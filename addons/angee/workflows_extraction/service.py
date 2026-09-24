@@ -17,8 +17,6 @@ from jsonschema import Draft202012Validator
 from rebac import current_actor, system_context
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
-from angee.base.permissions import require_authorization_database
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json_sha256
@@ -162,11 +160,9 @@ def prepare_pages(
     profile: ExtractionProfile,
     message_parts: Sequence[Any] = (),
     config: Mapping[str, Any] | None = None,
-    using: str | None = None,
 ) -> PreparedDocument:
     """Acquire all pages and retain native/raster carriers through Storage."""
 
-    alias = get_write_alias(apps.get_model("storage", "File"), using=using, instance=authorized_target)
     actor = current_actor()
     if actor is None:
         raise PermissionDenied("Authentication required.")
@@ -182,12 +178,12 @@ def prepare_pages(
     if ordered_files:
         mime_model = file_model._meta.get_field("mime_type").remote_field.model
         prefetch_related_objects(
-            ordered_files, Prefetch("mime_type", queryset=mime_model._base_manager.using(alias)),
+            ordered_files, Prefetch("mime_type", queryset=mime_model._base_manager.all()),
         )
     if ordered_parts:
         fragment_model = apps.get_model("messaging", "Part")._meta.get_field("fragment").remote_field.model
         prefetch_related_objects(
-            ordered_parts, Prefetch("fragment", queryset=fragment_model._base_manager.using(alias)),
+            ordered_parts, Prefetch("fragment", queryset=fragment_model._base_manager.all()),
         )
     sources = _document_sources(ordered_files, ordered_parts)
     options = _json_object(config or {}, field="config")
@@ -205,10 +201,10 @@ def prepare_pages(
     for page in acquired.pages:
         source = sources[page.source_position]
         drive_id = (
-            str(cast(Any, related_on(source.file, "drive", using=alias)).sqid)
+            str(cast(Any, source.file.drive).sqid)
             if source.file is not None
             else (
-                str(cast(Any, related_on(authorized_target, "drive", using=alias)).sqid)
+                str(cast(Any, authorized_target.drive).sqid)
                 if authorized_target._meta.label_lower == "storage.file"
                 else (str(authorized_target.sqid) if authorized_target._meta.label_lower == "storage.drive" else "")
             )
@@ -222,7 +218,7 @@ def prepare_pages(
             else:
                 content = str(part.value).encode()
                 carriers.append(
-                    file_model.objects.db_manager(alias).ingest_bytes(
+                    file_model.objects.ingest_bytes(
                         content,
                         filename=f"extraction-source-{page.source_position}-page-{page.page_position}.txt",
                         owner_id=owner_id,
@@ -231,7 +227,7 @@ def prepare_pages(
                 )
         raster_file = None
         if page.recognition_image is not None:
-            raster_file = file_model.objects.db_manager(alias).ingest_bytes(
+            raster_file = file_model.objects.ingest_bytes(
                 page.recognition_image.image_bytes,
                 filename=f"extraction-source-{page.source_position}-page-{page.page_position}.jpg",
                 owner_id=owner_id,
@@ -261,7 +257,6 @@ def restore_prepared_pages(
     profile: ExtractionProfile,
     message_parts: Sequence[Any] = (),
     config: Mapping[str, Any] | None = None,
-    using: str | None = None,
 ) -> PreparedDocument:
     """Recheck original bytes and READY carriers against the retained manifest."""
 
@@ -271,7 +266,6 @@ def restore_prepared_pages(
         message_parts=message_parts,
         authorized_target=authorized_target,
         config=config,
-        using=using,
     )
     if not json_values_equal(prepared.manifest, manifest):
         raise ValidationError({"pages": "The retained page manifest no longer matches its source carriers."})
@@ -284,7 +278,6 @@ def collect_carriers(
     *,
     recognition_model_id: str = "",
     recognition_config_digest: str = "",
-    using: str | None = None,
 ) -> CollectedDocument:
     """Accept exactly one allowed recognition result per requested page."""
 
@@ -342,7 +335,7 @@ def collect_carriers(
         readable = read_scoped_queryset(file_model, actor)
         if readable is None:
             raise PermissionDenied("Read access to the recognized carrier File is required.")
-        text_file = readable.using(using).filter(sqid=text_file_id).first()
+        text_file = readable.filter(sqid=text_file_id).first()
         if text_file is None or not text_file.with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to the recognized carrier File is required.")
         if str(text_file.upload_state) != "ready":
@@ -431,13 +424,10 @@ def process(
     recognition_model: Any | None = None,
     identity_mapping: Mapping[str, str] | None = None,
     retired_identities: Mapping[str, str] | None = None,
-    using: str | None = None,
 ) -> Any:
     """Retain one schema-valid deterministic profile result or explicit source hold."""
 
     extraction_model = apps.get_model("workflows_extraction", "Extraction")
-    alias = get_write_alias(extraction_model, using=using, instance=authorized_target)
-    require_authorization_database(alias, operation="Document processing authorization")
     actor = current_actor()
     if actor is None:
         raise PermissionDenied("Authentication required.")
@@ -446,7 +436,7 @@ def process(
         (recognition_model, ExtractionRole.RECOGNITION),
     ):
         if candidate is not None:
-            candidate.require_usable(actor, role, uses=role.accepted_model_uses, using=alias)
+            candidate.require_usable(actor, role, uses=role.accepted_model_uses)
     requested_mapping = dict(identity_mapping or {})
     requested_retirement = dict(retired_identities or {})
     if any(not isinstance(key, str) or not isinstance(value, str) for key, value in requested_mapping.items()):
@@ -473,7 +463,6 @@ def process(
         message_parts=message_parts,
         authorized_target=authorized_target,
         config=normalized_config,
-        using=alias,
     )
     collected = collect_carriers(
         prepared,
@@ -482,7 +471,6 @@ def process(
         recognition_config_digest=canonical_json_sha256(
             dict(normalized_config.get("recognition_config") or {})
         ),
-        using=alias,
     )
     schema_id = str(normalized_schema.get("$id") or normalized_schema.get("x-version") or "")
     if not schema_id:
@@ -500,8 +488,8 @@ def process(
             "schema": normalized_schema,
             "profile": profile,
             "pipeline_version": str(profile_impl.pipeline_version),
-            "model": _model_fingerprint(model, using=alias),
-            "recognition_model": _model_fingerprint(recognition_model, using=alias),
+            "model": _model_fingerprint(model),
+            "recognition_model": _model_fingerprint(recognition_model),
             "config": normalized_config,
             "pages": [
                 {
@@ -538,15 +526,15 @@ def process(
     )
     extraction_model = apps.get_model("workflows_extraction", "Extraction")
     with system_context(reason="workflows_extraction.process.base"):
-        existing = extraction_model._base_manager.using(alias).filter(reuse_key=reuse_key).first()
+        existing = extraction_model._base_manager.filter(reuse_key=reuse_key).first()
         current_base = (
-            extraction_model._base_manager.using(alias).filter(lineage_key=lineage_key).order_by("-revision").first()
+            extraction_model._base_manager.filter(lineage_key=lineage_key).order_by("-revision").first()
         )
         if existing is not None and existing.awaiting_correspondence:
             try:
-                extraction_model.objects.db_manager(alias).inference_authority_base(existing, actor=actor)
+                extraction_model.objects.inference_authority_base(existing, actor=actor)
             except ValidationError:
-                authority = extraction_model.objects.db_manager(alias).latest_succeeded_identity_authority(
+                authority = extraction_model.objects.latest_succeeded_identity_authority(
                     existing, actor=actor,
                 )
                 repair_reuse_key = canonical_json_sha256({
@@ -556,12 +544,12 @@ def process(
                     "authority_id": str(authority.sqid),
                     "authority_revision": authority.revision,
                 })
-                repaired = extraction_model._base_manager.using(alias).filter(
+                repaired = extraction_model._base_manager.filter(
                     reuse_key=repair_reuse_key,
                 ).first()
                 if repaired is not None:
                     if (
-                        extraction_model.objects.db_manager(alias).inference_authority_base(
+                        extraction_model.objects.inference_authority_base(
                             repaired, actor=actor,
                         ).pk
                         != authority.pk
@@ -581,7 +569,7 @@ def process(
         if existing is None:
             expected_head_id = current_base.pk if current_base is not None else None
             correspondence_base = (
-                extraction_model.objects.db_manager(alias).latest_succeeded_identity_authority(
+                extraction_model.objects.latest_succeeded_identity_authority(
                     current_base,
                     actor=actor,
                 )
@@ -593,7 +581,7 @@ def process(
             expected_head_id = current_base.pk if current_base is not None else None
             expected_base_id = existing.provenance.get("identity_correspondence", {}).get("expected_base_id")
             correspondence_base = (
-                extraction_model._base_manager.using(alias).filter(pk=expected_base_id, lineage_key=lineage_key).first()
+                extraction_model._base_manager.filter(pk=expected_base_id, lineage_key=lineage_key).first()
                 if expected_base_id is not None
                 else None
             )
@@ -656,8 +644,8 @@ def process(
             status = "failed"
             error_code = ":".join(value for value in (error.stage, error.code) if value) or type(error).__name__
             metadata = {"failure": {"stage": error.stage, "code": error.code}, **error.metadata}
-    target = canonical_record_target(authorized_target, using=alias)
-    return extraction_model.objects.db_manager(alias).create_revision(
+    target = canonical_record_target(authorized_target)
+    return extraction_model.objects.create_revision(
         sources=prepared.sources,
         pages=collected.pages,
         page_results=collected.page_results,
@@ -715,12 +703,9 @@ def infer(
     operation_step_run: Any,
     identity_mapping: Mapping[str, str] | None = None,
     retired_identities: Mapping[str, str] | None = None,
-    using: str | None = None,
 ) -> RetainedInference | SupersededInference:
     """Authorize the mapping model before retaining or reusing inferred facts."""
 
-    alias = get_write_alias(type(base), using=using, instance=base)
-    require_authorization_database(alias, operation="Document inference authorization")
     actor = current_actor()
     if actor is None:
         raise PermissionDenied("Authentication required.")
@@ -732,7 +717,7 @@ def infer(
         or (base.status != "succeeded" and not correspondence_hold)
     ):
         raise ValidationError({"inference": "A successful retained base or exact correspondence hold is required."})
-    operation_request = external_operation_request(operation_step_run, using=alias)
+    operation_request = external_operation_request(operation_step_run)
     request_key = operation_request.request_key
     input_facts = operation_request.input
     requested_mapping = dict(identity_mapping or {})
@@ -757,7 +742,7 @@ def infer(
     if not authorized_target.with_actor(actor).has_access("read"):
         raise PermissionDenied("Read access to the extraction target is required.")
     model.require_usable(
-        actor, ExtractionRole.MAPPING, uses=ExtractionRole.MAPPING.accepted_model_uses, using=alias,
+        actor, ExtractionRole.MAPPING, uses=ExtractionRole.MAPPING.accepted_model_uses,
     )
     if base.model_id is not None and base.model_id != model.pk:
         raise ValidationError({"inference": "The inferred model differs from the frozen base policy."})
@@ -802,11 +787,11 @@ def infer(
         and not preliminary_correspondence
     ):
         raise ValidationError({"inference": "The retained correspondence hold requires an explicit reviewed mapping."})
-    target = canonical_record_target(authorized_target, using=alias)
+    target = canonical_record_target(authorized_target)
     if target.content_type.pk != base.content_type_id or str(target.object_id) != str(base.object_id):
         raise ValidationError({"inference": "The target differs from the retained base."})
     preliminary_authority = (
-        extraction_model.objects.db_manager(alias).inference_authority_base(base, actor=actor)
+        extraction_model.objects.inference_authority_base(base, actor=actor)
         if preliminary_correspondence
         else None
     )
@@ -816,12 +801,12 @@ def infer(
             "base_id": str(base.sqid),
             "base_revision": base.revision,
             "request_key": request_key,
-            "model": _model_fingerprint(model, using=alias),
+            "model": _model_fingerprint(model),
             "mapping_config": config.get("mapping_config") or config,
         }
     )
     with system_context(reason="workflows_extraction.infer.current"):
-        existing = extraction_model._base_manager.using(alias).filter(reuse_key=reuse_key).first()
+        existing = extraction_model._base_manager.filter(reuse_key=reuse_key).first()
     if existing is not None:
         correspondence = existing.provenance.get("identity_correspondence", {})
         inference_facts = existing.stage_provenance.get("inference", {})
@@ -846,20 +831,19 @@ def infer(
         ):
             raise ValidationError({"inference": "The frozen request key owns different retained facts."})
         return RetainedInference(existing)
-    current = extraction_model.objects.db_manager(alias).inference_current_head(base, actor=actor)
+    current = extraction_model.objects.inference_current_head(base, actor=actor)
     if current.pk != base.pk:
         return SupersededInference(str(base.sqid), str(current.sqid))
     sources, parts = _retained_evidence(
         base,
         authorized_target=authorized_target,
         actor=actor,
-        using=alias,
     )
     if not parts:
         raise ValidationError({"inference": "The base has no complete retained carriers."})
-    if any(row.result.get("status") == "held" for row in base.pages.db_manager(alias).order_by("position")):
+    if any(row.result.get("status") == "held" for row in base.pages.order_by("position")):
         raise ValidationError({"inference": "Incomplete page carriers cannot be inferred."})
-    authority_base = preliminary_authority or extraction_model.objects.db_manager(alias).inference_authority_base(
+    authority_base = preliminary_authority or extraction_model.objects.inference_authority_base(
         base, actor=actor,
     )
     if authority_base.pk == base.pk:
@@ -869,7 +853,6 @@ def infer(
             authority_base,
             authorized_target=authorized_target,
             actor=actor,
-            using=alias,
         )
     claim_part_positions = _retained_claim_part_positions(
         authority_base,
@@ -898,7 +881,6 @@ def infer(
             parts,
             _validated_schema(base.schema),
             step_run=operation_step_run,
-            using=alias,
             model=model,
             config=dict(config.get("mapping_config") or config),
             timeout=timeout,
@@ -937,7 +919,6 @@ def infer(
                 automatic_correspondence=automatic_correspondence,
                 mapping_result=mapping_result,
                 error=failure,
-                using=alias,
             )
         except ValidationError:
             failure = DocumentPipelineError(
@@ -960,7 +941,6 @@ def infer(
                 automatic_correspondence=automatic_correspondence,
                 mapping_result=mapping_result,
                 error=failure,
-                using=alias,
             )
     if document_result.parts != parts:
         return _retain_failed_inference(
@@ -982,7 +962,6 @@ def infer(
                 code="carrier_order_changed",
                 usage_delta=usage_delta,
             ),
-            using=alias,
         )
     correspondence_required = False
     try:
@@ -1040,7 +1019,6 @@ def infer(
             automatic_correspondence=automatic_correspondence,
             mapping_result=mapping_result,
             error=failure,
-            using=alias,
         )
     errors = sorted(
         Draft202012Validator(base.schema).iter_errors(document_result.value), key=lambda error: list(error.path)
@@ -1065,7 +1043,6 @@ def infer(
                 code="candidate_schema_mismatch",
                 usage_delta=usage_delta,
             ),
-            using=alias,
         )
     unresolved_reasons = list(
         document_result.value.get("routing_review_reasons") or ()
@@ -1106,7 +1083,7 @@ def infer(
         },
     }
     try:
-        extraction = extraction_model.objects.db_manager(alias).create_revision_from_evidence(
+        extraction = extraction_model.objects.create_revision_from_evidence(
             base,
             lineage_key=base.lineage_key,
             reuse_key=reuse_key,
@@ -1131,7 +1108,7 @@ def infer(
         )
         return RetainedInference(extraction)
     except ValidationError as error:
-        current = extraction_model.objects.db_manager(alias).inference_current_head(base, actor=actor)
+        current = extraction_model.objects.inference_current_head(base, actor=actor)
         if current.pk != base.pk:
             return SupersededInference(
                 str(base.sqid),
@@ -1162,7 +1139,6 @@ def _retain_failed_inference(
     automatic_correspondence: bool,
     mapping_result: MappingResult | None,
     error: DocumentPipelineError,
-    using: str,
 ) -> RetainedInference | SupersededInference:
     """Retain a post-provider failure as the idempotent inference successor."""
 
@@ -1211,7 +1187,7 @@ def _retain_failed_inference(
         },
     }
     try:
-        extraction = extraction_model.objects.db_manager(using).create_revision_from_evidence(
+        extraction = extraction_model.objects.create_revision_from_evidence(
             base,
             lineage_key=base.lineage_key,
             reuse_key=reuse_key,
@@ -1236,7 +1212,7 @@ def _retain_failed_inference(
         )
         return RetainedInference(extraction)
     except ValidationError as retention_error:
-        current = extraction_model.objects.db_manager(using).inference_current_head(base, actor=actor)
+        current = extraction_model.objects.inference_current_head(base, actor=actor)
         if current.pk != base.pk:
             return SupersededInference(
                 str(base.sqid), str(current.sqid),
@@ -1258,17 +1234,16 @@ def _retained_evidence(
     *,
     authorized_target: Any,
     actor: Any,
-    using: str,
 ) -> tuple[tuple[DocumentSource, ...], tuple[DocumentPart, ...]]:
     """Reconstruct profile inputs from immutable retained rows under actor reads."""
 
     with system_context(reason="workflows_extraction.retained_evidence"):
         source_rows = list(
-            base.sources.db_manager(using)
+            base.sources
             .select_related("file__mime_type", "message_part__fragment", "message_part__message")
             .order_by("position")
         )
-        part_rows = list(base.parts.db_manager(using).select_related("source").order_by("position"))
+        part_rows = list(base.parts.select_related("source").order_by("position"))
     files = tuple(row.file for row in source_rows if row.file_id is not None)
     message_parts = tuple(row.message_part for row in source_rows if row.message_part_id is not None)
     _authorize(files, message_parts, authorized_target, actor=actor)
@@ -1852,13 +1827,13 @@ def _lineage_key(*, source_facts: Sequence[Mapping[str, Any]], target_ref: Recor
     )
 
 
-def _model_fingerprint(model: Any | None, *, using: str) -> dict[str, Any] | None:
+def _model_fingerprint(model: Any | None) -> dict[str, Any] | None:
     if model is None:
         return None
-    provider: Any = related_on(model, "provider", using=using)
+    provider: Any = model.provider
     return {
         "id": str(model.sqid),
-        "deployment": model.deployment_identity(using=using),
+        "deployment": model.deployment_identity(),
         "provider_config": provider.config,
         "model_config": model.config,
     }

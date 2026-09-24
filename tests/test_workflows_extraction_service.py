@@ -92,8 +92,7 @@ from tests.extraction_profiles import FakeDocumentProfile, RecordCarrierProfile
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 from tests.test_integrate_vcs import VCS_TEST_MODELS
 from tests.test_messaging import MESSAGING_TEST_MODELS
-from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowRun, WorkflowWriteRouter
-from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
+from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowRun
 
 
 def test_json_pointer_value_resolves_rfc6901_tokens_and_rejects_missing() -> None:
@@ -163,13 +162,8 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
         def inference_required(self, _result, _reasons):
             return True
 
-    step_run._state = SimpleNamespace(adding=False, db="default")
-    for model_fixture in models.values():
-        manager = model_fixture.objects
-        manager.db_manager = lambda alias, manager=manager: manager
 
     with (
-        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
         patch(
             "angee.workflows_extraction.steps.apps.get_model",
@@ -196,7 +190,6 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
     ):
         result = InferEvidenceStepImpl().run(step_run, now=None)
 
-    related_run.assert_called_once_with(step_run, "run", using="default")
     step_run.run.debit_budget.assert_not_called()
     assert result.kind == "done"
     assert result.outcome == "inference_failed"
@@ -352,7 +345,7 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
     step_run = SimpleNamespace(
         run=SimpleNamespace(
             admission_actor=lambda **kwargs: actor,
-            debit_budget=lambda values, *, using: debits.append(values),
+            debit_budget=lambda values: debits.append(values),
         )
     )
 
@@ -360,13 +353,8 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
         def inference_required(self, _result, _reasons):
             return True
 
-    step_run._state = SimpleNamespace(adding=False, db="default")
-    for model_fixture in models.values():
-        manager = model_fixture.objects
-        manager.db_manager = lambda alias, manager=manager: manager
 
     with (
-        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
         patch(
             "angee.workflows_extraction.steps.apps.get_model",
@@ -397,7 +385,6 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
         current = succeeded
         superseded = InferEvidenceStepImpl().run(step_run, now=None)
 
-    related_run.assert_called_with(step_run, "run", using="default")
     assert live.outcome == first.outcome == retry.outcome == "inference_failed"
     assert live.output["extraction_id"] == "ext_base"
     assert first.output["extraction_id"] == retry.output["extraction_id"] == "ext_failed"
@@ -511,13 +498,8 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         def inference_required(self, _result, _reasons):
             return True
 
-    step_run._state = SimpleNamespace(adding=False, db="default")
-    for model_fixture in models.values():
-        manager = model_fixture.objects
-        manager.db_manager = lambda alias, manager=manager: manager
 
     with (
-        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
         patch(
             "angee.workflows_extraction.steps.apps.get_model",
@@ -536,7 +518,6 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
             now=None,
         )
 
-    related_run.assert_called_once_with(step_run, "run", using="default")
     step_run.run.debit_budget.assert_not_called()
     assert result.outcome == "source_unavailable"
     assert result.output["extraction_id"] == "ext_hold"
@@ -551,7 +532,6 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
     request.input["base_extraction_id"] = "ext_authority"
     request.input["base_revision"] = 2
     with (
-        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch("angee.workflows_extraction.steps.external_operation_request", return_value=request),
         patch(
             "angee.workflows_extraction.steps.apps.get_model",
@@ -570,7 +550,6 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
             now=None,
         )
 
-    related_run.assert_called_once_with(step_run, "run", using="default")
     assert ordinary.outcome == "inference_failed"
     assert [(artifact.target, artifact.label) for artifact in ordinary.artifacts] == [
         (authority, "Source evidence requiring manual review"),
@@ -643,13 +622,8 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
         }
     )
 
-    step_run._state = SimpleNamespace(adding=False, db="default")
-    for model_fixture in models.values():
-        manager = model_fixture.objects
-        manager.db_manager = lambda alias, manager=manager: manager
 
     with (
-        patch("angee.workflows_extraction.steps.related_on", return_value=step_run.run) as related_run,
         patch(
             "angee.workflows_extraction.steps.external_operation_request",
             return_value=request,
@@ -687,7 +661,6 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
         current = empty_successor
         empty_correspondence = InferEvidenceStepImpl().run(step_run, now=None)
 
-    related_run.assert_called_with(step_run, "run", using="default")
     assert result.kind == "done"
     assert result.outcome == "unchanged"
     assert result.output == {
@@ -1155,20 +1128,16 @@ class ExtractionServiceTests(TestCase):
                 b"record:R-7", filename="record.txt", owner_id=self.owner.pk, drive_id=str(self.drive.sqid),
             )
         step_run = SimpleNamespace(
-            _state=SimpleNamespace(adding=False, db="default"),
+            run=SimpleNamespace(admission_actor=lambda **kwargs: self.owner),
             input={
                 "files": [str(source.sqid)], "profile": "record_carrier",
                 "target_model": self.drive._meta.label, "target_id": str(self.drive.sqid),
             },
         )
-        with patch(
-            "angee.workflows_extraction.steps.related_on",
-            return_value=SimpleNamespace(admission_actor=lambda **kwargs: self.owner),
-        ):
-            result = PreparePagesStepImpl().run(step_run, now=timezone.now())
+        result = PreparePagesStepImpl().run(step_run, now=timezone.now())
         self.assertEqual(result.output["profile"], "record_carrier")
         with actor_context(self.owner):
-            prepared, _manifest = _restore_prepared(result.output, {}, using="default")
+            prepared, _manifest = _restore_prepared(result.output, {})
             self.assertEqual(prepared.recognition_pages, ())
             (page,) = prepared.pages
             self.assertEqual(page.native_parts[0].value, {"number": "R-7"})
@@ -1192,7 +1161,7 @@ class ExtractionServiceTests(TestCase):
             process_parts.assert_called_once()
 
             legacy_output = {key: value for key, value in result.output.items() if key != "profile"}
-            legacy_prepared, legacy_manifest = _restore_prepared(legacy_output, {}, using="default")
+            legacy_prepared, legacy_manifest = _restore_prepared(legacy_output, {})
             self.assertEqual(legacy_manifest.profile, "none")
             self.assertEqual(legacy_prepared.pages[0].native_parts[0].kind, ExtractionPartKind.NATIVE_TEXT)
             self.assertEqual(legacy_prepared.manifest, prepared.manifest)
@@ -1205,10 +1174,7 @@ class ExtractionServiceTests(TestCase):
                     "prepared": output, "recognition_results": [], "hold_reasons": [],
                     "completed_page_count": 1, "schema": SCHEMA, "profile": selected_profile,
                 }
-                with patch(
-                    "angee.workflows_extraction.steps.related_on",
-                    return_value=SimpleNamespace(admission_actor=lambda **kwargs: self.owner),
-                ), patch("angee.workflows_extraction.steps.process") as process_evidence:
+                with patch("angee.workflows_extraction.steps.process") as process_evidence:
                     with self.assertRaises(ValidationError) as mismatch:
                         ProcessEvidenceStepImpl().run(step_run, now=timezone.now())
                 self.assertEqual(mismatch.exception.message_dict, {
@@ -1233,7 +1199,7 @@ class ExtractionServiceTests(TestCase):
                 drive_id=str(self.drive.sqid),
             )
         step_run = SimpleNamespace(
-            _state=SimpleNamespace(adding=False, db="default"),
+            run=SimpleNamespace(admission_actor=lambda **kwargs: self.owner),
             input={
                 "files": [str(image_file.sqid), str(self.files[0].sqid)],
                 "recognition_model": str(self.model.sqid),
@@ -1241,16 +1207,12 @@ class ExtractionServiceTests(TestCase):
                 "target_id": str(self.drive.sqid),
             },
         )
-        with patch(
-            "angee.workflows_extraction.steps.related_on",
-            return_value=SimpleNamespace(admission_actor=lambda **kwargs: self.owner),
-        ):
-            result = PreparePagesStepImpl().run(step_run, now=timezone.now())
+        result = PreparePagesStepImpl().run(step_run, now=timezone.now())
 
         with actor_context(self.owner):
-            prepared, manifest = _restore_prepared(result.output, {}, using="default")
+            prepared, manifest = _restore_prepared(result.output, {})
             legacy_output = {key: value for key, value in result.output.items() if key != "profile"}
-            legacy_prepared, legacy_manifest = _restore_prepared(legacy_output, {}, using="default")
+            legacy_prepared, legacy_manifest = _restore_prepared(legacy_output, {})
             self.assertEqual(legacy_manifest.profile, "none")
             self.assertEqual(legacy_prepared.manifest, prepared.manifest)
             self.assertEqual(len(prepared.pages), 2)
@@ -1265,7 +1227,7 @@ class ExtractionServiceTests(TestCase):
             changed = deepcopy(result.output)
             changed["recognition_pages"][0]["image_digest"] = "0" * 64
             with self.assertRaises(ValidationError) as error:
-                _restore_prepared(changed, {}, using="default")
+                _restore_prepared(changed, {})
             self.assertEqual(error.exception.message_dict, {
                 "pages": ["The recognition subset changed after preparation."],
             })
@@ -1397,7 +1359,7 @@ class ExtractionServiceTests(TestCase):
                 result_recorded_at=timezone.now(),
                 applied_at=timezone.now(),
             )
-            attempt.allocate(using="default")
+            attempt.allocate()
             step_run.current_attempt = attempt
             step_run.project_from_attempt(attempt, fields=("current_attempt",))
             decision = Decision(
@@ -1414,7 +1376,7 @@ class ExtractionServiceTests(TestCase):
                 target_id=str(extraction.target.sqid),
                 created_by=self.owner,
             )
-            decision.create_for_suspension(using="default")
+            decision.create_for_suspension()
             if verdict != "pending":
                 decision.resolve(
                     Verdict(verdict),
@@ -1422,7 +1384,7 @@ class ExtractionServiceTests(TestCase):
                     resolved_by=str(to_subject_ref(resolver)),
                 )
                 attempt.decision_settlement = {"decision_ids": [decision.pk], "outcome": "completed"}
-                attempt.settle_decisions(using="default")
+                attempt.settle_decisions()
             if grant_resolver:
                 write_relationships([RelationshipTuple(to_object_ref(decision), "assignee", to_subject_ref(resolver))])
         return decision
@@ -1604,7 +1566,7 @@ class ExtractionServiceTests(TestCase):
             # Seed the immutable shape released before head CAS and identity
             # authority were separated; production never rewrites this row.
             models.QuerySet(
-                model=type(repeated_hold), using=repeated_hold._state.db,
+                model=type(repeated_hold),
             ).filter(pk=repeated_hold.pk).update(provenance=legacy_provenance)
             repeated_hold.refresh_from_db()
             repaired = self._extract(config=repeated_config)
@@ -1826,7 +1788,7 @@ class ExtractionServiceTests(TestCase):
             ValidationError,
             "another retained fact authority",
         ):
-            manager._correction_revision_parent(original, altered_retirement, using="default")
+            manager._correction_revision_parent(original, altered_retirement)
         unbound_decision = self._decision(
             original,
             resolution={"action": "apply_correction", "note": "Stale unbound review"},
@@ -2975,22 +2937,6 @@ class ExtractionServiceTests(TestCase):
             )
         self.assertEqual(Extraction._base_manager.count(), 1)
 
-    @pytest.mark.usefixtures("workflow_authorization_frontier")
-    def test_revise_and_revision_retention_route_to_write_database(self) -> None:
-        original = self._extract(config={"result": {"number": "OLD", "rows": []}})
-        decision = self._decision(original)
-
-        with override_settings(DATABASE_ROUTERS=[WorkflowWriteRouter("default")]):
-            corrected = Extraction.objects.revise_from_decision(
-                decision.pk,
-                actor=self.owner,
-                result={"number": "NEW", "rows": []},
-                expected_action="correct_source_facts",
-                expected_resolution_action="apply_correction",
-            )
-
-        self.assertEqual(corrected._state.db, "default")
-        self.assertEqual(corrected.revision, original.revision + 1)
 
     def test_revise_from_decision_requires_domain_read_scope_even_inside_system_scope(self) -> None:
         original = self._extract(config={"result": {"number": "OLD", "rows": []}})

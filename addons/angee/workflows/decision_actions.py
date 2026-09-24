@@ -422,9 +422,7 @@ def compile_decision_action_schema(schema: Any) -> DecisionActionContract | None
     return DecisionActionContract(schema, verdicts, checked, context_fields)
 
 
-def validate_decision_resolution(
-    decision: Any, payload: Any, *, actor: Any, verdict: str, using: str
-) -> dict[str, Any]:
+def validate_decision_resolution(decision: Any, payload: Any, *, actor: Any, verdict: str) -> dict[str, Any]:
     """Validate values through JSON Schema or the native Python contract.
 
     JSON-authored Decisions retain self-contained Draft 2020-12 schemas: local
@@ -446,7 +444,7 @@ def validate_decision_resolution(
             submitted = schema.model_validate(resolution).model_dump(mode="json")
         except PydanticValidationError as error:
             raise _resolution_validation_error(error) from error
-        _validate_relation_fields(schema.model_json_schema(by_alias=False), submitted, actor, using=using)
+        _validate_relation_fields(schema.model_json_schema(by_alias=False), submitted, actor)
         return submitted
 
     schema = _decision_validation_schema(schema)
@@ -521,7 +519,7 @@ def validate_decision_resolution(
             messages.append(failure.message)
     if errors:
         raise ValidationError(errors)
-    _validate_relation_fields(resolution_schema, resolution, actor, using=using)
+    _validate_relation_fields(resolution_schema, resolution, actor)
     return copy.deepcopy(resolution)
 
 
@@ -548,7 +546,7 @@ def _decision_validation_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return retained
 
 
-def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any], actor: Any, *, using: str) -> None:
+def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any], actor: Any) -> None:
     """Authorize relation annotations through JSON Schema's native applicators.
 
     The native validator owns reference resolution, branch selection, nested
@@ -564,7 +562,7 @@ def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any]
     ) -> Iterator[SchemaValidationError]:
         del validator, field_schema
         message = (
-            _relation_error(relation, value, actor, using=using)
+            _relation_error(relation, value, actor)
             if isinstance(relation, dict)
             else "Relation metadata must be an object."
         )
@@ -604,7 +602,7 @@ def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any]
 _RELATION_PERMISSION = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
-def _relation_error(relation: dict[str, Any], value: Any, actor: Any, *, using: str) -> str | None:
+def _relation_error(relation: dict[str, Any], value: Any, actor: Any) -> str | None:
     """Return the field error for one submitted relation id, or None when valid.
 
     Unknown ids, wrong-model ids, and ids outside the declared permission scope
@@ -627,12 +625,10 @@ def _relation_error(relation: dict[str, Any], value: Any, actor: Any, *, using: 
     if not isinstance(permission, str) or _RELATION_PERMISSION.fullmatch(permission) is None:
         return "Relation value must reference a permitted record."
     scoped = read_scoped_queryset(model, actor, action=permission)
-    if scoped is not None:
-        scoped = scoped.using(using)
     if scoped is None and model_resource_type(model):
         return "Relation value must reference a permitted record."
     if scoped is None:
-        scoped = model._default_manager.using(using)
+        scoped = model._default_manager.all()
     instance = instance_from_public_id(model, value, queryset=scoped)
     if instance is None:
         return (

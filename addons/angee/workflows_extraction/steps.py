@@ -14,7 +14,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
 from angee.base.refs import canonical_record_target
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import (
@@ -128,21 +127,19 @@ class PreparePagesStepImpl(StepImpl):
     outcomes = (StepOutcome("prepared", "Prepared"),)
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        alias = get_write_alias(type(step_run), instance=step_run)
-        run: Any = related_on(step_run, "run", using=alias)
+        run: Any = step_run.run
         del now
         value = self.validate_input(step_run.input)
         options = value.profile_config
-        actor = run.admission_actor(using=alias)
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page preparation requires the workflow actor.")
         with actor_context(actor):
-            files, parts, target = _resolve_sources(value, using=alias)
+            files, parts, target = _resolve_sources(value)
             profile_field = apps.get_model("workflows_extraction", "Extraction").impl_field("profile")
             prepared = prepare_pages(
                 files=files, message_parts=parts, authorized_target=target, config=options,
                 profile=profile_field.resolve_class(value.profile)(),
-                using=alias,
             )
         model_id = value.recognition_model or ""
         recognition_options = dict(options.get("recognition_config") or {})
@@ -211,26 +208,24 @@ class RecognizePageStepImpl(StepImpl):
         )
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        alias = get_write_alias(type(step_run), instance=step_run)
         del now
-        return self._recognize(step_run, using=alias)
+        return self._recognize(step_run)
 
     def run_recovery(
         self, step_run: Any, *, now: datetime, source_attempt: Any, mode: RecoveryMode,
     ) -> StepResult:
-        alias = get_write_alias(type(step_run), instance=step_run)
         del now, source_attempt
         if mode is not RecoveryMode.FRESH:
             raise ValidationError({"recovery": "Page recognition requires fresh acknowledged recovery."})
-        return self._recognize(step_run, using=alias)
+        return self._recognize(step_run)
 
-    def _recognize(self, step_run: Any, *, using: str) -> StepResult:
-        run: Any = related_on(step_run, "run", using=using)
-        request = external_operation_request(step_run, using=using)
+    def _recognize(self, step_run: Any) -> StepResult:
+        run: Any = step_run.run
+        request = external_operation_request(step_run)
         value = self.validate_input(request.input)
         if value.config_digest != canonical_json_sha256(value.profile_config):
             raise ValidationError({"recognition": "The page item names a different admitted recognizer config."})
-        actor = run.admission_actor(using=using)
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page recognition requires the workflow actor.")
         actor_subject = run.admission_actor_subject()
@@ -239,12 +234,12 @@ class RecognizePageStepImpl(StepImpl):
         with actor_context(actor):
             file_model = apps.get_model("storage", "File")
             model_model = apps.get_model("agents", "InferenceModel")
-            image_file = file_model.objects.db_manager(using).select_related("drive").get(sqid=value.image_file_id)
+            image_file = file_model.objects.select_related("drive").get(sqid=value.image_file_id)
             if not image_file.with_actor(actor).has_access("read") or str(image_file.upload_state) != "ready":
                 raise PermissionDenied("Read access to the READY page carrier is required.")
             if str(image_file.content_hash) != value.image_digest:
                 raise ValidationError({"recognition": "The page carrier digest changed."})
-            model = model_model.objects.db_manager(using).get(sqid=value.model_id)
+            model = model_model.objects.get(sqid=value.model_id)
             with image_file.open_stream() as stream:
                 image_bytes = stream.read()
             if hashlib.sha256(image_bytes).hexdigest() != value.image_digest:
@@ -263,7 +258,6 @@ class RecognizePageStepImpl(StepImpl):
                 model=model,
                 config=value.profile_config,
                 timeout=value.timeout,
-                using=using,
             )
             if not isinstance(response.text, str) or "\x00" in response.text:
                 raise ValidationError({"recognition": "The recognizer did not return valid text."})
@@ -275,7 +269,7 @@ class RecognizePageStepImpl(StepImpl):
                 "config_digest": value.config_digest,
                 "source_position": value.source_position, "page_position": value.page_position,
             }
-            text_file = file_model.objects.db_manager(using).ingest_stream(
+            text_file = file_model.objects.ingest_stream(
                 ContentFile(text), filename=f"recognized-page-{value.source_position}-{value.page_position}.txt",
                 content_hash=digest, size_bytes=len(text), owner_id=actor_user_id(actor_subject),
                 drive_id=str(image_file.drive.sqid),
@@ -324,16 +318,15 @@ class CollectCarriersStepImpl(StepImpl):
     outcomes = (StepOutcome("collected", "Collected"), StepOutcome("source_hold", "Source hold"))
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        alias = get_write_alias(type(step_run), instance=step_run)
-        run: Any = related_on(step_run, "run", using=alias)
+        run: Any = step_run.run
         del now
         value = self.validate_input(step_run.input)
         options = value.profile_config
-        actor = run.admission_actor(using=alias)
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Carrier collection requires the workflow actor.")
         with actor_context(actor):
-            prepared, manifest = _restore_prepared(value.prepared, options, using=alias)
+            prepared, manifest = _restore_prepared(value.prepared, options)
             if (
                 canonical_json_sha256(dict(options.get("recognition_config") or {}))
                 != manifest.recognition_config_digest
@@ -345,7 +338,6 @@ class CollectCarriersStepImpl(StepImpl):
             collected = collect_carriers(
                 prepared, results, recognition_model_id=manifest.recognition_model_id,
                 recognition_config_digest=manifest.recognition_config_digest,
-                using=alias,
             )
         return StepResult.done(output={
             "prepared": value.prepared, "recognition_results": results,
@@ -390,33 +382,31 @@ class ProcessEvidenceStepImpl(StepImpl):
         return RecoveryCapability(None, "Processed evidence retention has no recovery reconciliation contract.")
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        alias = get_write_alias(type(step_run), instance=step_run)
-        run: Any = related_on(step_run, "run", using=alias)
+        run: Any = step_run.run
         del now
         value = self.validate_input(step_run.input)
-        actor = run.admission_actor(using=alias)
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Evidence processing requires the workflow actor.")
         with actor_context(actor):
-            prepared, manifest = _restore_prepared(value.prepared, value.profile_config, using=alias)
+            prepared, manifest = _restore_prepared(value.prepared, value.profile_config)
             if manifest.profile != value.profile:
                 raise ValidationError({"profile": "The selected profile differs from the prepared profile."})
             collected = collect_carriers(
                 prepared, value.recognition_results,
                 recognition_model_id=manifest.recognition_model_id,
                 recognition_config_digest=manifest.recognition_config_digest,
-                using=alias,
             )
             if list(collected.hold_reasons) != value.hold_reasons:
                 raise ValidationError({"recognition": "The collected source hold changed before retention."})
-            target = apps.get_model(manifest.target_model).objects.db_manager(alias).get(sqid=manifest.target_id)
+            target = apps.get_model(manifest.target_model).objects.get(sqid=manifest.target_id)
             model_model = apps.get_model("agents", "InferenceModel")
             mapping_model = (
-                model_model.objects.db_manager(alias).get(sqid=manifest.mapping_model_id)
+                model_model.objects.get(sqid=manifest.mapping_model_id)
                 if manifest.mapping_model_id else None
             )
             recognition_model = (
-                model_model.objects.db_manager(alias).get(sqid=manifest.recognition_model_id)
+                model_model.objects.get(sqid=manifest.recognition_model_id)
                 if manifest.recognition_model_id else None
             )
             evidence = process(
@@ -425,7 +415,6 @@ class ProcessEvidenceStepImpl(StepImpl):
                 model=mapping_model, recognition_model=recognition_model,
                 identity_mapping=value.identity_mapping,
                 retired_identities=value.retired_identities,
-                using=alias,
             )
         return StepResult.done(output={
             "extraction_id": str(evidence.sqid), "revision": evidence.revision,
@@ -491,36 +480,34 @@ class InferEvidenceStepImpl(StepImpl):
         )
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        alias = get_write_alias(type(step_run), instance=step_run)
         del now
-        return self._infer(step_run, using=alias)
+        return self._infer(step_run)
 
     def run_recovery(
         self, step_run: Any, *, now: datetime, source_attempt: Any, mode: RecoveryMode,
     ) -> StepResult:
-        alias = get_write_alias(type(step_run), instance=step_run)
         del now, source_attempt
         if mode is not RecoveryMode.FRESH:
             raise ValidationError({"recovery": "Inference requires fresh acknowledged recovery."})
-        return self._infer(step_run, using=alias)
+        return self._infer(step_run)
 
-    def _infer(self, step_run: Any, *, using: str) -> StepResult:
-        run: Any = related_on(step_run, "run", using=using)
-        request = external_operation_request(step_run, using=using)
+    def _infer(self, step_run: Any) -> StepResult:
+        run: Any = step_run.run
+        request = external_operation_request(step_run)
         value = self.validate_input(request.input)
-        actor = run.admission_actor(using=using)
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Bound inference requires the workflow actor.")
         with actor_context(actor):
             base = (
                 apps.get_model("workflows_extraction", "Extraction")
-                .objects.db_manager(using)
+                .objects
                 .get(sqid=value.base_extraction_id)
             )
             if base.revision != value.base_revision:
                 raise ValidationError({"base_revision": "The retained extraction revision differs."})
-            target = apps.get_model(value.target_model).objects.db_manager(using).get(sqid=value.target_id)
-            target_ref = canonical_record_target(target, using=using)
+            target = apps.get_model(value.target_model).objects.get(sqid=value.target_id)
+            target_ref = canonical_record_target(target)
             if (
                 target_ref.content_type.pk != base.content_type_id
                 or str(target_ref.object_id) != str(base.object_id)
@@ -531,12 +518,12 @@ class InferEvidenceStepImpl(StepImpl):
                     raise ValidationError({
                         "base_extraction_id": "Retained-only inference requires successful evidence."
                     })
-                current = type(base).objects.db_manager(using).inference_current_head(base, actor=actor)
+                current = type(base).objects.inference_current_head(base, actor=actor)
                 if current.pk != base.pk:
                     if (
                         current.awaiting_correspondence
                         and type(base)
-                        .objects.db_manager(using)
+                        .objects
                         .inference_authority_base(
                             current,
                             actor=actor,
@@ -549,7 +536,6 @@ class InferEvidenceStepImpl(StepImpl):
                             actor=actor,
                             success_outcome="correspondence_required",
                             artifact_label="Current extraction evidence",
-                            using=using,
                         )
                     raise ValidationError({
                         "base_extraction_id": (
@@ -560,7 +546,7 @@ class InferEvidenceStepImpl(StepImpl):
                     output=_inference_output(base), outcome="unchanged",
                     artifacts=(ArtifactSpec(base, "Retained extraction evidence"),),
                 )
-            current = type(base).objects.db_manager(using).inference_current_head(base, actor=actor)
+            current = type(base).objects.inference_current_head(base, actor=actor)
             if current.pk != base.pk:
                 if current.awaiting_correspondence:
                     return _retained_inference_result(
@@ -568,7 +554,6 @@ class InferEvidenceStepImpl(StepImpl):
                         actor=actor,
                         success_outcome="correspondence_required",
                         artifact_label="Current extraction evidence",
-                        using=using,
                     )
             else:
                 profile = base.resolve_impl("profile")()
@@ -589,7 +574,7 @@ class InferEvidenceStepImpl(StepImpl):
                     )
             if value.model_id is None:
                 raise ValidationError({"model_id": "An admitted mapping model is required."})
-            model = apps.get_model("agents", "InferenceModel").objects.db_manager(using).get(sqid=value.model_id)
+            model = apps.get_model("agents", "InferenceModel").objects.get(sqid=value.model_id)
             try:
                 outcome = infer(
                     base,
@@ -598,14 +583,13 @@ class InferEvidenceStepImpl(StepImpl):
                     operation_step_run=step_run,
                     identity_mapping=value.identity_mapping,
                     retired_identities=value.retired_identities,
-                    using=using,
                 )
             except DocumentPipelineError as error:
                 if (
                     error.code == RETAINED_CARRIER_UNAVAILABLE
                     and error.stage == "correspondence"
                 ):
-                    authority = type(base).objects.db_manager(using).inference_authority_base(
+                    authority = type(base).objects.inference_authority_base(
                         base, actor=actor,
                     )
                     if authority.pk != base.pk:
@@ -630,7 +614,7 @@ class InferEvidenceStepImpl(StepImpl):
                 )
         if isinstance(outcome, SupersededInference):
             with actor_context(actor):
-                current = apps.get_model("workflows_extraction", "Extraction").objects.db_manager(using).get(
+                current = apps.get_model("workflows_extraction", "Extraction").objects.get(
                     sqid=outcome.current_extraction_id,
                 )
             if current.status == "failed":
@@ -639,7 +623,6 @@ class InferEvidenceStepImpl(StepImpl):
                     actor=actor,
                     success_outcome="superseded",
                     artifact_label="Current extraction evidence",
-                    using=using,
                 )
                 return StepResult.done(
                     output={
@@ -658,7 +641,6 @@ class InferEvidenceStepImpl(StepImpl):
             actor=actor,
             success_outcome="inferred",
             artifact_label="Inferred extraction evidence",
-            using=using,
         )
 
 
@@ -706,7 +688,6 @@ def _retained_inference_result(
     actor: Any,
     success_outcome: str,
     artifact_label: str,
-    using: str,
 ) -> StepResult:
     """Route one exact retained result without inventing correspondence choices."""
 
@@ -725,7 +706,7 @@ def _retained_inference_result(
             outcome=success_outcome,
             artifacts=(ArtifactSpec(extraction, artifact_label),),
         )
-    manager = type(extraction).objects.db_manager(using)
+    manager = type(extraction).objects
     if manager.inference_candidate_selectors(extraction):
         return StepResult.done(
             output=_inference_output(extraction),
@@ -751,9 +732,7 @@ def _retained_inference_result(
 
 
 def _restore_prepared(
-    value: dict[str, Any], options: dict[str, Any],
-    *, using: str,
-) -> tuple[Any, PreparePagesOutput]:
+    value: dict[str, Any], options: dict[str, Any]) -> tuple[Any, PreparePagesOutput]:
     manifest = PreparePagesOutput.model_validate(value)
     sources = manifest.manifest.get("sources")
     if not isinstance(sources, list):
@@ -764,13 +743,12 @@ def _restore_prepared(
         files=file_ids, message_parts=part_ids, target_model=manifest.target_model,
         target_id=manifest.target_id,
     )
-    files, parts, target = _resolve_sources(input_refs, using=using)
+    files, parts, target = _resolve_sources(input_refs)
     profile_field = apps.get_model("workflows_extraction", "Extraction").impl_field("profile")
     prepared = restore_prepared_pages(
         manifest.manifest, files=files, message_parts=parts,
         authorized_target=target, config=options,
         profile=profile_field.resolve_class(manifest.profile)(),
-        using=using,
     )
     if [
         RecognitionPageInput.model_validate(
@@ -785,20 +763,20 @@ def _restore_prepared(
     return prepared, manifest
 
 
-def _resolve_sources(value: ExtractionSourceInput, *, using: str) -> tuple[list[Any], list[Any], Any]:
+def _resolve_sources(value: ExtractionSourceInput) -> tuple[list[Any], list[Any], Any]:
     file_model = apps.get_model("storage", "File")
     part_model = apps.get_model("messaging", "Part")
     requested_files = list(
-        file_model.objects.db_manager(using).select_related("mime_type", "drive").filter(sqid__in=value.files)
+        file_model.objects.select_related("mime_type", "drive").filter(sqid__in=value.files)
     )
     files_by_id = {str(file.sqid): file for file in requested_files}
     if any(file_id not in files_by_id for file_id in value.files):
         raise ValidationError({"files": "One or more source Files are unavailable."})
     requested_parts = list(
-        part_model.objects.db_manager(using).filter(sqid__in=value.message_parts).select_related("message", "fragment")
+        part_model.objects.filter(sqid__in=value.message_parts).select_related("message", "fragment")
     )
     parts_by_id = {str(part.sqid): part for part in requested_parts}
     if any(part_id not in parts_by_id for part_id in value.message_parts):
         raise ValidationError({"message_parts": "One or more Message Parts are unavailable."})
-    target = apps.get_model(value.target_model).objects.db_manager(using).get(sqid=value.target_id)
+    target = apps.get_model(value.target_model).objects.get(sqid=value.target_id)
     return [files_by_id[item] for item in value.files], [parts_by_id[item] for item in value.message_parts], target

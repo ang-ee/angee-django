@@ -307,7 +307,6 @@ def test_artifact_unique_index_rejects_reentrant_batch_insertion(
         StepArtifact.objects.retain_artifacts(
             instance.attempt,
             ((content_type.pk, target.pk, "Forged artifact"),),
-            using="default",
         )
 
     post_save.connect(reenter, sender=StepArtifact, weak=False)
@@ -1167,7 +1166,7 @@ def test_cancel_skips_decision_expiry_when_waiting_projection_has_failed_attempt
     scheduled_step_run.refresh_from_db()
     scheduled_step_run.status = StepRunStatus.WAITING
     with system_context(reason="retain waiting projection before run failure settles"):
-        scheduled_step_run.project_from_attempt(attempt, fields={"status"}, using="default")
+        scheduled_step_run.project_from_attempt(attempt, fields={"status"})
 
     from angee.workflows import engine
 
@@ -1273,7 +1272,6 @@ def test_retained_decision_creation_requires_current_suspension_and_rejects_bulk
             step_run=scheduled_step_run,
             attempt=attempt,
             declarations=(declaration,),
-            using="default",
         )
     with system_context(reason="test retained decision bulk guard"):
         with pytest.raises(TypeError, match="owned by DecisionManager"):
@@ -1831,10 +1829,10 @@ def test_invocation_admission_is_a_write_once_conditional_update(scheduled_step_
     attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
     at = timezone.now()
     with system_context(reason="verify conditional invocation admission"):
-        assert not attempt.admit_invocation(lease_token=uuid.uuid4(), at=at, using="default")
-        assert attempt.admit_invocation(lease_token=attempt.lease_token, at=at, using="default")
+        assert not attempt.admit_invocation(lease_token=uuid.uuid4(), at=at)
+        assert attempt.admit_invocation(lease_token=attempt.lease_token, at=at)
         assert not attempt.admit_invocation(
-            lease_token=attempt.lease_token, at=at + timedelta(seconds=1), using="default"
+            lease_token=attempt.lease_token, at=at + timedelta(seconds=1)
         )
         attempt.refresh_from_db()
     assert attempt.started_at == at
@@ -1848,7 +1846,7 @@ def test_settlement_conditional_update_rejects_duplicate_and_non_suspension(sche
     attempt.decision_settlement = {"decision_ids": [1], "outcome": "approved"}
     with system_context(reason="verify non-suspension cannot settle"):
         with pytest.raises(ValidationError, match="not available for settlement"):
-            attempt.settle_decisions(using="default")
+            attempt.settle_decisions()
     StepAttempt.objects.finalize(
         attempt.pk,
         lease_token=attempt.lease_token,
@@ -1858,9 +1856,9 @@ def test_settlement_conditional_update_rejects_duplicate_and_non_suspension(sche
     with system_context(reason="verify conditional suspension settlement"):
         attempt.refresh_from_db()
         attempt.decision_settlement = {"decision_ids": [1], "outcome": "approved"}
-        attempt.settle_decisions(using="default")
+        attempt.settle_decisions()
         with pytest.raises(ValidationError, match="not available for settlement"):
-            attempt.settle_decisions(using="default")
+            attempt.settle_decisions()
         attempt.refresh_from_db()
     assert attempt.decision_settlement == {"decision_ids": [1], "outcome": "approved"}
 

@@ -27,7 +27,6 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import SubjectRef, system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.identity import canonical_subject_ref
 from angee.base.refs import CanonicalRecordTarget, canonical_record_target
 from angee.workflows import settlement
@@ -109,7 +108,6 @@ def start(
     origin: RunOrigin | None = None,
     input: JsonPresence = JsonPresence(),
     validate_new: Callable[[], None] | None = None,
-    using: str | None = None,
 ) -> Any:
     """Start the current published version after validating its subject declaration.
 
@@ -121,7 +119,7 @@ def start(
 
     return (
         apps.get_model("workflows", "WorkflowRun")
-        .objects.db_manager(using)
+        .objects
         .start(
             workflow,
             subject,
@@ -133,19 +131,16 @@ def start(
             origin=origin,
             input=input,
             validate_new=validate_new,
-            using=using,
         )
     )
 
 
-def recover(
-    source_attempt: Any, *, request_key: str, actor: Any, prior_recovery: Any = None, using: str | None = None
-) -> Any:
+def recover(source_attempt: Any, *, request_key: str, actor: Any, prior_recovery: Any = None) -> Any:
     """Start or recover one exact same-revision retained recovery request."""
 
     return (
         apps.get_model("workflows", "WorkflowRun")
-        .objects.db_manager(using)
+        .objects
         .start_recovery(
             source_attempt,
             request_key=request_key,
@@ -155,7 +150,7 @@ def recover(
     )
 
 
-def deliver(run_id: int, *, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
+def deliver(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     """Deliver an external event by waking this run's parked journal rows.
 
     This is the workflow engine's event-delivery seam. Every delivery advances
@@ -164,61 +159,59 @@ def deliver(run_id: int, *, now: datetime | None = None, using: str | None = Non
     generation is made immediately due by the retained dispatch path.
     """
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowRun"), using=using)
 
     timestamp = now or timezone.now()
     run_model = apps.get_model("workflows", "WorkflowRun")
     step_run_model = apps.get_model("workflows", "StepRun")
     woken = 0
-    with system_context(reason="workflows.engine.deliver"), transaction.atomic(using=alias):
-        run = run_model.objects.db_manager(alias).lock_execution_ancestry((run_id,))[run_id]
+    with system_context(reason="workflows.engine.deliver"), transaction.atomic():
+        run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
         if run.status in RunStatus.TERMINAL:
             return {"woken": 0}
         run.deliveries += 1
-        run.save(update_fields=["deliveries", "updated_at"], using=alias)
+        run.save(update_fields=["deliveries", "updated_at"])
         waiting = list(
-            step_run_model.objects.db_manager(alias)
+            step_run_model.objects
             .lock_if_supported()
             .filter(run=run, status=StepRunStatus.WAITING)
             .order_by("pk")
         )
         for step_run in waiting:
-            apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).wake_current(step_run.pk, at=timestamp)
+            apps.get_model("workflows", "StepAttempt").objects.wake_current(step_run.pk, at=timestamp)
             woken += 1
         if run.status == RunStatus.WAITING and waiting:
-            run.resume(using=alias)
-        apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias).schedule_advance(
+            run.resume()
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
             run, available_at=timestamp
         )
-        transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+        transaction.on_commit(lambda: enqueue_dispatch_publisher())
     return {"woken": woken}
 
 
-def subscribe_external(step_run: Any, resources: Iterable[Any], *, using: str | None = None) -> None:
+def subscribe_external(step_run: Any, resources: Iterable[Any]) -> None:
     """Commit this invocation's complete domain target set before its predicate read."""
 
-    alias = get_write_alias(apps.get_model("workflows", "StepAttempt"), using=using, instance=step_run)
 
-    attempt: Any = related_on(step_run, "current_attempt", using=alias)
+    attempt: Any = step_run.current_attempt
     lease_token = attempt.lease_token if attempt is not None else None
     if step_run.current_attempt_id is None or not isinstance(lease_token, uuid.UUID):
         raise RuntimeError("External subscription requires a retained invocation lease.")
-    apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).subscribe_external(
+    apps.get_model("workflows", "StepAttempt").objects.subscribe_external(
         step_run.current_attempt_id,
         lease_token=lease_token,
         resources=resources,
     )
 
 
-def schedule_artifact_delivery(resource: Any, *, using: str | None = None) -> Any:
+def schedule_artifact_delivery(resource: Any) -> Any:
     """Keep a domain event in its native transaction without locking a run."""
 
     return (
-        apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(using).schedule_artifact_delivery(resource)
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_artifact_delivery(resource)
     )
 
 
-def deliver_artifact(resource: Any, *, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
+def deliver_artifact(resource: Any, *, now: datetime | None = None) -> dict[str, int]:
     """Wake exact external waits whose current attempt retained ``resource``.
 
     Resource owners use this seam when one durable domain fact changes.  Unlike
@@ -227,21 +220,19 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None, using: str |
     """
 
     timestamp = now or timezone.now()
-    anchor = resource.content_type if isinstance(resource, CanonicalRecordTarget) else resource
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowRun"), using=using, instance=anchor)
-    target = resource if isinstance(resource, CanonicalRecordTarget) else canonical_record_target(resource, using=alias)
+    target = resource if isinstance(resource, CanonicalRecordTarget) else canonical_record_target(resource)
     run_model = apps.get_model("workflows", "WorkflowRun")
     step_run_model = apps.get_model("workflows", "StepRun")
     artifact_model = apps.get_model("workflows", "StepArtifact")
     subscription_model = apps.get_model("workflows", "StepExternalSubscription")
     woken = 0
     delivered_run_ids: list[int] = []
-    artifact_owner = artifact_model.objects.db_manager(alias)
-    subscription_owner = subscription_model.objects.db_manager(alias)
-    attempt_owner = apps.get_model("workflows", "StepAttempt").objects.db_manager(alias)
-    step_run_owner = step_run_model.objects.db_manager(alias)
-    run_owner = run_model.objects.db_manager(alias)
-    with system_context(reason="workflows.engine.deliver_artifact"), transaction.atomic(using=alias):
+    artifact_owner = artifact_model.objects
+    subscription_owner = subscription_model.objects
+    attempt_owner = apps.get_model("workflows", "StepAttempt").objects
+    step_run_owner = step_run_model.objects
+    run_owner = run_model.objects
+    with system_context(reason="workflows.engine.deliver_artifact"), transaction.atomic():
         artifact_step_ids = list(
             artifact_owner.filter(
                 target_content_type_id=target.content_type.pk,
@@ -348,41 +339,38 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None, using: str |
         for run_id in sorted(touched):
             run = runs[run_id]
             run.deliveries += 1
-            run.save(using=alias, update_fields=["deliveries", "updated_at"])
+            run.save(update_fields=["deliveries", "updated_at"])
             if run.status == RunStatus.WAITING:
-                run.resume(using=alias)
+                run.resume()
             delivered_run_ids.append(run_id)
-            apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias).schedule_advance(
+            apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
                 run, available_at=timestamp
             )
         if delivered_run_ids:
-            transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+            transaction.on_commit(lambda: enqueue_dispatch_publisher())
     return {"runs": len(delivered_run_ids), "woken": woken}
 
 
-def deliver_artifact_dispatch(
-    dispatch_id: int, *, now: datetime | None = None, using: str | None = None
-) -> dict[str, int]:
+def deliver_artifact_dispatch(dispatch_id: int, *, now: datetime | None = None) -> dict[str, int]:
     """Consume one committed domain intent and deliver to current subscribers."""
 
     return (
         apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
+        .objects
         .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY, now=now)
     )
 
 
-def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any, using: str | None = None) -> tuple[Any, bool]:
+def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any) -> tuple[Any, bool]:
     """Retain one cross-run cancellation from this fenced database command."""
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowDispatch"), using=using, instance=step_run)
-    attempt: Any = related_on(step_run, "current_attempt", using=alias)
+    attempt: Any = step_run.current_attempt
     if attempt is None:
         raise apps.get_model("workflows", "StepAttempt").DoesNotExist("StepRun has no current attempt.")
 
     return (
         apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(alias)
+        .objects
         .schedule_run_cancel(
             step_run.pk,
             run,
@@ -392,54 +380,49 @@ def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any, using: str | Non
     )
 
 
-def cancel_run_dispatch(
-    dispatch_id: int, *, expected_run_id: int | None = None, using: str | None = None
-) -> dict[str, int]:
+def cancel_run_dispatch(dispatch_id: int, *, expected_run_id: int | None = None) -> dict[str, int]:
     """Deliver one persisted cross-run cancellation through the run owner."""
 
     return (
         apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
+        .objects
         .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.RUN_CANCEL, expected_target_id=expected_run_id)
     )
 
 
-def settle_run_dispatch(
-    dispatch_id: int, *, expected_run_id: int | None = None, using: str | None = None
-) -> dict[str, int]:
+def settle_run_dispatch(dispatch_id: int, *, expected_run_id: int | None = None) -> dict[str, int]:
     """Deliver a terminal subject settlement through the retained run owner."""
 
     return (
         apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
+        .objects
         .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.RUN_SETTLE, expected_target_id=expected_run_id)
     )
 
 
-def advance(run_id: int, *, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
+def advance(run_id: int, *, now: datetime | None = None) -> dict[str, int]:
     """Create and synchronously consume one durable orchestration pulse."""
 
     timestamp = now or timezone.now()
     run_model = apps.get_model("workflows", "WorkflowRun")
-    alias = get_write_alias(run_model, using=using)
-    with system_context(reason="workflows.engine.advance.schedule"), transaction.atomic(using=alias):
-        run = run_model.objects.db_manager(alias).get(pk=run_id)
+    with system_context(reason="workflows.engine.advance.schedule"), transaction.atomic():
+        run = run_model.objects.get(pk=run_id)
         dispatch = (
             apps.get_model("workflows", "WorkflowDispatch")
-            .objects.db_manager(alias)
+            .objects
             .schedule_advance(run, available_at=timestamp)
         )
-    return advance_dispatch(dispatch.pk, expected_run_id=run_id, now=timestamp, using=alias)
+    return advance_dispatch(dispatch.pk, expected_run_id=run_id, now=timestamp)
 
 
 def advance_dispatch(
-    dispatch_id: int, *, expected_run_id: int | None = None, now: datetime | None = None, using: str | None = None
+    dispatch_id: int, *, expected_run_id: int | None = None, now: datetime | None = None
 ) -> dict[str, int]:
     """Apply one durable ADVANCE delivery through its exact owner preflight."""
 
     return (
         apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
+        .objects
         .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.ADVANCE, expected_target_id=expected_run_id, now=now)
     )
 
@@ -448,21 +431,20 @@ def advance_locked(target: DispatchTarget, *, at: datetime) -> bool:
     """Advance the locked run and clear only this intent's retry diagnostic."""
 
     run = target.row
-    alias = run._state.db
     if not run.is_terminal:
-        _activate_run_if_needed(run, timestamp=at, alias=alias)
-        _route_completed_steps(run, alias=alias)
-        _process_recovery_map_aggregate(run, timestamp=at, alias=alias)
-        _route_completed_steps(run, alias=alias)
-        if _process_map_steps(run, timestamp=at, alias=alias):
-            _route_completed_steps(run, alias=alias)
-            if not _fail_if_budget_exceeded(run, alias=alias):
-                target.result["claimed"] = len(_claim_due_steps(run, timestamp=at, alias=alias))
-                _update_run_status(run, timestamp=at, alias=alias)
+        _activate_run_if_needed(run, timestamp=at)
+        _route_completed_steps(run)
+        _process_recovery_map_aggregate(run, timestamp=at)
+        _route_completed_steps(run)
+        if _process_map_steps(run, timestamp=at):
+            _route_completed_steps(run)
+            if not _fail_if_budget_exceeded(run):
+                target.result["claimed"] = len(_claim_due_steps(run, timestamp=at))
+                _update_run_status(run, timestamp=at)
     prefix = type(target.dispatch).objects.advance_error_prefix(target.dispatch)
     if run.status not in {RunStatus.FAILED, RunStatus.CANCELED} and run.error.startswith(prefix):
         run.error = ""
-        run.save(using=alias, update_fields=["error", "updated_at"])
+        run.save(update_fields=["error", "updated_at"])
     return True
 
 
@@ -470,13 +452,12 @@ def admit_execution(target: DispatchTarget, *, at: datetime) -> bool:
     """Admit an invocation now and defer its implementation until locks exit."""
 
     attempt = target.row
-    alias = attempt._state.db
     admitted = (
-        type(attempt).objects.db_manager(alias).admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=at)
+        type(attempt).objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=at)
     )
     if admitted != InvocationAdmission.FIRST_START:
         return False
-    target.after_unlock = lambda: execute_attempt(attempt.pk, attempt.lease_token, at=at, using=alias)
+    target.after_unlock = lambda: execute_attempt(attempt.pk, attempt.lease_token, at=at)
     return True
 
 
@@ -484,11 +465,10 @@ def deliver_artifact_locked(target: DispatchTarget, *, at: datetime) -> bool:
     """Wake subscribers to the immutable artifact identity on this intent."""
 
     dispatch = target.dispatch
-    alias = dispatch._state.db
     resource = CanonicalRecordTarget(
-        related_on(dispatch, "artifact_content_type", using=alias), dispatch.artifact_object_id
+        dispatch.artifact_content_type, dispatch.artifact_object_id
     )
-    target.result.update(deliver_artifact(resource, now=at, using=alias))
+    target.result.update(deliver_artifact(resource, now=at))
     return True
 
 
@@ -496,7 +476,7 @@ def cancel_run_locked(target: DispatchTarget, *, at: datetime) -> bool:
     """Apply the cancellation admitted when this intent was retained."""
 
     run = target.row
-    canceled = type(run).objects.db_manager(run._state.db).cancel_locked(run, at=at, alias=run._state.db)
+    canceled = type(run).objects.cancel_locked(run, at=at)
     target.result["canceled"] = int(canceled)
     return canceled
 
@@ -505,9 +485,8 @@ def cancel_child_locked(target: DispatchTarget, *, at: datetime) -> bool:
     """Verify the terminal parent before applying its owned-child cancellation."""
 
     child = target.row
-    alias = child._state.db
-    slot = related_on(child, "parent_step_run", using=alias)
-    parent = related_on(slot, "run", using=alias) if slot is not None else None
+    slot = child.parent_step_run
+    parent = slot.run if slot is not None else None
     if child.parent_relation != ParentRelation.OWNED_CALL or slot is None or parent is None or not parent.is_terminal:
         raise ValidationError({"child": "Owned-child cancellation requires its terminal parent."})
     return cancel_run_locked(target, at=at)
@@ -518,7 +497,7 @@ def settle_subject_locked(target: DispatchTarget, *, at: datetime) -> bool:
 
     if not target.row.is_terminal:
         raise ValidationError({"run": "Subject settlement requires a terminal run."})
-    settlement.settle_subject(target.row, using=target.row._state.db)
+    settlement.settle_subject(target.row)
     target.result["settled"] = 1
     return True
 
@@ -527,7 +506,7 @@ def resolve_decision_timer(target: DispatchTarget, *, verdict: Verdict, at: date
     decision = target.row
     resolved = (
         type(decision)
-        .objects.db_manager(decision._state.db)
+        .objects
         .resolve_timed(
             decision.pk,
             generation=target.dispatch.generation,
@@ -539,17 +518,11 @@ def resolve_decision_timer(target: DispatchTarget, *, verdict: Verdict, at: date
     return resolved
 
 
-def external_operation_request(step_run: Any, *, using: str | None = None) -> ExternalOperationRequest:
+def external_operation_request(step_run: Any) -> ExternalOperationRequest:
     """Return the exact retained request identity for the current provider call."""
 
-    alias = get_write_alias(apps.get_model("workflows", "StepAttempt"), using=using, instance=step_run)
 
-    attempt: Any = related_on(
-        step_run,
-        "current_attempt",
-        using=alias,
-        select_related=("recovery_source_attempt", "step_run__run"),
-    )
+    attempt: Any = step_run.current_attempt
     if attempt is None or attempt.started_at is None:
         raise RuntimeError("External operations require a started retained attempt.")
     source = attempt.recovery_source_attempt
@@ -563,18 +536,11 @@ def external_operation_request(step_run: Any, *, using: str | None = None) -> Ex
     )
 
 
-def resolve_workflow_actor(
-    source: Any, *, require_person: bool = False, using: str | None = None
-) -> WorkflowActorResolution:
+def resolve_workflow_actor(source: Any, *, require_person: bool = False) -> WorkflowActorResolution:
     """Resolve run admission, actor, assignee, or requester through one owner."""
 
-    alias = get_write_alias(
-        get_user_model(), using=using, instance=source if isinstance(source, models.Model) else None
-    )
 
     if hasattr(source, "admission_actor") and callable(source.admission_actor):
-        if isinstance(source, models.Model):
-            source._state.db = alias
         actor = source.admission_actor()
         if actor is None:
             raise ValidationError({"actor": "Workflow execution requires its admitted actor."})
@@ -592,7 +558,7 @@ def resolve_workflow_actor(
             raise ValidationError({"actor": "Workflow execution actor is invalid."}) from error
         actor = source
     if require_person:
-        person = get_user_model().objects.db_manager(alias).active_person_for_subject(subject)
+        person = get_user_model().objects.active_person_for_subject(subject)
         if person is None:
             raise ValidationError({"actor": "Workflow Decision requires an active human actor."})
         actor = person
@@ -600,13 +566,13 @@ def resolve_workflow_actor(
 
 
 def execute_dispatch(
-    dispatch_id: int, attempt_id: int, lease_token: Any, *, now: datetime | None = None, using: str | None = None
+    dispatch_id: int, attempt_id: int, lease_token: Any, *, now: datetime | None = None
 ) -> dict[str, int]:
     """Execute one exact retained attempt after atomic dispatch and lease admission."""
 
     return (
         apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
+        .objects
         .deliver(
             dispatch_id,
             expected_kind=WorkflowDispatchKind.EXECUTE,
@@ -617,16 +583,15 @@ def execute_dispatch(
     )
 
 
-def execute_attempt(attempt_id: int, lease_token: uuid.UUID, *, at: datetime, using: str) -> dict[str, int]:
+def execute_attempt(attempt_id: int, lease_token: uuid.UUID, *, at: datetime) -> dict[str, int]:
     """Invoke and finalize a previously admitted attempt outside delivery locks."""
 
     timestamp = at
-    alias = using
     attempt_model = apps.get_model("workflows", "StepAttempt")
     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     with system_context(reason="workflows.engine.execute_dispatch.load"):
         attempt = (
-            attempt_model.objects.db_manager(alias)
+            attempt_model.objects
             .select_related("step_run__run", "step_run__step", "recovery_source_attempt")
             .get(pk=attempt_id)
         )
@@ -634,9 +599,6 @@ def execute_attempt(attempt_id: int, lease_token: uuid.UUID, *, at: datetime, us
         impl_class = step_run.step.resolve_impl("step_class")
 
     def invoke(owned_step_run: Any, owned_attempt: Any) -> AttemptResult:
-        # Overrides retain their public signature and inherit the admitted writer.
-        owned_step_run._state.db = alias
-        owned_step_run.run._state.db = alias
         owned_step_run.input = owned_attempt.input if owned_attempt.input_present else None
         owned_step_run.current_attempt = owned_attempt
         if impl_class.execution_mode == StepExecutionMode.EXTERNAL_OPERATION:
@@ -662,35 +624,35 @@ def execute_attempt(attempt_id: int, lease_token: uuid.UUID, *, at: datetime, us
         result = (
             step_result.to_attempt_result() if step_result is not None else AttemptResult(AttemptResultKind.NO_RESULT)
         )
-        attempt_model.objects.db_manager(alias).validate_result(result)
+        attempt_model.objects.validate_result(result)
         return result
 
     def schedule_result(finalization: Any) -> None:
         if finalization.retry_intent is not None:
-            successor = attempt_model.objects.db_manager(alias).get(pk=finalization.retry_intent.attempt_id)
-            dispatch_model.objects.db_manager(alias).schedule_execute(successor)
+            successor = attempt_model.objects.get(pk=finalization.retry_intent.attempt_id)
+            dispatch_model.objects.schedule_execute(successor)
         for intent in finalization.timer_intents:
-            decision = apps.get_model("workflows", "Decision").objects.db_manager(alias).get(pk=intent.decision_id)
+            decision = apps.get_model("workflows", "Decision").objects.get(pk=intent.decision_id)
             kind = (
                 WorkflowDispatchKind.DECISION_ESCALATE
                 if intent.kind.value == "escalate"
                 else WorkflowDispatchKind.DECISION_EXPIRE
             )
-            dispatch_model.objects.db_manager(alias).schedule_decision(kind, decision)
+            dispatch_model.objects.schedule_decision(kind, decision)
         if finalization.recorded and finalization.applied and finalization.retry_intent is None:
-            projected: Any = related_on(attempt, "step_run", using=alias, select_related=("run",))
-            dispatch_model.objects.db_manager(alias).schedule_advance(projected.run, available_at=timezone.now())
+            projected = type(step_run).objects.select_related("run").get(pk=attempt.step_run_id)
+            dispatch_model.objects.schedule_advance(projected.run, available_at=timezone.now())
             if projected.status == StepRunStatus.WAITING and projected.wait_until is not None:
-                dispatch_model.objects.db_manager(alias).schedule_advance(
+                dispatch_model.objects.schedule_advance(
                     projected.run, available_at=projected.wait_until
                 )
-        transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+        transaction.on_commit(lambda: enqueue_dispatch_publisher())
 
     mode = impl_class.execution_mode
     try:
         if mode == StepExecutionMode.DATABASE_COMMAND:
-            with transaction.atomic(using=alias):
-                finalization = attempt_model.objects.db_manager(alias).execute_database_command(
+            with transaction.atomic():
+                finalization = attempt_model.objects.execute_database_command(
                     attempt_id,
                     lease_token=lease_token,
                     command=invoke,
@@ -715,8 +677,8 @@ def execute_attempt(attempt_id: int, lease_token: uuid.UUID, *, at: datetime, us
             stacktrace=traceback.format_exc(),
         )
 
-    with system_context(reason="workflows.engine.execute_dispatch.finalize"), transaction.atomic(using=alias):
-        finalization = attempt_model.objects.db_manager(alias).finalize(
+    with system_context(reason="workflows.engine.execute_dispatch.finalize"), transaction.atomic():
+        finalization = attempt_model.objects.finalize(
             attempt_id,
             lease_token=lease_token,
             result=result,
@@ -726,42 +688,41 @@ def execute_attempt(attempt_id: int, lease_token: uuid.UUID, *, at: datetime, us
     return {"executed": 1}
 
 
-def cancel(run: Any, *, actor: Any, using: str | None = None) -> None:
+def cancel(run: Any, *, actor: Any) -> None:
     """Dispatch an explicitly authorized cancellation to the run owner."""
 
-    return apps.get_model("workflows", "WorkflowRun").objects.db_manager(using).cancel(run, actor=actor)
+    return apps.get_model("workflows", "WorkflowRun").objects.cancel(run, actor=actor)
 
 
-def expire_pending_decisions(run: Any, *, resolved_by: str, using: str | None = None) -> int:
+def expire_pending_decisions(run: Any, *, resolved_by: str) -> int:
     """Expire every pending decision for a retained run instance."""
 
     return (
         apps.get_model("workflows", "WorkflowRun")
-        .objects.db_manager(using)
+        .objects
         .expire_decisions(run, resolved_by=resolved_by, include_current=True)
     )
 
 
-def expire_orphaned_decisions(run: Any, *, resolved_by: str, using: str | None = None) -> int:
+def expire_orphaned_decisions(run: Any, *, resolved_by: str) -> int:
     """Expire decisions whose retained run instance no longer holds their suspension."""
 
     return (
         apps.get_model("workflows", "WorkflowRun")
-        .objects.db_manager(using)
+        .objects
         .expire_decisions(run, resolved_by=resolved_by, include_current=False)
     )
 
 
-def sweep(*, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
+def sweep(*, now: datetime | None = None) -> dict[str, int]:
     """Advance runs whose durable wake time is due."""
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowRun"), using=using)
 
     timestamp = now or timezone.now()
     run_model = apps.get_model("workflows", "WorkflowRun")
     with system_context(reason="workflows.engine.sweep"):
         run_ids = list(
-            run_model.objects.db_manager(alias)
+            run_model.objects
             .filter(wake_at__lte=timestamp)
             .filter(status__in=[RunStatus.RUNNING, RunStatus.WAITING])
             .order_by("pk")
@@ -769,22 +730,21 @@ def sweep(*, now: datetime | None = None, using: str | None = None) -> dict[str,
         )
     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     dispatch_ids: list[int] = []
-    with system_context(reason="workflows.engine.sweep.schedule"), transaction.atomic(using=alias):
+    with system_context(reason="workflows.engine.sweep.schedule"), transaction.atomic():
         for run_id in run_ids:
-            run = run_model.objects.db_manager(alias).get(pk=run_id)
-            dispatch = dispatch_model.objects.db_manager(alias).schedule_advance(run, available_at=timestamp)
+            run = run_model.objects.get(pk=run_id)
+            dispatch = dispatch_model.objects.schedule_advance(run, available_at=timestamp)
             dispatch_ids.append(dispatch.pk)
         if run_ids:
-            transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+            transaction.on_commit(lambda: enqueue_dispatch_publisher())
     for dispatch_id in dispatch_ids:
-        advance_dispatch(dispatch_id, now=timestamp, using=alias)
+        advance_dispatch(dispatch_id, now=timestamp)
     return {"runs": len(run_ids)}
 
 
-def reap(*, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
+def reap(*, now: datetime | None = None) -> dict[str, int]:
     """Fail started step-runs whose heartbeat is past the configured deadline."""
 
-    alias = get_write_alias(apps.get_model("workflows", "StepRun"), using=using)
 
     timestamp = now or timezone.now()
     deadline = timestamp - heartbeat_timeout()
@@ -792,7 +752,7 @@ def reap(*, now: datetime | None = None, using: str | None = None) -> dict[str, 
     reaped = 0
     with system_context(reason="workflows.engine.reap.discover"):
         stale_ids = list(
-            step_run_model.objects.db_manager(alias)
+            step_run_model.objects
             .filter(status=StepRunStatus.STARTED)
             .filter(
                 models.Q(current_attempt__isnull=False, current_attempt__heartbeat_at__lt=deadline)
@@ -802,29 +762,27 @@ def reap(*, now: datetime | None = None, using: str | None = None) -> dict[str, 
             .values_list("pk", flat=True)
         )
     for step_run_id in stale_ids:
-        with system_context(reason="workflows.engine.reap"), transaction.atomic(using=alias):
-            step_run = step_run_model.objects.db_manager(alias).select_related("run").get(pk=step_run_id)
+        with system_context(reason="workflows.engine.reap"), transaction.atomic():
+            step_run = step_run_model.objects.select_related("run").get(pk=step_run_id)
             if (
                 apps.get_model("workflows", "StepAttempt")
-                .objects.db_manager(alias)
+                .objects
                 .timeout_current(step_run.pk, heartbeat_before=deadline, at=timestamp)
             ):
-                apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias).schedule_advance(
+                apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
                     step_run.run, available_at=timestamp
                 )
-                transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+                transaction.on_commit(lambda: enqueue_dispatch_publisher())
                 reaped += 1
     return {"reaped": reaped}
 
 
-def decide(
-    decision: Any, verdict: str, *, payload: Any = None, actor: Any = None, using: str | None = None
-) -> DecisionAttemptResult:
+def decide(decision: Any, verdict: str, *, payload: Any = None, actor: Any = None) -> DecisionAttemptResult:
     """Dispatch a public decision submission to its complete manager operation."""
 
     return (
         apps.get_model("workflows", "Decision")
-        .objects.db_manager(using)
+        .objects
         .submit(
             decision,
             verdict,
@@ -834,23 +792,22 @@ def decide(
     )
 
 
-def sweep_decisions(*, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
+def sweep_decisions(*, now: datetime | None = None) -> dict[str, int]:
     """Retain and consume dispatches for pending decisions whose deadlines are due."""
 
-    alias = get_write_alias(apps.get_model("workflows", "Decision"), using=using)
 
     timestamp = now or timezone.now()
     decision_model = apps.get_model("workflows", "Decision")
     dispatches: list[tuple[int, WorkflowDispatchKind, int, int]] = []
-    with system_context(reason="workflows.engine.decision_sweep"), transaction.atomic(using=alias):
+    with system_context(reason="workflows.engine.decision_sweep"), transaction.atomic():
         expired = list(
-            decision_model.objects.db_manager(alias)
+            decision_model.objects
             .filter(verdict=Verdict.PENDING, expires_at__lte=timestamp)
             .order_by("pk")
             .select_related("step_run__run")
         )
         escalated = list(
-            decision_model.objects.db_manager(alias)
+            decision_model.objects
             .filter(verdict=Verdict.PENDING, escalate_at__lte=timestamp)
             .filter(models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=timestamp))
             .order_by("pk")
@@ -864,14 +821,14 @@ def sweep_decisions(*, now: datetime | None = None, using: str | None = None) ->
             for decision in decisions:
                 if decision.suspension_attempt_id is None:
                     raise ValidationError({"decision": "Decision timers require retained suspension evidence."})
-                dispatch, _created = dispatch_model.objects.db_manager(alias).schedule_decision(kind, decision)
+                dispatch, _created = dispatch_model.objects.schedule_decision(kind, decision)
                 dispatches.append((dispatch.pk, WorkflowDispatchKind(kind), decision.pk, decision.attempts))
     expired_count = 0
     escalated_count = 0
     for dispatch_id, kind, decision_id, generation in dispatches:
         result = (
             apps.get_model("workflows", "WorkflowDispatch")
-            .objects.db_manager(alias)
+            .objects
             .deliver(
                 dispatch_id,
                 expected_kind=kind,
@@ -887,45 +844,44 @@ def sweep_decisions(*, now: datetime | None = None, using: str | None = None) ->
     return {"expired": expired_count, "escalated": escalated_count}
 
 
-def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any, using: str | None = None) -> Any:
+def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any) -> Any:
     """Cancel active rows, insert an override journal row, and schedule next steps."""
 
     return (
-        apps.get_model("workflows", "WorkflowRun").objects.db_manager(using).override_run(run, next_steps, actor=actor)
+        apps.get_model("workflows", "WorkflowRun").objects.override_run(run, next_steps, actor=actor)
     )
 
 
-def enqueue_advance(run_id: int, *, using: str | None = None) -> None:
+def enqueue_advance(run_id: int) -> None:
     """Retain an immediate advance and request transport publication."""
 
-    return enqueue_advance_at(run_id, timezone.now(), using=using)
+    return enqueue_advance_at(run_id, timezone.now())
 
 
-def enqueue_advance_at(run_id: int, when: datetime, *, using: str | None = None) -> None:
+def enqueue_advance_at(run_id: int, when: datetime) -> None:
     """Retain a timer wake before asking the transport to publish it."""
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowRun"), using=using)
 
-    with system_context(reason="workflows.engine.schedule_advance"), transaction.atomic(using=alias):
-        run = apps.get_model("workflows", "WorkflowRun").objects.db_manager(alias).filter(pk=run_id).first()
+    with system_context(reason="workflows.engine.schedule_advance"), transaction.atomic():
+        run = apps.get_model("workflows", "WorkflowRun").objects.filter(pk=run_id).first()
         if run is None:
             return
-        apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias).schedule_advance(
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
             run, available_at=when
         )
-        transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+        transaction.on_commit(lambda: enqueue_dispatch_publisher())
 
 
-def _activate_run_if_needed(run: Any, *, timestamp: datetime, alias: str) -> None:
+def _activate_run_if_needed(run: Any, *, timestamp: datetime) -> None:
     if run.status == RunStatus.PENDING:
-        run.mark_running(using=alias)
-    elif run.status == RunStatus.WAITING and _has_due_wait(run, timestamp=timestamp, alias=alias):
-        run.resume(using=alias)
+        run.mark_running()
+    elif run.status == RunStatus.WAITING and _has_due_wait(run, timestamp=timestamp):
+        run.resume()
 
 
-def _has_due_wait(run: Any, *, timestamp: datetime, alias: str) -> bool:
+def _has_due_wait(run: Any, *, timestamp: datetime) -> bool:
     return (
-        run.step_runs.db_manager(alias)
+        run.step_runs
         .filter(
             status=StepRunStatus.WAITING,
             wait_until__isnull=False,
@@ -935,23 +891,23 @@ def _has_due_wait(run: Any, *, timestamp: datetime, alias: str) -> bool:
     )
 
 
-def _route_completed_steps(run: Any, *, alias: str) -> None:
+def _route_completed_steps(run: Any) -> None:
     if run.origin == RunOrigin.TEST and run.test_scope == WorkflowScope.NODE:
         return
-    for step_run in _terminal_step_runs(run, alias=alias):
+    for step_run in _terminal_step_runs(run):
         if step_run.step_id is None:
             continue
         if step_run.status == StepRunStatus.SUCCEEDED:
-            _route_success(run, step_run, alias=alias)
+            _route_success(run, step_run)
         elif step_run.status == StepRunStatus.SKIPPED:
-            _route_skip(run, step_run, alias=alias)
+            _route_skip(run, step_run)
         elif step_run.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}:
-            _route_done(run, step_run, alias=alias)
+            _route_done(run, step_run)
 
 
-def _terminal_step_runs(run: Any, *, alias: str) -> Iterable[Any]:
+def _terminal_step_runs(run: Any) -> Iterable[Any]:
     return (
-        run.step_runs.db_manager(alias)
+        run.step_runs
         .select_related("step")
         .filter(status__in=list(StepRunStatus.TERMINAL))
         .filter(map_index=-1)
@@ -960,7 +916,7 @@ def _terminal_step_runs(run: Any, *, alias: str) -> Iterable[Any]:
     )
 
 
-def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime, alias: str) -> None:
+def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime) -> None:
     """Project a successful FRESH Map member through the ordinary Map join owner."""
 
     if run.origin != RunOrigin.RECOVERY or run.recovery_source_attempt_id is None:
@@ -970,7 +926,7 @@ def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime, alias: str
     if source_step_run.map_index < 0 or source.map_expansion_id is None:
         return
     recovered = (
-        run.step_runs.db_manager(alias)
+        run.step_runs
         .filter(
             step_id=source_step_run.step_id,
             map_index=source_step_run.map_index,
@@ -979,15 +935,15 @@ def _process_recovery_map_aggregate(run: Any, *, timestamp: datetime, alias: str
     )
     if recovered is None or recovered.status != StepRunStatus.SUCCEEDED:
         return
-    apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).record_recovery_map_aggregate(
+    apps.get_model("workflows", "StepAttempt").objects.record_recovery_map_aggregate(
         recovered.pk,
         at=timestamp,
     )
 
 
-def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
+def _process_map_steps(run: Any, *, timestamp: datetime) -> bool:
     locked_rows = list(
-        run.step_runs.db_manager(alias)
+        run.step_runs
         .lock_if_supported()
         .select_related("step", "current_attempt", "current_map_expansion")
         .order_by("pk")
@@ -1003,7 +959,7 @@ def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
     for step_run in map_rows:
         if step_run.status == StepRunStatus.SCHEDULED:
             fixture = (
-                run.test_fixtures.db_manager(alias)
+                run.test_fixtures
                 .filter(
                     step_id=step_run.step_id,
                     role=FixtureRole.OUTPUT,
@@ -1014,10 +970,10 @@ def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
                 else None
             )
             if fixture is not None:
-                apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).record_test_fixture(
+                apps.get_model("workflows", "StepAttempt").objects.record_test_fixture(
                     fixture, at=timestamp, due_step_run_id=step_run.pk
                 )
-                apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias).schedule_advance(
+                apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
                     run, available_at=timestamp
                 )
                 continue
@@ -1025,10 +981,9 @@ def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
                 run,
                 step_run,
                 source_rows=locked_rows,
-                alias=alias,
             )
             if preparation.failure is not None:
-                apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).fail_preparation(
+                apps.get_model("workflows", "StepAttempt").objects.fail_preparation(
                     step_run,
                     cause=AttemptCause.INITIAL,
                     input=preparation.input,
@@ -1042,11 +997,10 @@ def _process_map_steps(run: Any, *, timestamp: datetime, alias: str) -> bool:
                 step_run,
                 input=preparation.input,
                 timestamp=timestamp,
-                alias=alias,
             ):
                 return False
         if step_run.status == StepRunStatus.WAITING:
-            if not _complete_retained_map_step_if_ready(run, step_run, timestamp=timestamp, alias=alias):
+            if not _complete_retained_map_step_if_ready(run, step_run, timestamp=timestamp):
                 return False
     return True
 
@@ -1057,27 +1011,26 @@ def _expand_retained_map_step(
     *,
     input: AttemptInput,
     timestamp: datetime,
-    alias: str,
 ) -> bool:
     """Retain one Map expansion generation before exposing any body slot."""
 
     recorded = (
         apps.get_model("workflows", "StepAttempt")
-        .objects.db_manager(alias)
+        .objects
         .record_map_expansion(step_run, input=input, at=timestamp)
     )
     if recorded is None:
         return False
     expansion, plan = recorded
     target = (
-        apps.get_model("workflows", "Step").objects.db_manager(alias).get(pk=plan.target_id)
+        apps.get_model("workflows", "Step").objects.get(pk=plan.target_id)
         if plan.target_id is not None
         else None
     )
     items = plan.items
     if target is not None:
-        _ensure_map_children(run, step_run, target=target, items=items, alias=alias)
-        apps.get_model("workflows", "StepRun").objects.db_manager(alias).bind_map_membership(
+        _ensure_map_children(run, step_run, target=target, items=items)
+        apps.get_model("workflows", "StepRun").objects.bind_map_membership(
             run_id=run.pk,
             target_id=target.pk,
             expansion_attempt_id=expansion.pk,
@@ -1086,13 +1039,13 @@ def _expand_retained_map_step(
         )
     if not items:
         return _complete_retained_map_step_if_ready(
-            run, step_run, timestamp=timestamp, expansion_attempt_id=expansion.pk, alias=alias
+            run, step_run, timestamp=timestamp, expansion_attempt_id=expansion.pk
         )
     return True
 
 
 def _complete_retained_map_step_if_ready(
-    run: Any, step_run: Any, *, timestamp: datetime, expansion_attempt_id: int | None = None, alias: str
+    run: Any, step_run: Any, *, timestamp: datetime, expansion_attempt_id: int | None = None
 ) -> bool:
     """Aggregate only the exact members of the current retained expansion."""
 
@@ -1100,9 +1053,9 @@ def _complete_retained_map_step_if_ready(
     if expansion_id is None:
         raise ValidationError({"attempt": "Retained Map controller has no current expansion."})
     expansion: Any = (
-        apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).get(pk=expansion_attempt_id)
+        apps.get_model("workflows", "StepAttempt").objects.get(pk=expansion_attempt_id)
         if expansion_attempt_id
-        else related_on(step_run, "current_attempt", using=alias)
+        else step_run.current_attempt
     )
     checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
     map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
@@ -1110,25 +1063,25 @@ def _complete_retained_map_step_if_ready(
         target_id = map_state.get("target_step_id")
         items = map_state.get("items")
         if target_id is not None and isinstance(items, list):
-            target = apps.get_model("workflows", "Step").objects.db_manager(alias).get(pk=target_id)
+            target = apps.get_model("workflows", "Step").objects.get(pk=target_id)
             # The membership owner validates the exact current expansion before
             # recovery is allowed to materialize any missing child rows.
-            apps.get_model("workflows", "StepRun").objects.db_manager(alias).bind_map_membership(
+            apps.get_model("workflows", "StepRun").objects.bind_map_membership(
                 run_id=step_run.run_id,
                 target_id=target.pk,
                 expansion_attempt_id=expansion_id,
                 item_count=len(items),
                 at=timestamp,
             )
-            _ensure_map_children(run, step_run, target=target, items=items, alias=alias)
-            apps.get_model("workflows", "StepRun").objects.db_manager(alias).bind_map_membership(
+            _ensure_map_children(run, step_run, target=target, items=items)
+            apps.get_model("workflows", "StepRun").objects.bind_map_membership(
                 run_id=step_run.run_id,
                 target_id=target.pk,
                 expansion_attempt_id=expansion_id,
                 item_count=len(items),
                 at=timestamp,
             )
-    apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).record_map_aggregate(
+    apps.get_model("workflows", "StepAttempt").objects.record_map_aggregate(
         step_run.pk,
         expansion_attempt_id=expansion_id,
         at=timestamp,
@@ -1136,10 +1089,10 @@ def _complete_retained_map_step_if_ready(
     return True
 
 
-def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[Any], alias: str) -> None:
+def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[Any]) -> None:
     step_run_model = apps.get_model("workflows", "StepRun")
     for index, item in enumerate(items):
-        child, _ = step_run_model.objects.db_manager(alias).get_or_create(
+        child, _ = step_run_model.objects.get_or_create(
             run_id=run.pk,
             step_id=target.pk,
             map_index=index,
@@ -1148,13 +1101,13 @@ def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[An
                 "input": map_child_input(item),
             },
         )
-        step_run_model.objects.update_previous(child, [step_run], using=alias)
+        step_run_model.objects.update_previous(child, [step_run])
 
 
-def _route_success(run: Any, step_run: Any, *, alias: str) -> None:
+def _route_success(run: Any, step_run: Any) -> None:
     outgoing = list(
         apps.get_model("workflows", "Edge")
-        .objects.db_manager(alias)
+        .objects
         .filter(source_id=step_run.step_id)
         .select_related("target")
         .order_by("pk")
@@ -1165,17 +1118,17 @@ def _route_success(run: Any, step_run: Any, *, alias: str) -> None:
         edges.append(edge)
     for target, edges in by_target.values():
         if any(not edge.condition or edge.condition == step_run.outcome for edge in edges):
-            _maybe_schedule_target(run, target, alias=alias)
-        elif target.incoming_edges.db_manager(alias).exclude(source_id=step_run.step_id).exists():
-            _maybe_schedule_target(run, target, alias=alias)
+            _maybe_schedule_target(run, target)
+        elif target.incoming_edges.exclude(source_id=step_run.step_id).exists():
+            _maybe_schedule_target(run, target)
         else:
-            _ensure_skipped(run, target, previous=[step_run], alias=alias)
+            _ensure_skipped(run, target, previous=[step_run])
 
 
-def _route_skip(run: Any, step_run: Any, *, alias: str) -> None:
+def _route_skip(run: Any, step_run: Any) -> None:
     outgoing = list(
         apps.get_model("workflows", "Edge")
-        .objects.db_manager(alias)
+        .objects
         .filter(source_id=step_run.step_id)
         .select_related("target")
         .order_by("pk")
@@ -1187,76 +1140,74 @@ def _route_skip(run: Any, step_run: Any, *, alias: str) -> None:
     for target, edges in by_target.values():
         if (
             any(not edge.condition for edge in edges)
-            or target.incoming_edges.db_manager(alias).exclude(source_id=step_run.step_id).exists()
+            or target.incoming_edges.exclude(source_id=step_run.step_id).exists()
         ):
-            _maybe_schedule_target(run, target, alias=alias)
+            _maybe_schedule_target(run, target)
         else:
-            _ensure_skipped(run, target, previous=[step_run], alias=alias)
+            _ensure_skipped(run, target, previous=[step_run])
 
 
-def _route_done(run: Any, step_run: Any, *, alias: str) -> None:
+def _route_done(run: Any, step_run: Any) -> None:
     for edge in (
         apps.get_model("workflows", "Edge")
-        .objects.db_manager(alias)
+        .objects
         .filter(source_id=step_run.step_id)
         .select_related("target")
         .order_by("pk")
     ):
         if edge.condition and edge.condition != step_run.outcome:
             continue
-        _maybe_schedule_target(run, edge.target, routed_row=step_run, alias=alias)
+        _maybe_schedule_target(run, edge.target, routed_row=step_run)
 
 
-def _maybe_schedule_target(run: Any, target: Any, *, routed_row: Any | None = None, alias: str) -> Any | None:
+def _maybe_schedule_target(run: Any, target: Any, *, routed_row: Any | None = None) -> Any | None:
     step_run_model = apps.get_model("workflows", "StepRun")
-    existing = step_run_model.objects.db_manager(alias).filter(run=run, step=target, map_index=-1).first()
+    existing = step_run_model.objects.filter(run=run, step=target, map_index=-1).first()
     if existing is not None:
         return existing
-    previous, statuses = _upstream_join_state(run, target, routed_row=routed_row, alias=alias)
+    previous, statuses = _upstream_join_state(run, target, routed_row=routed_row)
     if not statuses:
         return None
     decision = _join_decision(target.join_rule, statuses)
     if decision == "skip":
-        return _ensure_skipped(run, target, previous=previous, alias=alias)
+        return _ensure_skipped(run, target, previous=previous)
     if decision != "run":
         return None
-    step_run = step_run_model.objects.db_manager(alias).create(
+    step_run = step_run_model.objects.create(
         run_id=run.pk,
         step_id=target.pk,
         map_index=-1,
         status=StepRunStatus.SCHEDULED,
         input=_input_from_previous(previous),
     )
-    step_run_model.objects.update_previous(step_run, previous, replace=True, using=alias)
+    step_run_model.objects.update_previous(step_run, previous, replace=True)
     return step_run
 
 
-def _ensure_skipped(run: Any, step: Any, *, previous: list[Any], alias: str) -> Any:
+def _ensure_skipped(run: Any, step: Any, *, previous: list[Any]) -> Any:
     step_run_model = apps.get_model("workflows", "StepRun")
     step_run = (
-        step_run_model.objects.db_manager(alias).select_related("step").filter(run=run, step=step, map_index=-1).first()
+        step_run_model.objects.select_related("step").filter(run=run, step=step, map_index=-1).first()
     )
     if step_run is None:
-        step_run = step_run_model.objects.db_manager(alias).create(
+        step_run = step_run_model.objects.create(
             run_id=run.pk,
             step_id=step.pk,
             map_index=-1,
             status=StepRunStatus.SKIPPED,
             input=_input_from_previous(previous),
         )
-        step_run_model.objects.update_previous(step_run, previous, replace=True, using=alias)
+        step_run_model.objects.update_previous(step_run, previous, replace=True)
     elif step_run.status in {StepRunStatus.SCHEDULED, StepRunStatus.WAITING}:
-        step_run.mark_skipped(using=alias)
+        step_run.mark_skipped()
     else:
         return step_run
 
-    _route_skip(run, step_run, alias=alias)
+    _route_skip(run, step_run)
     return step_run
 
 
-def _upstream_join_state(
-    run: Any, target: Any, *, routed_row: Any | None = None, alias: str
-) -> tuple[list[Any], list[Any | None]]:
+def _upstream_join_state(run: Any, target: Any, *, routed_row: Any | None = None) -> tuple[list[Any], list[Any | None]]:
     """Return one conditional route contribution per predecessor step.
 
     Multiple edges from the same predecessor are alternatives.  A completed
@@ -1270,7 +1221,7 @@ def _upstream_join_state(
     by_source: dict[int, list[Any]] = {}
     for edge in (
         apps.get_model("workflows", "Edge")
-        .objects.db_manager(alias)
+        .objects
         .filter(target_id=target.pk)
         .select_related("source")
         .order_by("pk")
@@ -1280,7 +1231,7 @@ def _upstream_join_state(
     statuses: list[Any | None] = []
     for source_id, edges in by_source.items():
         row = (
-            step_run_model.objects.db_manager(alias)
+            step_run_model.objects
             .select_related("step")
             .filter(
                 run=run,
@@ -1347,9 +1298,9 @@ def _same_step_run(left: Any | None, right: Any | None) -> bool:
     return left is not None and right is not None and left.pk == right.pk
 
 
-def _claim_due_steps(run: Any, *, timestamp: datetime, alias: str) -> list[int]:
+def _claim_due_steps(run: Any, *, timestamp: datetime) -> list[int]:
     locked_rows = list(
-        run.step_runs.db_manager(alias)
+        run.step_runs
         .lock_if_supported()
         .select_related("step", "current_attempt", "current_map_expansion")
         .order_by("pk")
@@ -1362,7 +1313,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, alias: str) -> list[int]:
             or (row.status == StepRunStatus.WAITING and row.wait_until is not None and row.wait_until <= timestamp)
         )
         and not (row.step_id is not None and row.step.step_class == MapStep.key and row.map_index == -1)
-        and run.allows_test_step(row.step, using=alias)
+        and run.allows_test_step(row.step)
     ]
     if not due:
         return []
@@ -1370,33 +1321,33 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, alias: str) -> list[int]:
     if run.origin == RunOrigin.TEST:
         fixture_by_slot = {
             (fixture.step_id, fixture.item_index): fixture
-            for fixture in run.test_fixtures.db_manager(alias).filter(role=FixtureRole.OUTPUT)
+            for fixture in run.test_fixtures.filter(role=FixtureRole.OUTPUT)
         }
     substituted = [
         row for row in due if (row.step_id, None if row.map_index == -1 else row.map_index) in fixture_by_slot
     ]
     physical_due = [row for row in due if row not in substituted]
     if run.steps_taken + len(physical_due) > run.workflow.max_steps:
-        run.mark_failed(f"Workflow exceeded max_steps={run.workflow.max_steps}.", using=alias)
+        run.mark_failed(f"Workflow exceeded max_steps={run.workflow.max_steps}.")
         return []
 
     claimed: list[int] = []
     for step_run in substituted:
         fixture = fixture_by_slot[(step_run.step_id, None if step_run.map_index == -1 else step_run.map_index)]
-        apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).record_test_fixture(
+        apps.get_model("workflows", "StepAttempt").objects.record_test_fixture(
             fixture, at=timestamp, due_step_run_id=step_run.pk
         )
-        apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias).schedule_advance(
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
             run, available_at=timestamp
         )
         claimed.append(step_run.pk)
     due = physical_due
     if not due:
         if claimed:
-            transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+            transaction.on_commit(lambda: enqueue_dispatch_publisher())
         return claimed
 
-    preparations = [_prepare_attempt_input(run, step_run, source_rows=locked_rows, alias=alias) for step_run in due]
+    preparations = [_prepare_attempt_input(run, step_run, source_rows=locked_rows) for step_run in due]
     for step_run, preparation in zip(due, preparations, strict=True):
         cause = (
             AttemptCause.CONTINUATION
@@ -1410,7 +1361,7 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, alias: str) -> list[int]:
             )
         )
         if preparation.failure is not None:
-            apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).fail_preparation(
+            apps.get_model("workflows", "StepAttempt").objects.fail_preparation(
                 step_run,
                 cause=cause,
                 input=preparation.input,
@@ -1420,14 +1371,14 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, alias: str) -> list[int]:
                 claimed_at=timestamp,
                 recorded_at=timestamp,
             )
-            apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias).schedule_advance(
+            apps.get_model("workflows", "WorkflowDispatch").objects.schedule_advance(
                 run, available_at=timestamp
             )
             claimed.append(step_run.pk)
             continue
         claim = (
             apps.get_model("workflows", "StepAttempt")
-            .objects.db_manager(alias)
+            .objects
             .claim(
                 step_run,
                 cause=cause,
@@ -1437,14 +1388,14 @@ def _claim_due_steps(run: Any, *, timestamp: datetime, alias: str) -> list[int]:
                 claimed_at=timestamp,
             )
         )
-        apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias).schedule_execute(claim.attempt)
+        apps.get_model("workflows", "WorkflowDispatch").objects.schedule_execute(claim.attempt)
         claimed.append(step_run.pk)
     if claimed:
-        transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+        transaction.on_commit(lambda: enqueue_dispatch_publisher())
     return claimed
 
 
-def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], alias: str) -> _AttemptPreparation:
+def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any]) -> _AttemptPreparation:
     """Resolve one immutable ordinary-step input before any physical invocation."""
 
     if (
@@ -1481,7 +1432,7 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
         )
 
     if step_run.status == StepRunStatus.WAITING and step_run.current_attempt_id is not None:
-        previous: Any = related_on(step_run, "current_attempt", using=alias, select_related=("test_fixture",))
+        previous: Any = step_run.current_attempt
         map_item = (
             MapItemSource(
                 previous.map_expansion_id,
@@ -1499,7 +1450,7 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
     fixture = None
     if run.origin == RunOrigin.TEST and step_run.map_index >= 0:
         fixture = (
-            run.test_fixtures.db_manager(alias)
+            run.test_fixtures
             .filter(
                 step_id=step_run.step_id,
                 role=FixtureRole.MAP_ITEM,
@@ -1564,10 +1515,10 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
     )
     sources: dict[str, Any] = {}
     if run.origin == RunOrigin.RECOVERY:
-        for evidence in run.recovery_evidence.db_manager(alias).select_related("step", "source_attempt").order_by("pk"):
+        for evidence in run.recovery_evidence.select_related("step", "source_attempt").order_by("pk"):
             source_attempt = evidence.source_attempt
             gate_decisions = (
-                list(source_attempt.decisions.db_manager(alias).order_by("priority", "pk"))
+                list(source_attempt.decisions.order_by("priority", "pk"))
                 if source_attempt.result_kind == AttemptResultKind.SUSPEND
                 else []
             )
@@ -1606,7 +1557,7 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
         settled_decisions: list[Any] = []
         if valid_attempt and attempt.result_kind == AttemptResultKind.SUSPEND:
             settled_decisions = list(
-                source.decisions.db_manager(alias).filter(suspension_attempt_id=attempt.pk).order_by("priority", "pk")
+                source.decisions.filter(suspension_attempt_id=attempt.pk).order_by("priority", "pk")
             )
         settled_output = retained_gate_output(attempt, settled_decisions) if settled_decisions else None
         valid_done = valid_attempt and attempt.result_kind == AttemptResultKind.DONE
@@ -1749,7 +1700,7 @@ def _preparation_error(message: str, error: Exception) -> AttemptResult:
     )
 
 
-def _fail_if_budget_exceeded(run: Any, *, alias: str) -> bool:
+def _fail_if_budget_exceeded(run: Any) -> bool:
     """Fail ``run`` when its top-level numeric budget spend exceeds a limit."""
 
     budget = run.workflow.budget if isinstance(run.workflow.budget, Mapping) else {}
@@ -1758,7 +1709,7 @@ def _fail_if_budget_exceeded(run: Any, *, alias: str) -> bool:
         spent_value = _numeric_budget_value(spent.get(key))
         if spent_value is None or spent_value <= limit:
             continue
-        run.mark_failed(f"Workflow exceeded budget {key}={limit:g} (spent {spent_value:g}).", using=alias)
+        run.mark_failed(f"Workflow exceeded budget {key}={limit:g} (spent {spent_value:g}).")
         return True
     return False
 
@@ -1784,23 +1735,23 @@ def _numeric_budget_value(value: Any) -> float | None:
     return parsed if parsed >= 0 else None
 
 
-def _update_run_status(run: Any, *, timestamp: datetime, alias: str) -> None:
+def _update_run_status(run: Any, *, timestamp: datetime) -> None:
     if run.status in RunStatus.TERMINAL:
         return
-    rows = run.step_runs.db_manager(alias).select_related("step").all()
+    rows = run.step_runs.select_related("step").all()
     if run.origin == RunOrigin.TEST and run.test_scope == WorkflowScope.NODE:
-        rows = [row for row in rows if row.step_id is not None and run.allows_test_step(row.step, using=alias)]
+        rows = [row for row in rows if row.step_id is not None and run.allows_test_step(row.step)]
         active_without_wait = any(row.status in {StepRunStatus.SCHEDULED, StepRunStatus.STARTED} for row in rows)
     else:
         active_without_wait = rows.filter(status__in=[StepRunStatus.SCHEDULED, StepRunStatus.STARTED]).exists()
     if active_without_wait:
         if run.status == RunStatus.PENDING:
-            run.mark_running(using=alias)
+            run.mark_running()
         elif run.status == RunStatus.WAITING:
-            run.resume(using=alias)
+            run.resume()
         if run.wake_at is not None:
             run.wake_at = None
-            run.save(update_fields=["wake_at", "updated_at"], using=alias)
+            run.save(update_fields=["wake_at", "updated_at"])
         return
 
     waiting_rows = (
@@ -1818,14 +1769,14 @@ def _update_run_status(run: Any, *, timestamp: datetime, alias: str) -> None:
             .first()
         )
         if run.status == RunStatus.RUNNING:
-            run.mark_waiting(wake_at=wake_at, using=alias)
+            run.mark_waiting(wake_at=wake_at)
         elif run.status == RunStatus.WAITING and run.wake_at != wake_at:
             run.wake_at = wake_at
-            run.save(update_fields=["wake_at", "updated_at"], using=alias)
+            run.save(update_fields=["wake_at", "updated_at"])
         return
 
     failed = (
-        run.step_runs.db_manager(alias)
+        run.step_runs
         .filter(status__in=[StepRunStatus.FAILED, StepRunStatus.CANCELED], map_index=-1)
         .order_by("-pk")
         .first()
@@ -1838,7 +1789,7 @@ def _update_run_status(run: Any, *, timestamp: datetime, alias: str) -> None:
     ):
         source_step_run = run.recovery_source_attempt.step_run
         failed = (
-            run.step_runs.db_manager(alias)
+            run.step_runs
             .filter(
                 step_id=source_step_run.step_id,
                 map_index=source_step_run.map_index,
@@ -1848,29 +1799,29 @@ def _update_run_status(run: Any, *, timestamp: datetime, alias: str) -> None:
         )
     if failed is not None:
         if run.status == RunStatus.PENDING:
-            run.mark_running(using=alias)
+            run.mark_running()
         _fail_run(
-            run, failed.error or f"Step {failed.pk} ended as {failed.status}.", failed_step_run=failed, alias=alias
+            run, failed.error or f"Step {failed.pk} ended as {failed.status}.", failed_step_run=failed
         )
         return
 
-    if run.step_runs.db_manager(alias).exists():
+    if run.step_runs.exists():
         if run.status == RunStatus.PENDING:
-            run.mark_running(using=alias)
-        _finish_run_result(run, alias=alias)
+            run.mark_running()
+        _finish_run_result(run)
         return
 
     if run.status == RunStatus.RUNNING and run.wake_at is not None and run.wake_at <= timestamp:
         run.wake_at = None
-        run.save(update_fields=["wake_at", "updated_at"], using=alias)
+        run.save(update_fields=["wake_at", "updated_at"])
 
 
-def _finish_run_result(run: Any, *, alias: str) -> None:
+def _finish_run_result(run: Any) -> None:
     """Select exactly one declared terminal rule and retain its typed run result."""
 
     rules = run.workflow.result_rules
     terminals = list(
-        run.step_runs.db_manager(alias)
+        run.step_runs
         .select_related("step")
         .filter(
             map_index=-1,
@@ -1879,7 +1830,7 @@ def _finish_run_result(run: Any, *, alias: str) -> None:
         )
         .order_by("pk")
     )
-    outgoing_routes = list(run.workflow.edges.db_manager(alias).values_list("source_id", "condition"))
+    outgoing_routes = list(run.workflow.edges.values_list("source_id", "condition"))
     unhandled_calls = [
         row
         for row in terminals
@@ -1891,12 +1842,12 @@ def _finish_run_result(run: Any, *, alias: str) -> None:
     ]
     if unhandled_calls:
         if any(row.outcome == "child_failed" for row in unhandled_calls):
-            run.mark_failed("An unhandled child workflow failed.", using=alias)
+            run.mark_failed("An unhandled child workflow failed.")
         else:
-            run.mark_canceled(using=alias)
+            run.mark_canceled()
         return
     if not rules:
-        run.mark_succeeded(outcome="completed", output={}, using=alias)
+        run.mark_succeeded(outcome="completed", output={})
         return
     matches = [
         (rule, producer)
@@ -1905,7 +1856,7 @@ def _finish_run_result(run: Any, *, alias: str) -> None:
         if producer.step.key == rule["producer"] and producer.outcome == rule["when_outcome"]
     ]
     if len(matches) != 1:
-        run.mark_failed(workflow_result_terminal_match_error(len(matches)), using=alias)
+        run.mark_failed(workflow_result_terminal_match_error(len(matches)))
         return
     rule, producer = matches[0]
     context = BindingContext(
@@ -1929,9 +1880,9 @@ def _finish_run_result(run: Any, *, alias: str) -> None:
         if errors:
             raise ValidationError({"result": "Terminal output does not satisfy the published workflow schema."})
     except (PydanticValidationError, ValidationError) as error:
-        run.mark_failed(f"Workflow result contract failed: {error}", using=alias)
+        run.mark_failed(f"Workflow result contract failed: {error}")
         return
-    run.mark_succeeded(outcome=rule["outcome"], output=output, using=alias)
+    run.mark_succeeded(outcome=rule["outcome"], output=output)
 
 
 def _input_from_previous(previous: list[Any]) -> Any:
@@ -1948,19 +1899,19 @@ def _step_key(step_run: Any) -> str:
     return step_run.system_kind or str(step_run.pk)
 
 
-def _fail_run(run: Any, error: str, *, failed_step_run: Any, alias: str) -> None:
+def _fail_run(run: Any, error: str, *, failed_step_run: Any) -> None:
     """Mark ``run`` failed and start its linked error workflow once."""
 
-    run.mark_failed(error, using=alias)
-    _start_error_workflow(run, failed_step_run=failed_step_run, alias=alias)
+    run.mark_failed(error)
+    _start_error_workflow(run, failed_step_run=failed_step_run)
 
 
-def _start_error_workflow(run: Any, *, failed_step_run: Any, alias: str) -> None:
+def _start_error_workflow(run: Any, *, failed_step_run: Any) -> None:
     """Start the pinned workflow's error workflow for ``failed_step_run``."""
 
     if _is_error_workflow_run(run):
         return
-    lineage = related_on(run.workflow, "error_workflow", using=alias)
+    lineage = run.workflow.error_workflow
     if lineage is None:
         return
     start(
@@ -1970,7 +1921,6 @@ def _start_error_workflow(run: Any, *, failed_step_run: Any, alias: str) -> None
         parent_step_run=failed_step_run,
         parent_relation="continuation",
         origin=cast(RunOrigin, RunOrigin.ERROR_WORKFLOW),
-        using=alias,
     )
 
 

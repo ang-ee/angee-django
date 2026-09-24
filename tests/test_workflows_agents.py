@@ -173,9 +173,9 @@ def test_infer_step_passes_native_request_envelope_and_projects_response(
 
     bindings = _stub_model_backend(monkeypatch, respond)
 
-    def debit_budget(run: WorkflowRun, delta: dict[str, int], *, using: str | None = None) -> None:
+    def debit_budget(run: WorkflowRun, delta: dict[str, int]) -> None:
         debits.append(dict(delta))
-        original_debit(run, delta, using=using)
+        original_debit(run, delta)
 
     monkeypatch.setattr(WorkflowRun, "debit_budget", debit_budget)
     workflow = _infer_workflow()
@@ -396,20 +396,19 @@ def test_infer_step_approved_readable_model_passes_once(
     model = _inference_model("approved-readable")
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"classification": [model.deployment_identity()]}
     original = InferenceModel.require_usable
-    calls: list[tuple[Any, str, str | None]] = []
+    calls: list[tuple[Any, str]] = []
 
     def require_usable(
-        instance: Any, actor: Any, role: str, *, uses: Collection[InferenceModelUse], using: str | None = None
-    ) -> None:
-        calls.append((actor.pk, role, using))
-        original(instance, actor, role, uses=uses, using=using)
+        instance: Any, actor: Any, role: str, *, uses: Collection[InferenceModelUse], ) -> None:
+        calls.append((actor.pk, role))
+        original(instance, actor, role, uses=uses)
 
     monkeypatch.setattr(InferenceModel, "require_usable", require_usable)
     bindings = _stub_model_backend(monkeypatch, lambda messages, info: ModelResponse(parts=[TextPart("allowed")]))
     run = _start_infer_run(_infer_workflow(), _infer_input(model))
     advance_once(run)
     execute_started(run)
-    assert calls == [(workflow_actor().pk, "classification", "default")]
+    assert calls == [(workflow_actor().pk, "classification")]
     assert bindings == [(model.provider_model_name, None)]
     assert step_run_for(run, "infer").outcome == "completed"
 
@@ -495,7 +494,7 @@ def test_infer_terminal_provider_error_routes_failed_and_debits_once(
         raise RuntimeError("backend unavailable")
 
     _stub_model_backend(monkeypatch, respond)
-    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta, *, using=None: debits.append(dict(delta)))
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
     workflow = workflow_with_steps(
         name="Inference terminal error",
         steps=(
@@ -555,7 +554,7 @@ def test_infer_error_after_response_debits_returned_usage_once(
         ),
     )
     monkeypatch.setattr(steps, "_response_projection", fail_projection)
-    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta, *, using=None: debits.append(dict(delta)))
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
     run = _start_infer_run(_infer_workflow(), _infer_input(model))
 
     advance_once(run)
@@ -589,7 +588,7 @@ def test_infer_retryable_provider_error_allocates_retry_and_debits_once(
         raise ModelHTTPError(429, "stub", {"message": "provider throttled"})
 
     _stub_model_backend(monkeypatch, respond)
-    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta, *, using=None: debits.append(dict(delta)))
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
     run = _start_infer_run(_infer_workflow(retry={"max_attempts": 2}), _infer_input(model))
     step_run = advance_once(run)[0]
 
@@ -625,7 +624,7 @@ def test_infer_invalid_structured_output_retains_usage_and_debits_once(
             usage=RequestUsage(input_tokens=4, output_tokens=2),
         ),
     )
-    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta, *, using=None: debits.append(dict(delta)))
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
     value = _infer_input(model)
     value["request"]["output_schema"] = {"type": "object"}
     run = _start_infer_run(_infer_workflow(), value)
@@ -655,9 +654,8 @@ def test_infer_debit_failure_aborts_instead_of_becoming_provider_output(
     bindings = _stub_model_backend(monkeypatch, lambda messages, info: ModelResponse(parts=[TextPart("done")]))
     debits: list[dict[str, int]] = []
 
-    def fail_debit(run: WorkflowRun, delta: dict[str, int], *, using: str | None = None) -> None:
+    def fail_debit(run: WorkflowRun, delta: dict[str, int]) -> None:
         del run
-        assert using == "default"
         debits.append(dict(delta))
         raise RuntimeError("budget write failed")
 
@@ -1112,9 +1110,8 @@ def _stub_model_backend(
         handle: str,
         *,
         credential: Any | None = None,
-        using: str | None = None,
     ) -> FunctionModel:
-        del backend, using
+        del backend
         bindings.append((handle, credential))
         return FunctionModel(
             respond,

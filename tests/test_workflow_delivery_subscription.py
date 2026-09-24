@@ -82,7 +82,7 @@ def test_continuation_join_uses_exponential_bounded_reconciliation(
         _state=SimpleNamespace(adding=False, db="default"),
         current_attempt=SimpleNamespace(lease_token="join-lease"),
         input=step_input,
-        run=SimpleNamespace(execution_admission_actor=lambda *, using: object()),
+        run=SimpleNamespace(execution_admission_actor=lambda: object()),
         resume_state={},
         step=SimpleNamespace(
             config={
@@ -120,7 +120,7 @@ def test_terminal_failed_continuation_routes_child_failed(monkeypatch: pytest.Mo
         _state=SimpleNamespace(adding=False, db="default"),
         current_attempt=SimpleNamespace(lease_token="join-lease"),
         input={"continuation_id": "child"},
-        run=SimpleNamespace(execution_admission_actor=lambda *, using: object()),
+        run=SimpleNamespace(execution_admission_actor=lambda: object()),
         step=SimpleNamespace(
             config={
                 "child_id_path": ["continuation_id"],

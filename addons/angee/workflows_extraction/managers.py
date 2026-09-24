@@ -12,7 +12,6 @@ from jsonschema import Draft202012Validator
 from rebac import system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, related_on
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import record_ref_for
@@ -158,7 +157,7 @@ class ExtractionManager(EvidenceManager):
 
         lineage_model = self.model._meta.apps.get_model("workflows_extraction", "ExtractionLineage")
         with system_context(reason="workflows_extraction.infer.current_head"):
-            lineage = lineage_model._base_manager.using(self._db).select_related("head").filter(
+            lineage = lineage_model._base_manager.select_related("head").filter(
                 key=base.lineage_key,
             ).first()
         current = lineage.head if lineage is not None else None
@@ -176,7 +175,7 @@ class ExtractionManager(EvidenceManager):
             raise ValidationError({"inference": "The current extraction differs from the retained base."})
         return current
 
-    def _inference_authority_base(self, base: Any, *, using: str | None) -> Any:
+    def _inference_authority_base(self, base: Any) -> Any:
         """Resolve one hold's immutable successful authority without authorizing it."""
 
         if base.status == "succeeded":
@@ -189,7 +188,7 @@ class ExtractionManager(EvidenceManager):
         if type(revision) is not int or revision < 1 or revision >= base.revision:
             raise ValidationError({"inference": "The correspondence hold lacks a valid authority base."})
         with system_context(reason="workflows_extraction.infer.authority_base"):
-            authority = self.model._base_manager.using(using).filter(
+            authority = self.model._base_manager.filter(
                 lineage_key=base.lineage_key, revision=revision,
             ).first()
         if authority is None or authority.status != "succeeded":
@@ -207,19 +206,18 @@ class ExtractionManager(EvidenceManager):
     def inference_authority_base(self, base: Any, *, actor: Any) -> Any:
         """Resolve the exact actor-readable fact owner retained by a correspondence hold."""
 
-        authority = self._inference_authority_base(base, using=self._db)
+        authority = self._inference_authority_base(base)
         if not authority.with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to the retained authority base is required.")
         return authority
 
     def _latest_succeeded_identity_authority(
-        self, head: Any, *, using: str | None
-    ) -> Any:
+        self, head: Any) -> Any:
         """Resolve one lineage head's latest successful fact owner."""
 
         with system_context(reason="workflows_extraction.infer.latest_succeeded_authority"):
             authority = (
-                self.model._base_manager.using(using)
+                self.model._base_manager.all()
                 .filter(
                     lineage_key=head.lineage_key,
                     revision__lt=head.revision,
@@ -239,7 +237,7 @@ class ExtractionManager(EvidenceManager):
     def latest_succeeded_identity_authority(self, head: Any, *, actor: Any) -> Any:
         """Resolve the actor-readable successful fact owner for one exact lineage head."""
 
-        authority = self._latest_succeeded_identity_authority(head, using=self._db)
+        authority = self._latest_succeeded_identity_authority(head)
         if not authority.with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to the retained identity authority is required.")
         return authority
@@ -286,14 +284,12 @@ class ExtractionManager(EvidenceManager):
         revision_parent: Any,
         *,
         actor: Any,
-        using: str | None,
     ) -> Any:
         """Validate the sole non-direct parent supported by human correction."""
 
         revision_parent = self._correction_revision_parent(
             authority,
             revision_parent,
-            using=using,
         )
         if (
             not authority.with_actor(actor).has_access("read")
@@ -307,10 +303,7 @@ class ExtractionManager(EvidenceManager):
     def _correction_revision_parent(
         self,
         authority: Any,
-        revision_parent: Any,
-        *,
-        using: str | None,
-    ) -> Any:
+        revision_parent: Any) -> Any:
         """Validate immutable adjacency facts without granting record access."""
 
         if (
@@ -331,9 +324,9 @@ class ExtractionManager(EvidenceManager):
             else self.inference_candidate_selectors(revision_parent)
         )
         retained_authority = (
-            self._latest_succeeded_identity_authority(revision_parent, using=using)
+            self._latest_succeeded_identity_authority(revision_parent)
             if failed_inference
-            else self._inference_authority_base(revision_parent, using=using)
+            else self._inference_authority_base(revision_parent)
         )
         if (
             selectors
@@ -358,7 +351,6 @@ class ExtractionManager(EvidenceManager):
             extraction,
             revision_parent,
             actor=actor,
-            using=self._db,
         )
         return (
             CorrectionBinding(extraction.reference, revision_parent.reference),
@@ -370,7 +362,6 @@ class ExtractionManager(EvidenceManager):
         successor: Any,
         *,
         actor: Any,
-        using: str | None,
     ) -> tuple[Any, Any, Any]:
         """Resolve the fact authority and direct parent recorded by a correction."""
 
@@ -390,11 +381,11 @@ class ExtractionManager(EvidenceManager):
         revision_parent = None
         if correction is not None:
             with system_context(reason="workflows_extraction.correction.original"):
-                original = self.model._base_manager.using(using).filter(
+                original = self.model._base_manager.filter(
                     sqid=correction.original_extraction_id,
                     revision=correction.original_revision,
                 ).first()
-                revision_parent = self.model._base_manager.using(using).filter(
+                revision_parent = self.model._base_manager.filter(
                     sqid=(
                         correction.revision_parent_extraction_id
                         or correction.original_extraction_id
@@ -412,7 +403,6 @@ class ExtractionManager(EvidenceManager):
             original,
             revision_parent,
             actor=actor,
-            using=using,
         )
         if (
             successor.status != "succeeded"
@@ -474,7 +464,7 @@ class ExtractionManager(EvidenceManager):
                 {"decision": "The correction Decision has an invalid revision-parent binding."}
             )
         with system_context(reason="workflows_extraction.correction.revision_parent"):
-            revision_parent = self.model._base_manager.using(self._db).filter(
+            revision_parent = self.model._base_manager.filter(
                 sqid=raw_binding["revision_parent_extraction_id"],
                 revision=raw_binding["revision_parent_extraction_revision"],
             ).first()
@@ -485,7 +475,6 @@ class ExtractionManager(EvidenceManager):
         revision_parent = self._correction_revision_parent(
             extraction,
             revision_parent,
-            using=self._db,
         )
         binding = CorrectionBinding(extraction.reference, revision_parent.reference)
         if raw_binding != binding.payload():
@@ -524,13 +513,11 @@ class ExtractionManager(EvidenceManager):
             raise PermissionDenied("Correction resolver required.")
         if not expected_action or not expected_resolution_action:
             raise ValueError("Correction actions must be explicit.")
-        alias = get_write_alias(self.model, bound=self)
-        manager = self.db_manager(alias)
         registry = self.model._meta.apps
         decision_model = registry.get_model("workflows", "Decision")
         lineage_model = registry.get_model("workflows_extraction", "ExtractionLineage")
         with (
-            decision_model.objects.db_manager(alias).locked_resolution(
+            decision_model.objects.locked_resolution(
                 decision_id,
                 actor=actor,
                 expected_action=expected_action,
@@ -548,7 +535,7 @@ class ExtractionManager(EvidenceManager):
             if not isinstance(decision.payload, Mapping):
                 raise ValidationError({"decision": "The correction Decision payload must be an object."})
             extraction = (
-                self.model._base_manager.using(alias)
+                self.model._base_manager.all()
                 .filter(
                     sqid=decision.payload.get("extraction_id"),
                 )
@@ -556,19 +543,19 @@ class ExtractionManager(EvidenceManager):
             )
             if extraction is None:
                 raise ValidationError({"extraction": "The retained extraction is unavailable."})
-            lineage_model._base_manager.using(alias).lock_if_supported().get(key=extraction.lineage_key)
-            binding, selected_parent = manager.validate_correction_binding(
+            lineage_model._base_manager.lock_if_supported().get(key=extraction.lineage_key)
+            binding, selected_parent = self.validate_correction_binding(
                 decision.payload,
                 extraction=extraction,
             )
-            original = system_queryset(self.model, using=alias, lock=("self",)).get(pk=extraction.pk)
-            revision_parent = system_queryset(self.model, using=alias, lock=("self",)).get(pk=selected_parent.pk)
+            original = system_queryset(self.model,  lock=("self",)).get(pk=extraction.pk)
+            revision_parent = system_queryset(self.model,  lock=("self",)).get(pk=selected_parent.pk)
             if original.reference != binding.authority or revision_parent.reference != binding.revision_parent:
                 raise ValidationError({"extraction": "The frozen correction revision parent changed before review."})
             unresolved_target = original.target
             if unresolved_target is None:
                 raise ValidationError({"extraction": "The retained extraction target is unavailable."})
-            target = system_queryset(type(unresolved_target), using=alias, lock=("self",)).get(
+            target = system_queryset(type(unresolved_target),  lock=("self",)).get(
                 pk=unresolved_target.pk,
             )
             target_ref = record_ref_for(target)
@@ -576,9 +563,9 @@ class ExtractionManager(EvidenceManager):
                 raise ValidationError({"decision": "The correction Decision names another target."})
             for record in (original, revision_parent, target):
                 readable = read_scoped_queryset(type(record), actor)
-                if readable is None or not readable.using(alias).filter(pk=record.pk).exists():
+                if readable is None or not readable.filter(pk=record.pk).exists():
                     raise PermissionDenied("Correction evidence, revision parent, and target must remain readable.")
-            retained_sources = tuple(original.sources.db_manager(alias).lock_if_supported().order_by("position"))
+            retained_sources = tuple(original.sources.lock_if_supported().order_by("position"))
             file_model = registry.get_model("storage", "File")
             part_model = registry.get_model("messaging", "Part")
             fragment_model = registry.get_model("messaging", "Fragment")
@@ -586,7 +573,7 @@ class ExtractionManager(EvidenceManager):
             part_ids = {source.message_part_id for source in retained_sources if source.message_part_id is not None}
             files = {
                 row.pk: row
-                for row in system_queryset(file_model, using=alias, lock=("self",))
+                for row in system_queryset(file_model,  lock=("self",))
                 .filter(
                     pk__in=file_ids,
                 )
@@ -594,7 +581,7 @@ class ExtractionManager(EvidenceManager):
             }
             parts = {
                 row.pk: row
-                for row in system_queryset(part_model, using=alias, lock=("self",))
+                for row in system_queryset(part_model,  lock=("self",))
                 .filter(
                     pk__in=part_ids,
                 )
@@ -605,7 +592,7 @@ class ExtractionManager(EvidenceManager):
             fragment_ids = {part.fragment_id for part in parts.values() if part.fragment_id is not None}
             fragments = {
                 row.pk: row
-                for row in system_queryset(fragment_model, using=alias, lock=("self",))
+                for row in system_queryset(fragment_model,  lock=("self",))
                 .filter(
                     pk__in=fragment_ids,
                 )
@@ -648,7 +635,7 @@ class ExtractionManager(EvidenceManager):
 
             original_provenance = _json_object(original.provenance, field="extraction")
             retirement = dict(retired_identities or {})
-            effective_mapping = manager.correction_identity_mapping(
+            effective_mapping = self.correction_identity_mapping(
                 original,
                 normalized_result,
                 identity_mapping=identity_mapping,
@@ -721,7 +708,7 @@ class ExtractionManager(EvidenceManager):
                     revision_parent_revision=revision_parent.revision,
                 )
             reuse_key = canonical_json_sha256({"human_correction": reuse_basis})
-            return manager.create_revision_from_evidence(
+            return self.create_revision_from_evidence(
                 original,
                 revision_parent=revision_parent,
                 lineage_key=lineage_key,
@@ -765,13 +752,13 @@ class ExtractionManager(EvidenceManager):
         ):
             raise ValueError("Reviewed correction actions must be explicit.")
         original, revision_parent, correction = (
-            self._reviewed_correction_revision_basis(successor, actor=actor, using=self._db)
+            self._reviewed_correction_revision_basis(successor, actor=actor)
         )
         decision_model = self.model._meta.apps.get_model("workflows", "Decision")
         if decision is None:
             with system_context(reason="workflows_extraction.correction.authority"):
                 decision = (
-                    decision_model._base_manager.using(self._db)
+                    decision_model._base_manager.all()
                     .filter(sqid=correction.decision_id)
                     .first()
                 )
@@ -835,19 +822,9 @@ class ExtractionManager(EvidenceManager):
     ) -> Any:
         """Reuse exact requests or allocate the next revision with fresh profile evidence."""
 
-        anchor = next(
-            (
-                source.file if source.file is not None else source.message_part
-                for source in sources
-                if source.file is not None or source.message_part is not None
-            ),
-            None,
-        )
-        alias = get_write_alias(self.model, bound=self, instance=anchor)
-        return self.db_manager(alias)._create_revision(
+        return self._create_revision(
             values=values,
             evidence=(sources, pages, page_results, parts),
-            using=alias,
         )
 
     def create_revision_from_evidence(
@@ -865,25 +842,21 @@ class ExtractionManager(EvidenceManager):
         correction already allocated for the same authority key.
         """
 
-        alias = get_write_alias(self.model, bound=self, instance=original)
-        manager = self.db_manager(alias)
         revision_parent = revision_parent or original
         if revision_parent.pk != original.pk:
-            manager._correction_revision_parent(
+            self._correction_revision_parent(
                 original,
                 revision_parent,
-                using=alias,
             )
         expected_head_id = values.get("expected_head_id", values.get("expected_base_id"))
         if expected_head_id != revision_parent.pk:
             raise ValidationError({
                 "extraction": "The correction revision parent differs from its frozen head."
             })
-        return manager._create_revision(
+        return self._create_revision(
             values=values,
             original=original,
             revision_parent=revision_parent,
-            using=alias,
         )
 
     def _create_revision(
@@ -899,7 +872,6 @@ class ExtractionManager(EvidenceManager):
         | None = None,
         original: Any | None = None,
         revision_parent: Any | None = None,
-        using: str | None,
     ) -> Any:
         """Own revision locking, retry, reuse, and child persistence once."""
 
@@ -907,7 +879,6 @@ class ExtractionManager(EvidenceManager):
             raise TypeError("Provide either fresh evidence or one retained extraction.")
         if original is None and revision_parent is not None:
             raise TypeError("Fresh evidence cannot name a retained revision parent.")
-        alias = get_write_alias(self.model, using=using, bound=self, instance=original)
         revision_parent = revision_parent or original
         expected_base_id = values.pop("expected_base_id", None)
         expected_head_id = values.pop("expected_head_id", expected_base_id)
@@ -926,15 +897,15 @@ class ExtractionManager(EvidenceManager):
         with system_context(reason="workflows_extraction.extraction.create_revision"):
             for attempt in range(3):
                 try:
-                    with transaction.atomic(using=alias):
+                    with transaction.atomic():
                         lineage_model = self.model._meta.apps.get_model("workflows_extraction", "ExtractionLineage")
-                        lineage = lineage_model._base_manager.using(alias).filter(key=values["lineage_key"]).first()
+                        lineage = lineage_model._base_manager.filter(key=values["lineage_key"]).first()
                         if lineage is None:
                             lineage = lineage_model(key=values["lineage_key"])
-                            lineage.allocate(using=alias)
-                        lineage = lineage_model._base_manager.using(alias).lock_if_supported().get(pk=lineage.pk)
-                        previous: Any = related_on(lineage, "head", using=alias)
-                        existing = self.db_manager(alias).filter(reuse_key=values["reuse_key"]).first()
+                            lineage.allocate()
+                        lineage = lineage_model._base_manager.lock_if_supported().get(pk=lineage.pk)
+                        previous: Any = lineage.head
+                        existing = self.filter(reuse_key=values["reuse_key"]).first()
                         unresolved_failure = (
                             values.get("status") == "failed"
                             and (
@@ -960,7 +931,7 @@ class ExtractionManager(EvidenceManager):
                                     "identity_correspondence", {}
                                 ).get("last_known_revision")
                             elif correspondence_failure:
-                                authority = self.db_manager(alias).filter(
+                                authority = self.filter(
                                     pk=expected_base_id,
                                     lineage_key=values["lineage_key"],
                                     status="succeeded",
@@ -987,7 +958,6 @@ class ExtractionManager(EvidenceManager):
                                 revision_parent=revision_parent,
                                 values=values,
                                 evidence=evidence,
-                                using=alias,
                             )
                         if (previous.pk if previous is not None else None) != expected_head_id:
                             raise ValidationError({"extraction": "The request's extraction base is no longer current."})
@@ -1014,15 +984,15 @@ class ExtractionManager(EvidenceManager):
                             retired_identities=retired,
                             **values,
                         )
-                        extraction.retain(using=alias)
+                        extraction.retain()
                         if evidence is not None:
-                            self._persist_fresh_evidence(extraction, *evidence, using=alias)
+                            self._persist_fresh_evidence(extraction, *evidence)
                         else:
-                            self._clone_retained_evidence(extraction, original, using=alias)
-                        lineage.advance_head(extraction, using=alias)
+                            self._clone_retained_evidence(extraction, original)
+                        lineage.advance_head(extraction)
                         return extraction
                 except IntegrityError:
-                    duplicate = self.db_manager(alias).filter(reuse_key=values["reuse_key"]).first()
+                    duplicate = self.filter(reuse_key=values["reuse_key"]).first()
                     if duplicate is not None:
                         return self._validated_reuse(
                             duplicate,
@@ -1030,7 +1000,6 @@ class ExtractionManager(EvidenceManager):
                             revision_parent=revision_parent,
                             values=values,
                             evidence=evidence,
-                            using=alias,
                         )
                     if attempt == 2:
                         raise
@@ -1044,7 +1013,6 @@ class ExtractionManager(EvidenceManager):
         revision_parent: Any | None,
         values: dict[str, Any],
         evidence: Any,
-        using: str | None,
     ) -> Any:
         if (
             existing.lineage_key != values["lineage_key"]
@@ -1065,13 +1033,13 @@ class ExtractionManager(EvidenceManager):
             )
         ):
             raise ValidationError({"extraction": "This request identity already owns different retained facts."})
-        if evidence is not None and not self._same_fresh_evidence(existing, evidence, using=using):
+        if evidence is not None and not self._same_fresh_evidence(existing, evidence):
             raise ValidationError({"extraction": "This request identity already owns different source evidence."})
         return existing
 
-    def _same_fresh_evidence(self, existing: Any, evidence: Any, *, using: str | None) -> bool:
+    def _same_fresh_evidence(self, existing: Any, evidence: Any) -> bool:
         sources, pages, page_results, parts = evidence
-        retained = list(existing.sources.db_manager(using).order_by("position"))
+        retained = list(existing.sources.order_by("position"))
         if len(retained) != len(sources):
             return False
         if any(
@@ -1081,7 +1049,7 @@ class ExtractionManager(EvidenceManager):
             for row, source in zip(retained, sources)
         ):
             return False
-        retained_pages = list(existing.pages.db_manager(using).select_related("source").order_by("position"))
+        retained_pages = list(existing.pages.select_related("source").order_by("position"))
         if len(retained_pages) != len(pages) or len(pages) != len(page_results):
             return False
         if any(
@@ -1093,7 +1061,7 @@ class ExtractionManager(EvidenceManager):
             for position, (row, page, result) in enumerate(zip(retained_pages, pages, page_results))
         ):
             return False
-        retained_parts = list(existing.parts.db_manager(using).select_related("source").order_by("position"))
+        retained_parts = list(existing.parts.select_related("source").order_by("position"))
         return len(retained_parts) == len(parts) and all(
             row.position == position and row.source.position == part.source_position
             and row.source_page == part.source_page and row.mime_type == part.mime_type
@@ -1120,12 +1088,9 @@ class ExtractionManager(EvidenceManager):
         sources: Sequence[DocumentSource],
         pages: Sequence[PageImage],
         page_results: Sequence[PageResult],
-        parts: Sequence[DocumentPart],
-        *,
-        using: str | None,
-    ) -> None:
+        parts: Sequence[DocumentPart]) -> None:
         source_model, page_model, part_model = self._evidence_models()
-        retained_sources = source_model._base_manager.using(using)._retain_rows(
+        retained_sources = source_model._base_manager.all()._retain_rows(
             [
                 source_model(
                     extraction=extraction,
@@ -1138,7 +1103,7 @@ class ExtractionManager(EvidenceManager):
             ]
         )
         source_by_position = {source.position: source for source in retained_sources}
-        page_model._base_manager.using(using)._retain_rows(
+        page_model._base_manager.all()._retain_rows(
             [
                 page_model(
                     extraction=extraction,
@@ -1156,7 +1121,7 @@ class ExtractionManager(EvidenceManager):
             ]
         )
         claims = extraction.provenance["claims"]
-        part_model._base_manager.using(using)._retain_rows(
+        part_model._base_manager.all()._retain_rows(
             [
                 part_model(
                     extraction=extraction,
@@ -1179,14 +1144,14 @@ class ExtractionManager(EvidenceManager):
             ]
         )
 
-    def _clone_retained_evidence(self, extraction: Any, original: Any, *, using: str | None) -> None:
+    def _clone_retained_evidence(self, extraction: Any, original: Any) -> None:
         source_model, page_model, part_model = self._evidence_models()
         original_sources = list(
-            source_model._base_manager.using(using).filter(extraction=original).order_by("position")
+            source_model._base_manager.filter(extraction=original).order_by("position")
         )
         if [source.position for source in original_sources] != list(range(len(original_sources))):
             raise ValidationError({"extraction": "The retained source ordering is invalid."})
-        retained_sources = source_model._base_manager.using(using)._retain_rows(
+        retained_sources = source_model._base_manager.all()._retain_rows(
             [
                 source_model(
                     extraction=extraction,
@@ -1203,11 +1168,11 @@ class ExtractionManager(EvidenceManager):
             for original_source, retained_source in zip(original_sources, retained_sources)
         }
         original_pages = list(
-            page_model._base_manager.using(using).filter(extraction=original).order_by("position")
+            page_model._base_manager.filter(extraction=original).order_by("position")
         )
         if [page.position for page in original_pages] != list(range(len(original_pages))):
             raise ValidationError({"extraction": "The retained page ordering is invalid."})
-        page_model._base_manager.using(using)._retain_rows(
+        page_model._base_manager.all()._retain_rows(
             [
                 page_model(
                     extraction=extraction,
@@ -1225,12 +1190,12 @@ class ExtractionManager(EvidenceManager):
             ]
         )
         original_parts = list(
-            part_model._base_manager.using(using).filter(extraction=original).order_by("position")
+            part_model._base_manager.filter(extraction=original).order_by("position")
         )
         if [part.position for part in original_parts] != list(range(len(original_parts))):
             raise ValidationError({"extraction": "The retained part ordering is invalid."})
         claims = extraction.provenance["claims"]
-        part_model._base_manager.using(using)._retain_rows(
+        part_model._base_manager.all()._retain_rows(
             [
                 part_model(
                     extraction=extraction,

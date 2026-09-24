@@ -818,13 +818,11 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
     monkeypatch.setattr(agents_provisioning, "OperatorDaemon", _FakeDaemon)
     original_mark_provisioned = Agent.mark_provisioned
 
-    def mark_provisioned_with_recorded_service(
-        self: Agent, *, workspace: str, service: str = "", using: str | None = None
-    ) -> None:
+    def mark_provisioned_with_recorded_service(self: Agent, *, workspace: str, service: str = "") -> None:
         with system_context(reason="test.agents.render.verify_service_recorded"):
             persisted = Agent.objects.get(pk=self.pk)
             calls.append(("recorded_service", persisted.service, str(persisted.lifecycle)))
-        original_mark_provisioned(self, workspace=workspace, service=service, using=using)
+        original_mark_provisioned(self, workspace=workspace, service=service)
 
     monkeypatch.setattr(Agent, "mark_provisioned", mark_provisioned_with_recorded_service)
 
@@ -1182,7 +1180,7 @@ def test_provision_agent_records_error_when_plan_resolution_fails(
     agent = _provisionable_agent(admin, "PlanFail", slug="agt-planfail-tpl")
     agent_id = _public_id(agent.sqid)
 
-    def _boom(_agent: Any, *, using: str) -> Any:
+    def _boom(_agent: Any) -> Any:
         raise RuntimeError("credential is unreadable")
 
     monkeypatch.setattr(agents_provisioning, "_render_plan", _boom)

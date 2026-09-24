@@ -12,16 +12,14 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from rebac import system_context, to_subject_ref
 
-from angee.base.db import get_write_alias, related_on
-from angee.base.permissions import require_authorization_database
 from angee.integrate.models import Bridge
 from angee.integrate.sync import SyncDispatch
 from angee.workflows.attempts import JsonPresence
 from angee.workflows.states import RunStatus
 
 
-def _active_owner(bridge: Any, actor: Any, *, using: str) -> Any:
-    owner = related_on(bridge, "owner", using=using)
+def _active_owner(bridge: Any, actor: Any) -> Any:
+    owner = bridge.owner
     if owner is None or not owner.is_active:
         raise PermissionDenied("Bridge cycles require an active Integration owner.")
     if actor is None or to_subject_ref(actor) != to_subject_ref(owner):
@@ -36,14 +34,13 @@ def admit_bridge_cycle(
     occurrence_key: str,
     actor: Any,
     input: JsonPresence | None = None,
-    prepare: Callable[[str], None] | None = None,
+    prepare: Callable[[], None] | None = None,
     available_at: datetime | None = None,
-    using: str | None = None,
 ) -> Any:
     """Exactly retain a cycle; cadence identity is only the run's dedup key.
 
     An omitted ``input`` snapshots the locked Bridge's ``sync_workflow_input``.
-    ``prepare(using)`` is database-only and runs after workflow/retained-run
+    ``prepare()`` is database-only and runs after workflow/retained-run
     locks, before the Bridge lock and its input snapshot. Use it for upstream
     scope locks; input construction may lock downstream scope rows. Both run on
     duplicate deliveries, whose immutable facts must still match exactly.
@@ -54,36 +51,33 @@ def admit_bridge_cycle(
     the Bridge row before refusing any other active cycle.
     """
 
-    using = get_write_alias(type(bridge), using=using, instance=bridge)
-    require_authorization_database(using, operation="Bridge cycle admission", error_field="using")
     if bridge.pk is None or not isinstance(occurrence_key, str) or not occurrence_key:
         raise ValidationError({"occurrence_key": "A saved Bridge and cadence occurrence are required."})
-    bridge._state.db = using
     run_model = apps.get_model("workflows", "WorkflowRun")
-    with system_context(reason="workflows_integrate.admit"), transaction.atomic(using=using):
-        current = type(bridge).objects.db_manager(using).get(pk=bridge.pk)
-        owner = _active_owner(current, actor, using=using)
-        content_type = ContentType.objects.db_manager(using).get_for_model(bridge, for_concrete_model=False)
+    with system_context(reason="workflows_integrate.admit"), transaction.atomic():
+        current = type(bridge).objects.get(pk=bridge.pk)
+        owner = _active_owner(current, actor)
+        content_type = ContentType.objects.get_for_model(bridge, for_concrete_model=False)
         dedup_key = f"bridge-sync:{content_type.pk}:{bridge.pk}:{occurrence_key}"
         prepared_bridge = None
         new_bridge = None
 
-        def frozen_input(alias: str) -> JsonPresence:
+        def frozen_input() -> JsonPresence:
             nonlocal prepared_bridge
             if prepare is not None:
-                prepare(alias)
-            prepared_bridge = type(bridge).objects.db_manager(alias).lock_if_supported().get(pk=bridge.pk)
-            _active_owner(prepared_bridge, owner, using=alias)
-            return input if input is not None else JsonPresence(True, prepared_bridge.sync_workflow_input(using=alias))
+                prepare()
+            prepared_bridge = type(bridge).objects.lock_if_supported().get(pk=bridge.pk)
+            _active_owner(prepared_bridge, owner)
+            return input if input is not None else JsonPresence(True, prepared_bridge.sync_workflow_input())
 
         def validate_new() -> None:
             nonlocal new_bridge
             new_bridge = prepared_bridge
-            active = run_model.objects.db_manager(using).for_subject(new_bridge).exclude(status__in=RunStatus.TERMINAL)
+            active = run_model.objects.for_subject(new_bridge).exclude(status__in=RunStatus.TERMINAL)
             if active.exclude(dedup_key=dedup_key).exists():
                 raise ValidationError({"bridge": "This Bridge already has an active cycle."})
 
-        run = run_model.objects.db_manager(using).start(
+        run = run_model.objects.start(
             workflow,
             subject=bridge,
             actor=owner,
@@ -91,43 +85,38 @@ def admit_bridge_cycle(
             input=frozen_input,
             available_at=available_at,
             validate_new=validate_new,
-            using=using,
         )
         if new_bridge is not None:
-            if not new_bridge.claim_dispatch(run.pk, using=using):
+            if not new_bridge.claim_dispatch(run.pk):
                 raise ValidationError({"bridge": "The Bridge dispatch changed during admission."})
-            bridge.refresh_from_db(using=using)
+            bridge.refresh_from_db()
         return run
 
 
 def dispatch_bridge_cycle(
-    bridge: Bridge, *, prepare: Callable[[str], None] | None = None, using: str | None = None
+    bridge: Bridge, *, prepare: Callable[[], None] | None = None
 ) -> SyncDispatch:
     """Admit a declared workflow key at its current publication from Bridge.sync."""
 
-    using = get_write_alias(type(bridge), using=using, instance=bridge)
-    require_authorization_database(using, operation="Bridge cycle admission", error_field="using")
-    bridge._state.db = using
     occurrence_key = bridge.sync_progress.get("queued_at")
     if not occurrence_key:
         raise ValidationError({"occurrence_key": "Queue the Bridge before dispatching a cycle."})
     workflow_model = apps.get_model("workflows", "Workflow")
     with system_context(reason="workflows_integrate.dispatch"):
         workflow = (
-            workflow_model.objects.db_manager(using)
+            workflow_model.objects
             .lineage_heads(bridge.sync_workflow_key)
             .order_by("pk")
             .first()
         )
         if workflow is None:
             raise ValidationError({"sync_workflow_key": "The declared workflow key does not exist."})
-        owner = related_on(bridge, "owner", using=using)
+        owner = bridge.owner
         admit_bridge_cycle(
             bridge,
             workflow=workflow,
             occurrence_key=occurrence_key,
             actor=owner,
             prepare=prepare,
-            using=using,
         )
     return SyncDispatch.DISPATCHED

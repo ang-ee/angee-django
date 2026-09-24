@@ -58,12 +58,10 @@ def _permission_target(
     value: PublicID,
     permission: str,
     reason: str,
-    *,
-    using: str | None = None,
 ) -> Any:
     """Resolve a non-write lifecycle target and enforce its explicit permission."""
 
-    target: Any = resolve_action_target(model, value, reason=reason, using=using)
+    target: Any = resolve_action_target(model, value, reason=reason)
     if not target.has_access(permission):
         raise ValidationError(f"You are not allowed to {permission} this {model._meta.verbose_name}.")
     return target
@@ -259,14 +257,8 @@ class ProposalActionMutation:
         """Close one Round with disjoint accepted and partial selections."""
 
         target = authorized_action_target(info, Round, round, "write")
-        accepted_rows = [
-            authorized_action_target(info, Proposal, value, "evaluate", using=target._state.db)
-            for value in accepted
-        ]
-        partial_rows = [
-            authorized_action_target(info, Proposal, value, "evaluate", using=target._state.db)
-            for value in partial
-        ]
+        accepted_rows = [authorized_action_target(info, Proposal, value, "evaluate") for value in accepted]
+        partial_rows = [authorized_action_target(info, Proposal, value, "evaluate") for value in partial]
         target.close(outcome, accepted=accepted_rows, partial=partial_rows)
         return ActionResult(ok=True, message="Proposal round closed.", id=target.sqid)
 
@@ -290,7 +282,7 @@ class ProposalActionMutation:
         """Transfer facilitation and reconcile private-track grants."""
 
         target = authorized_action_target(info, Round, round, "write")
-        user = User.system_queryset().using(target._state.db).from_public_id(str(facilitator))
+        user = User.system_queryset().from_public_id(str(facilitator))
         if user is None:
             raise ValidationError({"facilitator": "User was not found."})
         target.transfer_facilitation(user)
@@ -331,9 +323,7 @@ class ProposalActionMutation:
         """Set one Proposal's party once through its row-locked verb."""
 
         target = authorized_action_target(info, Proposal, proposal, "write")
-        party_row = _permission_target(
-            Party, party, "read", "proposals.graphql.identify_party", using=target._state.db
-        )
+        party_row = _permission_target(Party, party, "read", "proposals.graphql.identify_party")
         target.identify_party(party_row)
         return ActionResult(ok=True, message="Proposal party identified.", id=target.sqid)
 
@@ -373,19 +363,11 @@ class ProposalActionMutation:
         """Capture and submit one structured reply in a single transaction."""
 
         round_row = authorized_action_target(info, Round, round, "write")
-        message_row = _permission_target(
-            Message, message, "read", "proposals.graphql.capture_message", using=round_row._state.db
-        )
+        message_row = _permission_target(Message, message, "read", "proposals.graphql.capture_message")
         party_row = (
-            None
-            if party is None
-            else _permission_target(
-                Party, party, "read", "proposals.graphql.capture_party", using=round_row._state.db
-            )
+            None if party is None else _permission_target(Party, party, "read", "proposals.graphql.capture_party")
         )
-        proposal = Proposal.objects.db_manager(round_row._state.db).capture_from_message(
-            message_row, round_row, party_row
-        )
+        proposal = Proposal.objects.capture_from_message(message_row, round_row, party_row)
         return ActionResult(ok=True, message="Proposal captured.", id=proposal.sqid)
 
 

@@ -9,7 +9,6 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models.signals import pre_save
-from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
@@ -40,14 +39,12 @@ from tests.workflows import (
     StepRun,
     WorkflowDispatch,
     WorkflowRun,
-    WorkflowWriteRouter,
     advance_once,
     execute_started,
     run_to_terminal,
     start_run,
     workflow_with_steps,
 )
-from tests.workflows import workflow_authorization_frontier as workflow_authorization_frontier
 
 User = get_user_model()
 workflow_gate_record_access_tables = gate_tests.workflow_gate_record_access_tables
@@ -173,33 +170,6 @@ def test_manager_decide_accepts_positive_and_negative_collection_results(
         gate = StepRun.objects.get(pk=decisions[0].step_run_id)
         assert gate.status == StepRunStatus.SUCCEEDED
         assert [row["verdict"] for row in gate.output["resolutions"]] == [verdict, verdict]
-
-
-def test_decide_uses_write_router_without_falling_through_to_read_replica(
-    workflow_gate_tables: None,
-    no_workflow_queue: None,
-    workflow_authorization_frontier: None,
-) -> None:
-    del workflow_gate_tables, no_workflow_queue
-    reviewer = User.objects.create_user(username="decision-write-router")
-    workflow = workflow_with_steps(
-        name="Decision write router",
-        steps=({"key": "gate", "step_class": "gate", "config": _gate_config([reviewer], None, [])},),
-        edges=(),
-    )
-    decision = _decision_for(_open_gate_run(workflow), "gate")
-
-    with override_settings(DATABASE_ROUTERS=[WorkflowWriteRouter("default")]):
-        result = Decision.objects.decide(
-            decision.pk,
-            actor=reviewer,
-            resolution=DecisionSubmission(Verdict.COMPLETED, {"action": "complete"}),
-        )
-
-    assert result.validation_error is None
-    with system_context(reason="write router Decision assertion"):
-        decision.refresh_from_db(using="default")
-    assert decision.verdict == Verdict.COMPLETED
 
 
 def test_manager_decide_checks_actor_inside_system_scope(

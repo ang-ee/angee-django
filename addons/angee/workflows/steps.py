@@ -33,7 +33,7 @@ from typing import Any, ClassVar, Literal, Self
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
-from django.db import connections, models
+from django.db import connection, models
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from jsonschema import Draft202012Validator
@@ -41,7 +41,6 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.impl import ImplBase, ImplChoice
 from angee.base.scoping import read_scoped_queryset, system_queryset
@@ -496,41 +495,39 @@ class StepImpl(ImplBase):
         del now
         raise NotImplementedError(f"{type(self).__name__}.run() is supplied by a runtime slice.")
 
-    def heartbeat(self, step_run: Any, *, at: datetime | None = None, using: str | None = None) -> None:
+    def heartbeat(self, step_run: Any, *, at: datetime | None = None) -> None:
         """Refresh ``step_run``'s heartbeat while a long implementation is running."""
 
         if str(getattr(step_run.status, "value", step_run.status)) != "started":
             return
         timestamp = at or timezone.now()
-        alias = get_write_alias(type(step_run), using=using, instance=step_run)
         if step_run.current_attempt_id is not None:
             attempt_model = apps.get_model("workflows", "StepAttempt")
             with system_context(reason="workflows.step.heartbeat.load"):
-                attempt: Any = related_on(step_run, "current_attempt", using=alias)
-            attempt_model.objects.db_manager(alias).heartbeat(attempt.pk, lease_token=attempt.lease_token, at=timestamp)
+                attempt: Any = step_run.current_attempt
+            attempt_model.objects.heartbeat(attempt.pk, lease_token=attempt.lease_token, at=timestamp)
             return
         step_run.heartbeat_at = timestamp
         with system_context(reason="workflows.step.heartbeat"):
-            step_run.save(using=alias, update_fields=["heartbeat_at", "updated_at"])
+            step_run.save(update_fields=["heartbeat_at", "updated_at"])
 
     @contextmanager
-    def heartbeat_during(self, step_run: Any, *, using: str | None = None) -> Iterator[None]:
+    def heartbeat_during(self, step_run: Any) -> Iterator[None]:
         """Keep one admitted STANDARD attempt's lease alive during bounded I/O.
 
         ``heartbeat`` needs caller-driven pulses; the reaper only expires leases.
         Opaque synchronous I/O provides no mid-call hook, so a daemon worker
-        composes the attempt manager's heartbeat on the captured write alias.
+        composes the attempt manager's heartbeat.
         Its connection closes in the worker's finally, and this context always
         stops and joins the worker before the invoking attempt can finalize.
         A rejected lease reports its retained revocation reason as a transient
         error; delivery finalization still owns the authoritative attempt fence.
         """
 
-        alias = get_write_alias(type(step_run), using=using, instance=step_run)
-        if self.execution_mode is not StepExecutionMode.STANDARD or connections[alias].in_atomic_block:
+        if self.execution_mode is not StepExecutionMode.STANDARD or connection.in_atomic_block:
             raise RuntimeError("Lease heartbeat during I/O requires STANDARD execution outside a transaction.")
         with system_context(reason="workflows.step.heartbeat_during.load"):
-            attempt: Any = related_on(step_run, "current_attempt", using=alias)
+            attempt: Any = step_run.current_attempt
         if attempt is None:
             raise ValidationError({"attempt": "A lease heartbeat requires a retained attempt."})
         interval = heartbeat_timeout().total_seconds() / 3
@@ -539,11 +536,11 @@ class StepImpl(ImplBase):
         stopped = Event()
         failures: list[Exception] = []
 
-        def pulse(*, using: str) -> None:
+        def pulse() -> None:
             with system_context(reason="workflows.step.heartbeat_during"):
                 accepted = (
                     type(attempt)
-                    .objects.db_manager(using)
+                    .objects
                     .heartbeat(
                         attempt.pk,
                         lease_token=attempt.lease_token,
@@ -553,7 +550,7 @@ class StepImpl(ImplBase):
                 if not accepted:
                     reason = (
                         type(attempt)
-                        .objects.db_manager(using)
+                        .objects
                         .values_list("lease_revocation_reason", flat=True)
                         .get(pk=attempt.pk)
                     )
@@ -563,17 +560,17 @@ class StepImpl(ImplBase):
                         else "The workflow attempt lease is no longer active."
                     )
 
-        def keep_alive(*, using: str) -> None:
+        def keep_alive() -> None:
             try:
                 while not stopped.wait(interval):
-                    pulse(using=using)
+                    pulse()
             except Exception as error:  # noqa: BLE001 - relay the lease failure to the invoking worker.
                 failures.append(error)
             finally:
-                connections[using].close()
+                connection.close()
 
-        pulse(using=alias)
-        worker = Thread(target=keep_alive, kwargs={"using": alias}, name="workflow-heartbeat", daemon=True)
+        pulse()
+        worker = Thread(target=keep_alive, name="workflow-heartbeat", daemon=True)
         worker.start()
         try:
             yield
@@ -651,14 +648,14 @@ class CallWorkflow(StepImpl):
         return publication
 
     @classmethod
-    def _workflow_for_start(cls, config: Mapping[str, Any], payload: Mapping[str, Any], *, using: str) -> Any:
+    def _workflow_for_start(cls, config: Mapping[str, Any], payload: Mapping[str, Any]) -> Any:
         """Load one lineage head or exact version for manager-owned admission."""
 
         workflow_model = apps.get_model("workflows", "Workflow")
         workflow_key = config.get("workflow_key")
         if workflow_key:
             with system_context(reason="workflows.call.lineage"):
-                head = system_queryset(workflow_model, using=using, lock=None).lineage_heads(workflow_key).first()
+                head = system_queryset(workflow_model, lock=None).lineage_heads(workflow_key).first()
             if head is None:
                 raise ValidationError({"workflow_key": "CallWorkflow requires an existing workflow key."})
             return head
@@ -668,7 +665,7 @@ class CallWorkflow(StepImpl):
         publication = instance_from_public_id(
             workflow_model,
             selected,
-            queryset=system_queryset(workflow_model, using=using, lock=None),
+            queryset=system_queryset(workflow_model, lock=None),
         )
         if publication is None or publication.published_from_id is None:
             raise ValidationError({"publication": "CallWorkflow requires an exact workflow publication id."})
@@ -726,14 +723,13 @@ class CallWorkflow(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
-        alias = get_write_alias(type(step_run), instance=step_run)
         config = type(self).normalize_config(step_run.step.config)
         payload = step_run.input
         if not isinstance(payload, Mapping):
             raise ValidationError({"input": "CallWorkflow input must be an object."})
         run_model = apps.get_model("workflows", "WorkflowRun")
-        actor = step_run.run.execution_admission_actor(using=alias)
-        workflow = type(self)._workflow_for_start(config, payload, using=alias)
+        actor = step_run.run.execution_admission_actor()
+        workflow = type(self)._workflow_for_start(config, payload)
         subject_spec = payload.get("subject", step_run.run.subject)
         if subject_spec is None or isinstance(subject_spec, models.Model):
             subject = subject_spec
@@ -746,14 +742,12 @@ class CallWorkflow(StepImpl):
             except (LookupError, ValueError) as error:
                 raise ValidationError({"subject": "Child subject model is not installed."}) from error
             scoped = read_scoped_queryset(model, actor, action="write")
-            if scoped is not None:
-                scoped = scoped.using(alias)
             subject = None if scoped is None else instance_from_public_id(model, public_id, queryset=scoped)
             if subject is None:
                 raise ValidationError({"subject": "Child subject is unavailable to the execution actor."})
         else:
             raise ValidationError({"subject": "Child subject must be an exact record reference or null."})
-        child = run_model.objects.db_manager(alias).start(
+        child = run_model.objects.start(
             workflow,
             subject,
             actor,
@@ -764,12 +758,12 @@ class CallWorkflow(StepImpl):
         )
         type(self)._validate_publication_contract(child.workflow, config)
         attempt_model = apps.get_model("workflows", "StepAttempt")
-        attempt_model.objects.db_manager(alias).bind_call_child(
+        attempt_model.objects.bind_call_child(
             step_run.current_attempt_id,
             lease_token=step_run.current_attempt.lease_token,
             child=child,
         )
-        current = system_queryset(run_model, using=alias, lock=("self",)).get(pk=child.pk)
+        current = system_queryset(run_model, lock=("self",)).get(pk=child.pk)
         if current.status not in RunStatus.TERMINAL:
             return StepResult.suspend(decisions=(), waiting_kind="external")
         if current.result is None:
@@ -828,15 +822,14 @@ class JoinContinuation(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
 
-        alias = get_write_alias(type(step_run), instance=step_run)
         config = type(self).normalize_config(step_run.step.config)
-        actor = step_run.run.execution_admission_actor(using=alias)
+        actor = step_run.run.execution_admission_actor()
         child_id = json_value_at_path(step_run.input, config["child_id_path"], field="child")
         if not isinstance(child_id, str) or not child_id:
             raise ValidationError({"child": "Continuation child identity must be a public id."})
         child, completion = (
             apps.get_model("workflows", "StepAttempt")
-            .objects.db_manager(alias)
+            .objects
             .join_continuation(
                 step_run.pk,
                 lease_token=step_run.current_attempt.lease_token,
@@ -898,12 +891,11 @@ class EmitStep(StepImpl):
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
 
-        alias = get_write_alias(type(step_run), instance=step_run)
         config = type(self).normalize_config(step_run.step.config)
         output = step_run.input
         if list(Draft202012Validator(config["output_schema"]).iter_errors(output)):
             raise ValidationError({"output": "Emit input does not satisfy its declared projection contract."})
-        actor = step_run.run.execution_admission_actor(using=alias)
+        actor = step_run.run.execution_admission_actor()
         artifacts: list[ArtifactSpec] = []
         for binding in config["artifacts"]:
             model = apps.get_model(binding["model"])
@@ -911,8 +903,6 @@ class EmitStep(StepImpl):
             if not isinstance(public_id, str):
                 raise ValidationError({"artifacts": "Artifact id paths must select public-id strings."})
             queryset = read_scoped_queryset(model, actor, action="read")
-            if queryset is not None:
-                queryset = queryset.using(alias)
             target = None if queryset is None else instance_from_public_id(model, public_id, queryset=queryset)
             if target is None:
                 raise ValidationError({"artifacts": "An emitted artifact is unavailable to the workflow actor."})
@@ -1148,10 +1138,9 @@ class DecisionApplyStep(StepImpl):
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Load the predecessor identity and preserve the command's typed result."""
 
-        alias = get_write_alias(type(step_run), instance=step_run)
         decision = (
             apps.get_model("workflows", "Decision")
-            .objects.db_manager(alias)
+            .objects
             .predecessor_decision(step_run, type(self).gate_step_class)
         )
         actor = decision.resolution_actor_subject()
@@ -1218,11 +1207,10 @@ class MapStep(StepImpl):
         return {"step__step_class": cls.key, "map_index": -1}
 
     @classmethod
-    def target_step(cls, step_run: Any, *, using: str | None = None) -> Any:
+    def target_step(cls, step_run: Any) -> Any:
         """Return the configured target step for one map parent row."""
 
-        alias = get_write_alias(type(step_run), using=using, instance=step_run)
-        step_run = type(step_run)._base_manager.using(alias).select_related("step", "run").get(pk=step_run.pk)
+        step_run = type(step_run)._base_manager.select_related("step", "run").get(pk=step_run.pk)
 
         config = cls.config_mapping(step_run)
         key = str(config.get("target_step") or "")
@@ -1230,7 +1218,7 @@ class MapStep(StepImpl):
             raise ValidationError({"config": "Map steps require target_step."})
         try:
             step_model = step_run._meta.get_field("step").remote_field.model
-            return system_queryset(step_model, using=alias).get(workflow_id=step_run.run.workflow_id, key=key)
+            return system_queryset(step_model).get(workflow_id=step_run.run.workflow_id, key=key)
         except ObjectDoesNotExist as error:
             raise ValidationError({"config": f"Map target step {key!r} does not exist."}) from error
 
@@ -1240,12 +1228,10 @@ class MapStep(StepImpl):
         step_run: Any,
         *,
         input: JsonPresence,
-        using: str | None = None,
     ) -> list[Any]:
         """Return the item list resolved from this map step's config."""
 
-        alias = get_write_alias(type(step_run), using=using, instance=step_run)
-        step_run = type(step_run)._base_manager.using(alias).select_related("step", "run").get(pk=step_run.pk)
+        step_run = type(step_run)._base_manager.select_related("step", "run").get(pk=step_run.pk)
 
         expression = cls.config_mapping(step_run).get("items")
         value = cls.expression_value(expression, step_run, input=input)

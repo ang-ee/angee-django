@@ -1062,7 +1062,7 @@ def test_predecessor_lookup_recovers_the_exact_transitive_gate_source(
             return fixture_run(self, step_run, now=now)
         with monkeypatch.context() as read_router:
             read_router.setattr("django.db.router.db_for_read", lambda model, **hints: "missing-read-replica")
-            selected = Decision.objects.db_manager("default").predecessor_decision(step_run, GateStep)
+            selected = Decision.objects.predecessor_decision(step_run, GateStep)
         with Decision.objects.locked_resolution(
             selected.pk,
             actor=assignee,
@@ -1316,7 +1316,7 @@ def test_decision_target_is_actor_validated_retained_and_immutable(
     )
 
     with pytest.raises(ValidationError, match="not found"):
-        Decision.objects._validated_target(declaration, actor=stranger, using="default")
+        Decision.objects._validated_target(declaration, actor=stranger)
 
     def suspend_from_fixture(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
@@ -2020,7 +2020,7 @@ def test_decision_json_schema_preserves_types_and_authored_constraints(
     monkeypatch.setattr(
         decision_actions,
         "_validate_relation_fields",
-        lambda _schema, resolution, _actor, *, using: relation_checks.append(resolution),
+        lambda _schema, resolution, _actor: relation_checks.append(resolution),
     )
     schema = _action_schema(
         actions=("apply",),
@@ -2131,11 +2131,11 @@ def test_decision_relation_permission_defaults_to_write_and_allows_declared_read
     monkeypatch.setattr(decision_actions, "instance_from_public_id", lambda _model, _value, *, queryset: object())
 
     assert (
-        decision_actions._relation_error({"resource": "demo.Company"}, "company-1", object(), using="default") is None
+        decision_actions._relation_error({"resource": "demo.Company"}, "company-1", object()) is None
     )
     assert (
         decision_actions._relation_error(
-            {"resource": "demo.Company", "permission": "read"}, "company-1", object(), using="default"
+            {"resource": "demo.Company", "permission": "read"}, "company-1", object()
         )
         is None
     )
@@ -2143,7 +2143,7 @@ def test_decision_relation_permission_defaults_to_write_and_allows_declared_read
 
     assert (
         decision_actions._relation_error(
-            {"resource": "demo.Company", "permission": "read;delete"}, "company-1", object(), using="default"
+            {"resource": "demo.Company", "permission": "read;delete"}, "company-1", object()
         )
         == "Relation value must reference a permitted record."
     )
@@ -3469,7 +3469,7 @@ def _execute(schema: Any, query: str, variables: dict[str, Any] | None = None, *
 def _validate_json_resolution(schema: dict[str, Any], payload: Any) -> dict[str, Any]:
     decision = SimpleNamespace(form_schema=schema)
     return decision_actions.validate_decision_resolution(
-        decision, payload, actor=None, verdict="completed", using="default"
+        decision, payload, actor=None, verdict="completed"
     )
 
 

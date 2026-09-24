@@ -11,13 +11,11 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import connections
+from django.db import connection
 from django.db.models.fields import NOT_PROVIDED
 from import_export import fields
 from import_export.results import RowResult
 
-from angee.base.db import get_write_alias
-from angee.base.permissions import require_authorization_database
 from angee.base.scoping import system_queryset
 from angee.resources.entries import resolve_model
 from angee.resources.exceptions import ResourceLoadError
@@ -93,7 +91,7 @@ class WorkflowDefinitionResource(AngeeResource):
         return apps.get_model("workflows", "Workflow")
 
     @classmethod
-    def lock_imports(cls, loaded_groups: Sequence[tuple[Any, AngeeResource]], *, using: str | None = None) -> None:
+    def lock_imports(cls, loaded_groups: Sequence[tuple[Any, AngeeResource]]) -> None:
         """Lock all existing affected heads, including omissions and adoption.
 
         Planning reads may resolve existing xrefs/natural identities only. They
@@ -108,17 +106,15 @@ class WorkflowDefinitionResource(AngeeResource):
         if not facets:
             return
         model = facets[0][1].workflow_model
-        alias = get_write_alias(model, using=using)
-        require_authorization_database(alias, operation="Workflow resource locks", error_class=ResourceLoadError)
-        if not connections[alias].in_atomic_block:
+        if not connection.in_atomic_block:
             raise ResourceLoadError("Workflow resource locks require an active resource transaction.")
-        ids = cls._lock_targets(facets, using=alias)
-        locked = list(system_queryset(model, using=alias, lock=("self",)).filter(pk__in=ids).order_by("pk"))
-        if {row.pk for row in locked} != ids or cls._lock_targets(facets, using=alias) - ids:
+        ids = cls._lock_targets(facets)
+        locked = list(system_queryset(model, lock=("self",)).filter(pk__in=ids).order_by("pk"))
+        if {row.pk for row in locked} != ids or cls._lock_targets(facets) - ids:
             raise ResourceLoadError("Workflow resource parents changed during lock planning; retry the load.")
 
     @classmethod
-    def _lock_targets(cls, facets: Sequence[tuple[Any, WorkflowDefinitionResource]], *, using: str) -> set[int]:
+    def _lock_targets(cls, facets: Sequence[tuple[Any, WorkflowDefinitionResource]]) -> set[int]:
         # Rebuild on each pass: the post-lock read must see concurrent parent moves.
         ledgers: dict[tuple[str, str], Any] = {}
         owned: list[tuple[Any, Any]] = []
@@ -131,7 +127,7 @@ class WorkflowDefinitionResource(AngeeResource):
                 ((group.entry.addon.name, xref), ledger) for xref, ledger in resource._existing_ledgers.items()
             )
             # Retained omitted targets are affected even without current xrefs.
-            for ledger in resource.ledger_model._default_manager.using(using).filter(
+            for ledger in resource.ledger_model._default_manager.filter(
                 source_addon=group.entry.addon.name,
                 source_path=group.entry.source,
                 target_model=group.model._meta.label,
@@ -157,7 +153,7 @@ class WorkflowDefinitionResource(AngeeResource):
                 missing[key[0]].add(key[1])
         ledger_model = facets[0][1].ledger_model
         for addon, xrefs in missing.items():
-            for ledger in ledger_model._default_manager.using(using).filter(source_addon=addon, xref__in=xrefs):
+            for ledger in ledger_model._default_manager.filter(source_addon=addon, xref__in=xrefs):
                 ledgers[(addon, ledger.xref)] = ledger
 
         model = facets[0][1].workflow_model
@@ -178,7 +174,7 @@ class WorkflowDefinitionResource(AngeeResource):
                 continue
         targets: dict[tuple[str, str], Any] = {}
         for target_model, pks in target_pks.items():
-            rows = target_model._default_manager.using(using).in_bulk({pk for pk in pks.values() if pk is not None})
+            rows = target_model._default_manager.in_bulk({pk for pk in pks.values() if pk is not None})
             targets.update((key, rows.get(pk)) for key, pk in pks.items())
 
         ids: set[int] = set()
@@ -296,13 +292,12 @@ class WorkflowDefinitionResource(AngeeResource):
     def after_import(self, dataset: Any, result: Any, **kwargs: Any) -> None:
         if result.has_errors() or result.has_validation_errors():
             return
-        alias = self.get_db_connection_name()
         # Positional row/instance pairing relies on report_skipped, store_instance, skip_diff, use_bulk=False.
         declarations = {
             xref: row_result.instance
             for xref, row_result in zip(dataset["_xref"], result.rows, strict=True)
         }
-        persisted = self.workflow_model.objects.db_manager(alias).install_definition(
+        persisted = self.workflow_model.objects.install_definition(
             self._meta.model,
             declarations,
             ledger_model=self.ledger_model,

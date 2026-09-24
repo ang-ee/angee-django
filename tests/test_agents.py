@@ -21,7 +21,7 @@ import httpx2
 import pytest
 from anthropic.types import Message, TextBlock, Usage
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import PermissionDenied
 from django.core.management import call_command
 from django.db import connection
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
@@ -303,7 +303,7 @@ def test_sdk_backend_client_class_override_skips_dotted_import() -> None:
         client_class_path = "missing_provider_sdk.Client"
         sdk_package_name = "missing-provider-sdk"
 
-        def _client_kwargs(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, Any]:
+        def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
             del credential
             return {}
 
@@ -1190,17 +1190,16 @@ def test_structured_decoder_rejects_missing_ambiguous_or_nonobject_output(parts)
         decode_inference_output(ModelResponse(parts=parts))
 
 
-def test_infer_decoding_error_retains_usage_and_explicit_alias(monkeypatch):
+def test_infer_decoding_error_retains_usage(monkeypatch):
     model = InferenceModel(name="structured")
     response = ModelResponse(parts=[TextPart("[]")], usage=RequestUsage(input_tokens=3, output_tokens=2))
 
-    def chat(messages, *, using, **kwargs):
-        assert using == "inference_writer"
+    def chat(messages, **kwargs):
         return response
 
     monkeypatch.setattr(model, "chat", chat)
     with pytest.raises(InferenceOutputError) as error:
-        model.infer([], output_schema={"type": "object"}, using="inference_writer")
+        model.infer([], output_schema={"type": "object"})
     assert error.value.response is response
     assert error.value.usage == {"input_tokens": 3, "output_tokens": 2, "tokens": 5, "requests": 1}
     assert model._state.db is None
@@ -1233,13 +1232,6 @@ def test_model_approval_distinguishes_malformed_policy_from_denial(settings, pol
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = policy
     with pytest.raises(ValueError, match="policy is invalid"):
         InferenceModel().require_approved("mapping")
-
-
-def test_model_authorization_rejects_nondefault_database_before_rebac(monkeypatch):
-    model = InferenceModel()
-    monkeypatch.setattr(model, "with_actor", lambda actor: pytest.fail("unbound REBAC lookup"))
-    with pytest.raises(ValidationError, match="default authorization database"):
-        model.require_usable(object(), "inference", uses={InferenceModelUse.CHAT}, using="other")
 
 
 @pytest.mark.django_db(transaction=True)

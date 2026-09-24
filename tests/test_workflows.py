@@ -1087,7 +1087,7 @@ def test_current_published_resolution_uses_lineage_head(workflow_tables: None) -
         assert Workflow.objects.current_published_for(draft) == second
         assert Workflow.objects.current_published_for(first) == second
         assert Workflow.objects.current_published_for(second) == second
-        scoped = Workflow.objects.with_actor(owner).using("default")
+        scoped = Workflow.objects.with_actor(owner)
         assert scoped.current_published_for(draft) == second
         assert scoped.current_published_for(draft)._state.db == "default"
         assert Workflow.objects.with_actor(outsider).current_published_for(draft) is None

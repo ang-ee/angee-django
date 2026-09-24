@@ -39,17 +39,17 @@ def test_relation_permission_follows_references_applicators_and_nested_arrays(
     if applicator != "allOf":
         schema["properties"]["selection"][applicator].append({"type": "null"})
 
-    def authorize(spec: Any, value: Any, supplied_actor: Any, *, using: str) -> str | None:
+    def authorize(spec: Any, value: Any, supplied_actor: Any) -> str | None:
         checked.append((spec, value, supplied_actor))
         return None if permitted else "Record is outside the actor's permission scope."
 
     monkeypatch.setattr(decision_actions, "_relation_error", authorize)
     payload = {"selection": [{"record": "pty_123"}]}
     if permitted:
-        decision_actions._validate_relation_fields(schema, payload, actor, using="default")
+        decision_actions._validate_relation_fields(schema, payload, actor)
     else:
         with pytest.raises(ValidationError) as error:
-            decision_actions._validate_relation_fields(schema, payload, actor, using="default")
+            decision_actions._validate_relation_fields(schema, payload, actor)
         assert "selection.0.record" in error.value.message_dict
     assert checked == [(relation, "pty_123", actor)]
 
@@ -57,7 +57,7 @@ def test_relation_permission_follows_references_applicators_and_nested_arrays(
 def test_nonmatching_branch_does_not_deny_permitted_relation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def authorize(relation: dict[str, str], value: str, actor: Any, *, using: str) -> str | None:
+    def authorize(relation: dict[str, str], value: str, actor: Any) -> str | None:
         del value, actor
         return "Denied wrong branch" if relation["permission"] == "write" else None
 
@@ -71,7 +71,7 @@ def test_nonmatching_branch_does_not_deny_permitted_relation(
         ],
     }
     payload = {"mode": "view", "record": "pty_123"}
-    decision_actions._validate_relation_fields(schema, payload, object(), using="default")
+    decision_actions._validate_relation_fields(schema, payload, object())
 
 
 def test_structural_validation_never_coerces_relation_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,7 +92,6 @@ def test_structural_validation_never_coerces_relation_values(monkeypatch: pytest
             {"action": "approve", "record": 123},
             actor=object(),
             verdict="completed",
-            using="default",
         )
 
 
@@ -107,7 +106,7 @@ def test_rebac_relation_without_actor_scope_fails_closed(monkeypatch: pytest.Mon
         lambda *args, **kwargs: pytest.fail("An unscoped model lookup must not occur."),
     )
     assert (
-        decision_actions._relation_error({"resource": "parties.Party"}, "pty_123", None, using="default")
+        decision_actions._relation_error({"resource": "parties.Party"}, "pty_123", None)
         == "Relation value must reference a permitted record."
     )
 
@@ -126,7 +125,7 @@ def test_explicit_nested_dialect_keeps_relation_extension(monkeypatch: pytest.Mo
     }
     monkeypatch.setattr(decision_actions, "_relation_error", lambda *args, **kwargs: "Denied retained record")
     with pytest.raises(ValidationError, match="Denied retained record"):
-        decision_actions._validate_relation_fields(schema, {"record": "pty_123"}, object(), using="default")
+        decision_actions._validate_relation_fields(schema, {"record": "pty_123"}, object())
     assert "$schema" in schema["$defs"]["record"]
 
 
@@ -150,7 +149,6 @@ def test_nested_dialect_changes_and_remote_references_fail_closed() -> None:
             },
             {"record": "pty_123"},
             object(),
-            using="default",
         )
     with pytest.raises(ValidationError, match="inside the retained schema"):
         decision_actions._validate_relation_fields(
@@ -160,7 +158,6 @@ def test_nested_dialect_changes_and_remote_references_fail_closed() -> None:
             },
             {"record": "pty_123"},
             object(),
-            using="default",
         )
 
 
@@ -176,7 +173,7 @@ def test_python_authored_contract_retains_native_coercion_and_relation_authoriza
     actor = object()
     seen: list[tuple[Any, Any]] = []
 
-    def authorize(relation: Any, value: Any, supplied_actor: Any, *, using: str) -> str | None:
+    def authorize(relation: Any, value: Any, supplied_actor: Any) -> str | None:
         del relation
         seen.append((value, supplied_actor))
         return None if permitted else "Record is outside the actor's permission scope."
@@ -187,11 +184,11 @@ def test_python_authored_contract_retains_native_coercion_and_relation_authoriza
     payload = {"selected_record": "pty_123", "count": "7"}
     if permitted:
         assert decision_actions.validate_decision_resolution(
-            decision, payload, actor=actor, verdict="completed", using="default"
+            decision, payload, actor=actor, verdict="completed"
         ) == {"record": "pty_123", "count": 7}
     else:
         with pytest.raises(ValidationError, match="outside the actor"):
             decision_actions.validate_decision_resolution(
-                decision, payload, actor=actor, verdict="completed", using="default"
+                decision, payload, actor=actor, verdict="completed"
             )
     assert seen == [("pty_123", actor)]

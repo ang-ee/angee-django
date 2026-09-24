@@ -13,7 +13,6 @@ from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.db import related_on
 from angee.workflows import engine, settlement
 from angee.workflows.attempts import AttemptResultKind, LeaseRevocationReason
 from angee.workflows.dispatch import WorkflowDispatchKind
@@ -33,20 +32,20 @@ from tests.workflows import (
 )
 
 
-def settle_fixture(run: Any, *, using: str | None = None) -> None:
+def settle_fixture(run: Any) -> None:
     """Replaceable declared handler for tests of the real registration seam."""
 
 
-def settle_unavailable(run: Any, *, using: str | None = None) -> None:
+def settle_unavailable(run: Any) -> None:
     """Fail delivery without consuming its retained dispatch."""
 
     raise RuntimeError("subject writer unavailable")
 
 
 @pytest.fixture
-def settlement_calls(settings: Any, monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str | None]]:
-    calls: list[tuple[int, str | None]] = []
-    monkeypatch.setattr(f"{__name__}.settle_fixture", lambda run, *, using=None: calls.append((run.pk, using)))
+def settlement_calls(settings: Any, monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    calls: list[int] = []
+    monkeypatch.setattr(f"{__name__}.settle_fixture", lambda run: calls.append(run.pk))
     settings.ANGEE_WORKFLOW_SUBJECT_SETTLERS = {
         "tests.workflows.Workflow": f"{__name__}.settle_fixture",
     }
@@ -59,13 +58,13 @@ def test_terminal_settlement_intent_requires_a_registered_subject(
     subject_kind: str,
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    settlement_calls: list[tuple[int, str | None]],
+    settlement_calls: list[int],
 ) -> None:
     workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
     subject = None if subject_kind == "subjectless" else workflow
     if subject_kind == "unregistered":
         with system_context(reason="unregistered settlement subject"):
-            subject = related_on(workflow, "created_by", using="default")
+            subject = workflow.created_by
     run = start_run(workflow, subject=subject)
     with system_context(reason="terminal settlement registration boundary"):
         run.mark_failed()
@@ -81,7 +80,7 @@ def test_every_engine_terminal_path_retains_one_subject_settlement(
     outcome: str,
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    settlement_calls: list[tuple[int, str | None]],
+    settlement_calls: list[int],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = workflow_with_steps(
@@ -125,19 +124,19 @@ def test_every_engine_terminal_path_retains_one_subject_settlement(
         assert intent.envelope.target_id == run.pk
         assert intent.consumed_at is None
         with transaction.atomic():
-            duplicate, created = WorkflowDispatch.objects.schedule_run_settle(run, using="default")
+            duplicate, created = WorkflowDispatch.objects.schedule_run_settle(run)
         assert not created and duplicate.pk == intent.pk
 
     assert engine.settle_run_dispatch(intent.pk, expected_run_id=run.pk) == {"settled": 1}
     assert engine.settle_run_dispatch(intent.pk, expected_run_id=run.pk) == {"settled": 0}
-    assert settlement_calls == [(run.pk, "default")]
+    assert settlement_calls == [run.pk]
 
 
 @pytest.mark.django_db(transaction=True)
 def test_transport_settles_registered_subject_once(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    settlement_calls: list[tuple[int, str | None]],
+    settlement_calls: list[int],
 ) -> None:
     workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
     run = start_run(workflow, subject=workflow)
@@ -152,10 +151,9 @@ def test_transport_settles_registered_subject_once(
             kind=envelope.kind.value,
             target_id=envelope.target_id,
             generation=envelope.generation,
-            using="default",
         )
 
-    assert settlement_calls == [(run.pk, "default")]
+    assert settlement_calls == [run.pk]
     with system_context(reason="inspect subject settlement transport delivery"):
         intent.refresh_from_db()
         assert intent.consumed_at is not None
@@ -165,7 +163,7 @@ def test_transport_settles_registered_subject_once(
 def test_failed_subject_settlement_preserves_pending_delivery(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    settlement_calls: list[tuple[int, str | None]],
+    settlement_calls: list[int],
 ) -> None:
     workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
     run = start_run(workflow, subject=workflow)
@@ -183,14 +181,14 @@ def test_failed_subject_settlement_preserves_pending_delivery(
         assert intent.consumed_at is None
     assert settlement_calls == []
     assert engine.settle_run_dispatch(intent.pk, expected_run_id=run.pk) == {"settled": 1}
-    assert settlement_calls == [(run.pk, "default")]
+    assert settlement_calls == [run.pk]
 
 
 @pytest.mark.django_db(transaction=True)
 def test_subject_settlement_requires_terminal_transaction_and_exact_envelope(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    settlement_calls: list[tuple[int, str | None]],
+    settlement_calls: list[int],
 ) -> None:
     workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
     run = start_run(workflow, subject=workflow)
@@ -209,7 +207,7 @@ def test_subject_settlement_requires_terminal_transaction_and_exact_envelope(
 
 
 def test_settlement_registration_is_explicit_and_collisions_fail(
-    settlement_calls: list[tuple[int, str | None]],
+    settlement_calls: list[int],
 ) -> None:
     handlers = settlement.subject_settlers()
     assert set(handlers) == {(Workflow._meta.app_label, Workflow._meta.model_name)}
@@ -232,7 +230,7 @@ def test_settlement_registration_is_explicit_and_collisions_fail(
 def test_terminal_transition_and_subject_intent_roll_back_together(
     workflow_engine_tables: None,
     no_workflow_queue: None,
-    settlement_calls: list[tuple[int, str | None]],
+    settlement_calls: list[int],
 ) -> None:
     workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
     run = start_run(workflow, subject=workflow)
@@ -260,7 +258,7 @@ def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
     run = start_run(workflow)
     row = advance_once(run)[0]
     heartbeated = Event()
-    heartbeats: list[tuple[int, str | None]] = []
+    heartbeats: list[int] = []
     workers: set[Thread] = set()
     invoking_thread = current_thread()
     manager_class = type(StepAttempt.objects)
@@ -268,7 +266,7 @@ def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
 
     def heartbeat(manager: Any, attempt_id: int, **kwargs: Any) -> bool:
         result = original(manager, attempt_id, **kwargs)
-        heartbeats.append((attempt_id, manager._db))
+        heartbeats.append(attempt_id)
         if current_thread() is not invoking_thread:
             workers.add(current_thread())
         if len(heartbeats) >= 2:
@@ -276,7 +274,7 @@ def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
         return result
 
     def perform(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
-        with self.heartbeat_during(step_run, using="default"):
+        with self.heartbeat_during(step_run):
             # Changing this caller's FK cache must never redirect the worker to
             # another lease. The durable attempt is still the admitted one.
             step_run.current_attempt_id = None
@@ -290,7 +288,7 @@ def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
     execute_started(run)
 
     assert len(heartbeats) >= 2
-    assert set(heartbeats) == {(row.current_attempt_id, "default")}
+    assert set(heartbeats) == {row.current_attempt_id}
     assert workers and all(worker.daemon and not worker.is_alive() for worker in workers)
     assert step_run_for(run, "page").status == ("failed" if body_fails else "succeeded")
 
@@ -318,9 +316,9 @@ def test_bounded_io_lost_lease_retains_transient_unapplied_result(
 
     def perform(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         with system_context(reason="capture heartbeat test lease"):
-            attempt = related_on(step_run, "current_attempt", using="default")
-        with self.heartbeat_during(step_run, using="default"):
-            StepAttempt.objects.db_manager("default").revoke(
+            attempt = step_run.current_attempt
+        with self.heartbeat_during(step_run):
+            StepAttempt.objects.revoke(
                 attempt.pk,
                 lease_token=attempt.lease_token,
                 reason=LeaseRevocationReason.SUPERSEDED,
@@ -333,7 +331,7 @@ def test_bounded_io_lost_lease_retains_transient_unapplied_result(
     monkeypatch.setattr(FixtureStep, "run", perform)
     execute_started(run)
     with system_context(reason="inspect retained lost-lease evidence"):
-        attempt = related_on(row, "current_attempt", using="default")
+        attempt = row.current_attempt
         assert attempt.result_kind == AttemptResultKind.TRANSIENT_ERROR
         assert attempt.applied_at is None
         assert attempt.lease_revocation_reason == LeaseRevocationReason.SUPERSEDED

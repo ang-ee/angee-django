@@ -12,7 +12,7 @@ import pytest
 import tablib
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models.fields import NOT_PROVIDED
 from import_export.results import RowResult
 from pydantic import BaseModel, ConfigDict, Field
@@ -163,7 +163,7 @@ def _load(groups: tuple[tuple[ResourceGroup, AngeeResource], ...], *, dry_run: b
     aliases = {key: owner.name for owner in owners.values() for key in (owner.label, owner.name)}
     return WorkflowResourceLedger.objects._import_groups(
         tuple(group.entry for group, _ in groups), tuple(group for group, _ in groups), (),
-        dry_run=dry_run, addon_aliases=aliases, using="default",
+        dry_run=dry_run, addon_aliases=aliases,
     )
 
 
@@ -619,7 +619,7 @@ def test_legacy_zero_revisions_still_compare_publication_content(tmp_path: Path)
         assert first is not None
         _install(addon, entry_name="Changed legacy entry")
         # Reproduce existing rows receiving the revision field's migration default.
-        models.QuerySet(model=Workflow, using="default").filter(pk__in=(head.pk, first.pk)).update(draft_revision=0)
+        models.QuerySet(model=Workflow).filter(pk__in=(head.pk, first.pk)).update(draft_revision=0)
 
         second = head.publish_if_changed()
 
@@ -687,7 +687,7 @@ def test_publication_observes_complete_facets_and_grants_and_failure_rolls_back(
         return WorkflowResourceLedger.objects._import_groups(
             (*[group.entry for group, _ in groups], grant_entry),
             tuple(group for group, _ in groups), (grants,), dry_run=dry_run,
-            addon_aliases={addon.name: addon.name, addon.label: addon.name}, using="default",
+            addon_aliases={addon.name: addon.name, addon.label: addon.name},
         )
 
     load(dry_run=True)
@@ -755,34 +755,6 @@ def test_canonical_ledger_hook_runs_once_per_persisted_row_and_never_for_skip(tm
     assert calls == []
     _install(addon, entry_name="New name")
     assert calls == ["entry"]
-
-
-def test_resource_load_rejects_split_read_routing_before_any_write(tmp_path: Path, monkeypatch: Any) -> None:
-    addon = _addon(tmp_path)
-    read = router.db_for_read
-    monkeypatch.setattr(
-        router, "db_for_read", lambda model, **hints: "replica" if model is Step else read(model, **hints),
-    )
-    with pytest.raises(ResourceLoadError, match="default authorization database"):
-        _install(addon)
-    assert not WorkflowResourceLedger.objects.exists()
-    assert not Workflow._base_manager.exists()
-
-
-def test_resource_entry_owners_reject_explicit_and_bound_non_default_aliases(tmp_path: Path, monkeypatch: Any) -> None:
-    addon = _addon(tmp_path)
-    groups = _groups(addon)
-    monkeypatch.setattr(
-        type(WorkflowResourceLedger.objects), "_groups_for",
-        lambda _manager, *args, **kwargs: (
-            tuple(group.entry for group, _ in groups), tuple(group for group, _ in groups), (),
-        ),
-    )
-    with pytest.raises(ResourceLoadError, match="default authorization database"):
-        WorkflowResourceLedger.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL], using="other")
-    with pytest.raises(ResourceLoadError, match="default authorization database"):
-        WorkflowResourceLedger.objects.db_manager("other").validate_addons((addon,), tiers=[Resource.Tier.INSTALL])
-    assert not WorkflowResourceLedger.objects.exists()
 
 
 def test_empty_workflow_facet_removes_unreferenced_head_and_ledger(tmp_path: Path) -> None:
@@ -863,4 +835,4 @@ def test_lock_planning_batches_ledgers_and_targets_independently_of_row_count(
 
     # Each facet primes its declared and owned ledgers; each target model is read once.
     with system_context(reason="batched workflow lock planning"), django_assert_num_queries(9):
-        assert WorkflowDefinitionResource._lock_targets(groups, using="default") == {head.pk}
+        assert WorkflowDefinitionResource._lock_targets(groups) == {head.pk}

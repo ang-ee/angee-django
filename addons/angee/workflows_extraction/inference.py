@@ -143,7 +143,6 @@ def recognize_page(
     model: Any,
     config: dict[str, Any],
     timeout: float,
-    using: str,
 ) -> RecognitionResult:
     """Transcribe one retained page through the workflow inference owner."""
 
@@ -169,7 +168,6 @@ def recognize_page(
             ),
             role=ExtractionRole.RECOGNITION,
             uses=ExtractionRole.RECOGNITION.accepted_model_uses,
-            using=using,
         )
     except InferenceCallError as error:
         raise DocumentPipelineError(
@@ -199,7 +197,6 @@ def map_text_parts(
     model: Any,
     config: dict[str, Any],
     timeout: float,
-    using: str,
 ) -> MappingResult:
     """Map retained evidence and derive provenance from its exact scalar spans."""
 
@@ -223,7 +220,6 @@ def map_text_parts(
             ),
             role=ExtractionRole.MAPPING,
             uses=ExtractionRole.MAPPING.accepted_model_uses,
-            using=using,
         )
     except InferenceCallError as error:
         metadata = (

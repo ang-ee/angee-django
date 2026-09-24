@@ -14,7 +14,6 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import override_settings
-from django.utils import timezone
 from rebac import system_context
 
 from angee.workflows import engine
@@ -22,9 +21,7 @@ from angee.workflows import models as workflow_models
 from angee.workflows.steps import StepImpl
 from angee.workflows_integrate import archives
 from angee.workflows_integrate.archive_steps import (
-    ArchiveExecuteStepImpl,
     ArchiveGateStepImpl,
-    ArchiveProbeStepImpl,
 )
 from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
 from angee.workflows_integrate.steps import ArchiveExecutionReporter, ArchiveExtractor
@@ -333,9 +330,8 @@ def test_probe_gate_map_execute_archive_end_to_end(
     active_io: list[str] = []
 
     @contextmanager
-    def keepalive(self: StepImpl, step_run: Any, *, using: str | None = None) -> Iterator[None]:
-        assert using == "default"
-        with native_keepalive(self, step_run, using=using):
+    def keepalive(self: StepImpl, step_run: Any) -> Iterator[None]:
+        with native_keepalive(self, step_run):
             active_io.append(step_run.step.key)
             try:
                 yield
@@ -353,7 +349,6 @@ def test_probe_gate_map_execute_archive_end_to_end(
         reporter: ArchiveExecutionReporter,
     ) -> dict[str, Any]:
         assert active_io == ["execute_unit"]
-        assert reporter.using == file._state.db == "default"
         return execute(self, file, target_pk, reporter)
 
     monkeypatch.setattr(StepImpl, "heartbeat_during", keepalive)
@@ -787,33 +782,13 @@ def test_archive_execution_rejects_invalid_bound_input(
     assert FixtureArchiveIngest.landed == {}
 
 
-@pytest.mark.parametrize(
-    "implementation",
-    (ArchiveProbeStepImpl, ArchiveGateStepImpl, ArchiveExecuteStepImpl),
-)
-@pytest.mark.parametrize("explicit_alias", (True, False))
-def test_archive_steps_reject_nondefault_execution_before_reading_rows(
-    implementation: type[Any],
-    explicit_alias: bool,
-) -> None:
-    """Unrouted bridge import owners cannot silently use another database."""
-
-    step_run = StepRun(pk=1)
-    step_run._state.adding = False
-    step_run._state.db = "archive-secondary"
-    with pytest.raises(ValidationError, match="default"):
-        implementation().run(
-            step_run,
-            now=timezone.now(),
-            using="archive-secondary" if explicit_alias else None,
-        )
 
 
 class _HeartbeatStub:
     """Minimal heartbeat owner for direct extractor execution in tests."""
 
-    def heartbeat(self, step_run: Any, *, at: Any = None, using: str | None = None) -> None:
-        del step_run, at, using
+    def heartbeat(self, step_run: Any, *, at: Any = None) -> None:
+        del step_run, at
 
 
 def _resolution(*, target: str) -> dict[str, Any]:

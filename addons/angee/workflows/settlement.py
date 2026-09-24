@@ -15,8 +15,6 @@ from django.db import models
 from django.dispatch import receiver
 from django.utils.module_loading import import_string
 
-from angee.base.db import get_write_alias, related_on
-
 
 @cache
 def subject_settlers() -> dict[tuple[str, str], Callable[..., None]]:
@@ -68,7 +66,7 @@ def subject_settler(content_type: ContentType | None) -> Callable[..., None] | N
     return subject_settlers().get((content_type.app_label, content_type.model))
 
 
-def settle_subject(run: Any, *, using: str | None = None) -> None:
+def settle_subject(run: Any) -> None:
     """Invoke the explicitly registered owner for this run's subject type.
 
     The dispatch owner holds the terminal run lock and consumes its intent only
@@ -76,8 +74,7 @@ def settle_subject(run: Any, *, using: str | None = None) -> None:
     idempotence against a newer operation on that subject.
     """
 
-    alias = get_write_alias(type(run), using=using, instance=run)
-    content_type = related_on(run, "subject_content_type", using=alias)
+    content_type = run.subject_content_type
     handler = subject_settler(content_type)
     if handler is not None:
-        handler(run, using=alias)
+        handler(run)

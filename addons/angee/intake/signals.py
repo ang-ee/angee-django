@@ -8,7 +8,6 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import ValidationError
 
-from angee.base.db import get_write_alias, related_on
 from angee.messaging.events import message_ingested
 
 logger = logging.getLogger(__name__)
@@ -36,8 +35,7 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
         return
     try:
         apps.get_model("intake", "Need")
-        using = get_write_alias(type(instance), instance=instance)
-        channel: Any = related_on(instance, "channel", using=using, required=False, select_related=("intake_queue",))
+        channel: Any = instance.channel
     except LookupError:
         # Source-only test graphs may install addon declarations without emitted
         # concrete runtime models. The global messaging seam must remain inert.

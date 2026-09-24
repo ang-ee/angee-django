@@ -238,15 +238,15 @@ def test_recognize_page_uses_retained_actor_subject_for_file_owner(monkeypatch: 
     model.with_actor.return_value.has_access.return_value = True
     text_file = SimpleNamespace(sqid="fil_text")
     file_model = MagicMock()
-    file_manager = file_model.objects.db_manager.return_value
+    file_manager = file_model.objects
     file_manager.select_related.return_value.get.return_value = image_file
     file_manager.ingest_stream.return_value = text_file
     model_model = MagicMock()
-    model_model.objects.db_manager.return_value.get.return_value = model
+    model_model.objects.get.return_value = model
     run = SimpleNamespace(
         admission_actor=lambda **kwargs: actor,
         admission_actor_subject=lambda **kwargs: actor_subject,
-        debit_budget=lambda usage, using: None,
+        debit_budget=lambda usage: None,
     )
     value = SimpleNamespace(
         source_position=0,
@@ -267,7 +267,6 @@ def test_recognize_page_uses_retained_actor_subject_for_file_owner(monkeypatch: 
         usage_delta=None,
         duration_ms=1,
     )
-    monkeypatch.setattr(extraction_steps, "related_on", lambda *args, **kwargs: run)
     monkeypatch.setattr(
         extraction_steps,
         "external_operation_request",
@@ -288,7 +287,7 @@ def test_recognize_page_uses_retained_actor_subject_for_file_owner(monkeypatch: 
         lambda value: owner_subjects.append(value) or 7,
     )
 
-    result = RecognizePageStepImpl()._recognize(SimpleNamespace(), using="default")
+    result = RecognizePageStepImpl()._recognize(SimpleNamespace(run=run))
 
     assert result.outcome == "recognized"
     assert owner_subjects == [actor_subject]
@@ -376,7 +375,6 @@ def test_inference_mapping_uses_shared_request_and_parsed_output(monkeypatch: py
         model=model,
         config={"max_tokens": 128, "thinking": False},
         timeout=5,
-        using="default",
     )
 
     assert isinstance(result, MappingResult)
@@ -386,7 +384,7 @@ def test_inference_mapping_uses_shared_request_and_parsed_output(monkeypatch: py
     args, kwargs = call.call_args
     assert args[:2] == (step, model)
     assert kwargs == {
-        "role": "mapping", "uses": ExtractionRole.MAPPING.accepted_model_uses, "using": "default",
+        "role": "mapping", "uses": ExtractionRole.MAPPING.accepted_model_uses,
     }
     assert args[2].settings == {"timeout": 5, "max_tokens": 128, "temperature": 0, "thinking": False}
     assert args[2].output_schema == SCHEMA
@@ -403,7 +401,7 @@ def test_inference_mapping_invalid_output_retains_bounded_diagnostics(monkeypatc
     part = DocumentPart(0, None, "text/plain", "native_text", "Document DOC-42", "native", "hash")
 
     with pytest.raises(DocumentPipelineError) as raised:
-        map_text_parts((part,), SCHEMA, step_run=object(), model=object(), config={}, timeout=5, using="default")
+        map_text_parts((part,), SCHEMA, step_run=object(), model=object(), config={}, timeout=5)
 
     metadata = raised.value.metadata
     assert raised.value.stage == "mapping_response"
@@ -426,7 +424,7 @@ def test_inference_recognition_carries_native_image_and_zero_temperature(monkeyp
     monkeypatch.setattr(extraction_inference, "call_inference", call)
 
     result = recognize_page(
-        _page(0, 0), step_run=object(), model=object(), config={"max_tokens": 256}, timeout=5, using="default"
+        _page(0, 0), step_run=object(), model=object(), config={"max_tokens": 256}, timeout=5
     )
 
     request = call.call_args.args[2]
@@ -435,7 +433,7 @@ def test_inference_recognition_carries_native_image_and_zero_temperature(monkeyp
     assert len(request.images) == 1 and isinstance(request.images[0], BinaryContent)
     assert request.images[0].data == b"synthetic"
     assert call.call_args.kwargs == {
-        "role": "recognition", "uses": ExtractionRole.RECOGNITION.accepted_model_uses, "using": "default",
+        "role": "recognition", "uses": ExtractionRole.RECOGNITION.accepted_model_uses,
     }
     assert result.provider_metadata["usage"] == usage == result.usage_delta
 
@@ -446,7 +444,7 @@ def test_inference_recognition_invalid_response_exposes_usage(monkeypatch: pytes
         extraction_inference, "call_inference", MagicMock(return_value=InferenceResult(ModelResponse(parts=[]), usage))
     )
     with pytest.raises(DocumentPipelineError) as raised:
-        recognize_page(_page(0, 0), step_run=object(), model=object(), config={}, timeout=5, using="default")
+        recognize_page(_page(0, 0), step_run=object(), model=object(), config={}, timeout=5)
     assert raised.value.stage == "recognition_response"
     assert raised.value.usage_delta == usage
 
@@ -458,9 +456,9 @@ def test_inference_preserves_shared_retry_classification(operation: str, monkeyp
     )
     with pytest.raises(TransientStepError, match="provider throttled"):
         if operation == "recognition":
-            recognize_page(_page(0, 0), step_run=object(), model=object(), config={}, timeout=5, using="default")
+            recognize_page(_page(0, 0), step_run=object(), model=object(), config={}, timeout=5)
         else:
-            map_text_parts((), SCHEMA, step_run=object(), model=object(), config={}, timeout=5, using="default")
+            map_text_parts((), SCHEMA, step_run=object(), model=object(), config={}, timeout=5)
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("inf"), "invalid"])
@@ -472,9 +470,9 @@ def test_invalid_extraction_timeout_never_enters_provider_retry(
     monkeypatch.setattr(extraction_inference, "call_inference", call)
     with pytest.raises(DocumentPipelineError) as failure:
         if operation == "recognition":
-            recognize_page(_page(0, 0), step_run=object(), model=object(), config={}, timeout=timeout, using="default")
+            recognize_page(_page(0, 0), step_run=object(), model=object(), config={}, timeout=timeout)
         else:
-            map_text_parts((), SCHEMA, step_run=object(), model=object(), config={}, timeout=timeout, using="default")
+            map_text_parts((), SCHEMA, step_run=object(), model=object(), config={}, timeout=timeout)
     call.assert_not_called()
     assert failure.value.code == "invalid_config"
     assert failure.value.stage == f"{operation}_request"
@@ -496,9 +494,9 @@ def test_invalid_published_inference_config_routes_to_manual_review(
     monkeypatch.setattr(extraction_inference, "call_inference", call)
     with pytest.raises(DocumentPipelineError) as failure:
         if operation == "recognition":
-            recognize_page(_page(0, 0), step_run=object(), model=object(), config=config, timeout=5, using="default")
+            recognize_page(_page(0, 0), step_run=object(), model=object(), config=config, timeout=5)
         else:
-            map_text_parts((), SCHEMA, step_run=object(), model=object(), config=config, timeout=5, using="default")
+            map_text_parts((), SCHEMA, step_run=object(), model=object(), config=config, timeout=5)
     assert failure.value.stage == f"{operation}_request"
     assert failure.value.code == "invalid_config"
     call.assert_not_called()
@@ -511,7 +509,7 @@ def test_missing_decoded_mapping_retains_paid_usage(monkeypatch: pytest.MonkeyPa
         MagicMock(return_value=InferenceResult(ModelResponse(parts=[]), usage)),
     )
     with pytest.raises(DocumentPipelineError) as failure:
-        map_text_parts((), SCHEMA, step_run=object(), model=object(), config={}, timeout=5, using="default")
+        map_text_parts((), SCHEMA, step_run=object(), model=object(), config={}, timeout=5)
     assert failure.value.stage == "mapping_response"
     assert failure.value.code == "invalid_response"
     assert failure.value.usage_delta == usage
@@ -579,7 +577,6 @@ def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_provider
             model=object(),
             config={},
             timeout=10,
-            using="default",
         )
     assert failure.value.parts[0].value == "Document DOC-1"
     assert "private" not in str(failure.value)
@@ -623,23 +620,18 @@ def test_extraction_inference_authorizes_model_once_before_provider(
     monkeypatch.setattr(model, "infer", provider_call)
     run = SimpleNamespace(admission_actor=lambda **kwargs: actor, debit_budget=MagicMock())
     provider = SimpleNamespace(backend=InferenceBackend(SimpleNamespace()))
-    monkeypatch.setattr(
-        workflow_inference,
-        "related_on",
-        lambda instance, field, **kwargs: run if field == "run" else provider,
-    )
-    step = object()
+    model._state.fields_cache["provider"] = provider
+    step = SimpleNamespace(run=run)
 
     def invoke():
         if operation == "recognition":
-            return recognize_page(_page(0, 0), step_run=step, model=model, config={}, timeout=5, using="default")
-        return map_text_parts((), SCHEMA, step_run=step, model=model, config={}, timeout=5, using="default")
+            return recognize_page(_page(0, 0), step_run=step, model=model, config={}, timeout=5)
+        return map_text_parts((), SCHEMA, step_run=step, model=model, config={}, timeout=5)
 
     if readable and compatible:
         invoke()
         provider_call.assert_called_once()
-        assert provider_call.call_args.kwargs["using"] == "default"
-        run.debit_budget.assert_called_once_with(usage, using="default")
+        run.debit_budget.assert_called_once_with(usage)
     else:
         with pytest.raises(
             PermissionDenied if not readable else ValueError,
@@ -652,45 +644,8 @@ def test_extraction_inference_authorizes_model_once_before_provider(
     read.return_value.has_access.assert_called_once_with("read")
 
 
-@pytest.mark.parametrize("operation", ["mapping", "recognition"])
-def test_extraction_inference_rejects_unbound_authorization_alias(
-    operation: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from angee.workflows_agents import inference as workflow_inference
-
-    monkeypatch.setattr(workflow_inference, "system_context", lambda **kwargs: nullcontext())
-
-    model = _InferenceModel(name="test", model_use="multimodal", status="available")
-    provider_call = MagicMock()
-    read = MagicMock()
-    monkeypatch.setattr(model, "infer", provider_call)
-    monkeypatch.setattr(model, "with_actor", read)
-    run = SimpleNamespace(admission_actor=lambda **kwargs: object(), debit_budget=MagicMock())
-    monkeypatch.setattr(workflow_inference, "related_on", lambda *args, **kwargs: run)
-
-    with pytest.raises(ValidationError, match="default authorization database is required"):
-        if operation == "recognition":
-            recognize_page(_page(0, 0), step_run=object(), model=model, config={}, timeout=5, using="other")
-        else:
-            map_text_parts((), SCHEMA, step_run=object(), model=model, config={}, timeout=5, using="other")
-    read.assert_not_called()
-    provider_call.assert_not_called()
-    run.debit_budget.assert_not_called()
 
 
-def test_direct_inference_rejects_unsupported_alias_before_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
-    actor = MagicMock()
-    monkeypatch.setattr(service, "current_actor", actor)
-    with pytest.raises(ValidationError, match="default authorization database is required"):
-        service.infer(
-            object(),
-            model=object(),
-            authorized_target=object(),
-            operation_step_run=object(),
-            using="other",
-        )
-    actor.assert_not_called()
 
 
 @pytest.mark.parametrize("role", ["mapping", "recognition"])
@@ -711,7 +666,7 @@ def test_deterministic_process_denies_unreadable_models_before_consuming_config(
 
     with pytest.raises(PermissionDenied, match="cannot read"):
         service.process(
-            object(), (), schema=SCHEMA, authorized_target=object(), profile="none", using="default", **models
+            object(), (), schema=SCHEMA, authorized_target=object(), profile="none",  **models
         )
 
     read.assert_called_once_with(actor)
@@ -720,12 +675,6 @@ def test_deterministic_process_denies_unreadable_models_before_consuming_config(
     authorize.assert_not_called()
 
 
-def test_deterministic_process_rejects_alias_before_source_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    actor = MagicMock()
-    monkeypatch.setattr(service, "current_actor", actor)
-    with pytest.raises(ValidationError, match="default authorization database is required"):
-        service.process(object(), (), schema=SCHEMA, authorized_target=object(), profile="none", using="other")
-    actor.assert_not_called()
 
 
 @pytest.mark.parametrize("correspondence_hold", [False, True])
@@ -768,7 +717,7 @@ def test_infer_checks_model_before_reuse_or_retained_evidence(
     monkeypatch.setattr(service, "map_text_parts", provider)
 
     with pytest.raises(ValueError if denial == "capability" else PermissionDenied):
-        service.infer(base, model=model, authorized_target=base, operation_step_run=object(), using="default")
+        service.infer(base, model=model, authorized_target=base, operation_step_run=object())
 
     evidence.assert_not_called()
     fingerprint.assert_not_called()

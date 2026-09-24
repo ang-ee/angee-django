@@ -11,7 +11,6 @@ from django.utils import timezone
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
-from angee.base.db import related_on
 from angee.base.identity import public_id_of
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
@@ -104,7 +103,7 @@ def test_stage_retains_cycle_total_through_wait_and_retry(
         assert step_run.status == StepRunStatus.STARTED
         assert step_run.resume_state["cycle_items"] == 1
         with system_context(reason="test stream cycle total retry"):
-            successor = related_on(step_run, "current_attempt", using="default")
+            successor = step_run.current_attempt
         assert successor is not None
         execute_started(run, now=successor.available_at)
         step_run.refresh_from_db()
@@ -165,7 +164,7 @@ def test_infrastructure_failure_raises_and_engine_retains_declared_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class UnavailableAdapter(ReadKeysAdapter):
-        def read_keys(self, stream: Any, keys: Any, *, using: str | None = None) -> tuple[RecordChange, ...]:
+        def read_keys(self, stream: Any, keys: Any) -> tuple[RecordChange, ...]:
             raise transport_error
 
     adapter = UnavailableAdapter(pages=[transport_error])
@@ -191,16 +190,16 @@ def test_infrastructure_failure_raises_and_engine_retains_declared_retry(
     stage_type = CoverageGate if coverage else BoundedStreamStage
     invoke = stage_type.run
 
-    def capture_error(self: Any, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
+    def capture_error(self: Any, step_run: Any, *, now: datetime) -> StepResult:
         try:
-            return invoke(self, step_run, now=now, using=using)
+            return invoke(self, step_run, now=now)
         except TransientStepError as error:
             raised.append(str(error))
             raise
 
     monkeypatch.setattr(stage_type, "run", capture_error)
     with system_context(reason="test original stream attempt"):
-        original = related_on(step_run, "current_attempt", using="default")
+        original = step_run.current_attempt
     assert original is not None
 
     execute_started(run, now=step_run.wait_until if coverage else None)
@@ -211,7 +210,7 @@ def test_infrastructure_failure_raises_and_engine_retains_declared_retry(
     assert original.result_kind == AttemptResultKind.TRANSIENT_ERROR
     assert step_run.status == StepRunStatus.STARTED
     with system_context(reason="test retained stream retry"):
-        successor = related_on(step_run, "current_attempt", using="default")
+        successor = step_run.current_attempt
         assert successor is not None
         dispatch = WorkflowDispatch.objects.get(step_attempt=successor)
         assert SyncStream.objects.get().cursor == {}
@@ -232,7 +231,7 @@ def test_adapter_contract_failure_does_not_retain_a_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class MissingIdentityAdapter(ReadKeysAdapter):
-        def read_keys(self, stream: Any, keys: Any, *, using: str | None = None) -> tuple[RecordChange, ...]:
+        def read_keys(self, stream: Any, keys: Any) -> tuple[RecordChange, ...]:
             return ()
 
     class UnimplementedIdentityAdapter(MemoryAdapter):
@@ -261,7 +260,7 @@ def test_adapter_contract_failure_does_not_retain_a_retry(
     step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.FAILED
     with system_context(reason="test adapter contract fails without retry"):
-        attempt = related_on(step_run, "current_attempt", using="default")
+        attempt = step_run.current_attempt
         assert attempt is not None
         assert attempt.result_kind == AttemptResultKind.ERROR
         assert not StepAttempt.objects.filter(step_run=step_run, retry_of__isnull=False).exists()
@@ -289,7 +288,7 @@ def test_invalid_adapter_page_fails_without_retry_or_commit(
     step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.FAILED
     with system_context(reason="test invalid page rejects the attempt without retry"):
-        attempt = related_on(step_run, "current_attempt", using="default")
+        attempt = step_run.current_attempt
         assert attempt is not None
         assert attempt.result_kind == AttemptResultKind.ERROR
         assert not StepAttempt.objects.filter(step_run=step_run, retry_of__isnull=False).exists()
@@ -308,8 +307,7 @@ def test_crash_after_commit_replays_from_stream_cursor(
 
     class CursorAdapter(MemoryAdapter):
         def extract(
-            self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
-        ) -> StreamPage:
+            self, stream: Any, page_bound: int, *, deadline: float | None = None, ) -> StreamPage:
             position = stream.cursor.get("offset", 0)
             self.extracted += 1
             return StreamPage((f"record-{position}",), {"offset": position + 1}, exhausted=position == 1)
@@ -332,7 +330,7 @@ def test_crash_after_commit_replays_from_stream_cursor(
     step_run.refresh_from_db()
     assert step_run.resume_state == {}
     with system_context(reason="test replay retains admitted stream input"):
-        attempt = related_on(step_run, "current_attempt", using="default")
+        attempt = step_run.current_attempt
     assert attempt is not None and attempt.input_present
     step_run.input = attempt.input
 
@@ -363,19 +361,18 @@ def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
     calls = []
 
     def interrupted_prepare(
-        stream: Any, adapter: BridgeImpl | None = None, *, page_bound: int = 100, using: str | None = None
-    ) -> Any:
+        stream: Any, adapter: BridgeImpl | None = None, *, page_bound: int = 100, ) -> Any:
         calls.append(stream.pk)
         if len(calls) == 1:
             raise ConnectionError("first preparation interrupted")
-        return prepare(stream, adapter, page_bound=page_bound, using=using)
+        return prepare(stream, adapter, page_bound=page_bound)
 
     monkeypatch.setattr(integrate_steps, "begin_stream_cycle", interrupted_prepare)
     run, step_run = _start_stage(stream_bridge, retry=True)
     execute_started(run)
     step_run.refresh_from_db()
     with system_context(reason="test unprepared cycle retry"):
-        successor = related_on(step_run, "current_attempt", using="default")
+        successor = step_run.current_attempt
     assert successor is not None
 
     execute_started(run, now=successor.available_at)
@@ -405,7 +402,7 @@ def test_stage_rejects_a_bridge_other_than_the_admitted_subject(
 ) -> None:
     _, step_run = _start_stage(stream_bridge)
     with system_context(reason="test admitted stream input subject binding"):
-        attempt = related_on(step_run, "current_attempt", using="default")
+        attempt = step_run.current_attempt
     assert attempt is not None and attempt.input_present
     step_run.input = attempt.input
     step_run.input["bridge"]["id"] = "unknown-bridge"
@@ -545,7 +542,7 @@ def test_coverage_raises_one_native_decision_per_conflict(
     # Re-evaluating the data predicate cannot recreate those Decisions or accept
     # an unresolved row merely because the operator has already reviewed it.
     with system_context(reason="test recheck retains admitted coverage input"):
-        attempt = related_on(step_run, "current_attempt", using="default")
+        attempt = step_run.current_attempt
     assert attempt is not None and attempt.input_present
     step_run.input = attempt.input
     result = CoverageGate().run(step_run, now=timezone.now())

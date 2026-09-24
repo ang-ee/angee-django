@@ -1183,7 +1183,7 @@ def _decision_projection(value: Any) -> Any:
 
     if hasattr(value, "_decision_workflow_key"):
         return value
-    projected = Decision.system_queryset(using=value._state.db).with_context_projection().only("id").get(pk=value.pk)
+    projected = Decision.system_queryset().with_context_projection().only("id").get(pk=value.pk)
     for name in Decision.context_projection_annotation():
         setattr(value, name, getattr(projected, name))
     return value
@@ -2073,7 +2073,7 @@ class WorkflowActionMutation:
 
         target = resolve_action_target(Workflow, workflow, reason="workflows.graphql.publish_workflow")
         try:
-            published = target.publish(using=target._state.db)
+            published = target.publish()
         except ValidationError as error:
             return ActionResult.from_error(error, "Publishing the workflow failed.")
         return ActionResult(ok=True, message=f"Published workflow {published.sqid}.")
@@ -2090,8 +2090,8 @@ class WorkflowActionMutation:
 
         target = authorized_action_target(info, Workflow, workflow, "write")
         try:
-            command = _definition_edit(target, edit, using=target._state.db)
-            result = Workflow.objects.db_manager(target._state.db).apply_definition(
+            command = _definition_edit(target, edit)
+            result = Workflow.objects.apply_definition(
                 target,
                 expected_revision=expected_revision,
                 edit=command,
@@ -2138,7 +2138,7 @@ class WorkflowActionMutation:
 
         target = authorized_action_target(info, Workflow, workflow, "write")
         try:
-            result = Workflow.objects.db_manager(target._state.db).publish_definition(
+            result = Workflow.objects.publish_definition(
                 target, expected_revision=expected_revision
             )
         except StaleDefinitionError as error:
@@ -2176,9 +2176,9 @@ class WorkflowActionMutation:
         """Restore an exact immutable publication into the saved draft."""
 
         draft = authorized_action_target(info, Workflow, workflow, "write")
-        version = authorized_action_target(info, Workflow, source_workflow, "read", using=draft._state.db)
+        version = authorized_action_target(info, Workflow, source_workflow, "read")
         try:
-            result = Workflow.objects.db_manager(draft._state.db).restore_definition(
+            result = Workflow.objects.restore_definition(
                 draft, version, expected_revision=expected_revision
             )
         except StaleDefinitionError as error:
@@ -2318,16 +2318,12 @@ class WorkflowDefinitionQuery:
         )
 
 
-def _definition_edit(
-    workflow: Any, value: WorkflowDefinitionEditInput, *, using: str | None = None,
-) -> DefinitionEdit:
+def _definition_edit(workflow: Any, value: WorkflowDefinitionEditInput) -> DefinitionEdit:
     """Translate typed transport values to the domain command without deciding policy."""
 
     workflow_fields = _set_fields(value.workflow)
     if "error_workflow" in workflow_fields and workflow_fields["error_workflow"] is not None:
         queryset = Workflow.objects.with_action("read")
-        if using is not None:
-            queryset = queryset.using(using)
         related = instance_for_id(
             Workflow,
             workflow_fields["error_workflow"],
@@ -2646,7 +2642,7 @@ class PublicDecisionMutation:
         actor = session_user(info)
         with actor_context(actor):
             target = authorized_action_target(info, Decision, decision, "act")
-        result = engine.decide(target, verdict.value, payload=payload, actor=actor, using=target._state.db)
+        result = engine.decide(target, verdict.value, payload=payload, actor=actor)
         return PublicDecisionResolutionPayload.from_result(result)
 
 
@@ -2667,7 +2663,7 @@ class ConsoleDecisionMutation:
         actor = session_user(info)
         with actor_context(actor):
             target = authorized_action_target(info, Decision, decision, "act")
-        result = engine.decide(target, verdict.value, payload=payload, actor=actor, using=target._state.db)
+        result = engine.decide(target, verdict.value, payload=payload, actor=actor)
         return ConsoleDecisionResolutionPayload.from_result(result)
 
 
@@ -2689,9 +2685,8 @@ class WorkflowRunActionMutation:
         target = authorized_action_target(info, Workflow, workflow, "write")
         run = engine.start(
             target,
-            subject=_resolve_subject(subject, actor=actor, using=target._state.db),
+            subject=_resolve_subject(subject, actor=actor),
             actor=actor,
-            using=target._state.db,
         )
         return ActionResult(ok=True, message=f"Started workflow run {run.sqid}.", id=run.sqid)
 
@@ -2705,10 +2700,10 @@ class WorkflowRunActionMutation:
 
         actor = session_user(info)
         target = authorized_action_target(info, Trigger, trigger, "write")
-        record = _resolve_subject(subject, actor=actor, action="read", using=target._state.db)
+        record = _resolve_subject(subject, actor=actor, action="read")
         if record is None:
             raise ValidationError({"subject": "An event-trigger subject is required."})
-        run = Trigger.objects.db_manager(target._state.db).fire_event(
+        run = Trigger.objects.fire_event(
             target, subject=record, actor=actor, request_key=request_key
         )
         return ActionResult(ok=True, message=f"Started workflow run {run.sqid}.", id=run.sqid)
@@ -2722,7 +2717,7 @@ class WorkflowRunActionMutation:
 
         actor = session_user(info)
         source = authorized_action_target(info, WorkflowRun, run, "write")
-        result = WorkflowRun.objects.db_manager(source._state.db).reprocess(
+        result = WorkflowRun.objects.reprocess(
             source, actor=actor, request_key=request_key
         )
         return ActionResult(ok=True, message=f"Started workflow run {result.sqid}.", id=result.sqid)
@@ -2747,23 +2742,23 @@ class WorkflowRunActionMutation:
         actor = session_user(info)
         target = authorized_action_target(info, Workflow, workflow, "write")
         selected = (
-            instance_for_id(Step, source_step, queryset=Step._default_manager.using(target._state.db))
+            instance_for_id(Step, source_step, queryset=Step._default_manager.all())
             if source_step is not None else None
         )
         repair_source = (
             instance_for_id(
-                StepAttempt, repair_source_attempt, queryset=StepAttempt._default_manager.using(target._state.db)
+                StepAttempt, repair_source_attempt, queryset=StepAttempt._default_manager.all()
             )
             if repair_source_attempt is not None
             else None
         )
         if repair_source_attempt is not None and repair_source is None:
             raise ValidationError({"repair_source_attempt": "Test repair source evidence is unavailable."})
-        run = WorkflowRun.objects.db_manager(target._state.db).start_test(
+        run = WorkflowRun.objects.start_test(
             target,
             expected_revision=expected_revision,
             request_key=request_key,
-            subject=_resolve_subject(subject, actor=actor, using=target._state.db),
+            subject=_resolve_subject(subject, actor=actor),
             actor=actor,
             input=JsonPresence(input is not strawberry.UNSET, None if input is strawberry.UNSET else input),
             scope=scope,
@@ -2789,12 +2784,12 @@ class WorkflowRunActionMutation:
         if attempt is None:
             raise ValidationError({"source_attempt": "Recovery source evidence is unavailable."})
         prior = (
-            instance_for_id(WorkflowRun, prior_recovery, queryset=WorkflowRun._default_manager.using(attempt._state.db))
+            instance_for_id(WorkflowRun, prior_recovery, queryset=WorkflowRun._default_manager.all())
             if prior_recovery is not None else None
         )
         if prior_recovery is not None and prior is None:
             raise ValidationError({"prior_recovery": "Prior recovery is unavailable."})
-        run = WorkflowRun.objects.db_manager(attempt._state.db).start_recovery(
+        run = WorkflowRun.objects.start_recovery(
             attempt,
             request_key=request_key,
             actor=session_user(info),
@@ -2808,7 +2803,7 @@ class WorkflowRunActionMutation:
         """Cancel a workflow run and its active journal rows."""
 
         with action_target(WorkflowRun, run, reason="workflows.graphql.cancel_workflow_run") as target:
-            WorkflowRun.objects.db_manager(target._state.db).cancel(target, actor=session_user(info))
+            WorkflowRun.objects.cancel(target, actor=session_user(info))
         return ActionResult(ok=True, message="Workflow run canceled.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -2819,11 +2814,11 @@ class WorkflowRunActionMutation:
         target = resolve_action_target(WorkflowRun, run, reason="workflows.graphql.override_run")
         steps = [
             resolve_action_target(
-                Step, step_id, reason="workflows.graphql.override_run.step", using=target._state.db
+                Step, step_id, reason="workflows.graphql.override_run.step"
             )
             for step_id in next_steps
         ]
-        override = engine.override_run(target, steps, actor=actor, using=target._state.db)
+        override = engine.override_run(target, steps, actor=actor)
         return ActionResult(ok=True, message=f"Override recorded as {override.sqid}.")
 
 
@@ -2836,7 +2831,7 @@ class TriggerActionMutation:
         """Enable a workflow trigger."""
 
         with action_target(Trigger, trigger, reason="workflows.graphql.enable_workflow_trigger") as target:
-            target.enable(using=target._state.db)
+            target.enable()
         return ActionResult(ok=True, message="Workflow trigger enabled.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -2844,7 +2839,7 @@ class TriggerActionMutation:
         """Disable a workflow trigger."""
 
         with action_target(Trigger, trigger, reason="workflows.graphql.disable_workflow_trigger") as target:
-            target.disable(using=target._state.db)
+            target.disable()
         return ActionResult(ok=True, message="Workflow trigger disabled.")
 
 
@@ -2960,9 +2955,7 @@ schemas = {
 """GraphQL contributions installed by the workflows addon."""
 
 
-def _resolve_subject(
-    ref: WorkflowObjectRefInput | None, *, actor: Any, action: str = "write", using: str | None = None,
-) -> models.Model | None:
+def _resolve_subject(ref: WorkflowObjectRefInput | None, *, actor: Any, action: str = "write") -> models.Model | None:
     """Resolve an optional run subject through the requested actor scope.
 
     Manual workflow starts use the default ``write`` action because steps may
@@ -2980,8 +2973,6 @@ def _resolve_subject(
     queryset = read_scoped_queryset(model, actor, action=action)
     if queryset is None:
         queryset = model._default_manager.all()
-    if using is not None:
-        queryset = queryset.using(using)
     subject = instance_for_id(model, ref.id, queryset=queryset)
     if subject is None:
         raise ValidationError({"subject": "Run workflow subject was not found."})

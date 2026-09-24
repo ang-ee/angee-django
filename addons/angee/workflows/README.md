@@ -118,14 +118,14 @@ in their own transaction. Addons register database-only subject handlers through
 `ANGEE_WORKFLOW_SUBJECT_SETTLERS:append`, mapping an explicit model-class import
 path to a callable import path. Abstract declarations expand to their installed
 concrete content types; overlapping declarations fail at startup. A subject settler
-accepts `(run, *, using=None)`, locks its subject on that alias, and guards
+accepts `(run)`, locks its subject, and guards
 settlement against a newer operation on the subject. Delivery commits
 the handler's writes and consumes the intent together; failures leave it pending
 for the existing dispatch publisher. Subjectless runs and unregistered subjects
 create no settlement intent. `settlement.rebuild_subject_settlers()` builds the
 handler map at app startup and rebuilds it when Django settings change.
 
-Long STANDARD steps compose `StepImpl.heartbeat_during(step_run, using=alias)`
+Long STANDARD steps compose `StepImpl.heartbeat_during(step_run)`
 around bounded external I/O. It refreshes only the captured attempt lease on a
 separate connection and shares the reaper's configured heartbeat timeout. The
 step's page transaction remains separate from attempt finalization.

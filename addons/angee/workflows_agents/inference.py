@@ -19,7 +19,6 @@ from angee.agents.models import (
     InferenceOutputSchema,
     InferenceResult,
 )
-from angee.base.db import get_write_alias, related_on
 from angee.workflows.steps import TransientStepError
 
 
@@ -57,7 +56,6 @@ def call_inference(
     *,
     role: str,
     uses: Collection[InferenceModelUse] | None = None,
-    using: str | None = None,
 ) -> InferenceResult:
     """Resolve and authorize once, then classify failures and debit exactly once.
 
@@ -66,18 +64,17 @@ def call_inference(
     the attempt owner rather than becoming an ordinary provider outcome.
     """
 
-    alias = get_write_alias(type(step_run), using=using, instance=step_run)
     with system_context(reason="workflows_agents.inference.resolve"):
         if isinstance(model, str):
-            model = apps.get_model("agents", "InferenceModel").objects.db_manager(alias).get(sqid=model)
-        run: Any = related_on(step_run, "run", using=alias)
-        actor = run.admission_actor(using=alias)
+            model = apps.get_model("agents", "InferenceModel").objects.get(sqid=model)
+        run: Any = step_run.run
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Inference requires the workflow admission actor.")
         if uses is None:
             uses = IMAGE_INFERENCE_MODEL_USES if request.images else TEXT_INFERENCE_MODEL_USES
-        model.require_usable(actor, role, uses=uses, using=alias)
-        provider: Any = related_on(model, "provider", using=alias)
+        model.require_usable(actor, role, uses=uses)
+        provider: Any = model.provider
         backend = provider.backend
     usage: dict[str, int] = {}
     try:
@@ -86,7 +83,6 @@ def call_inference(
             images=request.images,
             output_schema=request.output_schema,
             settings=request.settings,
-            using=alias,
         )
         usage = result.usage
         return result
@@ -100,4 +96,4 @@ def call_inference(
             response, usage = error.response, error.usage
         raise InferenceCallError(error, response=response, usage=usage) from error
     finally:
-        run.debit_budget(usage, using=alias)
+        run.debit_budget(usage)

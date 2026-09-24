@@ -10,7 +10,6 @@ from django.utils.module_loading import import_string
 from pydantic_ai.models import Model
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
-from angee.base.db import related_on
 from angee.integrate.credentials import CredentialKind
 
 
@@ -25,11 +24,11 @@ class SDKInferenceBackend(InferenceBackend):
     oauth_auth_kwarg: ClassVar[str] = "auth_token"
     sdk_package_name: ClassVar[str] = "provider SDK"
 
-    def client(self, *, using: str | None = None) -> Any:
+    def client(self) -> Any:
         """Return a vendor SDK client bound to this provider's credential."""
 
         client_class = self.client_class or self._load_client_class()
-        return client_class(**self._client_kwargs(using=using))
+        return client_class(**self._client_kwargs())
 
     def _async_client_class(self) -> Any:
         if not self.async_client_class_path:
@@ -41,13 +40,11 @@ class SDKInferenceBackend(InferenceBackend):
                 f"Install the `{self.sdk_package_name}` package to use the {self.label} async client."
             ) from error
 
-    def model(
-        self, handle: str, *, credential: Any | None = None, using: str | None = None
-    ) -> AbstractAsyncContextManager[Model]:
+    def model(self, handle: str, *, credential: Any | None = None) -> AbstractAsyncContextManager[Model]:
         """Resolve credential policy now; own SDK lifetime in the calling async loop."""
 
         client_class = self._async_client_class()
-        kwargs = self._async_client_kwargs(credential=credential, using=using)
+        kwargs = self._async_client_kwargs(credential=credential)
         handle = self._provider_model(handle)
 
         @asynccontextmanager
@@ -62,7 +59,7 @@ class SDKInferenceBackend(InferenceBackend):
 
         raise NotImplementedError(f"{self.label} does not declare a native model adapter.")
 
-    def _async_client_kwargs(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, Any]:
+    def _async_client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
         """Return async SDK client constructor kwargs; defaults to the sync set.
 
         The override seam for vendor facts that differ between the sync and
@@ -70,9 +67,9 @@ class SDKInferenceBackend(InferenceBackend):
         requests a credential kind requires.
         """
 
-        return self._client_kwargs(credential=credential, using=using)
+        return self._client_kwargs(credential=credential)
 
-    def _client_kwargs(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, Any]:
+    def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
         """Return common SDK client constructor kwargs."""
 
         try:
@@ -81,30 +78,25 @@ class SDKInferenceBackend(InferenceBackend):
             raise ValueError("Inference provider timeout_seconds must be numeric.") from None
         if timeout:
             self.validate_timeout(timeout)
-        kwargs: dict[str, Any] = self._credential_auth(credential=credential, using=using)
+        kwargs: dict[str, Any] = self._credential_auth(credential=credential)
         if self.endpoint:
             kwargs["base_url"] = self.endpoint
         if timeout:
             kwargs["timeout"] = timeout
         return kwargs
 
-    def _credential_auth(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, str]:
+    def _credential_auth(self, *, credential: Any | None = None) -> dict[str, str]:
         """Return credential auth, or the SDK placeholder key for a no-auth backend."""
 
         if credential is None:
-            if using is None:
-                credential = getattr(self.provider, "credential", None)
-            else:
-                credential = related_on(
-                    self.provider, "credential", using=using, required=False, select_related=("oauth_client",)
-                )
+            credential = self.provider.credential
         if credential is None:
             if not self.requires_credential:
                 return {"api_key": "not-required"}
             raise ValueError(f"{self.label} inference requires an attached credential.")
         ensure_fresh = getattr(credential, "ensure_fresh", None)
         if callable(ensure_fresh):
-            ensure_fresh(using=using)
+            ensure_fresh()
         secret = str(credential.secret_value() or "")
         if not secret:
             raise ValueError(f"{self.label} inference credential has no secret.")

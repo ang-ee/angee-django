@@ -46,7 +46,7 @@ class _Credential:
         self.kind = kind
         self.freshened = 0
 
-    def ensure_fresh(self, *, using: str | None = None) -> None:
+    def ensure_fresh(self) -> None:
         self.freshened += 1
 
     def secret_value(self) -> str:
