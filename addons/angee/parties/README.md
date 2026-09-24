@@ -79,9 +79,8 @@ An edited retained tombstone cannot silently recreate the remote. Existing
 streams own their persisted `config`; changing a Directory's seed does not
 overwrite an existing policy. Epoch changes preserve that configuration.
 
-Core parties models do not carry `ExternalOwnershipMixin`'s provenance columns.
-The stream therefore records its mapped field ownership and compare-to-base
-enforcement in `config.field_ownership`; provenance guard adoption is deferred.
+Contact fields remain locally editable; the stream's comparison bases and
+conflict policy govern synchronization with the remote address book.
 The Integration owner supplies the credential and the local audit owner.
 
 Malformed cards are quarantined individually. Unsupported or malformed DAV

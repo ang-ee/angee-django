@@ -44,7 +44,7 @@ and carried through ``save_state``, including when a three-argument hook wraps i
 Bodies, conditions and custom hooks own explicit binding of their database work.
 Callers may pass ``persist=callback`` to a declared transition to compose its
 final save. The existing success hook must explicitly accept and forward that
-keyword to ``save_state``; source authority is never stored on the instance.
+keyword to ``save_state``; the callback applies only to that invocation.
 The body, target write and success hook share one ``transaction.atomic`` on that
 alias, so a hook failure rolls back the body's database writes too. Existing outer
 transactions on that alias compose through Django savepoints; commit callbacks

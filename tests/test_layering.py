@@ -144,6 +144,23 @@ def test_integrate_does_not_import_workflows() -> None:
     assert not {path: names for path, names in violations.items() if names}
 
 
+def test_external_field_ownership_stays_with_consumer_addons() -> None:
+    """Framework sync and transitions do not depend on a consumer's field policy."""
+
+    assert not (PROJECT_ROOT / "addons" / "angee" / "integrate" / "ownership.py").exists()
+    forbidden = ("angee.integrate.ownership", "arp.integrate_odoo")
+    violations = {
+        str(path.relative_to(PROJECT_ROOT)): sorted(
+            name
+            for name in _module_imports(path)
+            if any(name == prefix or name.startswith(f"{prefix}.") for prefix in forbidden)
+        )
+        for root in (PROJECT_ROOT / "angee", PROJECT_ROOT / "addons" / "angee")
+        for path in sorted(root.rglob("*.py"))
+    }
+    assert not {path: names for path, names in violations.items() if names}
+
+
 class _FKReload(NamedTuple):
     """One syntactic reload, also used by read-only addon sweep inventories."""
 

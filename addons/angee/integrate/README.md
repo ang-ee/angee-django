@@ -18,7 +18,6 @@ defers terminal telemetry to that owner. Direct bridges still return an integer.
 | Immutable observed and applied evidence | [RecordRevision and its manager](records.py) |
 | Record quarantine and due rescan candidates | [SyncDiscrepancy and its manager](records.py) |
 | Bounded page, conditional push and inventory execution | [StreamAdapter and driver](streams.py) |
-| Source/local field declarations, immutable provenance and explicit imports | [ExternalOwnershipMixin and ExternalOwnershipManager](ownership.py) |
 | Concurrent nested JSON edits | [merge_json_state](models.py) |
 | Operator inspection | Read-only record-sync resources in [the console schema](schema.py), inheriting [Integration permissions](permissions.zed) |
 | Saved-record Streams tab, discrepancy/link drill-downs and cursor summary | [Generic Streams data views](web/src/IntegrationStreams.tsx), contributed once to Integration forms by [the web addon](web/src/index.tsx) |
@@ -104,17 +103,3 @@ evidence and discrepancy resolution remain with the aggregate adapter. Sweeps
 never delete domain rows or overwrite an open conflict. A peer beyond its
 tombstone retention period must reverify a baseline. Link observation and
 promotion preserve an omitted target; explicit `target=None` clears its binding.
-
-Ownership declarations protect ordinary save, collection update, bulk and
-delete paths. Source-owned fields change through `apply_external`, which checks
-the locked row's immutable source identity and scope; locally owned fields stay
-outside that command. Accounting import DTOs remain consumer-owned. Source-owned
-many-to-many relations require an explicitly owned through model. These writes
-currently fail closed on a non-default database because the upstream REBAC
-permission checks do not accept an operation alias.
-For a validated native lifecycle action, compose `run_external_transition` with
-the explicit source identity and declared method name. It preserves transition
-and save validation while verifying the complete changed field set before commit;
-only source fields and native lifecycle bookkeeping may change. Custom transition
-success hooks forward the explicit persistence callback. No ambient import
-authority is installed; see the [ownership guideline](../../../docs/backend/guidelines.md#record-sync).

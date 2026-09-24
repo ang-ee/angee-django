@@ -552,6 +552,57 @@ def test_save_state_persists_transition_and_touched_fields(transition_task_table
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("outcome", ["saved", "callback_error", "concurrent"])
+def test_composed_persist_keeps_alias_atomicity_and_concurrency_guard(transition_alias: str, outcome: str) -> None:
+    """A custom final saver receives the guarded write and shares its transaction."""
+
+    task = TransitionTask.objects.using(transition_alias).create(state=TransitionTask.State.RUNNING)
+    calls: list[tuple[str, set[str]]] = []
+
+    def persist(row: TransitionTask, *, using: str, update_fields: set[str]) -> None:
+        assert row is task
+        assert row.state == TransitionTask.State.DONE
+        assert transaction.get_connection(using).in_atomic_block
+        calls.append((using, update_fields))
+        row.save(using=using, update_fields=update_fields)
+        if outcome == "callback_error":
+            raise RuntimeError("callback failed")
+
+    if outcome == "concurrent":
+        TransitionTask.objects.using(transition_alias).filter(pk=task.pk).update(state=TransitionTask.State.DONE)
+        with pytest.raises(TransitionNotAllowed):
+            task.persist_done(persist=persist)
+    elif outcome == "callback_error":
+        with pytest.raises(RuntimeError, match="callback failed"):
+            task.persist_done(persist=persist)
+    else:
+        task.persist_done(persist=persist)
+
+    assert calls == ([] if outcome == "concurrent" else [(transition_alias, {"state", "note"})])
+    stored = TransitionTask.objects.using(transition_alias).get(pk=task.pk)
+    expected_state = TransitionTask.State.RUNNING if outcome == "callback_error" else TransitionTask.State.DONE
+    assert stored.state == expected_state
+    assert stored.note == ("persisted" if outcome == "saved" else "")
+    assert get_transition_save_field(task) is None
+    assert get_transition_save_using(task) is None
+    assert not hasattr(task, "_transition_fields")
+
+
+def test_composed_persist_requires_a_success_hook() -> None:
+    """A callback cannot silently disappear when the declaration has no save hook."""
+
+    task = TransitionTask(state=TransitionTask.State.RUNNING)
+    calls: list[models.Model] = []
+
+    with pytest.raises(ImproperlyConfigured, match="requires an explicit success hook"):
+        task.mark_done(persist=lambda row, **kwargs: calls.append(row))
+
+    assert calls == []
+    assert task.state == TransitionTask.State.RUNNING
+    assert not hasattr(task, "body_state")
+
+
+@pytest.mark.django_db(transaction=True)
 def test_save_state_loses_a_concurrent_transition_race(transition_task_table: None) -> None:
     """Two racing transitions: the one whose committed source already moved loses.
 

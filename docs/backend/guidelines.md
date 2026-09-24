@@ -869,6 +869,9 @@ and current contracts before applying a historical example to a new deployment.
   field's attname, or `None`, through the public contract.
   Custom success hooks use `get_transition_save_using(instance)` for their database
   work rather than re-deriving the operation's write alias from the instance.
+  Compose a custom final save through `persist(instance, *, using, update_fields)`;
+  the success hook must explicitly forward it to `save_state`, which retains the
+  concurrency guard and transaction on the selected alias.
 - **Integration children use the ordinary emitted Django MRO.** The composer
   emits donors, the child's abstract source, then its concrete parent, so child
   behavior can override parent behavior and cooperative methods delegate with
@@ -1156,17 +1159,6 @@ Replica hashes come from adapters; event feeds deduplicate through domain
 identity and are never payload-hashed. Cursors contain plain finite JSON,
 validated at the driver boundary.
 
-- **External field ownership is a static model contract.** Models receiving
-  `apply_external` or `claim_external_ownership` compose the
-  [`ExternalOwnershipMixin`](../../addons/angee/integrate/ownership.py), its
-  manager/queryset and an `ExternalOwnershipDeclaration`. The source addon may
-  supply these through an `extends` donor and add child/overlay policy through
-  `ExternalOwnershipContribution`; export every donor from that addon's
-  `models.py` so the composer discovers it. A contribution augments a complete
-  declaration; it does not replace provenance or the guarded write owners.
-  Fully bidirectional contact fields remain locally editable and use the
-  stream's comparison/conflict policy. A source-specific guard therefore belongs
-  to the importing addon's donor, rather than every installation of parties.
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in
   one transaction on the operation's write alias. Semantic record failures use
@@ -1219,15 +1211,6 @@ validated at the driver boundary.
   repeated-page detection and partition concurrency.
   Workflow execution, decisions and durable scheduling stay with their existing
   owners; integrate must not import workflows.
-- **Native imports keep native lifecycle validation.**
-  `run_external_transition` carries explicit source facts through a declared
-  transition's persistence callback. No ambient authority or instance import
-  flag is consulted. The locked source claim must match; every changed concrete
-  field must be source-owned or native lifecycle bookkeeping (`auto_now` and
-  `AuditMixin.updated_by`). The transition graph, conditions, success hook,
-  ordinary save hooks and uncontended-state check still run. Undeclared changes
-  roll back the whole transition, including related database effects. Custom
-  success hooks must explicitly forward the `persist` callback.
 
 ### Bridge cycles as workflow runs
 
