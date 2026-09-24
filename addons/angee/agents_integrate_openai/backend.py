@@ -6,7 +6,6 @@ from collections.abc import Sequence
 from typing import Any, ClassVar
 
 from openai import APIConnectionError
-from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -25,6 +24,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     label = "OpenAI"
     icon = "openai"
     api_key_env: ClassVar[tuple[str, ...]] = ("OPENAI_API_KEY",)
+    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = (APIConnectionError,)
     defaults = {
         "vendor": "openai",
         "name": "OpenAI",
@@ -49,12 +49,6 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     )
     oauth_auth_kwarg = ""
     sdk_package_name = "openai"
-
-    def is_transient_error(self, error: Exception) -> bool:
-        """Include OpenAI connection failures wrapped by the native model adapter."""
-
-        cause = error.__cause__ if isinstance(error, ModelAPIError) else error
-        return isinstance(cause, APIConnectionError) or super().is_transient_error(error)
 
     def list_models(self, *, using: str | None = None) -> Sequence[InferenceModelSpec]:
         """List OpenAI models and their broker-prefixed aliases."""

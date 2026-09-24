@@ -4,7 +4,7 @@ export const ExtractionRecordEvidenceDocument = graphql(`
   query ExtractionRecordEvidence($id: ID!) {
     extraction_evidence(id: $id) {
       extraction {
-        id revision status error_code schema_id schema_digest engine created_at
+        id revision status error_code schema_id schema_digest profile created_at
       }
       result
       schema

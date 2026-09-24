@@ -2,8 +2,7 @@
 
 Extraction retains immutable document carriers, schema candidates, source claims,
 and revision correspondence. Publications select domain interpretation through an
-`ExtractionProfile` registered in `ANGEE_EXTRACTION_PROFILE_CLASSES`. The retained
-`engine` key and `engine_config` store that profile selection and its frozen policy.
+`ExtractionProfile` registered in `ANGEE_EXTRACTION_PROFILE_CLASSES`.
 
 Profiles own deterministic `process_parts`, `normalize_inference_candidate`,
 `inference_required`, `evidence_layout`, and `pipeline_version`. The built-in
@@ -15,8 +14,7 @@ Recognition and schema mapping use the plain `recognize_page` and `map_text_part
 functions. They build native requests for `workflows_agents.inference.call_inference`;
 that owner checks the admission actor's model access, deployment approval and
 capability, classifies provider failures, and debits the run once. Agents owns
-provider selection and structured-output decoding. There are no independently
-selected recognition or mapping engines.
+provider selection and structured-output decoding.
 
 Every nested operation receives the selected database alias. Document processing
 and workflow inference require the default database because the authorization backend cannot

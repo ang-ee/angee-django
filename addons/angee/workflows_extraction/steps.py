@@ -33,7 +33,7 @@ from angee.workflows.steps import (
     StepResult,
 )
 from angee.workflows_extraction.contracts import DocumentPipelineError, PageImage
-from angee.workflows_extraction.engines import (
+from angee.workflows_extraction.inference import (
     RETAINED_CARRIER_UNAVAILABLE,
     recognize_page,
 )
@@ -47,21 +47,21 @@ from angee.workflows_extraction.service import (
     restore_prepared_pages,
 )
 
-EngineConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
+ProfileConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
 
 
 class ExtractionConfigInput(BaseModel):
     """Per-invocation document profile and inference configuration."""
 
     model_config = ConfigDict(extra="forbid")
-    engine_config: EngineConfig = Field(default_factory=dict)
+    profile_config: ProfileConfig = Field(default_factory=dict)
 
 
 class ExtractionPolicyInput(ExtractionConfigInput):
     """Per-invocation schema and profile policy for evidence processing."""
 
     schema_: dict[str, Any] = Field(alias="schema", json_schema_extra={"widget": "json"})
-    engine: str = Field(min_length=1)
+    profile: str = Field(min_length=1)
 
 
 class ExtractionSourceInput(BaseModel):
@@ -132,7 +132,7 @@ class PreparePagesStepImpl(StepImpl):
         run: Any = related_on(step_run, "run", using=alias)
         del now
         value = self.validate_input(step_run.input)
-        options = value.engine_config
+        options = value.profile_config
         actor = run.admission_actor(using=alias)
         if actor is None:
             raise PermissionDenied("Page preparation requires the workflow actor.")
@@ -161,7 +161,7 @@ class PreparePagesStepImpl(StepImpl):
 
 
 class RecognizePageInput(RecognitionPageInput):
-    engine_config: EngineConfig = Field(default_factory=dict)
+    profile_config: ProfileConfig = Field(default_factory=dict)
     timeout: int = Field(default=60, gt=0, description="Provider timeout in whole seconds.")
 
 
@@ -225,7 +225,7 @@ class RecognizePageStepImpl(StepImpl):
         run: Any = related_on(step_run, "run", using=using)
         request = external_operation_request(step_run, using=using)
         value = self.validate_input(request.input)
-        if value.config_digest != canonical_json_sha256(value.engine_config):
+        if value.config_digest != canonical_json_sha256(value.profile_config):
             raise ValidationError({"recognition": "The page item names a different admitted recognizer config."})
         actor = run.admission_actor(using=using)
         if actor is None:
@@ -258,7 +258,7 @@ class RecognizePageStepImpl(StepImpl):
                 ),
                 step_run=step_run,
                 model=model,
-                config=value.engine_config,
+                config=value.profile_config,
                 timeout=value.timeout,
                 using=using,
             )
@@ -325,7 +325,7 @@ class CollectCarriersStepImpl(StepImpl):
         run: Any = related_on(step_run, "run", using=alias)
         del now
         value = self.validate_input(step_run.input)
-        options = value.engine_config
+        options = value.profile_config
         actor = run.admission_actor(using=alias)
         if actor is None:
             raise PermissionDenied("Carrier collection requires the workflow actor.")
@@ -395,7 +395,7 @@ class ProcessEvidenceStepImpl(StepImpl):
         if actor is None:
             raise PermissionDenied("Evidence processing requires the workflow actor.")
         with actor_context(actor):
-            prepared, manifest = _restore_prepared(value.prepared, value.engine_config, using=alias)
+            prepared, manifest = _restore_prepared(value.prepared, value.profile_config, using=alias)
             collected = collect_carriers(
                 prepared, value.recognition_results,
                 recognition_model_id=manifest.recognition_model_id,
@@ -416,7 +416,7 @@ class ProcessEvidenceStepImpl(StepImpl):
             )
             evidence = process(
                 prepared, value.recognition_results, schema=value.schema_, authorized_target=target,
-                engine=value.engine, config=value.engine_config,
+                profile=value.profile, config=value.profile_config,
                 model=mapping_model, recognition_model=recognition_model,
                 identity_mapping=value.identity_mapping,
                 retired_identities=value.retired_identities,
@@ -568,7 +568,7 @@ class InferEvidenceStepImpl(StepImpl):
             else:
                 profile = resolve_impl_class(
                     "ANGEE_EXTRACTION_PROFILE_CLASSES",
-                    str(base.engine),
+                    str(base.profile),
                     base_class=ExtractionProfile,
                 )()
                 unchanged = (

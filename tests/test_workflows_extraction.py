@@ -13,11 +13,11 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from pydantic import ValidationError as PydanticValidationError
 from pydantic_ai.messages import BinaryContent, ModelResponse, TextPart
 
-from angee.agents.models import InferenceResult
+from angee.agents.models import InferenceModelUse, InferenceResult
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows.steps import TransientStepError
 from angee.workflows_agents.inference import InferenceCallError
-from angee.workflows_extraction import engines as extraction_inference
+from angee.workflows_extraction import inference as extraction_inference
 from angee.workflows_extraction import service
 from angee.workflows_extraction import steps as extraction_steps
 from angee.workflows_extraction.contracts import (
@@ -27,11 +27,11 @@ from angee.workflows_extraction.contracts import (
     MappingResult,
     PageImage,
 )
-from angee.workflows_extraction.engines import (
+from angee.workflows_extraction.enums import ExtractionErrorCode
+from angee.workflows_extraction.inference import (
     map_text_parts,
     recognize_page,
 )
-from angee.workflows_extraction.enums import ExtractionErrorCode
 from angee.workflows_extraction.profiles import UnconfiguredExtractionProfile
 from angee.workflows_extraction.routing import acquire_native_parts
 from angee.workflows_extraction.service import _validated_schema
@@ -132,15 +132,15 @@ def test_extraction_execution_policy_is_input_bound(step_impl: type) -> None:
     assert step_impl.config_model is None
     assert step_impl.config_form_spec() is None
     assert schema is not None
-    assert schema["properties"]["engine_config"]["widget"] == "json"
+    assert schema["properties"]["profile_config"]["widget"] == "json"
     if step_impl in (PreparePagesStepImpl, CollectCarriersStepImpl):
         assert "schema" not in schema["properties"]
-        assert "engine" not in schema["properties"]
+        assert "profile" not in schema["properties"]
     elif step_impl is RecognizePageStepImpl:
         assert "schema" not in schema["properties"]
-        assert "engine" not in schema["properties"]
+        assert "profile" not in schema["properties"]
     else:
-        assert {"schema", "engine"} <= schema["properties"].keys()
+        assert {"schema", "profile"} <= schema["properties"].keys()
 
 
 @pytest.mark.parametrize(
@@ -174,22 +174,22 @@ def test_extraction_steps_admit_per_invocation_policy(
     step_input: dict[str, object],
 ) -> None:
     policy: dict[str, object] = {
-        "engine_config": {"recognition_config": {"max_tokens": 512}},
+        "profile_config": {"recognition_config": {"max_tokens": 512}},
     }
     if step_impl is ProcessEvidenceStepImpl:
         policy.update(
             {
                 "schema": {"$id": "tests.extraction.v1", "type": "object"},
-                "engine": "document_profile",
+                "profile": "document_profile",
             }
         )
 
     value = step_impl.validate_input({**step_input, **policy})
 
-    assert value.engine_config == policy["engine_config"]
+    assert value.profile_config == policy["profile_config"]
     if step_impl is ProcessEvidenceStepImpl:
         assert value.schema_ == policy["schema"]
-        assert value.engine == "document_profile"
+        assert value.profile == "document_profile"
 
 
 def test_recognize_page_input_owns_inference_defaults_and_validates_timeout() -> None:
@@ -204,13 +204,13 @@ def test_recognize_page_input_owns_inference_defaults_and_validates_timeout() ->
             "dpi": 300,
             "model_id": "imd_recognition",
             "config_digest": "b" * 64,
-            "engine_config": {"max_tokens": 512},
+            "profile_config": {"max_tokens": 512},
         }
     )
 
-    assert "engine" not in type(value).model_fields
+    assert "profile" not in type(value).model_fields
     assert value.timeout == 60
-    assert value.engine_config == {"max_tokens": 512}
+    assert value.profile_config == {"max_tokens": 512}
     with pytest.raises(PydanticValidationError, match="greater than 0"):
         RecognizePageStepImpl.validate_input(
             {
@@ -258,11 +258,11 @@ def test_recognize_page_uses_retained_actor_subject_for_file_owner(monkeypatch: 
         dpi=300,
         model_id="imd_recognition",
         config_digest="digest",
-        engine_config={},
+        profile_config={},
         timeout=60,
     )
-    engine = MagicMock()
-    engine.recognize_page.return_value = SimpleNamespace(
+    recognize = MagicMock()
+    recognize.return_value = SimpleNamespace(
         text="recognized text",
         usage_delta=None,
         duration_ms=1,
@@ -281,7 +281,7 @@ def test_recognize_page_uses_retained_actor_subject_for_file_owner(monkeypatch: 
         "get_model",
         lambda app, name: file_model if (app, name) == ("storage", "File") else model_model,
     )
-    monkeypatch.setattr(extraction_steps, "recognize_page", engine.recognize_page)
+    monkeypatch.setattr(extraction_steps, "recognize_page", recognize)
     monkeypatch.setattr(
         extraction_steps,
         "actor_user_id",
@@ -382,10 +382,12 @@ def test_inference_mapping_uses_shared_request_and_parsed_output(monkeypatch: py
     assert isinstance(result, MappingResult)
     assert result.value == {"number": "INV-42"}
     assert result.claims["/number"][0]["part_position"] == 0
-    assert result.engine_metadata["usage"] == usage == result.usage_delta
+    assert result.provider_metadata["usage"] == usage == result.usage_delta
     args, kwargs = call.call_args
     assert args[:2] == (step, model)
-    assert kwargs == {"role": "mapping", "using": "default"}
+    assert kwargs == {
+        "role": "mapping", "uses": {InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL}, "using": "default",
+    }
     assert args[2].settings == {"timeout": 5, "max_tokens": 128, "temperature": 0, "thinking": False}
     assert args[2].output_schema == SCHEMA
 
@@ -432,8 +434,10 @@ def test_inference_recognition_carries_native_image_and_zero_temperature(monkeyp
     assert request.settings == {"timeout": 5, "max_tokens": 256, "temperature": 0}
     assert len(request.images) == 1 and isinstance(request.images[0], BinaryContent)
     assert request.images[0].data == b"synthetic"
-    assert call.call_args.kwargs == {"role": "recognition", "using": "default"}
-    assert result.engine_metadata["usage"] == usage == result.usage_delta
+    assert call.call_args.kwargs == {
+        "role": "recognition", "uses": {InferenceModelUse.IMAGE, InferenceModelUse.MULTIMODAL}, "using": "default",
+    }
+    assert result.provider_metadata["usage"] == usage == result.usage_delta
 
 
 def test_inference_recognition_invalid_response_exposes_usage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -459,24 +463,59 @@ def test_inference_preserves_shared_retry_classification(operation: str, monkeyp
             map_text_parts((), SCHEMA, step_run=object(), model=object(), config={}, timeout=5, using="default")
 
 
-@pytest.mark.parametrize("timeout", [0, -1])
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), "invalid"])
 @pytest.mark.parametrize("operation", ["mapping", "recognition"])
 def test_invalid_extraction_timeout_never_enters_provider_retry(
     operation: str, timeout: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     call = MagicMock()
     monkeypatch.setattr(extraction_inference, "call_inference", call)
-    with pytest.raises(ValueError, match="positive and unexhausted"):
+    with pytest.raises(DocumentPipelineError) as failure:
         if operation == "recognition":
             recognize_page(_page(0, 0), step_run=object(), model=object(), config={}, timeout=timeout, using="default")
         else:
             map_text_parts((), SCHEMA, step_run=object(), model=object(), config={}, timeout=timeout, using="default")
     call.assert_not_called()
+    assert failure.value.code == "invalid_config"
+    assert failure.value.stage == f"{operation}_request"
 
 
 def test_unconfigured_profile_fails_closed() -> None:
     with pytest.raises(ValueError, match="Select a document extraction profile"):
         UnconfiguredExtractionProfile().process_parts((), (), SCHEMA, config={})
+
+
+@pytest.mark.parametrize("operation", ["mapping", "recognition"])
+@pytest.mark.parametrize(
+    "config", [{"max_tokens": "invalid"}, {"temperature": "invalid"}, {"max_tokens": 0}, {"max_tokens": float("inf")}],
+)
+def test_invalid_published_inference_config_routes_to_manual_review(
+    operation: str, config: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call = MagicMock()
+    monkeypatch.setattr(extraction_inference, "call_inference", call)
+    with pytest.raises(DocumentPipelineError) as failure:
+        if operation == "recognition":
+            recognize_page(_page(0, 0), step_run=object(), model=object(), config=config, timeout=5, using="default")
+        else:
+            map_text_parts((), SCHEMA, step_run=object(), model=object(), config=config, timeout=5, using="default")
+    assert failure.value.stage == f"{operation}_request"
+    assert failure.value.code == "invalid_config"
+    call.assert_not_called()
+
+
+def test_missing_decoded_mapping_retains_paid_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    usage = {"tokens": 4, "requests": 1}
+    monkeypatch.setattr(
+        extraction_inference, "call_inference",
+        MagicMock(return_value=InferenceResult(ModelResponse(parts=[]), usage)),
+    )
+    with pytest.raises(DocumentPipelineError) as failure:
+        map_text_parts((), SCHEMA, step_run=object(), model=object(), config={}, timeout=5, using="default")
+    assert failure.value.stage == "mapping_response"
+    assert failure.value.code == "invalid_response"
+    assert failure.value.usage_delta == usage
+    assert failure.value.metadata["usage"] == usage
 
 
 @pytest.mark.parametrize(
@@ -654,7 +693,7 @@ def test_deterministic_process_denies_unreadable_models_before_consuming_config(
 
     with pytest.raises(PermissionDenied, match="cannot read"):
         service.process(
-            object(), (), schema=SCHEMA, authorized_target=object(), engine="none", using="default", **models
+            object(), (), schema=SCHEMA, authorized_target=object(), profile="none", using="default", **models
         )
 
     read.assert_called_once_with(actor)
@@ -667,5 +706,52 @@ def test_deterministic_process_rejects_alias_before_source_reads(monkeypatch: py
     actor = MagicMock()
     monkeypatch.setattr(service, "current_actor", actor)
     with pytest.raises(ValidationError, match="default authorization database is required"):
-        service.process(object(), (), schema=SCHEMA, authorized_target=object(), engine="none", using="other")
+        service.process(object(), (), schema=SCHEMA, authorized_target=object(), profile="none", using="other")
     actor.assert_not_called()
+
+
+@pytest.mark.parametrize("correspondence_hold", [False, True])
+@pytest.mark.parametrize("denial", ["read", "approval", "capability"])
+def test_infer_checks_model_before_reuse_or_retained_evidence(
+    correspondence_hold: bool, denial: str, monkeypatch: pytest.MonkeyPatch, settings,
+) -> None:
+    actor = object()
+    model = _InferenceModel(
+        id=42, name="test", model_use="image" if denial == "capability" else "multimodal", status="available",
+    )
+    monkeypatch.setattr(
+        model, "with_actor", lambda value: SimpleNamespace(has_access=lambda permission: denial != "read"),
+    )
+    identity = {"provider": "provider", "backend": "test", "endpoint": "local", "model": "test"}
+    monkeypatch.setattr(model, "deployment_identity", lambda **kwargs: identity)
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"mapping": [] if denial == "approval" else [identity]}
+
+    class Base(SimpleNamespace):
+        def with_actor(self, value):
+            return self
+
+        def has_access(self, permission):
+            return True
+
+    base = Base(
+        pk=7, sqid="ext_base", revision=1, status="failed" if correspondence_hold else "succeeded",
+        awaiting_correspondence=correspondence_hold,
+    )
+    operation = SimpleNamespace(
+        request_key="retained-operation",
+        input={"base_extraction_id": base.sqid, "base_revision": base.revision, "model_id": str(model.sqid)},
+    )
+    monkeypatch.setattr(service.apps, "get_model", lambda *args: Base)
+    monkeypatch.setattr(service, "current_actor", lambda: actor)
+    monkeypatch.setattr(service, "external_operation_request", lambda *args, **kwargs: operation)
+    evidence, fingerprint, provider = MagicMock(), MagicMock(), MagicMock()
+    monkeypatch.setattr(service, "_retained_evidence", evidence)
+    monkeypatch.setattr(service, "_model_fingerprint", fingerprint)
+    monkeypatch.setattr(service, "map_text_parts", provider)
+
+    with pytest.raises(ValueError if denial == "capability" else PermissionDenied):
+        service.infer(base, model=model, authorized_target=base, operation_step_run=object(), using="default")
+
+    evidence.assert_not_called()
+    fingerprint.assert_not_called()
+    provider.assert_not_called()

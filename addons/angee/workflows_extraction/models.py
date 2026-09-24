@@ -93,8 +93,7 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
     schema = models.JSONField(editable=False)
-    # This retained key selects domain interpretation, never provider transport.
-    engine = ImplClassField(
+    profile = ImplClassField(
         base_class=ExtractionProfile,
         registry_setting="ANGEE_EXTRACTION_PROFILE_CLASSES",
         editable=False,
@@ -109,7 +108,7 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         on_delete=models.PROTECT,
         related_name="recognition_extraction_evidence",
     )
-    engine_config = models.JSONField(default=dict, blank=True, editable=False)
+    profile_config = models.JSONField(default=dict, blank=True, editable=False)
     result = models.JSONField(editable=False)
     provenance = models.JSONField(default=dict, editable=False)
     document_map = models.JSONField(default=list, editable=False)
@@ -328,7 +327,7 @@ class ExtractionPage(SqidMixin, AngeeModel):
     dpi = models.PositiveIntegerField(editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
     result = models.JSONField(editable=False)
-    engine_metadata = models.JSONField(default=dict, blank=True, editable=False)
+    provider_metadata = models.JSONField(default=dict, blank=True, editable=False)
     objects = EvidenceManager()
 
     class Meta:
@@ -349,7 +348,7 @@ class ExtractionPage(SqidMixin, AngeeModel):
 
     @property
     def reference(self) -> PageRef:
-        carriers = self.engine_metadata.get("carrier_files", ())
+        carriers = self.provider_metadata.get("carrier_files", ())
         return PageRef(self.source.reference, int(self.source_page), tuple(str(item) for item in carriers))
 
 

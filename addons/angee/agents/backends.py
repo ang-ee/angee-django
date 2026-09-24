@@ -16,7 +16,7 @@ from typing import Any, ClassVar, cast
 from asgiref.sync import async_to_sync
 from httpx import NetworkError, Timeout, TimeoutException
 from pydantic_ai.direct import model_request
-from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
@@ -87,6 +87,8 @@ class InferenceBackend(ImplBase):
     # contract because every backend consumer must make the same typed decision.
     requires_credential: ClassVar[bool] = True
     default_base_url: ClassVar[str] = ""
+    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = ()
+    """Vendor SDK transport failures in addition to the shared network types."""
     defaults = {
         "name": "Manual",
         "status": "draft",
@@ -108,7 +110,10 @@ class InferenceBackend(ImplBase):
 
         if isinstance(error, ModelHTTPError):
             return error.status_code == 429 or 500 <= error.status_code < 600
-        return isinstance(error, TimeoutError | ConnectionError | TimeoutException | NetworkError)
+        cause = error.__cause__ if isinstance(error, ModelAPIError) else error
+        return isinstance(
+            cause, (TimeoutError, ConnectionError, TimeoutException, NetworkError, *self.transient_error_types)
+        )
 
     def connect_oauth_client(self, owner_label: str, *, using: str | None = None) -> Any:
         """Return the enabled OAuth client this backend connects its provider through.

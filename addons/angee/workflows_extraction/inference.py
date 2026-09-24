@@ -19,6 +19,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.settings import ModelSettings
 
+from angee.agents.backends import InferenceBackend
+from angee.agents.models import InferenceModelUse
 from angee.workflows_agents.inference import InferenceCallError, InferRequest, call_inference
 from angee.workflows_extraction.contracts import (
     DocumentPart,
@@ -145,7 +147,7 @@ def recognize_page(
 ) -> RecognitionResult:
     """Transcribe one retained page through the workflow inference owner."""
 
-    settings = _inference_settings(config, timeout=timeout)
+    settings = _inference_settings(config, timeout=timeout, stage="recognition_request")
     started = time.monotonic()
     try:
         result = call_inference(
@@ -166,6 +168,7 @@ def recognize_page(
                 settings=dict(settings),
             ),
             role="recognition",
+            uses={InferenceModelUse.MULTIMODAL, InferenceModelUse.IMAGE},
             using=using,
         )
     except InferenceCallError as error:
@@ -200,7 +203,7 @@ def map_text_parts(
 ) -> MappingResult:
     """Map retained evidence and derive provenance from its exact scalar spans."""
 
-    settings = _inference_settings(config, timeout=timeout)
+    settings = _inference_settings(config, timeout=timeout, stage="mapping_request")
     started = time.monotonic()
     try:
         result = call_inference(
@@ -219,6 +222,7 @@ def map_text_parts(
                 settings=dict(settings),
             ),
             role="mapping",
+            uses={InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL},
             using=using,
         )
     except InferenceCallError as error:
@@ -238,23 +242,33 @@ def map_text_parts(
             usage_delta=error.usage,
         ) from None
     value = result.output
-    assert value is not None  # The inference owner requires an object for output_schema.
     metadata = _response_metadata(result.response, usage=result.usage, started=started)
+    if value is None:
+        raise DocumentPipelineError(
+            "Text schema mapping response contained no decoded object.",
+            parts=parts,
+            stage="mapping_response",
+            code="invalid_response",
+            metadata=metadata,
+            usage_delta=result.usage,
+        )
     return MappingResult(value, derive_text_claims(value, parts), metadata, dict(result.usage))
 
 
-def _inference_settings(config: Mapping[str, Any], *, timeout: float) -> ModelSettings:
+def _inference_settings(config: Mapping[str, Any], *, timeout: float, stage: str) -> ModelSettings:
     """Return provider-neutral analytical defaults for extraction inference."""
 
-    if timeout <= 0:
-        raise ValueError("Document extraction timeout must be positive and unexhausted.")
     try:
+        timeout = float(timeout)
+        InferenceBackend._validate_timeout(timeout)
         max_tokens = int(config.get("max_tokens", 8192))
         temperature = float(config.get("temperature", 0))
-    except (TypeError, ValueError) as error:
-        raise ValueError("Extraction inference settings must be numeric.") from error
-    if max_tokens <= 0:
-        raise ValueError("Extraction inference max_tokens must be positive.")
+        if max_tokens <= 0:
+            raise ValueError("Extraction inference max_tokens must be positive.")
+    except (TypeError, ValueError, OverflowError) as error:
+        raise DocumentPipelineError(
+            "Extraction inference configuration is invalid.", stage=stage, code="invalid_config",
+        ) from error
     result: ModelSettings = {
         "timeout": timeout,
         "max_tokens": max_tokens,

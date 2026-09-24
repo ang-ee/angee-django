@@ -39,7 +39,7 @@ class ExtractionType(AngeeNode):
     error_code: auto
     schema_id: auto
     schema_digest: auto
-    engine: auto
+    profile: auto
     created_at: auto
 
     @strawberry_django.field(only=["model_id"])
@@ -214,10 +214,10 @@ _EXTRACTION_RESOURCE = hasura_model_resource(
     ExtractionType,
     model=Extraction,
     name="workflow_extraction_extractions",
-    filterable=["id", "status", "schema_id", "engine", "model", "recognition_model", "created_at"],
+    filterable=["id", "status", "schema_id", "profile", "model", "recognition_model", "created_at"],
     sortable=["revision", "status", "schema_id", "created_at"],
     aggregatable=["id", "revision"],
-    groupable=["status", "schema_id", "engine", "model"],
+    groupable=["status", "schema_id", "profile", "model"],
     insert=False,
     update=False,
     delete=False,

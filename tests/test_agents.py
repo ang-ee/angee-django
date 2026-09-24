@@ -1102,7 +1102,12 @@ def test_inference_backend_does_not_retry_nontransient_http_status(status):
 @pytest.mark.parametrize(
     "error", [TimeoutError(), ConnectionError(), httpx.ReadTimeout("timeout"), httpx.ConnectError("connection")]
 )
-def test_inference_backend_classifies_transport_exception_types(error):
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_inference_backend_classifies_transport_exception_types(error, wrapped):
+    if wrapped:
+        wrapper = ModelAPIError("test-model", "transport failure")
+        wrapper.__cause__ = error
+        error = wrapper
     assert InferenceBackend(SimpleNamespace()).is_transient_error(error)
 
 
@@ -1202,25 +1207,39 @@ def test_infer_decoding_error_retains_usage_and_explicit_alias(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "status,model_use,role",
+    "status,model_use,uses",
     [
-        (InferenceModelStatus.RETIRED, InferenceModelUse.CHAT, "mapping"),
-        (InferenceModelStatus.DEPRECATED, InferenceModelUse.MULTIMODAL, "recognition"),
-        (InferenceModelStatus.AVAILABLE, InferenceModelUse.CHAT, "recognition"),
-        (InferenceModelStatus.AVAILABLE, InferenceModelUse.EMBEDDING, "inference"),
+        (InferenceModelStatus.RETIRED, InferenceModelUse.CHAT, {InferenceModelUse.CHAT}),
+        (InferenceModelStatus.DEPRECATED, InferenceModelUse.MULTIMODAL, {InferenceModelUse.MULTIMODAL}),
+        (InferenceModelStatus.AVAILABLE, InferenceModelUse.CHAT, {InferenceModelUse.IMAGE}),
+        (InferenceModelStatus.AVAILABLE, InferenceModelUse.EMBEDDING, {InferenceModelUse.CHAT}),
     ],
 )
-def test_model_capability_rejects_unusable_lifecycle_and_modality(status, model_use, role):
+def test_model_capability_rejects_unusable_lifecycle_and_modality(status, model_use, uses):
     model = InferenceModel(status=status, model_use=model_use)
     with pytest.raises(ValueError):
-        model.require_capability(role)
+        model.require_capability(uses)
+
+
+@pytest.mark.parametrize("model_use", list(InferenceModelUse))
+def test_model_capability_accepts_each_explicit_model_use(model_use):
+    """Consumers declare capabilities independently from their approval role names."""
+
+    InferenceModel(model_use=model_use).require_capability({model_use})
+
+
+@pytest.mark.parametrize("policy", [[], {"mapping": None}, {"mapping": {}}, {"mapping": ["bad-entry"]}])
+def test_model_approval_distinguishes_malformed_policy_from_denial(settings, policy):
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = policy
+    with pytest.raises(ValueError, match="policy is invalid"):
+        InferenceModel().require_approved("mapping")
 
 
 def test_model_authorization_rejects_nondefault_database_before_rebac(monkeypatch):
     model = InferenceModel()
     monkeypatch.setattr(model, "with_actor", lambda actor: pytest.fail("unbound REBAC lookup"))
     with pytest.raises(ValidationError, match="default authorization database"):
-        model.require_usable(object(), "inference", using="other")
+        model.require_usable(object(), "inference", uses={InferenceModelUse.CHAT}, using="other")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1233,8 +1252,8 @@ def test_model_requires_read_and_exact_approved_deployment(agents_tables, settin
     assert identity["endpoint"] == provider.backend.endpoint == "http://localhost:11434/v1"
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"mapping": [identity]}
     with pytest.raises(PermissionDenied, match="cannot read"):
-        model.require_usable(denied_actor, "mapping")
-    model.require_usable(provider.owner, "mapping")
+        model.require_usable(denied_actor, "mapping", uses={InferenceModelUse.CHAT})
+    model.require_usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT})
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"mapping": [{**identity, "endpoint": "http://localhost:9999/v1"}]}
-    with pytest.raises(ValueError, match="not approved"):
-        model.require_usable(provider.owner, "mapping")
+    with pytest.raises(PermissionDenied, match="not approved"):
+        model.require_usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT})

@@ -120,7 +120,7 @@ class ExtractionManager(EvidenceManager):
             })
         mapping = implicit_identity_correspondence(
             result,
-            layout=base.engine_config.get("evidence_layout", {}),
+            layout=base.profile_config.get("evidence_layout", {}),
             original=base,
         )
         if mapping is None:
@@ -137,7 +137,7 @@ class ExtractionManager(EvidenceManager):
 
         if identity_mapping is None:
             implicit = implicit_identity_correspondence(
-                result, layout=original.engine_config.get("evidence_layout", {}),
+                result, layout=original.profile_config.get("evidence_layout", {}),
                 original=original,
             )
             if implicit is None:
@@ -148,7 +148,7 @@ class ExtractionManager(EvidenceManager):
         mapping = dict(identity_mapping)
         if not mapping and not retired_identities:
             mapping = implicit_identity_correspondence(
-                result, layout=original.engine_config.get("evidence_layout", {}),
+                result, layout=original.profile_config.get("evidence_layout", {}),
                 original=original,
             ) or {}
         return mapping
@@ -735,10 +735,10 @@ class ExtractionManager(EvidenceManager):
                 schema_id=schema_id,
                 schema=normalized_schema,
                 schema_digest=str(original.schema_digest),
-                engine=str(original.engine),
+                profile=str(original.profile),
                 model_id=original.model_id,
                 recognition_model_id=original.recognition_model_id,
-                engine_config=original.engine_config,
+                profile_config=original.profile_config,
                 result=normalized_result,
                 provenance=provenance,
                 content_type_id=original.content_type_id,
@@ -821,7 +821,7 @@ class ExtractionManager(EvidenceManager):
             )
         return result_selectors(
             base.result,
-            base.engine_config.get("evidence_layout", {}),
+            base.profile_config.get("evidence_layout", {}),
         )
 
     def create_revision(
@@ -833,7 +833,7 @@ class ExtractionManager(EvidenceManager):
         parts: Sequence[DocumentPart],
         **values: Any,
     ) -> Any:
-        """Reuse exact requests or allocate the next revision with fresh engine evidence."""
+        """Reuse exact requests or allocate the next revision with fresh profile evidence."""
 
         anchor = next(
             (
@@ -1003,7 +1003,7 @@ class ExtractionManager(EvidenceManager):
                         else:
                             document_map, retired = _document_mapping(
                                 values["result"],
-                                layout=values["engine_config"].get("evidence_layout", {}),
+                                layout=values["profile_config"].get("evidence_layout", {}),
                                 original=(original or previous),
                                 identity_mapping=identity_mapping,
                                 retired_identities=retired_identities,
@@ -1089,7 +1089,7 @@ class ExtractionManager(EvidenceManager):
             or row.position != position or row.width != page.width or row.height != page.height
             or row.dpi != page.dpi or row.duration_ms != max(result.duration_ms, 0)
             or not json_values_equal(row.result, result.value)
-            or not json_values_equal(row.engine_metadata, result.engine_metadata or {})
+            or not json_values_equal(row.provider_metadata, result.provider_metadata or {})
             for position, (row, page, result) in enumerate(zip(retained_pages, pages, page_results))
         ):
             return False
@@ -1150,7 +1150,7 @@ class ExtractionManager(EvidenceManager):
                     dpi=page.dpi,
                     duration_ms=max(result.duration_ms, 0),
                     result=result.value,
-                    engine_metadata=result.engine_metadata or {},
+                    provider_metadata=result.provider_metadata or {},
                 )
                 for position, (page, result) in enumerate(zip(pages, page_results))
             ]
@@ -1219,7 +1219,7 @@ class ExtractionManager(EvidenceManager):
                     dpi=page.dpi,
                     duration_ms=page.duration_ms,
                     result=page.result,
-                    engine_metadata=page.engine_metadata,
+                    provider_metadata=page.provider_metadata,
                 )
                 for page in original_pages
             ]

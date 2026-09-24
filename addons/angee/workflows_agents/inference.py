@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
 from django.apps import apps
@@ -10,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import BinaryContent, ModelMessage, ModelResponse
 from rebac import system_context
 
-from angee.agents.models import InferenceOutputError, InferenceOutputSchema, InferenceResult
+from angee.agents.models import InferenceModelUse, InferenceOutputError, InferenceOutputSchema, InferenceResult
 from angee.base.db import get_write_alias, related_on
 from angee.workflows.steps import TransientStepError
 
@@ -48,6 +49,7 @@ def call_inference(
     request: InferRequest,
     *,
     role: str,
+    uses: Collection[InferenceModelUse] | None = None,
     using: str | None = None,
 ) -> InferenceResult:
     """Resolve and authorize once, then classify failures and debit exactly once.
@@ -65,7 +67,13 @@ def call_inference(
         actor = run.admission_actor(using=alias)
         if actor is None:
             raise PermissionDenied("Inference requires the workflow admission actor.")
-        model.require_usable(actor, role, using=alias)
+        if uses is None:
+            uses = (
+                {InferenceModelUse.MULTIMODAL, InferenceModelUse.IMAGE}
+                if request.images
+                else {InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL}
+            )
+        model.require_usable(actor, role, uses=uses, using=alias)
         provider: Any = related_on(model, "provider", using=alias)
         backend = provider.backend
     usage: dict[str, int] = {}

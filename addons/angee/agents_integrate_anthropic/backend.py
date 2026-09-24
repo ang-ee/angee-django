@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import anthropic
-from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
@@ -75,6 +74,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     icon = "anthropic"
     oauth_client = "anthropic-personal"
     api_key_env = ("ANTHROPIC_API_KEY",)
+    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = (anthropic.APIConnectionError,)
     defaults = {
         "vendor": "anthropic",
         "name": "Anthropic",
@@ -84,12 +84,6 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     client_class_path = "anthropic.Anthropic"
     async_client_class_path = "anthropic.AsyncAnthropic"
     sdk_package_name = "anthropic"
-
-    def is_transient_error(self, error: Exception) -> bool:
-        """Include Anthropic connection failures wrapped by the native model adapter."""
-
-        cause = error.__cause__ if isinstance(error, ModelAPIError) else error
-        return isinstance(cause, anthropic.APIConnectionError) or super().is_transient_error(error)
 
     def _client_kwargs(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, Any]:
         """Return Anthropic SDK kwargs, including the OAuth beta when needed."""

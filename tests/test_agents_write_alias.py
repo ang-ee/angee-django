@@ -243,6 +243,27 @@ def test_deployment_identity_refreshes_deferred_handle_on_selected_alias(agent_w
     assert identity["endpoint"] == "http://localhost:11434/v1"
 
 
+@pytest.mark.parametrize("has_model", [False, True])
+def test_agent_error_classifier_binds_nullable_model_and_provider_to_alias(agent_write_alias, monkeypatch, has_model):
+    """Deferred relations ignore another read router while missing models are terminal."""
+
+    provider = _provider("error-alias", backend_class="anthropic")
+    with system_context(reason="test.agents.alias.error.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="claude") if has_model else None
+        agent = Agent.objects.create(name="Error classifier", owner=provider.owner, model=model)
+        agent = Agent.objects.using("default").only("pk").get(pk=agent.pk)
+    seen: list[str] = []
+
+    def classify(backend, error):
+        seen.append(backend.provider._state.db)
+        return isinstance(error, TimeoutError)
+
+    monkeypatch.setattr(AnthropicInferenceBackend, "is_transient_error", classify)
+    monkeypatch.setattr(router, "routers", [TransitionRouter("other_writer")])
+    assert agent.is_transient_inference_error(TimeoutError(), using=agent_write_alias) is has_model
+    assert seen == ([agent_write_alias] if has_model else [])
+
+
 @pytest.mark.parametrize("has_credential", [False, True])
 def test_direct_provision_inputs_and_readiness_bind_uncached_relations(
     agent_write_alias: str, monkeypatch: pytest.MonkeyPatch, has_credential: bool

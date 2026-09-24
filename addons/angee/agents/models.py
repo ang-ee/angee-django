@@ -13,9 +13,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, cast
 
 from django.apps import apps
@@ -54,7 +55,7 @@ from angee.base.permissions import require_authorization_database
 from angee.base.transitions import StateTransitions, save_state, transition
 
 
-class InferenceModelUse(models.TextChoices):
+class InferenceModelUse(models.TextChoices, StrEnum):
     """What an inference model is used for (mirrors the LLM catalogue's model use)."""
 
     CHAT = "chat", "Chat"
@@ -469,6 +470,7 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
 
         An absent policy leaves the catalogue unrestricted. A configured policy
         fails closed for missing roles, malformed entries and identity changes.
+        Denial raises ``PermissionDenied``; malformed policy raises ``ValueError``.
         """
 
         policy = getattr(settings, "ANGEE_INFERENCE_APPROVED_DEPLOYMENTS", None)
@@ -476,26 +478,30 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
             return
         if not isinstance(policy, Mapping):
             raise ValueError("The inference deployment approval policy is invalid.")
-        approved = policy.get(role)
+        approved = policy.get(role, [])
         if not isinstance(approved, (list, tuple)) or not all(isinstance(item, Mapping) for item in approved):
             raise ValueError(f"The inference {role} deployment approval policy is invalid.")
         identity = self.deployment_identity(using=using)
         if not any(dict(item) == identity for item in approved):
-            raise ValueError(f"The configured {role} model deployment is not approved.")
+            raise PermissionDenied(f"The configured {role} model deployment is not approved.")
 
-    def require_capability(self, role: str) -> None:
-        """Require a callable lifecycle and the modality consumed by this role."""
+    def require_capability(self, uses: Collection[InferenceModelUse]) -> None:
+        """Require a callable lifecycle and one of the declared model uses."""
 
         if self.status in {InferenceModelStatus.DEPRECATED, InferenceModelStatus.RETIRED}:
             raise ValueError("Select an available inference model.")
-        if role == "recognition":
-            if self.model_use not in {InferenceModelUse.MULTIMODAL, InferenceModelUse.IMAGE}:
-                raise ValueError("Recognition requires an image-capable model.")
-        elif self.model_use not in {InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL}:
-            raise ValueError(f"Inference role {role} requires a chat-capable model.")
+        if self.model_use not in uses:
+            raise ValueError(f"Inference requires a model with one of these uses: {', '.join(sorted(uses))}.")
 
-    def require_usable(self, actor: Any, role: str, *, using: str | None = None) -> None:
-        """Require actor read access, deployment approval and role capability.
+    def require_usable(
+        self,
+        actor: Any,
+        role: str,
+        *,
+        uses: Collection[InferenceModelUse],
+        using: str | None = None,
+    ) -> None:
+        """Require actor read access, role approval and a declared model capability.
 
         REBAC's field-backed checks currently have no database-alias contract,
         so authorization fails closed before reads on non-default databases.
@@ -507,7 +513,7 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         if not self.with_actor(actor).has_access("read"):
             raise PermissionDenied("You cannot read the configured inference model.")
         self.require_approved(role, using=using)
-        self.require_capability(role)
+        self.require_capability(uses)
 
     def chat(
         self,
@@ -1038,6 +1044,17 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             raise ValueError("Agent has no service user and cannot act.")
         user: Any = related_on(self, "user", using=using)
         return to_subject_ref(user)
+
+    def is_transient_inference_error(self, error: Exception, *, using: str | None = None) -> bool:
+        """Classify with the bound inference provider, if this agent has a model."""
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        with system_context(reason="agents.agent.inference_error"):
+            model: Any = related_on(self, "model", using=using, required=False)
+            if model is None:
+                return False
+            provider: Any = related_on(model, "provider", using=using)
+            return bool(provider.backend.is_transient_error(error))
 
     @property
     def runtime_backend(self) -> AgentRuntime:

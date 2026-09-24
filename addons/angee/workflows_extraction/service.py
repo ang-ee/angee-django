@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
@@ -16,6 +16,7 @@ from django.db.models import Prefetch, prefetch_related_objects
 from jsonschema import Draft202012Validator
 from rebac import current_actor, system_context
 
+from angee.agents.models import InferenceModelUse
 from angee.base.actors import actor_user_id
 from angee.base.db import get_write_alias, related_on
 from angee.base.impl import resolve_impl_class
@@ -34,12 +35,12 @@ from angee.workflows_extraction.contracts import (
     PageImage,
     PageResult,
 )
-from angee.workflows_extraction.engines import (
+from angee.workflows_extraction.enums import ExtractionErrorCode
+from angee.workflows_extraction.inference import (
     RETAINED_AUTHORITY_COMPLETION_REVIEW,
     RETAINED_CARRIER_UNAVAILABLE,
     map_text_parts,
 )
-from angee.workflows_extraction.enums import ExtractionErrorCode
 from angee.workflows_extraction.pointers import (
     JSON_POINTER_MISSING,
     implicit_identity_correspondence,
@@ -142,19 +143,17 @@ class CollectedDocument:
 
 @dataclass(frozen=True, slots=True)
 class SupersededInference:
-    """A racing retained successor plus usage spent by this invocation."""
+    """A successor that won the retained revision race."""
 
     base_extraction_id: str
     current_extraction_id: str
-    usage_delta: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
-class InferenceResult:
-    """A retained inference result plus usage spent by this invocation."""
+class RetainedInference:
+    """The extraction retained or reused by an inference operation."""
 
     extraction: Any
-    usage_delta: dict[str, int] = field(default_factory=dict)
 
 
 def prepare_pages(
@@ -423,7 +422,7 @@ def process(
     *,
     schema: dict[str, Any],
     authorized_target: Any,
-    engine: str,
+    profile: str,
     config: Mapping[str, Any] | None = None,
     model: Any | None = None,
     recognition_model: Any | None = None,
@@ -440,9 +439,12 @@ def process(
     actor = current_actor()
     if actor is None:
         raise PermissionDenied("Authentication required.")
-    for candidate, role in ((model, "mapping"), (recognition_model, "recognition")):
+    for candidate, role, uses in (
+        (model, "mapping", {InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL}),
+        (recognition_model, "recognition", {InferenceModelUse.MULTIMODAL, InferenceModelUse.IMAGE}),
+    ):
         if candidate is not None:
-            candidate.require_usable(actor, role, using=alias)
+            candidate.require_usable(actor, role, uses=uses, using=alias)
     requested_mapping = dict(identity_mapping or {})
     requested_retirement = dict(retired_identities or {})
     if any(not isinstance(key, str) or not isinstance(value, str) for key, value in requested_mapping.items()):
@@ -457,7 +459,7 @@ def process(
     _authorize(files, message_parts, authorized_target, actor=actor)
     normalized_schema = _validated_schema(schema)
     normalized_config = _json_object(config or {}, field="config")
-    profile_class = resolve_impl_class("ANGEE_EXTRACTION_PROFILE_CLASSES", engine, base_class=ExtractionProfile)
+    profile_class = resolve_impl_class("ANGEE_EXTRACTION_PROFILE_CLASSES", profile, base_class=ExtractionProfile)
     profile_layout = _json_object(profile_class.evidence_layout, field="evidence_layout")
     if "evidence_layout" in normalized_config and normalized_config["evidence_layout"] != profile_layout:
         raise ValidationError({"config": "The published profile owns its evidence layout."})
@@ -493,7 +495,7 @@ def process(
             "lineage": lineage_key,
             "source_facts": source_facts,
             "schema": normalized_schema,
-            "engine": engine,
+            "profile": profile,
             "pipeline_version": str(profile_class.pipeline_version),
             "model": _model_fingerprint(model, using=alias),
             "recognition_model": _model_fingerprint(recognition_model, using=alias),
@@ -511,7 +513,7 @@ def process(
                     "source": page.source_position,
                     "page": page.page_position,
                     "result": page_result.value,
-                    "metadata": page_result.engine_metadata,
+                    "metadata": page_result.provider_metadata,
                 }
                 for page, page_result in zip(collected.pages, collected.page_results)
             ],
@@ -622,7 +624,7 @@ def process(
                 has_recognition_model=recognition_model is not None,
             )
             result, claims = document_result.value, document_result.claims
-            metadata, roles = dict(document_result.engine_metadata or {}), document_result.used_model_roles
+            metadata, roles = dict(document_result.provider_metadata or {}), document_result.used_model_roles
             errors = sorted(
                 Draft202012Validator(normalized_schema).iter_errors(result), key=lambda error: list(error.path)
             )
@@ -668,10 +670,10 @@ def process(
         schema_id=schema_id,
         schema=normalized_schema,
         schema_digest=canonical_json_sha256(normalized_schema),
-        engine=engine,
+        profile=profile,
         model=model,
         recognition_model=recognition_model,
-        engine_config=normalized_config,
+        profile_config=normalized_config,
         result=result,
         provenance={
             "source_count": len(source_facts),
@@ -711,8 +713,8 @@ def infer(
     identity_mapping: Mapping[str, str] | None = None,
     retired_identities: Mapping[str, str] | None = None,
     using: str | None = None,
-) -> InferenceResult | SupersededInference:
-    """Retain inferred facts and expose only this call's provider usage."""
+) -> RetainedInference | SupersededInference:
+    """Authorize the mapping model before retaining or reusing inferred facts."""
 
     alias = get_write_alias(type(base), using=using, instance=base)
     require_authorization_database(alias, operation="Document inference authorization")
@@ -751,13 +753,16 @@ def infer(
         raise PermissionDenied("Read access to the base extraction is required.")
     if not authorized_target.with_actor(actor).has_access("read"):
         raise PermissionDenied("Read access to the extraction target is required.")
+    model.require_usable(
+        actor, "mapping", uses={InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL}, using=alias,
+    )
     if base.model_id is not None and base.model_id != model.pk:
         raise ValidationError({"inference": "The inferred model differs from the frozen base policy."})
-    config = _json_object(base.engine_config, field="config")
+    config = _json_object(base.profile_config, field="config")
     if config.get("inference_mode") != "permitted":
         raise ValidationError({"inference": "This publication permits deterministic processing only."})
     profile = resolve_impl_class(
-        "ANGEE_EXTRACTION_PROFILE_CLASSES", str(base.engine), base_class=ExtractionProfile,
+        "ANGEE_EXTRACTION_PROFILE_CLASSES", str(base.profile), base_class=ExtractionProfile,
     )()
     inference_required = profile.inference_required(base.result, base.unresolved_reasons)
     if not correspondence_hold and not inference_required:
@@ -839,7 +844,7 @@ def infer(
             or bool(inference_facts.get("automatic_correspondence")) != automatic_correspondence
         ):
             raise ValidationError({"inference": "The frozen request key owns different retained facts."})
-        return InferenceResult(existing)
+        return RetainedInference(existing)
     current = extraction_model.objects.db_manager(alias).inference_current_head(base, actor=actor)
     if current.pk != base.pk:
         return SupersededInference(str(base.sqid), str(current.sqid))
@@ -884,12 +889,10 @@ def infer(
             parts=parts,
             claims=deepcopy(base.claims),
             used_model_roles=tuple(base.provenance.get("used_model_roles", ())),
-            engine_metadata=request_metadata,
+            provider_metadata=request_metadata,
         )
     else:
-        timeout = float(
-            config.get("timeout") or settings.ANGEE_EXTRACTION_TIMEOUT_SECONDS
-        )
+        timeout = config.get("timeout", settings.ANGEE_EXTRACTION_TIMEOUT_SECONDS)
         mapping_result = map_text_parts(
             parts,
             _validated_schema(base.schema),
@@ -907,7 +910,7 @@ def infer(
                 base.schema,
                 value=mapping_result.value,
                 claims=mapping_result.claims,
-                metadata=mapping_result.engine_metadata,
+                metadata=mapping_result.provider_metadata,
                 config=config,
                 recognition_used=recognition_used,
             )
@@ -1005,7 +1008,7 @@ def infer(
                 final_claims,
                 document_result.used_model_roles,
                 document_result.duration_ms,
-                document_result.engine_metadata,
+                document_result.provider_metadata,
             )
         else:
             completed_missing_authority = False
@@ -1097,7 +1100,7 @@ def infer(
                 "requested_retirement": requested_retirement,
                 "automatic_correspondence": automatic_correspondence,
                 "effective_identity_mapping": effective_mapping,
-                "provider": dict(document_result.engine_metadata or {}),
+                "provider": dict(document_result.provider_metadata or {}),
             },
         },
     }
@@ -1115,24 +1118,23 @@ def infer(
             schema_id=base.schema_id,
             schema=base.schema,
             schema_digest=base.schema_digest,
-            engine=str(base.engine),
+            profile=str(base.profile),
             model=model,
             recognition_model_id=base.recognition_model_id,
-            engine_config=config,
+            profile_config=config,
             result=document_result.value,
             provenance=provenance,
             content_type_id=base.content_type_id,
             object_id=base.object_id,
             created_by_id=actor_user_id(actor),
         )
-        return InferenceResult(extraction, usage_delta)
+        return RetainedInference(extraction)
     except ValidationError as error:
         current = extraction_model.objects.db_manager(alias).inference_current_head(base, actor=actor)
         if current.pk != base.pk:
             return SupersededInference(
                 str(base.sqid),
                 str(current.sqid),
-                usage_delta,
             )
         if usage_delta:
             raise DocumentPipelineError(
@@ -1160,7 +1162,7 @@ def _retain_failed_inference(
     mapping_result: Any,
     error: DocumentPipelineError,
     using: str,
-) -> InferenceResult | SupersededInference:
+) -> RetainedInference | SupersededInference:
     """Retain a post-provider failure as the idempotent inference successor."""
 
     extraction_model = type(base)
@@ -1169,7 +1171,7 @@ def _retain_failed_inference(
         value for value in (error.stage, error.code) if value
     ) or type(error).__name__
     provider = {
-        **dict(getattr(mapping_result, "engine_metadata", None) or {}),
+        **dict(getattr(mapping_result, "provider_metadata", None) or {}),
         "usage": usage_delta,
     }
     inference = {
@@ -1221,22 +1223,22 @@ def _retain_failed_inference(
             schema_id=base.schema_id,
             schema=base.schema,
             schema_digest=base.schema_digest,
-            engine=str(base.engine),
+            profile=str(base.profile),
             model=model,
             recognition_model_id=base.recognition_model_id,
-            engine_config=dict(config),
+            profile_config=dict(config),
             result={},
             provenance=provenance,
             content_type_id=base.content_type_id,
             object_id=base.object_id,
             created_by_id=actor_user_id(actor),
         )
-        return InferenceResult(extraction, usage_delta)
+        return RetainedInference(extraction)
     except ValidationError as retention_error:
         current = extraction_model.objects.db_manager(using).inference_current_head(base, actor=actor)
         if current.pk != base.pk:
             return SupersededInference(
-                str(base.sqid), str(current.sqid), usage_delta,
+                str(base.sqid), str(current.sqid),
             )
         if usage_delta:
             raise DocumentPipelineError(
@@ -1761,8 +1763,8 @@ def _confirmed_fact_pointers(
     return confirmed
 
 
-def authored_engine_config(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Return authored engine policy without native retry lineage metadata."""
+def authored_profile_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return authored profile policy without native retry lineage metadata."""
 
     return {key: value for key, value in dict(config).items() if key != "retry_of_revision"}
 
@@ -1882,7 +1884,7 @@ def _validate_document_result(
             for claim in claims
         ):
             raise ValidationError({"result": "Document claims reference unavailable evidence."})
-    _json_object(result.engine_metadata or {}, field="engine_metadata")
+    _json_object(result.provider_metadata or {}, field="provider_metadata")
     roles = set(result.used_model_roles)
     if not roles <= {"mapping", "recognition"}:
         raise ValidationError({"result": "Document extraction reported an unsupported model role."})

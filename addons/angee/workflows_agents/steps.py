@@ -16,7 +16,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, transaction
 from django.utils import timezone
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelResponse
 from rebac import actor_context, system_context
 
@@ -55,6 +55,15 @@ class InferInput(BaseModel):
     role: Annotated[str, Field(min_length=1)]
     request: InferRequest
     timeout: float = Field(default=60, gt=0, description="Provider timeout in seconds for this step invocation.")
+
+    @field_validator("request")
+    @classmethod
+    def validate_request_timeout(cls, request: InferRequest) -> InferRequest:
+        """Keep the infer step's timeout on its one declared input field."""
+
+        if "timeout" in request.settings:
+            raise ValueError("timeout belongs to the infer step input, not request.settings.")
+        return request
 
 
 class InferOutput(BaseModel):
@@ -100,7 +109,7 @@ class InferStepImpl(StepImpl):
         except InferenceCallError as error:
             return StepResult.done(
                 output={
-                    "response": None,
+                    "response": _response_projection(error.response) if error.response is not None else None,
                     "output": None,
                     "usage": error.usage,
                     "error": {"type": type(error.error).__name__, "message": str(error.error)},
@@ -204,7 +213,7 @@ class AgentSessionStepImpl(StepImpl):
                 replay_state=session.replay_state,
             )
         except Exception as error:  # noqa: BLE001 - provider/runtime failures become turn outcomes.
-            if session.agent.model.provider.backend.is_transient_error(error) and _attempts_remaining(step_run):
+            if _attempts_remaining(step_run) and session.agent.is_transient_inference_error(error, using=alias):
                 raise TransientStepError(str(error)) from error
             outcome = TurnOutcome(
                 kind="failed",

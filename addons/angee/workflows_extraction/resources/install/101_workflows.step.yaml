@@ -14,7 +14,7 @@ rows:
         fields:
           files: {kind: workflow_input, path: [files]}
           message_parts: {kind: workflow_input, path: [message_parts]}
-          engine_config: {kind: workflow_input, path: [engine_config]}
+          profile_config: {kind: workflow_input, path: [profile_config]}
           model: {kind: workflow_input, path: [model]}
           recognition_model: {kind: workflow_input, path: [recognition_model]}
           target_model: {kind: workflow_input, path: [target_model]}
@@ -47,7 +47,7 @@ rows:
           dpi: {kind: map_item, path: [dpi]}
           model_id: {kind: map_item, path: [model_id]}
           config_digest: {kind: map_item, path: [config_digest]}
-          engine_config: {kind: workflow_input, path: [engine_config, recognition_config]}
+          profile_config: {kind: workflow_input, path: [profile_config, recognition_config]}
           timeout: {kind: workflow_input, path: [recognition_timeout]}
   - xref: document_extraction_collect_carriers
     fields:
@@ -61,7 +61,7 @@ rows:
         fields:
           prepared: {kind: step_output, step_key: prepare_pages, path: []}
           recognition: {kind: step_output, step_key: map_pages, path: []}
-          engine_config: {kind: workflow_input, path: [engine_config]}
+          profile_config: {kind: workflow_input, path: [profile_config]}
   - xref: document_extraction_process_evidence
     fields:
       workflow: workflows_extraction.document_extraction
@@ -77,5 +77,5 @@ rows:
           hold_reasons: {kind: step_output, step_key: collect_carriers, path: [hold_reasons]}
           completed_page_count: {kind: step_output, step_key: collect_carriers, path: [completed_page_count]}
           schema: {kind: workflow_input, path: [schema]}
-          engine: {kind: workflow_input, path: [engine]}
-          engine_config: {kind: workflow_input, path: [engine_config]}
+          profile: {kind: workflow_input, path: [profile]}
+          profile_config: {kind: workflow_input, path: [profile_config]}

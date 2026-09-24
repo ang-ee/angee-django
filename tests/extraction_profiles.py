@@ -11,8 +11,8 @@ from angee.workflows_extraction.contracts import (
 from angee.workflows_extraction.profiles import ExtractionProfile
 
 
-class FakeDocumentEngine(ExtractionProfile):
-    """Deterministic document-level engine for evidence integration tests."""
+class FakeDocumentProfile(ExtractionProfile):
+    """Deterministic document-level profile for evidence integration tests."""
 
     key = "fake_document"
     label = "Fake document extraction"
@@ -61,7 +61,7 @@ class FakeDocumentEngine(ExtractionProfile):
                 else:
                     claims[f"/{key}"] = [{"part_position": 0}]
         return DocumentResult(
-            dict(value), tuple(parts), claims, engine_metadata={"route": "fake"},
+            dict(value), tuple(parts), claims, provider_metadata={"route": "fake"},
         )
 
     def normalize_inference_candidate(
@@ -79,5 +79,5 @@ class FakeDocumentEngine(ExtractionProfile):
         del sources, schema, config, recognition_used
         return DocumentResult(
             dict(value), tuple(parts), dict(claims), ("mapping",),
-            engine_metadata=dict(metadata),
+            provider_metadata=dict(metadata),
         )

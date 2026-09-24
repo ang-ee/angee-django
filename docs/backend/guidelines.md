@@ -773,6 +773,16 @@ and current contracts before applying a historical example to a new deployment.
   a planned transition to `posts/*`; verify their actual data and migration state
   before selecting the migration and `reconcile_permissions` steps. A fresh
   installation does not inherit an old deployment's repair procedure.
+- **Drain retained extraction inputs before the profile cutover.** Before
+  upgrading a stack from extraction engines to profiles, inventory active durable
+  extraction runs, including suspended runs and retained recognition-page items,
+  for frozen inputs containing `engine`, `engine_config`, `recognition_engine`,
+  or `mapping_engine`. Stop admission and drain or cancel those runs through the
+  workflow owner before deploying the new input contracts; no permanent
+  compatibility shim accepts those keys. Rehearse this inventory and drain/cancel
+  check against a restored database copy before the real upgrade, then verify
+  that no affected active runs remain in the deployment. Retain the stack's
+  runtime migration history throughout the rehearsal and upgrade.
 - **A structural marker consumed after runtime emission must be emitted too.**
   A non-inherited `__dict__` source-model marker stops at the abstract source unless
   the composer carries it into the concrete runtime class body.

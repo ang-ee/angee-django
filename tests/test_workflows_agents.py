@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -33,7 +33,7 @@ from pydantic_ai.toolsets.function import FunctionToolset
 from pydantic_ai.usage import RequestUsage
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 
-from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
+from angee.agents.models import AgentLifecycle, InferenceModelUse, RuntimeStatus, SessionStatus, TurnStatus
 from angee.agents.runners import TurnOutcome
 from angee.base.impl import resolve_impl_class
 from angee.graphql.access import ChangeReadGate
@@ -151,6 +151,9 @@ def test_infer_step_passes_native_request_envelope_and_projects_response(
 
     del workflows_agents_tables, no_workflow_queue
     model = _inference_model("infer-envelope")
+    with system_context(reason="test image model capability"):
+        model.model_use = InferenceModelUse.IMAGE
+        model.save(update_fields=["model_use"])
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
     schema = {
         "type": "object",
@@ -300,7 +303,7 @@ def test_infer_step_rejects_unapproved_role_or_deployment_before_provider_call(
     step_run = advance_once(run)[0]
     step_run.input = _infer_input(model)
 
-    with pytest.raises(ValueError, match="policy is invalid|is not approved"):
+    with pytest.raises(PermissionDenied, match="is not approved"):
         InferStepImpl().run(step_run, now=timezone.now())
     assert bindings == []
     run.refresh_from_db()
@@ -315,6 +318,18 @@ def test_infer_step_rejects_invalid_timeout_before_provider_error_routing(timeou
 
     value = {**_infer_input(), "timeout": timeout}
     with pytest.raises(PydanticValidationError, match="timeout"):
+        InferStepImpl.validate_input(value)
+
+
+@pytest.mark.parametrize("timeout", [None, 0, 12.5])
+def test_infer_step_rejects_timeout_in_request_settings(timeout: float | None) -> None:
+    """A misplaced timeout is rejected instead of silently replaced by the default."""
+
+    from angee.workflows_agents.steps import InferStepImpl
+
+    value = _infer_input()
+    value["request"]["settings"] = {"timeout": timeout}
+    with pytest.raises(PydanticValidationError, match="belongs to the infer step input"):
         InferStepImpl.validate_input(value)
 
 
@@ -384,9 +399,11 @@ def test_infer_step_approved_readable_model_passes_once(
     original = InferenceModel.require_usable
     calls: list[tuple[Any, str, str | None]] = []
 
-    def require_usable(instance: Any, actor: Any, role: str, *, using: str | None = None) -> None:
+    def require_usable(
+        instance: Any, actor: Any, role: str, *, uses: Collection[InferenceModelUse], using: str | None = None
+    ) -> None:
         calls.append((actor.pk, role, using))
-        original(instance, actor, role, using=using)
+        original(instance, actor, role, uses=uses, using=using)
 
     monkeypatch.setattr(InferenceModel, "require_usable", require_usable)
     bindings = _stub_model_backend(monkeypatch, lambda messages, info: ModelResponse(parts=[TextPart("allowed")]))
@@ -591,7 +608,7 @@ def test_infer_retryable_provider_error_allocates_retry_and_debits_once(
     assert debits == [{}]
 
 
-def test_infer_invalid_structured_response_retains_usage_and_debits_once(
+def test_infer_invalid_structured_output_retains_usage_and_debits_once(
     workflows_agents_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -620,6 +637,7 @@ def test_infer_invalid_structured_response_retains_usage_and_debits_once(
     assert row.outcome == "failed"
     assert row.output["output"] is None
     assert row.output["error"]["type"] == "InferenceOutputError"
+    assert row.output["response"]["parts"][0]["content"] == "[]"
     assert row.output["usage"] == usage
     assert debits == [usage]
 
@@ -948,6 +966,44 @@ def test_transient_exhaustion_fails_turn_and_parks_session(
         assert "429" in turn.error
 
 
+@pytest.mark.parametrize("max_attempts", [1, 2])
+def test_model_less_agent_failure_is_retained_as_failed_turn(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    max_attempts: int,
+) -> None:
+    """A missing inference model cannot obscure the real error or end the session."""
+
+    del workflows_agents_tables, no_workflow_queue
+    owner, agent = _ready_session_agent("no-model")
+    admit_workflow_actor(_session_workflow(retry={"max_attempts": max_attempts}), owner)
+    session = sessions.start_session(agent, owner=owner, context={})
+    sessions.post_message(session, "hi")
+    with system_context(reason="test model-less session run"):
+        run = sessions.run_for(session)
+    step_run = advance_once(run)[0]
+    if max_attempts == 1:
+        monkeypatch.setattr(
+            Agent,
+            "is_transient_inference_error",
+            lambda *args, **kwargs: pytest.fail("exhausted attempts must not load an inference backend"),
+        )
+    execute_started(run)
+    engine.advance(run.pk)
+
+    step_run.refresh_from_db()
+    run.refresh_from_db()
+    session.refresh_from_db()
+    assert run.status == workflow_models.RunStatus.WAITING
+    assert step_run.status == workflow_models.StepRunStatus.WAITING
+    assert session.status == SessionStatus.ERROR
+    with system_context(reason="test model-less failed turn"):
+        turn = AgentTurn.objects.get(session=session, index=1)
+        assert turn.status == TurnStatus.FAILED
+        assert turn.error == "An in-process agent requires an inference model."
+
+
 def test_in_process_provision_and_teardown_leave_no_orphaned_waiting_run(
     workflows_agents_tables: None,
     no_workflow_queue: None,
@@ -1097,7 +1153,7 @@ def _ready_session_agent(slug: str) -> tuple[Any, Agent]:
     return owner, agent
 
 
-def _session_workflow() -> Any:
+def _session_workflow(*, retry: dict[str, Any] | None = None) -> Any:
     """Publish the structural workflow selected by the session service."""
 
     return workflow_with_steps(
@@ -1106,6 +1162,6 @@ def _session_workflow() -> Any:
         purpose=workflow_models.WorkflowPurpose.AGENT_SESSION,
         subject_declaration="agents.agentsession",
         max_steps=100000,
-        steps=({"key": "session", "step_class": "agent_session", "config": {}},),
+        steps=({"key": "session", "step_class": "agent_session", "config": {} if retry is None else {"retry": retry}},),
         edges=(),
     )
