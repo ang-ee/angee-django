@@ -48,7 +48,7 @@ test("absent field errors leave untouched controls valid and retain actual neste
   expect(fieldErrorMessages([undefined, null])).toEqual([]);
   expect(fieldErrorMessages([{ lines: [undefined, null, {
     quantity: { message: "Enter a quantity." },
-  }] }], "invoice")).toEqual(["invoice.lines.2.quantity: Enter a quantity."]);
+  }] }], "document")).toEqual(["document.lines.2.quantity: Enter a quantity."]);
   expect(fieldErrorMessages(["Required", { message: 0 }])).toEqual(["Required", "0"]);
 });
 
@@ -82,13 +82,13 @@ test("titleText preserves string and numeric scalar titles", () => {
 
 test("dynamic resolution cannot unlock a field already locked by form mode", () => {
   const locked: FieldDescriptor = {
-    name: "journal",
+    name: "collection",
     readOnly: true,
-    resolve: () => ({ name: "journal", readOnly: false }),
+    resolve: () => ({ name: "collection", readOnly: false }),
   };
-  expect(resolveField(locked, {})).toMatchObject({ name: "journal", readOnly: true });
+  expect(resolveField(locked, {})).toMatchObject({ name: "collection", readOnly: true });
   expect(resolveField({ ...locked, readOnly: false }, {})).toMatchObject({
-    name: "journal", readOnly: false,
+    name: "collection", readOnly: false,
   });
 });
 

@@ -33,29 +33,29 @@ from angee.graphql.actions import (
     resolve_action_target,
 )
 from tests.conftest import create_user
-from tests.linesdemo.models import SaleDoc
+from tests.linesdemo.models import Document
 
 
 def test_action_result_carries_created_record_id() -> None:
     """A create-and-return verb populates ``id``; a plain result leaves it ``None``."""
 
     assert ActionResult(ok=True, message="ok").id is None
-    created = ActionResult(ok=True, message="Payment registered.", id="pay_abc123")
-    assert created.id == "pay_abc123"
+    created = ActionResult(ok=True, message="Review registered.", id="review_abc123")
+    assert created.id == "review_abc123"
 
 
 def test_action_guard_maps_baseline_domain_errors(caplog: pytest.LogCaptureFixture) -> None:
     """The guard maps each baseline domain error to an in-band ``ActionResult``."""
 
-    @action_guard("Could not register the payment.")
+    @action_guard("Could not register the review.")
     def register(kind: str) -> ActionResult:
         if kind == "validation":
-            raise ValidationError({"amount": ["Exceeds the balance."]})
+            raise ValidationError({"amount": ["Exceeds the limit."]})
         if kind == "transition":
-            raise TransitionNotAllowed("status draft to paid is not allowed.")
+            raise TransitionNotAllowed("status draft to accepted is not allowed.")
         if kind == "missing":
             raise Group.DoesNotExist("no such row")
-        return ActionResult(ok=True, message="Payment registered.")
+        return ActionResult(ok=True, message="Review registered.")
 
     ok = register("ok")
     assert ok.ok is True
@@ -63,8 +63,8 @@ def test_action_guard_maps_baseline_domain_errors(caplog: pytest.LogCaptureFixtu
     with caplog.at_level("ERROR", logger=actions_module.__name__):
         validation = register("validation")
     assert validation.ok is False
-    assert validation.message == "Could not register the payment."
-    assert validation.validation_errors == {"amount": ["Exceeds the balance."]}
+    assert validation.message == "Could not register the review."
+    assert validation.validation_errors == {"amount": ["Exceeds the limit."]}
     assert "GraphQL action register failed" in caplog.messages
     assert caplog.records[-1].exc_info is not None
 
@@ -79,21 +79,21 @@ def test_action_guard_maps_baseline_domain_errors(caplog: pytest.LogCaptureFixtu
 def test_action_guard_admits_addon_local_errors_and_reraises_others() -> None:
     """A resolver adds its own error types; anything unlisted propagates as a GraphQL error."""
 
-    class PaymentRefused(Exception):
-        """A payment-provider domain refusal an addon owns."""
+    class ReviewRefused(Exception):
+        """A review-provider domain refusal an addon owns."""
 
-    @action_guard("Payment refused.", errors=(PaymentRefused,))
-    def charge(kind: str) -> ActionResult:
+    @action_guard("Review refused.", errors=(ReviewRefused,))
+    def submit(kind: str) -> ActionResult:
         if kind == "refused":
-            raise PaymentRefused("gateway declined")
+            raise ReviewRefused("reviewer declined")
         raise RuntimeError("boom")
 
-    refused = charge("refused")
+    refused = submit("refused")
     assert refused.ok is False
-    assert refused.message == "Payment refused."
+    assert refused.message == "Review refused."
 
     with pytest.raises(RuntimeError, match="boom"):
-        charge("other")
+        submit("other")
 
 
 def test_action_result_carries_in_band_validation_errors() -> None:
@@ -288,22 +288,22 @@ def test_action_target_wraps_lookup_and_body_in_system_context(
 
 
 @pytest.fixture()
-def saledoc_table(transactional_db: Any):
+def document_table(transactional_db: Any):
     """Ensure the demo document table exists and the REBAC schema is synced."""
 
     existing = set(connection.introspection.table_names())
-    if SaleDoc._meta.db_table not in existing:
+    if Document._meta.db_table not in existing:
         with connection.schema_editor() as editor:
-            editor.create_model(SaleDoc)
+            editor.create_model(Document)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
         with connection.cursor() as cursor:
-            cursor.execute(f"DELETE FROM {connection.ops.quote_name(SaleDoc._meta.db_table)}")
+            cursor.execute(f"DELETE FROM {connection.ops.quote_name(Document._meta.db_table)}")
 
 
-def _grant(document: SaleDoc, relation: str, user: Any) -> None:
+def _grant(document: Document, relation: str, user: Any) -> None:
     """Write one direct relationship tuple for ``user`` on ``document``."""
 
     write_relationships(
@@ -325,35 +325,35 @@ def _info_for(user: Any) -> Any:
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 
-def _owned_document(owner: Any, *, title: str = "Order") -> SaleDoc:
+def _owned_document(owner: Any, *, title: str = "Document") -> Document:
     """Seed one document and grant ``owner`` the write-carrying owner relation."""
 
     with system_context(reason="tests.action.seed"):
-        document = SaleDoc.objects.create(title=title)
+        document = Document.objects.create(title=title)
     _grant(document, "owner", owner)
     return document
 
 
-def test_authorized_action_target_returns_the_actor_reachable_row(saledoc_table) -> None:
+def test_authorized_action_target_returns_the_actor_reachable_row(document_table) -> None:
     """An actor with the per-row permission gets the actor-bound row back."""
 
     owner = create_user("owner")
     document = _owned_document(owner)
 
     with actor_context(owner):
-        target = authorized_action_target(_info_for(owner), SaleDoc, document.public_id, "write")
+        target = authorized_action_target(_info_for(owner), Document, document.public_id, "write")
 
     assert target == document
 
 
-def test_authorized_action_target_denies_anonymous_sessions(saledoc_table) -> None:
+def test_authorized_action_target_denies_anonymous_sessions(document_table) -> None:
     """An unauthenticated session raises the GraphQL-error denial, not an in-band shape."""
 
     with pytest.raises(PermissionDenied, match="Authentication required."):
-        authorized_action_target(_info_for(AnonymousUser()), SaleDoc, "sd_missing", "write")
+        authorized_action_target(_info_for(AnonymousUser()), Document, "sd_missing", "write")
 
 
-def test_authorized_action_target_hides_unreachable_rows_as_not_found(saledoc_table) -> None:
+def test_authorized_action_target_hides_unreachable_rows_as_not_found(document_table) -> None:
     """A row outside the actor's write scope reads as plain not-found (no existence oracle)."""
 
     owner = create_user("owner")
@@ -361,14 +361,14 @@ def test_authorized_action_target_hides_unreachable_rows_as_not_found(saledoc_ta
     document = _owned_document(owner)
 
     with actor_context(intruder), pytest.raises(ValidationError) as caught:
-        authorized_action_target(_info_for(intruder), SaleDoc, document.public_id, "write")
+        authorized_action_target(_info_for(intruder), Document, document.public_id, "write")
 
     assert caught.value.message_dict == {
-        NON_FIELD_ERRORS: [f"SaleDoc {document.public_id!r} was not found."]
+        NON_FIELD_ERRORS: [f"Document {document.public_id!r} was not found."]
     }
 
 
-def test_authorized_action_target_denies_readable_row_without_permission(saledoc_table) -> None:
+def test_authorized_action_target_denies_readable_row_without_permission(document_table) -> None:
     """A reader (read without write) resolves the row but fails the per-row permission."""
 
     owner = create_user("owner")
@@ -379,23 +379,23 @@ def test_authorized_action_target_denies_readable_row_without_permission(saledoc
     with actor_context(reader):
         # The reader can load the row — proving the denial below is the permission
         # preflight, not the write scope failing to find it.
-        assert SaleDoc.objects.filter(pk=document.pk).exists()
+        assert Document.objects.filter(pk=document.pk).exists()
         with pytest.raises(ValidationError) as caught:
-            authorized_action_target(_info_for(reader), SaleDoc, document.public_id, "write")
+            authorized_action_target(_info_for(reader), Document, document.public_id, "write")
 
     assert caught.value.message_dict == {
-        NON_FIELD_ERRORS: [f"You are not allowed to modify this {SaleDoc._meta.verbose_name}."]
+        NON_FIELD_ERRORS: [f"You are not allowed to modify this {Document._meta.verbose_name}."]
     }
 
 
-def test_action_guard_maps_authorized_action_target_failures_in_band(saledoc_table) -> None:
+def test_action_guard_maps_authorized_action_target_failures_in_band(document_table) -> None:
     """The preflight raise and the guard compose into the in-band ``ActionResult``."""
 
     intruder = create_user("intruder")
 
     @action_guard("Confirm failed.")
     def confirm(info: Any, id: str) -> ActionResult:
-        authorized_action_target(info, SaleDoc, id, "write")
+        authorized_action_target(info, Document, id, "write")
         return ActionResult(ok=True, message="Confirmed.")
 
     with actor_context(intruder):
@@ -404,5 +404,5 @@ def test_action_guard_maps_authorized_action_target_failures_in_band(saledoc_tab
     assert result.ok is False
     assert result.message == "Confirm failed."
     assert result.validation_errors == {
-        NON_FIELD_ERRORS: ["SaleDoc 'sd_missing' was not found."]
+        NON_FIELD_ERRORS: ["Document 'sd_missing' was not found."]
     }

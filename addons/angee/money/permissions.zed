@@ -17,7 +17,7 @@ definition money/role {
 }
 
 // Currencies are a shared master catalogue: every authenticated user reads them
-// (products, orders, invoices reference a currency). Platform admins create
+// (items and records reference a currency). Platform admins create
 // catalogue rows; stored money_admin manager bindings govern existing rows.
 definition money/currency {
     relation admin:   angee/role // rebac:const=admin

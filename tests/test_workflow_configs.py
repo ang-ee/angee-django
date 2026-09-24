@@ -157,10 +157,10 @@ def test_join_and_emit_configs_retain_declared_contracts() -> None:
             "expected_starter_class": "start_continuation",
             "expected_output_schema": {
                 "type": "object",
-                "required": ["invoice_id"],
-                "properties": {"invoice_id": {"type": "string"}},
+                "required": ["document_id"],
+                "properties": {"document_id": {"type": "string"}},
             },
-            "expected_subject": "accounting.invoice",
+            "expected_subject": "example.document",
             "expected_outcomes": ["completed"],
             "reconcile_after": 45,
         },
@@ -285,7 +285,7 @@ def test_gate_config_preserves_binding_nodes_for_runtime_admission() -> None:
         GateStep,
         {
             "policy": "all_done",
-            "action": "review_invoice",
+            "action": "review_document",
             "slots": slots,
             "payload": payload,
             "clean": clean,
@@ -306,9 +306,9 @@ def test_gate_config_reserves_kind_only_for_closed_binding_discriminators() -> N
     with pytest.raises(ValidationError, match="top-level key 'kind' is reserved"):
         GateStep.normalize_config(
             {
-                "action": "review_invoice",
+                "action": "review_document",
                 "slots": [{"assignees": ["auth/user:1"]}],
-                "payload": {"kind": "invoice", "id": "invoice-1"},
+                "payload": {"kind": "document", "id": "document-1"},
             }
         )
 

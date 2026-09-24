@@ -90,11 +90,11 @@ describe("composeAddons", () => {
     const composed = composeAddons(
       [
         defineAddon({
-          id: "accounting-intake",
+          id: "document-review",
           menus: [
             {
               route: "dashboards.addon",
-              params: { key: "arp.accounting_intake.accounts_payable" },
+              params: { key: "example.document_review.overview" },
             },
           ],
         }),
@@ -106,7 +106,7 @@ describe("composeAddons", () => {
       {
         id: "dashboards.addon",
         route: "dashboards.addon",
-        params: { key: "arp.accounting_intake.accounts_payable" },
+        params: { key: "example.document_review.overview" },
       },
     ]);
   });

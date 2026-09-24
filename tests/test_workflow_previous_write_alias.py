@@ -76,7 +76,7 @@ def test_previous_add_and_set_use_explicit_writer_with_native_signals(
 
     routing = WorkflowWriteRouter("default")
     monkeypatch.setattr(router, "routers", [routing])
-    # Odoo contributes a senderless receiver, so exercise that registration form.
+    # Consumer addons can register senderless receivers, so exercise that form.
     m2m_changed.connect(observe)
     try:
         with system_context(reason="previous edge semantics"), connection.execute_wrapper(reject_default_domain_query):

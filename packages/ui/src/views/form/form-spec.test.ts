@@ -137,12 +137,12 @@ describe("deserializeFormSpec", () => {
   test("uses retained property order after persisted nested properties are reordered", () => {
     const fields = deserializeFormSpec({
       type: "object",
-      propertyOrder: ["invoice", "note"],
+      propertyOrder: ["document", "note"],
       properties: {
         note: { type: "string" },
-        invoice: {
+        document: {
           type: "object", widget: "object",
-          propertyOrder: ["supplier", "reference", "lines"],
+          propertyOrder: ["counterparty", "reference", "lines"],
           properties: {
             lines: {
               type: "array", widget: "list",
@@ -156,15 +156,15 @@ describe("deserializeFormSpec", () => {
               },
             },
             reference: { type: "string" },
-            supplier: { type: "string" },
+            counterparty: { type: "string" },
           },
         },
       },
     }, defaultWidgets);
 
-    expect(fields.map((field) => field.name)).toEqual(["invoice", "note"]);
+    expect(fields.map((field) => field.name)).toEqual(["document", "note"]);
     expect(fields[0]?.objectTemplate?.map((field) => field.name))
-      .toEqual(["supplier", "reference", "lines"]);
+      .toEqual(["counterparty", "reference", "lines"]);
     expect(fields[0]?.objectTemplate?.[2]?.itemTemplate?.objectTemplate?.map((field) => field.name))
       .toEqual(["description", "quantity"]);
   });
@@ -462,8 +462,8 @@ describe("formSpecInitialValues", () => {
       },
     } }, { ...defaultWidgets, object: { read: () => null } });
     const reviewContext = {
-      kind: "supplier_confirmation",
-      subject: { invoice_id: "inv_1" },
+      kind: "counterparty_confirmation",
+      subject: { document_id: "doc_1" },
       candidates: [{ party_id: "pty_1" }],
     };
 

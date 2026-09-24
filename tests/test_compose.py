@@ -1797,7 +1797,7 @@ def test_configured_cleanup_removes_all_generated_packages(tmp_path: Path, setti
     settings.ANGEE_RUNTIME_DIR = runtime_dir
     runtime_dir.mkdir()
     (runtime_dir / "__init__.py").write_text(f"{GENERATED_SENTINEL}\n", encoding="utf-8")
-    for label in ("integrate_odoo", "accounting_integrate_odoo", "workflows_ocr", "arp"):
+    for label in ("integrate_example", "records_integrate_example", "workflows_legacy", "example"):
         package = runtime_dir / label
         package.mkdir()
         (package / "__init__.py").write_text("", encoding="utf-8")

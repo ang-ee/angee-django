@@ -121,12 +121,12 @@ describe("useActionMutation", () => {
     mutationMock.response = {
       ok: false,
       message: "Not allowed.",
-      validation_errors: { __all__: ["You are not allowed to modify this order."] },
+      validation_errors: { __all__: ["You are not allowed to modify this record."] },
     };
     const { result } = renderHook(
       () =>
         useActionMutation("run_probe", {
-          invalidates: [{ resource: "orders", invalidates: ["list"] }],
+          invalidates: [{ resource: "records", invalidates: ["list"] }],
         }),
       { wrapper: ConsoleProvider },
     );
@@ -141,7 +141,7 @@ describe("useActionMutation", () => {
     expect(outcome).toEqual({
       ok: false,
       message: "Not allowed.",
-      validationErrors: { __all__: ["You are not allowed to modify this order."] },
+      validationErrors: { __all__: ["You are not allowed to modify this record."] },
     });
     expect(mutationMock.invalidate).not.toHaveBeenCalled();
     expect(mutationMock.invalidateQueries).not.toHaveBeenCalled();
@@ -152,7 +152,7 @@ describe("useActionMutation", () => {
     const { result } = renderHook(
       () =>
         useActionMutation("run_probe", {
-          invalidates: [{ resource: "orders", invalidates: ["list"] }],
+          invalidates: [{ resource: "records", invalidates: ["list"] }],
         }),
       { wrapper: ConsoleProvider },
     );

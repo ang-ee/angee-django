@@ -123,7 +123,7 @@ class DedupeScanStepImpl(StepImpl):
     veto-filtered, deterministic order) and adds only the review projection:
     display names, the shared-handle evidence line, and a proposed survivor per
     pair — a real name beats a numeric one, then the richer handle set, then
-    the older row (the fyltr ``_pick_primary`` heuristic, parties-native).
+    the older row.
     """
 
     key = "parties_dedupe_scan"

@@ -20,8 +20,8 @@ const ContextSchema = v.object({ title: v.string(), warning: v.string(), recordI
 afterEach(cleanup);
 
 test("selects an exact native fact, without interpreting its pointer or accepting ambiguous keys", () => {
-  const fact = { pointer: "/review_context", label: "Retained review", authority: "source", value: { title: "Invoice" } };
-  expect(decisionReviewFact([fact], "/review_context")?.value).toEqual({ title: "Invoice" });
+  const fact = { pointer: "/review_context", label: "Retained review", authority: "source", value: { title: "Document" } };
+  expect(decisionReviewFact([fact], "/review_context")?.value).toEqual({ title: "Document" });
   expect(decisionReviewFact([fact], "/review_context/title")).toBeUndefined();
   expect(decisionReviewFact([fact, fact], "/review_context")).toBeUndefined();
   expect(decisionReviewFact([{ ...fact, authority: "trusted" }], "/review_context")).toBeUndefined();

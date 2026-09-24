@@ -42,8 +42,8 @@ export const Feed: Story = {
     <StorySurface>
       <MessageFeed label="Comments">
         <MessageRow
-          avatar={<Avatar size="sm" initials="AY" />}
-          author="Alexis Yushin"
+          avatar={<Avatar size="sm" initials="AE" />}
+          author="Alex Example"
           timestamp={new Date(now - 2 * hour)}
           reactions={
             <ReactionBar
@@ -115,8 +115,8 @@ export const Row: Story = {
     <StorySurface>
       <MessageFeed>
         <MessageRow
-          avatar={<Avatar size="sm" initials="AY" />}
-          author="Alexis Yushin"
+          avatar={<Avatar size="sm" initials="AE" />}
+          author="Alex Example"
           timestamp={new Date(now - 5 * 60 * 1000)}
           meta="· edited"
           actions={<RowActions />}

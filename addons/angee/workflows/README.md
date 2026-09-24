@@ -142,7 +142,7 @@ config:
   child_id_path: [continuation_id]
   expected_starter_class: start_continuation
   expected_output_schema: {type: object}
-  expected_subject: accounting_intake.invoicesource
+  expected_subject: example.documentsource
   expected_outcomes: [completed]
   reconcile_after: 900
 ```
@@ -158,13 +158,13 @@ input_binding: {kind: step_output, step_key: finalize, path: []}
 config:
   output_schema:
     type: object
-    required: [invoice_id]
-    properties: {invoice_id: {type: string}}
+    required: [document_id]
+    properties: {document_id: {type: string}}
   outcome: completed
   artifacts:
-    - model: accounting_intake.Invoice
-      id_path: [invoice_id]
-      label: Accepted invoice
+    - model: example.Document
+      id_path: [document_id]
+      label: Accepted document
 ```
 
 Replay is denied by default. An operation that can prove fresh execution safe
@@ -205,12 +205,12 @@ a slot-local replacement, is invalid.
 step_class: gate
 config:
   policy: one_done
-  action: review_invoice
+  action: review_document
   slots:
     - assignees: [angee/role:admin#member]
   actions:
     - {value: approve, label: Approve, verdict: COMPLETE, variant: primary}
-    - {value: reject, label: Reject, verdict: REJECT, variant: destructive, confirm: Reject this invoice?}
+    - {value: reject, label: Reject, verdict: REJECT, variant: destructive, confirm: Reject this document?}
   properties:
     reason: {type: string, title: Reason}
 ```
@@ -255,22 +255,22 @@ state, and use durable unique/conditional facts for idempotence. Keep dependency
 direction explicit: `parties` never imports workflows; `workflows_parties` only
 orchestrates both owners. An addon already depending on workflows can accept a
 Decision identity in its command, as `ExtractionManager.revise_from_decision`
-does. ARP S7 binds to the same split. `DATABASE_COMMAND` commits the operation,
+does. `DATABASE_COMMAND` commits the operation,
 result and dispatch together; provider and blob I/O stay outside this mode.
 
 The exact resource shape for a bound gate and apply pair is:
 
 ```yaml
-- xref: invoice_review_gate
+- xref: document_review_gate
   fields:
-    workflow: intake.invoice_review
+    workflow: example.document_review
     key: review
-    name: Review invoice
+    name: Review document
     step_class: gate
     input_binding: {kind: step_output, step_key: prepare_review, path: []}
     config:
       policy: all_done
-      action: review_invoice
+      action: review_document
       slots: {kind: workflow_input, path: [slots]}
       payload: {kind: workflow_input, path: [payload]}
       decision_schema: {kind: workflow_input, path: [decision_schema]}
@@ -279,12 +279,12 @@ The exact resource shape for a bound gate and apply pair is:
       clean: {kind: workflow_input, path: [clean]}
     join_rule: all_success
     is_entry: false
-- xref: invoice_review_apply
+- xref: document_review_apply
   fields:
-    workflow: intake.invoice_review
+    workflow: example.document_review
     key: apply_review
-    name: Apply invoice review
-    step_class: intake_invoice_review_apply
+    name: Apply document review
+    step_class: example_document_review_apply
     input_binding: {kind: step_output, step_key: review, path: []}
     config: {}
     join_rule: all_success

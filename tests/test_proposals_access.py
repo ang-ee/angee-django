@@ -98,7 +98,7 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
         )
 
         with actor_context(admin):
-            project = Project.objects.create(title="Painkiller")
+            project = Project.objects.create(title="Example project")
         with system_context(reason="tests.proposals.task"):
             task = Task(project=project, created_by=admin, updated_by=admin)
             Task._base_manager.bulk_create([task])
@@ -106,7 +106,7 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
         with actor_context(admin):
             round = Round(
                 facilitator=admin,
-                name="Vendor response",
+                name="Reviewer response",
                 last_call_at=now,
                 submission_deadline=now + timedelta(days=7),
                 **{target_kind: task if target_kind == "task" else project},

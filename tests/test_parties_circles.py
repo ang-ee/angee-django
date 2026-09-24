@@ -74,7 +74,7 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     del parties_tables
     owner = _user("manual-contact-owner")
     with system_context(reason="test manual contact party"):
-        party = Party._base_manager.create(display_name="Supplier", created_by=owner)
+        party = Party._base_manager.create(display_name="Counterparty", created_by=owner)
 
     with actor_context(owner):
         with pytest.raises(ValidationError):
@@ -94,15 +94,15 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
         link = PartyHandle.objects.propose_manual_contact(
             party,
             platform="email",
-            value="billing@example.test",
-            label="Billing",
+            value="contact@example.test",
+            label="Contact",
             actor=owner,
         )
         link.dismiss()
         repeated = PartyHandle.objects.propose_manual_contact(
             party,
             platform="email",
-            value="billing@example.test",
+            value="contact@example.test",
             label="Changed label",
             actor=owner,
         )
@@ -113,7 +113,7 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     assert repeated.source == LinkSource.MANUAL
     assert not repeated.is_confirmed
     assert repeated.is_dismissed
-    assert repeated.handle.label == "Billing"
+    assert repeated.handle.label == "Contact"
     assert not repeated.handle.is_verified
     assert not repeated.handle.party_link_confirmed
 
@@ -129,9 +129,9 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
     reader = _user("manual-contact-reader")
     foreign = _user("manual-contact-foreign")
     with system_context(reason="test manual contact reuse"):
-        target = Party._base_manager.create(display_name="Target supplier", created_by=owner)
+        target = Party._base_manager.create(display_name="Target counterparty", created_by=owner)
         reader_target = Party._base_manager.create(display_name="Reader target", created_by=reader)
-        confirmed_party = Party._base_manager.create(display_name="Confirmed supplier", created_by=owner)
+        confirmed_party = Party._base_manager.create(display_name="Confirmed counterparty", created_by=owner)
         shared = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="shared@example.test",

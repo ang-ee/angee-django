@@ -3,8 +3,8 @@
 The framework's one home for "round this amount to N places by an explicitly named
 mode." Unlike :meth:`decimal.Decimal.quantize`, whose ``rounding`` defaults to the
 ambient decimal context, :func:`quantize` requires the mode as a positional
-argument: a rounding *policy* (a currency exponent, a unit precision, the
-``half_up`` / ``half_even`` tax rounding a company configures) is a decision its
+argument: a rounding *policy* (a currency exponent, a unit precision, a
+``half_up`` / ``half_even`` mode an owner configures) is a decision its
 owner must state, never a hidden context default. Callers map their own policy
 enum to a ``decimal.ROUND_*`` constant and pass it here.
 """
@@ -70,17 +70,12 @@ def round_to_increment(value: Decimal, increment: Decimal, mode: str) -> Decimal
     denominator = scaled_coefficient(increment)
     units, remainder = divmod(abs(numerator), denominator)
     doubled = remainder * 2
-    if doubled > denominator or (
-        doubled == denominator
-        and (mode == ROUND_HALF_UP or units % 2 == 1)
-    ):
+    if doubled > denominator or (doubled == denominator and (mode == ROUND_HALF_UP or units % 2 == 1)):
         units += 1
     if numerator < 0:
         units = -units
 
-    increment_coefficient = int(
-        "".join(str(digit) for digit in increment_tuple.digits)
-    )
+    increment_coefficient = int("".join(str(digit) for digit in increment_tuple.digits))
     result_coefficient = abs(units) * increment_coefficient
     result_digits = tuple(int(character) for character in str(result_coefficient))
     return Decimal(

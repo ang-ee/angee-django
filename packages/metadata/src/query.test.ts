@@ -51,7 +51,7 @@ describe("ResourceQuery", () => {
     expect(ResourceQuery.from({ resource: metadata, fields: {} })).toBe(query);
   });
   test("prefers a searchable representation before the first iContains field", () => {
-    const query = ResourceQuery.from(testDataResource("integrate.Vendor", {
+    const query = ResourceQuery.from(testDataResource("example.Reviewer", {
       recordRepresentation: "display_name",
       recordSearchFields: [],
       query: testResourceQuery({
@@ -89,7 +89,7 @@ describe("ResourceQuery", () => {
     expect(unsupportedRepresentation.textSearchFields(["display_name"])).toEqual([]);
   });
   test("searches the first executable text field when no representation is declared", () => {
-    const query = ResourceQuery.from(testDataResource("integrate.Vendor", {
+    const query = ResourceQuery.from(testDataResource("example.Reviewer", {
       recordRepresentation: null,
       recordSearchFields: [],
       query: testResourceQuery({
@@ -255,11 +255,11 @@ describe("ResourceQuery", () => {
   test("encodes text without overwriting comparisons sharing a wire operator", () => {
     const query = ResourceQuery.from(resource());
     expect(
-      query.toWhere({ body: { contains: "50%_\\", startsWith: "Sale" } }),
+      query.toWhere({ body: { contains: "50%_\\", startsWith: "Record" } }),
     ).toEqual({
       _and: [
         { body: { _like: "%50\\%\\_\\\\%" } },
-        { body: { _like: "Sale%" } },
+        { body: { _like: "Record%" } },
       ],
     });
     expect(query.toWhere({ body: { iLike: "ab_%" } })).toEqual({
@@ -704,11 +704,11 @@ test("decimal predicates and client text sorting preserve their intended orderin
 test("compound presets replace their own fields and keep unrelated predicates", () => {
   const preset = { kind: { inList: ["direct", "mail"] } };
   expect(Filter.facetFromFilter(preset)).toBeNull();
-  const initial = { kind: { exact: "group" }, text: { iContains: "invoice" } };
+  const initial = { kind: { exact: "group" }, text: { iContains: "document" } };
   const chosen = Filter.from(initial).togglePreset(preset);
   expect(chosen).toEqual({
     kind: { inList: ["direct", "mail"] },
-    text: { iContains: "invoice" },
+    text: { iContains: "document" },
   });
   expect(Filter.from(chosen).hasPreset(preset)).toBe(true);
   const one = Filter.from(chosen).toggleFacet({
@@ -717,23 +717,23 @@ test("compound presets replace their own fields and keep unrelated predicates", 
   });
   expect(one).toEqual({
     kind: { exact: "mail" },
-    text: { iContains: "invoice" },
+    text: { iContains: "document" },
   });
   expect(Filter.from(one).hasPreset(preset)).toBe(false);
   expect(Filter.from(chosen).togglePreset(preset)).toEqual({
-    text: { iContains: "invoice" },
+    text: { iContains: "document" },
   });
 });
 
 test("field-scoped clear and change detection traverse AND branches", () => {
   const filter = Filter.from({
-    AND: [{ account: { exact: "one" } }, { text: { iContains: "invoice" } }],
+    AND: [{ account: { exact: "one" } }, { text: { iContains: "document" } }],
   });
   expect(Filter.from(filter.onlyFields(["account"])).conjunctions()).toEqual([
     { field: "account", operator: "exact", value: "one" },
   ]);
   expect(Filter.from(filter.withoutFields(["account"])).conjunctions()).toEqual(
-    [{ field: "text", operator: "iContains", value: "invoice" }],
+    [{ field: "text", operator: "iContains", value: "document" }],
   );
   expect(filter.withoutFields(["account", "text"])).toEqual({});
   expect(() =>

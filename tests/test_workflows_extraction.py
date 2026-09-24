@@ -364,9 +364,9 @@ def test_schema_owner_requires_object_root() -> None:
 def test_inference_mapping_uses_shared_request_and_parsed_output(monkeypatch: pytest.MonkeyPatch) -> None:
     response = ModelResponse(parts=[TextPart("provider output")], provider_response_id="response-1")
     usage = {"input_tokens": 23, "output_tokens": 7, "tokens": 30, "requests": 1}
-    call = MagicMock(return_value=InferenceResult(response, usage, {"number": "INV-42"}))
+    call = MagicMock(return_value=InferenceResult(response, usage, {"number": "DOC-42"}))
     monkeypatch.setattr(extraction_inference, "call_inference", call)
-    part = DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-42", "native", "hash")
+    part = DocumentPart(0, None, "text/plain", "native_text", "Document DOC-42", "native", "hash")
     step, model = object(), object()
 
     result = map_text_parts(
@@ -380,7 +380,7 @@ def test_inference_mapping_uses_shared_request_and_parsed_output(monkeypatch: py
     )
 
     assert isinstance(result, MappingResult)
-    assert result.value == {"number": "INV-42"}
+    assert result.value == {"number": "DOC-42"}
     assert result.claims["/number"][0]["part_position"] == 0
     assert result.provider_metadata["usage"] == usage == result.usage_delta
     args, kwargs = call.call_args
@@ -393,14 +393,14 @@ def test_inference_mapping_uses_shared_request_and_parsed_output(monkeypatch: py
 
 
 def test_inference_mapping_invalid_output_retains_bounded_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
-    raw_output = "invoice data, but not JSON"
+    raw_output = "document data, but not JSON"
     response = ModelResponse(
         parts=[TextPart(raw_output)], provider_response_id="response-invalid", finish_reason="length"
     )
     usage = {"input_tokens": 31, "output_tokens": 9, "tokens": 40, "requests": 1}
     call = MagicMock(side_effect=InferenceCallError(ValueError("Invalid output"), response=response, usage=usage))
     monkeypatch.setattr(extraction_inference, "call_inference", call)
-    part = DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-42", "native", "hash")
+    part = DocumentPart(0, None, "text/plain", "native_text", "Document DOC-42", "native", "hash")
 
     with pytest.raises(DocumentPipelineError) as raised:
         map_text_parts((part,), SCHEMA, step_run=object(), model=object(), config={}, timeout=5, using="default")
@@ -420,7 +420,7 @@ def test_inference_mapping_invalid_output_retains_bounded_diagnostics(monkeypatc
 
 
 def test_inference_recognition_carries_native_image_and_zero_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = ModelResponse(parts=[TextPart("Invoice INV-44")], provider_response_id="recognition-1")
+    response = ModelResponse(parts=[TextPart("Document DOC-44")], provider_response_id="recognition-1")
     usage = {"input_tokens": 11, "output_tokens": 4, "tokens": 15, "requests": 1}
     call = MagicMock(return_value=InferenceResult(response, usage))
     monkeypatch.setattr(extraction_inference, "call_inference", call)
@@ -430,7 +430,7 @@ def test_inference_recognition_carries_native_image_and_zero_temperature(monkeyp
     )
 
     request = call.call_args.args[2]
-    assert result.text == "Invoice INV-44"
+    assert result.text == "Document DOC-44"
     assert request.settings == {"timeout": 5, "max_tokens": 256, "temperature": 0}
     assert len(request.images) == 1 and isinstance(request.images[0], BinaryContent)
     assert request.images[0].data == b"synthetic"
@@ -541,7 +541,7 @@ def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures(
         acquire_native_parts((acquired, failed))
     assert [part.value for part in error.value.parts] == ["retained"]
 
-    nul_text = DocumentSource(0, "c" * 64, "text/plain", b"invoice\x00text")
+    nul_text = DocumentSource(0, "c" * 64, "text/plain", b"document\x00text")
     with pytest.raises(DocumentPipelineError, match="acquisition failed"):
         acquire_native_parts((nul_text,))
 
@@ -554,7 +554,7 @@ def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures(
     assert (empty.value.stage, empty.value.code) == ("acquisition", "empty_source")
 
 
-def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_vendor_error(
+def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -562,7 +562,7 @@ def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_vendor_e
         "call_inference",
         MagicMock(
             side_effect=InferenceCallError(
-                RuntimeError("private vendor response"),
+                RuntimeError("private provider response"),
                 response=None,
                 usage={},
             )
@@ -570,7 +570,7 @@ def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_vendor_e
     )
     with pytest.raises(DocumentPipelineError) as failure:
         map_text_parts(
-            (DocumentPart(0, None, "text/plain", "native_text", "Invoice DOC-1", "native", "b" * 64),),
+            (DocumentPart(0, None, "text/plain", "native_text", "Document DOC-1", "native", "b" * 64),),
             SCHEMA,
             step_run=object(),
             model=object(),
@@ -578,7 +578,7 @@ def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_vendor_e
             timeout=10,
             using="default",
         )
-    assert failure.value.parts[0].value == "Invoice DOC-1"
+    assert failure.value.parts[0].value == "Document DOC-1"
     assert "private" not in str(failure.value)
 
 
@@ -614,9 +614,9 @@ def test_extraction_inference_authorizes_model_once_before_provider(
     identity = {"provider": "provider", "backend": "test", "endpoint": "local", "model": "test"}
     monkeypatch.setattr(model, "deployment_identity", lambda **kwargs: identity)
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {operation: [identity]}
-    response = ModelResponse(parts=[TextPart("Invoice INV-42")])
+    response = ModelResponse(parts=[TextPart("Document DOC-42")])
     usage = {"requests": 1, "tokens": 3}
-    provider_call = MagicMock(return_value=InferenceResult(response, usage, {"number": "INV-42"}))
+    provider_call = MagicMock(return_value=InferenceResult(response, usage, {"number": "DOC-42"}))
     monkeypatch.setattr(model, "infer", provider_call)
     run = SimpleNamespace(admission_actor=lambda **kwargs: actor, debit_budget=MagicMock())
     provider = SimpleNamespace(backend=InferenceBackend(SimpleNamespace()))

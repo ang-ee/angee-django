@@ -26,11 +26,11 @@ describe("resource-view model", () => {
   test("isolates several route collections while retaining message and pinned selection", () => {
     const initial = { pageSize: 25 };
     const current = { "s.page": 3, "r.page": 2, message: "msg-1", related: "file-1", "c.filter": '{"text":{"iContains":"old"}}' };
-    const next = mergeResourceViewSearch(current, resourceViewStateToSearch(createResourceViewState({ ...initial, filter: { text: { iContains: "invoice" } } }), initial), "c");
-    expect(next).toEqual({ ...current, "c.filter": '{"text":{"iContains":"invoice"}}' });
+    const next = mergeResourceViewSearch(current, resourceViewStateToSearch(createResourceViewState({ ...initial, filter: { text: { iContains: "document" } } }), initial), "c");
+    expect(next).toEqual({ ...current, "c.filter": '{"text":{"iContains":"document"}}' });
     expect(resourceViewSearchToState(next, initial, "s").pagination.pageIndex).toBe(2);
     expect(resourceViewSearchToState(next, initial, "r").pagination.pageIndex).toBe(1);
-    expect(resourceViewSearchToState(next, initial, "c").filter).toEqual({ text: { iContains: "invoice" } });
+    expect(resourceViewSearchToState(next, initial, "c").filter).toEqual({ text: { iContains: "document" } });
     expect(resourceViewSearchToState(current, initial, "c").filter).toEqual({ text: { iContains: "old" } });
   });
   test("round-trips flat URL search state", () => {
@@ -207,11 +207,11 @@ describe("resource-view model", () => {
   });
 
   test("round-trips canonical relation groups and rejects retired URL triples", () => {
-    const state = createResourceViewState({ groupStack: [{ field: "vendor" }] });
+    const state = createResourceViewState({ groupStack: [{ field: "reviewer" }] });
     const search = resourceViewStateToSearch(state);
-    expect(search.group).toBe("vendor");
-    expect(resourceViewSearchToState(search).group).toEqual({ field: "vendor" });
-    expect(resourceViewSearchToState({ group: "vendor.displayName~vendor~vendorId" }).queryError?.message).toMatch(/group/);
+    expect(search.group).toBe("reviewer");
+    expect(resourceViewSearchToState(search).group).toEqual({ field: "reviewer" });
+    expect(resourceViewSearchToState({ group: "reviewer.displayName~reviewer~reviewerId" }).queryError?.message).toMatch(/group/);
   });
 
   test("resets page and clears selection when query scope changes", () => {

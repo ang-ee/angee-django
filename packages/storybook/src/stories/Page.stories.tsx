@@ -11,7 +11,7 @@ const navItems: readonly SectionNavItem[] = [
 
 const records = [
   ["Q3 review brief", "Active", "Sofia", "2,840", "Today"],
-  ["Clinic rollout notes", "Draft", "Alexis", "1,260", "Yesterday"],
+  ["Clinic rollout notes", "Draft", "Alex", "1,260", "Yesterday"],
   ["Access audit outline", "Active", "Mara", "980", "May 28"],
   ["Storage policy memo", "Archived", "Eoin", "3,420", "May 21"],
 ] as const;

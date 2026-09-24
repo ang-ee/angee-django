@@ -207,13 +207,13 @@ def test_template_formats_prefix_year_and_padded_number(sequence_tables: None) -
 
     del sequence_tables
     _make_sequence(
-        key="invoice",
-        name="Invoice",
-        template="{prefix}INV/{year}/{number:05d}",
+        key="document",
+        name="Document",
+        template="{prefix}DOC/{year}/{number:05d}",
         prefix="AC-",
         period_reset="year",
     )
-    assert _draw("invoice", on_date=date(2026, 7, 4)) == "AC-INV/2026/00001"
+    assert _draw("document", on_date=date(2026, 7, 4)) == "AC-DOC/2026/00001"
 
 
 def test_no_reset_counts_monotonically_across_dates(sequence_tables: None) -> None:
@@ -230,28 +230,28 @@ def test_year_reset_restarts_at_the_year_boundary(sequence_tables: None) -> None
     """A yearly reset partitions the counter by year."""
 
     del sequence_tables
-    _make_sequence(key="so", name="Sales Order", template="{year}-{number:04d}", period_reset="year")
-    assert _draw("so", on_date=date(2026, 6, 30)) == "2026-0001"
-    assert _draw("so", on_date=date(2026, 12, 31)) == "2026-0002"
-    assert _draw("so", on_date=date(2027, 1, 1)) == "2027-0001"
+    _make_sequence(key="record", name="Record", template="{year}-{number:04d}", period_reset="year")
+    assert _draw("record", on_date=date(2026, 6, 30)) == "2026-0001"
+    assert _draw("record", on_date=date(2026, 12, 31)) == "2026-0002"
+    assert _draw("record", on_date=date(2027, 1, 1)) == "2027-0001"
 
 
 def test_month_reset_restarts_at_the_month_boundary(sequence_tables: None) -> None:
     """A monthly reset partitions the counter by year-month."""
 
     del sequence_tables
-    _make_sequence(key="pay", name="Payment", template="{number:03d}", period_reset="month")
-    assert _draw("pay", on_date=date(2026, 7, 15)) == "001"
-    assert _draw("pay", on_date=date(2026, 7, 31)) == "002"
-    assert _draw("pay", on_date=date(2026, 8, 1)) == "001"
+    _make_sequence(key="review", name="Review", template="{number:03d}", period_reset="month")
+    assert _draw("review", on_date=date(2026, 7, 15)) == "001"
+    assert _draw("review", on_date=date(2026, 7, 31)) == "002"
+    assert _draw("review", on_date=date(2026, 8, 1)) == "001"
 
 
 def test_preview_is_none_when_disabled(sequence_tables: None) -> None:
     """preview_next declines to peek unless the sequence opts in."""
 
     del sequence_tables
-    _make_sequence(key="q", name="Quote", template="{number}", preview_enabled=False)
-    assert Sequence.objects.preview_next("q") is None
+    _make_sequence(key="draft", name="Draft", template="{number}", preview_enabled=False)
+    assert Sequence.objects.preview_next("draft") is None
 
 
 def test_preview_is_none_for_unknown_key(sequence_tables: None) -> None:

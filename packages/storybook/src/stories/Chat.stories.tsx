@@ -112,10 +112,10 @@ export const ChannelTranscript: Story = {
     // `system` treatment. The channel-conversation transcript view composes this shape.
     <div className="max-w-md space-y-3 p-3">
       <ChatBubble role="assistant">
-        Hi — my invoice still shows the old billing address. Can you fix it before the next run?
+        Hi — my document still shows the old contact address. Can you fix it before the next run?
       </ChatBubble>
       <ChatBubble role="user">
-        Done — I&apos;ve updated the address on your account and reissued the invoice.
+        Done — I&apos;ve updated the address on your account and reissued the document.
       </ChatBubble>
       <ChatBubble role="system">Internal note: verified the change against the CRM before replying.</ChatBubble>
     </div>

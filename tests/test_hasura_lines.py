@@ -34,11 +34,11 @@ from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
-from tests.linesdemo.models import Product, SaleDoc, SaleLine, Tag
+from tests.linesdemo.models import Document, DocumentLine, Product, Tag
 
 
-@strawberry_django.type(SaleLine)
-class SaleLineType(AngeeNode):
+@strawberry_django.type(DocumentLine)
+class DocumentLineType(AngeeNode):
     """GraphQL projection of one document line.
 
     ``kind`` reads as the UPPERCASE enum wire member (the choices column projects
@@ -57,30 +57,30 @@ class SaleLineType(AngeeNode):
         return [strawberry.ID(tag.public_id) for tag in self.tags.all()]
 
 
-@strawberry_django.type(SaleDoc)
-class SaleDocType(AngeeNode):
+@strawberry_django.type(Document)
+class DocumentType(AngeeNode):
     """GraphQL projection of a document with its ordered lines."""
 
     title: auto
     note: auto
 
     @strawberry_django.field
-    def lines(self) -> list[SaleLineType]:
+    def lines(self) -> list[DocumentLineType]:
         return list(self.lines.order_by("position", "pk"))
 
 
 _LINES = HasuraLines(
     field="lines",
-    model=SaleLine,
-    node=SaleLineType,
+    model=DocumentLine,
+    node=DocumentLineType,
     writable=("label", "quantity", "position"),
     defaults={"quantity": "1"},
 )
 
 _RESOURCE = hasura_model_resource(
-    SaleDocType,
-    model=SaleDoc,
-    name="sale_docs",
+    DocumentType,
+    model=Document,
+    name="documents",
     filterable=["id", "title"],
     sortable=["title"],
     aggregatable=["id"],
@@ -97,7 +97,7 @@ def _resource_schema(resource: Any) -> strawberry.Schema:
                     "public": {
                         "query": [resource.query],
                         "mutation": [resource.mutation],
-                        "types": [SaleDocType, SaleLineType, *resource.types],
+                        "types": [DocumentType, DocumentLineType, *resource.types],
                     }
                 }
             )
@@ -111,16 +111,16 @@ _SCHEMA = _resource_schema(_RESOURCE)
 # the write must decode it under the caller's actor (the finding #5 handle).
 _LINES_WITH_PRODUCT = HasuraLines(
     field="lines",
-    model=SaleLine,
-    node=SaleLineType,
+    model=DocumentLine,
+    node=DocumentLineType,
     writable=("label", "quantity", "position", "product"),
     public_id_fields=("product",),
 )
 
 _RESOURCE_WITH_PRODUCT = hasura_model_resource(
-    SaleDocType,
-    model=SaleDoc,
-    name="sale_docs_prod",
+    DocumentType,
+    model=Document,
+    name="documents_prod",
     filterable=["id", "title"],
     sortable=["title"],
     aggregatable=["id"],
@@ -138,16 +138,16 @@ _SCHEMA_WITH_PRODUCT = _resource_schema(_RESOURCE_WITH_PRODUCT)
 # M2M as decoded public sqids inside the ``<res>_save`` transaction (F-b).
 _LINES_RICH = HasuraLines(
     field="lines",
-    model=SaleLine,
-    node=SaleLineType,
+    model=DocumentLine,
+    node=DocumentLineType,
     writable=("label", "quantity", "position", "kind", "tags"),
     public_id_fields=("tags",),
 )
 
 _RESOURCE_RICH = hasura_model_resource(
-    SaleDocType,
-    model=SaleDoc,
-    name="sale_docs_rich",
+    DocumentType,
+    model=Document,
+    name="documents_rich",
     filterable=["id", "title"],
     sortable=["title"],
     aggregatable=["id"],
@@ -159,7 +159,7 @@ _RESOURCE_RICH = hasura_model_resource(
 _SCHEMA_RICH = _resource_schema(_RESOURCE_RICH)
 
 
-_TAGS_THROUGH = SaleLine._meta.get_field("tags").remote_field.through
+_TAGS_THROUGH = DocumentLine._meta.get_field("tags").remote_field.through
 
 
 @pytest.fixture()
@@ -167,9 +167,9 @@ def linesdemo_tables(transactional_db: Any):
     """Ensure the demo tables exist and the REBAC schema is synced."""
 
     existing = set(connection.introspection.table_names())
-    # ``Tag`` precedes ``SaleLine`` so the M2M through table (created with the
-    # line) can reference it; ``create_model(SaleLine)`` creates the through table.
-    created = [m for m in (SaleDoc, Product, Tag, SaleLine) if m._meta.db_table not in existing]
+    # ``Tag`` precedes ``DocumentLine`` so the M2M through table (created with the
+    # line) can reference it; ``create_model(DocumentLine)`` creates the through table.
+    created = [m for m in (Document, Product, Tag, DocumentLine) if m._meta.db_table not in existing]
     if created:
         with connection.schema_editor() as editor:
             for model in created:
@@ -181,11 +181,11 @@ def linesdemo_tables(transactional_db: Any):
         # The through table first (its rows are not cascade-deleted by a raw
         # DELETE on the parent line), then children before parents.
         with connection.cursor() as cursor:
-            for model in (_TAGS_THROUGH, SaleLine, Tag, Product, SaleDoc):
+            for model in (_TAGS_THROUGH, DocumentLine, Tag, Product, Document):
                 cursor.execute(f"DELETE FROM {connection.ops.quote_name(model._meta.db_table)}")
 
 
-def _grant(document: SaleDoc, relation: str, user: Any) -> None:
+def _grant(document: Document, relation: str, user: Any) -> None:
     """Write one direct relationship tuple for ``user`` on ``document``."""
 
     write_relationships(
@@ -199,15 +199,15 @@ def _grant(document: SaleDoc, relation: str, user: Any) -> None:
     )
 
 
-def _grant_owner(document: SaleDoc, user: Any) -> None:
+def _grant_owner(document: Document, user: Any) -> None:
     """Write the ``owner`` relationship that grants write on a document."""
 
     _grant(document, "owner", user)
 
 
 _INSERT = """
-mutation($object: sale_docs_insert_input!) {
-  insert_sale_docs_one(object: $object) {
+mutation($object: documents_insert_input!) {
+  insert_documents_one(object: $object) {
     id
     lines { id label quantity position }
   }
@@ -215,8 +215,8 @@ mutation($object: sale_docs_insert_input!) {
 """
 
 _SAVE = """
-mutation($pk: ID!, $patch: sale_docs_set_input, $lines: [sale_docs_lines_insert_input!]) {
-  sale_docs_save(pk: $pk, patch: $patch, lines: $lines) {
+mutation($pk: ID!, $patch: documents_set_input, $lines: [documents_lines_insert_input!]) {
+  documents_save(pk: $pk, patch: $patch, lines: $lines) {
     id
     title
     lines { id label quantity position }
@@ -234,7 +234,7 @@ def test_nested_insert_writes_parent_and_lines_atomically(linesdemo_tables):
         _INSERT,
         {
             "object": {
-                "title": "Quotation",
+                "title": "Draft document",
                 "lines": {
                     "data": [
                         {"label": "Widget", "quantity": 2, "position": 0},
@@ -246,9 +246,9 @@ def test_nested_insert_writes_parent_and_lines_atomically(linesdemo_tables):
         user=actor,
     )
     data = result_data(result)
-    assert len(data["insert_sale_docs_one"]["lines"]) == 2
+    assert len(data["insert_documents_one"]["lines"]) == 2
     with system_context(reason="test read"):
-        doc = SaleDoc.objects.get(title="Quotation")
+        doc = Document.objects.get(title="Draft document")
         rows = list(doc.lines.order_by("position").values_list("label", "quantity", "position"))
     assert rows == [("Widget", 2, 0), ("Gadget", 5, 1)]
 
@@ -275,8 +275,8 @@ def test_nested_insert_rolls_back_parent_on_line_failure(linesdemo_tables):
     )
     assert result.errors is not None
     with system_context(reason="test read"):
-        assert not SaleDoc.objects.filter(title="Doomed").exists()
-        assert not SaleLine.objects.filter(label="ok").exists()
+        assert not Document.objects.filter(title="Doomed").exists()
+        assert not DocumentLine.objects.filter(label="ok").exists()
 
 
 def test_save_diffs_lines_create_update_delete_in_one_transaction(linesdemo_tables):
@@ -284,9 +284,9 @@ def test_save_diffs_lines_create_update_delete_in_one_transaction(linesdemo_tabl
 
     owner = create_user("owner")
     with system_context(reason="seed"):
-        doc = SaleDoc.objects.create(title="Order", note="draft")
-        keep = SaleLine.objects.create(document=doc, label="Keep", quantity=1, position=0)
-        drop = SaleLine.objects.create(document=doc, label="Drop", quantity=9, position=1)
+        doc = Document.objects.create(title="Document", note="draft")
+        keep = DocumentLine.objects.create(document=doc, label="Keep", quantity=1, position=0)
+        drop = DocumentLine.objects.create(document=doc, label="Drop", quantity=9, position=1)
     _grant_owner(doc, owner)
 
     result = execute_schema(
@@ -303,7 +303,7 @@ def test_save_diffs_lines_create_update_delete_in_one_transaction(linesdemo_tabl
         user=owner,
     )
     data = result_data(result)
-    assert data["sale_docs_save"]["title"] == "Order"
+    assert data["documents_save"]["title"] == "Document"
 
     with system_context(reason="test read"):
         doc.refresh_from_db()
@@ -312,7 +312,7 @@ def test_save_diffs_lines_create_update_delete_in_one_transaction(linesdemo_tabl
     # ``keep`` updated to quantity 3, ``drop`` removed, ``New`` created.
     assert rows == [("Keep", 3, 0), ("New", 7, 1)]
     with system_context(reason="test read"):
-        assert not SaleLine.objects.filter(pk=drop.pk).exists()
+        assert not DocumentLine.objects.filter(pk=drop.pk).exists()
 
 
 def test_save_without_lines_leaves_children_untouched(linesdemo_tables):
@@ -320,8 +320,8 @@ def test_save_without_lines_leaves_children_untouched(linesdemo_tables):
 
     owner = create_user("owner")
     with system_context(reason="seed"):
-        doc = SaleDoc.objects.create(title="Order", note="draft")
-        SaleLine.objects.create(document=doc, label="Line", quantity=1, position=0)
+        doc = Document.objects.create(title="Document", note="draft")
+        DocumentLine.objects.create(document=doc, label="Line", quantity=1, position=0)
     _grant_owner(doc, owner)
 
     result = execute_schema(
@@ -343,8 +343,8 @@ def test_save_denies_actor_without_write_on_parent(linesdemo_tables):
     owner = create_user("owner")
     intruder = create_user("intruder")
     with system_context(reason="seed"):
-        doc = SaleDoc.objects.create(title="Order")
-        line = SaleLine.objects.create(document=doc, label="Line", quantity=1, position=0)
+        doc = Document.objects.create(title="Document")
+        line = DocumentLine.objects.create(document=doc, label="Line", quantity=1, position=0)
     _grant_owner(doc, owner)
 
     result = execute_schema(
@@ -361,7 +361,7 @@ def test_save_denies_actor_without_write_on_parent(linesdemo_tables):
     with system_context(reason="test read"):
         doc.refresh_from_db()
         line.refresh_from_db()
-    assert doc.title == "Order"
+    assert doc.title == "Document"
     assert line.label == "Line" and line.quantity == 1
 
 
@@ -377,15 +377,15 @@ def test_save_denies_reader_without_write_even_with_empty_patch(linesdemo_tables
     owner = create_user("owner")
     reader = create_user("reader")
     with system_context(reason="seed"):
-        doc = SaleDoc.objects.create(title="Order")
-        line = SaleLine.objects.create(document=doc, label="Line", quantity=1, position=0)
+        doc = Document.objects.create(title="Document")
+        line = DocumentLine.objects.create(document=doc, label="Line", quantity=1, position=0)
     _grant_owner(doc, owner)
     _grant(doc, "reader", reader)
 
     # The reader can load the parent — proving the denial is the write gate, not
     # the read scope failing to find the row.
     with actor_context(reader):
-        assert SaleDoc.objects.filter(pk=doc.pk).exists()
+        assert Document.objects.filter(pk=doc.pk).exists()
 
     result = execute_schema(
         _SCHEMA,
@@ -416,10 +416,10 @@ def test_save_rejects_line_ids_not_on_the_parent(linesdemo_tables):
 
     owner = create_user("owner")
     with system_context(reason="seed"):
-        doc = SaleDoc.objects.create(title="Order")
-        mine = SaleLine.objects.create(document=doc, label="Mine", quantity=1, position=0)
-        other_doc = SaleDoc.objects.create(title="Other")
-        foreign = SaleLine.objects.create(document=other_doc, label="Foreign", quantity=1, position=0)
+        doc = Document.objects.create(title="Document")
+        mine = DocumentLine.objects.create(document=doc, label="Mine", quantity=1, position=0)
+        other_doc = Document.objects.create(title="Other")
+        foreign = DocumentLine.objects.create(document=other_doc, label="Foreign", quantity=1, position=0)
     _grant_owner(doc, owner)
 
     result = execute_schema(
@@ -447,13 +447,13 @@ def test_save_fetches_kept_lines_without_per_row_growth(linesdemo_tables):
     """The kept-child fetch is batched: its query cost does not grow per row (no N+1)."""
 
     owner = create_user("owner")
-    table = connection.ops.quote_name(SaleLine._meta.db_table)
+    table = connection.ops.quote_name(DocumentLine._meta.db_table)
 
     def child_selects_for(line_count: int) -> int:
         with system_context(reason="seed"):
-            doc = SaleDoc.objects.create(title="Order")
+            doc = Document.objects.create(title="Document")
             kept = [
-                SaleLine.objects.create(document=doc, label=f"L{index}", quantity=1, position=index)
+                DocumentLine.objects.create(document=doc, label=f"L{index}", quantity=1, position=index)
                 for index in range(line_count)
             ]
         _grant_owner(doc, owner)
@@ -497,8 +497,8 @@ def test_save_locks_the_parent_row_before_diffing_lines(linesdemo_tables, monkey
 
     owner = create_user("owner")
     with system_context(reason="seed"):
-        doc = SaleDoc.objects.create(title="Order")
-        line = SaleLine.objects.create(document=doc, label="Line", quantity=1, position=0)
+        doc = Document.objects.create(title="Document")
+        line = DocumentLine.objects.create(document=doc, label="Line", quantity=1, position=0)
     _grant_owner(doc, owner)
 
     result = execute_schema(
@@ -508,7 +508,7 @@ def test_save_locks_the_parent_row_before_diffing_lines(linesdemo_tables, monkey
         user=owner,
     )
     result_data(result)
-    assert SaleDoc in locked_models
+    assert Document in locked_models
 
 
 def test_save_decodes_line_relation_under_the_callers_actor(linesdemo_tables):
@@ -520,15 +520,15 @@ def test_save_decodes_line_relation_under_the_callers_actor(linesdemo_tables):
 
     owner = create_user("owner")
     with system_context(reason="seed"):
-        doc = SaleDoc.objects.create(title="Order")
+        doc = Document.objects.create(title="Document")
         visible = Product.objects.create(name="Visible")
         hidden = Product.objects.create(name="Hidden")
     _grant_owner(doc, owner)
     _grant(visible, "owner", owner)  # the caller may read `visible`, not `hidden`
 
     _SAVE_PROD = """
-    mutation($pk: ID!, $lines: [sale_docs_prod_lines_insert_input!]) {
-      sale_docs_prod_save(pk: $pk, lines: $lines) {
+    mutation($pk: ID!, $lines: [documents_prod_lines_insert_input!]) {
+      documents_prod_save(pk: $pk, lines: $lines) {
         id
         lines { id label quantity position }
       }
@@ -567,9 +567,9 @@ def test_lines_require_the_parent_update_surface():
 
     with pytest.raises(ImproperlyConfigured, match="update=False"):
         hasura_model_resource(
-            SaleDocType,
-            model=SaleDoc,
-            name="sale_docs_readonly",
+            DocumentType,
+            model=Document,
+            name="documents_readonly",
             filterable=["id", "title"],
             sortable=["title"],
             aggregatable=["id"],
@@ -592,9 +592,9 @@ def test_lines_require_a_lines_aware_write_backend():
 
     with pytest.raises(ImproperlyConfigured, match="lines-aware"):
         hasura_model_resource(
-            SaleDocType,
-            model=SaleDoc,
-            name="sale_docs_bare",
+            DocumentType,
+            model=Document,
+            name="documents_bare",
             filterable=["id", "title"],
             sortable=["title"],
             aggregatable=["id"],
@@ -615,16 +615,16 @@ def test_lines_writable_relation_requires_a_public_id_decode():
 
     unguarded = HasuraLines(
         field="lines",
-        model=SaleLine,
-        node=SaleLineType,
+        model=DocumentLine,
+        node=DocumentLineType,
         writable=("label", "quantity", "position", "product"),
         # public_id_fields omits "product" — the missing decode the guard catches.
     )
     with pytest.raises(ImproperlyConfigured, match="product"):
         hasura_model_resource(
-            SaleDocType,
-            model=SaleDoc,
-            name="sale_docs_unguarded",
+            DocumentType,
+            model=Document,
+            name="documents_unguarded",
             filterable=["id", "title"],
             sortable=["title"],
             aggregatable=["id"],
@@ -637,12 +637,12 @@ def test_lines_writable_relation_requires_a_public_id_decode():
 def test_lines_resource_metadata_is_emitted():
     """The resource advertises the editable-lines contract + the save root."""
 
-    (resource,) = [m for m in _SCHEMA.angee_resources if m.model_label == "linesdemo.SaleDoc"]
+    (resource,) = [m for m in _SCHEMA.angee_resources if m.model_label == "linesdemo.Document"]
     assert "save" in resource.capabilities
-    assert resource.roots.save_name == "sale_docs_save"
+    assert resource.roots.save_name == "documents_save"
     assert resource.lines is not None
     assert resource.lines.field == "lines"
-    assert resource.lines.model_label == "linesdemo.SaleLine"
+    assert resource.lines.model_label == "linesdemo.DocumentLine"
     assert resource.lines.position_field == "position"
     assert resource.lines.defaults == {"quantity": "1"}
     line_field_names = {field.name for field in resource.lines.fields}
@@ -652,8 +652,8 @@ def test_lines_resource_metadata_is_emitted():
 
 
 _INSERT_RICH = """
-mutation($object: sale_docs_rich_insert_input!) {
-  insert_sale_docs_rich_one(object: $object) {
+mutation($object: documents_rich_insert_input!) {
+  insert_documents_rich_one(object: $object) {
     id
     lines { id label kind tags }
   }
@@ -661,8 +661,8 @@ mutation($object: sale_docs_rich_insert_input!) {
 """
 
 _SAVE_RICH = """
-mutation($pk: ID!, $lines: [sale_docs_rich_lines_insert_input!]) {
-  sale_docs_rich_save(pk: $pk, lines: $lines) {
+mutation($pk: ID!, $lines: [documents_rich_lines_insert_input!]) {
+  documents_rich_save(pk: $pk, lines: $lines) {
     id
     lines { id label kind tags }
   }
@@ -678,7 +678,7 @@ def test_rich_lines_metadata_projects_enum_and_m2m_child_fields():
     target — instead of the old model reconstruction raising on either.
     """
 
-    (resource,) = [m for m in _SCHEMA_RICH.angee_resources if m.model_label == "linesdemo.SaleDoc"]
+    (resource,) = [m for m in _SCHEMA_RICH.angee_resources if m.model_label == "linesdemo.Document"]
     assert resource.lines is not None
     by_name = {field.name: field for field in resource.lines.fields}
     kind = by_name["kind"]
@@ -701,7 +701,7 @@ def test_rich_nested_insert_persists_enum_and_m2m(linesdemo_tables):
         _INSERT_RICH,
         {
             "object": {
-                "title": "Quotation",
+                "title": "Draft document",
                 "lines": {
                     "data": [
                         {
@@ -718,12 +718,12 @@ def test_rich_nested_insert_persists_enum_and_m2m(linesdemo_tables):
         user=actor,
     )
     data = result_data(result)
-    (line,) = data["insert_sale_docs_rich_one"]["lines"]
+    (line,) = data["insert_documents_rich_one"]["lines"]
     # The wire reads the UPPERCASE enum member and the M2M as public sqids.
     assert line["kind"] == "SERVICE"
     assert set(line["tags"]) == {red.public_id, blue.public_id}
     with system_context(reason="test read"):
-        row = SaleLine.objects.get(label="Widget")
+        row = DocumentLine.objects.get(label="Widget")
         # Stored as the lowercase model value.
         assert row.kind == "service"
         assert set(row.tags.values_list("name", flat=True)) == {"Red", "Blue"}
@@ -734,12 +734,12 @@ def test_rich_save_round_trips_enum_and_m2m_diff(linesdemo_tables):
 
     owner = create_user("owner")
     with system_context(reason="seed"):
-        doc = SaleDoc.objects.create(title="Order")
+        doc = Document.objects.create(title="Document")
         red = Tag.objects.create(name="Red")
         blue = Tag.objects.create(name="Blue")
         green = Tag.objects.create(name="Green")
-        line = SaleLine.objects.create(
-            document=doc, label="Line", quantity=1, position=0, kind=SaleLine.Kind.GOODS
+        line = DocumentLine.objects.create(
+            document=doc, label="Line", quantity=1, position=0, kind=DocumentLine.Kind.GOODS
         )
         line.tags.set([red])
     _grant_owner(doc, owner)
@@ -763,7 +763,7 @@ def test_rich_save_round_trips_enum_and_m2m_diff(linesdemo_tables):
         user=owner,
     )
     data = result_data(result)
-    (saved,) = data["sale_docs_rich_save"]["lines"]
+    (saved,) = data["documents_rich_save"]["lines"]
     assert saved["kind"] == "SERVICE"
     assert set(saved["tags"]) == {blue.public_id, green.public_id}
     with system_context(reason="test read"):

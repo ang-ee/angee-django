@@ -17,9 +17,9 @@ const mocks = vi.hoisted(() => ({
           origin: "TEST",
           waiting_kind: "external",
           next_wake_at: null,
-          active_step: "Prepare supplier review",
+          active_step: "Prepare counterparty review",
           updated_at: "2026-09-18T10:00:00Z",
-          workflow: { id: "workflow-waiting", name: "Supplier review" },
+          workflow: { id: "workflow-waiting", name: "Counterparty review" },
           parent_step_run: null,
           reprocessed_from: null,
           recovery_source_attempt: null,
@@ -44,9 +44,9 @@ const mocks = vi.hoisted(() => ({
       artifacts: [
         {
           id: "artifact-current-readable",
-          label: "Supplier eligibility needs confirmation",
+          label: "Counterparty eligibility needs confirmation",
           created_at: "2026-09-18T10:01:00Z",
-          target_reference: { model: "accounting.VendorProfile", id: "vendor-1" },
+          target_reference: { model: "example.CounterpartyProfile", id: "counterparty-1" },
           attempt: {
             id: "attempt-current",
             step_run: {
@@ -76,9 +76,9 @@ const mocks = vi.hoisted(() => ({
         },
         {
           id: "artifact-stale",
-          label: "Earlier supplier evidence",
+          label: "Earlier counterparty evidence",
           created_at: "2026-09-18T09:58:00Z",
-          target_reference: { model: "accounting.VendorProfile", id: "vendor-old" },
+          target_reference: { model: "example.CounterpartyProfile", id: "counterparty-old" },
           attempt: {
             id: "attempt-earlier",
             step_run: {
@@ -94,7 +94,7 @@ const mocks = vi.hoisted(() => ({
           id: "artifact-complete",
           label: "Completed output",
           created_at: "2026-09-18T09:01:00Z",
-          target_reference: { model: "accounting.Invoice", id: "invoice-1" },
+          target_reference: { model: "example.Document", id: "document-1" },
           attempt: {
             id: "attempt-complete",
             step_run: {
@@ -148,21 +148,21 @@ import { WorkflowSubjectHistoryPane } from "./WorkflowSubjectHistoryPane";
 afterEach(cleanup);
 
 test("current external-wait artifacts become one routed next-action block while historical outputs stay retained", () => {
-  render(<WorkflowSubjectHistoryPane subjectDeclaration="accounting.Invoice" subjectId="invoice-1" />);
+  render(<WorkflowSubjectHistoryPane subjectDeclaration="example.Document" subjectId="document-1" />);
 
   const waitingBlock = screen.getByText("Waiting for an update").parentElement;
   expect(waitingBlock).not.toBeNull();
   expect(within(waitingBlock!).getByRole("link", {
-    name: "Supplier eligibility needs confirmation",
-  }).getAttribute("href")).toBe("/records/accounting.VendorProfile/vendor-1");
+    name: "Counterparty eligibility needs confirmation",
+  }).getAttribute("href")).toBe("/records/example.CounterpartyProfile/counterparty-1");
   expect(within(waitingBlock!).getByText("Claimed sender association").closest("a")).toBeNull();
 
   const outputs = screen.getByRole("heading", { name: "Outputs" }).closest("section");
   expect(outputs).not.toBeNull();
-  expect(within(outputs!).getByRole("link", { name: "Earlier supplier evidence" })).toBeTruthy();
+  expect(within(outputs!).getByRole("link", { name: "Earlier counterparty evidence" })).toBeTruthy();
   expect(within(outputs!).getByRole("link", { name: "Completed output" })).toBeTruthy();
-  expect(within(outputs!).queryByText("Supplier eligibility needs confirmation")).toBeNull();
-  expect(screen.getAllByText("Supplier eligibility needs confirmation")).toHaveLength(1);
+  expect(within(outputs!).queryByText("Counterparty eligibility needs confirmation")).toBeNull();
+  expect(screen.getAllByText("Counterparty eligibility needs confirmation")).toHaveLength(1);
   expect(screen.getAllByText("Waiting for an update")).toHaveLength(1);
 });
 
@@ -174,5 +174,5 @@ test("collapsible presentation keeps subject history inside the shared bounded a
   />);
 
   expect(screen.getByText("inbox.title")).toBeTruthy();
-  expect(screen.getByText("Supplier review").closest("[class*='max-h']")).toBeTruthy();
+  expect(screen.getByText("Counterparty review").closest("[class*='max-h']")).toBeTruthy();
 });

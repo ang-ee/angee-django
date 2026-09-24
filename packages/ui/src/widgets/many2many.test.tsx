@@ -40,21 +40,21 @@ describe("many2manyWidget", () => {
 test("edits multiple relations in one control, including removing stored ids outside the option list", async () => {
   const Edit = Many2ManyCellEdit;
   const onChange = vi.fn();
-  const field = { label: "Taxes", options: [
-    { value: "vat", label: "VAT 20%" },
-    { value: "fee", label: "Service 5%" },
+  const field = { label: "Categories", options: [
+    { value: "primary", label: "Primary" },
+    { value: "secondary", label: "Secondary" },
     { value: "off", label: "Disabled", disabled: true },
   ] };
-  const { rerender } = render(<Edit value={["vat"]} field={field} onChange={onChange} />);
-  const trigger = screen.getByRole("combobox", { name: "Taxes" });
-  expect(within(trigger).getByText("VAT 20%")).toBeTruthy();
+  const { rerender } = render(<Edit value={["primary"]} field={field} onChange={onChange} />);
+  const trigger = screen.getByRole("combobox", { name: "Categories" });
+  expect(within(trigger).getByText("Primary")).toBeTruthy();
   fireEvent.click(trigger);
-  choose(await screen.findByRole("option", { name: "Service 5%" }));
-  expect(onChange).toHaveBeenLastCalledWith(["vat", "fee"]);
-  rerender(<Edit value={["vat", "fee"]} field={field} onChange={onChange} />);
+  choose(await screen.findByRole("option", { name: "Secondary" }));
+  expect(onChange).toHaveBeenLastCalledWith(["primary", "secondary"]);
+  rerender(<Edit value={["primary", "secondary"]} field={field} onChange={onChange} />);
   expect(within(trigger).getByText("+1")).toBeTruthy();
-  choose(screen.getByRole("option", { name: "VAT 20%" }));
-  expect(onChange).toHaveBeenLastCalledWith(["fee"]);
+  choose(screen.getByRole("option", { name: "Primary" }));
+  expect(onChange).toHaveBeenLastCalledWith(["secondary"]);
   rerender(<Edit value={["legacy"]} field={field} onChange={onChange} />);
   choose(await screen.findByRole("option", { name: "legacy" }));
   expect(onChange).toHaveBeenLastCalledWith([]);
@@ -63,9 +63,9 @@ test("edits multiple relations in one control, including removing stored ids out
 
 test("a read-only multiple relation has no picker", () => {
   const Edit = many2manyWidget.edit;
-  render(<Edit value={["vat"]} field={{ options: [{ value: "vat", label: "VAT 20%" }] }} readOnly />);
+  render(<Edit value={["primary"]} field={{ options: [{ value: "primary", label: "Primary" }] }} readOnly />);
   expect(screen.queryByRole("combobox")).toBeNull();
-  expect(screen.getByText("VAT 20%")).toBeTruthy();
+  expect(screen.getByText("Primary")).toBeTruthy();
   cleanup();
 });
 

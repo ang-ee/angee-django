@@ -1,4 +1,4 @@
-"""Focused contracts for bounded, model-free structured invoice parsing."""
+"""Focused contracts for bounded, model-free structured document parsing."""
 
 from __future__ import annotations
 
@@ -17,16 +17,16 @@ def _values(source):
     return {(fact.field, fact.occurrence): fact.raw_value for fact in source.facts}
 
 
-def test_ubl_copies_raw_header_line_and_bank_facts_without_validation_claims() -> None:
+def test_ubl_copies_raw_header_line_and_account_facts_without_validation_claims() -> None:
     payload = b"""<?xml version="1.0"?>
     <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
       xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
       xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
-      <cbc:UBLVersionID>2.1</cbc:UBLVersionID><cbc:ID>INV-7</cbc:ID>
+      <cbc:UBLVersionID>2.1</cbc:UBLVersionID><cbc:ID>DOC-7</cbc:ID>
       <cbc:IssueDate>2026-09-01</cbc:IssueDate><cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
       <cac:AccountingSupplierParty><cac:Party><cac:PartyName>
         <cbc:Name>Example GmbH</cbc:Name>
-      </cac:PartyName><cac:PostalAddress><cbc:StreetName>Supplierstrasse 4</cbc:StreetName>
+      </cac:PartyName><cac:PostalAddress><cbc:StreetName>Examplestrasse 4</cbc:StreetName>
         <cbc:CityName>Berlin</cbc:CityName><cbc:PostalZone>10115</cbc:PostalZone>
         <cac:Country><cbc:IdentificationCode>DE</cbc:IdentificationCode></cac:Country>
       </cac:PostalAddress></cac:Party></cac:AccountingSupplierParty>
@@ -37,18 +37,18 @@ def test_ubl_copies_raw_header_line_and_bank_facts_without_validation_claims() -
       <cac:LegalMonetaryTotal><cbc:PayableAmount currencyID="EUR">12.30</cbc:PayableAmount></cac:LegalMonetaryTotal>
       <cac:InvoiceLine><cbc:InvoicedQuantity>2</cbc:InvoicedQuantity><cac:Item><cbc:Name>Hosting</cbc:Name></cac:Item><cac:Price><cbc:PriceAmount>6.15</cbc:PriceAmount></cac:Price></cac:InvoiceLine>
     </Invoice>"""
-    (source,) = extract_structured_sources(payload, media_type="application/xml", filename="invoice.xml")
+    (source,) = extract_structured_sources(payload, media_type="application/xml", filename="document.xml")
     assert source.kind == "ubl_invoice"
     assert source.evidence.standard_version == "2.1"
     assert source.evidence.validated is False
     assert source.evidence.validator is None
     assert _values(source) == {
-        ("invoice.reference", 0): "INV-7",
+        ("invoice.reference", 0): "DOC-7",
         ("invoice.issue_date", 0): "2026-09-01",
         ("invoice.currency", 0): "EUR",
         ("invoice.document_total", 0): "12.30",
         ("vendor.name", 0): "Example GmbH",
-        ("vendor.address.street", 0): "Supplierstrasse 4",
+        ("vendor.address.street", 0): "Examplestrasse 4",
         ("vendor.address.city", 0): "Berlin",
         ("vendor.address.postal_code", 0): "10115",
         ("vendor.address.country", 0): "DE",
@@ -86,17 +86,17 @@ def test_cii_maps_repeated_lines_by_occurrence() -> None:
 
 def test_xml_entities_and_resource_excess_are_rejected_before_mapping() -> None:
     with pytest.raises(StructuredSourceError, match="entity declarations"):
-        extract_structured_sources(b'<!DOCTYPE Invoice SYSTEM "invoice.dtd"><Invoice/>')
+        extract_structured_sources(b'<!DOCTYPE Document SYSTEM "document.dtd"><Document/>')
     with pytest.raises(StructuredSourceError, match="entity declarations"):
         extract_structured_sources(
-            b'<!DOCTYPE x [<!ENTITY leak SYSTEM "file:///etc/passwd">]><Invoice>&leak;</Invoice>'
+            b'<!DOCTYPE x [<!ENTITY leak SYSTEM "file:///etc/passwd">]><Document>&leak;</Document>'
         )
-    utf16_entity = '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY leak "secret">]><Invoice>&leak;</Invoice>'.encode(
+    utf16_entity = '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY leak "secret">]><Document>&leak;</Document>'.encode(
         "utf-16"
     )
     with pytest.raises(StructuredSourceError, match="entity declarations"):
         extract_structured_sources(utf16_entity, media_type="application/xml")
-    deep = b"<Invoice>" + b"<x>" * 4 + b"v" + b"</x>" * 4 + b"</Invoice>"
+    deep = b"<Document>" + b"<x>" * 4 + b"v" + b"</x>" * 4 + b"</Document>"
     with pytest.raises(StructuredSourceError, match="parsing limits"):
         extract_structured_sources(deep, limits=StructuredLimits(max_xml_depth=3))
 
@@ -105,10 +105,10 @@ def test_edifact_invoic_extracts_unambiguous_raw_facts_and_bounds_segments() -> 
     payload = (
         b"UNB+UNOC:3+SENDER+RECEIVER+260909:1200+1'UNH+1+INVOIC:D:01B:UN'"
         b"BGM+380+EDI-4+9'DTM+137:20260909:102'CUX+2:EUR'MOA+39:42.50'"
-        b"NAD+SU+9988::92++Supplier Ltd+Suite 2:6 Lansing Sq+North York+Ontario+M2J 1T5+'"
+        b"NAD+SU+9988::92++Example Ltd+Suite 2:6 Lansing Sq+North York+Ontario+M2J 1T5+'"
         b"LIN+1'IMD+F++:::Service'QTY+47:2'PRI+AAA:21.25'UNT+9+1'UNZ+1+1'"
     )
-    (source,) = extract_structured_sources(payload, filename="invoice.edi")
+    (source,) = extract_structured_sources(payload, filename="document.edi")
     assert source.kind == "edifact_invoic"
     assert _values(source)["invoice.reference", 0] == "EDI-4"
     assert _values(source)["invoice.document_total", 0] == "42.50"
@@ -124,7 +124,7 @@ def test_edifact_invoic_extracts_unambiguous_raw_facts_and_bounds_segments() -> 
         extract_structured_sources(payload, limits=StructuredLimits(max_edi_segment_length=10))
 
 
-def test_non_invoice_edi_is_retained_as_unsupported_structured() -> None:
+def test_unsupported_message_type_edi_is_retained_as_unsupported_structured() -> None:
     payload = b"UNB+UNOC:3+A+B+260909:1200+1'UNH+1+ORDERS:D:01B:UN'UNT+2+1'UNZ+1+1'"
     (source,) = extract_structured_sources(payload)
     assert source.kind == "unsupported_structured"
@@ -133,7 +133,7 @@ def test_non_invoice_edi_is_retained_as_unsupported_structured() -> None:
 
 
 def test_complex_or_multi_message_edifact_is_retained_for_review() -> None:
-    escaped = b"UNB+UNOC:3+A+B+260909:1200+1'UNH+1+INVOIC:D:01B:UN'BGM+380+INV?+1'UNT+2+1'UNZ+1+1'"
+    escaped = b"UNB+UNOC:3+A+B+260909:1200+1'UNH+1+INVOIC:D:01B:UN'BGM+380+DOC?+1'UNT+2+1'UNZ+1+1'"
     (source,) = extract_structured_sources(escaped)
     assert source.kind == "unsupported_structured"
     assert "release-character" in source.review_reasons[0]
@@ -147,32 +147,32 @@ def test_x12_810_copies_big_it1_and_pid_but_does_not_guess_tds_decimal() -> None
     isa = "ISA*00*          *00*          *ZZ*SENDER         *ZZ*RECEIVER       *260909*1200*U*00401*000000001*0*P*>~"
     payload = (
         isa + "GS*IN*SENDER*RECEIVER*20260909*1200*1*X*004010~ST*810*0001~"
-        "BIG*20260909*X12-8~CUR*BY*USD~N1*SE*Supplier Inc*92*SUP-1~"
+        "BIG*20260909*X12-8~CUR*BY*USD~N1*SE*Example Inc*92*PARTY-1~"
         "IT1*1*2*EA*10.25**VP*SKU~PID*F****Monthly service~TDS*2050~SE*8*0001~GE*1*1~IEA*1*000000001~"
     ).encode()
-    (source,) = extract_structured_sources(payload, filename="invoice.x12")
+    (source,) = extract_structured_sources(payload, filename="document.x12")
     assert source.kind == "x12_810"
     assert _values(source)["invoice.reference", 0] == "X12-8"
     assert _values(source)["line.quantity", 0] == "2"
     assert _values(source)["line.unit_price", 0] == "10.25"
     assert _values(source)["invoice.document_total", 0] == "2050"
-    assert _values(source)["vendor.identifier", 0] == "SUP-1"
+    assert _values(source)["vendor.identifier", 0] == "PARTY-1"
     assert "implied decimal scale" in source.review_reasons[0]
 
 
 def test_plain_text_is_not_misclassified_as_structured() -> None:
-    assert extract_structured_sources(b"Invoice 42 is due next week", filename="message.txt") == ()
+    assert extract_structured_sources(b"Document 42 is due next week", filename="message.txt") == ()
 
 
 def test_signed_structured_carrier_is_retained_for_review_without_decoding() -> None:
-    (source,) = extract_structured_sources(b"opaque signed content", filename="invoice.xml.p7m")
+    (source,) = extract_structured_sources(b"opaque signed content", filename="document.xml.p7m")
     assert source.kind == "unsupported_structured"
     assert "Signed or compressed" in source.review_reasons[0]
 
 
 def test_bom_plaintext_is_not_xml_and_declared_malformed_edi_requires_review() -> None:
-    assert extract_structured_sources(b"\xef\xbb\xbfplain invoice text", filename="message.txt") == ()
-    (source,) = extract_structured_sources(b"not an interchange", filename="invoice.edi")
+    assert extract_structured_sources(b"\xef\xbb\xbfplain document text", filename="message.txt") == ()
+    (source,) = extract_structured_sources(b"not an interchange", filename="document.edi")
     assert source.kind == "unsupported_structured"
     assert "malformed envelope" in source.review_reasons[0]
 
@@ -193,7 +193,7 @@ def test_pdf_embedded_xml_is_enumerated_and_sized_before_extraction() -> None:
     xml = b'<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"><ID>PDF-1</ID></Invoice>'
     document = pdfium.PdfDocument.new()
     document.new_page(612, 792)
-    attachment = document.new_attachment("invoice.xml")
+    attachment = document.new_attachment("document.xml")
     attachment.set_data(xml)
     output = io.BytesIO()
     document.save(output)
@@ -201,7 +201,7 @@ def test_pdf_embedded_xml_is_enumerated_and_sized_before_extraction() -> None:
 
     (source,) = extract_structured_sources(output.getvalue(), media_type="application/pdf", source_position=3)
     assert source.carrier == "pdf_attachment"
-    assert source.name == "invoice.xml"
+    assert source.name == "document.xml"
     assert source.evidence.source_position == 3
     assert source.evidence.payload_size == len(xml)
     assert _values(source)["invoice.reference", 0] == "PDF-1"

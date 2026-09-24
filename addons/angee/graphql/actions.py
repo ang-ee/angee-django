@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 class ActionResult:
     """Outcome of a console domain action: a success flag and a human message.
 
-    Returned by non-CRUD action mutations (sync, test, discover, register-payment,
+    Returned by non-CRUD action mutations (sync, test, discover, open-document,
     …) so the client can surface a toast and refresh the affected record.
 
     On a *domain* failure the action returns ``ok=False`` and may populate
@@ -51,7 +51,7 @@ class ActionResult:
     id: strawberry.ID | None = None
     """Public id of the record the verb created, when the action creates one.
 
-    A create-and-return verb (register a payment, open a document) populates this so
+    A create-and-return verb (register a review, open a document) populates this so
     the client can route to or refresh the new record; a verb that only mutates an
     existing row leaves it ``None``.
     """
@@ -210,13 +210,9 @@ def _require_action_permission(
     """Preserve the shared not-found and row-permission result contract."""
 
     if instance is None:
-        raise ValidationError(
-            {NON_FIELD_ERRORS: [f"{model._meta.object_name} {public_id_value(id)!r} was not found."]}
-        )
+        raise ValidationError({NON_FIELD_ERRORS: [f"{model._meta.object_name} {public_id_value(id)!r} was not found."]})
     if not instance.has_access(permission):
-        raise ValidationError(
-            {NON_FIELD_ERRORS: [f"You are not allowed to modify this {model._meta.verbose_name}."]}
-        )
+        raise ValidationError({NON_FIELD_ERRORS: [f"You are not allowed to modify this {model._meta.verbose_name}."]})
     return cast(_RebacActionTarget, instance)
 
 

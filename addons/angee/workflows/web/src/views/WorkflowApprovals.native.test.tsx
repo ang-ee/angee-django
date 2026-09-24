@@ -148,7 +148,7 @@ test("a record overlay renders one exact target task without mounting a nested D
     <Provider dataProvider={provider}>
       <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-          <WorkflowApprovals target={{ model: "parties.Party", id: "party-7", tab: "accounting" }} decisionId="decision-1" selectedTaskOnly />
+          <WorkflowApprovals target={{ model: "parties.Party", id: "party-7", tab: "details" }} decisionId="decision-1" selectedTaskOnly />
         </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
     </Provider>,
@@ -157,7 +157,7 @@ test("a record overlay renders one exact target task without mounting a nested D
   expect(await screen.findByText("Approve tool")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Back to approvals" })).toBeNull();
   expect(provider.getList).not.toHaveBeenCalled();
-  expect(exactVariables.at(-1)).toEqual({ id: "decision-1", targetModel: "parties.Party", targetId: "party-7", targetTab: "accounting" });
+  expect(exactVariables.at(-1)).toEqual({ id: "decision-1", targetModel: "parties.Party", targetId: "party-7", targetTab: "details" });
 });
 
 test("a run history link renders one completed Decision outside the pending collection", async () => {
@@ -195,7 +195,7 @@ test("a selected target distinguishes query failure from a permission-masked una
     return <Provider dataProvider={provider}>
       <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-          <WorkflowApprovals target={{ model: "parties.Party", id: "party-7", tab: "accounting" }} decisionId={decisionId} selectedTaskOnly onDecisionChange={onDecisionChange} />
+          <WorkflowApprovals target={{ model: "parties.Party", id: "party-7", tab: "details" }} decisionId={decisionId} selectedTaskOnly onDecisionChange={onDecisionChange} />
         </AppRuntimeProvider></ToastProvider></ModalsHost>
       </RouterContextProvider>
     </Provider>;

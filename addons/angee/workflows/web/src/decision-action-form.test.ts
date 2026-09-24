@@ -59,12 +59,12 @@ test("Decision annotations are parsed by workflows after the generic form bounda
     .toThrow("The Decision schema is invalid.");
 });
 
-test("native terms, bank, and source action schemas retain exact branch values and full constraints", () => {
-  const terms = compileDecisionActionFormSpec({
+test("native counterparty, identity, and source action schemas retain exact branch values and full constraints", () => {
+  const counterpartyReview = compileDecisionActionFormSpec({
     type: "object", required: ["action"], properties: {
       action: { type: "string", enum: ["approve", "reject", "escalate"], options: [
-        { value: "approve", label: "Select this supplier", verdict: "COMPLETE" },
-        { value: "reject", label: "Reject supplier", verdict: "REJECT", variant: "destructive", confirm: "Reject?" },
+        { value: "approve", label: "Select this counterparty", verdict: "COMPLETE" },
+        { value: "reject", label: "Reject counterparty", verdict: "REJECT", variant: "destructive", confirm: "Reject?" },
         { value: "escalate", label: "Escalate for review", verdict: "ESCALATE" },
       ] },
       party_id: { type: "string", relation: { resource: "parties.Party", permission: "read" } },
@@ -85,26 +85,26 @@ test("native terms, bank, and source action schemas retain exact branch values a
       }, additionalProperties: false },
     ],
   }, widgets, t);
-  expect(terms.fieldsFor("approve")[0]).toEqual(expect.objectContaining({
+  expect(counterpartyReview.fieldsFor("approve")[0]).toEqual(expect.objectContaining({
     name: "party_id",
     relation: { resource: "parties.Party", permission: "read" },
   }));
-  expect(terms.options.map((option) => option.verdict)).toEqual(["COMPLETE", "REJECT", "ESCALATE"]);
-  expect(terms.project("reject", { party_id: "pty_existing", note: "", reviewed: [] }))
+  expect(counterpartyReview.options.map((option) => option.verdict)).toEqual(["COMPLETE", "REJECT", "ESCALATE"]);
+  expect(counterpartyReview.project("reject", { party_id: "pty_existing", note: "", reviewed: [] }))
     .toEqual({ action: "reject", note: "" });
-  expect(terms.validate({ action: "reject", note: "" }).valid).toBe(false);
-  expect(terms.validate({ action: "reject", note: "Reason" }).valid).toBe(true);
-  expect(terms.validateContext({ reviewed: [] }).valid).toBe(true);
-  expect(terms.validateContext({})).toEqual({
+  expect(counterpartyReview.validate({ action: "reject", note: "" }).valid).toBe(false);
+  expect(counterpartyReview.validate({ action: "reject", note: "Reason" }).valid).toBe(true);
+  expect(counterpartyReview.validateContext({ reviewed: [] }).valid).toBe(true);
+  expect(counterpartyReview.validateContext({})).toEqual({
     valid: false,
     messages: { reviewed: ["Frozen Decision context is missing."] },
   });
-  expect(terms.validateContext({ reviewed: "invalid" })).toEqual({
+  expect(counterpartyReview.validateContext({ reviewed: "invalid" })).toEqual({
     valid: false,
     messages: { reviewed: ["Frozen Decision context is invalid."] },
   });
 
-  const bank = compileDecisionActionFormSpec({
+  const identity = compileDecisionActionFormSpec({
     type: "object", required: ["action"], properties: {
       action: { type: "string", enum: ["verify", "reject"], options: [
         { value: "verify", label: "Verify destination", verdict: "COMPLETE" },
@@ -123,10 +123,10 @@ test("native terms, bank, and source action schemas retain exact branch values a
     ],
   }, widgets, t);
   const frozenDigest = "a".repeat(64);
-  expect(bank.project("verify", { expected_identity_digest: frozenDigest, evidence: null, reviewed: [{ pointer: "/bank" }] }))
+  expect(identity.project("verify", { expected_identity_digest: frozenDigest, evidence: null, reviewed: [{ pointer: "/identity" }] }))
     .toEqual({ action: "verify", expected_identity_digest: frozenDigest, evidence: null });
-  expect(bank.validate(bank.project("verify", { expected_identity_digest: frozenDigest, evidence: null })).valid).toBe(true);
-  expect(bank.validate({ action: "verify", expected_identity_digest: "wrong", evidence: null }).valid).toBe(false);
+  expect(identity.validate(identity.project("verify", { expected_identity_digest: frozenDigest, evidence: null })).valid).toBe(true);
+  expect(identity.validate({ action: "verify", expected_identity_digest: "wrong", evidence: null }).valid).toBe(false);
 
   const source = compileDecisionActionFormSpec({
     type: "object", required: ["action"], properties: {
@@ -134,13 +134,13 @@ test("native terms, bank, and source action schemas retain exact branch values a
         { value: "link_existing", label: "Link this source", verdict: "COMPLETE" },
         { value: "keep_separate", label: "Keep separate", verdict: "COMPLETE" },
       ] },
-      invoice_id: { type: "string", minLength: 1 }, reason: { type: "string", pattern: ".*\\S.*" },
+      document_id: { type: "string", minLength: 1 }, reason: { type: "string", pattern: ".*\\S.*" },
       approved: { type: "boolean" }, count: { type: "integer" },
       reviewed: { type: "array", layout: "context", widget: "facts", items: { type: "object" } },
     },
     oneOf: [
-      { type: "object", required: ["action", "invoice_id", "reason"], properties: {
-        action: { const: "link_existing" }, invoice_id: { type: "string", minLength: 1 },
+      { type: "object", required: ["action", "document_id", "reason"], properties: {
+        action: { const: "link_existing" }, document_id: { type: "string", minLength: 1 },
         reason: { type: "string", pattern: ".*\\S.*" }, approved: { type: "boolean" }, count: { type: "integer" },
       }, additionalProperties: false },
       { type: "object", required: ["action", "reason"], properties: {
@@ -148,9 +148,9 @@ test("native terms, bank, and source action schemas retain exact branch values a
       }, additionalProperties: false },
     ],
   }, widgets, t);
-  expect(source.project("link_existing", { invoice_id: "inv_current", reason: "Source reviewed", approved: false, count: 0, reviewed: [] }))
-    .toEqual({ action: "link_existing", invoice_id: "inv_current", reason: "Source reviewed", approved: false, count: 0 });
-  expect(source.validate(source.project("link_existing", { invoice_id: "inv_current", reason: "Source reviewed", approved: false, count: 0 })).valid).toBe(true);
+  expect(source.project("link_existing", { document_id: "doc_current", reason: "Source reviewed", approved: false, count: 0, reviewed: [] }))
+    .toEqual({ action: "link_existing", document_id: "doc_current", reason: "Source reviewed", approved: false, count: 0 });
+  expect(source.validate(source.project("link_existing", { document_id: "doc_current", reason: "Source reviewed", approved: false, count: 0 })).valid).toBe(true);
   expect(source.validate({ action: "keep_separate", reason: "   " }).valid).toBe(false);
 });
 
@@ -231,20 +231,20 @@ test("alternative correction fields produce one labelled instruction without dup
         { value: "reject", label: "Reject document", verdict: "REJECT" },
       ] },
       note: { type: "string", label: "Review explanation", minLength: 1 },
-      currency: { type: ["string", "null"], label: "Invoice currency", omittable: true },
-      invoice_date: { type: ["string", "null"], label: "Invoice date", omittable: true },
-      vendor_name: { type: ["string", "null"], label: "Supplier name", omittable: true },
+      currency: { type: ["string", "null"], label: "Document currency", omittable: true },
+      document_date: { type: ["string", "null"], label: "Document date", omittable: true },
+      counterparty_name: { type: ["string", "null"], label: "Counterparty name", omittable: true },
     },
     oneOf: [
       { type: "object", required: ["action", "note"], properties: {
         action: { const: "correct" }, note: { type: "string", label: "Review explanation", minLength: 1 },
-        currency: { type: ["string", "null"], label: "Invoice currency", omittable: true },
-        invoice_date: { type: ["string", "null"], label: "Invoice date", omittable: true },
-        vendor_name: { type: ["string", "null"], label: "Supplier name", omittable: true },
+        currency: { type: ["string", "null"], label: "Document currency", omittable: true },
+        document_date: { type: ["string", "null"], label: "Document date", omittable: true },
+        counterparty_name: { type: ["string", "null"], label: "Counterparty name", omittable: true },
       }, anyOf: [
         { required: ["currency"], properties: { currency: { type: "string", minLength: 1 } } },
-        { required: ["invoice_date"], properties: { invoice_date: { type: "string", minLength: 1 } } },
-        { required: ["vendor_name"], properties: { vendor_name: { type: "string", minLength: 1 } } },
+        { required: ["document_date"], properties: { document_date: { type: "string", minLength: 1 } } },
+        { required: ["counterparty_name"], properties: { counterparty_name: { type: "string", minLength: 1 } } },
       ], additionalProperties: false },
       { type: "object", required: ["action", "note"], properties: {
         action: { const: "reject" }, note: { type: "string", label: "Review explanation", minLength: 1 },
@@ -253,21 +253,21 @@ test("alternative correction fields produce one labelled instruction without dup
   }, widgets, t);
 
   expect(form.validate({
-    action: "correct", note: "", currency: null, invoice_date: null, vendor_name: null,
+    action: "correct", note: "", currency: null, document_date: null, counterparty_name: null,
   })).toEqual({
     valid: false,
     messages: {
       note: ["Review explanation must contain at least 1 character."],
-      root: ["Complete at least one of: Invoice currency, Invoice date, or Supplier name."],
+      root: ["Complete at least one of: Document currency, Document date, or Counterparty name."],
     },
   });
   expect(form.validate({
-    action: "correct", note: "Reviewed", currency: null, invoice_date: null, vendor_name: null,
+    action: "correct", note: "Reviewed", currency: null, document_date: null, counterparty_name: null,
   }).messages).toEqual({
-    root: ["Complete at least one of: Invoice currency, Invoice date, or Supplier name."],
+    root: ["Complete at least one of: Document currency, Document date, or Counterparty name."],
   });
   expect(form.validate({
-    action: "correct", note: "Reviewed", currency: null, invoice_date: "2026-08-31", vendor_name: null,
+    action: "correct", note: "Reviewed", currency: null, document_date: "2026-08-31", counterparty_name: null,
   })).toEqual({ valid: true, messages: {} });
 });
 

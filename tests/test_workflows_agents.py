@@ -76,8 +76,8 @@ def test_agent_approval_uses_dynamic_all_done_resumable_gate_slots() -> None:
 
     owner = User.objects.create_user(username="approval-gate-owner")
     requests = [
-        {"tool_call_id": "call-1", "name": "read_invoice", "args": {"id": "invoice-1"}},
-        {"tool_call_id": "call-2", "name": "post_invoice", "args": {"id": "invoice-1"}},
+        {"tool_call_id": "call-1", "name": "read_document", "args": {"id": "document-1"}},
+        {"tool_call_id": "call-2", "name": "post_document", "args": {"id": "document-1"}},
     ]
     config = _approval_gate_config(SimpleNamespace(owner=owner), requests)
     result = GateStep.gate_result(
@@ -167,7 +167,7 @@ def test_infer_step_passes_native_request_envelope_and_projects_response(
     def respond(messages: list[Any], info: AgentInfo) -> ModelResponse:
         captured.update(messages=messages, info=info)
         return ModelResponse(
-            parts=[ToolCallPart("inference_output", {"classification": "invoice"}, "call-1")],
+            parts=[ToolCallPart("inference_output", {"classification": "document"}, "call-1")],
             usage=RequestUsage(input_tokens=7, output_tokens=3),
         )
 
@@ -219,8 +219,8 @@ def test_infer_step_passes_native_request_envelope_and_projects_response(
     assert row.outcome == "completed"
     assert row.output["response"]["kind"] == "response"
     assert row.output["response"]["parts"][0]["part_kind"] == "tool-call"
-    assert row.output["response"]["parts"][0]["args"] == {"classification": "invoice"}
-    assert row.output["output"] == {"classification": "invoice"}
+    assert row.output["response"]["parts"][0]["args"] == {"classification": "document"}
+    assert row.output["output"] == {"classification": "document"}
     assert row.output["usage"] == {"input_tokens": 7, "output_tokens": 3, "tokens": 10, "requests": 1}
     assert debits == [{"input_tokens": 7, "output_tokens": 3, "tokens": 10, "requests": 1}]
     assert run.budget_spent == {"input_tokens": 7, "output_tokens": 3, "tokens": 10, "requests": 1}

@@ -897,11 +897,11 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
                                 "value": "complete", "label": "Complete", "verdict": "COMPLETE",
                             }],
                         },
-                        "invoice": {
+                        "document": {
                             "type": "object",
                             "widget": "object",
                             "properties": {
-                                "supplier": {"type": "string"},
+                                "counterparty": {"type": "string"},
                                 "reference": {"type": "string"},
                                 "lines": {
                                     "type": "array",
@@ -923,10 +923,10 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
                         "required": ["action"],
                         "properties": {
                             "action": {"const": "complete"},
-                            "invoice": {
+                            "document": {
                                 "type": "object",
                                 "properties": {
-                                    "supplier": {"type": "string"},
+                                    "counterparty": {"type": "string"},
                                     "reference": {"type": "string"},
                                     "lines": {
                                         "type": "array",
@@ -969,10 +969,10 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
     state = GateResumeState.from_checkpoint(scheduled_step_run.resume_state)
     assert state.decision_ids == [decision.pk for decision in decisions]
     retained_schema = state.decision_schemas[str(decisions[1].pk)]
-    assert retained_schema["propertyOrder"] == ["action", "invoice"]
-    invoice_schema = retained_schema["properties"]["invoice"]
-    assert invoice_schema["propertyOrder"] == ["supplier", "reference", "lines"]
-    assert invoice_schema["properties"]["lines"]["items"]["propertyOrder"] == [
+    assert retained_schema["propertyOrder"] == ["action", "document"]
+    document_schema = retained_schema["properties"]["document"]
+    assert document_schema["propertyOrder"] == ["counterparty", "reference", "lines"]
+    assert document_schema["properties"]["lines"]["items"]["propertyOrder"] == [
         "description",
         "quantity",
     ]

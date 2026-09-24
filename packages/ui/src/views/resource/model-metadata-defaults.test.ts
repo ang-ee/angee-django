@@ -147,7 +147,7 @@ describe("resource metadata defaults", () => {
           values: [{ value: "READY" }],
         },
         defaultScopes: { name: "defaultScopes", kind: "list", scalar: "String" },
-        vendor: { name: "vendor", kind: "relation", relationModelLabel: "Vendor" },
+        reviewer: { name: "reviewer", kind: "relation", relationModelLabel: "Reviewer" },
       }, testDataResource("policies.Policy"));
     const resolved = fieldsWithMetadataDefaults(
       [
@@ -155,7 +155,7 @@ describe("resource metadata defaults", () => {
         { name: "environment" },
         { name: "status" },
         { name: "defaultScopes" },
-        { name: "vendor" },
+        { name: "reviewer" },
         { name: "isEnabled", widget: "booleanBadge" },
       ],
       policyMetadata,
@@ -270,29 +270,29 @@ describe("resource metadata defaults", () => {
   });
 
   test("keeps relation query capabilities and augments them with the lazy picker seam", () => {
-    const vendor = canonicalModel({}, {
-      ...relationResource("parties.Vendor", "vendors"),
+    const reviewer = canonicalModel({}, {
+      ...relationResource("example.Reviewer", "reviewers"),
       recordRepresentation: "displayName",
     });
     const metadata = canonicalModel({
-      vendor: {
-        name: "vendor",
+      reviewer: {
+        name: "reviewer",
         kind: "relation",
-        relationModelLabel: "parties.Vendor",
+        relationModelLabel: "example.Reviewer",
         relationObject: false,
         scalar: "ID",
       },
-    }, testDataResource("orders.Order", { query: testResourceQuery({ fields: {
-      vendor: testQueryField("vendor", {
+    }, testDataResource("example.Document", { query: testResourceQuery({ fields: {
+      reviewer: testQueryField("reviewer", {
         kind: "relation",
         scalar: "ID",
         relation: {
-          model: "parties.Vendor",
-          identityPath: "vendor.id",
-          labelPath: "vendor.displayName",
+          model: "example.Reviewer",
+          identityPath: "reviewer.id",
+          labelPath: "reviewer.displayName",
         },
         filter: {
-          field: "vendor",
+          field: "reviewer",
           scalar: "ID",
           values: [],
           operators: ["exact", "inList", "isNull"],
@@ -300,11 +300,11 @@ describe("resource metadata defaults", () => {
       }),
     } }) }));
     const query = ResourceQuery.from(metadata);
-    const base = buildFilterFields([], [{ id: "ignored", vendor: "page-only" }], metadata, query);
+    const base = buildFilterFields([], [{ id: "ignored", reviewer: "page-only" }], metadata, query);
 
     expect(base).toMatchObject([{
-      id: "vendor",
-      field: "vendor",
+      id: "reviewer",
+      field: "reviewer",
       type: "text",
       operators: ["exact", "inList", "isNull", "isNotNull"],
     }]);
@@ -313,16 +313,16 @@ describe("resource metadata defaults", () => {
     const augmented = relationFilterFields(
       query,
       metadata,
-      schemaFieldMetadataFromDataResources([vendor.resource]),
+      schemaFieldMetadataFromDataResources([reviewer.resource]),
     );
     expect(augmented).toMatchObject([{
-      id: "vendor",
-      field: "vendor",
+      id: "reviewer",
+      field: "reviewer",
     }]);
     expect(augmented[0]?.renderValue).toEqual(expect.any(Function));
     expect(mergeFilterFields(augmented, base)).toMatchObject([{
-      id: "vendor",
-      field: "vendor",
+      id: "reviewer",
+      field: "reviewer",
       operators: ["exact", "inList", "isNull", "isNotNull"],
       renderValue: expect.any(Function),
     }]);
@@ -332,7 +332,7 @@ describe("resource metadata defaults", () => {
     expect(relationFilterFields(
       query,
       null,
-      schemaFieldMetadataFromDataResources([vendor.resource]),
+      schemaFieldMetadataFromDataResources([reviewer.resource]),
     )[0]?.renderValue).toEqual(expect.any(Function));
     expect(relationFilterFields(
       query,
@@ -344,7 +344,7 @@ describe("resource metadata defaults", () => {
   test("keeps a filterable plain record ID without deriving page choices", () => {
     const metadata = canonicalModel({
       id: { name: "id", kind: "scalar", scalar: "ID" },
-    }, testDataResource("orders.Order", { query: testResourceQuery({ fields: {
+    }, testDataResource("example.Document", { query: testResourceQuery({ fields: {
       id: testQueryField("id", { scalar: "ID", filter: {
         field: "id", scalar: "ID", values: [], operators: ["exact", "inList"],
       } }),
@@ -362,7 +362,7 @@ describe("resource metadata defaults", () => {
     const metadata = canonicalModel({
       metadata: { name: "metadata", kind: "scalar", scalar: "JSON" },
       tags: { name: "tags", kind: "list", scalar: "String" },
-    }, testDataResource("orders.Order", { query: testResourceQuery({ fields: {
+    }, testDataResource("example.Document", { query: testResourceQuery({ fields: {
       metadata: testQueryField("metadata", { kind: "json", scalar: "JSON", filter: {
         field: "metadata", scalar: "JSON", values: [], operators: ["jsonContains", "isNull"],
       } }),
@@ -434,10 +434,10 @@ describe("resource metadata defaults", () => {
 });
 
 describe("relationFieldInfo / relationListFieldInfo", () => {
-  const tax = canonicalModel({}, {
-    ...relationResource("taxes.Tax", "taxes"),
+  const category = canonicalModel({}, {
+    ...relationResource("example.Category", "categories"),
     recordRepresentation: "name",
-    roots: { list: "taxes", create: "insert_taxes_one" },
+    roots: { list: "categories", create: "insert_categories_one" },
   });
   const productVariant = canonicalModel({}, {
     ...relationResource("catalog.ProductVariant", "product_variants"),
@@ -448,7 +448,7 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
     capabilities: [],
   }));
   const scope = canonicalModel({}, {
-    ...relationResource("accounting.Scope", "scopes"),
+    ...relationResource("example.Scope", "scopes"),
     recordRepresentation: "name",
   });
   const organization = canonicalModel({}, {
@@ -462,7 +462,7 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
     recordRepresentation: "displayName",
   });
   const schema = schemaFieldMetadataFromDataResources([
-    tax.resource,
+    category.resource,
     productVariant.resource,
     unlistable.resource,
     scope.resource,
@@ -480,11 +480,11 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
         kind: "relation",
         relationModelLabel: "parties.Party",
       },
-      taxes: {
-        name: "taxes",
+      categories: {
+        name: "categories",
         kind: "list",
         scalar: "ID",
-        relationModelLabel: "taxes.Tax",
+        relationModelLabel: "example.Category",
       },
       labels: { name: "labels", kind: "list", scalar: "String" },
       orphan: {
@@ -500,11 +500,11 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
         relationObject: false,
         scalar: "ID",
         widget: "select",
-        relationModelLabel: "accounting.Scope",
+        relationModelLabel: "example.Scope",
       },
       // The record's own opaque id — a bare `ID` scalar with no relation target.
       id: { name: "id", kind: "scalar", scalar: "ID" },
-    }, testDataResource("orders.Line"));
+    }, testDataResource("example.DocumentLine"));
 
   test("resolves a to-one relation, but not a to-many, for relationFieldInfo", () => {
     expect(relationFieldInfo("product", model, schema)?.resource).toBe(
@@ -512,7 +512,7 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
     );
     // An M2M is `kind: "list"`, so the to-one resolver ignores it (else it would
     // render a single picker over a many field).
-    expect(relationFieldInfo("taxes", model, schema)).toBeNull();
+    expect(relationFieldInfo("categories", model, schema)).toBeNull();
   });
 
   test("narrows a base relation picker to a declared concrete resource", () => {
@@ -548,7 +548,7 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
     // A `scope` FK the node projects as a bare `ID!` still wires the picker/label
     // through the relation metadata, so the form gets a usable relation widget.
     const info = relationFieldInfo("scope", model, schema);
-    expect(info?.resource).toBe("accounting.Scope");
+    expect(info?.resource).toBe("example.Scope");
     expect(info?.labelField).toBe("name");
     // Its metadata widget is `select` (not `many2one`), so the form selects it as a
     // scalar leaf — a valid detail query, never an object sub-selection.
@@ -559,8 +559,8 @@ describe("relationFieldInfo / relationListFieldInfo", () => {
   });
 
   test("resolves an M2M relation target for relationListFieldInfo", () => {
-    const info = relationListFieldInfo("taxes", model, schema);
-    expect(info?.resource).toBe("taxes.Tax");
+    const info = relationListFieldInfo("categories", model, schema);
+    expect(info?.resource).toBe("example.Category");
     expect(info?.labelField).toBe("name");
     expect(info?.canCreate).toBe(true);
     // The to-many resolver ignores a to-one field.
@@ -585,7 +585,7 @@ describe("money currencyField plumbing", () => {
         widget: "money",
         currencyField: "currency",
       },
-    }, testDataResource("orders.Order"));
+    }, testDataResource("example.Document"));
 
   test("a bare column inherits the backend widget and currencyField from metadata", () => {
     const [column] = columnsWithMetadataDefaults<Row>([{ field: "amountTotal" }], metadata);
@@ -652,7 +652,7 @@ describe("relation column read expansion", () => {
         relationModelLabel: "projects.Project",
         relationObject: true,
       },
-    }, testDataResource("orders.Line", {
+    }, testDataResource("example.DocumentLine", {
       query: testResourceQuery({ fields: {
         product: testQueryField("product", { relation: { model: "catalog.ProductVariant", identityPath: "product.id", labelPath: "product.display_name" } }),
         project: testQueryField("project", { relation: { model: "projects.Project", identityPath: "project.id", labelPath: "project.title" } }),

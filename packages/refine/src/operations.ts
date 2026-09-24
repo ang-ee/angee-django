@@ -129,7 +129,7 @@ export interface ActionOutcome {
   ok: boolean;
   message: string;
   /**
-   * Public id of the record the verb created (a register-payment, an
+   * Public id of the record the verb created (a register-review or
    * open-document verb), when the mutation selected and populated it. Lets the
    * caller deep-link to or refresh the new record; absent on a mutate-only verb.
    */

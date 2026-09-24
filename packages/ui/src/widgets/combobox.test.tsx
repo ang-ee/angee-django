@@ -32,15 +32,15 @@ test("retains a selected option from a non-option initial value", async () => {
         }}
         field={{
           name: "currency",
-          label: "Invoice currency",
+          label: "Document currency",
           options,
         }}
       />
     );
   }
   render(<Harness />);
-  const combo = screen.getByRole("combobox", { name: "Invoice currency" });
-  expect(combo.textContent).toContain("Invoice currency");
+  const combo = screen.getByRole("combobox", { name: "Document currency" });
+  expect(combo.textContent).toContain("Document currency");
   expect(changes).toEqual([]);
   fireEvent.click(combo);
   expect(changes).toEqual([]);

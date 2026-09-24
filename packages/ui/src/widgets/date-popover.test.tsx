@@ -11,7 +11,7 @@ describe("DatePopover", () => {
       <DatePopover
         selected={new Date(2024, 3, 9)}
         label="April 9, 2024"
-        ariaLabel="Invoice date"
+        ariaLabel="Document date"
         open
         onOpenChange={vi.fn()}
         onSelectDate={vi.fn()}

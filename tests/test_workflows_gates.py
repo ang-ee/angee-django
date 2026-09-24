@@ -89,7 +89,7 @@ User = get_user_model()
 def test_decision_action_builder_owns_tagged_branches_and_typed_context() -> None:
     """Consumers declare actions and models; the builder alone emits tagged branches."""
 
-    record = ReviewRecordReference(model="parties.Party", id="party-1", label="Supplier")
+    record = ReviewRecordReference(model="parties.Party", id="party-1", label="Counterparty")
     authored = build_decision_action(
         actions=(
             ReviewAction(
@@ -108,11 +108,11 @@ def test_decision_action_builder_owns_tagged_branches_and_typed_context() -> Non
             ),
         ),
         properties={"note": {"type": "string", "minLength": 1}},
-        payload={"invoice": "invoice-1"},
+        payload={"document": "document-1"},
         facts=(
             ReviewFact(
                 pointer="/total",
-                label="Invoice total",
+                label="Document total",
                 value="100.00",
                 subject=record,
                 authority="source",
@@ -1191,8 +1191,8 @@ def test_decision_context_local_defs_are_validated_with_root_scope() -> None:
         {
             "facts": [
                 {
-                    "pointer": "/supplier",
-                    "label": "Supplier",
+                    "pointer": "/counterparty",
+                    "label": "Counterparty",
                     "value": "A",
                     "authority": "source",
                 }
@@ -1200,7 +1200,7 @@ def test_decision_context_local_defs_are_validated_with_root_scope() -> None:
         }
     )
     with pytest.raises(ValidationError, match="does not satisfy"):
-        contract.validate_context({"facts": [{"pointer": "/supplier"}]})
+        contract.validate_context({"facts": [{"pointer": "/counterparty"}]})
 
 
 @pytest.fixture(autouse=True)
@@ -2009,14 +2009,14 @@ def test_decision_json_schema_preserves_types_and_authored_constraints(
         required=("amount",),
         properties={
             "amount": {"type": "integer"},
-            "payment_term_id": {"type": "string"},
+            "review_schedule_id": {"type": "string"},
             "due_date": {"type": "string"},
             "note": {"type": "string"},
         },
         all_of=[
             {
                 "oneOf": [
-                    {"required": ["payment_term_id"]},
+                    {"required": ["review_schedule_id"]},
                     {"required": ["due_date"]},
                 ]
             }
@@ -2029,24 +2029,24 @@ def test_decision_json_schema_preserves_types_and_authored_constraints(
             {
                 "action": "apply",
                 "amount": "7",
-                "payment_term_id": "net-30",
+                "review_schedule_id": "monthly",
                 "due_date": "2030-01-01",
             },
         )
     assert relation_checks == []
 
     with pytest.raises(ValidationError):
-        _validate_json_resolution(schema, {"action": "apply", "amount": "7", "payment_term_id": "net-30"})
+        _validate_json_resolution(schema, {"action": "apply", "amount": "7", "review_schedule_id": "monthly"})
     assert relation_checks == []
 
     validated = _validate_json_resolution(
         schema,
-        {"action": "apply", "amount": 7, "payment_term_id": "net-30"},
+        {"action": "apply", "amount": 7, "review_schedule_id": "monthly"},
     )
     assert validated == {
         "action": "apply",
         "amount": 7,
-        "payment_term_id": "net-30",
+        "review_schedule_id": "monthly",
     }
     assert relation_checks == [validated]
 
@@ -2063,10 +2063,10 @@ def test_decision_mapping_schema_excludes_layout_context_from_resolution() -> No
                 "layout": "context",
                 "readOnly": True,
                 "widget": "object",
-                "required": ["kind", "invoice_id"],
+                "required": ["kind", "document_id"],
                 "properties": {
-                    "kind": {"const": "invoice_review"},
-                    "invoice_id": {"type": "string", "minLength": 1},
+                    "kind": {"const": "document_review"},
+                    "document_id": {"type": "string", "minLength": 1},
                 },
                 "additionalProperties": False,
             },
@@ -2078,13 +2078,13 @@ def test_decision_mapping_schema_excludes_layout_context_from_resolution() -> No
     assert contract is not None
     contract.validate_context(
         {
-            "source_evidence": {"kind": "invoice_review", "invoice_id": "inv_exact"},
+            "source_evidence": {"kind": "document_review", "document_id": "doc_exact"},
         }
     )
     with pytest.raises(ValidationError, match="does not satisfy"):
         contract.validate_context(
             {
-                "source_evidence": {"kind": "invoice_review", "invoice_id": ""},
+                "source_evidence": {"kind": "document_review", "document_id": ""},
             }
         )
 

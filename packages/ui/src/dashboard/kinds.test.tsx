@@ -76,7 +76,7 @@ describe("dashboard table columns", () => {
               status: "pending",
               status_label: "Ignored companion guess",
               step: { name: "Confirm details" },
-              run: { id: "run-1", workflow: { name: "Invoice intake" } },
+              run: { id: "run-1", workflow: { name: "Document intake" } },
             },
           },
           { public_key: "decision-2", step_run: null },
@@ -88,7 +88,7 @@ describe("dashboard table columns", () => {
       .toEqual(["Run", "Workflow", "Step Run Step Name", "Status"]);
     const rows = screen.getAllByRole("row");
     expect(within(rows[1]!).getAllByRole("cell").map((cell) => cell.textContent))
-      .toEqual(["run-1", "Invoice intake", "Confirm details", "Pending review"]);
+      .toEqual(["run-1", "Document intake", "Confirm details", "Pending review"]);
     expect(within(rows[2]!).getAllByRole("cell").map((cell) => cell.textContent))
       .toEqual(["", "", "", ""]);
   });

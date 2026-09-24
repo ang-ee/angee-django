@@ -198,8 +198,8 @@ describe("record action helpers", () => {
   test("settles id-returning record mutations through the action-result owner", async () => {
     const refresh = vi.fn();
     const { result } = renderHook(() =>
-      useRecordActionMutation("convert_to_quotation", {
-        linkTo: "sales.Order",
+      useRecordActionMutation("convert_to_document", {
+        linkTo: "example.Document",
       }),
     );
 
@@ -209,7 +209,7 @@ describe("record action helpers", () => {
     });
 
     expect(dataMocks.useActionResultRun).toHaveBeenCalledWith({
-      linkTo: "sales.Order",
+      linkTo: "example.Document",
     });
     expect(dataMocks.settle).toHaveBeenCalledOnce();
     expect(dataMocks.mutate).toHaveBeenCalledWith("lead_1");

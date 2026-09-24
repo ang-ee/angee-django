@@ -90,9 +90,12 @@ from tests.workflows import workflow_authorization_frontier as workflow_authoriz
 
 
 def test_json_pointer_value_resolves_rfc6901_tokens_and_rejects_missing() -> None:
-    assert json_pointer_value({"vendor/name": {"tax~id": "CZ123"}}, "/vendor~1name/tax~0id") == "CZ123"
+    assert (
+        json_pointer_value({"counterparty/name": {"record~id": "ID123"}}, "/counterparty~1name/record~0id")
+        == "ID123"
+    )
     with pytest.raises(KeyError):
-        json_pointer_value({"vendor": {}}, "/vendor/name")
+        json_pointer_value({"counterparty": {}}, "/counterparty/name")
 
 
 @pytest.mark.parametrize("message", ["The inferred candidate does not match the frozen schema.", ""])
@@ -111,11 +114,11 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
         "revision": 3,
         "status": "succeeded",
         "error_code": "",
-        "unresolved_reasons": ["missing_supplier_identity"],
-        "result": {"invoice_count": 1, "routing_review_reasons": ["missing_supplier_identity"]},
+        "unresolved_reasons": ["missing_counterparty_identity"],
+        "result": {"document_count": 1, "routing_review_reasons": ["missing_counterparty_identity"]},
         "corrections": (),
         "provenance": {"used_model_roles": []},
-        "profile": "invoice_document",
+        "profile": "example_document",
         "content_type_id": 5,
         "object_id": target.pk,
     }.items():
@@ -276,11 +279,11 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
         "revision": 3,
         "status": "succeeded",
         "error_code": "",
-        "unresolved_reasons": ["missing_supplier_identity"],
-        "result": {"invoice_count": 1},
+        "unresolved_reasons": ["missing_counterparty_identity"],
+        "result": {"document_count": 1},
         "corrections": (),
         "provenance": {"used_model_roles": []},
-        "profile": "invoice_document",
+        "profile": "example_document",
         "content_type_id": 5,
         "object_id": target.pk,
     }.items():
@@ -420,10 +423,10 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         "unresolved_reasons": [],
         "claims": {"/number": [{"part_position": 0, "start": 0, "end": 4}]},
         "document_refs": (),
-        "result": {"invoice_count": 1},
+        "result": {"document_count": 1},
         "corrections": (),
         "provenance": {"used_model_roles": []},
-        "profile": "invoice_document",
+        "profile": "example_document",
         "content_type_id": 5,
         "object_id": target.pk,
     }.items():
@@ -449,10 +452,10 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         "status": "failed",
         "error_code": ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
         "unresolved_reasons": ["identity_correspondence_required"],
-        "result": {"invoice_count": 1},
+        "result": {"document_count": 1},
         "corrections": (),
         "provenance": {"used_model_roles": []},
-        "profile": "invoice_document",
+        "profile": "example_document",
         "content_type_id": 5,
         "object_id": target.pk,
     }.items():
@@ -568,7 +571,7 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
         "revision": 3,
         "status": "succeeded",
         "error_code": "",
-        "unresolved_reasons": ["missing_supplier_identity"],
+        "unresolved_reasons": ["missing_counterparty_identity"],
         "content_type_id": 5,
         "object_id": target.pk,
     }.items():
@@ -665,7 +668,7 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
         "revision": 3,
         "status": "succeeded",
         "error_code": "",
-        "unresolved_reasons": ["missing_supplier_identity"],
+        "unresolved_reasons": ["missing_counterparty_identity"],
     }
     resolve_profile.assert_not_called()
     infer_call.assert_not_called()
@@ -694,7 +697,7 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
         "revision": 3,
         "status": "succeeded",
         "error_code": "",
-        "unresolved_reasons": ["missing_supplier_identity"],
+        "unresolved_reasons": ["missing_counterparty_identity"],
         "inference_failure": {
             "type": "DocumentPipelineError",
             "message": "The retained correspondence candidate is empty.",
@@ -713,16 +716,16 @@ def test_retained_authority_materializes_only_missing_claimed_containers() -> No
     base = SimpleNamespace(
         claims={
             "/currency": [{"part_position": 0}],
-            "/source_payment_claims/0/printed_text": [{"part_position": 0}],
+            "/source_status_claims/0/printed_text": [{"part_position": 0}],
         },
         corrections=(),
         document_refs=(),
         result={
             "reference": "SOURCE-1",
             "currency": "USD",
-            "source_payment_claims": [{
+            "source_status_claims": [{
                 "kind": "unresolved",
-                "printed_text": "Payment status: not paid",
+                "printed_text": "Review status: pending",
                 "amount": None,
                 "currency": "",
             }],
@@ -732,21 +735,21 @@ def test_retained_authority_materializes_only_missing_claimed_containers() -> No
     result, claims, completion_required = _preserve_retained_authority(
         base,
         {
-            "supplier": "Provider candidate",
-            "source_payment_claims": [],
+            "counterparty": "Provider candidate",
+            "source_status_claims": [],
         },
-        {"/supplier": [{"part_position": 0}]},
+        {"/counterparty": [{"part_position": 0}]},
         identity_mapping={},
         retired_identities={},
         claim_part_positions={0: 0},
     )
 
     assert result == {
-        "supplier": "Provider candidate",
+        "counterparty": "Provider candidate",
         "currency": "USD",
-        "source_payment_claims": [{
+        "source_status_claims": [{
             "kind": "unresolved",
-            "printed_text": "Payment status: not paid",
+            "printed_text": "Review status: pending",
             "amount": None,
             "currency": "",
         }],
@@ -762,9 +765,9 @@ def test_retained_authority_materializes_only_missing_claimed_containers() -> No
         }
     ) == ["retained_carrier_hold"]
     assert claims == {
-        "/supplier": [{"part_position": 0}],
+        "/counterparty": [{"part_position": 0}],
         "/currency": [{"part_position": 0}],
-        "/source_payment_claims/0/printed_text": [{"part_position": 0}],
+        "/source_status_claims/0/printed_text": [{"part_position": 0}],
     }
 
 
@@ -900,19 +903,19 @@ class PageAggregationTests(SimpleTestCase):
         )
 
     def test_derives_claim_spans_only_for_values_present_in_retained_text(self) -> None:
-        parts = (DocumentPart(0, 0, "text/plain", "native_text", "Invoice 22121 total 174.20", "test", "a" * 64),)
-        claims = derive_text_claims({"reference": "22121", "total": "174.20", "bank": "invented"}, parts)
+        parts = (DocumentPart(0, 0, "text/plain", "native_text", "Document 22121 total 174.20", "test", "a" * 64),)
+        claims = derive_text_claims({"reference": "22121", "total": "174.20", "category": "invented"}, parts)
         self.assertEqual(set(claims), {"/reference", "/total"})
-        self.assertEqual(claims["/reference"][0], {"part_position": 0, "start": 8, "end": 13})
+        self.assertEqual(claims["/reference"][0], {"part_position": 0, "start": 9, "end": 14})
 
     def test_claim_spans_exclude_empty_and_partial_numeric_matches(self) -> None:
-        text = "Postal 00601 invoice INV-1 quantity 1 price 87.10"
+        text = "Postal 00601 document DOC-1 quantity 1 price 87.10"
         part = DocumentPart(0, 0, "text/plain", "native_text", text, "test", "a" * 64)
         claims = derive_text_claims(
-            {"vendor": {"tax_id": ""}, "quantity": 1, "unit_price": "87.1"},
+            {"counterparty": {"record_id": ""}, "quantity": 1, "unit_price": "87.1"},
             (part,),
         )
-        self.assertNotIn("/vendor/tax_id", claims)
+        self.assertNotIn("/counterparty/record_id", claims)
         self.assertEqual(text[claims["/quantity"][0]["start"] : claims["/quantity"][0]["end"]], "1")
         self.assertEqual(text[claims["/unit_price"][0]["start"] : claims["/unit_price"][0]["end"]], "87.10")
 
@@ -991,12 +994,12 @@ class PageAggregationTests(SimpleTestCase):
         )
 
     def test_declared_text_decode_is_bounded_to_utf8_and_html_is_inert(self) -> None:
-        self.assertEqual(_decode_declared_text(b"\xef\xbb\xbfInvoice 22121"), "Invoice 22121")
+        self.assertEqual(_decode_declared_text(b"\xef\xbb\xbfDocument 22121"), "Document 22121")
         with self.assertRaises(ValueError):
             _decode_declared_text(b"\xff\xfeI\x00")
         self.assertEqual(
-            _html_text("<p>Invoice 22121</p><script>ignore()</script><a href='https://invalid'>Total 10</a>"),
-            "Invoice 22121\nTotal 10",
+            _html_text("<p>Document 22121</p><script>ignore()</script><a href='https://invalid'>Total 10</a>"),
+            "Document 22121\nTotal 10",
         )
 
     @override_settings(ANGEE_EXTRACTION_MAX_BYTES=10)
@@ -1020,7 +1023,7 @@ class PageAggregationTests(SimpleTestCase):
 
     @override_settings(ANGEE_EXTRACTION_MAX_BYTES=10)
     def test_document_source_allows_missing_advisory_mime_type(self) -> None:
-        content = b"<Invoice/>"
+        content = b"<Record />"
         file = SimpleNamespace(
             open_stream=lambda: io.BytesIO(content),
             content_hash=hashlib.sha256(content).hexdigest(),
@@ -2509,7 +2512,7 @@ class ExtractionServiceTests(TestCase):
         target = self.files[0]
         base_schema = {
             **SCHEMA,
-            "$id": "test.invoice.v1",
+            "$id": "test.document.v1",
             "properties": {
                 **SCHEMA["properties"],
                 "routing_review_reasons": {
@@ -2520,10 +2523,10 @@ class ExtractionServiceTests(TestCase):
         }
         upgraded_schema = {
             **base_schema,
-            "$id": "test.invoice.v2",
+            "$id": "test.document.v2",
             "properties": {
                 **base_schema["properties"],
-                "source_payment_claims": {"type": "array", "items": {"type": "object"}},
+                "source_status_claims": {"type": "array", "items": {"type": "object"}},
             },
         }
         authority_config = {
@@ -2806,7 +2809,7 @@ class ExtractionServiceTests(TestCase):
     def test_document_profile_persists_model_free_raw_parts_and_fingerprints_recognizer(self) -> None:
         config = {
             "result": {"number": "SYN-2", "rows": ["native"]},
-            "source_text": "Synthetic invoice attachment",
+            "source_text": "Synthetic document attachment",
         }
         with actor_context(self.owner):
             first = self._retain(files=self.files[:1], authorized_target=self.drive, config=config)

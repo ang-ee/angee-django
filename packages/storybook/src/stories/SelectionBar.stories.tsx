@@ -60,7 +60,7 @@ export const SheetSurface: Story = {
   args: {
     count: 4,
     surface: "sheet",
-    summary: "Invoices selected",
+    summary: "Documents selected",
   },
   render: ({ count, position, summary, surface }) => (
     <SelectionBar
