@@ -350,11 +350,11 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     publishing.publish_change(Row(broadcasts=False), action="update", update_fields=None)
     assert sent == []
 
-    publishing.publish_change(Row(broadcasts=True), action="delete", update_fields=None, using="default")
+    publishing.publish_change(Row(broadcasts=True), action="delete", update_fields=None)
     assert sent == [stub_payload.as_message()]
 
     # A plain model with no hook keeps the default broadcast behavior.
-    publishing.publish_change(object(), action="create", update_fields=None, using="default")
+    publishing.publish_change(object(), action="create", update_fields=None)
     assert sent == [stub_payload.as_message(), stub_payload.as_message()]
 
 

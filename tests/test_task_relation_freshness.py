@@ -17,12 +17,25 @@ from tests.conftest import _clear_model_tables, _create_missing_tables
 from tests.scopedemo.models import Scope
 
 
+def _local_constraints(constraints: tuple[models.BaseConstraint, ...]) -> tuple[models.BaseConstraint, ...]:
+    """Copy inherited constraints under module-local names; SQLite index names are global."""
+
+    copies = []
+    for constraint in constraints:
+        path, args, kwargs = constraint.deconstruct()
+        kwargs["name"] = f"freshness_{kwargs['name']}"
+        copies.append(type(constraint)(*args, **kwargs))
+    return tuple(copies)
+
+
+
 class FreshnessStage(AbstractStage):
     queue = models.ForeignKey(Scope, on_delete=models.CASCADE)
 
     class Meta(AbstractStage.Meta):
         abstract = False
         app_label = "scopedemo"
+        constraints = _local_constraints(AbstractStage.Meta.constraints)
 
 
 class FreshnessMilestone(AbstractMilestone):
@@ -31,6 +44,7 @@ class FreshnessMilestone(AbstractMilestone):
     class Meta(AbstractMilestone.Meta):
         abstract = False
         app_label = "scopedemo"
+        constraints = _local_constraints(getattr(AbstractMilestone.Meta, "constraints", ()))
 
 
 class FreshnessTask(TaskWork, AbstractTask):
@@ -50,7 +64,7 @@ class FreshnessTask(TaskWork, AbstractTask):
     class Meta(AbstractTask.Meta):
         abstract = False
         app_label = "scopedemo"
-        constraints = AbstractTask.Meta.constraints[:2]
+        constraints = _local_constraints(AbstractTask.Meta.constraints[:2])
 
 
 @pytest.fixture
