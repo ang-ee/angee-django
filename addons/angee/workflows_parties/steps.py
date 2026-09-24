@@ -18,7 +18,7 @@ from typing import Any, TypedDict
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 from rebac import system_context
 
 from angee.base.db import get_write_alias, related_on
@@ -30,6 +30,7 @@ from angee.workflows.attempts import (
     RecoveryCapability,
     RecoveryMode,
 )
+from angee.workflows.configs import WorkflowStepConfig
 from angee.workflows.decision_actions import (
     ReviewAction,
     ReviewFact,
@@ -51,6 +52,21 @@ _EXECUTE_MODES = frozenset({"prepare", "unit"})
 _ACTIONS = ("merge", "skip", "keep_separate")
 _SURVIVORS = ("left", "right")
 _IDENTITY_KEYS = ("left", "right", "left_name", "right_name", "evidence")
+
+
+class IdentityReviewConfig(WorkflowStepConfig):
+    """Consumer presentation vocabulary for the shared identity-review actions.
+
+    ``party_label`` names the reviewed party verbatim in labels and descriptions;
+    ``default_address_label`` labels proposed addresses that have no label.
+    Action and choice identifiers remain the shared identity contract.
+    """
+
+    action: str = "review-party-identity"
+    assignee: str = ""
+    max_attempts: int = Field(default=3, ge=1)
+    party_label: str = Field(default="Party", min_length=1, pattern=r"\S")
+    default_address_label: str = Field(default="Primary", min_length=1, max_length=64, pattern=r"\S")
 
 
 class IdentityReviewPassThrough(BaseModel):
@@ -280,14 +296,22 @@ class DedupeExecuteStepImpl(DecisionApplyStep):
         alias = get_write_alias(type(step_run), instance=step_run)
 
         del now
-        with apps.get_model("workflows", "Decision").objects.db_manager(alias).locked_resolution(
-            decision_id,
-            actor=actor,
-            consumer_step_run_id=step_run.pk,
-        ) as decision:
-            rows = apps.get_model("parties", "Party").objects.db_manager(alias).prepare_duplicate_pairs(
-                decision.payload.get("pairs"),
-                decision.resolution.get("pairs"),
+        with (
+            apps.get_model("workflows", "Decision")
+            .objects.db_manager(alias)
+            .locked_resolution(
+                decision_id,
+                actor=actor,
+                consumer_step_run_id=step_run.pk,
+            ) as decision
+        ):
+            rows = (
+                apps.get_model("parties", "Party")
+                .objects.db_manager(alias)
+                .prepare_duplicate_pairs(
+                    decision.payload.get("pairs"),
+                    decision.resolution.get("pairs"),
+                )
             )
             return StepResult.done(
                 output=[{"decision_id": decision.pk, "pair_index": index} for index, _row in enumerate(rows)],
@@ -312,7 +336,7 @@ class IdentityReviewStepImpl(GateStep):
     output_model = IdentityReviewOutput
     effect_description = "Reads Party identity facts and may create a workflow Decision."
     idempotent = True
-    config_model = None
+    config_model = IdentityReviewConfig
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         alias = get_write_alias(type(step_run), instance=step_run)
@@ -322,11 +346,16 @@ class IdentityReviewStepImpl(GateStep):
         step_run.step = step
         run: Any = related_on(step_run, "run", using=alias)
         del now
-        proposal = _identity_input(step_run.input)
+        config = type(self).normalize_config(step_run.step.config)
+        proposal = _identity_input(step_run.input, default_address_label=config["default_address_label"])
         actor = engine.resolve_workflow_actor(run, using=alias).subject
-        party, current = apps.get_model("parties", "Party").objects.db_manager(alias).identity_snapshot(
-            proposal["party_id"],
-            actor=actor,
+        party, current = (
+            apps.get_model("parties", "Party")
+            .objects.db_manager(alias)
+            .identity_snapshot(
+                proposal["party_id"],
+                actor=actor,
+            )
         )
         facts = (
             ReviewFact(
@@ -373,21 +402,20 @@ class IdentityReviewStepImpl(GateStep):
                 },
                 outcome="unchanged",
             )
-        config = dict(step_run.step.config)
         assignee = str(
             engine.resolve_workflow_actor(
                 proposal.get("assignee") or config.get("assignee") or run, using=alias
             ).subject
         )
-        review = _identity_review_action(payload=payload, facts=facts)
+        review = _identity_review_action(payload=payload, facts=facts, party_label=config["party_label"])
         return type(self).gate_result(
             step_run,
             config={
                 "policy": "one_done",
-                "action": str(config.get("action") or "review-party-identity"),
+                "action": config["action"],
                 "slots": [{"assignees": [assignee]}],
                 "payload": review.payload,
-                "max_attempts": positive_int(config.get("max_attempts", 3), "Identity review max_attempts"),
+                "max_attempts": config["max_attempts"],
                 "decision_schema": review.decision_schema,
                 "targets": [
                     {
@@ -428,9 +456,13 @@ class IdentityApplyStepImpl(DecisionApplyStep):
         value = _identity_apply_input(step_run.input)
         passthrough = _unchanged_identity_input(value)
         if passthrough is not None:
-            _, current = apps.get_model("parties", "Party").objects.db_manager(alias).identity_snapshot(
-                passthrough["party_id"],
-                actor=engine.resolve_workflow_actor(run, using=alias).subject,
+            _, current = (
+                apps.get_model("parties", "Party")
+                .objects.db_manager(alias)
+                .identity_snapshot(
+                    passthrough["party_id"],
+                    actor=engine.resolve_workflow_actor(run, using=alias).subject,
+                )
             )
             if canonical_json_sha256(current) != passthrough["facts_hash"]:
                 return StepResult.done(
@@ -454,20 +486,28 @@ class IdentityApplyStepImpl(DecisionApplyStep):
         alias = get_write_alias(type(step_run), instance=step_run)
 
         del now
-        with apps.get_model("workflows", "Decision").objects.db_manager(alias).locked_resolution(
-            decision_id,
-            actor=actor,
-            consumer_step_run_id=step_run.pk,
-        ) as decision:
+        with (
+            apps.get_model("workflows", "Decision")
+            .objects.db_manager(alias)
+            .locked_resolution(
+                decision_id,
+                actor=actor,
+                consumer_step_run_id=step_run.pk,
+            ) as decision
+        ):
             payload = decision.payload
             if decision.target_model.lower() != "parties.party" or decision.target_id != payload.get("party_id"):
                 raise ValidationError({"party_id": "Identity review does not target its retained Party."})
-            outcome, results = apps.get_model("parties", "Party").objects.db_manager(alias).apply_identity(
-                party_id=decision.target_id,
-                expected_facts_hash=payload["facts_hash"],
-                proposed=payload["proposed"],
-                choices={name: decision.resolution.get(name, "") for name in _IDENTITY_ACTIONS},
-                actor=actor,
+            outcome, results = (
+                apps.get_model("parties", "Party")
+                .objects.db_manager(alias)
+                .apply_identity(
+                    party_id=decision.target_id,
+                    expected_facts_hash=payload["facts_hash"],
+                    proposed=payload["proposed"],
+                    choices={name: decision.resolution.get(name, "") for name in _IDENTITY_ACTIONS},
+                    actor=actor,
+                )
             )
             return StepResult.done(
                 output={"party_id": decision.target_id, "context": payload["context"], **results},
@@ -486,31 +526,31 @@ class _IdentityAction(TypedDict):
 
 _IDENTITY_ACTIONS: dict[str, _IdentityAction] = {
     "name_action": {
-        "label": "Supplier name",
+        "label": "{party} name",
         "description": "Keep the current canonical name or use the proposed name from this source.",
         "choices": {
-            "keep": "Keep current supplier name",
-            "replace": "Use proposed supplier name",
+            "keep": "Keep current {party} name",
+            "replace": "Use proposed {party} name",
         },
     },
     "address_action": {
-        "label": "Supplier address",
+        "label": "{party} address",
         "description": "Keep current addresses, add the proposed address, or replace the primary address.",
         "choices": {
-            "keep": "Keep current supplier addresses",
-            "add": "Add proposed supplier address",
-            "replace": "Replace primary supplier address",
+            "keep": "Keep current {party} addresses",
+            "add": "Add proposed {party} address",
+            "replace": "Replace primary {party} address",
         },
     },
     "handle_action": {
-        "label": "Supplier contact",
+        "label": "{party} contact",
         "description": (
-            "Keep the email or phone at its current confirmation status, confirm it for this supplier, or dismiss it."
+            "Keep the email or phone at its current confirmation status, confirm it for this {party}, or dismiss it."
         ),
         "choices": {
             "keep": "Keep current contact status",
-            "confirm": "Confirm proposed supplier contact",
-            "dismiss": "Dismiss proposed supplier contact",
+            "confirm": "Confirm proposed {party} contact",
+            "dismiss": "Dismiss proposed {party} contact",
         },
     },
 }
@@ -544,7 +584,7 @@ def _unchanged_identity_input(value: Any) -> dict[str, Any] | None:
     return dict(value)
 
 
-def _identity_input(value: Any) -> dict[str, Any]:
+def _identity_input(value: Any, *, default_address_label: str) -> dict[str, Any]:
     """Normalize the JSON-safe identity proposal while leaving context opaque."""
 
     if not isinstance(value, Mapping) or not str(value.get("party_id") or ""):
@@ -572,7 +612,7 @@ def _identity_input(value: Any) -> dict[str, Any]:
     normalized = {
         "name": " ".join(str(proposed.get("name") or "").split()),
         "address": {
-            "label": " ".join(str(address.get("label") or "Billing").split())[:64],
+            "label": " ".join(str(address.get("label") or default_address_label).split())[:64],
             **{field: " ".join(str(address.get(field) or "").split()) for field in _ADDRESS_FIELDS},
         },
         "handle": {
@@ -593,17 +633,18 @@ def _identity_input(value: Any) -> dict[str, Any]:
     }
 
 
-def _identity_review_action(*, payload: Mapping[str, Any], facts: Any) -> Any:
+def _identity_review_action(*, payload: Mapping[str, Any], facts: Any, party_label: str) -> Any:
     """Build the tagged identity actions and typed frozen fact context."""
 
+    labels = {"party": party_label}
     editable = {
         name: {
             "type": "string",
             "enum": list(field["choices"]),
             "default": "keep",
-            "label": field["label"],
-            "description": field["description"],
-            "options": [{"value": value, "label": label} for value, label in field["choices"].items()],
+            "label": field["label"].format(**labels),
+            "description": field["description"].format(**labels),
+            "options": [{"value": value, "label": label.format(**labels)} for value, label in field["choices"].items()],
         }
         for name, field in _IDENTITY_ACTIONS.items()
     }

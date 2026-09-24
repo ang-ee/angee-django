@@ -1,5 +1,5 @@
 import * as React from "react";
-import { SelectPrimitive, StatusDot, statusTone } from "@angee/ui";
+import { SelectPrimitive, StatusDot, useStatusTone } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import type { AcpStatus } from "../useAcpRuntime";
@@ -36,6 +36,7 @@ export function AgentChooser({
   fallbackName?: string;
   fallbackHandle?: string;
 }): React.ReactElement {
+  const statusTone = useStatusTone();
   const t = useAgentsT();
   // Tolerate a value absent from the list (default agent not yet listed, or the roster
   // still loading) via the fallbacks, so the trigger never renders blank.

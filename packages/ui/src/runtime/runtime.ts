@@ -26,6 +26,7 @@ import {
 } from "./route-href";
 import type { DashboardRegistry } from "../dashboard/headless";
 import type { ThemeContribution } from "../theme";
+import type { StatusToneMap } from "../widgets/status-tones";
 
 export const DEFAULT_LOGIN_PATH = "/login";
 export const HOME_PATH_PREFERENCE_KEY = "homePath";
@@ -85,6 +86,7 @@ export type ResourceRecordHrefLookup = (
  */
 export interface AppRuntime {
   widgets: WidgetMap;
+  statusTones: StatusToneMap;
   i18n: RuntimeI18n | null;
   auth: RuntimeAuthState;
   logoutAction: RuntimeLogoutAction;
@@ -163,6 +165,7 @@ const EMPTY_USER_PREFERENCES: RuntimeUserPreferences = {};
 
 const EMPTY_RUNTIME: AppRuntime = {
   widgets: {},
+  statusTones: {},
   i18n: null,
   auth: ANONYMOUS_RUNTIME_AUTH,
   logoutAction: {

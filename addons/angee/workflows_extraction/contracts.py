@@ -136,6 +136,12 @@ class DocumentSource:
     file: Any | None = None
     message_part: Any | None = None
 
+    @property
+    def filename(self) -> str:
+        """Retained file name, or an empty string for message fragments."""
+
+        return str(getattr(self.file, "filename", "") or getattr(self.file, "name", ""))
+
 
 @dataclass(frozen=True, slots=True)
 class DocumentPart:

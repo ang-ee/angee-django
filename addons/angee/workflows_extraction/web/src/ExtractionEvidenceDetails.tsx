@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { DocumentType } from "@angee/gql/console";
-import { Badge, Button, CodeBlock, recordTargetHref, statusLabel, statusTone, TextLink, useRecordPeekContext, useResourceRecordHrefLookup, useT } from "@angee/ui";
+import { Badge, Button, CodeBlock, recordTargetHref, statusLabel, useStatusTone, TextLink, useRecordPeekContext, useResourceRecordHrefLookup, useT } from "@angee/ui";
 import { FileRecordPreview, filePreviewReference } from "@angee/storage";
 
 import { ExtractionRecordEvidenceDocument } from "./documents";
@@ -23,6 +23,7 @@ function evidencePreviewPage(evidence: ExtractionEvidence): number | null {
 }
 
 export function ExtractionEvidenceDetails({ evidence }: { evidence: ExtractionEvidence }): React.ReactElement {
+  const statusTone = useStatusTone();
   const t = useT("workflowsExtraction");
   const recordHref = useResourceRecordHrefLookup();
   const peek = useRecordPeekContext();

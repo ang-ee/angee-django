@@ -1,5 +1,6 @@
 """Deterministic domain profiles registered only by test settings."""
 
+import hashlib
 from typing import Any, Sequence
 
 from angee.workflows_extraction.contracts import (
@@ -7,6 +8,7 @@ from angee.workflows_extraction.contracts import (
     DocumentPipelineError,
     DocumentResult,
     DocumentSource,
+    ExtractionPartKind,
 )
 from angee.workflows_extraction.profiles import ExtractionProfile
 
@@ -81,3 +83,19 @@ class FakeDocumentProfile(ExtractionProfile):
             dict(value), tuple(parts), dict(claims), ("mapping",),
             provider_metadata=dict(metadata),
         )
+
+
+class RecordCarrierProfile(FakeDocumentProfile):
+    """A neutral record envelope selected through the ordinary profile registry."""
+
+    key = "record_carrier"
+    label = "Record carrier"
+
+    def detect_carriers(self, source: DocumentSource) -> tuple[DocumentPart, ...]:
+        if not isinstance(source.content, bytes) or not source.content.startswith(b"record:"):
+            return ()
+        number = source.content.removeprefix(b"record:").decode("utf-8")
+        return (DocumentPart(
+            source.source_position, None, source.mime_type, ExtractionPartKind.STRUCTURED,
+            {"number": number}, "structured:record", hashlib.sha256(source.content).hexdigest(),
+        ),)

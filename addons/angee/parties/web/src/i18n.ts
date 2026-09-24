@@ -40,10 +40,10 @@ export const enPartiesMessages: Record<string, string> = {
   "party.contact.phoneValue": "Phone number",
   "party.contact.phone.placeholder": "+420 123 456 789",
   "party.contact.value.description":
-    "Adds an unconfirmed contact claim. To correct a contact, add the replacement, then dismiss the old Identity link. This does not verify an invoice sender.",
+    "Adds an unconfirmed contact claim. To correct a contact, add the replacement, then dismiss the old Identity link. This does not authenticate messages from this contact.",
   "party.contact.label": "Label",
-  "party.contact.label.placeholder": "Billing, work, or another useful label",
-  "party.contact.summary": "Billing contact",
+  "party.contact.label.placeholder": "Primary, work, or another useful label",
+  "party.contact.summary": "Contact details",
   "party.contact.email": "Email",
   "party.contact.phone": "Phone",
   "party.contact.required": "Enter an email address or phone number.",

@@ -133,10 +133,10 @@ def test_extraction_execution_policy_is_input_bound(step_impl: type) -> None:
     assert step_impl.config_form_spec() is None
     assert schema is not None
     assert schema["properties"]["profile_config"]["widget"] == "json"
-    if step_impl in (PreparePagesStepImpl, CollectCarriersStepImpl):
+    if step_impl is PreparePagesStepImpl:
         assert "schema" not in schema["properties"]
-        assert "profile" not in schema["properties"]
-    elif step_impl is RecognizePageStepImpl:
+        assert "profile" in schema["properties"]
+    elif step_impl in (CollectCarriersStepImpl, RecognizePageStepImpl):
         assert "schema" not in schema["properties"]
         assert "profile" not in schema["properties"]
     else:
@@ -531,26 +531,29 @@ def test_correspondence_hold_owned_by_extraction(status: str, code: str, expecte
 
 
 def test_native_acquisition_converts_input_errors_to_retained_pipeline_failures() -> None:
+    profile = UnconfiguredExtractionProfile()
     source = DocumentSource(0, "a" * 64, "image/png", b"not an image")
     with pytest.raises(DocumentPipelineError, match=r"acquisition failed \(ValueError\)"):
-        acquire_native_parts((source,))
+        acquire_native_parts((source,), profile=profile)
 
     acquired = DocumentSource(0, "b" * 64, "text/plain", "retained", message_part=object())
     failed = DocumentSource(1, "a" * 64, "image/png", b"not an image")
     with pytest.raises(DocumentPipelineError) as error:
-        acquire_native_parts((acquired, failed))
+        acquire_native_parts((acquired, failed), profile=profile)
     assert [part.value for part in error.value.parts] == ["retained"]
 
     nul_text = DocumentSource(0, "c" * 64, "text/plain", b"document\x00text")
     with pytest.raises(DocumentPipelineError, match="acquisition failed"):
-        acquire_native_parts((nul_text,))
+        acquire_native_parts((nul_text,), profile=profile)
 
     with pytest.raises(DocumentPipelineError) as unsupported:
-        acquire_native_parts((DocumentSource(0, "d" * 64, "application/octet-stream", b"not-an-image"),))
+        acquire_native_parts(
+            (DocumentSource(0, "d" * 64, "application/octet-stream", b"not-an-image"),), profile=profile,
+        )
     assert (unsupported.value.stage, unsupported.value.code) == ("acquisition", "unsupported_media_type")
 
     with pytest.raises(DocumentPipelineError) as empty:
-        acquire_native_parts((DocumentSource(0, "e" * 64, "application/octet-stream", b""),))
+        acquire_native_parts((DocumentSource(0, "e" * 64, "application/octet-stream", b""),), profile=profile)
     assert (empty.value.stage, empty.value.code) == ("acquisition", "empty_source")
 
 

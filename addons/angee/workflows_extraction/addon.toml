@@ -6,7 +6,6 @@ keywords = ["workflows", "extraction", "documents", "evidence"]
 category = "Workflows"
 depends_on = ["angee.workflows", "angee.workflows_agents", "angee.agents", "angee.storage", "angee.messaging", "django.contrib.contenttypes"]
 dependencies = [
-  "defusedxml>=0.7,<1",
   "jsonschema>=4.26",
   "pypdfium2>=4.30",
   "pillow>=11.0",

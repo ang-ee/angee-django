@@ -257,6 +257,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   // userPreferences) are layered in by RuntimeSessionProvider inside the frame.
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
     widgets: { ...defaultWidgets, ...composed.widgets },
+    statusTones: composed.statusTones,
     i18n: i18n.instance,
     icons: composed.icons,
     forms: composed.forms,

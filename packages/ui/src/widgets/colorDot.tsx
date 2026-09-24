@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import { StatusDot } from "../ui/status-icon";
-import { statusTone } from "./status-tones";
+import { useStatusTone } from "./use-status-tone";
 import { StatusSelectEdit } from "./statusSelectEdit";
 import { optionLabel, type WidgetDefinition, type WidgetRenderProps } from "./types";
 
@@ -14,6 +14,7 @@ import { optionLabel, type WidgetDefinition, type WidgetRenderProps } from "./ty
  * select so the field is still writable in a form.
  */
 function ColorDotRead({ value, field }: WidgetRenderProps<string>): ReactElement {
+  const statusTone = useStatusTone();
   const label = optionLabel(field?.options, value);
   // The dot carries an accessible label even when the value isn't a known option.
   const ariaLabel = typeof label === "string" && label ? label : String(value ?? "");

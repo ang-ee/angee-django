@@ -20,7 +20,7 @@ import {
   ResourceList,
   Skeleton,
   SkeletonStatus,
-  statusTone,
+  useStatusTone,
   TextLink,
   Workbench,
   useContainerQuery,
@@ -532,6 +532,7 @@ export function attemptStateLabel(row: StepAttemptRow, t: ReturnType<typeof useW
 }
 
 function AttemptResultBadge({ kind, t }: { kind: unknown; t: ReturnType<typeof useWorkflowsT> }): React.ReactElement | null {
+  const statusTone = useStatusTone();
   const value = String(kind ?? "").toUpperCase();
   if (!value) return null;
   const label = value === "ERROR" ? t("runs.resultERROR")

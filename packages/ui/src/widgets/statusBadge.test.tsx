@@ -4,6 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { statusBadgeWidget } from "./statusBadge";
+import { AppRuntimeProvider } from "../runtime/runtime";
 
 describe("statusBadge widget tone", () => {
   afterEach(() => {
@@ -11,6 +12,19 @@ describe("statusBadge widget tone", () => {
   });
 
   const Badge = statusBadgeWidget.read;
+
+  test("keeps contributed vocabulary scoped to its app and honors field overrides", () => {
+    render(<>
+      <AppRuntimeProvider runtime={{ statusTones: { reviewed: "accent" } }}>
+        <Badge value="REVIEWED" field={{ options: [{ value: "REVIEWED", label: "Contributed" }] }} />
+        <Badge value="REVIEWED" field={{ tone: { REVIEWED: "danger" }, options: [{ value: "REVIEWED", label: "Overridden" }] }} />
+      </AppRuntimeProvider>
+      <Badge value="reviewed" field={{ options: [{ value: "reviewed", label: "Other app" }] }} />
+    </>);
+    expect(screen.getByText("Contributed").className).toContain("bg-accent-soft");
+    expect(screen.getByText("Overridden").className).toContain("bg-danger-soft");
+    expect(screen.getByText("Other app").className).toContain("bg-brand-soft");
+  });
 
   test("colors known status values via the widget convention", () => {
     render(

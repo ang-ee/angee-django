@@ -2,7 +2,7 @@
 // app folds the manifests into a single runtime with `composeAddons`. Every
 // contribution is keyed, and the key decides what a second claim on it means:
 //
-// - Registry facts (routes, menu ids, widgets, icons, i18n keys, forms, previews,
+// - Registry facts (routes, menu ids, widgets, status tones, icons, i18n keys, forms, previews,
 //   data providers) and the keyed contribution lists that are extension points
 //   (slot entries by `(slot, model?, impl?, id)`, drawers by `(edge, id)`) are
 //   unique — a second addon claiming one is a collision, and a composition-time
@@ -31,6 +31,8 @@ import type {
   WidgetMap,
 } from "@angee/ui/runtime";
 import { RECORD_SEARCH_KEYS, isModelScopedSlot } from "@angee/ui/runtime";
+import { STATUS_TONES, type StatusToneMap } from "@angee/ui/widgets/status-tones";
+import { optionToken } from "@angee/ui/widgets/types";
 import {
   DASHBOARD_STORE_SLOT,
   parseDashboardSnapshot,
@@ -94,6 +96,8 @@ export interface AddonManifest {
   routes?: readonly AddonRoute[];
   menus?: readonly MenuItem[];
   widgets?: WidgetMap;
+  /** Product status vocabulary; normalized keys cannot claim framework defaults or another addon's value. */
+  statusTones?: StatusToneMap;
   i18n?: I18nResources;
   icons?: Readonly<Record<string, unknown>>;
   forms?: FormOverrideMap;
@@ -135,6 +139,7 @@ export interface ComposedAddons {
   routes: readonly AddonRoute[];
   menus: readonly ComposedMenuItem[];
   widgets: WidgetMap;
+  statusTones: StatusToneMap;
   i18n: I18nResources;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
@@ -255,6 +260,7 @@ export function composeAddons(
   const routes: AddonRoute[] = [];
   const menus: ComposedMenuItem[] = [];
   const widgets: WidgetMap = {};
+  const statusTones: Record<string, StatusToneMap[string]> = Object.create(null);
   const i18n: Record<string, Record<string, string>> = {};
   const icons: Record<string, unknown> = {};
   const forms: FormOverrideMap = {};
@@ -310,6 +316,15 @@ export function composeAddons(
         icons[name] = icon;
       }
     }
+    for (const [value, tone] of Object.entries(addon.statusTones ?? {})) {
+      const key = optionToken(value);
+      if (!key) throw new Error(`Addon "${addon.id}" declares an empty status tone key.`);
+      if (Object.values(STATUS_TONES).some((values) => values.includes(key))) {
+        throw new Error(`Addon "${addon.id}" redefines framework status tone "${key}".`);
+      }
+      assertUnclaimed(statusTones, key, addon.id, "status tone");
+      statusTones[key] = tone;
+    }
     if (addon.forms) {
       for (const [model, form] of Object.entries(addon.forms)) {
         const canonicalModel = canonicalizeModel(model);
@@ -363,6 +378,7 @@ export function composeAddons(
     routes,
     menus,
     widgets,
+    statusTones,
     i18n,
     icons,
     forms,

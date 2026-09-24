@@ -38,6 +38,7 @@ import {
 } from "@angee/ui/views/resource-view-model";
 import type { DataResourceMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
+import { statusBadgeWidget } from "@angee/ui/widgets/statusBadge";
 
 afterEach(() => cleanup());
 
@@ -1127,6 +1128,27 @@ describe("createApp resource route index", () => {
 });
 
 describe("createApp route tree", () => {
+  test("renders addon-contributed status tones through the app runtime", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/review");
+    const app = createApp(testAppInput([{
+      id: "review",
+      statusTones: { reviewed: "accent" },
+      routes: [{
+        name: "review", path: "/review",
+        component: () => createElement(statusBadgeWidget.read, { value: "REVIEWED" }),
+      }],
+    }]));
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(host.querySelector(".bg-accent-soft")?.textContent).toBe("REVIEWED"));
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+
   test("keeps a contributed layout provider mounted when changing pages", async () => {
     const host = document.createElement("div");
     document.body.append(host);

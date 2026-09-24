@@ -73,7 +73,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
       </div>
     );
   },
-  statusTone: () => "neutral",
+  useStatusTone: () => () => "neutral",
   textRoleVariants: () => "",
   useRouteHref: () => mocks.routeHref,
 }));

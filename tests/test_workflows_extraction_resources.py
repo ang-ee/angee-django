@@ -57,7 +57,7 @@ def test_install_resources_publish_valid_generic_extraction_child() -> None:
     }
     preparation_fields = steps["prepare_pages"].input_binding["fields"]
     assert "schema" not in preparation_fields
-    assert "profile" not in preparation_fields
+    assert preparation_fields["profile"] == {"kind": "workflow_input", "path": ["profile"]}
     assert preparation_fields["profile_config"] == {
         "kind": "workflow_input",
         "path": ["profile_config"],

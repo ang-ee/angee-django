@@ -283,12 +283,17 @@ history uses native Query pages with domain-owned
   (`solid`/`soft`/`surface`/`outline`/`ghost`). Drive recipe color through
   `toneClass(tone, fill)`; never hand-type a soft/solid tone triple, and never use
   the retired `default`/`error` names (they are `neutral`/`danger`).
-- **Status → tone is owned once** by the shared `STATUS_TONES` vocabulary
-  (`widgets/status-tones.ts`, the domain layer over the domain-free `lib/tones.ts`).
-  The `statusBadge` (pill) and `colorDot` (dot) widgets and every console status
-  surface (`StateTag`) resolve a value through `statusTone(value, override?)`: an
-  explicit `<Column tone>` map wins, then the shared convention, else `brand`. Never
-  add a private status→tone map (the operator console kept one and drifted). A run
+- **Status → tone is owned once** by
+  [`statusTone`](../../packages/ui/src/widgets/status-tones.ts). Framework defaults
+  contain only neutral vocabulary. Addons contribute product values through
+  `defineAddon({ statusTones })`; composition normalizes keys and rejects duplicate
+  claims, including claims on framework defaults. Every React surface resolves
+  tones with [`useStatusTone()`](../../packages/ui/src/widgets/use-status-tone.ts),
+  which reads the current app's runtime; custom surfaces use the same hook as
+  `statusBadge`, `colorDot`, and form headers.
+  The pure `statusTone` resolver remains for non-React transforms with explicit
+  vocabulary. An explicit `<Column tone>` map wins, then addon tones, then the shared
+  convention, else `brand`. A run
   state — stopped/running/error/warning — renders as `colorDot` (grey/green/red/amber);
   a value the vocabulary doesn't know takes an explicit `<Column tone>` (e.g. a task's
   `blocked`→`danger`). Keep the run state a separate field from a lifecycle/state enum

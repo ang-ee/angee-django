@@ -199,6 +199,7 @@ ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessi
 ANGEE_EXTRACTION_PROFILE_CLASSES = {
     "none": "angee.workflows_extraction.profiles.UnconfiguredExtractionProfile",
     "fake_document": "tests.extraction_profiles.FakeDocumentProfile",
+    "record_carrier": "tests.extraction_profiles.RecordCarrierProfile",
 }
 ANGEE_EXTRACTION_MAX_BYTES = 25 * 1024 * 1024
 ANGEE_EXTRACTION_TIMEOUT_SECONDS = 120

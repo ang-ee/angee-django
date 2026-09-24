@@ -117,14 +117,14 @@ def _dedupe_workflow() -> Any:
     )
 
 
-def _identity_workflow() -> Any:
+def _identity_workflow(*, config: dict[str, Any] | None = None) -> Any:
     return workflow_with_steps(
         name="Review identity",
         steps=(
             {
                 "key": "review",
                 "step_class": "parties_identity_review",
-                "config": {},
+                "config": config or {},
                 "input_binding": {"kind": "workflow_input", "path": []},
             },
             {
@@ -270,9 +270,20 @@ def test_party_handle_delete_notifies_stable_handle_after_resolution(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("config", "party_label", "address_label"),
+    (
+        ({}, "Party", "Primary"),
+        ({"party_label": "Member", "default_address_label": "Office"}, "Member", "Office"),
+        ({"party_label": "VIP", "default_address_label": "Office"}, "VIP", "Office"),
+    ),
+)
 def test_identity_review_freezes_context_and_applies_name_and_address(
     workflows_parties_tables: None,
     no_workflow_queue: None,
+    config: dict[str, Any],
+    party_label: str,
+    address_label: str,
 ) -> None:
     del workflows_parties_tables, no_workflow_queue
     operator = User.objects.create_user(username="identity-reviewer")
@@ -288,7 +299,7 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
         "evidence": [{"label": "Printed counterparty", "source_model": "storage.File", "source_id": "fil_example"}],
         "context": {"document_id": "doc_example", "draft_revision": 2},
     }
-    workflow = _identity_workflow()
+    workflow = _identity_workflow(config=config)
     run = engine.start(workflow, party, admit_workflow_actor(workflow, operator), input=JsonPresence(True, proposal))
     advance_once(run)
     execute_started(run)
@@ -301,19 +312,19 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
         "type": "string",
         "enum": ["keep", "replace"],
         "default": "keep",
-        "label": "Supplier name",
+        "label": f"{party_label} name",
         "description": "Keep the current canonical name or use the proposed name from this source.",
         "options": [
-            {"value": "keep", "label": "Keep current supplier name"},
-            {"value": "replace", "label": "Use proposed supplier name"},
+            {"value": "keep", "label": f"Keep current {party_label} name"},
+            {"value": "replace", "label": f"Use proposed {party_label} name"},
         ],
     }
-    assert fields["address_action"]["label"] == "Supplier address"
+    assert fields["address_action"]["label"] == f"{party_label} address"
     assert fields["address_action"]["options"][0] == {
         "value": "keep",
-        "label": "Keep current supplier addresses",
+        "label": f"Keep current {party_label} addresses",
     }
-    assert fields["handle_action"]["label"] == "Supplier contact"
+    assert fields["handle_action"]["label"] == f"{party_label} contact"
     assert fields["handle_action"]["options"][0] == {
         "value": "keep",
         "label": "Keep current contact status",
@@ -333,6 +344,7 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
         party.refresh_from_db()
         address = Address._base_manager.get(party=party)
     assert party.display_name == "Example Counterparty"
+    assert address.label == address_label
     assert (address.street, address.city, address.country) == ("10 Example Road", "Exampleton", "GB")
     assert step_run_for(run, "apply").output["context"] == proposal["context"]
 

@@ -6,7 +6,7 @@ import {
   MiniCard,
   RailPanel,
   RelativeTime,
-  statusTone,
+  useStatusTone,
   type Tone,
 } from "@angee/ui";
 
@@ -37,6 +37,7 @@ const PAIRING_HEALTH_BY_STATE: Readonly<Record<string, PairingHealthDefinition>>
 function pairingHealth(
   state: string | null | undefined,
   t: MessagingT,
+  statusTone: ReturnType<typeof useStatusTone>,
 ): { label: string; tone: Tone } {
   const definition = state ? PAIRING_HEALTH_BY_STATE[state] : undefined;
   const overrides = state && definition?.tone
@@ -50,6 +51,7 @@ function pairingHealth(
 
 /** Messaging-owned channel health contributed into the Parties overview seam. */
 export function MessagingOverviewContribution(): React.ReactElement {
+  const statusTone = useStatusTone();
   const t = useMessagingT();
   const query = useAuthoredQuery(
     MessagingChannelHealth,
@@ -65,7 +67,7 @@ export function MessagingOverviewContribution(): React.ReactElement {
           {channels.map((channel) => {
             const syncStatus = String(channel.last_sync_status ?? "").toLowerCase();
             const unhealthy = Boolean(channel.sync_error) || syncStatus === "error";
-            const pairing = pairingHealth(channel.pairing_state, t);
+            const pairing = pairingHealth(channel.pairing_state, t, statusTone);
             return (
               <MiniCard
                 key={channel.id}

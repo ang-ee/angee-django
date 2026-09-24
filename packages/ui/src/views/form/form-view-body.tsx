@@ -19,7 +19,7 @@ import { renderGlyph } from "../../chrome/Glyph";
 import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
 import { optionLabel, relationValueId } from "../../widgets/types";
-import { statusTone } from "../../widgets/status-tones";
+import { useStatusTone } from "../../widgets/use-status-tone";
 import type { RelationOption } from "../../widgets/RelationField";
 import {
   EditableLines,
@@ -86,6 +86,7 @@ export function FormViewRecordHeader({
   title?: React.ReactNode;
   extra?: React.ReactNode;
 }): React.ReactElement {
+  const statusTone = useStatusTone();
   const {
     t,
     form,
@@ -206,7 +207,7 @@ export function FormViewRecordHeader({
                 : "";
               return value ? (
                 <Badge
-                  tone={statusTone(value)}
+                  tone={statusTone(value, currentStatusField.tone)}
                   density="compact"
                   shape="pill"
                   className="self-start"

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
-  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, statusTone, useRouteHref, useRouteRecordId } from "@angee/ui";
+  EmptyState, Glyph, PrimaryPanePublisher, SessionRail, SessionRailItem, Skeleton, StatusDot, buttonVariants, useStatusTone, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { useAgentsT } from "../i18n";
 import { type AgentChatView } from "../documents";
@@ -25,6 +25,7 @@ import { useRunningAgents } from "./useRunningAgents";
  * never drift.
  */
 export function AgentSessionsPage(): React.ReactElement {
+  const statusTone = useStatusTone();
   const t = useAgentsT();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
@@ -115,7 +116,7 @@ export function AgentSessionsPage(): React.ReactElement {
         ))}
       </SessionRail>
     );
-  }, [agentsHref, loading, agents, selectedId, sessionHref, t]);
+  }, [agentsHref, loading, agents, selectedId, sessionHref, statusTone, t]);
   // Loading: a skeleton conversation pane beside the skeleton rail rows above.
   if (loading) {
     return (

@@ -15,7 +15,7 @@ _angee:
 addon_id:
   type: str
   default: notes
-  help: Stable addon id and i18n namespace, e.g. notes or billing.
+  help: Stable addon id and i18n namespace, e.g. notes or contacts.
 
 addon_title:
   type: str
