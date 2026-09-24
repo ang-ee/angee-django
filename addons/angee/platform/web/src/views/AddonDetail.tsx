@@ -6,7 +6,6 @@ import { usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
 import { LinkedChips, useRouteNavigate } from "../lib/cells";
 import { usePlatformAddon } from "../lib/explorer";
-import { addonDisplayLabel } from "../lib/rows";
 
 export function AddonDetail(): ReactElement {
   const t = usePlatformT();
@@ -30,7 +29,7 @@ export function AddonDetail(): ReactElement {
             }
           : null
       }
-      title={addon ? addonDisplayLabel(addon.label, addon.id) : undefined}
+      title={addon?.label}
       meta={
         addon ? (
           <>

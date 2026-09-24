@@ -48,7 +48,11 @@ function RowsRead(props: WidgetRenderProps<RowsValue>): ReactElement {
   return <RowsField {...props} readOnly />;
 }
 
-/** Render fixed-N object rows as a table, or titled sections when rowTitle is supplied. */
+/**
+ * Render fixed-N object rows as a table, or titled sections with rowTitle.
+ * Both layouts evaluate showWhen against each row. Tables retain empty cells
+ * for hidden fields so the remaining values stay under their column headers.
+ */
 export function RowsField({
   value,
   field,
@@ -63,31 +67,31 @@ export function RowsField({
 }): ReactElement {
   const rows = rowsValue(value);
   const fieldName = rowsFieldName(field);
-  const columns = rowTemplate(field).filter((column) => !column.hidden);
+  const columns = rowTemplate(field).filter((column) =>
+    !column.hidden && (!rows.length || rows.some((row) => isFieldVisible(column, row))),
+  );
   const rowFields = (row: Record<string, unknown>, rowIndex: number) => {
-    const visibleColumns = rowTitle
-      ? columns.filter((column) => isFieldVisible(column, row))
-      : columns;
+    const visibleColumns = columns.filter((column) => isFieldVisible(column, row));
     const focusColumn = visibleColumns.find((column) => !column.readOnly);
-    return visibleColumns.map((column) => {
-    const cellPath = `${fieldName}.${rowIndex}.${column.name}`;
-    const control = <LabeledDescriptorField
-      field={{ ...column, name: cellPath, label: column.label ?? column.name }}
-      value={row[column.name]}
-      dialogValues={row}
-      messages={messagesForDottedPath(messages, cellPath)}
-      readOnly={readOnly || column.readOnly}
-      showLabel={Boolean(rowTitle)}
-      showDescription={Boolean(rowTitle)}
-      onChange={(next) => onChange?.(rows.map((current, currentIndex) =>
-        currentIndex === rowIndex ? updatedRecord(current, column.name, next) : current,
-      ))}
-      onCommit={onCommit}
-      controlRef={rowIndex === 0 && column === focusColumn ? controlRef : undefined}
-    />;
-    return rowTitle
-      ? <div key={column.name} className={isCompositeFieldDescriptor(column) ? "md:col-span-2" : undefined}>{control}</div>
-      : <TableCell key={column.name} className={readOnly ? "min-w-32 align-top" : "min-w-48 align-top"}>{control}</TableCell>;
+    return (rowTitle ? visibleColumns : columns).map((column) => {
+      const cellPath = `${fieldName}.${rowIndex}.${column.name}`;
+      const control = visibleColumns.includes(column) ? <LabeledDescriptorField
+        field={{ ...column, name: cellPath, label: column.label ?? column.name }}
+        value={row[column.name]}
+        dialogValues={row}
+        messages={messagesForDottedPath(messages, cellPath)}
+        readOnly={readOnly || column.readOnly}
+        showLabel={Boolean(rowTitle)}
+        showDescription={Boolean(rowTitle)}
+        onChange={(next) => onChange?.(rows.map((current, currentIndex) =>
+          currentIndex === rowIndex ? updatedRecord(current, column.name, next) : current,
+        ))}
+        onCommit={onCommit}
+        controlRef={rowIndex === 0 && column === focusColumn ? controlRef : undefined}
+      /> : null;
+      return rowTitle
+        ? <div key={column.name} className={isCompositeFieldDescriptor(column) ? "md:col-span-2" : undefined}>{control}</div>
+        : <TableCell key={column.name} className={readOnly ? "min-w-32 align-top" : "min-w-48 align-top"}>{control}</TableCell>;
     });
   };
 

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { refineResourceName, type Row } from "@angee/metadata";
+import { DISABLED_RESOURCE, refineResourceName, type Row } from "@angee/metadata";
 import { useResourceListQuery } from "./resource-list-query";
 import { errorFromUnknown } from "../../../data/errors";
 import { DEFAULT_TEXT_FILTER_FIELD } from "../resource-view-model";
@@ -39,7 +39,7 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     includeDeclaredOrder: false,
   });
   const dataResource = modelMetadata?.resource ?? null;
-  const resourceName = dataResource ? refineResourceName(dataResource) : "__angee_disabled__";
+  const resourceName = dataResource ? refineResourceName(dataResource) : DISABLED_RESOURCE;
   const active = enabled && Boolean(dataResource);
   const run = useResourceListQuery({
     resource: dataResource,

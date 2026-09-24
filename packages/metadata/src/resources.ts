@@ -7,6 +7,9 @@ import type { ResourceProps } from "@refinedev/core";
 import type { ReactNode } from "react";
 import { dataResourcesFromAngeeSchemaMetadata } from "./projection";
 
+/** Explicit resource for disabled hooks, preventing fallback to the current route. */
+export const DISABLED_RESOURCE = "__angee_disabled__";
+
 export interface AngeeRefineResource extends ResourceProps {
   name: string;
   identifier: string;

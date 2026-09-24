@@ -59,10 +59,16 @@ export interface WorkflowDecisionContextDetails {
   label: React.ReactNode;
 }
 
-export interface NativeWorkflowDecisionScaffoldProps {
+export type WorkflowDecisionContext = NonNullable<ReturnType<typeof decisionReviewContext>>;
+
+export interface NativeWorkflowDecisionScaffoldProps extends Pick<
+  WorkflowDecisionScaffoldProps<WorkflowDecisionContext>, "references" | "initialPeek"
+> {
   props: WorkflowDecisionContentProps;
   header: WorkflowDecisionHeader;
   contextDetails: WorkflowDecisionContextDetails;
+  /** Domain summary over the native context, parsed once by this scaffold. */
+  summary?: (context: WorkflowDecisionContext) => React.ReactNode;
   actionPickerPlacement?: "before-content" | "after-content" | false;
   children: React.ReactNode;
 }
@@ -89,17 +95,7 @@ export function DecisionContextUnavailable({
 }
 
 /** Own the common shell around domain-specific, frozen Decision review context. */
-export function WorkflowDecisionScaffold(props: NativeWorkflowDecisionScaffoldProps): React.ReactElement;
-export function WorkflowDecisionScaffold<Context>(props: WorkflowDecisionScaffoldProps<Context>): React.ReactElement;
-export function WorkflowDecisionScaffold<Context>(
-  props: WorkflowDecisionScaffoldProps<Context> | NativeWorkflowDecisionScaffoldProps,
-): React.ReactElement {
-  return "schema" in props
-    ? <ParsedDecisionScaffold {...props} />
-    : <NativeDecisionScaffold {...props} />;
-}
-
-function ParsedDecisionScaffold<Context>({
+export function WorkflowDecisionScaffold<Context>({
   props,
   context: retainedContext,
   schema,
@@ -136,10 +132,14 @@ function ParsedDecisionScaffold<Context>({
   >{children(context)}</DecisionScaffoldShell>;
 }
 
-function NativeDecisionScaffold({
+/** Render native retained context once, alongside domain summaries and correction controls. */
+export function NativeWorkflowDecisionScaffold({
   props,
   header,
   contextDetails,
+  summary,
+  references,
+  initialPeek,
   actionPickerPlacement,
   children,
 }: NativeWorkflowDecisionScaffoldProps): React.ReactElement {
@@ -147,8 +147,11 @@ function NativeDecisionScaffold({
     () => decisionReviewContext(props.contextValues),
     [props.contextValues],
   );
-  const references = context?.references;
-  useInitialDecisionPeek(props, Array.isArray(references) ? references[0] : references);
+  const contextReferences = context === undefined ? [] : references?.(context) ?? [];
+  const initial = context === undefined ? undefined : initialPeek
+    ? initialPeek(context, contextReferences)
+    : Array.isArray(context.references) ? context.references[0] : context.references;
+  useInitialDecisionPeek(props, initial && "reference" in initial ? initial.reference : initial);
 
   const details = context === undefined ? <DecisionContextUnavailable props={props} /> : (
     <DetailSection title={contextDetails.title}>
@@ -166,7 +169,8 @@ function NativeDecisionScaffold({
   return <DecisionScaffoldShell
     props={props}
     heading={header}
-    contextDetails={details}
+    references={contextReferences}
+    contextDetails={<>{context === undefined ? null : summary?.(context)}{details}</>}
     actionPickerPlacement={actionPickerPlacement}
   >{children}</DecisionScaffoldShell>;
 }
@@ -210,9 +214,4 @@ function DecisionScaffoldShell({
     {children}
     {actionPickerPlacement === "after-content" ? props.actionPicker : null}
   </section>;
-}
-
-/** Normalize retained scalar text without interpreting domain-specific objects. */
-export function textValue(value: unknown): string {
-  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }

@@ -4,12 +4,13 @@ import { CHATTER_TAB_SEARCH_KEY, recordTargetHref, recordTargetSearch } from "@a
 export const DECISION_SEARCH_KEY = "decision";
 export const WORKFLOW_RUN_SEARCH_KEY = "workflowRun";
 
-export function decisionSearch(search: Readonly<Record<string, unknown>>, decision: string | null): Record<string, unknown> {
-  return recordTargetSearch(search, { search: {
-    [CHATTER_TAB_SEARCH_KEY]: decision ? "workflows" : null,
-    [DECISION_SEARCH_KEY]: decision,
-    [WORKFLOW_RUN_SEARCH_KEY]: null,
-  } });
+/** Route-search patch for selecting or clearing a Decision in the shared chatter. */
+export function decisionSearchPatch(decision: string | null): Record<string, unknown> {
+  return {
+    [CHATTER_TAB_SEARCH_KEY]: decision ? "workflows" : undefined,
+    [DECISION_SEARCH_KEY]: decision ?? undefined,
+    [WORKFLOW_RUN_SEARCH_KEY]: undefined,
+  };
 }
 
 export function workflowSubjectActionSearch(

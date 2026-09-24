@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ResourceQuery, useModelMetadata } from "@angee/metadata";
+import { DISABLED_RESOURCE, ResourceQuery, useModelMetadata } from "@angee/metadata";
 import { useAngeeAggregate, useAngeeGroupBy, type AggregateBucket, type AggregateMeasure } from "@angee/refine";
 import { useAggregateOperation, useGroupOperation } from "../views/resource/resource-operations";
 import { Filter, type ResourceViewFilter } from "../views/resource/resource-view-model";
@@ -11,7 +11,7 @@ export interface DashboardPageScope {
   filter?: ResourceViewFilter;
 }
 
-const EMPTY_SOURCE: WidgetSource = { resource: "__angee_disabled__" };
+const EMPTY_SOURCE: WidgetSource = { resource: DISABLED_RESOURCE };
 const COUNT_MEASURE: AggregateMeasure = { op: "count", field: null };
 const EMPTY_FIELDS: DashboardWidgetData["queryFields"] = {};
 

@@ -136,8 +136,11 @@ export function parseFormSpecPayload(payload: unknown): Record<string, unknown> 
   return result.success ? result.output : {};
 }
 
-/** Presentation annotations registered with full JSON Schema validators. */
-export const FORM_SPEC_ANNOTATIONS = [
-  "widget", "label", "addLabel", "removeLabel", "placeholder", "layout", "defaultValue", "propertyOrder",
-  "omittable", "presenceRequired", "options", "relation", "hidden",
-] as const;
+const JSON_SCHEMA_KEYWORDS = new Set([
+  "type", "required", "description", "readOnly", "nullable", "minimum", "maximum",
+  "minLength", "maxLength", "minItems", "maxItems", "default", "const", "format", "pattern", "enum",
+]);
+
+/** Every non-standard field entry is an annotation for full JSON Schema validators. */
+export const FORM_SPEC_ANNOTATIONS: readonly string[] = Object.keys(FieldBaseSchema.entries)
+  .filter((keyword) => !JSON_SCHEMA_KEYWORDS.has(keyword));

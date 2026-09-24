@@ -1,7 +1,5 @@
 import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { rowPublicId } from "@angee/metadata";
-import { useActionMutation, useAuthoredMutation } from "@angee/refine";
 import {
   Action,
   Column,
@@ -13,16 +11,18 @@ import {
   ResourceList,
   routeSearchParam,
   TopMenuTabs,
-  useResourceRecordHrefLookup,
+  useActionOutcomeMutation,
+  useActionResultRun,
+  useRecordAction,
+  useRecordActionMutation,
   useRouteSearch,
-  type ActionContext,
+  updateRouteSearch,
   type RecordTabDescriptor,
   type StringIdRow,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
-import { CancelWorkflowRunDocument } from "../documents.console";
-import { DECISION_SEARCH_KEY, decisionSearch } from "../decision-navigation";
+import { DECISION_SEARCH_KEY, decisionSearchPatch } from "../decision-navigation";
 import { useWorkflowsT } from "../i18n";
 import {
   RunTimelinePanel,
@@ -47,7 +47,6 @@ interface WorkflowRunRow extends StringIdRow {
 export function RunsPage(): React.ReactElement {
   const t = useWorkflowsT();
   const navigate = useNavigate();
-  const recordHref = useResourceRecordHrefLookup();
   const search = useRouteSearch();
   const decisionId = routeSearchParam(search, DECISION_SEARCH_KEY) ?? null;
   const collection = search.tab === "sessions" ? "sessions" : "automations";
@@ -60,55 +59,33 @@ export function RunsPage(): React.ReactElement {
     ],
     [t],
   );
-  // Correct as-is: WorkflowRun and Decision have changes(), while StepRun is read by an authored query.
-  const [cancelRun] = useAuthoredMutation(CancelWorkflowRunDocument, {
+  const [cancel] = useRecordActionMutation<ActionFieldName>("cancel_workflow_run", {
+    idArgument: "run",
     invalidateModels: [RUN_MODEL, STEP_RUN_MODEL, DECISION_MODEL],
-    errorFrom: (data) =>
-      data?.cancel_workflow_run.ok === false ? data.cancel_workflow_run.message : null,
   });
-  const [reprocessRun] = useActionMutation<ActionFieldName>("reprocess_workflow_run", {
+  const [reprocessRun, reprocessState] = useActionOutcomeMutation<ActionFieldName>("reprocess_workflow_run", {
     idArgument: "run",
     invalidateModels: [RUN_MODEL, STEP_RUN_MODEL, DECISION_MODEL],
   });
   const reprocessKeys = React.useRef(new Map<string, string>());
-  const cancel = React.useCallback(
-    async (context: ActionContext) => {
-      const id = rowPublicId(context.record);
-      if (!id) return;
-      const data = await cancelRun({ id });
-      context.refresh();
-      return data?.cancel_workflow_run?.message;
-    },
-    [cancelRun],
-  );
+  const settleReprocess = useActionResultRun({ linkTo: RUN_MODEL, noResultTitle: t("runs.reprocessFailed") });
   const reprocessById = React.useCallback(async (id: string) => {
     let requestKey = reprocessKeys.current.get(id);
     if (!requestKey) {
       requestKey = crypto.randomUUID();
       reprocessKeys.current.set(id, requestKey);
     }
-    const outcome = await reprocessRun(id, { request_key: requestKey });
+    const outcome = await settleReprocess(() => reprocessRun(id, { request_key: requestKey }));
     if (outcome?.ok) reprocessKeys.current.delete(id);
-    if (outcome?.ok && outcome.id) {
-      const href = recordHref(RUN_MODEL, outcome.id);
-      if (href) void navigate({ to: href });
-    }
-    return outcome?.message;
-  }, [navigate, recordHref, reprocessRun]);
-  const reprocess = React.useCallback(async (context: ActionContext) => {
-    const id = rowPublicId(context.record);
-    if (!id) return;
-    const message = await reprocessById(id);
-    context.refresh();
-    return message;
-  }, [reprocessById]);
+  }, [reprocessRun, settleReprocess]);
+  const reprocess = useRecordAction(reprocessById, { refresh: false });
   const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
     () => [
       {
         id: "timeline",
         label: t("tabs.timeline"),
         icon: "workflow-run",
-        render: ({ recordId }) => <RunTimelinePanel runId={recordId} onReprocess={() => reprocessById(recordId)} />,
+        render: ({ recordId }) => <RunTimelinePanel runId={recordId} onReprocess={() => reprocessById(recordId)} reprocessing={reprocessState.fetching} />,
         keepMounted: true,
       },
       {
@@ -124,7 +101,7 @@ export function RunsPage(): React.ReactElement {
               void navigate({
                 to: ".",
                 replace: true,
-                search: (previous: Record<string, unknown>) => decisionSearch(previous, decision),
+                search: updateRouteSearch(decisionSearchPatch(decision)),
               });
             }}
           />
@@ -132,7 +109,7 @@ export function RunsPage(): React.ReactElement {
         keepMounted: true,
       },
     ],
-    [decisionId, navigate, reprocessById, t],
+    [decisionId, navigate, reprocessById, reprocessState.fetching, t],
   );
 
   return (

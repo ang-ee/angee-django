@@ -21,7 +21,7 @@ import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, type FormSpecFieldDescriptor } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
-import type { RowsValue } from "./RowsField";
+import { RowsField, type RowsValue } from "./RowsField";
 
 const channelRows: Row[] = [
   { id: "chn-general", name: "General" },
@@ -226,6 +226,39 @@ describe("rows widget", () => {
     expect(screen.getByText("On").closest("td")).not.toBeNull();
     expect(screen.getByText("Off").closest("td")).not.toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  test.each([false, true])("applies row visibility in both layouts (sections: %s)", async (sections) => {
+    const controlRef = vi.fn();
+    renderRows(
+      <RowsField
+        field={rowsField([
+          { name: "target", label: "Target", widget: "text", showWhen: (row) => row.editable === true },
+          { name: "source", label: "Source", widget: "text" },
+          { name: "unused", label: "Unused", widget: "text", showWhen: () => false },
+        ])}
+        value={[
+          { source: "Archive A", target: "Hidden target", editable: false },
+          { source: "Archive B", target: "Visible target", editable: true },
+        ]}
+        rowTitle={sections ? (_row, index) => `Row ${index + 1}` : undefined}
+        controlRef={controlRef}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const targets = await screen.findAllByRole("textbox", { name: "Target" });
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toHaveProperty("value", "Visible target");
+    expect(screen.queryByDisplayValue("Hidden target")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Unused" })).toBeNull();
+    expect(controlRef).toHaveBeenCalledWith(screen.getAllByRole("textbox", { name: "Source" })[0]);
+    if (!sections) {
+      expect(screen.queryByRole("columnheader", { name: "Unused" })).toBeNull();
+      const rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((row) => row.querySelectorAll("td").length)).toEqual([2, 2]);
+      expect(rows[0]?.querySelector("td")?.textContent).toBe("");
+    }
   });
 });
 

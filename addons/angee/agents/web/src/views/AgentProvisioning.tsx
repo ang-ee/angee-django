@@ -8,7 +8,7 @@ import {
 import {
   refineFieldsFromPaths, } from "@angee/refine";
 import {
-  refineResourceName, } from "@angee/metadata";
+  DISABLED_RESOURCE, refineResourceName, } from "@angee/metadata";
 import {
   useModelMetadata, } from "@angee/metadata";
 import { Skeleton, SkeletonStatus, textRoleVariants } from "@angee/ui";
@@ -60,7 +60,7 @@ export function AgentProvisioning({
     [],
   );
   const run = useOne<RowRecord, HttpError>({
-    resource: resource ? refineResourceName(resource) : "__angee_disabled__",
+    resource: resource ? refineResourceName(resource) : DISABLED_RESOURCE,
     id: agentId,
     dataProviderName: resource?.schemaName,
     meta: { fields },

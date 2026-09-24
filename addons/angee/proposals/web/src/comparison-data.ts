@@ -1,4 +1,5 @@
 import {
+  DISABLED_RESOURCE,
   refineResourceName,
   useModelMetadata,
   type DataResourceMetadata,
@@ -177,5 +178,5 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
 }
 
 function resourceName(resource: DataResourceMetadata | null): string {
-  return resource ? refineResourceName(resource) : "__angee_disabled__";
+  return resource ? refineResourceName(resource) : DISABLED_RESOURCE;
 }

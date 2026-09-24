@@ -50,7 +50,7 @@ describe("ResourceQuery", () => {
     ]);
     expect(ResourceQuery.from({ resource: metadata, fields: {} })).toBe(query);
   });
-  test("falls back only to a searchable record representation", () => {
+  test("prefers a searchable representation before falling back to any iContains field", () => {
     const query = ResourceQuery.from(testDataResource("integrate.Vendor", {
       recordRepresentation: "display_name",
       recordSearchFields: [],
@@ -84,7 +84,22 @@ describe("ResourceQuery", () => {
         },
       }),
     }));
-    expect(unsupportedRepresentation.textSearchFields()).toEqual([]);
+    expect(unsupportedRepresentation.textSearchFields()).toEqual(["hidden"]);
+    expect(unsupportedRepresentation.textSearchFields(["display_name"])).toEqual([]);
+  });
+  test("searches every executable text field when no representation is declared", () => {
+    const query = ResourceQuery.from(testDataResource("integrate.Vendor", {
+      recordRepresentation: null,
+      recordSearchFields: [],
+      query: testResourceQuery({
+        fields: {
+          code: field("code", "String", ["exact", "iContains"]),
+          name: field("name", "String", ["exact", "iContains"]),
+          count: field("count", "Int", ["exact"]),
+        },
+      }),
+    }));
+    expect(query.textSearchFields()).toEqual(["code", "name"]);
   });
   test("validates explicit text-search fields for contract and local-row queries", () => {
     const contract = testResourceQuery({

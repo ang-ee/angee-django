@@ -153,14 +153,14 @@ describe("platform detail surfaces", () => {
     );
   });
 
-  test("AddonDetail names an unresolved catalogue entry by its canonical name", () => {
+  test("AddonDetail uses the server's label for an unresolved catalogue entry", () => {
     routerMocks.params = { id: "arp.base" };
     platformMocks.usePlatformAddon.mockReturnValue({
       addon: {
         field_count: 0,
         id: "arp.base",
         kind: "required",
-        label: "",
+        label: "arp.base",
         model_count: 0,
         namespace: "arp",
         resource_count: 0,

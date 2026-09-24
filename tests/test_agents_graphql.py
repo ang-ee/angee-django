@@ -204,6 +204,28 @@ def test_agent_hasura_insert_accepts_enum_member_names(agents_console_tables: No
         assert row.lifecycle == "draft"
 
 
+@pytest.mark.parametrize(
+    ("runtime_class", "runtime_status", "service", "expected"),
+    [
+        ("claude_code", "running", "", False),
+        ("claude_code", "running", "agent-service", True),
+        ("opencode", "running", "", False),
+        ("opencode", "running", "agent-service", True),
+        ("pydantic", "running", "", True),
+        ("pydantic", "stopped", "", False),
+        ("claude_code", "stopped", "agent-service", False),
+        ("none", "running", "", False),
+    ],
+)
+def test_agent_chat_readiness_requires_its_runtime_transport(
+    runtime_class: str, runtime_status: str, service: str, expected: bool
+) -> None:
+    """Only in-process runtimes may chat without a rendered operator service."""
+
+    agent = Agent(runtime_class=runtime_class, runtime_status=runtime_status, service=service)
+    assert agent.can_chat is expected
+
+
 def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> None:
     """Agent row writes use the generated Hasura mutation roots."""
 
@@ -220,6 +242,7 @@ def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> N
                 name
                 lifecycle
                 is_template
+                can_chat
                 can_provision
                 can_deprovision
                 can_delete
@@ -236,6 +259,7 @@ def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> N
         "name": "Composer",
         "lifecycle": "DRAFT",
         "is_template": False,
+        "can_chat": False,
         "can_provision": True,
         "can_deprovision": False,
         "can_delete": True,

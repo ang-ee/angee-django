@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import type { ReactNode } from "react";
+import { createAngeeI18nRuntime } from "@angee/app";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
@@ -160,7 +161,7 @@ afterEach(() => {
 });
 
 describe("ApprovalTask", () => {
-  test("a registered content presents frozen action labels without changing submission semantics", async () => {
+  test.each([true, false])("composed action labels retain frozen submission semantics (namespace available: %s)", async (composed) => {
     const schema: JsonValue = {
       type: "object",
       required: ["action"],
@@ -183,11 +184,14 @@ describe("ApprovalTask", () => {
       placesActionPicker: true,
       actionPresentation: {
         namespace: "approval-test",
-        messages: { "action.confirm": "Confirm publication" },
-        labels: { record: "action.confirm" },
+        keyPrefix: "action",
       },
     });
-    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets, slots: [{
+    const label = composed ? "Confirm publication" : "Record decision";
+    const i18n = createAngeeI18nRuntime(composed ? {
+      "approval-test": { "action.record": "Confirm publication" },
+    } : {}).instance;
+    render(<AppRuntimeProvider runtime={{ i18n, widgets: defaultWidgets, slots: [{
       slot: WORKFLOW_DECISION_CONTENT_SLOT,
       model: "workflows.Decision",
       impl: "review",
@@ -196,15 +200,15 @@ describe("ApprovalTask", () => {
     }] }}><ApprovalTask approval={{ ...authoredApproval, decision_schema: schema }} onResolved={() => undefined} />
     </AppRuntimeProvider>);
 
-    expect(screen.queryByRole("button", { name: "Record decision" })).toBeNull();
+    expect(screen.queryByRole("button", { name: composed ? "Record decision" : "Confirm publication" })).toBeNull();
     expect(screen.getByRole("button", { name: "Keep declared rejection" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm publication" }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Confirm publication" })[1]!);
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    fireEvent.click(screen.getAllByRole("button", { name: label })[1]!);
 
     await waitFor(() => expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith({
-      title: "Confirm publication",
+      title: label,
       body: "Keep this confirmation body.",
-      confirm: "Confirm publication",
+      confirm: label,
       danger: false,
     }));
     await waitFor(() => expect(mocks.decide).toHaveBeenCalledExactlyOnceWith({

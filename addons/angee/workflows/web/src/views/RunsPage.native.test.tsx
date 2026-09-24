@@ -188,8 +188,8 @@ beforeEach(() => {
 test("a failed run leads with the failed step, retained error, inspection, and native recovery", async () => {
   mocks.loading = false;
   mocks.runStatus = "FAILED";
-  const reprocess = vi.fn().mockResolvedValue("Reprocess started");
-  const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" onReprocess={reprocess} /> }), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const reprocess = vi.fn().mockResolvedValue(undefined);
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" onReprocess={reprocess} /> }), history: createMemoryHistory({ initialEntries: ["/?tab=automations&page=3"] }) });
   await router.load();
   render(<RouterProvider router={router} />);
 
@@ -201,10 +201,24 @@ test("a failed run leads with the failed step, retained error, inspection, and n
   fireEvent.click(screen.getByRole("button", { name: "Inspect failed execution" }));
   await waitFor(() => expect(router.state.location.search).toMatchObject({
     step: "step-1", execution: "execution-failed", attempt: "attempt-failed",
+    tab: "automations", page: 3,
   }));
   await waitFor(() => expect(mocks.resources.some((props) =>
     props.resource === "workflows.StepAttempt" && props.defaultRecordTab === "failure",
   )).toBe(true));
+});
+
+test("the reprocess button follows the mutation owner's pending state", async () => {
+  mocks.loading = false;
+  mocks.runStatus = "FAILED";
+  const reprocess = vi.fn().mockResolvedValue(undefined);
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" onReprocess={reprocess} reprocessing /> }), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  await router.load();
+  render(<RouterProvider router={router} />);
+  const button = await screen.findByRole("button", { name: "Starting reprocess…" });
+  expect(button).toHaveProperty("disabled", true);
+  fireEvent.click(button);
+  expect(reprocess).not.toHaveBeenCalled();
 });
 
 test("an active run exposes a durable advancement error without failed-run actions", async () => {

@@ -15,10 +15,11 @@ import {
   routeSearchParam,
   useRecordChromeContext,
   useRouteSearch,
+  updateRouteSearch,
 } from "@angee/ui";
 import {
   DECISION_SEARCH_KEY,
-  decisionSearch,
+  decisionSearchPatch,
   WORKFLOW_DECISION_CONTENT_SLOT,
   WorkflowApprovals,
   WorkflowSubjectHistoryPane,
@@ -95,7 +96,7 @@ export function SelectedPartyDecision(): ReactElement | null {
     void navigate({
       to: ".",
       replace: true,
-      search: (previous: Record<string, unknown>) => decisionSearch(previous, null),
+      search: updateRouteSearch(decisionSearchPatch(null)),
     });
   };
   return (

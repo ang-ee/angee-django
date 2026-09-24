@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  DISABLED_RESOURCE,
   fieldUpdatable,
   refineResourceName,
   rowPublicId,
@@ -131,7 +132,7 @@ export function useBoardLaneState<TRow extends Row>({
   const update = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
     resource: source && dataResource
       ? refineResourceName(dataResource)
-      : "__angee_disabled__",
+      : DISABLED_RESOURCE,
     dataProviderName: source ? dataResource?.schemaName : undefined,
     invalidates: ["list", "many", "detail"],
     successNotification: false,

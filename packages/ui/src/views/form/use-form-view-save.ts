@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  DISABLED_RESOURCE,
   fieldUpdatable,
   refineResourceName,
   type DataResourceLinesMetadata,
@@ -224,12 +225,12 @@ export function useFormViewSave({
   }, [formFields, isCreate, modelMetadata, submit]);
   const queryClient = useQueryClient();
   const { keys } = useKeys();
-  const { identifier } = useResourceParams({ resource: refineResource || "__angee_disabled__" });
+  const { identifier } = useResourceParams({ resource: refineResource || DISABLED_RESOURCE });
   const detailKey = React.useMemo(() => keys().data(dataResource?.schemaName ?? "default")
     .resource(identifier ?? "").action("one").id(id ?? "")
     .params({ fields: refineFields }).get(), [dataResource?.schemaName, id, identifier, keys, refineFields]);
   const read = useOne<RowRecord, HttpError>({
-    resource: refineResource || "__angee_disabled__",
+    resource: refineResource || DISABLED_RESOURCE,
     id: id ?? undefined,
     dataProviderName: dataResource?.schemaName,
     meta: { fields: refineFields },
@@ -252,7 +253,7 @@ export function useFormViewSave({
     void read.query.refetch();
   }, [acknowledgedSource, read.query.refetch]);
   const create = useCreate<RowRecord, HttpError, FormValues>({
-    resource: refineResource || "__angee_disabled__",
+    resource: refineResource || DISABLED_RESOURCE,
     dataProviderName: dataResource?.schemaName,
     meta: { fields: refineFields },
     invalidates: ["list", "many"],
@@ -260,7 +261,7 @@ export function useFormViewSave({
     errorNotification: false,
   });
   const update = useUpdate<RowRecord, HttpError, FormValues>({
-    resource: refineResource || "__angee_disabled__",
+    resource: refineResource || DISABLED_RESOURCE,
     dataProviderName: dataResource?.schemaName,
     meta: { fields: refineFields },
     invalidates: ["list", "many", "detail"],

@@ -1,12 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import {
-  QueryClient,
-  QueryClientProvider,
-} from "@tanstack/react-query";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 
 import { AppRuntimeProvider } from "../../runtime";
@@ -18,11 +13,16 @@ import {
   mutationDialogValueCodecs,
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
+import { createUiTestProviders } from "../../testing";
+
+const { Provider, clearClients } = createUiTestProviders({
+  queryClientConfig: { defaultOptions: { queries: { retry: false } } },
+});
 
 const parseRawValues = (values: Readonly<Record<string, unknown>>) => values;
 
 describe("MutationDialog", () => {
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); clearClients(); });
 
   test("an owned trigger opens the dialog and receives focus after dismissal", async () => {
     const submit = vi.fn().mockRejectedValueOnce(new Error("Try again"));
@@ -319,36 +319,29 @@ describe("MutationDialog", () => {
 
   test("an unknown relation degrades to a disabled control and development warning", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
     render(
-      <QueryClientProvider client={queryClient}>
-        <ModelMetadataProvider
-          metadata={schemaFieldMetadataFromDataResources([testDataResource("parties.Party")])}
-        >
-          <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-            <MutationDialog
-              open
-              onOpenChange={vi.fn()}
-              title="Assign owner"
-              fields={[
-                {
-                  name: "owner",
-                  label: "Owner",
-                  relation: {
-                    resource: "missing.Person",
-                    labelField: "display_name",
-                  },
+      <Provider resources={[testDataResource("parties.Party")]}>
+        <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <MutationDialog
+            open
+            onOpenChange={vi.fn()}
+            title="Assign owner"
+            fields={[
+              {
+                name: "owner",
+                label: "Owner",
+                relation: {
+                  resource: "missing.Person",
+                  labelField: "display_name",
                 },
-              ]}
-              submitLabel="Assign"
-              parseValues={parseRawValues}
-              onSubmit={vi.fn()}
-            />
-          </AppRuntimeProvider>
-        </ModelMetadataProvider>
-      </QueryClientProvider>,
+              },
+            ]}
+            submitLabel="Assign"
+            parseValues={parseRawValues}
+            onSubmit={vi.fn()}
+          />
+        </AppRuntimeProvider>
+      </Provider>,
     );
 
     expect(

@@ -197,6 +197,7 @@ class AgentType(AngeeNode):
     lifecycle: auto
     runtime_status: auto
     last_error: auto
+    can_chat: bool = strawberry_django.field(only=["runtime_status", "runtime_class", "service"])
     can_provision: bool
     can_deprovision: bool
     can_delete: bool
@@ -647,9 +648,10 @@ def _mint_session(agent: Any) -> dict[str, Any]:
 def _agent_for_view(view: dict[str, Any]) -> Any:
     """Return the running agent that serves ``view`` for the current actor, or ``None``.
 
-    v1 routes every view to the **actor's own** running, service-backed agent (the most
-    recently updated). ``view["type"]`` is the routing seam — a later slice dispatches on
-    it to pick a view-specialised agent — so it is read here even though v1 ignores it.
+    v1 routes every view to the **actor's own** running agent with an available chat
+    transport (the most recently updated). ``view["type"]`` is the routing seam — a
+    later slice dispatches on it to pick a view-specialised agent — so it is read
+    here even though v1 ignores it.
     """
 
     del view  # routing seam: a later slice dispatches on ``view["type"]``; v1 ignores it
@@ -663,10 +665,7 @@ def _agent_for_view(view: dict[str, Any]) -> Any:
             .select_related("model")
             .order_by("-updated_at")
         )
-        return next(
-            (agent for agent in candidates if agent.runtime_backend.runs_in_process or bool(agent.service)),
-            None,
-        )
+        return next((agent for agent in candidates if agent.can_chat), None)
 
 
 @strawberry.type

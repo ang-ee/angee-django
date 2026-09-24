@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { attemptStateLabel, inspectionSelectionSearch, mapItemLabel, runCollectionFilter, runOriginLabel, waitLabel } from "./RunInspection";
+import { attemptStateLabel, mapItemLabel, runCollectionFilter, runOriginLabel, waitLabel } from "./RunInspection";
 
 const labels: Record<string, string> = {
   "runs.waitScheduled": "Scheduled",
@@ -55,16 +55,6 @@ describe("RunsPage presentation", () => {
     expect(mapItemLabel(null, t)).toBe("—");
     expect(mapItemLabel(0, t)).toBe("Item 0");
     expect(mapItemLabel(2, t)).toBe("Item 2");
-  });
-
-  test("keeps execution and attempt selection in stable run URL state", () => {
-    expect(inspectionSelectionSearch({ tab: "automations", page: 3, filters: ["mine"], execution: "old", attempt: "attempt-1" }, {
-      execution: "execution-2",
-      attempt: null,
-    })).toEqual({ tab: "automations", page: 3, filters: ["mine"], execution: "execution-2" });
-    expect(inspectionSelectionSearch({ tab: "automations", execution: "execution-2" }, {
-      attempt: "attempt-2",
-    })).toEqual({ tab: "automations", execution: "execution-2", attempt: "attempt-2" });
   });
 
   test("distinguishes returned, unapplied and revoked physical attempts from successful outcomes", () => {

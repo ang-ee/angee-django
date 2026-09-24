@@ -4,7 +4,6 @@ import {
   Badge, Chip, ListView, SlotOutlet, statusTone, textRoleVariants, useRouteHref, useSlot, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
-import { addonDisplayLabel } from "../lib/rows";
 import {
   AddonCard,
   AddonCardActions,
@@ -26,7 +25,7 @@ function columns(t: (key: string) => string): readonly ListColumn<AddonResourceR
       header: t("col.addon"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
-          <span className="truncate font-medium text-fg">{addonDisplayLabel(row.label, row.id)}</span>
+          <span className="truncate font-medium text-fg">{row.label}</span>
           <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
         </span>
       ),

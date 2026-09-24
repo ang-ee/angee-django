@@ -945,6 +945,14 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         return runtime_class()
 
     @property
+    def can_chat(self) -> bool:
+        """Whether the running agent has an in-process runtime or a rendered service."""
+
+        return self.runtime_status == RuntimeStatus.RUNNING and (
+            self.runtime_backend.runs_in_process or bool(self.service)
+        )
+
+    @property
     def can_provision(self) -> bool:
         """Whether the provision action may start from the current lifecycle facts."""
 

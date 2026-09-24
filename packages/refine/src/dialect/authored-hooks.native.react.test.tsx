@@ -125,6 +125,26 @@ test("keyset restart waits for an actor", async () => {
   expect(f.custom).not.toHaveBeenCalled();
 });
 
+test("keyset restart keeps identity for equivalent scopes and follows a changed scope", async () => {
+  const f = fixture();
+  const resetQueries = vi.spyOn(f.client, "resetQueries");
+  const { result, rerender } = renderHook(({ scope }) => useAuthoredKeysetFeed({
+    actor: "reader", enabled: false, models: [], pageSize: 1,
+    window: { ...feedWindow, variables: (before) => ({ id: before ?? scope }) },
+  }), { wrapper: f.wrapper, initialProps: { scope: "first" } });
+  const restart = result.current.restart;
+  rerender({ scope: "first" });
+  expect(result.current.restart).toBe(restart);
+  rerender({ scope: "second" });
+  expect(result.current.restart).not.toBe(restart);
+  await act(async () => { await result.current.restart(); });
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  expect(resetQueries).toHaveBeenCalledWith({
+    queryKey: ["angee", "authored", "keyset-feed", "reader", authoredQueryKey(DOCUMENT, { id: "second" })],
+    exact: true,
+  }, { throwOnError: true });
+});
+
 test("authored mutation reset clears native error state without another request", async () => {
   const error = new Error("Update declined.");
   const f = fixture(vi.fn().mockRejectedValue(error));

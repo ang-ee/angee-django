@@ -30,6 +30,7 @@ from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_
 from angee.platform import composed
 
 _EXPLORER = ObjectRef("platform/explorer", "default")
+_Addon = apps.get_model("platform", "Addon")
 
 
 @strawberry.enum
@@ -140,7 +141,7 @@ class PlatformAddon:
     """Detail projection over the persisted addon catalogue."""
 
     id: str = strawberry.field(resolver=_addon_id)
-    label: str
+    label: str = strawberry.field(resolver=_Addon.get_display_label)
     namespace: str
     kind: str
     model_count: int
@@ -262,9 +263,6 @@ def _edge_rows(models: list[composed.PlatformModelRow]) -> list[PlatformEdge]:
     return edges
 
 
-_Addon = apps.get_model("platform", "Addon")
-
-
 @strawberry_django.type(_Addon)
 class AddonNode:
     """Read-only projection of one composed/available addon (the reflection table).
@@ -275,7 +273,7 @@ class AddonNode:
     """
 
     name: auto
-    label: auto
+    label: str = strawberry_django.field(resolver=_Addon.get_display_label, only=["label", "name"])
     namespace: auto
     description: auto
     category: auto
