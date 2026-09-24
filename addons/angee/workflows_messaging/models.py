@@ -119,17 +119,16 @@ class MessageTrigger(models.Model):
         super().validate_event_admission(subject, source=source, dedup_key=dedup_key)
         if source != MESSAGE_INGESTED:
             return
-        alias = self._state.db
         workflow_model = self._meta.get_field("workflow").remote_field.model
         run_model = self._meta.apps.get_model("workflows", "WorkflowRun")
-        content_type = ContentType.objects.db_manager(alias).get_for_model(subject, for_concrete_model=False)
+        content_type = ContentType.objects.get_for_model(subject, for_concrete_model=False)
         versions = (
-            system_queryset(workflow_model, using=alias, lock=None)
+            system_queryset(workflow_model, lock=None)
             .filter(models.Q(pk=self.workflow_id) | models.Q(published_from_id=self.workflow_id))
             .values("pk")
         )
         active = (
-            system_queryset(run_model, using=alias, lock=("self",))
+            system_queryset(run_model, lock=("self",))
             .filter(
                 workflow_id__in=models.Subquery(versions),
                 subject_content_type_id=content_type.pk,

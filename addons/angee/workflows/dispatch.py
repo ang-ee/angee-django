@@ -223,7 +223,7 @@ def enqueue_dispatch_publisher() -> None:
     """Request one immediate publication pass; periodic recovery remains authoritative."""
 
     try:
-        enqueue_task("workflows.publish_dispatches")
+        enqueue_task("workflows.publish_dispatches", kwargs={})
     except Exception:  # noqa: BLE001 - the durable intent remains for periodic recovery.
         return
 

@@ -50,11 +50,11 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     oauth_auth_kwarg = ""
     sdk_package_name = "openai"
 
-    def list_models(self, *, using: str | None = None) -> Sequence[InferenceModelSpec]:
+    def list_models(self) -> Sequence[InferenceModelSpec]:
         """List OpenAI models and their broker-prefixed aliases."""
 
         specs: list[InferenceModelSpec] = []
-        client = self.client(using=using)
+        client = self.client()
         for model in client.models.list():
             model_id = str(getattr(model, "id", "") or "").strip()
             if not model_id:

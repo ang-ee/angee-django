@@ -133,10 +133,11 @@ class ConditionalSharedReaderMixin(models.Model):
             return {}
         return {relation: (_EVERY_AUTHENTICATED_USER,) if self.shared_reader_eligible else ()}
 
-    def proposed_relationships(self) -> Mapping[str, Iterable[SubjectRef | models.Model]]:
+    def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, Iterable[SubjectRef | models.Model]]:
         """Propose only the shared-reader tuple that save will reconcile atomically."""
 
-        relationships = dict(super().proposed_relationships())
+        # ``using`` is django-zed-rebac's own override signature; pass it through.
+        relationships = dict(super().proposed_relationships(using=using))
         relationships.update(self._shared_reader_relationships())
         return relationships
 
