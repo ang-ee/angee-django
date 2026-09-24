@@ -136,7 +136,8 @@ def test_integrate_does_not_import_workflows() -> None:
     root = PROJECT_ROOT / "addons" / "angee" / "integrate"
     violations = {
         str(path.relative_to(PROJECT_ROOT)): sorted(
-            name for name in _module_imports(path)
+            name
+            for name in _module_imports(path)
             if name == "angee.workflows" or name.startswith(("angee.workflows.", "angee.workflows_"))
         )
         for path in sorted(root.rglob("*.py"))
@@ -158,6 +159,20 @@ def test_framework_does_not_import_consumer_addons() -> None:
         for path in sorted(root.rglob("*.py"))
     }
     assert not {path: names for path, names in violations.items() if names}
+
+
+def test_source_does_not_import_historical_relationships() -> None:
+    """Only external materialized history and tests may use the frozen API."""
+
+    module = "angee.base.historical_relationships"
+    violations = {}
+    for directory in ("angee", "addons", "examples", "templates"):
+        for path in sorted((PROJECT_ROOT / directory).rglob("*.py")):
+            relative = path.relative_to(PROJECT_ROOT)
+            imports = sorted(name for name in _module_imports(path) if name == module or name.startswith(f"{module}."))
+            if imports:
+                violations[str(relative)] = imports
+    assert not violations
 
 
 class _FKReload(NamedTuple):
@@ -214,7 +229,10 @@ def _fk_reloads(root: Path) -> Iterator[_FKReload]:
             manager = lookup.func.value
             while isinstance(manager, ast.Call):
                 if isinstance(manager.func, ast.Attribute) and manager.func.attr in {
-                    "using", "db_manager", "select_related", "all"
+                    "using",
+                    "db_manager",
+                    "select_related",
+                    "all",
                 }:
                     manager = manager.func.value
                 elif isinstance(manager.func, ast.Name) and manager.func.id == "cast" and len(manager.args) == 2:
@@ -222,7 +240,9 @@ def _fk_reloads(root: Path) -> Iterator[_FKReload]:
                 else:
                     break
             if not isinstance(manager, ast.Attribute) or manager.attr not in {
-                "objects", "_default_manager", "_base_manager"
+                "objects",
+                "_default_manager",
+                "_base_manager",
             }:
                 continue
             target = lookup.keywords[0].value
@@ -231,33 +251,65 @@ def _fk_reloads(root: Path) -> Iterator[_FKReload]:
             enclosing = [part for part in functions if part.lineno <= node.lineno <= (part.end_lineno or part.lineno)]
             function = max(enclosing, key=lambda part: part.lineno).name if enclosing else ""
             yield _FKReload(
-                path, node.lineno, function, manager.attr, ast.unparse(manager.value), ast.unparse(target),
+                path,
+                node.lineno,
+                function,
+                manager.attr,
+                ast.unparse(manager.value),
+                ast.unparse(target),
                 lookup.func.attr == "get",
             )
 
 
 _FK_RELOAD_EXEMPTIONS = {
-    ("addons/angee/parties/models.py", "canonical", "_base_manager", "type(self)", "party.merged_into_id"):
-        "Preserve Person/Organization's concrete subtype instead of the FK's Party target.",
-    ("addons/angee/parties/connections.py", "_connection_person", "_base_manager", "person_model", "handle.party_id"):
-        "Project a Party FK onto Person rather than returning the declared Party target.",
-    ("addons/angee/integrate/connect.py", "_state_user", "objects", "user_model", "record.user_id"):
-        "StateRecord is a frozen OAuth payload, not a Django model with a user FK.",
     (
-        "addons/angee/workflows/engine.py", "advance_dispatch", "objects",
-        "apps.get_model('workflows', 'WorkflowRun')", "preflight.envelope.target_id",
+        "addons/angee/parties/models.py",
+        "canonical",
+        "_base_manager",
+        "type(self)",
+        "party.merged_into_id",
+    ): "Preserve Person/Organization's concrete subtype instead of the FK's Party target.",
+    (
+        "addons/angee/parties/connections.py",
+        "_connection_person",
+        "_base_manager",
+        "person_model",
+        "handle.party_id",
+    ): "Project a Party FK onto Person rather than returning the declared Party target.",
+    (
+        "addons/angee/integrate/connect.py",
+        "_state_user",
+        "objects",
+        "user_model",
+        "record.user_id",
+    ): "StateRecord is a frozen OAuth payload, not a Django model with a user FK.",
+    (
+        "addons/angee/workflows/engine.py",
+        "advance_dispatch",
+        "objects",
+        "apps.get_model('workflows', 'WorkflowRun')",
+        "preflight.envelope.target_id",
     ): "WorkflowDispatchEnvelope carries a frozen dispatch identifier, not a model FK.",
     (
-        "addons/angee/workflows/engine.py", "schedule_result", "objects",
-        "attempt_model", "finalization.retry_intent.attempt_id",
+        "addons/angee/workflows/engine.py",
+        "schedule_result",
+        "objects",
+        "attempt_model",
+        "finalization.retry_intent.attempt_id",
     ): "RetryIntent is a frozen attempt identifier without a field-bearing model instance.",
     (
-        "addons/angee/workflows/engine.py", "schedule_result", "objects",
-        "apps.get_model('workflows', 'Decision')", "intent.decision_id",
+        "addons/angee/workflows/engine.py",
+        "schedule_result",
+        "objects",
+        "apps.get_model('workflows', 'Decision')",
+        "intent.decision_id",
     ): "DecisionTimerIntent captures an identifier rather than a Django relation.",
     (
-        "addons/angee/workflows/engine.py", "_expand_retained_map_step", "objects",
-        "apps.get_model('workflows', 'Step')", "plan.target_id",
+        "addons/angee/workflows/engine.py",
+        "_expand_retained_map_step",
+        "objects",
+        "apps.get_model('workflows', 'Step')",
+        "plan.target_id",
     ): "MapExpansionPlan is a frozen definition result, not the owner of a target FK.",
 }
 
@@ -276,8 +328,7 @@ def test_fk_reloads_use_related_on() -> None:
                 violations.append(f"{relative}:{site.line} ({site.manager}, {site.function})")
 
     assert not violations, (
-        "Bare FK reloads must use angee.base.db.related_on(instance, field_name, using=...):\n"
-        + "\n".join(violations)
+        "Bare FK reloads must use angee.base.db.related_on(instance, field_name, using=...):\n" + "\n".join(violations)
     )
 
 
@@ -334,8 +385,15 @@ def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int,
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
     boundaries = {"django.db.transaction.atomic", "django.db.transaction.on_commit"}
     mutators = {
-        "save", "save_base", "create", "get_or_create", "update_or_create", "update", "delete",
-        "bulk_create", "bulk_update",
+        "save",
+        "save_base",
+        "create",
+        "get_or_create",
+        "update_or_create",
+        "update",
+        "delete",
+        "bulk_create",
+        "bulk_update",
     }
     mutators |= {f"a{name}" for name in mutators}
     owners = [
@@ -369,12 +427,15 @@ def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int,
                 return True
             if node.id == "self":
                 classes = [
-                    owner for owner in owners if isinstance(owner, ast.ClassDef)
+                    owner
+                    for owner in owners
+                    if isinstance(owner, ast.ClassDef)
                     and owner.lineno <= node.lineno <= (owner.end_lineno or owner.lineno)
                 ]
                 owner = max(classes, key=lambda owner: owner.lineno, default=None)
                 return owner is not None and (
-                    owner.name.endswith("Manager") or "QuerySet" in owner.name
+                    owner.name.endswith("Manager")
+                    or "QuerySet" in owner.name
                     or any(collection_type(base) for base in owner.bases)
                 )
         elif isinstance(node, ast.Attribute):
@@ -387,8 +448,22 @@ def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int,
                 if method in {"get_queryset", "system_queryset"}:
                     return True
                 terminals = {
-                    "get", "first", "last", "earliest", "latest", "create", "get_or_create", "update_or_create",
-                    "count", "exists", "aggregate", "update", "delete", "bulk_create", "bulk_update", "in_bulk",
+                    "get",
+                    "first",
+                    "last",
+                    "earliest",
+                    "latest",
+                    "create",
+                    "get_or_create",
+                    "update_or_create",
+                    "count",
+                    "exists",
+                    "aggregate",
+                    "update",
+                    "delete",
+                    "bulk_create",
+                    "bulk_update",
+                    "in_bulk",
                 }
                 terminals |= {f"a{name}" for name in terminals}
                 if method in terminals:
@@ -412,27 +487,40 @@ def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int,
                         changed = True
 
     manager_db_reads = [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and node.attr == "db" and isinstance(node.ctx, ast.Load)
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "db"
+        and isinstance(node.ctx, ast.Load)
         and collection_expression(node.value, scope_of(node))
     ]
     bare_decorators = [
-        decorator for owner in owners for decorator in owner.decorator_list
+        decorator
+        for owner in owners
+        for decorator in owner.decorator_list
         if name_of(decorator) == "django.db.transaction.atomic"
     ]
-    write_owner = bool(bare_decorators) or any(owner.name in mutators for owner in functions) or any(
-        name_of(call.func) in boundaries
-        or name_of(call.func) == "angee.base.db.get_write_alias"
-        or isinstance(call.func, ast.Attribute) and call.func.attr in {*mutators, "full_clean_for_write"}
-        for call in calls
+    write_owner = (
+        bool(bare_decorators)
+        or any(owner.name in mutators for owner in functions)
+        or any(
+            name_of(call.func) in boundaries
+            or name_of(call.func) == "angee.base.db.get_write_alias"
+            or isinstance(call.func, ast.Attribute)
+            and call.func.attr in {*mutators, "full_clean_for_write"}
+            for call in calls
+        )
     )
 
     deferred_preambles: set[ast.Call] = set()
     for conditional in (node for node in ast.walk(tree) if isinstance(node, ast.If)):
         refreshes = [
-            statement.value for statement in conditional.body
-            if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)
-            and isinstance(statement.value.func, ast.Attribute) and statement.value.func.attr == "refresh_from_db"
+            statement.value
+            for statement in conditional.body
+            if isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute)
+            and statement.value.func.attr == "refresh_from_db"
         ]
         if not refreshes:
             continue
@@ -449,8 +537,10 @@ def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int,
         conditions.extend(value for value in local_values.values() if value is not None)
         receivers = {
             ast.dump(node.func.value)
-            for condition in conditions for node in ast.walk(condition)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            for condition in conditions
+            for node in ast.walk(condition)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
             and node.func.attr == "get_deferred_fields"
         }
         for call in refreshes:
@@ -487,28 +577,51 @@ def _routing_drift(tree: ast.Module, *, addon: bool) -> Iterator[tuple[str, int,
         elif addon and write_owner and isinstance(node.func, ast.Attribute) and node.func.attr == "full_clean":
             receiver = node.func.value
             native_override = (
-                parents and parents[-1].name == "full_clean"
-                and isinstance(receiver, ast.Call) and name_of(receiver.func) == "super"
+                parents
+                and parents[-1].name == "full_clean"
+                and isinstance(receiver, ast.Call)
+                and name_of(receiver.func) == "super"
             )
             if not native_override:
                 yield "full_clean", node.lineno, owner_name
 
 
 _ROUTING_EXEMPTIONS = {
-    ("addons/angee/platform/permissions.py", "transaction", "reconcile_permission_schema"):
-        "Excluded platform lifecycle debt: PackageManagedRecord.target/REBAC cleanup lack alias propagation.",
-    ("addons/angee/workflows_agents/sessions.py", "transaction", "start_session"):
-        "Excluded agent-session entry debt: agent/provider/session owners still need routing and an entry guard.",
-    ("addons/angee/workflows_agents/sessions.py", "transaction", "post_message"):
-        "Excluded agent-session entry debt: session/turn owner routing is incomplete.",
-    ("addons/angee/workflows_agents/sessions.py", "transaction", "close_session"):
-        "Excluded agent-session entry debt: closure/turn cancellation routing is incomplete.",
-    ("addons/angee/workflows_agents/steps.py", "transaction", "AgentSessionStepImpl.run"):
-        "The workflow entry rejects non-default execution until the excluded agent/session owners support aliases.",
-    ("addons/angee/workflows_agents/steps.py", "transaction", "_TurnUpdateSink.flush"):
-        "Private persistence callback under AgentSessionStepImpl.run's default-only admission.",
-    ("addons/angee/workflows_agents/steps.py", "transaction", "_persist_turn_outcome"):
-        "Private outcome persistence under AgentSessionStepImpl.run's default-only admission.",
+    (
+        "addons/angee/platform/permissions.py",
+        "transaction",
+        "reconcile_permission_schema",
+    ): "Excluded platform lifecycle debt: PackageManagedRecord.target/REBAC cleanup lack alias propagation.",
+    (
+        "addons/angee/workflows_agents/sessions.py",
+        "transaction",
+        "start_session",
+    ): "Excluded agent-session entry debt: agent/provider/session owners still need routing and an entry guard.",
+    (
+        "addons/angee/workflows_agents/sessions.py",
+        "transaction",
+        "post_message",
+    ): "Excluded agent-session entry debt: session/turn owner routing is incomplete.",
+    (
+        "addons/angee/workflows_agents/sessions.py",
+        "transaction",
+        "close_session",
+    ): "Excluded agent-session entry debt: closure/turn cancellation routing is incomplete.",
+    (
+        "addons/angee/workflows_agents/steps.py",
+        "transaction",
+        "AgentSessionStepImpl.run",
+    ): "The workflow entry rejects non-default execution until the excluded agent/session owners support aliases.",
+    (
+        "addons/angee/workflows_agents/steps.py",
+        "transaction",
+        "_TurnUpdateSink.flush",
+    ): "Private persistence callback under AgentSessionStepImpl.run's default-only admission.",
+    (
+        "addons/angee/workflows_agents/steps.py",
+        "transaction",
+        "_persist_turn_outcome",
+    ): "Private outcome persistence under AgentSessionStepImpl.run's default-only admission.",
 }
 
 
@@ -528,7 +641,8 @@ def test_write_owners_keep_routing_at_the_database_owner() -> None:
             relative = path.relative_to(PROJECT_ROOT).as_posix()
             if (
                 {"migrations", "runtime_migrations", "tests"}.intersection(path.relative_to(root).parts)
-                or path.stem == "tests" or path.stem.startswith("test_")
+                or path.stem == "tests"
+                or path.stem.startswith("test_")
             ):
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -585,13 +699,11 @@ def test_write_owners_keep_routing_at_the_database_owner() -> None:
         ("Version.objects.get(pk=1).db", []),
         ("VersionManager().get(pk=1).db", []),
         (
-            "if deferred := row.get_deferred_fields():\n"
-            "    row.refresh_from_db(using=alias, fields=deferred)",
+            "if deferred := row.get_deferred_fields():\n    row.refresh_from_db(using=alias, fields=deferred)",
             ["deferred_refresh"],
         ),
         (
-            "deferred = row.get_deferred_fields()\n"
-            "if deferred:\n    row.refresh_from_db(using=alias, fields=deferred)",
+            "deferred = row.get_deferred_fields()\nif deferred:\n    row.refresh_from_db(using=alias, fields=deferred)",
             ["deferred_refresh"],
         ),
         (
@@ -605,13 +717,11 @@ def test_write_owners_keep_routing_at_the_database_owner() -> None:
             ["deferred_refresh"],
         ),
         (
-            "if deferred := row.get_deferred_fields():\n"
-            "    row.refresh_from_db(alias, deferred)",
+            "if deferred := row.get_deferred_fields():\n    row.refresh_from_db(alias, deferred)",
             ["deferred_refresh"],
         ),
         (
-            "if deferred := row.get_deferred_fields():\n"
-            "    other.refresh_from_db(using=alias, fields=deferred)",
+            "if deferred := row.get_deferred_fields():\n    other.refresh_from_db(using=alias, fields=deferred)",
             [],
         ),
         (

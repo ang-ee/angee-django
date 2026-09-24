@@ -115,6 +115,11 @@ else:
             "TEST": {"NAME": _TEST_DB_FILE},
         }
     }
+# The historical relationship helper binds every write to the selected alias.
+DATABASES["historical_relationships_other"] = {
+    **DATABASES["default"],
+    "TEST": {"MIRROR": "default"},
+}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "iam.User"
 # Bare tests skip addon autoconfig; reuse IAM's native REBAC policy binding.

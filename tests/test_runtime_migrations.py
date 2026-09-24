@@ -426,6 +426,25 @@ def test_materialization_is_idempotent(runtime_migration_probe) -> None:
     assert second == ()
 
 
+def test_removed_declaration_preserves_materialized_body_and_graph(runtime_migration_probe) -> None:
+    materializer, addon, source_path, _, _ = runtime_migration_probe
+    (output,) = materializer.materialize()
+    body = output.read_bytes()
+    previous_graph = MigrationLoader(None, ignore_no_migrations=True).graph
+
+    write_addon_manifest(addon)
+    source_path.unlink()
+
+    assert materializer.materialize() == ()
+    materializer.check()
+
+    assert output.read_bytes() == body
+    graph = MigrationLoader(None, ignore_no_migrations=True).graph
+    assert graph.nodes.keys() == previous_graph.nodes.keys()
+    for node in graph.nodes:
+        assert graph.forwards_plan(node) == previous_graph.forwards_plan(node)
+
+
 def test_check_reports_pending_without_writing(runtime_migration_probe) -> None:
     materializer, _, _, runtime_dir, _ = runtime_migration_probe
 

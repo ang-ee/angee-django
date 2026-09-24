@@ -241,13 +241,8 @@ read-only filesystem probe. After a successful build, normal `makemigrations` ma
 generate any remaining lossless changes and Django handles the rest of the
 migration lifecycle.
 
-For an explicitly authorized reset of disposable migration history, delete the
-obsolete `[[migrations]]` declarations, their source modules and the disposable
-`runtime/<label>/migrations/` history, then run plain
-`uv run manage.py makemigrations` through the [stack host](checks.md#composition-and-schema)
-to generate initial migrations from the final models. The [migration
-policy](backend/guidelines.md#migrations-and-runtime) still protects released and
-applied migration bodies; ordinary builds do not authorize their deletion.
+Follow the [migration policy](backend/guidelines.md#migrations-and-runtime) for
+the upgrade floor, carried-forward history, and consumer reset authorization.
 
 [`angee provision`](../angee/compose/management/commands/angee.py) owns full
 runtime preparation. It builds in the initial process, then starts one fresh
@@ -311,8 +306,8 @@ Both cleanup operations preserve and report every `migrations/` subtree, includi
 history for labels no longer composed. Those labels may retain directories solely
 to hold their history. An absent addon does not establish that its migrations are
 disposable: the [migration policy](backend/guidelines.md#migrations-and-runtime)
-requires preserving files and investigating the recorded graph before an
-explicitly authorized reset. [`Runtime`](../angee/compose/runtime.py) removes
+requires preserving files and investigating the recorded graph before recovery.
+[`Runtime`](../angee/compose/runtime.py) removes
 obsolete generated migration-module bindings while preserving project-owned
 bindings; Django loads migrations for installed apps, so retained histories for
 uninstalled labels are not imported during build.
@@ -346,8 +341,8 @@ from the unchanged hatch-angee manifest, and keep implementation with its owner.
 Shared import utilities in `angee.addons` handle references and optional modules;
 they do not maintain a second contract or infer capability values.
 
-Resource relocation with renamed workflow keys requires an explicitly authorized
-reset deployment: renamed workflow keys cannot adopt old definitions through
+Resource relocation with renamed workflow keys requires an explicit data
+migration: renamed workflow keys cannot adopt old definitions through
 [`AngeeResource._adopt_for_row`](../addons/angee/resources/loader.py) with
 `adopt = "key"`. Removing a resource manifest declaration does not retire its rows or
 ledgers; [`WorkflowDefinitionManagerMixin.install_definition`](../addons/angee/workflows/definitions.py)
