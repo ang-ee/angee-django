@@ -199,10 +199,6 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 "local_delete": "conflict",
                 "remote_delete": "retain",
                 **policies.get(book.href, {}),
-                "field_ownership": {
-                    "bidirectional": list(CONTACT_FIELDS),
-                    "enforcement": "compare_to_base",
-                },
             }
             if policy["local_delete"] not in {"conflict", "propagate"} or policy["remote_delete"] not in {
                 "retain",

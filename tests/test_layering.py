@@ -144,11 +144,10 @@ def test_integrate_does_not_import_workflows() -> None:
     assert not {path: names for path, names in violations.items() if names}
 
 
-def test_external_field_ownership_stays_with_consumer_addons() -> None:
-    """Framework sync and transitions do not depend on a consumer's field policy."""
+def test_framework_does_not_import_consumer_addons() -> None:
+    """Framework code never imports consumers or their retired framework owner."""
 
-    assert not (PROJECT_ROOT / "addons" / "angee" / "integrate" / "ownership.py").exists()
-    forbidden = ("angee.integrate.ownership", "arp.integrate_odoo")
+    forbidden = ("angee.integrate.ownership", "arp")
     violations = {
         str(path.relative_to(PROJECT_ROOT)): sorted(
             name
