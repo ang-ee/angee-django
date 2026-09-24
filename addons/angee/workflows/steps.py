@@ -1023,10 +1023,7 @@ class GateStep(StepImpl):
     def resumption(cls, step_run: Any) -> GateResumption | None:
         """Return the exact settled slots of this step's current resumable suspension."""
 
-        try:
-            state = GateResumeState.model_validate(step_run.resume_state or {})
-        except PydanticValidationError as error:
-            raise ValidationError({"gate": str(error)}) from error
+        state = GateResumeState.from_checkpoint(step_run.resume_state or {})
         if not state.resume_after_decisions or state.decision_outcome is None:
             return None
         decision_ids = state.decision_ids
@@ -1050,6 +1047,8 @@ class GateStep(StepImpl):
             for decision_id in decision_ids
         )
         assert state.decision_resolutions is not None
+        if not isinstance(state.state, dict):
+            raise ValidationError({"gate": "Resumable gate retained state must be an object."})
         return GateResumption(
             outcome=state.decision_outcome,
             resolutions=copy.deepcopy(state.decision_resolutions),

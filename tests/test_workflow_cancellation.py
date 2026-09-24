@@ -120,7 +120,7 @@ def test_child_cancel_requires_its_persisted_parent_to_be_terminal(cancelable_ru
         )
         intent, _created = WorkflowDispatch.objects.schedule_child_cancel(child)
     with pytest.raises(ValidationError, match="terminal parent"):
-        engine.cancel_child_dispatch(intent.pk, expected_child_id=child.pk)
+        WorkflowDispatch.objects.deliver(intent.pk, expected_target_id=child.pk)
     with system_context(reason="inspect rejected child cancellation"):
         intent.refresh_from_db()
         child.refresh_from_db()

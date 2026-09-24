@@ -228,10 +228,6 @@ _FK_RELOAD_EXEMPTIONS = {
     ("addons/angee/integrate/connect.py", "_state_user", "objects", "user_model", "record.user_id"):
         "StateRecord is a frozen OAuth payload, not a Django model with a user FK.",
     (
-        "addons/angee/workflows/engine.py", "advance_dispatch", "objects",
-        "apps.get_model('workflows', 'WorkflowRun')", "preflight.envelope.target_id",
-    ): "WorkflowDispatchEnvelope carries a frozen dispatch identifier, not a model FK.",
-    (
         "addons/angee/workflows/engine.py", "schedule_result", "objects",
         "attempt_model", "finalization.retry_intent.attempt_id",
     ): "RetryIntent is a frozen attempt identifier without a field-bearing model instance.",

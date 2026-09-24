@@ -305,7 +305,7 @@ class WorkflowDefinitionManagerMixin:
                                 # The model owns one-time key backfill and rejects renames.
                                 row.save(using=alias, update_fields={"key"})
                             patch = self._installation_patch(
-                                row, snapshot.workflow, self.model.declaration_fields - {"key"}
+                                row, snapshot.workflow, self.model.editable_declaration_fields
                             )
                             if patch:
                                 self.db_manager(alias).apply_definition(
@@ -359,7 +359,7 @@ class WorkflowDefinitionManagerMixin:
             row._state.db = using
             if not row._state.adding and row.pk not in saved:
                 raise ValidationError(f"{xref}: a resource definition cannot move to another workflow.")
-            names = model.declaration_fields - ({"workflow"} if is_step else {"workflow", "source", "target"})
+            names = model.editable_declaration_fields
             wanted = {name: getattr(row, name) for name in names}
             if is_step:
                 if row._state.adding:
@@ -592,7 +592,7 @@ class WorkflowDefinitionManagerMixin:
                     raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
                 draft.edges.db_manager(alias).all().delete(session=session)
                 draft.steps.db_manager(alias).all().delete(session=session)
-                fields = self.model.declaration_fields - {"key"}
+                fields = self.model.editable_declaration_fields
                 for field_name in sorted(fields):
                     attname = draft._meta.get_field(field_name).attname
                     setattr(draft, attname, copy.deepcopy(getattr(locked_source, attname)))
@@ -819,30 +819,30 @@ class _DefinitionState:
             "workflow",
             GraphIdentity(existing_id=self.workflow.pk),
             self.workflow_fields,
-            self.workflow.declaration_fields - {"key"},
+            self.workflow.editable_declaration_fields,
         )
         for node_create in self.edit.node_creates:
             self._fields(
                 "node",
                 GraphIdentity(client_key=node_create.client_key),
                 node_create.fields,
-                self.step_model.declaration_fields - {"workflow"},
+                self.step_model.editable_declaration_fields,
             )
         for node_patch in self.edit.node_patches:
             self._fields(
-                "node", _edit_identity(node_patch), node_patch.fields, self.step_model.declaration_fields - {"workflow"}
+                "node", _edit_identity(node_patch), node_patch.fields, self.step_model.editable_declaration_fields
             )
         for edge_create in self.edit.edge_creates:
             self._fields(
                 "edge",
                 GraphIdentity(client_key=edge_create.client_key),
                 edge_create.fields,
-                self.edge_model.declaration_fields - {"workflow", "source", "target"},
+                self.edge_model.editable_declaration_fields,
             )
         for edge_patch in self.edit.edge_patches:
             self._fields(
                 "edge", _edit_identity(edge_patch), edge_patch.fields,
-                self.edge_model.declaration_fields - {"workflow", "source", "target"},
+                self.edge_model.editable_declaration_fields,
             )
         self._unique("node", "client_key", [item.client_key for item in self.edit.node_creates], client=True)
         self._unique("edge", "client_key", [item.client_key for item in self.edit.edge_creates], client=True)

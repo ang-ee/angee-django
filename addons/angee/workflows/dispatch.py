@@ -67,15 +67,24 @@ class DispatchTarget:
 class DispatchKindSpec:
     """One source for target shape, locking, uniqueness and domain dispatch."""
 
-    target_field: str
+    target_relation: str | None
     lock_plan: tuple[DispatchLock, ...]
     uniqueness: tuple[str, ...]
     handler_path: str
     result_fields: tuple[str, ...]
-    required_fields: tuple[str, ...]
+    extra_required_fields: tuple[str, ...] = ()
     lease_field: str | None = None
     handler_kwargs: tuple[tuple[str, Any], ...] = ()
     error_handler: str | None = None
+
+    @property
+    def target_field(self) -> str:
+        return f"{self.target_relation}_id" if self.target_relation is not None else "pk"
+
+    @property
+    def required_fields(self) -> tuple[str, ...]:
+        target = (self.target_relation,) if self.target_relation is not None else ()
+        return (*target, *self.extra_required_fields)
 
     @property
     def handler(self) -> Callable[..., bool]:
@@ -112,72 +121,67 @@ _DECISION_LOCKS = (
 )
 DISPATCH_KINDS = {
     WorkflowDispatchKind.ADVANCE: DispatchKindSpec(
-        "run_id",
-        _RUN_LOCKS,
-        (),
-        "angee.workflows.engine.advance_locked",
-        ("claimed",),
-        ("run",),
+        target_relation="run",
+        lock_plan=_RUN_LOCKS,
+        uniqueness=(),
+        handler_path="angee.workflows.engine.advance_locked",
+        result_fields=("claimed",),
         error_handler="record_advance_error",
     ),
     WorkflowDispatchKind.EXECUTE: DispatchKindSpec(
-        "step_attempt_id",
-        _ATTEMPT_LOCKS,
-        ("step_attempt",),
-        "angee.workflows.engine.admit_execution",
-        ("executed",),
-        ("step_attempt",),
+        target_relation="step_attempt",
+        lock_plan=_ATTEMPT_LOCKS,
+        uniqueness=("step_attempt",),
+        handler_path="angee.workflows.engine.admit_execution",
+        result_fields=("executed",),
         lease_field="step_attempt",
     ),
     WorkflowDispatchKind.DECISION_EXPIRE: DispatchKindSpec(
-        "decision_id",
-        _DECISION_LOCKS,
-        ("kind", "decision", "generation"),
-        "angee.workflows.engine.resolve_decision_timer",
-        ("resolved",),
-        ("decision", "generation"),
+        target_relation="decision",
+        lock_plan=_DECISION_LOCKS,
+        uniqueness=("decision", "generation"),
+        handler_path="angee.workflows.engine.resolve_decision_timer",
+        result_fields=("resolved",),
+        extra_required_fields=("generation",),
         handler_kwargs=(("verdict", Verdict.EXPIRED),),
     ),
     WorkflowDispatchKind.DECISION_ESCALATE: DispatchKindSpec(
-        "decision_id",
-        _DECISION_LOCKS,
-        ("kind", "decision", "generation"),
-        "angee.workflows.engine.resolve_decision_timer",
-        ("resolved",),
-        ("decision", "generation"),
+        target_relation="decision",
+        lock_plan=_DECISION_LOCKS,
+        uniqueness=("decision", "generation"),
+        handler_path="angee.workflows.engine.resolve_decision_timer",
+        result_fields=("resolved",),
+        extra_required_fields=("generation",),
         handler_kwargs=(("verdict", Verdict.ESCALATED),),
     ),
     WorkflowDispatchKind.ARTIFACT_DELIVERY: DispatchKindSpec(
-        "pk",
-        (),
-        (),
-        "angee.workflows.engine.deliver_artifact_locked",
-        ("runs", "woken"),
-        ("artifact_content_type", "artifact_object_id"),
+        target_relation=None,
+        lock_plan=(),
+        uniqueness=(),
+        handler_path="angee.workflows.engine.deliver_artifact_locked",
+        result_fields=("runs", "woken"),
+        extra_required_fields=("artifact_content_type", "artifact_object_id"),
     ),
     WorkflowDispatchKind.CHILD_CANCEL: DispatchKindSpec(
-        "run_id",
-        (*_RUN_LOCKS, DispatchLock("run__parent_step_run")),
-        ("kind", "run"),
-        "angee.workflows.engine.cancel_child_locked",
-        ("canceled",),
-        ("run",),
+        target_relation="run",
+        lock_plan=(*_RUN_LOCKS, DispatchLock("run__parent_step_run")),
+        uniqueness=("run",),
+        handler_path="angee.workflows.engine.cancel_child_locked",
+        result_fields=("canceled",),
     ),
     WorkflowDispatchKind.RUN_CANCEL: DispatchKindSpec(
-        "run_id",
-        _RUN_LOCKS,
-        ("kind", "run"),
-        "angee.workflows.engine.cancel_run_locked",
-        ("canceled",),
-        ("run",),
+        target_relation="run",
+        lock_plan=_RUN_LOCKS,
+        uniqueness=("run",),
+        handler_path="angee.workflows.engine.cancel_run_locked",
+        result_fields=("canceled",),
     ),
     WorkflowDispatchKind.RUN_SETTLE: DispatchKindSpec(
-        "run_id",
-        _RUN_LOCKS,
-        ("kind", "run"),
-        "angee.workflows.engine.settle_subject",
-        ("settled",),
-        ("run",),
+        target_relation="run",
+        lock_plan=_RUN_LOCKS,
+        uniqueness=("run",),
+        handler_path="angee.workflows.engine.settle_subject_locked",
+        result_fields=("settled",),
     ),
 }
 

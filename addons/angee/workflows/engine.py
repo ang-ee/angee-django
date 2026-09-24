@@ -24,10 +24,9 @@ from django.utils import timezone
 from jsonschema import Draft202012Validator
 from pydantic import JsonValue
 from pydantic import ValidationError as PydanticValidationError
-from rebac import PermissionDenied, SubjectRef, current_actor, system_context
+from rebac import SubjectRef, system_context
 from rebac.actors import to_subject_ref
 
-from angee.base.actors import actor_user_id
 from angee.base.db import get_write_alias, related_on
 from angee.base.identity import canonical_subject_ref
 from angee.base.refs import CanonicalRecordTarget, canonical_record_target
@@ -373,18 +372,6 @@ def deliver_artifact_dispatch(
     )
 
 
-def cancel_child_dispatch(
-    dispatch_id: int, *, expected_child_id: int | None = None, using: str | None = None
-) -> dict[str, int]:
-    """Deliver one persisted owned-child cancellation through the run owner."""
-
-    return (
-        apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
-        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.CHILD_CANCEL, expected_target_id=expected_child_id)
-    )
-
-
 def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any, using: str | None = None) -> tuple[Any, bool]:
     """Retain one cross-run cancellation from this fenced database command."""
 
@@ -526,7 +513,7 @@ def cancel_child_locked(target: DispatchTarget, *, at: datetime) -> bool:
     return cancel_run_locked(target, at=at)
 
 
-def settle_subject(target: DispatchTarget, *, at: datetime) -> bool:
+def settle_subject_locked(target: DispatchTarget, *, at: datetime) -> bool:
     """Settle a terminal run through the registered subject owner."""
 
     if not target.row.is_terminal:
@@ -847,52 +834,6 @@ def decide(
     )
 
 
-def escalate_decision_dispatch(
-    dispatch_id: int,
-    *,
-    expected_decision_id: int | None = None,
-    expected_generation: int | None = None,
-    now: datetime | None = None,
-    using: str | None = None,
-) -> dict[str, int]:
-    """Consume one exact durable escalation timer."""
-
-    return (
-        apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
-        .deliver(
-            dispatch_id,
-            expected_kind=WorkflowDispatchKind.DECISION_ESCALATE,
-            expected_target_id=expected_decision_id,
-            expected_generation=expected_generation,
-            now=now,
-        )
-    )
-
-
-def expire_decision_dispatch(
-    dispatch_id: int,
-    *,
-    expected_decision_id: int | None = None,
-    expected_generation: int | None = None,
-    now: datetime | None = None,
-    using: str | None = None,
-) -> dict[str, int]:
-    """Consume one exact durable expiry timer."""
-
-    return (
-        apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
-        .deliver(
-            dispatch_id,
-            expected_kind=WorkflowDispatchKind.DECISION_EXPIRE,
-            expected_target_id=expected_decision_id,
-            expected_generation=expected_generation,
-            now=now,
-        )
-    )
-
-
 def sweep_decisions(*, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
     """Retain and consume dispatches for pending decisions whose deadlines are due."""
 
@@ -949,68 +890,11 @@ def sweep_decisions(*, now: datetime | None = None, using: str | None = None) ->
 def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any, using: str | None = None) -> Any:
     """Cancel active rows, insert an override journal row, and schedule next steps."""
 
-    alias = get_write_alias(
-        apps.get_model("workflows", "WorkflowRun"), using=using, instance=run if isinstance(run, models.Model) else None
+    return (
+        apps.get_model("workflows", "WorkflowRun")
+        .objects.db_manager(using)
+        .override_run(run, next_steps, actor=actor)
     )
-
-    run_model = apps.get_model("workflows", "WorkflowRun")
-    step_run_model = apps.get_model("workflows", "StepRun")
-    run_id = run.pk
-    actor_ref = _actor_ref(actor)
-    actor_id = actor_user_id(actor_ref)
-    step_ids = [step.pk for step in next_steps]
-
-    with system_context(reason="workflows.engine.override"), transaction.atomic(using=alias):
-        locked = run_model.objects.db_manager(alias).lock_execution_ancestry((run_id,))[run_id]
-        if locked.status in RunStatus.TERMINAL:
-            raise ValidationError({"run": "A terminal workflow run cannot be overridden."})
-        for step_run in (
-            step_run_model.objects.db_manager(alias)
-            .lock_if_supported()
-            .filter(
-                run=locked,
-                status__in=list(StepRunStatus.ACTIVE),
-            )
-        ):
-            if step_run.step_id in step_ids:
-                step_run_model.objects.db_manager(alias).reschedule_for_override(
-                    step_run.pk, input={}, at=timezone.now()
-                )
-            else:
-                apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).cancel_current(
-                    step_run.pk, at=timezone.now()
-                )
-        override = step_run_model.objects.db_manager(alias).create(
-            run_id=locked.pk,
-            step=None,
-            system_kind="override",
-            status=StepRunStatus.SUCCEEDED,
-            output={"next_steps": step_ids},
-            outcome="override",
-            created_by_id=actor_id,
-            updated_by_id=actor_id,
-        )
-        for step_id in step_ids:
-            row = step_run_model.objects.db_manager(alias).filter(run=locked, step_id=step_id, map_index=-1).first()
-            if row is None:
-                row = step_run_model.objects.db_manager(alias).create(
-                    run_id=locked.pk,
-                    step_id=step_id,
-                    map_index=-1,
-                    status=StepRunStatus.SCHEDULED,
-                    input={},
-                )
-            elif row.status in StepRunStatus.TERMINAL:
-                row = step_run_model.objects.db_manager(alias).reschedule_for_override(
-                    row.pk, input={}, at=timezone.now()
-                )
-            step_run_model.objects.update_previous(row, [override], replace=True, using=alias)
-        if locked.status == RunStatus.WAITING:
-            locked.resume(using=alias)
-        dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-        dispatch_model.objects.db_manager(alias).schedule_advance(locked, available_at=timezone.now())
-        transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
-    return override
 
 
 def enqueue_advance(run_id: int, *, using: str | None = None) -> None:
@@ -1032,16 +916,6 @@ def enqueue_advance_at(run_id: int, when: datetime, *, using: str | None = None)
             run, available_at=when
         )
         transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
-
-
-def _actor_ref(actor: Any) -> SubjectRef:
-    """Return the explicit actor for a resolution path."""
-
-    if actor is None:
-        actor = current_actor()
-    if actor is None:
-        raise PermissionDenied("Authentication required.")
-    return actor if isinstance(actor, SubjectRef) else to_subject_ref(actor)
 
 
 def _activate_run_if_needed(run: Any, *, timestamp: datetime, alias: str) -> None:

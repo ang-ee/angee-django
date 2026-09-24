@@ -17,16 +17,25 @@ source paths and simple JSON Schema shapes, and reject unsupported constraints
 conservatively. Completion validates the exact JSON output again.
 
 [`engine`](engine.py) is the public function facade for workflow operations.
-Addons may call its admission, execution, cancellation, and delivery functions;
-their domain owners enforce the operation contracts. Operations accepting a
-run, decision, or step take the retained model instance; identifier-only delivery
-functions take primary keys. Durable task transport and the synchronous test
-driver call `WorkflowDispatch.objects.deliver`
-so the dispatch kind's declared spec owns target selection, locking, admission,
-and consumption.
+Its domain owners enforce the operation contracts. Operations accepting a run,
+decision, or step take the retained model instance. The existing public
+`advance_dispatch`, `execute_dispatch`, `deliver_artifact_dispatch`,
+`cancel_run_dispatch`, and `settle_run_dispatch` signatures delegate to
+`WorkflowDispatch.objects.deliver`, as do durable task transport and the
+synchronous test driver. Transport supplies a complete `WorkflowDispatchEnvelope`
+for validation under the delivery locks.
+
+Each member of the closed dispatch enum has one spec owning target selection,
+lock order, constraint shape, handler selection, and consumption results. Adding
+a kind requires its enum member and spec; scheduling policy belongs to the
+manager verb that admits that intent. The spec does not define scheduling policy.
 
 `GateResumeState` in [`attempts.py`](attempts.py) owns retained gate checkpoint
-fields. Custom operation checkpoint values survive admission and settlement.
+fields. Its typed attributes preserve the established `_resume_after_decisions`
+and `_decision_*` storage keys, which are reserved. Custom operation checkpoint
+values survive admission and settlement. `from_checkpoint()` reads these reserved
+keys and reports malformed gate data as Django validation errors; only GateStep
+resumption requires its retained `state` to be an object.
 
 Resource files declare separate native Workflow, Step, and Edge rows, in dependency
 order. Every Step names its `step_class` explicitly; the model has no fallback

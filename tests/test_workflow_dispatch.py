@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
+from inspect import signature
 from typing import Any
 from unittest.mock import patch
 
@@ -158,6 +160,47 @@ def test_advance_error_is_visible_until_the_exact_durable_intent_retries(run: Wo
     assert canceled_run.status == "canceled"
     assert canceled_run.error == retained_error
     assert pending.consumed_at == now
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"dispatch_id": -1},
+        {"kind": WorkflowDispatchKind.RUN_SETTLE},
+        {"target_id": -1},
+        {"generation": 1},
+        {"lease_token": uuid.UUID(int=1)},
+    ],
+)
+def test_transport_envelope_is_validated_after_owner_locks(
+    run: WorkflowRun,
+    monkeypatch: pytest.MonkeyPatch,
+    change: dict[str, Any],
+) -> None:
+    now = timezone.now()
+    dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
+    manager_type = type(WorkflowDispatch.objects)
+    lock_target = manager_type._lock_target
+    locked: list[int] = []
+
+    def observe_lock(manager: Any, intent: Any, *, using: str) -> DispatchTarget:
+        target = lock_target(manager, intent, using=using)
+        locked.append(target.row.pk)
+        return target
+
+    monkeypatch.setattr(manager_type, "_lock_target", observe_lock)
+    with pytest.raises(ValidationError, match="Transport envelope"):
+        WorkflowDispatch.objects.deliver(
+            dispatch.pk, supplied_envelope=replace(dispatch.envelope, **change), now=now
+        )
+    assert locked == [run.pk]
+    with system_context(reason="verify invalid transport leaves durable intent pending"):
+        dispatch.refresh_from_db()
+    assert dispatch.consumed_at is None
+    assert WorkflowDispatch.objects.deliver(
+        dispatch.pk, supplied_envelope=dispatch.envelope, now=now
+    ) == {"claimed": 0}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -487,6 +530,16 @@ def test_dispatch_kind_is_closed() -> None:
     assert all(kind.spec is DISPATCH_KINDS[kind] for kind in WorkflowDispatchKind)
 
 
+@pytest.mark.parametrize("kind", WorkflowDispatchKind)
+def test_declared_dispatch_handlers_resolve_with_the_delivery_contract(kind: WorkflowDispatchKind) -> None:
+    """The model-phase import boundary must not defer path typos to delivery."""
+
+    signature(kind.spec.handler).bind(None, at=timezone.now())
+    if kind.spec.error_handler is not None:
+        handler = getattr(WorkflowDispatch.objects, kind.spec.error_handler)
+        signature(handler).bind(1, error=RuntimeError("dispatch failure"))
+
+
 def deliver_declared_spec(target: DispatchTarget, *, at: datetime) -> bool:
     """One test declaration changes its target, result, and handler together."""
 
@@ -497,7 +550,7 @@ def deliver_declared_spec(target: DispatchTarget, *, at: datetime) -> bool:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_one_kind_spec_drives_constraints_envelope_and_delivery(
+def test_replacing_kind_spec_changes_constraints_envelope_and_delivery(
     run: WorkflowRun,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -509,7 +562,8 @@ def test_one_kind_spec_drives_constraints_envelope_and_delivery(
         WorkflowDispatchKind.ADVANCE,
         replace(
             WorkflowDispatchKind.ADVANCE.spec,
-            target_field="pk",
+            target_relation=None,
+            extra_required_fields=("run",),
             lock_plan=(),
             uniqueness=("run",),
             handler_path=f"{__name__}.deliver_declared_spec",

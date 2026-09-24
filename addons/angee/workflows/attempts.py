@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Annotated, Any, Self
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -25,6 +25,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic import ValidationError as PydanticValidationError
 
 from angee.base.serialization import canonical_json
 
@@ -453,19 +454,32 @@ class DecisionGateOutput(BaseModel):
 class GateResumeState(BaseModel):
     """Typed Decision checkpoint fields, retaining an operation's other checkpoint data.
 
-    Resume state is shared with custom suspended operations. Their additional
-    fields survive admission and settlement; Decision fields are validated here.
+    Resume state is shared with custom suspended operations. The established
+    ``_resume_after_decisions`` and ``_decision_*`` storage keys are reserved;
+    unprefixed operation fields survive admission and settlement unchanged.
+    GateStep owns the object shape of its own retained ``state``.
     """
 
-    model_config = ConfigDict(extra="allow", frozen=True, strict=True)
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True, validate_by_name=True, serialize_by_alias=True)
 
-    resume_after_decisions: bool = False
-    decision_ids: list[StrictInt] = Field(default_factory=list)
-    decision_outcome: StrictStr | None = None
-    decision_resolutions: dict[StrictStr, JsonValue] | None = None
-    decision_schemas: dict[StrictStr, dict[StrictStr, JsonValue]] = Field(default_factory=dict)
+    resume_after_decisions: Annotated[bool, Field(alias="_resume_after_decisions")] = False
+    decision_ids: Annotated[list[StrictInt], Field(alias="_decision_ids")] = Field(default_factory=list)
+    decision_outcome: Annotated[StrictStr | None, Field(alias="_decision_outcome")] = None
+    decision_resolutions: Annotated[dict[StrictStr, JsonValue] | None, Field(alias="_decision_resolutions")] = None
+    decision_schemas: Annotated[dict[StrictStr, dict[StrictStr, JsonValue]], Field(alias="_decision_schemas")] = Field(
+        default_factory=dict
+    )
     gate: JsonValue = Field(default_factory=dict)
-    state: dict[StrictStr, JsonValue] = Field(default_factory=dict)
+    state: JsonValue = Field(default_factory=dict)
+
+    @classmethod
+    def from_checkpoint(cls, state: object) -> Self:
+        """Read reserved storage keys without interpreting custom operation keys."""
+
+        try:
+            return cls.model_validate(state, by_alias=True, by_name=False)
+        except PydanticValidationError as error:
+            raise ValidationError({"gate": str(error)}) from error
 
     @model_validator(mode="after")
     def complete_settlement(self) -> Self:

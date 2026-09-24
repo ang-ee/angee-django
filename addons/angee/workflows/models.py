@@ -227,6 +227,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             "result_rules",
         }
     )
+    editable_declaration_fields = declaration_fields - {"key"}
     runtime = True
     rebac_grantable = {"editor": "write", "viewer": "write"}
 
@@ -485,7 +486,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             self._raise_if_key_changed(persisted)
             update_fields = kwargs.get("update_fields")
             changed = declaration_changed(
-                self, persisted, fields=self.declaration_fields - {"key"}, update_fields=update_fields
+                self, persisted, fields=self.editable_declaration_fields, update_fields=update_fields
             )
             assigns_stable_key = (
                 not persisted.key and bool(self.key) and (update_fields is None or "key" in update_fields)
@@ -769,6 +770,7 @@ class Step(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
             "position",
         }
     )
+    editable_declaration_fields = declaration_fields - {"workflow"}
     runtime = True
 
     sqid_prefix = "wfs_"
@@ -924,6 +926,7 @@ class Edge(AuditMixin, AngeeDataModel):
 
     resource_class = WorkflowDefinitionResource
     declaration_fields = frozenset({"workflow", "source", "target", "condition"})
+    editable_declaration_fields = declaration_fields - {"workflow", "source", "target"}
     runtime = True
 
     sqid_prefix = "wfe_"
@@ -2572,8 +2575,8 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     external_object_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     lease_revoked_at = models.DateTimeField(null=True, blank=True)
-    lease_revocation_reason = StateField(choices_enum=LeaseRevocationReason, blank=True)
-    result_kind = StateField(choices_enum=AttemptResultKind, blank=True)
+    lease_revocation_reason = StateField(choices_enum=LeaseRevocationReason, blank=True, db_index=False)
+    result_kind = StateField(choices_enum=AttemptResultKind, blank=True, db_index=False)
     result_recorded_at = models.DateTimeField(null=True, blank=True)
     output_present = models.BooleanField(default=False)
     output = models.JSONField(null=True, blank=True)
@@ -3079,10 +3082,10 @@ class Decision(AuditMixin, AngeeDataModel):
             state = self.step_run.resume_state
         if not isinstance(state, dict):
             return None
-        schemas = GateResumeState.model_validate(state).decision_schemas
-        if isinstance(schemas, dict) and str(self.pk) in schemas:
+        schemas = GateResumeState.from_checkpoint(state).decision_schemas
+        if str(self.pk) in schemas:
             schema = schemas[str(self.pk)]
-            return dict(schema) if isinstance(schema, dict) and schema else None
+            return dict(schema) if schema else None
         gate = state.get("gate")
         if isinstance(gate, dict):
             gate_schema = gate.get("decision_schema")

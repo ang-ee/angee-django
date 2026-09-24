@@ -87,7 +87,7 @@ def test_agent_approval_uses_dynamic_all_done_resumable_gate_slots() -> None:
     assert config["policy"] == "all_done"
     assert config["resume"] is True
     assert len(config["slots"]) == 2
-    assert GateResumeState.model_validate(result.resume_state) == GateResumeState(
+    assert GateResumeState.from_checkpoint(result.resume_state) == GateResumeState(
         gate={"policy": "all_done"},
         state={"turn": "turn-1"},
         resume_after_decisions=True,

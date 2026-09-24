@@ -134,6 +134,15 @@ from angee.workflows.trigger_declarations import (
 logger = logging.getLogger(__name__)
 
 
+def resolve_actor_subject(actor: Any) -> SubjectRef:
+    """Resolve a workflow action's explicit actor or its ambient principal."""
+
+    actor = current_actor() if actor is None else actor
+    if actor is None:
+        raise PermissionDenied("Authentication required.")
+    return to_subject_ref(actor)
+
+
 def _retained_record_access_refs(decision: Any) -> tuple[ObjectRef, ...]:
     """Parse one Decision's immutable delegation identities without widening them."""
 
@@ -470,7 +479,7 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
 
 
 class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # type: ignore[misc]
-    """Own immutable publication pinning and initial durable execution state."""
+    """Own immutable publication pinning and durable run operations."""
 
     def lock_execution_ancestry(self, run_ids: Iterable[int]) -> dict[int, Any]:
         """Lock persisted parent and recovery ancestors before their descendants.
@@ -555,6 +564,55 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             with system_context(reason="workflows.runs.cancel"):
                 locked.sudo(reason="workflows.runs.cancel.persistence")
                 self.cancel_locked(locked, at=timezone.now(), alias=alias)
+
+    def override_run(self, run: models.Model, next_steps: Iterable[models.Model], *, actor: Any) -> Any:
+        """Cancel active rows, retain an override journal row, and schedule next steps."""
+
+        alias = get_write_alias(self.model, bound=self, instance=run)
+        registry = self.model._meta.apps
+        steps = registry.get_model("workflows", "StepRun").objects.db_manager(alias)
+        attempts = registry.get_model("workflows", "StepAttempt").objects.db_manager(alias)
+        dispatches = registry.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias)
+        actor_id = actor_user_id(resolve_actor_subject(actor))
+        step_ids = [step.pk for step in next_steps]
+
+        with system_context(reason="workflows.runs.override"), transaction.atomic(using=alias):
+            locked = self.db_manager(alias).lock_execution_ancestry((run.pk,))[run.pk]
+            if locked.status in RunStatus.TERMINAL:
+                raise ValidationError({"run": "A terminal workflow run cannot be overridden."})
+            for step_run in steps.lock_if_supported().filter(run=locked, status__in=list(StepRunStatus.ACTIVE)):
+                if step_run.step_id in step_ids:
+                    steps.reschedule_for_override(step_run.pk, input={}, at=timezone.now())
+                else:
+                    attempts.cancel_current(step_run.pk, at=timezone.now())
+            override = steps.create(
+                run_id=locked.pk,
+                step=None,
+                system_kind="override",
+                status=StepRunStatus.SUCCEEDED,
+                output={"next_steps": step_ids},
+                outcome="override",
+                created_by_id=actor_id,
+                updated_by_id=actor_id,
+            )
+            for step_id in step_ids:
+                row = steps.filter(run=locked, step_id=step_id, map_index=-1).first()
+                if row is None:
+                    row = steps.create(
+                        run_id=locked.pk,
+                        step_id=step_id,
+                        map_index=-1,
+                        status=StepRunStatus.SCHEDULED,
+                        input={},
+                    )
+                elif row.status in StepRunStatus.TERMINAL:
+                    row = steps.reschedule_for_override(row.pk, input={}, at=timezone.now())
+                steps.update_previous(row, [override], replace=True, using=alias)
+            if locked.status == RunStatus.WAITING:
+                locked.resume(using=alias)
+            dispatches.schedule_advance(locked, available_at=timezone.now())
+            transaction.on_commit(lambda: enqueue_dispatch_publisher(using=alias), using=alias)
+        return override
 
     def expire_decisions(self, run: Any, *, resolved_by: str, include_current: bool) -> int:
         """Expire a run's decisions while holding its canonical aggregate locks."""
@@ -3332,7 +3390,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
             projected = retained_gate_output(attempt, decisions)
             if projected is None:
                 raise ValidationError({"decisions": "Retained gate settlement cannot be projected."})
-            state = GateResumeState.model_validate(step_run.resume_state or {})
+            state = GateResumeState.from_checkpoint(step_run.resume_state or {})
             if state.resume_after_decisions:
                 step_run.resume_state = state.model_copy(
                     update={"decision_outcome": outcome, "decision_resolutions": projected}
@@ -5516,7 +5574,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     declarations=result.decisions,
                     using=alias,
                 )
-                state = GateResumeState.model_validate(resume_state or {})
+                state = GateResumeState.from_checkpoint(resume_state or {})
                 schemas = {
                     str(decision.pk): retained_decision_form_schema(spec.decision_schema)
                     for decision, spec in zip(decisions, result.decisions, strict=True)
@@ -5861,9 +5919,10 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             )
             if len(retained) != len(ids) or any(row.verdict not in Verdict.TERMINAL for row in retained):
                 raise ValidationError({"gate": "Decision apply predecessor settlement is incomplete."})
-            if len(retained) != 1:
+            settled = gate.decision_gate.settled_decisions(retained)
+            if len(settled) != 1:
                 raise ValidationError({"gate": "Decision apply requires one settled predecessor slot."})
-            return retained[0]
+            return settled[0]
 
     @contextmanager
     def locked_resolution(
@@ -6138,9 +6197,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         """Parse a public human action for one retained Decision instance."""
 
         alias = get_write_alias(self.model, bound=self, instance=decision)
-        actor = current_actor() if actor is None else actor
-        if actor is None:
-            raise PermissionDenied("Authentication required.")
+        actor = resolve_actor_subject(actor)
         verdicts = {"complete": Verdict.COMPLETED, "reject": Verdict.REJECTED, "escalate": Verdict.ESCALATED}
         try:
             verdict = verdicts[verb.lower()]
@@ -6663,7 +6720,7 @@ class WorkflowDispatchQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
             available_at__lte=at,
         )
         if envelope.lease_token is not None:
-            eligible = eligible.filter(step_attempt__lease_token=envelope.lease_token)
+            eligible = eligible.filter(**{f"{envelope.kind.spec.lease_field}__lease_token": envelope.lease_token})
         return super(AppendOnlyQuerySet, eligible).update(consumed_at=at, updated_at=at)
 
     def immutable_error(self, operation: str) -> Exception:
@@ -6708,7 +6765,7 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
             )
         if paths and facts != system_queryset(self.model, using=using, lock=None).values(*paths).get(pk=dispatch.pk):
             raise OperationalError("Dispatch ancestry changed while locking.")
-        row = dispatch if spec.target_field == "pk" else locked[spec.target_field.removesuffix("_id")]
+        row = dispatch if spec.target_relation is None else locked[spec.target_relation]
         return DispatchTarget(row, dispatch, dict.fromkeys(spec.result_fields, 0))
 
     def deliver(
@@ -6720,10 +6777,13 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
         now: datetime | None = None,
         expected_kind: WorkflowDispatchKind | None = None,
         expected_generation: int | None = None,
+        supplied_envelope: WorkflowDispatchEnvelope | None = None,
     ) -> dict[str, int]:
         """Admit, perform and consume one spec-owned durable delivery.
 
-        A wrong lease, duplicate or early delivery is inert. A handler returning
+        Transport callers supply the complete envelope, compared once under
+        the locks. Local facade callers may assert individual identity fields.
+        A wrong local lease, duplicate or early delivery is inert. A handler returning
         false fences and consumes its stale intent. Exceptions roll back domain
         effects and consumption together. Executable attempts invoke their step
         after this delivery transaction exits. Callers performing external work
@@ -6744,8 +6804,11 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
                     raise OperationalError("Dispatch kind changed while locking.")
                 target.dispatch = dispatch
                 envelope = dispatch.envelope
+                if supplied_envelope is not None and supplied_envelope != envelope:
+                    raise ValidationError({"dispatch": "Transport envelope does not match its durable intent."})
+                invocation_lease = supplied_envelope.lease_token if supplied_envelope is not None else lease_token
                 if (
-                    envelope.lease_token != lease_token
+                    envelope.lease_token != invocation_lease
                     or dispatch.consumed_at is not None
                     or at < dispatch.available_at
                 ):

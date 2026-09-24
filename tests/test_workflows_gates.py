@@ -393,23 +393,48 @@ def test_gate_config_rejects_static_action_unions_before_admission(slot_schema: 
 @pytest.mark.parametrize(
     "state",
     [
-        {"resume_after_decisions": "true"},
-        {"decision_ids": ["11"]},
-        {"decision_outcome": "completed"},
-        {"decision_resolutions": {}},
-        {"decision_outcome": "completed", "decision_resolutions": {}},
-        {"state": []},
+        {"_resume_after_decisions": "true"},
+        {"_decision_ids": ["11"]},
+        {"_decision_outcome": "completed"},
+        {"_decision_resolutions": {}},
+        {"_decision_outcome": "completed", "_decision_resolutions": {}},
     ],
 )
 def test_gate_resume_state_rejects_coercion_and_partial_settlement(state: dict[str, Any]) -> None:
-    with pytest.raises(ValueError):
-        GateResumeState.model_validate(state)
+    with pytest.raises(ValidationError):
+        GateResumeState.from_checkpoint(state)
 
 
 def test_gate_resume_state_preserves_custom_checkpoint_fields() -> None:
-    checkpoint = {"resume_after_decisions": True, "gate": {"policy": "all_done"}, "cursor": "page-2"}
-    state = GateResumeState.model_validate(checkpoint)
+    checkpoint = {
+        "_resume_after_decisions": True,
+        "gate": {"policy": "all_done"},
+        "cursor": "page-2",
+        "state": ["page-2"],
+        "decision_ids": ["operation-owned"],
+        "decision_outcome": {"operation": "pending"},
+        "resume_after_decisions": "operation-owned",
+    }
+    state = GateResumeState.from_checkpoint(checkpoint)
+    assert state.resume_after_decisions is True
+    assert state.decision_ids == []
     assert state.model_dump(mode="json", exclude_defaults=True) == checkpoint
+    assert state.model_copy(update={"decision_ids": [11]}).model_dump(mode="json", exclude_defaults=True) == {
+        **checkpoint,
+        "_decision_ids": [11],
+    }
+
+
+def test_decision_form_schema_reads_retained_reserved_checkpoint_keys() -> None:
+    decision = Decision(pk=11)
+    schema = {"type": "object", "properties": {"reason": {"type": "string"}}}
+    checkpoint = {"_decision_schemas": {"11": schema}, "state": ["operation-owned"]}
+    setattr(decision, Decision._form_schema_state_attribute, checkpoint)
+
+    assert decision.form_schema == schema
+    checkpoint["_decision_schemas"] = {"11": []}
+    with pytest.raises(ValidationError):
+        _ = decision.form_schema
 
 
 def test_gate_resumption_returns_retained_state_and_runtime_slot_results() -> None:
@@ -433,13 +458,13 @@ def test_gate_resumption_returns_retained_state_and_runtime_slot_results() -> No
     )
     projected = {"resolutions": [{"decision_id": "decision-1"}], "outcome": "completed"}
     step_run = SimpleNamespace(
-        resume_state=GateResumeState(
-            resume_after_decisions=True,
-            decision_ids=[11, 12],
-            decision_outcome="completed",
-            decision_resolutions=projected,
-            state={"turn": "turn-1"},
-        ).model_dump(mode="json"),
+        resume_state={
+            "_resume_after_decisions": True,
+            "_decision_ids": [11, 12],
+            "_decision_outcome": "completed",
+            "_decision_resolutions": projected,
+            "state": {"turn": "turn-1"},
+        },
         decisions=decisions,
     )
 
@@ -462,6 +487,9 @@ def test_gate_resumption_returns_retained_state_and_runtime_slot_results() -> No
             "resolution": {"action": "reject", "reason": "unsafe"},
         },
     )
+    step_run.resume_state["state"] = []
+    with pytest.raises(ValidationError, match="retained state must be an object"):
+        GateStep.resumption(step_run)
 
 
 class _DecisionRows(list[Any]):
@@ -1197,11 +1225,12 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
     requester = User.objects.create_user(username="wdc-requester")
     assignee = User.objects.create_user(username="wdc-assignee")
     escalated = User.objects.create_user(username="wdc-escalated")
+    checkpoint = {"phase": "awaiting-review", "state": ["operation-owned"], "decision_ids": ["external-id"]}
 
     def suspend_from_fixture(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
         return StepResult.suspend(
-            resume_state={"phase": "awaiting-review"},
+            resume_state=checkpoint,
             decisions=[
                 DecisionSpec(
                     assignees=(str(public_subject_ref(to_subject_ref(assignee))),),
@@ -1231,10 +1260,16 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
     assert decision.payload == {"title": "Review"}
     assert decision.verdict == workflow_models.Verdict.PENDING
     assert decision.max_attempts == 3
+    row = _step_run(run, "fixture")
+    assert row.resume_state == {**checkpoint, "_decision_ids": [decision.pk]}
+    assert decision.form_schema is None
 
     assert _relationship_subjects(decision, "assignee") == {str(to_subject_ref(assignee))}
     assert _relationship_subjects(decision, "requester") == {str(to_subject_ref(requester))}
     assert _relationship_subjects(decision, "escalation") == {str(to_subject_ref(escalated))}
+    engine.decide(decision, "complete", actor=assignee)
+    row.refresh_from_db()
+    assert row.status == workflow_models.StepRunStatus.SUCCEEDED
 
 
 def test_decision_target_is_actor_validated_retained_and_immutable(
@@ -1370,7 +1405,7 @@ def test_legacy_gate_decision_still_marks_the_suspended_step_succeeded(
     gate = _step_run(run, "gate")
     decision = _decision_for(run, "gate")
 
-    assert GateResumeState.model_validate(gate.resume_state).decision_ids == [decision.pk]
+    assert GateResumeState.from_checkpoint(gate.resume_state).decision_ids == [decision.pk]
     engine.decide(decision, "complete", payload={"action": "complete"}, actor=assignee)
 
     gate.refresh_from_db()
@@ -1475,9 +1510,7 @@ def test_force_expiry_wakes_retained_decision_continuation(
     def suspend(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
         return StepResult.suspend(
-            resume_state=GateResumeState(resume_after_decisions=True, gate={"policy": "all_done"}).model_dump(
-                mode="json", exclude_defaults=True
-            ),
+            resume_state={"_resume_after_decisions": True, "gate": {"policy": "all_done"}},
             decisions=(
                 DecisionSpec(
                     assignees=(str(to_subject_ref(assignee)),),
@@ -1504,12 +1537,12 @@ def test_force_expiry_wakes_retained_decision_continuation(
     decision = _decision_for(run, "fixture")
     assert decision.verdict == workflow_models.Verdict.EXPIRED
     assert row.current_attempt_id == prior_attempt_id
-    assert GateResumeState.model_validate(row.resume_state).decision_outcome == "completed"
+    assert GateResumeState.from_checkpoint(row.resume_state).decision_outcome == "completed"
     assert row.wait_until is not None
 
 
 @pytest.mark.parametrize(
-    ("policy", "outcome", "retained_count", "invalid_settlement"),
+    ("policy", "outcome", "retained_count", "legacy_settlement"),
     (("one_done", "expired", 1, False), ("one_done", "expired", 2, True), ("all_done", "completed", 2, False)),
 )
 def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
@@ -1519,7 +1552,7 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
     policy: str,
     outcome: str,
     retained_count: int,
-    invalid_settlement: bool,
+    legacy_settlement: bool,
 ) -> None:
     """Bulk expiry preserves all rows and the exact policy-owned settlement."""
 
@@ -1561,9 +1594,9 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
     execute_started(run)
     decisions = _decisions_for(run, "gate")
     assert len(decisions) == 2
-    with monkeypatch.context() as malformed_writer:
-        if invalid_settlement:
-            malformed_writer.setattr(
+    with monkeypatch.context() as legacy_writer:
+        if legacy_settlement:
+            legacy_writer.setattr(
                 type(_step_run(run, "gate").decision_gate),
                 "settled_decisions",
                 lambda self, rows: tuple(row for row in rows if row.verdict in workflow_models.Verdict.TERMINAL),
@@ -1580,7 +1613,7 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
     assert [item["decision_id"] for item in consumer.output["resolutions"]] == [
         row.sqid for row in decisions[:retained_count]
     ]
-    if policy == "one_done" and not invalid_settlement:
+    if policy == "one_done":
         assert Decision.objects.predecessor_decision(consumer, GateStep).pk == decisions[0].pk
     else:
         with pytest.raises(ValidationError, match="one settled predecessor slot"):
@@ -1718,12 +1751,12 @@ def test_resume_after_decisions_scopes_each_single_and_multi_suspension(
 
     row = _step_run(run, "fixture")
     first_decision = _decisions_for(run, "fixture")[0]
-    assert GateResumeState.model_validate(row.resume_state).decision_ids == [first_decision.pk]
+    assert GateResumeState.from_checkpoint(row.resume_state).decision_ids == [first_decision.pk]
 
     engine.decide(first_decision, "complete", actor=first)
     row.refresh_from_db()
     assert row.status == workflow_models.StepRunStatus.WAITING
-    assert GateResumeState.model_validate(row.resume_state).decision_outcome == "completed"
+    assert GateResumeState.from_checkpoint(row.resume_state).decision_outcome == "completed"
 
     advance_once(run)
     execute_started(run)
@@ -1731,18 +1764,18 @@ def test_resume_after_decisions_scopes_each_single_and_multi_suspension(
     all_decisions = _decisions_for(run, "fixture")
     current = all_decisions[1:]
     assert len(current) == 2
-    assert GateResumeState.model_validate(row.resume_state).decision_ids == [decision.pk for decision in current]
-    assert first_decision.pk not in GateResumeState.model_validate(row.resume_state).decision_ids
+    assert GateResumeState.from_checkpoint(row.resume_state).decision_ids == [decision.pk for decision in current]
+    assert first_decision.pk not in GateResumeState.from_checkpoint(row.resume_state).decision_ids
 
     engine.decide(current[0], "complete", actor=second)
     row.refresh_from_db()
     assert row.status == workflow_models.StepRunStatus.WAITING
-    assert GateResumeState.model_validate(row.resume_state).decision_outcome is None
+    assert GateResumeState.from_checkpoint(row.resume_state).decision_outcome is None
 
     engine.decide(current[1], "complete", actor=third)
     row.refresh_from_db()
     assert row.status == workflow_models.StepRunStatus.WAITING
-    assert GateResumeState.model_validate(row.resume_state).decision_outcome == "completed"
+    assert GateResumeState.from_checkpoint(row.resume_state).decision_outcome == "completed"
 
 
 def test_sequential_policy_requires_priority_order(
@@ -2123,18 +2156,18 @@ def test_escalation_timeout_writes_tuple_and_routes_escalated(
             kind=WorkflowDispatchKind.DECISION_ESCALATE,
         )
     with pytest.raises(ValidationError, match="durable intent"):
-        engine.escalate_decision_dispatch(
+        WorkflowDispatch.objects.deliver(
             dispatch.pk,
-            expected_decision_id=decision.pk,
+            expected_target_id=decision.pk,
             expected_generation=decision.attempts + 1,
             now=now + timedelta(minutes=10),
         )
     _refresh_decision(decision)
     assert decision.verdict == workflow_models.Verdict.PENDING
 
-    engine.escalate_decision_dispatch(
+    WorkflowDispatch.objects.deliver(
         dispatch.pk,
-        expected_decision_id=decision.pk,
+        expected_target_id=decision.pk,
         expected_generation=decision.attempts,
         now=now + timedelta(minutes=10),
     )
@@ -2168,9 +2201,9 @@ def test_expiry_timeout_routes_expired(
             decision=decision,
             kind=WorkflowDispatchKind.DECISION_EXPIRE,
         )
-    engine.expire_decision_dispatch(
+    WorkflowDispatch.objects.deliver(
         dispatch.pk,
-        expected_decision_id=decision.pk,
+        expected_target_id=decision.pk,
         expected_generation=decision.attempts,
         now=now + timedelta(minutes=10),
     )

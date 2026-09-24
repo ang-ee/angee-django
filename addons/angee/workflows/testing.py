@@ -135,11 +135,7 @@ def _deliver_results(root: Any, *, now: datetime | None = None, using: str) -> N
                 manager.filter(scope, available_at__lte=timestamp, consumed_at__isnull=True).order_by("pk")
             )
         for dispatch in deliveries:
-            manager.deliver(
-                dispatch.pk,
-                expected_target_id=dispatch.envelope.target_id,
-                now=timestamp,
-            )
+            manager.deliver(dispatch.pk, now=timestamp)
 
 
 def start_run(workflow: Any, *, subject: Any = None, actor: Any = None, using: str | None = None) -> Any:

@@ -966,7 +966,7 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
         scheduled_step_run.refresh_from_db()
 
     assert [decision.declaration_index for decision in decisions] == [0, 1]
-    state = GateResumeState.model_validate(scheduled_step_run.resume_state)
+    state = GateResumeState.from_checkpoint(scheduled_step_run.resume_state)
     assert state.decision_ids == [decision.pk for decision in decisions]
     retained_schema = state.decision_schemas[str(decisions[1].pk)]
     assert retained_schema["propertyOrder"] == ["action", "invoice"]

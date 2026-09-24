@@ -8,9 +8,7 @@ from typing import Any
 
 from celery import shared_task
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from django.utils import timezone
-from rebac import system_context
 
 from angee.base.db import get_write_alias
 from angee.jobs.enqueue import enqueue_task
@@ -92,16 +90,8 @@ def consume_workflow_dispatch(
     parsed_lease = uuid.UUID(lease_token) if lease_token is not None else None
     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     alias = get_write_alias(dispatch_model, using=using)
-    with system_context(reason="workflows.dispatch.envelope"):
-        durable = dispatch_model.objects.db_manager(alias).with_envelope().get(pk=dispatch_id).envelope
     supplied = WorkflowDispatchEnvelope(dispatch_id, parsed, target_id, generation, parsed_lease)
-    if supplied != durable:
-        raise ValidationError({"dispatch": "Transport envelope does not match its durable intent."})
-    dispatch_model.objects.db_manager(alias).deliver(
-        dispatch_id,
-        expected_target_id=target_id,
-        lease_token=parsed_lease,
-    )
+    dispatch_model.objects.db_manager(alias).deliver(dispatch_id, supplied_envelope=supplied)
 
 
 @shared_task(bind=True, name="workflows.publish_dispatches")
