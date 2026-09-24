@@ -266,10 +266,10 @@ class WorkflowDefinitionResource(AngeeResource):
                 # declaration updates only while the step's config contract still
                 # declares them; an explicit empty object still clears.
                 declared = instance.resolve_impl("step_class").declared_config_keys()
-                retained = old_config if declared is None else {
+                kept_config = old_config if declared is None else {
                     key: value for key, value in old_config.items() if key in declared
                 }
-                instance.config = {**retained, **instance.config}
+                instance.config = {**kept_config, **instance.config}
             if instance._state.adding or "config" in row or changed_class:
                 instance.validate_impl_configs()
 
