@@ -16,7 +16,7 @@ actually unique to your product.
 
 ## What Angee is
 
-- **A framework, not an app** — used to build SaaS, internal tools, and
+- **A framework, not an app** — used to build SaaS, ERP, and
   self-hosted personal apps. You compose it; you don't fork it.
 - **Addon-based** — every capability is one addon: Django source (abstract models
   + GraphQL + REBAC + resources) plus, when it has UI, a co-located `web/`
@@ -98,7 +98,7 @@ actually unique to your product.
   published lineages for permissioned human-in-the-loop automation.
 - **MCP** *(Planned)* — an agent tool surface generated from the framework's
   persisted, REBAC-gated GraphQL operations.
-- **Domain applications** *(Planned)* — consumer-owned capabilities composed
+- **Agentic resource planning** *(Planned)* — consumer-owned capabilities composed
   over shared primitives such as `money`, `sequence`, and `uom`.
 
 ## How you build & ship

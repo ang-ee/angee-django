@@ -20,7 +20,7 @@ from angee.base.models import AngeeDataModel
 class Document(AngeeDataModel):
     """An owner-gated document whose lines are edited transactionally."""
 
-    sqid_prefix = "sdc_"
+    sqid_prefix = "doc_"
 
     title = models.CharField(max_length=200)
     note = models.CharField(max_length=200, blank=True, default="")
@@ -80,7 +80,7 @@ class Tag(AngeeDataModel):
 class DocumentLine(AngeeDataModel):
     """One ordered child line of a :class:`Document` (no row policy of its own)."""
 
-    sqid_prefix = "sln_"
+    sqid_prefix = "dln_"
 
     class Kind(models.TextChoices):
         """The line's product/service classification — the F6 enum child field."""

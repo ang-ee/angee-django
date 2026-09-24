@@ -37,24 +37,24 @@ def disabled_app(tmp_path, monkeypatch):
     """A real disabled app whose label and default selection belong to Django."""
 
     for name in tuple(sys.modules):
-        if name == "example" or name.startswith("example."):
+        if name == "fakeaddon" or name.startswith("fakeaddon."):
             monkeypatch.delitem(sys.modules, name)
-    package = tmp_path / "example" / "base"
+    package = tmp_path / "fakeaddon" / "base"
     package.mkdir(parents=True)
     (package.parent / "__init__.py").write_text("")
     (package / "__init__.py").write_text("")
-    (package / "addon.toml").write_text('[addon]\nname = "example.base"\ndepends_on = ["example.loaded"]\n')
+    (package / "addon.toml").write_text('[addon]\nname = "fakeaddon.base"\ndepends_on = ["fakeaddon.loaded"]\n')
     (package / "models.py").write_text('raise AssertionError("disabled models imported")\n')
     (package / "apps.py").write_text(
         "from django.apps import AppConfig\n"
         "class BaseConfig(AppConfig):\n"
-        "    name = 'example.base'\n"
-        "    label = 'example'\n"
+        "    name = 'fakeaddon.base'\n"
+        "    label = 'fakeaddon'\n"
         "    default = True\n"
         "    def ready(self):\n"
         "        raise AssertionError('disabled ready called')\n"
         "class SelectedConfig(BaseConfig):\n"
-        "    label = 'example_selected'\n"
+        "    label = 'fakeaddon_selected'\n"
         "    default = False\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -62,7 +62,7 @@ def disabled_app(tmp_path, monkeypatch):
         yield package
     finally:
         for name in tuple(sys.modules):
-            if name == "example" or name.startswith("example."):
+            if name == "fakeaddon" or name.startswith("fakeaddon."):
                 sys.modules.pop(name)
 
 
@@ -219,9 +219,9 @@ def test_installed_discovery_keeps_native_origins_and_precedence(tmp_path, monke
 @pytest.mark.parametrize(
     ("declaration", "label"),
     [
-        ("example.base", "example"),
-        ("example.base.apps.BaseConfig", "example"),
-        ("example.base.apps.SelectedConfig", "example_selected"),
+        ("fakeaddon.base", "fakeaddon"),
+        ("fakeaddon.base.apps.BaseConfig", "fakeaddon"),
+        ("fakeaddon.base.apps.SelectedConfig", "fakeaddon_selected"),
     ],
 )
 def test_disabled_app_identity_uses_native_config_without_population(disabled_app, declaration, label) -> None:
@@ -230,10 +230,10 @@ def test_disabled_app_identity_uses_native_config_without_population(disabled_ap
     config = resolve_app_config(declaration)
 
     assert config is not None
-    assert (config.name, config.label, config.path) == ("example.base", label, str(disabled_app))
+    assert (config.name, config.label, config.path) == ("fakeaddon.base", label, str(disabled_app))
     assert config.apps is None
     assert config.models is None
-    assert "example.base.models" not in sys.modules
+    assert "fakeaddon.base.models" not in sys.modules
     assert tuple(apps.get_app_configs()) == before
 
 
@@ -271,9 +271,9 @@ def test_disabled_config_failure_is_reported_without_breaking_discovery(
     (disabled_app / "apps.py").write_text(source)
     before = tuple(apps.get_app_configs())
 
-    assert resolve_app_config("example.base") is None
+    assert resolve_app_config("fakeaddon.base") is None
 
-    assert "example.base" in caplog.text
+    assert "fakeaddon.base" in caplog.text
     assert diagnostic in caplog.text
     assert tuple(apps.get_app_configs()) == before
 
@@ -281,7 +281,7 @@ def test_disabled_config_failure_is_reported_without_breaking_discovery(
 def test_discovery_cannot_claim_another_apps_identity(disabled_app) -> None:
     del disabled_app
     with pytest.raises(ImproperlyConfigured, match="disagrees with AppConfig.name"):
-        resolve_app_config("example.base", expected_name="example.other")
+        resolve_app_config("fakeaddon.base", expected_name="example.other")
 
 
 @pytest.mark.parametrize(
@@ -291,7 +291,7 @@ def test_discovery_cannot_claim_another_apps_identity(disabled_app) -> None:
         (
             "from django.apps import AppConfig\n"
             "class FirstConfig(AppConfig):\n"
-            "    name = 'example.base'\n"
+            "    name = 'fakeaddon.base'\n"
             "    default = True\n"
             "class SecondConfig(FirstConfig):\n"
             "    default = True\n",
@@ -304,7 +304,7 @@ def test_app_identity_does_not_hide_application_errors(disabled_app, source, dia
 
     (disabled_app / "apps.py").write_text(source)
     with pytest.raises(RuntimeError, match=diagnostic):
-        resolve_app_config("example.base")
+        resolve_app_config("fakeaddon.base")
 
 
 def test_manifest_root_resolution_uses_exact_app_config_aliases() -> None:
@@ -331,18 +331,18 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         del platform_tables
         addon = apps.get_model("platform", "Addon")
         line = apps.get_model("linesdemo", "DocumentLine")
-        loaded = make_addon(name="example.loaded", path=tmp_path / "loaded", depends_on=("django.contrib.auth",))
+        loaded = make_addon(name="fakeaddon.loaded", path=tmp_path / "loaded", depends_on=("django.contrib.auth",))
         loaded.apps = apps
         loaded.models = {"documentline": line}
         loaded.angee_addon_root = True
         loaded.angee_forced = False
         installed_manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
-        local_manifest = AddonManifest(name="example.unavailable", depends_on=("example.base",))
+        local_manifest = AddonManifest(name="example.unavailable", depends_on=("fakeaddon.base",))
         available = {
             loaded.name: (addon_manifest(loaded), Path(loaded.path)),
-            "example.base": (
+            "fakeaddon.base": (
                 installed_manifest,
-                EntryPoint(name="example.base", value="example.base", group="angee.addons"),
+                EntryPoint(name="fakeaddon.base", value="fakeaddon.base", group="angee.addons"),
             ),
             local_manifest.name: (local_manifest, tmp_path / "unavailable"),
         }
@@ -350,7 +350,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
 
         def resource_counts(*, using):
             count_aliases.append(using)
-            return {loaded.name: 7, "example.base": 99}
+            return {loaded.name: 7, "fakeaddon.base": 99}
 
         patch.setattr(platform_models, "available_addons", lambda _dirs: available)
         patch.setattr(platform_models.composed, "addons", lambda: [loaded])
@@ -358,7 +358,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         patch.setattr(platform_models.composed, "resource_counts", resource_counts)
         with system_context(reason="test.platform.reconcile-native-facts"):
             addon.objects.create(
-                name="example.base",
+                name="fakeaddon.base",
                 state=addon.State.ENABLED,
                 forced=True,
                 pending=True,
@@ -391,7 +391,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             addon.objects.reconcile_from_registry("default", desired=frozenset({loaded.name}))
 
             enabled = addon.objects.get(name=loaded.name)
-            disabled = addon.objects.get(name="example.base")
+            disabled = addon.objects.get(name="fakeaddon.base")
             historical.refresh_from_db()
             remote.refresh_from_db()
             materialised.refresh_from_db()
@@ -402,14 +402,14 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             addon.Kind.CONSUMER,
         )
         assert enabled.depends_on == ["django.contrib.auth"]
-        assert enabled.depended_by == ["example.base"]
+        assert enabled.depended_by == ["fakeaddon.base"]
         assert enabled.forced is False
         assert enabled.pending is False
         assert (enabled.model_count, enabled.resource_count) == (1, 7)
         assert enabled.field_count == len(line._meta.fields) + len(line._meta.many_to_many)
         assert enabled.model_labels == [line._meta.label_lower]
         assert (disabled.state, disabled.source, disabled.label) == (
-            addon.State.DISABLED, addon.Source.INSTALLED, "example"
+            addon.State.DISABLED, addon.Source.INSTALLED, "fakeaddon"
         )
         assert disabled.depends_on == [loaded.name]
         assert disabled.depended_by == [local_manifest.name]
@@ -430,14 +430,14 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             addon.State.DISABLED,
             "",
         )
-        assert materialised.depends_on == ["example.base"]
+        assert materialised.depends_on == ["fakeaddon.base"]
         assert materialised.vcs_path == "addons/unavailable"
         assert str(materialised) == local_manifest.name
 
 
 @pytest.mark.parametrize(
     ("declaration", "label"),
-    [("example.base", "example"), ("example.base.apps.SelectedConfig", "example_selected")],
+    [("fakeaddon.base", "fakeaddon"), ("fakeaddon.base.apps.SelectedConfig", "fakeaddon_selected")],
 )
 def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
     platform_tables, disabled_app, tmp_path, settings, monkeypatch, declaration, label
@@ -471,7 +471,7 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
         assert [(impact.name, impact.label, impact.root) for impact in preview.addons_to_enable] == [
             (manifest.name, label, True)
         ]
-        assert "example.base.models" not in sys.modules
+        assert "fakeaddon.base.models" not in sys.modules
         assert tuple(apps.get_app_configs()) == before
 
         with system_context(reason="test.platform.unknown-desired-preserves-pending"):
@@ -480,7 +480,7 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
         assert row.pending is True
 
 
-def test_install_preview_keeps_unresolvable_identity_unknown(tmp_path, settings, monkeypatch) -> None:
+def test_install_preview_uses_name_for_unresolvable_identity(tmp_path, settings, monkeypatch) -> None:
     manifest = AddonManifest(name="unavailable_package.addon", depends_on=("unavailable_package.dependency",))
     monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: {manifest.name: (manifest, tmp_path)})
     monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
@@ -495,7 +495,7 @@ def test_install_preview_keeps_unresolvable_identity_unknown(tmp_path, settings,
     assert preview.roots_after == (manifest.name,)
     assert len(preview.addons_to_enable) == 1
     impact = preview.addons_to_enable[0]
-    assert (impact.name, impact.label, impact.depends_on) == (manifest.name, "", manifest.depends_on)
+    assert (impact.name, impact.label, impact.depends_on) == (manifest.name, manifest.name, manifest.depends_on)
 
 
 @pytest.fixture
