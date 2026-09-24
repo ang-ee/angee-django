@@ -315,15 +315,6 @@ def test_unrelated_save_repairs_wildcard_from_persisted_policy(tags_tables: None
     assert _shared_reader_exists(tag)
 
 
-@pytest.mark.parametrize("operation", ("save", "reconcile_shared_reader"))
-def test_shared_reader_rejects_non_default_alias_before_database_access(operation: str) -> None:
-    """Persistence and explicit reconciliation fail before model or tuple writes."""
-
-    tag = ScopeFlagTag(name="Other database")
-    with pytest.raises(ValidationError, match="default authorization database"):
-        getattr(tag, operation)(using="other")
-
-
 def test_targeted_content_save_skips_shared_reader_reconciliation(tags_tables: None) -> None:
     """A targeted save outside policy fields avoids tuple reads and writes."""
 

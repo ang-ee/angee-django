@@ -11,11 +11,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
-from rebac.models import active_relationship_model
 
-from angee.base.db import get_read_alias, get_write_alias
 from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
-from angee.base.permissions import require_authorization_database
 from angee.resources.entries import (
     GRANT_KIND,
     EntryGraph,
@@ -63,7 +60,6 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         addons: Iterable[Any],
         *,
         tiers: Iterable[object] | None = None,
-        using: str | None = None,
     ) -> ValidationResult:
         """Validate selected addon resource files without saving rows."""
 
@@ -76,7 +72,6 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             grant_groups,
             dry_run=True,
             addon_aliases=self._addon_aliases(selected_addons),
-            using=get_write_alias(self.model, using=using, bound=self),
         )
         return ValidationResult(
             checked_files=len({group.entry.key for group in row_groups} | {group.entry.key for group in grant_groups}),
@@ -92,7 +87,6 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         tiers: Iterable[object],
         allow_non_dev: bool = False,
         dry_run: bool = False,
-        using: str | None = None,
     ) -> LoadResult:
         """Load selected addon resource tiers idempotently."""
 
@@ -109,7 +103,6 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             grant_groups,
             dry_run=dry_run,
             addon_aliases=self._addon_aliases(selected_addons),
-            using=get_write_alias(self.model, using=using, bound=self),
         )
 
     def _import_groups(
@@ -120,7 +113,6 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         *,
         dry_run: bool,
         addon_aliases: Mapping[str, str],
-        using: str,
     ) -> LoadResult:
         """Import model rows and materialize grants; optionally roll back.
 
@@ -134,40 +126,11 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             (
                 group,
                 build_resource(
-                    group.model, group.entry, ledger_model=self.model, addon_aliases=addon_aliases, using=using,
+                    group.model, group.entry, ledger_model=self.model, addon_aliases=addon_aliases,
                 ),
             )
             for group in row_groups
         ]
-        write_models = [self.model, *(group.model for group in row_groups)]
-        write_models.extend(
-            field.remote_field.through
-            for group in row_groups
-            for field in group.model._meta.many_to_many
-            if field.name in group.dataset.headers
-        )
-        if grant_groups:
-            write_models.append(active_relationship_model())
-        related_models = {
-            field.remote_field.model
-            for model in write_models
-            for field in model._meta.fields
-            if field.remote_field is not None
-        }
-        # Probe unbound upstream read policies only to reject unsupported routes;
-        # every write below still uses the alias selected by the entry owner.
-        aliases = {
-            using,
-            *(get_write_alias(model) for model in write_models),
-            *(get_read_alias(model, bound=model._default_manager) for model in {*write_models, *related_models}),
-            *(resource.get_db_connection_name() for _group, resource in loaded_groups),
-        }
-        for alias in aliases:
-            require_authorization_database(
-                alias,
-                operation="Resource rows, ledger and grants sharing the resource load transaction",
-                error_class=ResourceLoadError,
-            )
         rows_by_entry: dict[EntryKey, list[tuple[ResourceGroup, Any]]] = defaultdict(list)
         for group, resource in loaded_groups:
             rows_by_entry[group.entry.key].append((group, resource))
@@ -175,14 +138,14 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
             reason = "resources.validate" if dry_run else "resources.load"
-            with system_context(reason=reason), transaction.atomic(using=using):
+            with system_context(reason=reason), transaction.atomic():
                 resource_classes = {
                     group.model.resource_class
                     for group, _ in loaded_groups
                     if issubclass(group.model, ResourceLoadMixin) and group.model.resource_class is not None
                 }
                 for resource_class in sorted(resource_classes, key=lambda cls: (cls.__module__, cls.__qualname__)):
-                    resource_class.lock_imports(loaded_groups, using=using)
+                    resource_class.lock_imports(loaded_groups)
                 for entry in entries:
                     if entry.kind == GRANT_KIND:
                         created, skipped = materialize_grant_groups(
@@ -213,7 +176,7 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
                             raise ResourceLoadError(f"{group.entry.display}: {error}") from error
                         load_result = load_result.with_result(result)
                 if not dry_run:
-                    self._run_post_load_hooks(loaded_groups, using=using)
+                    self._run_post_load_hooks(loaded_groups)
                 if dry_run:
                     raise DryRunRollback()
         except DryRunRollback:
@@ -223,8 +186,6 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
     def _run_post_load_hooks(
         self,
         loaded_groups: list[tuple[ResourceGroup, Any]],
-        *,
-        using: str,
     ) -> None:
         """Dispatch model-owned hooks after all selected resource rows load."""
 
@@ -236,7 +197,6 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
             for xref in group.dataset["_xref"]:
                 instance = resource.instance_for_xref(xref)
                 if instance is not None:
-                    instance._state.db = using
                     instances_by_pk[instance.pk] = instance
             if instances_by_pk:
                 hook(

@@ -30,7 +30,6 @@ def _patch_get(monkeypatch: pytest.MonkeyPatch, fake_http_get: Any) -> None:
         return httpx.Response(status, content=body)
 
     monkeypatch.setattr(HttpClient, "get", get)
-    monkeypatch.setattr(gh, "related_on", lambda bridge, field_name, **kwargs: bridge.credential)
 
 
 def _integration(*, api_base: str = "") -> Any:

@@ -11,8 +11,6 @@ from django.core.management.base import BaseCommand, CommandParser
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.db import get_write_alias
-
 DEFAULT_CHUNK_SIZE = 500
 """Rows materialized per purge query."""
 
@@ -47,25 +45,24 @@ class Command(BaseCommand):
 
         del args
         file_model = apps.get_model("storage", "File")
-        using = get_write_alias(file_model)
         now = timezone.now()
         draft_cutoff = now - timedelta(hours=int(settings.ANGEE_STORAGE_DRAFT_TTL_HOURS))
         trash_cutoff = now - timedelta(days=int(settings.ANGEE_STORAGE_TRASH_TTL_DAYS))
 
         with system_context(reason="storage.prune"):
-            stale_drafts = file_model.objects.db_manager(using).stale_drafts(draft_cutoff)
-            expired_trash = file_model.objects.db_manager(using).expired_trash(trash_cutoff)
+            stale_drafts = file_model.objects.stale_drafts(draft_cutoff)
+            expired_trash = file_model.objects.expired_trash(trash_cutoff)
             self.stdout.write(
                 f"storage_prune: stale_drafts={stale_drafts.count()} expired_trash={expired_trash.count()}"
             )
             if options["dry_run"]:
                 return
             chunk_size = max(1, int(options["chunk_size"]))
-            purged = self._purge(stale_drafts, chunk_size=chunk_size, using=using)
-            purged += self._purge(expired_trash, chunk_size=chunk_size, using=using)
+            purged = self._purge(stale_drafts, chunk_size=chunk_size)
+            purged += self._purge(expired_trash, chunk_size=chunk_size)
         self.stdout.write(f"storage_prune: purged={purged}")
 
-    def _purge(self, queryset: Any, *, chunk_size: int, using: str) -> int:
+    def _purge(self, queryset: Any, *, chunk_size: int) -> int:
         """Purge every row still matching ``queryset`` and return the count.
 
         Each row is re-fetched against the queryset predicate immediately
@@ -79,7 +76,7 @@ class Command(BaseCommand):
             if row is None:
                 continue
             try:
-                row.purge(using=using)
+                row.purge()
             except Exception as error:
                 self.stderr.write(f"storage_prune: purge failed for pk={pk}: {error}")
                 continue

@@ -18,7 +18,6 @@ from rebac import app_settings, current_actor, is_anonymous_actor, to_subject_re
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
-from angee.base.db import get_write_alias
 from angee.base.mixins import ConditionalSharedReaderMixin, ConditionalSharedReaderQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 
@@ -144,10 +143,9 @@ class FactoryDocQuerySet(AngeeQuerySet["FactoryDoc"]):
     def insert(self, obj: FactoryDoc) -> FactoryDoc:
         """Persist the prepared document and its companion exactly once."""
 
-        using = get_write_alias(self.model, bound=self)
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             obj = super().insert(obj)
-            FactoryCompanion.objects.using(using).create(document=obj)
+            FactoryCompanion.objects.create(document=obj)
         return obj
 
 

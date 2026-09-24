@@ -19,15 +19,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.utils.text import slugify
 
-from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin
 from angee.base.models import AngeeModel
-from angee.base.permissions import require_authorization_database
 from angee.parties.mixins import ScoredLinkMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
@@ -77,29 +74,22 @@ class Group(ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin, AuditMixin,
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the group with a unique slug and reconcile its reader tuple."""
 
-        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
-        require_authorization_database(
-            using,
-            operation="Group visibility relationship writes",
-            error_class=ImproperlyConfigured,
-        )
-        kwargs["using"] = using
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             if not self.slug:
-                self.slug = self._available_slug(using=using)
+                self.slug = self._available_slug()
                 update_fields = kwargs.get("update_fields")
                 if update_fields is not None:
                     kwargs["update_fields"] = tuple(dict.fromkeys((*update_fields, "slug")))
             super().save(*args, **kwargs)
 
-    def _available_slug(self, *, using: str) -> str:
+    def _available_slug(self) -> str:
         """Return the first name-derived slug unused in the shared Group table."""
 
         slug_field = self._meta.get_field("slug")
         max_length = slug_field.max_length or 50
         base = slugify(self.name)[:max_length] or "group"
         owner_model = slug_field.model
-        candidates = owner_model.system_queryset(using=using, lock=())
+        candidates = owner_model.system_queryset(lock=())
         if self.pk is not None:
             candidates = candidates.exclude(pk=self.pk)
 

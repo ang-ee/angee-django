@@ -16,11 +16,9 @@ from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
 from import_export.utils import get_related_model
 
-from angee.base.db import get_write_alias
 from angee.base.identity import public_id_of
 from angee.base.impl import ImplDefaultsMixin
 from angee.base.models import AngeeModel
-from angee.base.permissions import require_authorization_database
 from angee.base.serialization import json_safe
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -71,18 +69,12 @@ class AngeeResource(resources.ModelResource):
                 field.widget.addon_aliases = addon_aliases
 
     @classmethod
-    def lock_imports(cls, loaded_groups: Sequence[tuple[Any, AngeeResource]], *, using: str | None = None) -> None:
+    def lock_imports(cls, loaded_groups: Sequence[tuple[Any, AngeeResource]]) -> None:
         """Acquire batch-wide domain locks before imports; never import or write rows.
 
         Called once per declared resource class inside the loader's transaction.
         A subclass may inspect the complete batch solely to order its locks.
         """
-
-    def after_init_instance(self, instance: models.Model, new: bool, row: Mapping[str, Any], **kwargs: Any) -> None:
-        """Pin native model validation and save hooks to the resource transaction."""
-
-        instance._state.db = self.get_db_connection_name()
-        super().after_init_instance(instance, new, row, **kwargs)
 
     @classmethod
     def get_fk_widget(cls, field: Any) -> functools.partial[Any]:
@@ -203,7 +195,7 @@ class AngeeResource(resources.ModelResource):
         self._existing_ledgers = {xref: None for xref in xrefs}
         if not xrefs:
             return
-        ledgers = self.ledger_model._default_manager.using(self.get_db_connection_name()).filter(
+        ledgers = self.ledger_model._default_manager.filter(
             source_addon=self.entry.addon.name,
             xref__in=xrefs,
         )
@@ -267,7 +259,7 @@ class AngeeResource(resources.ModelResource):
         if xref in self._existing_ledgers:
             return self._existing_ledgers[xref]
         ledger = (
-            self.ledger_model._default_manager.using(self.get_db_connection_name()).filter(
+            self.ledger_model._default_manager.filter(
                 source_addon=self.entry.addon.name,
                 xref=xref,
             )
@@ -304,7 +296,7 @@ class AngeeResource(resources.ModelResource):
     ) -> None:
         """Create or update the ledger row for an imported object."""
 
-        ledger, _ = self.ledger_model._default_manager.using(self.get_db_connection_name()).update_or_create(
+        ledger, _ = self.ledger_model._default_manager.update_or_create(
             source_addon=self.entry.addon.name,
             xref=xref,
             defaults={
@@ -325,7 +317,7 @@ class AngeeResource(resources.ModelResource):
 
         if ledger is None or not ledger.target_id:
             return None
-        instance = ledger.target_instance(using=self.get_db_connection_name())
+        instance = ledger.target_instance()
         if instance is None:
             return None
         expected = self._meta.model._meta.concrete_model
@@ -438,7 +430,7 @@ class AngeeResource(resources.ModelResource):
         if isinstance(self.entry.adopt, tuple) and condition is not None:
             if not self._row_matches_condition(row, condition):
                 return None
-        queryset = self._meta.model._default_manager.using(self.get_db_connection_name()).filter(**identity)
+        queryset = self._meta.model._default_manager.filter(**identity)
         if condition is not None:
             queryset = queryset.filter(condition)
         matches = list(queryset[:2])
@@ -663,8 +655,8 @@ class AngeeResource(resources.ModelResource):
 
         if not updates:
             return
-        type(instance)._default_manager.using(self.get_db_connection_name()).filter(pk=instance.pk).update(**updates)
-        instance.refresh_from_db(using=self.get_db_connection_name(), fields=list(updates))
+        type(instance)._default_manager.filter(pk=instance.pk).update(**updates)
+        instance.refresh_from_db(fields=list(updates))
 
 
 class XrefInstanceLoader(BaseInstanceLoader):
@@ -685,7 +677,6 @@ def build_resource(
     *,
     ledger_model: type[models.Model],
     addon_aliases: Mapping[str, str],
-    using: str | None = None,
 ) -> AngeeResource:
     """Compose the model's ``resource_class`` with native xref import options.
 
@@ -694,8 +685,6 @@ def build_resource(
     adapter retains the same identity, row diagnostics and canonical ledger.
     """
 
-    alias = get_write_alias(model, using=using)
-    require_authorization_database(alias, operation="Resource loading", error_class=ResourceLoadError)
     resource_class = model.resource_class if issubclass(model, ResourceLoadMixin) else None
     if resource_class is None:
         resource_class = AngeeResource
@@ -705,7 +694,6 @@ def build_resource(
         model,
         resource_class=resource_class,
         meta_options={
-            "using_db": alias,
             "clean_model_instances": True,
             "import_id_fields": (),
             "instance_loader_class": XrefInstanceLoader,

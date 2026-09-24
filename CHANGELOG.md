@@ -11,6 +11,8 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Remove write-alias threading and custom `using=` parameters; Django routers own database routing.
+
 - Existing stacks must build and migrate on the previous release line first,
   at least through source revision `0a55a6fb`. Framework runtime history is
   carried forward, including materialized bodies from retired declarations and

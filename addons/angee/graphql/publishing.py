@@ -18,7 +18,6 @@ from django.db import models, transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import Signal
 
-from angee.base.db import get_write_alias
 from angee.graphql.events import ChangePayload, ReadableFields
 
 _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
@@ -27,8 +26,7 @@ change_published = Signal()
 """Sent robustly after commit when a model change should be observed.
 
 Receivers are called with ``sender`` set to the model class, a ``payload``
-keyword containing the already-built :class:`ChangePayload`, and ``using``
-containing the source write alias. Delivery uses
+keyword containing the already-built :class:`ChangePayload`. Delivery uses
 ``send_robust``: receiver exceptions are logged by the publisher and are not
 propagated to the save/delete caller or allowed to starve later receivers.
 """
@@ -165,8 +163,6 @@ def _on_save(
     update_fields: Iterable[str] | None = None,
     raw: bool = False,
     readable_fields: ReadableFields = (),
-    *,
-    using: str | None = None,
     **kwargs: Any,
 ) -> None:
     """Publish a create or update event after the transaction commits."""
@@ -179,21 +175,18 @@ def _on_save(
         action="create" if created else "update",
         update_fields=update_fields,
         readable_fields=readable_fields,
-        using=using,
     )
 
 
 def _on_delete(
     sender: type[models.Model],
     instance: models.Model,
-    *,
-    using: str | None = None,
     **kwargs: Any,
 ) -> None:
     """Publish a delete event after the transaction commits."""
 
     del sender, kwargs
-    publish_change(instance, action="delete", update_fields=None, using=using)
+    publish_change(instance, action="delete", update_fields=None)
 
 
 def publish_change(
@@ -202,7 +195,6 @@ def publish_change(
     action: str,
     update_fields: Iterable[str] | None,
     readable_fields: ReadableFields = (),
-    using: str | None = None,
 ) -> None:
     """Build and send one observable change payload after commit."""
 
@@ -220,7 +212,7 @@ def publish_change(
     if callable(broadcasts) and not broadcasts():
         return
     model = type(instance)
-    alias = get_write_alias(model, using=using, instance=instance)
+
     payload = ChangePayload.from_instance(
         instance,
         action=action,
@@ -228,13 +220,13 @@ def publish_change(
         readable_fields=readable_fields,
         during_ingestion=publication_ingestion_active(),
     )
-    transaction.on_commit(lambda: _send_change(model, payload, using=alias), using=alias)
+    transaction.on_commit(lambda: _send_change(model, payload))
 
 
-def _send_change(model: type[models.Model], payload: ChangePayload, *, using: str) -> None:
+def _send_change(model: type[models.Model], payload: ChangePayload) -> None:
     """Send ``payload`` to every robust change receiver and log failures."""
 
-    responses = change_published.send_robust(sender=model, payload=payload, using=using)
+    responses = change_published.send_robust(sender=model, payload=payload)
     for receiver, response in responses:
         if not isinstance(response, Exception):
             continue

@@ -1,8 +1,8 @@
 """Frozen compatibility for materialized historical migrations only.
 
 Do not use this module in new application code or migration declarations. These
-functions preserve the historical REBAC storage shapes, exact-tuple semantics,
-and explicit database alias expected by already-materialized migrations.
+functions preserve the historical REBAC storage shapes and exact-tuple semantics
+expected by already-materialized migrations.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from typing import Any, Literal
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models, transaction
+from django.db import models, router, transaction
 from rebac import ObjectRef, RelationshipTuple
 from rebac.models import active_relationship_model
 
@@ -132,7 +132,7 @@ def _historical_relationship_store(
     """Resolve one exact supported historical REBAC storage shape."""
 
     # The live owner selects only the configured storage *name*. All reads and
-    # writes below remain bound to the historical app registry and caller alias.
+    # writes below remain bound to the historical app registry.
     model_name = active_relationship_model()._meta.object_name
     relationship = apps.get_model("rebac", model_name)
     fields = _field_names(relationship)
@@ -235,19 +235,18 @@ def _relationship_facts(value: RelationshipTuple) -> dict[str, Any]:
 def ensure_historical_relationships(
     apps: Any,
     *,
-    using: str,
     relationships: Iterable[RelationshipTuple],
 ) -> None:
     """Idempotently create exact tuples through historical migration models.
 
     This deliberately does not use the live REBAC backend: data migrations must
-    remain bound to their historical app registry and explicit database alias.
+    remain bound to their historical app registry.
     """
 
     values = tuple(_relationship_facts(value) for value in relationships)
     storage, relationship, resource = _historical_relationship_store(apps)
-    rows = relationship._base_manager.db_manager(using)
-    with transaction.atomic(using=using):
+    rows = relationship._base_manager
+    with transaction.atomic():
         for facts in values:
             identity = {
                 name: facts[name]
@@ -275,7 +274,7 @@ def ensure_historical_relationships(
                 )
             else:
                 assert resource is not None
-                resources = resource._base_manager.db_manager(using)
+                resources = resource._base_manager
                 resource_row, _ = resources.get_or_create(
                     resource_type=facts["resource_type"],
                     resource_id=facts["resource_id"],
@@ -298,15 +297,14 @@ def ensure_historical_relationships(
 def delete_historical_relationships(
     apps: Any,
     *,
-    using: str,
     relationships: Iterable[RelationshipTuple],
 ) -> None:
     """Delete only the exact historical tuples requested by a reverse migration."""
 
     values = tuple(_relationship_facts(value) for value in relationships)
     storage, relationship, _resource = _historical_relationship_store(apps)
-    rows = relationship._base_manager.db_manager(using)
-    with transaction.atomic(using=using):
+    rows = relationship._base_manager
+    with transaction.atomic():
         for facts in values:
             lookup = {
                 "relation": facts["relation"],
@@ -344,13 +342,12 @@ def delete_historical_relationships(
             # no parent, M2M, private, or hidden/visible reverse dependents needing
             # Collector; registry resource rows are deliberately retained for
             # other grants.
-            rows.filter(**lookup)._raw_delete(using)
+            rows.filter(**lookup)._raw_delete(router.db_for_write(relationship))
 
 
 def retarget_historical_resource(
     apps: Any,
     *,
-    using: str,
     old: ObjectRef,
     new: ObjectRef,
 ) -> None:
@@ -358,7 +355,7 @@ def retarget_historical_resource(
 
     The registry keeps the old row and its FK grants when the target is absent.
     When both identities exist, only identical grant facts may merge. Migration
-    callers supply historical models and an explicit database alias.
+    callers supply historical models.
     """
 
     if not isinstance(old, ObjectRef) or not isinstance(new, ObjectRef):
@@ -369,8 +366,8 @@ def retarget_historical_resource(
         return
 
     storage, relationship, resource = _historical_relationship_store(apps)
-    rows = relationship._base_manager.db_manager(using)
-    with transaction.atomic(using=using):
+    rows = relationship._base_manager
+    with transaction.atomic():
         if storage == "denormalized":
             if rows.filter(subject_type=old.resource_type, subject_id=old.resource_id).exists():
                 raise ImproperlyConfigured("A historical resource used as a subject cannot be retargeted.")
@@ -399,13 +396,13 @@ def retarget_historical_resource(
                 if duplicate is not None:
                     if duplicate.caveat_context != row.caveat_context or duplicate.expires_at != row.expires_at:
                         raise ImproperlyConfigured("Historical resource retargeting found conflicting grant facts.")
-                    rows.filter(pk=row.pk)._raw_delete(using)
+                    rows.filter(pk=row.pk)._raw_delete(router.db_for_write(relationship))
                 else:
                     rows.filter(pk=row.pk).update(resource_id=new.resource_id)
             return
 
         assert resource is not None
-        resources = resource._base_manager.db_manager(using)
+        resources = resource._base_manager
         old_row = (
             resources.select_for_update()
             .filter(
@@ -454,7 +451,7 @@ def retarget_historical_resource(
             if duplicate is not None:
                 if duplicate.caveat_context != row.caveat_context or duplicate.expires_at != row.expires_at:
                     raise ImproperlyConfigured("Historical resource retargeting found conflicting grant facts.")
-                rows.filter(pk=row.pk)._raw_delete(using)
+                rows.filter(pk=row.pk)._raw_delete(router.db_for_write(relationship))
             else:
                 rows.filter(pk=row.pk).update(resource_fk_id=new_row.pk)
-        resources.filter(pk=old_row.pk)._raw_delete(using)
+        resources.filter(pk=old_row.pk)._raw_delete(router.db_for_write(resource))

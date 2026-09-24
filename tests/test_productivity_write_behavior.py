@@ -1,17 +1,16 @@
-"""Productivity writes preserve their alias, creation provenance, and authority."""
+"""Productivity write behavior."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
 
 import pytest
 import strawberry_django
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, models, router
+from django.db import connection, models
 from django.utils import timezone
 from rebac import system_context
 from rebac.backends import LocalBackend, backend, reset_backend
@@ -28,13 +27,10 @@ from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.intake.models import Need as AbstractNeed
-from angee.portfolio.models import ProductManager, UpdateManager
-from angee.projects.models import LinkManager, ProjectManager, TaskManager
 from angee.projects.models import Task as AbstractTask
-from angee.proposals.models import ProposalManager
 from angee.work.models import Queue as AbstractQueue
-from angee.work.models import QueueManager, TaskWork
 from angee.work.models import Stage as AbstractWorkStage
+from angee.work.models import TaskWork
 from tests.conftest import (
     SchemaAddon,
     _clear_model_tables,
@@ -44,15 +40,13 @@ from tests.conftest import (
     result_data,
 )
 from tests.projects_models import Task
-from tests.proposals_models import Proposal, Round
 from tests.spaces_models import Group, Membership
 from tests.test_messaging import Party, Person
 from tests.test_sequence import SEQUENCE_TEST_MODELS
-from tests.test_transitions import TransitionRouter
 
 
 class RoutingStageContainer(models.Model):
-    """Small native container for the shared stage owner's routing contract."""
+    """Small native container for stage defaults and scope validation."""
 
     default_stage = models.ForeignKey("tests.RoutingPipelineStage", null=True, on_delete=models.SET_NULL)
 
@@ -135,7 +129,6 @@ class CreateTask(TaskWork, AuditMixin, AngeeDataModel):
     dropped_reason = StateField(choices_enum=AbstractTask.TaskDroppedReason, null=True, blank=True)
     project = models.ForeignKey(CreateProject, null=True, blank=True, on_delete=models.SET_NULL)
     stage = models.ForeignKey(Stage, null=True, blank=True, on_delete=models.SET_NULL)
-    # Cycle behavior is independent of constructor/status provenance.
     cycle = None
     cycle_id = None
     hasura_readable_fields = ()
@@ -185,11 +178,24 @@ class CreateStageType(AngeeNode):
 
 
 @pytest.fixture
+def productivity_tables(transactional_db: None) -> Iterator[None]:
+    """Create native stage and snooze rows for behavior regressions."""
+    test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord, RoutingSnoozeRecord)
+    with connection.schema_editor() as editor:
+        for model in test_models:
+            editor.create_model(model)
+    try:
+        yield
+    finally:
+        with connection.schema_editor() as editor:
+            for model in reversed(test_models):
+                editor.delete_model(model)
+
+
+@pytest.fixture
 def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any, Queue]]:
     """Expose the production donors through real Hasura resources and local REBAC."""
-
     del transactional_db
-    # Queue access delegates to Group's memberships__party__person__user path.
     model_types = (
         Party,
         Person,
@@ -206,8 +212,7 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
     call_command("rebac", "sync", verbosity=0)
     active = backend()
     assert isinstance(active, LocalBackend)
-    extra = parse_zed(
-        """
+    extra = parse_zed("""
         definition tests/create_project {
             permission create = authenticated
             permission read = authenticated
@@ -224,8 +229,7 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
             permission create = task->write + project->write
             permission read = task->read + project->read
         }
-        """
-    )
+        """)
     active.set_schema(replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]))
     try:
         admin = create_platform_admin("productivity-create-admin")
@@ -269,12 +273,12 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
                                 CreateStageType,
                                 *(item for resource in resources for item in resource.types),
                             ],
-                        },
+                        }
                     }
                 )
             ]
         ).build("public")
-        yield schema, admin, queue
+        yield (schema, admin, queue)
     finally:
         _clear_model_tables(model_types)
         if created_models:
@@ -284,11 +288,8 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
         reset_backend()
 
 
-def test_graphql_task_create_preserves_stage_projected_status(
-    productivity_create_case: tuple[Any, Any, Queue],
-) -> None:
-    """A clean-derived done status remains distinct from caller-authored status."""
-
+def test_graphql_task_create_preserves_stage_projected_status(productivity_create_case: tuple[Any, Any, Queue]) -> None:
+    """Graphql task create preserves stage projected status."""
     schema, actor, queue = productivity_create_case
     stage = Stage.objects.as_user(actor).get(queue=queue, category="completed")
     created = result_data(
@@ -312,11 +313,8 @@ def test_graphql_task_create_preserves_stage_projected_status(
     assert task.number == 1
 
 
-def test_graphql_need_create_preserves_task_target_provenance(
-    productivity_create_case: tuple[Any, Any, Queue],
-) -> None:
-    """Task-derived project context never becomes a second authored target."""
-
+def test_graphql_need_create_preserves_task_target_provenance(productivity_create_case: tuple[Any, Any, Queue]) -> None:
+    """Graphql need create preserves task target provenance."""
     schema, actor, queue = productivity_create_case
     with system_context(reason="tests.productivity.create.need_target"):
         project = CreateProject.objects.create()
@@ -342,15 +340,11 @@ def test_graphql_need_create_preserves_task_target_provenance(
 
 @pytest.mark.parametrize("category", ("TRIAGE", "DUPLICATE"))
 def test_graphql_stage_create_keeps_system_category_guard(
-    productivity_create_case: tuple[Any, Any, Queue],
-    category: str,
+    productivity_create_case: tuple[Any, Any, Queue], category: str
 ) -> None:
-    """A real admin still lacks ambient system-provisioning authority."""
-
+    """Graphql stage create keeps system category guard."""
     schema, actor, queue = productivity_create_case
     with system_context(reason="tests.productivity.create.remove_reserved_stage"):
-        # Remove the existing provisioned category so a uniqueness error cannot
-        # accidentally satisfy the guard regression.
         Stage.objects.filter(queue=queue, category=category.lower()).delete()
     result = execute_schema(
         schema,
@@ -368,27 +362,6 @@ def test_graphql_stage_create_keeps_system_category_guard(
     assert not Stage.objects.as_user(actor).filter(queue=queue, category=category.lower()).exists()
 
 
-@pytest.fixture
-def productivity_writer(database_alias: Callable[[str], AbstractContextManager[str]]) -> Iterator[str]:
-    """Expose the productivity schema through the shared connection factory."""
-
-    test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord, RoutingSnoozeRecord)
-    with connection.schema_editor() as editor:
-        for model in test_models:
-            editor.create_model(model)
-    try:
-        with database_alias("productivity_writer") as alias:
-            yield alias
-    finally:
-        with connection.schema_editor() as editor:
-            for model in reversed(test_models):
-                editor.delete_model(model)
-
-
-def _reject_default_query(*args: Any) -> None:
-    raise AssertionError("A productivity write touched the unrelated default connection.")
-
-
 def test_noop_refresh_preserves_authored_work_state_and_loaded_queue() -> None:
     task = Task()
     task.status = "done"
@@ -399,29 +372,16 @@ def test_noop_refresh_preserves_authored_work_state_and_loaded_queue() -> None:
     assert task._work_loaded_queue_id == 1
 
 
-def test_stage_default_requires_caller_to_pin_container() -> None:
-    """A mismatched alias fails before mutating or querying the caller's object."""
-
-    container = RoutingStageContainer(default_stage_id=1)
-    container._state.db = "original"
-    with pytest.raises(ValueError, match="Pin the stage container"):
-        RoutingPipelineStage.resolve_default(container, using="other")
-    assert container._state.db == "original"
-    assert container.default_stage_id == 1
-
-
 @pytest.mark.django_db(transaction=True)
-def test_stage_default_and_validation_use_selected_alias_with_legacy_hooks(
-    productivity_writer: str, monkeypatch: pytest.MonkeyPatch
+def test_deferred_stage_default_and_validation_call_hooks(
+    productivity_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     container = RoutingStageContainer.objects.create()
     stage = RoutingPipelineStage.objects.create(container_id=container.pk, name="Ready")
     RoutingStageContainer.objects.filter(pk=container.pk).update(default_stage_id=stage.pk)
     record = RoutingStageRecord.objects.create(container_id=container.pk, stage_id=stage.pk)
-    record = RoutingStageRecord.objects.using("default").only("pk").get(pk=record.pk)
-    assert RoutingStageRecord.objects.using(productivity_writer).filter(pk=record.pk).exists()
-    routing = TransitionRouter("unavailable-writer")
-    monkeypatch.setattr(router, "routers", [routing])
+    record = RoutingStageRecord.objects.only("pk").get(pk=record.pk)
+    assert RoutingStageRecord.objects.filter(pk=record.pk).exists()
     original_default = RoutingPipelineStage.resolve_default
     original_stages = RoutingPipelineStage.for_container
     seen = []
@@ -436,79 +396,26 @@ def test_stage_default_and_validation_use_selected_alias_with_legacy_hooks(
 
     monkeypatch.setattr(RoutingPipelineStage, "resolve_default", classmethod(legacy_default))
     monkeypatch.setattr(RoutingPipelineStage, "for_container", classmethod(legacy_stages))
-    with connection.execute_wrapper(_reject_default_query):
-        assert record.resolve_default_stage(using=productivity_writer).pk == stage.pk
-        record.validate_stage_scope(using=productivity_writer)
-    assert seen == [
-        ("default", productivity_writer),
-        ("stages", productivity_writer),
-        ("stages", productivity_writer),
-    ]
-    assert routing.writes == []
+    assert record.resolve_default_stage().pk == stage.pk
+    record.validate_stage_scope()
+    assert seen == [("default", "default"), ("stages", "default"), ("stages", "default")]
 
 
 @pytest.mark.django_db(transaction=True)
-def test_stage_scope_still_rejects_a_foreign_container_on_selected_alias(productivity_writer: str) -> None:
-    first = RoutingStageContainer.objects.using(productivity_writer).create()
-    second = RoutingStageContainer.objects.using(productivity_writer).create()
-    stage = RoutingPipelineStage.objects.using(productivity_writer).create(container_id=first.pk, name="Ready")
+def test_stage_scope_rejects_foreign_container(productivity_tables: None) -> None:
+    first = RoutingStageContainer.objects.create()
+    second = RoutingStageContainer.objects.create()
+    stage = RoutingPipelineStage.objects.create(container_id=first.pk, name="Ready")
     record = RoutingStageRecord(container_id=second.pk, stage_id=stage.pk)
-    with connection.execute_wrapper(_reject_default_query), pytest.raises(ValidationError, match="record's container"):
-        record.validate_stage_scope(using=productivity_writer)
+    with pytest.raises(ValidationError, match="record's container"):
+        record.validate_stage_scope()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_bulk_snooze_wake_reads_and_writes_only_the_selected_connection(
-    productivity_writer: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_bulk_snooze_wake_clears_snooze_fields(productivity_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     now = timezone.now()
-    row = RoutingSnoozeRecord.objects.using(productivity_writer).create(
-        snoozed_until=now, snoozed_by=7, updated_at=now
-    )
-    monkeypatch.setattr(router, "routers", [TransitionRouter("unavailable-writer")])
-    with connection.execute_wrapper(_reject_default_query):
-        assert TaskWork.wake_due_snoozes.__func__(RoutingSnoozeRecord, now=now, using=productivity_writer) == 1
-    row.refresh_from_db(using=productivity_writer)
+    row = RoutingSnoozeRecord.objects.create(snoozed_until=now, snoozed_by=7, updated_at=now)
+    assert TaskWork.wake_due_snoozes.__func__(RoutingSnoozeRecord, now=now) == 1
+    row.refresh_from_db()
     assert row.snoozed_until is None
     assert row.snoozed_by is None
-
-
-@pytest.mark.parametrize(
-    ("manager_type", "method", "args", "kwargs"),
-    [
-        (ProjectManager, "from_task", (None,), {}),
-        (TaskManager, "from_activity", (None,), {}),
-        (LinkManager, "upsert", (), {"target": None, "url": "https://example.test"}),
-        (ProductManager, "from_project", (None,), {}),
-        (UpdateManager, "report", (), {"target": None, "health": "on_track"}),
-        (ProposalManager, "capture_from_message", (None, None), {}),
-        (QueueManager, "provision_personal", (None,), {}),
-    ],
-)
-def test_unsupported_manager_operations_reject_before_queries_or_argument_reads(
-    manager_type: Any, method: str, args: tuple[Any, ...], kwargs: dict[str, Any]
-) -> None:
-    manager = manager_type()
-    manager.model = RoutingStageContainer
-    with pytest.raises(ImproperlyConfigured, match="default authorization database"):
-        getattr(manager.db_manager("unavailable-writer"), method)(*args, **kwargs)
-
-
-@pytest.mark.parametrize(
-    ("model", "method", "args"),
-    [
-        (Round, "open", ()),
-        (Round, "close", ("no_award",)),
-        (Round, "transfer_facilitation", (None,)),
-        (Proposal, "save", ()),
-        (Proposal, "submit", ()),
-        (Proposal, "withdraw", ()),
-        (Proposal, "identify_party", (None,)),
-        (Proposal, "create_track", ()),
-        (Proposal, "publish_track", ()),
-    ],
-)
-def test_proposal_tuple_operations_reject_before_persistence(model: Any, method: str, args: tuple[Any, ...]) -> None:
-    instance = model()
-    with pytest.raises(ImproperlyConfigured, match="default authorization database"):
-        getattr(instance, method)(*args, using="unavailable-writer")

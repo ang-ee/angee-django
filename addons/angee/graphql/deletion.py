@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 import strawberry
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.deletion import (
     Collector,
     ProtectedError,
@@ -17,9 +17,7 @@ from django.db.models.deletion import (
 from rebac import current_actor, system_context
 from rebac.resources import model_resource_type
 
-from angee.base.db import get_write_alias
 from angee.base.identity import public_id_of
-from angee.base.permissions import require_authorization_database
 from angee.base.scoping import read_scoped_queryset
 from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -153,7 +151,7 @@ class DeletePreview:
 
     @classmethod
     def from_instance(
-        cls, instance: models.Model, actor: Any | None = None, *, using: str | None = None,
+        cls, instance: models.Model, actor: Any | None = None,
     ) -> DeletePreview:
         """Return Django's cascade forecast for ``instance``.
 
@@ -161,8 +159,7 @@ class DeletePreview:
         delete so fast-delete counts and visible rows share one database snapshot.
         """
 
-        alias = get_write_alias(type(instance), using=using, instance=instance)
-        collector = Collector(using=alias)
+        collector = Collector(using=router.db_for_write(type(instance), instance=instance))
         blocked: list[DeletePreviewGroup] = []
         try:
             collector.collect([instance])
@@ -292,7 +289,6 @@ def delete_by_public_id(
     queryset: models.QuerySet[models.Model] | None = None,
     before_delete: Callable[[models.Model], None] | None = None,
     reason: str | None = None,
-    using: str | None = None,
 ) -> DeletePreview:
     """Preview, then optionally delete, one public-id-addressed model row.
 
@@ -301,15 +297,12 @@ def delete_by_public_id(
     already gated the request actor.
     """
 
-    alias = get_write_alias(model, using=using, bound=queryset)
-    if confirm and reason is None and model_resource_type(model):
-        require_authorization_database(alias, operation="Authorized model deletion")
     context = system_context(reason=reason) if reason is not None else nullcontext()
-    with context, transaction.atomic(using=alias):
+    with context, transaction.atomic():
         instance = require_instance_for_id(
             model,
             public_id,
-            queryset=(queryset if queryset is not None else model._default_manager.all()).using(alias),
+            queryset=(queryset if queryset is not None else model._default_manager.all()),
         )
         preview = DeletePreview.from_instance(instance)
         if confirm and not preview.has_blockers:
@@ -317,7 +310,7 @@ def delete_by_public_id(
                 before_delete(instance)
             deleted_pk = instance.pk
             try:
-                instance.delete(using=alias)
+                instance.delete()
             except (ProtectedError, RestrictedError):
                 preview = DeletePreview.from_instance(instance)
             else:
@@ -391,7 +384,7 @@ class _PreviewRows:
 
         groups: dict[type[models.Model], _PreviewRows] = {}
         for model, rows in collector.data.items():
-            preview = cls.from_collected(root, model, rows, actor, using=collector.using)
+            preview = cls.from_collected(root, model, rows, actor)
             if preview.total_count:
                 groups.setdefault(model, cls()).add(
                     total_count=preview.total_count,
@@ -399,7 +392,7 @@ class _PreviewRows:
                     visible_rows=preview.visible_rows,
                 )
         for queryset, total_count in fast_deletes:
-            preview = cls.from_fast_delete(queryset, total_count, actor, using=collector.using)
+            preview = cls.from_fast_delete(queryset, total_count, actor)
             if preview.total_count:
                 groups.setdefault(queryset.model, cls()).add(
                     total_count=preview.total_count,
@@ -415,8 +408,6 @@ class _PreviewRows:
         model: type[models.Model],
         rows: Iterable[models.Model],
         actor: Any | None,
-        *,
-        using: str,
     ) -> _PreviewRows:
         """Return access-scoped preview rows from collector-materialized rows."""
 
@@ -428,7 +419,7 @@ class _PreviewRows:
             if _requires_read_scope(model):
                 return cls(total_count=len(collected), visible_count=0)
             return cls(total_count=len(collected), visible_count=len(collected), visible_rows=collected)
-        return cls._from_scoped_collected(collected, scoped.using(using))
+        return cls._from_scoped_collected(collected, scoped)
 
     @classmethod
     def _from_scoped_collected(
@@ -458,8 +449,6 @@ class _PreviewRows:
         queryset: models.QuerySet[models.Model],
         total_count: int,
         actor: Any | None,
-        *,
-        using: str,
     ) -> _PreviewRows:
         """Return access-scoped preview rows from one fast-delete queryset."""
 
@@ -474,7 +463,7 @@ class _PreviewRows:
                 visible_count=total_count,
                 visible_rows=list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
             )
-        visible_queryset = scoped.using(using).filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
+        visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
         visible_count = visible_queryset.count()
         return cls(
             total_count=total_count,

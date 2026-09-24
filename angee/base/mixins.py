@@ -24,10 +24,8 @@ from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
-from angee.base.permissions import require_authorization_database
 from angee.base.scoping import system_queryset
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -112,8 +110,7 @@ class ConditionalSharedReaderMixin(models.Model):
     so deferred or dirty values excluded by ``update_fields`` never drive access.
     It changes only its configured wildcard tuple; manual and source-scope grants
     remain owned by their distinct relations. Shared-reader persistence and tuple
-    reconciliation require the default database alias because authorization is
-    not split across databases.
+    reconciliation remain in the same transaction.
     """
 
     shared_reader_relation: ClassVar[str | None] = "shared"
@@ -136,19 +133,16 @@ class ConditionalSharedReaderMixin(models.Model):
             return {}
         return {relation: (_EVERY_AUTHENTICATED_USER,) if self.shared_reader_eligible else ()}
 
-    def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, Iterable[SubjectRef | models.Model]]:
+    def proposed_relationships(self) -> Mapping[str, Iterable[SubjectRef | models.Model]]:
         """Propose only the shared-reader tuple that save will reconcile atomically."""
 
-        relationships = dict(super().proposed_relationships(using=using))
+        relationships = dict(super().proposed_relationships())
         relationships.update(self._shared_reader_relationships())
         return relationships
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist and reconcile when this write can change reader eligibility."""
 
-        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
-        require_authorization_database(alias, operation="Conditional shared-reader writes")
-        kwargs["using"] = alias
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             update_fields = {str(field) for field in update_fields}
@@ -164,19 +158,17 @@ class ConditionalSharedReaderMixin(models.Model):
         if not reconcile:
             super().save(*args, **kwargs)
             return
-        with transaction.atomic(using=alias):
+        with transaction.atomic():
             super().save(*args, **kwargs)
-            self.reconcile_shared_reader(using=alias)
+            self.reconcile_shared_reader()
 
-    def reconcile_shared_reader(self, *, using: str | None = None) -> None:
+    def reconcile_shared_reader(self) -> None:
         """Reconcile only this owner's wildcard tuple from persisted row facts."""
 
-        alias = get_write_alias(type(self), using=using, instance=self)
-        require_authorization_database(alias, operation="Conditional shared-reader reconciliation")
         if self.pk is None:
             raise ValidationError("A shared reader requires a saved row.")
-        with transaction.atomic(using=alias):
-            canonical = system_queryset(type(self), using=alias, lock=("self",)).get(pk=self.pk)
+        with transaction.atomic():
+            canonical = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
             for relation, subjects in canonical._shared_reader_relationships().items():
                 resource = to_object_ref(canonical)
                 if subjects:
@@ -505,14 +497,7 @@ class HistoryMixin(models.Model):
 
 
 class RevisionMixin(models.Model):
-    """Track snapshots in django-reversion's independently routed store.
-
-    The Revision write router owns the store alias for both Revision and Version
-    rows. It is distinct from the versioned model's alias (Version.db), passed
-    as model_db to native version queries and supplied by Django's post_save
-    signal when recording a snapshot. A separate store is not a distributed
-    transaction with the model database.
-    """
+    """Track declared field snapshots through django-reversion."""
 
     revisioned_fields: ClassVar[tuple[str, ...]] = ()
     """Model field names registered with django-reversion."""
@@ -526,13 +511,10 @@ class RevisionMixin(models.Model):
     def revisions(self) -> Any:
         """Return this row's django-reversion versions newest-first."""
 
-        store_alias = get_write_alias(reversion.models.Revision)
-        versions = reversion.models.Version.objects.db_manager(store_alias).get_for_object(
-            self, model_db=get_write_alias(type(self), instance=self)
-        )
+        versions = reversion.models.Version.objects.get_for_object(self)
         return versions.select_related("revision")
 
-    def revert_to(self, version: Any, *, using: str | None = None) -> None:
+    def revert_to(self, version: Any) -> None:
         """Restore declared revisioned fields from ``version`` and save.
 
         Saves with ``update_fields`` so unrelated in-memory columns are not
@@ -540,7 +522,6 @@ class RevisionMixin(models.Model):
         not depend on the caller's transport opening a reversion block.
         """
 
-        alias = get_write_alias(type(self), using=using, instance=self)
         data = version.field_dict
         reverted: list[str] = []
         for name in self.revisioned_fields:
@@ -549,9 +530,8 @@ class RevisionMixin(models.Model):
                 reverted.append(name)
         if not reverted:
             return
-        store_alias = get_write_alias(reversion.models.Revision)
-        with transaction.atomic(using=alias), reversion.create_revision(using=store_alias):
-            self.save(using=alias, update_fields=update_fields_with_auto_now(self, reverted))
+        with transaction.atomic(), reversion.create_revision():
+            self.save(update_fields=update_fields_with_auto_now(self, reverted))
             reversion.set_comment(f"Reverted to revision {version.revision_id}.")
 
 
@@ -745,49 +725,45 @@ class HierarchyMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist the row, maintaining ``path`` on create and reparent."""
 
-        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
-        kwargs["using"] = alias
-        refresh_deferred(
-            self,
-            using=alias,
-            fields={
-                "parent_id",
-                "path",
-                *(self._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
-            },
-        )
+        deferred = self.get_deferred_fields() & {
+            "parent_id",
+            "path",
+            *(self._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
+        }
+        if deferred:
+            self.refresh_from_db(fields=sorted(deferred))
         if self._state.adding:
-            self._save_created(alias, *args, **kwargs)
-        elif self._hierarchy_needs_repath(using=alias):
-            self._save_reparented(alias, *args, **kwargs)
+            self._save_created(*args, **kwargs)
+        elif self._hierarchy_needs_repath():
+            self._save_reparented(*args, **kwargs)
         else:
             super().save(*args, **kwargs)
         self._hierarchy_saved_parent_id = self.parent_id
 
-    def _save_created(self, database: str, /, *args: Any, **kwargs: Any) -> None:
+    def _save_created(self, *args: Any, **kwargs: Any) -> None:
         """Insert the row, then derive its ``path`` from the parent's committed path."""
 
-        with transaction.atomic(using=database):
+        with transaction.atomic():
             super().save(*args, **kwargs)
-            parent = self._hierarchy_parent(using=database)
+            parent = self._hierarchy_parent()
             if parent is not None:
                 # Re-read the parent's committed path under lock before deriving the
                 # child prefix: a create racing a reparent of that parent would
                 # otherwise bake in a stale prefix that the reparent's cascade never
                 # reaches (the new row is not yet under the old prefix it rewrites).
-                fresh = self._locked_paths([parent.pk], using=database)
+                fresh = self._locked_paths([parent.pk])
                 if parent.pk in fresh:
                     parent.path = fresh[parent.pk]
             self._reject_cross_scope_parent(parent)
             new_path = self._hierarchy_path(parent)
             if new_path != self.path:
                 self._write_hierarchy_path(
-                    system_queryset(type(self), using=database).filter(pk=self.pk),
+                    system_queryset(type(self)).filter(pk=self.pk),
                     new_path,
                 )
                 self.path = new_path
 
-    def _save_reparented(self, database: str, /, *args: Any, **kwargs: Any) -> None:
+    def _save_reparented(self, *args: Any, **kwargs: Any) -> None:
         """Validate the move under lock, then rewrite the subtree in one UPDATE."""
 
         # A reparent is defined by the moved ``parent``, so persist it (and the
@@ -796,13 +772,13 @@ class HierarchyMixin(models.Model):
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             kwargs["update_fields"] = set(update_fields) | {"parent", "path"}
-        with transaction.atomic(using=database):
-            old_path = self._lock_moved_paths(using=database)
-            subtree = system_queryset(type(self), using=database, lock=()).filter(path__startswith=old_path)
+        with transaction.atomic():
+            old_path = self._lock_moved_paths()
+            subtree = system_queryset(type(self), lock=()).filter(path__startswith=old_path)
             if old_path:
                 # Evaluate SELECT FOR UPDATE before moving any descendant's path.
                 list(subtree.order_by("pk").values_list("pk", flat=True))
-            parent = self._hierarchy_parent(using=database)
+            parent = self._hierarchy_parent()
             self._reject_cycle(parent)
             self._reject_cross_scope_parent(parent)
             new_path = self._hierarchy_path(parent)
@@ -837,7 +813,7 @@ class HierarchyMixin(models.Model):
             return super(HierarchyQuerySet, queryset).update(path=path_value)
         return queryset.update(path=path_value)
 
-    def _lock_moved_paths(self, *, using: str) -> str:
+    def _lock_moved_paths(self) -> str:
         """Row-lock this node and its new parent, refreshing committed paths.
 
         Two overlapping reparents interleaving on stale in-memory paths is the
@@ -848,21 +824,21 @@ class HierarchyMixin(models.Model):
         """
 
         pks = [self.pk] if self.parent_id is None else [self.pk, self.parent_id]
-        fresh = self._locked_paths(pks, using=using)
+        fresh = self._locked_paths(pks)
         self.path = fresh.get(self.pk, self.path)
         if self.parent_id is not None and self.parent_id in fresh:
-            parent = self._hierarchy_parent(using=using)
+            parent = self._hierarchy_parent()
             if parent is not None:
                 parent.path = fresh[self.parent_id]
         return self.path
 
-    def _locked_paths(self, pks: list[Any], *, using: str) -> dict[Any, str]:
+    def _locked_paths(self, pks: list[Any]) -> dict[Any, str]:
         """Return committed paths, serializing overlapping moves when supported."""
 
-        reader = system_queryset(type(self), using=using, lock=())
+        reader = system_queryset(type(self), lock=())
         return dict(reader.filter(pk__in=pks).values_list("pk", "path"))
 
-    def _hierarchy_needs_repath(self, *, using: str) -> bool:
+    def _hierarchy_needs_repath(self) -> bool:
         """Return whether an existing row's ``parent`` moved (or its path is unset)."""
 
         if not self.path:
@@ -873,31 +849,25 @@ class HierarchyMixin(models.Model):
         # so a reparent would be invisible if we compared ``parent_id`` to itself.
         # Fetch the committed ``parent_id`` from the row to compare against the
         # in-memory FK the caller may have moved.
-        return self._hierarchy_committed_parent_id(using=using) != self.parent_id
+        return self._hierarchy_committed_parent_id() != self.parent_id
 
-    def _hierarchy_committed_parent_id(self, *, using: str) -> Any:
+    def _hierarchy_committed_parent_id(self) -> Any:
         """Return this row's committed ``parent_id`` from the database."""
 
-        return system_queryset(type(self), using=using).filter(pk=self.pk).values_list("parent_id", flat=True).first()
+        return system_queryset(type(self)).filter(pk=self.pk).values_list("parent_id", flat=True).first()
 
-    def _hierarchy_parent(self, *, using: str) -> HierarchyMixin | None:
+    def _hierarchy_parent(self) -> HierarchyMixin | None:
         """Return the parent instance (cached when assigned), or ``None`` for a root."""
 
         if self.parent_id is None:
             return None
-        field = cast(models.ForeignKey[Any, Any], self._meta.get_field("parent"))
-        parent = field.get_cached_value(self, default=None)
-        if parent is None or parent._state.db != using:
-            parent = system_queryset(field.related_model, using=using).get(field.get_reverse_related_filter(self))
-            field.set_cached_value(self, parent)
-        refresh_deferred(
-            parent,
-            using=using,
-            fields={
-                "path",
-                *(parent._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
-            },
-        )
+        parent = self.parent
+        deferred = parent.get_deferred_fields() & {
+            "path",
+            *(parent._meta.get_field(name).attname for name in self.hierarchy_scope_fields),
+        }
+        if deferred:
+            parent.refresh_from_db(fields=sorted(deferred))
         return cast("HierarchyMixin", parent)
 
     def _hierarchy_path(self, parent: HierarchyMixin | None) -> str:

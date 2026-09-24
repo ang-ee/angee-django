@@ -5,8 +5,7 @@ from __future__ import annotations
 import itertools
 import sys
 import tempfile
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -15,11 +14,10 @@ import pytest
 import reversion
 import tomlkit
 from django.apps import AppConfig
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.db import connection, connections, models, transaction
+from django.db import connection, models, transaction
 from django.test import RequestFactory
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
@@ -69,52 +67,6 @@ from tests.iam_models import Group as IAMGroup
 from tests.integrate_models import RECORD_SYNC_TEST_MODELS, Integration
 
 pytest_plugins = ("tests.workflows",)
-
-
-@pytest.fixture
-def database_alias(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[[str], AbstractContextManager[str]]:
-    """Expose an alias, snapshotting SQLite's seeded database on first use.
-
-    SQLite aliases need independent files: an alias transaction and an upstream
-    default-only REBAC audit write cannot concurrently write the same SQLite
-    database. Defer the snapshot until the first statement so ordinary fixture
-    setup can seed default after this context opens. Later writes are isolated.
-    """
-
-    @contextmanager
-    def copied_connection(alias: str) -> Iterator[str]:
-        if alias in settings.DATABASES:
-            raise ValueError(f"Database alias {alias!r} is already configured.")
-        # Enforce the test's database access before opening a dynamic connection.
-        connection.ensure_connection()
-        copied = connection.copy(alias=alias)
-        if copied.vendor == "sqlite":
-            copied.settings_dict["NAME"] = str(tmp_path / f"{alias}.sqlite3")
-        # Django permits dynamically created connections. Open before registering
-        # the alias, which must then be visible to ORM connection enumeration.
-        copied.ensure_connection()
-        with monkeypatch.context() as patch:
-            patch.setitem(settings.DATABASES, alias, copied.settings_dict)
-            connections[alias] = copied
-            seeded = False
-
-            def seed_sqlite(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
-                nonlocal seeded
-                if copied.vendor == "sqlite" and not seeded:
-                    if connection.in_atomic_block:
-                        raise RuntimeError("Seed the database alias before opening a default transaction.")
-                    connection.connection.backup(copied.connection)
-                    seeded = True
-                return execute(sql, params, many, context)
-
-            try:
-                with copied.execute_wrapper(seed_sqlite):
-                    yield alias
-            finally:
-                copied.close()
-                del connections[alias]
-
-    return copied_connection
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):

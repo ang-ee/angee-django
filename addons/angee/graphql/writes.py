@@ -12,20 +12,19 @@ from angee.graphql.ids import PublicID, instance_for_id
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
-def write_queryset(model: type[_ModelT], *, using: str | None = None) -> models.QuerySet[_ModelT]:
-    """Return a writer-bound target queryset with row scope and full field values.
+def write_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
+    """Return a write-scoped target queryset with row scope and full field values.
 
     Both mutation apply steps and delete-preview history need to load the
     in-memory instance with field-read redaction disabled while preserving
     REBAC row scope. REBAC models expose this as ``for_write()``; plain Django
-    models have no field redaction and use their default manager. ``using`` pins
-    related targets to the database already selected by their write owner.
+    models have no field redaction and use their default manager.
     """
 
-    return write_scoped_queryset(model, using=using)
+    return write_scoped_queryset(model)
 
 
-def instance_for_write(model: type[_ModelT], id: PublicID, *, using: str | None = None) -> _ModelT | None:
+def instance_for_write(model: type[_ModelT], id: PublicID) -> _ModelT | None:
     """Return the row addressed by ``id`` through the write-scoped queryset, or None.
 
     The write scope is the isolation gate: a member of another scope never finds
@@ -34,4 +33,4 @@ def instance_for_write(model: type[_ModelT], id: PublicID, *, using: str | None 
     reach the row — surface it as a plain not-found, never as an existence oracle.
     """
 
-    return instance_for_id(model, id, queryset=write_queryset(model, using=using))
+    return instance_for_id(model, id, queryset=write_queryset(model))

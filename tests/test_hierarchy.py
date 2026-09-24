@@ -72,24 +72,6 @@ def test_create_under_parent_derives_path_shape() -> None:
 
 
 @pytest.mark.django_db
-def test_explicit_using_is_forwarded_through_create_and_reparent() -> None:
-    """The selected write alias reaches both internal saved-row paths once."""
-
-    with system_context(reason="test hierarchy explicit database alias"):
-        first = HierNode(name="first")
-        first.save(using="default")
-        second = HierNode(name="second")
-        second.save(using="default")
-        child = HierNode(name="child", parent=first)
-        child.save(using="default")
-        child.parent = second
-        child.save(using="default")
-        child.refresh_from_db(using="default")
-    assert child.path.startswith(second.path)
-    assert not child.path.startswith(first.path)
-
-
-@pytest.mark.django_db
 def test_direct_path_update_cannot_bypass_the_saved_row_owner() -> None:
     """Public and cloned querysets reject writes to the derived path."""
 

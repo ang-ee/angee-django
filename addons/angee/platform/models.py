@@ -30,7 +30,6 @@ from hatch_angee import AddonManifest
 from rebac import system_context
 
 from angee.addons import addon_manifest, available_addons, resolve_app_config, resolve_manifest_roots
-from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 from angee.base.models import AngeeManager, AngeeModel
 from angee.base.serialization import canonical_json_sha256
@@ -121,10 +120,9 @@ class AddonManager(AngeeManager):
     def _apply_change(self, name: str, action: str, revision: str | None) -> InstallResult:
         """Validate one plan, write its exact roots, then reconcile the committed intent."""
 
-        using = get_write_alias(self.model, bound=self)
         with system_context(reason=f"platform.addon.{action}"):
             installer = addon_installer()
-            preview = self.db_manager(using).change_preview(name, action, installer=installer)
+            preview = self.change_preview(name, action, installer=installer)
             if not preview.can_apply or (revision is not None and preview.revision != revision):
                 return InstallResult.refusal(
                     name, action, preview.refusal or "The addon preview is stale; review the changes again."
@@ -133,7 +131,7 @@ class AddonManager(AngeeManager):
                 installer.apply_app_names(preview.roots_after, expected_text=preview.settings_text)
             except (OSError, NotImplementedError, StaleAddonPreviewError) as error:
                 return InstallResult.refusal(name, action, str(error))
-            self.reconcile_from_registry(using, desired=frozenset(preview.roots_after))
+            self.reconcile_from_registry(desired=frozenset(preview.roots_after))
             return InstallResult(
                 name=name, action=action, already=preview.roots_before == preview.roots_after
             )
@@ -205,7 +203,7 @@ class AddonManager(AngeeManager):
                 )
             )
         disabled = tuple(disabled_impacts)
-        inventory = self._data_inventory((impact.name for impact in disabled), using=self._db)
+        inventory = self._data_inventory((impact.name for impact in disabled))
         warning = (
             "Provisioning may generate and apply schema migrations that remove model data or contributed fields; "
             "the exact database effect cannot be forecast safely before migration planning."
@@ -294,7 +292,7 @@ class AddonManager(AngeeManager):
         return tuple(impacts)
 
     @staticmethod
-    def _data_inventory(names: Iterable[str], *, using: str | None = None) -> tuple[AddonDataInventory, ...]:
+    def _data_inventory(names: Iterable[str]) -> tuple[AddonDataInventory, ...]:
         configs = {config.name: config for config in composed.addons()}
         inventories = []
         for name in sorted(names):
@@ -304,7 +302,7 @@ class AddonManager(AngeeManager):
             models_inventory = []
             for model in composed.data_models(config):
                 try:
-                    count = model._default_manager.using(using).count()
+                    count = model._default_manager.count()
                 except DatabaseError:
                     count = None
                 models_inventory.append(
@@ -317,12 +315,12 @@ class AddonManager(AngeeManager):
             inventories.append(AddonDataInventory(name, tuple(models_inventory), contributed))
         return tuple(inventories)
 
-    def reconcile_loaded_registry(self, using: str) -> None:
+    def reconcile_loaded_registry(self) -> None:
         """Converge after startup using the effective roots recorded by AppGraph."""
 
-        self.reconcile_from_registry(using, desired=composed.root_app_names())
+        self.reconcile_from_registry(desired=composed.root_app_names())
 
-    def reconcile_from_registry(self, using: str, *, desired: frozenset[str] | None) -> None:
+    def reconcile_from_registry(self, *, desired: frozenset[str] | None) -> None:
         """Converge the table to the composed app graph + available addons.
 
         A **state** reconcile, never a delete: an addon that leaves the project is
@@ -331,9 +329,9 @@ class AddonManager(AngeeManager):
         other tiers (the VCS marketplace ``platform_integrate_vcs`` contributes) are
         left untouched. Each present addon's row is a full overwrite so a state flip
         (enabled ↔ disabled) resets every reflected field. Runs under the caller's
-        ``system_context`` (see ``signals.py``); routed through ``using`` and wrapped
-        in one transaction like the sibling source reconciles, so a mid-loop failure
-        never leaves the table half-converged.
+        ``system_context`` (see ``signals.py``), wrapped in one transaction like
+        the sibling source reconciles, so a mid-loop failure never leaves the
+        table half-converged.
 
         ``desired`` contains authored settings roots. Available roots awaiting
         composition and loaded roots removed from that desired set are pending;
@@ -357,9 +355,9 @@ class AddonManager(AngeeManager):
             if (manifest := addon_manifest(config)) is not None:
                 manifests[name] = manifest
         depended_by = self._dependants(manifests.values(), aliases=aliases)
-        counts = composed.resource_counts(using=using)
-        rows = self.using(using)
-        with transaction.atomic(using=using):
+        counts = composed.resource_counts()
+        rows = self.all()
+        with transaction.atomic():
             pending_by_name = dict(rows.values_list("name", "pending")) if canonical_desired is None else {}
             rows.filter(source__in=(Addon.Source.INSTALLED, Addon.Source.LOCAL)).exclude(name__in=manifests).update(
                 state=Addon.State.REMOVED,

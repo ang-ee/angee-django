@@ -11,12 +11,11 @@ import inspect
 from typing import Any
 
 from django.apps import AppConfig, apps
-from django.db import connections, router
+from django.db import connection
 from django.db.models import Model
 from pydantic import BaseModel, PrivateAttr
 
 from angee.addons import is_angee_addon
-from angee.base.db import get_read_alias
 from angee.base.impl import ImplChoice, ImplClassField
 
 
@@ -281,12 +280,12 @@ def contributed_fields(config: AppConfig) -> list[ContributedFieldRow]:
     return sorted(rows, key=lambda row: (row.model_label, row.field_name))
 
 
-def resource_counts(*, using: str | None = None) -> dict[str, int]:
-    """Return resource-ledger row counts keyed by source addon on ``using``.
+def resource_counts() -> dict[str, int]:
+    """Return resource-ledger row counts keyed by source addon.
 
     The ``resources`` addon owns the ledger and its rollup; ask it rather than
-    re-querying its model here. During migration, a routed-away or not-yet-created
-    ledger has no counts to project. Other database failures propagate; probing
+    re-querying its model here. During migration, a not-yet-created ledger
+    has no counts to project. Other database failures propagate; probing
     table existence avoids leaving an enclosing transaction broken.
     """
 
@@ -294,12 +293,9 @@ def resource_counts(*, using: str | None = None) -> dict[str, int]:
         resource = apps.get_model("resources", "Resource")
     except LookupError:
         return {}
-    alias = get_read_alias(resource, using=using, bound=resource.objects)
-    if not router.allow_migrate_model(alias, resource):
+    if resource._meta.db_table not in connection.introspection.table_names():
         return {}
-    if resource._meta.db_table not in connections[alias].introspection.table_names():
-        return {}
-    return resource.objects.using(alias).counts_by_addon()
+    return resource.objects.counts_by_addon()
 
 
 def model_rows() -> list[PlatformModelRow]:

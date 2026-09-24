@@ -136,110 +136,17 @@ Use these owners instead of maintaining another contract in an addon:
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
   promote it to a model or manager method.
-- **Write-alias completeness is a framework invariant.** Use
-  [`get_write_alias`](../../angee/base/db.py): explicit `using`, then a bound
-  manager/queryset's `_db` (never the read-routing `.db`), then a persisted
-  instance's `_state.db`, then `router.db_for_write(model, instance=instance)`.
-  Derive once at the operation's entry owner and pass the alias down through
-  every nested read, lock, transaction, callback, refresh, relation and owner
-  call. Pure reads that never feed a write use [`get_read_alias`](../../angee/base/db.py);
-  manager/queryset `.db` reads belong only inside that database owner. Any read
-  feeding a write uses the write owner's selected alias. Unqualified
-  `atomic`/`on_commit`, `Model.objects` inside a write owner,
-  reverse related managers, `refresh_from_db`, ContentType lookups, and
-  `@transaction.atomic` decorators on instance methods can silently choose the
-  default or read alias; bind them explicitly to the operation's write alias.
-  Reload forward FK targets through [`related_on`](../../angee/base/db.py) on
-  the operation's explicit alias (write, or read where the caller derived a read
-  alias), leaving result caching to the caller; its native deferred-FK refresh
-  invalidates the relation cache and repoints `instance._state.db`.
-  Before a write reads deferred columns, use [`refresh_deferred`](../../angee/base/db.py) with the pinned alias.
-  The invariant is **never silently misroute**: use the native alias-bound form,
-  or fail closed at the operation's entry owner for a non-default alias when
-  Django or the upstream library cannot honour it; do not rebuild that library.
-  Public override hooks accept optional keyword-only `using`, while private
-  helpers require the already-selected alias. To preserve override compatibility,
-  the entry owner pins each persisted instance it hands to a hook to its selected
-  alias through `_state.db` and calls the overridable hook without a `using`
-  keyword; the hook derives the same alias from the instance.
-
-  **Known routing frontiers:**
-
-  - Django M2M `add()`/`set()` choose the write router themselves. Bind the through
-    model's manager to the alias for deletion and bulk insertion, preserving
-    add/set and signal semantics; [`StepRunManager`](../../addons/angee/workflows/managers.py)
-    owns workflow previous-edge mutation.
-  - Django `full_clean()` and FK field validation have no alias argument. Use
-    [`AngeeModel.full_clean_for_write`](../../angee/base/models.py) for native local
-    validation and `BaseConstraint.validate(using=...)`, including native unique
-    constraints. On non-default aliases, FK existence is enforced by the database
-    FK constraint instead of the read-routed field query; local FK validation and
-    model constraints still run. Unsupported validation without an alias-bound
-    native form, including `unique_for_date`/`month`/`year`, fails closed on
-    non-default aliases.
-  - django-zed-rebac `check_access`/`check_new`, `resolve_subjects`, grant/revoke,
-    and `write_relationships` have no alias contract. This includes modeled
-    resource reads: the local backend's direct/arrow field-backed checks call
-    `FieldBacking.queryset` without `using`, so these are not merely reads of an
-    independent authorization store. Workflow actor admission, Decision relationship
-    operations, resource loading, IAM memberships/roles and admin bootstrap,
-    spaces visibility, project binding mirrors, portfolio reader grants,
-    proposal relationships, work personal-queue/duplicate membership changes,
-    content/planning factories and actions that invoke those checks, authorized
-    GraphQL deletion, IMAP sampling admission, and OIDC/external-account ownership
-    require the default database until the upstream owners support the operation
-    alias. Keep these guards at their entry owners; instance pinning cannot make
-    an unbound upstream query safe. Native ORM membership writes are separately
-    alias-bound; a bound through-table manager does not route REBAC side effects.
-    The same upstream limitation applies to its existing-row pre-save/pre-delete
-    permission checks. Candidate create gates project required ORM relations on
-    the write alias, but post-hop authorization still uses the backend's alias
-    contract. Excluded [`storage write entries`](../../addons/angee/storage/models.py)
-    (`FolderManager.create_in_drive`, `FileManager.draft`, `File.finalize`,
-    `File._authorize_push`, and `File.delete`) still call these unbound checks;
-    their alias-aware persistence does not close authorization routing. They
-    require entry guards or upstream alias support in the next storage sweep.
-    REBAC audit-event writes (`PermissionAuditEvent`) share this fail-closed
-    frontier: the upstream library has no alias contract.
-  - Django `Field.pre_save(instance, add)` receives no database alias, both from
-    `Model.save` and the insert compiler used by `bulk_create`. An explicit
-    `save(using=...)` can therefore disagree with the instance/write-router alias
-    seen by implicit fractional-rank allocation. The existing allocator is now
-    exposed as [`FractionalRankField.get_append_rank_for_instance`](../../angee/base/fields.py):
-    allocate on the operation alias and assign the rank before saving/bulk
-    insertion. `get_append_rank`/`get_rank_between` only perform arithmetic;
-    their callers bind neighbor queries. Explicit preallocation closes owned
-    task-creation paths without a model-save override. Rank-omitting Project
-    creation in [`ProjectManager.from_task`](../../addons/angee/projects/models.py)
-    and [`Proposal.create_track`](../../addons/angee/proposals/models.py) remains
-    affected when portfolio contributes `Project.sort_order`: these factories
-    are default-only for authorization, but implicit rank allocation can still
-    consult a conflicting write router. The declaring addon needs an explicit
-    preallocation seam before claiming that path is closed. Arbitrary rank-omitting
-    native saves with a conflicting explicit alias remain a Django hook frontier;
-    `pre_save` cannot detect that disagreement or enforce a non-default guard.
-  - django-reversion's **store alias** belongs to its `Revision` write router;
-    the versioned row's alias is the independent `Version.db`/`model_db` value.
-    [`RevisionMixin`](../../angee/base/mixins.py) binds version queries and revision
-    creation to that store and saves the model on its own selected alias. Native
-    post-save signals carry the model alias into snapshots. Separate databases
-    have separate transactions; this is not a cross-database atomicity guarantee.
-  - Inference providers accept an explicit operation alias through model binding,
-    credential refresh and SDK requests. Authorized inference still requires the
-    default database: `InferenceModel.require_usable` uses REBAC's model read
-    check, and workflow admission actor resolution has the same upstream alias
-    limitation. The shared workflow inference helper applies this boundary to
-    one-shot inference and extraction alike. Agent sessions retain their separate
-    default-only workflow entry guard; direct session entries still need alias
-    propagation and their own entry guard.
-  - [`Platform permission-schema cleanup`](../../addons/angee/platform/permissions.py)
-    still uses unbound schema queries and `PackageManagedRecord.target` generic
-    relations. It needs an upstream alias contract or a default-only entry guard
-    before claiming routed lifecycle support. This excluded lifecycle path and
-    the excluded agent-session transactions are the individually reasoned
-    exemptions in [`tests/test_layering.py`](../../tests/test_layering.py), not
-    evidence that their routing is complete. The guard rejects new violations
-    by default and fails on stale entries.
+- **Database routing:** Django routers own database selection, including the
+  native fallback to an instance's `_state.db`. Do not thread database aliases
+  through Angee methods or hooks. Use native relation access, `refresh_from_db`
+  when deferred or stale fields need reloading, and ordinary `atomic` and
+  `on_commit` boundaries while preserving locks and batching. A declared
+  read-only external import source may select its database explicitly.
+  Multi-database support extends Django with a router for static model placement;
+  add operation scoping only for a concrete need. REBAC-managed models must write
+  to the default database; the GraphQL addon's
+  [system check](../../addons/angee/graphql/checks.py) validates configured routers
+  against that requirement.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
@@ -723,9 +630,7 @@ and current contracts before applying a historical example to a new deployment.
 - **Patch inherited Django manager methods on the manager class.** Pytest's
   `monkeypatch` can restore an instance patch as a bound instance attribute;
   Django's `db_manager()` copies then retain the original manager and lose their
-  selected alias. Patch `type(manager)` and accept the manager argument in the
-  spy. Verify alias-sensitive consumers after the spy-owning module, as in the
-  [messaging routing tests](../../tests/test_messaging_write_alias.py).
+  binding. Patch `type(manager)` and accept the manager argument in the spy.
 - **A relocated virtualenv can retain stale launcher shebangs.** Diagnose the
   interpreter and environment owner when a console script cannot spawn; do not
   assume an application failure. [Checks](../checks.md) owns the supported
@@ -907,19 +812,16 @@ and current contracts before applying a historical example to a new deployment.
   A subclass that needs REBAC side effects overrides the transition; never add
   REBAC writes to the shared mixin.
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
-  [`StateTransitions`](../../angee/base/transitions.py) owns one transaction on
-  the operation's write alias around the body and success hook, including
-  `save_state`; consumer outer transactions on that alias compose through Django
-  savepoints. Since the body runs inside that transaction, follow the
+  [`StateTransitions`](../../angee/base/transitions.py) owns one transaction around
+  the body and success hook, including `save_state`; consumer outer transactions
+  compose through Django savepoints. Since the body runs inside that transaction, follow the
   [two-phase side-effect rule](#rules): defer non-database effects to
-  `transaction.on_commit(using=...)` or a post-commit phase.
+  `transaction.on_commit(...)` or a post-commit phase.
   Save guards use `get_transition_save_field(instance)` to read the active save
   field's attname, or `None`, through the public contract.
-  Custom success hooks use `get_transition_save_using(instance)` for their database
-  work rather than re-deriving the operation's write alias from the instance.
-  Compose a custom final save through `persist(instance, *, using, update_fields)`;
+  Compose a custom final save through `persist(instance, *, update_fields)`;
   the success hook must explicitly forward it to `save_state`, which retains the
-  concurrency guard and transaction on the selected alias.
+  concurrency guard and transaction.
 - **Integration children use the ordinary emitted Django MRO.** The composer
   emits donors, the child's abstract source, then its concrete parent, so child
   behavior can override parent behavior and cooperative methods delegate with
@@ -1212,7 +1114,7 @@ validated at the driver boundary.
 
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in
-  one transaction on the operation's write alias. Semantic record failures use
+  one transaction. Semantic record failures use
   savepoints so later records continue. Infrastructure failures roll back the
   page. Conditional remote writes happen outside database transactions and are
   reflected only after their response; no cross-system atomicity is implied.

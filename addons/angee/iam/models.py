@@ -27,12 +27,10 @@ from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
-from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
-from angee.base.permissions import require_authorization_database
 from angee.iam.identity import user_label
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
@@ -83,16 +81,12 @@ class Group(SqidMixin, AngeeModel):
         *,
         caveat_name: str = "",
         caveat_context: Mapping[str, Any] | None = None,
-        using: str | None = None,
     ) -> None:
         """Grant one existing user direct membership in this group."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        require_authorization_database(using, operation="IAM group membership")
-        self._state.db = using
         if not self.has_access("write"):
             raise PermissionDenied("Write access to the IAM group is required.")
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             grant_membership(
                 subject=self.member_subject(subject),
                 container=self,
@@ -100,15 +94,12 @@ class Group(SqidMixin, AngeeModel):
                 caveat_context=caveat_context,
             )
 
-    def remove_member(self, subject: str, *, caveat_name: str = "", using: str | None = None) -> bool:
+    def remove_member(self, subject: str, *, caveat_name: str = "") -> bool:
         """Revoke an exact direct membership, allowing a stale user subject."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        require_authorization_database(using, operation="IAM group membership")
-        self._state.db = using
         if not self.has_access("write"):
             raise PermissionDenied("Write access to the IAM group is required.")
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             return bool(
                 revoke_membership(
                     subject=self.member_subject(subject, require_existing=False),
@@ -208,24 +199,20 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         username: str,
         email: str | None = None,
         password: str | None = None,
-        *,
-        using: str | None = None,
         **extra_fields: Any,
     ) -> Any:
         """Create and save a regular user."""
 
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
-        using = get_write_alias(self.model, using=using, bound=self)
-        return self._create_user(username, email, password, using=using, **extra_fields)
+
+        return self._create_user(username, email, password, **extra_fields)
 
     def create_superuser(
         self,
         username: str,
         email: str | None = None,
         password: str | None = None,
-        *,
-        using: str | None = None,
         **extra_fields: Any,
     ) -> Any:
         """Create and save a superuser."""
@@ -236,16 +223,14 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             raise ValueError("Superuser must have is_staff=True.")
         if extra_fields.get("is_superuser") is not True:
             raise ValueError("Superuser must have is_superuser=True.")
-        using = get_write_alias(self.model, using=using, bound=self)
-        return self._create_user(username, email, password, using=using, **extra_fields)
+
+        return self._create_user(username, email, password, **extra_fields)
 
     def _create_user(
         self,
         username: str,
         email: str | None,
         password: str | None,
-        *,
-        using: str,
         **extra_fields: Any,
     ) -> Any:
         """Build, password-hash, and save one user."""
@@ -260,7 +245,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         user.set_password(password)
         actor = current_actor()
         user.sudo(reason="iam.user.create")
-        user.save(using=using)
+        user.save()
         if actor is not None:
             user.with_actor(actor)
         else:
@@ -369,15 +354,15 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
                 kwargs["update_fields"] = update_field_names
         super().save(*args, **kwargs)
 
-    def update_preferences(self, preferences: Mapping[str, Any], *, using: str | None = None) -> None:
+    def update_preferences(self, preferences: Mapping[str, Any]) -> None:
         """Replace this user's private UI preference object."""
 
         if not isinstance(preferences, Mapping):
             raise ValueError("preferences must be a JSON object")
-        using = get_write_alias(type(self), using=using, instance=self)
-        with system_context(reason="iam.preferences.update"), transaction.atomic(using=using):
+
+        with system_context(reason="iam.preferences.update"), transaction.atomic():
             self.preferences = dict(preferences)
-            self.save(using=using, update_fields=["preferences"])
+            self.save(update_fields=["preferences"])
 
     def __str__(self) -> str:
         """Use IAM's human label for person and service-user references alike."""

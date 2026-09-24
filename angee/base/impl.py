@@ -25,7 +25,6 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
-from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.fields import enum_member_for
 
 __all__ = [
@@ -468,7 +467,6 @@ class ImplBase:
         instance: models.Model,
         *,
         provided: frozenset[str] = frozenset(),
-        using: str | None = None,
     ) -> set[str]:
         """Seed ``instance``'s fields from this impl's effective defaults on create.
 
@@ -477,7 +475,6 @@ class ImplBase:
         deep-copied so rows never alias the class-level dict.
         """
 
-        alias = get_write_alias(type(instance), using=using, instance=instance)
         changed: set[str] = set()
         for field_name, value in cls.effective_defaults().items():
             try:
@@ -487,10 +484,9 @@ class ImplBase:
             if field_name in provided or getattr(field, "attname", field_name) in provided:
                 continue
             attname = getattr(field, "attname", field_name)
-            refresh_deferred(instance, using=alias, fields=(attname,))
             before = getattr(instance, attname)
             if field.many_to_one and isinstance(value, str):
-                cls._materialize_fk(instance, field, value, using=alias)
+                cls._materialize_fk(instance, field, value)
             else:
                 setattr(instance, field_name, copy.deepcopy(value))
             if getattr(instance, attname) != before:
@@ -498,7 +494,7 @@ class ImplBase:
         return changed
 
     @staticmethod
-    def _materialize_fk(instance: models.Model, field: Any, natural_key: str, *, using: str) -> None:
+    def _materialize_fk(instance: models.Model, field: Any, natural_key: str) -> None:
         """Resolve a string FK default against the related model's ``slug`` and assign it."""
 
         related = field.related_model
@@ -510,16 +506,13 @@ class ImplBase:
                 "which must declare a slug field."
             ) from error
         with system_context(reason="angee.impl.materialize_fk"):
-            target = related._base_manager.using(using).filter(slug=natural_key).first()
+            target = related._base_manager.filter(slug=natural_key).first()
         if target is None:
             raise ValueError(
                 f"{type(instance).__name__}.{field.name} impl default references "
                 f"{related._meta.label} slug {natural_key!r}, but no row exists."
             )
-        # Assign the stored FK and cache directly: the forward descriptor would
-        # ask the router again for an unsaved instance with no database hint.
-        setattr(instance, field.attname, field.target_field.value_from_object(target))
-        field.set_cached_value(instance, target)
+        setattr(instance, field.name, target)
 
 
 def impl_registry(registry_setting: str) -> dict[str, str]:
@@ -761,10 +754,6 @@ class ImplDefaultsMixin(models.Model):
     form (API, resource seed) still gets the chosen impl's defaults — for the fields
     the caller did not supply. Form-created rows pass their (possibly edited) values,
     so the impl never overrides them, even when a value equals the model default.
-
-    Validation hooks accept optional keyword-only ``using`` for direct callers.
-    ``save()`` pins ``_state.db`` to its selected alias and invokes hooks without
-    that keyword, preserving narrower overrides. Hooks otherwise use the pin.
     """
 
     class Meta:
@@ -815,8 +804,6 @@ class ImplDefaultsMixin(models.Model):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Seed impl defaults for unsupplied fields on first insert, then persist."""
 
-        alias = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
-        kwargs["using"] = alias
         adding = self._state.adding
         if adding:
             provided: frozenset[str] = getattr(self, "_impl_provided_fields", frozenset())
@@ -829,15 +816,10 @@ class ImplDefaultsMixin(models.Model):
                     continue
                 impl = field.resolve_class(key)
                 if isinstance(impl, type) and issubclass(impl, ImplBase):
-                    impl.materialize(self, provided=provided, using=alias)
+                    impl.materialize(self, provided=provided)
         update_fields = kwargs.get("update_fields")
-        original_alias = self._state.db
-        self._state.db = alias
-        try:
-            self.validate_impl_keys(update_fields=update_fields)
-            self.validate_impl_configs(update_fields=update_fields)
-        finally:
-            self._state.db = original_alias
+        self.validate_impl_keys(update_fields=update_fields)
+        self.validate_impl_configs(update_fields=update_fields)
         super().save(*args, **kwargs)
         loaded = dict(getattr(self, "_loaded_impl_keys", {}))
         updated = None if update_fields is None else set(update_fields)
@@ -848,12 +830,11 @@ class ImplDefaultsMixin(models.Model):
                 loaded[field.attname] = self.__dict__[field.attname]
         self._loaded_impl_keys = loaded
 
-    def validate_impl_keys(self, *, update_fields: Any = None, using: str | None = None) -> None:
+    def validate_impl_keys(self, *, update_fields: Any = None) -> None:
         """Reject persisted implementation switches at the shared model boundary."""
 
         if self._state.adding and self.pk is None:
             return
-        alias = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
         updated = None if update_fields is None else set(update_fields)
         loaded = getattr(self, "_loaded_impl_keys", {})
         for field in self._meta.get_fields():
@@ -864,7 +845,7 @@ class ImplDefaultsMixin(models.Model):
                     continue
                 with system_context(reason="base.impl.validate_stored_key"):
                     stored_row = (
-                        type(self)._base_manager.using(alias).filter(pk=self.pk).values_list(field.attname).first()
+                        type(self)._base_manager.filter(pk=self.pk).values_list(field.attname).first()
                     )
                 if stored_row is None and self._state.adding:
                     continue
@@ -874,7 +855,6 @@ class ImplDefaultsMixin(models.Model):
                 loaded[field.attname] = stored
             if updated is not None and field.name not in updated and field.attname not in updated:
                 continue
-            refresh_deferred(self, using=alias, fields=(field.attname,))
             if getattr(self, field.attname) != loaded[field.attname]:
                 raise ValidationError({field.name: "Implementation selection is create-only."})
 
@@ -899,15 +879,14 @@ class ImplDefaultsMixin(models.Model):
         setattr(self, "config", merged)
         return {"config"}
 
-    def validate_impl_configs(self, *, update_fields: Any = None, using: str | None = None) -> None:
+    def validate_impl_configs(self, *, update_fields: Any = None) -> None:
         """Validate every declared adapter config before any model save ingress."""
 
         if not self._state.adding and update_fields is not None and "config" not in update_fields:
             return
         if "config" not in self.get_deferred_fields() and not hasattr(self, "config"):
             return
-        alias = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
-        self._refresh_impl_config_fields(using=alias)
+        self._refresh_impl_config_fields()
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField):
                 continue
@@ -919,17 +898,15 @@ class ImplDefaultsMixin(models.Model):
                 normalized = impl.normalize_config(self.config)
                 setattr(self, "config", normalized)
 
-    def _refresh_impl_config_fields(self, *, using: str) -> None:
-        """Load deferred config and implementation selectors on the chosen alias."""
+    def _refresh_impl_config_fields(self) -> None:
+        """Load deferred config and implementation selectors together."""
 
-        refresh_deferred(
-            self,
-            using=using,
-            fields={
-                "config",
-                *(field.attname for field in self._meta.get_fields() if isinstance(field, ImplClassField)),
-            },
-        )
+        fields = self.get_deferred_fields() & {
+            "config",
+            *(field.attname for field in self._meta.get_fields() if isinstance(field, ImplClassField)),
+        }
+        if fields:
+            self.refresh_from_db(fields=sorted(fields))
 
     def set_impl_key(self, field_name: str, value: Any, *, default: str | None = None) -> bool:
         """Assign an impl key and return whether the stored key changed."""
@@ -947,17 +924,14 @@ class ImplDefaultsMixin(models.Model):
         field_name: str,
         *,
         provided: frozenset[str] = frozenset(),
-        using: str | None = None,
     ) -> set[str]:
         """Apply the selected impl's defaults for one impl field."""
 
-        alias = get_write_alias(type(self), using=using, instance=self)
         field = type(self).impl_field(field_name)
-        refresh_deferred(self, using=alias, fields=(field.attname,))
         key = getattr(self, field.attname, None)
         if not key:
             return set()
         impl = field.resolve_class(key)
         if isinstance(impl, type) and issubclass(impl, ImplBase):
-            return impl.materialize(self, provided=provided | {field.name, field.attname}, using=alias)
+            return impl.materialize(self, provided=provided | {field.name, field.attname})
         return set()

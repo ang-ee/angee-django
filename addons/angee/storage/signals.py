@@ -19,14 +19,12 @@ from django.db.models.signals import post_save
 from django.dispatch import Signal
 from rebac import system_context
 
-from angee.base.db import get_write_alias
-
 logger = logging.getLogger(__name__)
 
 file_finalized = Signal()
 """Sent (on commit) when a ``File`` flips to READY.
 
-Receives ``sender`` (the concrete file model), ``instance``, ``actor``, and the committed database alias ``using``.
+Receives ``sender`` (the concrete file model), ``instance``, and ``actor``.
 Rendition, virus-scan, extraction, and indexing addons subscribe here.
 """
 
@@ -41,15 +39,7 @@ def connect() -> None:
     )
 
 
-def create_trash_folder(
-    sender: type[Model],
-    instance: Model,
-    created: bool,
-    raw: bool = False,
-    *,
-    using: str | None = None,
-    **kwargs: Any,
-) -> None:
+def create_trash_folder(sender: type[Model], instance: Model, created: bool, raw: bool = False, **kwargs: Any) -> None:
     """Ensure each user owns exactly one Trash smart folder."""
 
     del kwargs
@@ -60,10 +50,9 @@ def create_trash_folder(
     except LookupError:
         # No composed concrete model (e.g. bare test settings) — nothing to own a Trash row.
         return
-    using = get_write_alias(sender, using=using, instance=instance)
     try:
         with system_context(reason="storage.trash_folder"):
-            folder_model._base_manager.db_manager(using).get_or_create(
+            folder_model._base_manager.get_or_create(
                 owner_id=instance.pk,
                 smart_kind=folder_model.SmartKind.TRASH,
                 is_virtual=True,

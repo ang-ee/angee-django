@@ -805,10 +805,6 @@ def test_oidc_email_match_fails_loud_without_people_scope(monkeypatch: pytest.Mo
             return []
 
     class Manager:
-        def db_manager(self, using: str) -> Manager:
-            assert using == "default"
-            return self
-
         def all(self) -> QuerySet:
             return QuerySet()
 
@@ -819,7 +815,7 @@ def test_oidc_email_match_fails_loud_without_people_scope(monkeypatch: pytest.Mo
     resolver = object.__new__(identity.OidcIdentityResolver)
 
     with pytest.raises(AttributeError, match="people"):
-        resolver._find_by_email("someone@example.com", using="default")
+        resolver._find_by_email("someone@example.com")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1192,7 +1188,7 @@ def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
     oidc_tables: None,
     deferred: bool,
 ) -> None:
-    """The invariant reads only its pinned alias, including deferred relations."""
+    """The sign-in invariant is enforced with loaded or deferred credential fields."""
 
     user = get_user_model().objects.create_user(username="oidc-only", email="oidc-only@example.com")
     oauth_client = _oauth_client()
@@ -1214,11 +1210,7 @@ def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
     if deferred:
         credential = Credential._base_manager.only("pk").get(pk=credential.pk)
 
-    class RejectUnboundReadRouter:
-        def db_for_read(self, model: Any, **hints: Any) -> str:
-            raise AssertionError(f"Unbound disconnect read: {model._meta.label}")
-
-    with override_settings(DATABASE_ROUTERS=[RejectUnboundReadRouter()]), pytest.raises(ValidationError) as exc_info:
+    with pytest.raises(ValidationError) as exc_info:
         Credential.objects.prepare_disconnect(credential)
 
     assert exc_info.value.code == "only_sign_in_method"

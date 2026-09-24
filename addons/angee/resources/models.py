@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.models import AngeeModel
@@ -48,14 +47,14 @@ class Resource(AngeeModel):
     objects = ResourceManager()
     """Manager with validate, load, and diff operations."""
 
-    def target_instance(self, *, using: str | None = None) -> models.Model | None:
+    def target_instance(self) -> models.Model | None:
         """Resolve this ledger's stored public identity through its model owner."""
 
         if not self.target_id:
             return None
-        alias = get_write_alias(type(self), using=using, instance=self)
+
         model = resolve_model(self.target_model)
-        return instance_from_public_id(model, self.target_id, queryset=model._default_manager.using(alias))
+        return instance_from_public_id(model, self.target_id)
 
     class Meta:
         """Django model options for the abstract resource ledger."""

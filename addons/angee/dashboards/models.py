@@ -12,7 +12,6 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
-from angee.base.db import get_write_alias, related_on
 from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
@@ -21,7 +20,6 @@ from angee.base.mixins import (
     ConditionalSharedReaderQuerySet,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
-from angee.base.permissions import require_authorization_database
 from angee.resources.mixins import ResourceLoadMixin
 
 DASHBOARD_SCHEMA_VERSION = 1
@@ -405,23 +403,13 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
             .first()
         )
 
-    def create_personal(
-        self,
-        owner: Any,
-        *,
-        name: str,
-        description: str = "",
-        client_creation_key: str,
-        using: str | None = None,
-    ) -> Any:
-        using = get_write_alias(self.model, using=using, bound=self)
-        require_authorization_database(using, operation="Dashboard creation authorization")
+    def create_personal(self, owner: Any, *, name: str, description: str = "", client_creation_key: str) -> Any:
         actor = self.check_create({"owner": (owner,)})
         if to_subject_ref(owner) != actor:
             raise PermissionDenied("A personal dashboard can only be created for the acting user.")
         if not client_creation_key:
             raise ValidationError({"client_creation_key": "A client creation key is required."})
-        existing = self.using(using).filter(owner=owner, client_creation_key=client_creation_key).first()
+        existing = self.filter(owner=owner, client_creation_key=client_creation_key).first()
         if existing is not None:
             return existing
         dashboard = self.model(
@@ -433,11 +421,11 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
             client_creation_key=client_creation_key,
         )
         try:
-            with transaction.atomic(using=using):
-                dashboard.full_clean_for_write(using=using)
-                dashboard.sudo(reason="dashboards.create_personal").save(using=using)
+            with transaction.atomic():
+                dashboard.full_clean()
+                dashboard.sudo(reason="dashboards.create_personal").save()
         except IntegrityError:
-            return self.using(using).get(owner=owner, client_creation_key=client_creation_key)
+            return self.get(owner=owner, client_creation_key=client_creation_key)
         return dashboard.with_actor(actor)
 
     def save_snapshot(
@@ -452,10 +440,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
         declaration_revision: str = "",
         name: str = "",
         description: str = "",
-        using: str | None = None,
     ) -> Any:
-        using = get_write_alias(self.model, using=using, bound=self)
-        require_authorization_database(using, operation="Dashboard snapshot authorization")
         canonical = canonical_dashboard_snapshot(snapshot)
         validate_dashboard_queries(canonical)
         actor = current_actor()
@@ -463,11 +448,11 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
             raise PermissionDenied("Dashboard snapshots require an acting user.")
         if scope not in {"personal", "addon", "resource"}:
             raise ValidationError({"scope": "Unknown dashboard scope."})
-        with transaction.atomic(using=using), system_context(reason="dashboards.save_snapshot"):
+        with transaction.atomic(), system_context(reason="dashboards.save_snapshot"):
             current = None
             if persisted_id is not None:
                 current = (
-                    cast(Any, self.model).system_queryset(using=using, lock=("self",))
+                    cast(Any, self.model).system_queryset(lock=("self",))
                     .filter(pk=persisted_id).first()
                 )
                 if current is None:
@@ -487,7 +472,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                     raise ValidationError({"scope": "Create personal dashboards before saving them."})
                 current = (
                     cast(Any, self.model)
-                    .system_queryset(using=using, lock=("self",))
+                    .system_queryset(lock=("self",))
                     .filter(
                         owner=owner,
                         scope=scope,
@@ -506,21 +491,21 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                     columns=canonical["columns"],
                     declaration_revision=declaration_revision,
                 )
-                current.full_clean_for_write(using=using)
+                current.full_clean()
                 try:
-                    with transaction.atomic(using=using):
-                        current.sudo(reason="dashboards.materialize").save(using=using)
+                    with transaction.atomic():
+                        current.sudo(reason="dashboards.materialize").save()
                 except IntegrityError as error:
                     raise DashboardConflictError() from error
 
-            if current.scope != "personal" and to_subject_ref(related_on(current, "owner", using=using)) != actor:
+            if current.scope != "personal" and to_subject_ref(current.owner) != actor:
                 raise PermissionDenied("Scoped dashboards can only be edited by their owner.")
             if not current.with_actor(actor).has_access("write"):
                 raise PermissionDenied("You cannot edit this dashboard.")
             widget_model = current._meta.get_field("widgets").related_model
             existing_widgets = {
                 widget.widget_key: widget
-                for widget in widget_model.system_queryset(using=using, lock=("self",)).filter(dashboard=current)
+                for widget in widget_model.system_queryset(lock=("self",)).filter(dashboard=current)
             }
             changed = current.columns != canonical["columns"] or current.declaration_revision != declaration_revision
             dashboard_fields: list[str] = []
@@ -552,48 +537,43 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                 }
                 if widget is None:
                     widget = widget_model(dashboard=current, widget_key=item["id"], **fields)
-                    widget.full_clean_for_write(using=using)
-                    widget.sudo(reason="dashboards.widget.create").save(using=using)
+                    widget.full_clean()
+                    widget.sudo(reason="dashboards.widget.create").save()
                     changed = True
                 else:
                     dirty = [field for field, value in fields.items() if getattr(widget, field) != value]
                     if dirty:
                         for field in dirty:
                             setattr(widget, field, fields[field])
-                        widget.full_clean_for_write(using=using)
-                        widget.sudo(reason="dashboards.widget.update").save(using=using, update_fields=dirty)
+                        widget.full_clean()
+                        widget.sudo(reason="dashboards.widget.update").save(update_fields=dirty)
                         changed = True
             for key, widget in existing_widgets.items():
                 if key not in seen and not widget.is_archived:
                     widget.is_archived = True
-                    widget.sudo(reason="dashboards.widget.archive").save(using=using, update_fields=["is_archived"])
+                    widget.sudo(reason="dashboards.widget.archive").save(update_fields=["is_archived"])
                     changed = True
             if changed:
                 current.columns = canonical["columns"]
                 current.declaration_revision = declaration_revision
                 current.revision += 1
                 current.sudo(reason="dashboards.save_snapshot").save(
-                    using=using,
                     update_fields=["columns", "declaration_revision", "revision", *dashboard_fields],
                 )
             return current.with_actor(actor)
 
-    def reset_snapshot(
-        self, dashboard: Any, *, expected_revision: int, using: str | None = None
-    ) -> None:
-        using = get_write_alias(self.model, using=using, bound=self, instance=dashboard)
-        require_authorization_database(using, operation="Dashboard reset authorization")
+    def reset_snapshot(self, dashboard: Any, *, expected_revision: int) -> None:
         actor = current_actor()
-        with transaction.atomic(using=using), system_context(reason="dashboards.reset_snapshot"):
-            locked = cast(Any, self.model).system_queryset(using=using, lock=("self",)).get(pk=dashboard.pk)
+        with transaction.atomic(), system_context(reason="dashboards.reset_snapshot"):
+            locked = cast(Any, self.model).system_queryset(lock=("self",)).get(pk=dashboard.pk)
             if locked.revision != expected_revision:
                 raise DashboardConflictError(locked.revision)
             if (
                 locked.scope == "personal" or actor is None
-                or to_subject_ref(related_on(locked, "owner", using=using)) != actor
+                or to_subject_ref(locked.owner) != actor
             ):
                 raise PermissionDenied("Only the owner can reset a scoped dashboard.")
-            locked.sudo(reason="dashboards.reset_snapshot").delete(using=using)
+            locked.sudo(reason="dashboards.reset_snapshot").delete()
 
 
 DashboardObjects = DashboardManager()
@@ -682,27 +662,23 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
 
         return self.owner_id is None
 
-    def set_personal_archived(
-        self, *, archived: bool, expected_revision: int, using: str | None = None
-    ) -> Any:
+    def set_personal_archived(self, *, archived: bool, expected_revision: int) -> Any:
         """Archive one personal dashboard under its revision lock and actor gate."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        require_authorization_database(using, operation="Dashboard archive authorization")
         if self.scope != self.Scope.PERSONAL:
             raise ValidationError("Only personal dashboards can be archived.")
         actor = self.actor()
         if not self.has_access("archive"):
             raise PermissionDenied("You cannot archive this dashboard.")
-        with transaction.atomic(using=using), system_context(reason="dashboards.archive"):
-            locked = type(self).system_queryset(using=using, lock=("self",)).get(pk=self.pk)
+        with transaction.atomic(), system_context(reason="dashboards.archive"):
+            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if locked.revision != expected_revision:
                 raise DashboardConflictError(locked.revision)
             if locked.is_archived != archived:
                 locked.is_archived = archived
                 locked.revision += 1
                 locked.sudo(reason="dashboards.archive").save(
-                    using=using, update_fields=["is_archived", "revision"]
+                    update_fields=["is_archived", "revision"]
                 )
         return locked.with_actor(actor)
 

@@ -21,14 +21,14 @@ print(response.usage.input_tokens, response.usage.output_tokens)
 ```
 
 `InferenceProvider.chat` accepts keyword-only `model=...`, `messages=...`,
-`model_settings=...`, `model_request_parameters=...`, `credential=...`, and `using=...`.
+`model_settings=...`, `model_request_parameters=...`, and `credential=...`.
 `InferenceModel.chat` resolves its wire model name and takes native messages as
 its first argument. It returns `pydantic_ai.messages.ModelResponse`.
 
-For structured output, call `model.require_usable(actor, role, uses=uses,
-using=alias)` at the entry of the authorized operation. Declare accepted model
-uses with `InferenceModelUse` members, then call `model.infer(messages, output_schema=schema,
-using=alias)`. `InferenceResult` exposes the native `response`, normalized
+For structured output, call `model.require_usable(actor, role, uses=uses)` at the
+entry of the authorized operation. Declare accepted model uses with
+`InferenceModelUse` members, then call `model.infer(messages, output_schema=schema)`.
+`InferenceResult` exposes the native `response`, normalized
 `usage`, and decoded `output` object. JSON text, fenced JSON, and native output
 tools share the agents decoder. Function-tool declarations return calls in the
 native response and leave `output` unset. A malformed structured response raises
@@ -40,7 +40,7 @@ failures. Declare tools with native
 calls remain response parts. Only a session runtime runs a tool loop. For async
 sessions, call `agent.inference_model()` from the synchronous Django boundary,
 then `async with binding as model` inside the runner. Custom backends implement
-`model(handle, *, credential=None, using=None)` and return a native model context. They do
+`model(handle, *, credential=None)` and return a native model context. They do
 not add a second request/response protocol. Client contexts close on normal
 completion, provider errors and cancellation.
 
@@ -70,7 +70,7 @@ configured, missing roles and exact deployment-identity mismatches are rejected.
 The effective endpoint comes from `InferenceBackend.endpoint` for both SDK
 clients and deployment approval. Authorization is limited to the default
 database because REBAC's field-backed checks do not accept a database alias.
-Provider and credential owners pass `using` explicitly after authorization.
+Django routers own provider and credential database routing.
 
 Provider success returns the serialized native `ModelResponse`, decoded
 `output`, and usage and routes `completed`. A terminal provider failure returns

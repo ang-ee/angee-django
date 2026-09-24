@@ -10,8 +10,6 @@ from rebac import system_context
 from rebac.actors import is_sudo
 from rebac.resources import model_resource_type
 
-from angee.base.db import get_write_alias
-
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
@@ -69,11 +67,10 @@ def read_scoped_queryset(
     return cast(models.QuerySet[_ModelT], with_action(action) if callable(with_action) else queryset)
 
 
-def write_scoped_queryset(model: type[_ModelT], *, using: str | None = None) -> models.QuerySet[_ModelT]:
-    """Return a writer-bound target queryset with REBAC row scope and unredacted fields."""
+def write_scoped_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
+    """Return a write target queryset with REBAC row scope and unredacted fields."""
 
     manager = model._default_manager
-    alias = get_write_alias(model, using=using, bound=manager)
     if _is_angee_model(model):
         if requires_angee_rebac_contract(model):
             queryset = cast(models.QuerySet[_ModelT], cast(Any, manager).for_write())
@@ -82,22 +79,20 @@ def write_scoped_queryset(model: type[_ModelT], *, using: str | None = None) -> 
     else:
         for_write = getattr(manager, "for_write", None)
         queryset = cast(models.QuerySet[_ModelT], for_write()) if callable(for_write) else manager.all()
-    return queryset.using(alias)
+    return queryset
 
 
 def system_queryset(
     model: type[_ModelT],
     *,
-    using: str | None = None,
     lock: tuple[str, ...] | None = None,
 ) -> models.QuerySet[_ModelT]:
     """Return the model's unscoped system queryset, with a third-party fallback."""
 
     owner = getattr(model, "system_queryset", None)
     if callable(owner):
-        return cast(models.QuerySet[_ModelT], owner(using=using, lock=lock))
+        return cast(models.QuerySet[_ModelT], owner(lock=lock))
     queryset = model._base_manager.all()
-    queryset = queryset.using(using) if using is not None else queryset
     system_context = getattr(queryset, "system_context", None)
     if callable(system_context):
         queryset = system_context(reason=f"{model._meta.label_lower}.system_queryset")

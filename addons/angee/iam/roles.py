@@ -37,9 +37,7 @@ from rebac.schema import (
     relation_is_writable,
 )
 
-from angee.base.db import get_write_alias
 from angee.base.identity import canonical_subject_ref, public_id_for, public_subject_ref
-from angee.base.permissions import require_authorization_database
 
 IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
@@ -376,13 +374,10 @@ def grant_role(
     role: str,
     caveat_name: str = "",
     caveat_context: dict[str, Any] | None = None,
-    using: str | None = None,
 ) -> None:
     """Grant one declared role to one existing supported IAM subject."""
 
-    using = get_write_alias(active_relationship_model(), using=using)
-    require_authorization_database(using, operation="IAM role grants")
-    with transaction.atomic(using=using):
+    with transaction.atomic():
         grant_membership(
             subject=validate_subject(subject),
             container=validate_role(role, grantable=True),
@@ -390,12 +385,10 @@ def grant_role(
             caveat_context=caveat_context,
         )
 
-def revoke_role(*, subject: str, role: str, caveat_name: str = "", using: str | None = None) -> bool:
+def revoke_role(*, subject: str, role: str, caveat_name: str = "") -> bool:
     """Revoke an exact role tuple while allowing stale subject and role ids."""
 
-    using = get_write_alias(active_relationship_model(), using=using)
-    require_authorization_database(using, operation="IAM role grants")
-    with transaction.atomic(using=using):
+    with transaction.atomic():
         return bool(
             revoke_membership(
                 subject=validate_subject(subject, require_existing=False),

@@ -18,7 +18,6 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac.managers import RebacManager
 
-from angee.base.db import get_write_alias
 from angee.base.models import AngeeManager, AngeeQuerySet
 
 
@@ -44,11 +43,10 @@ class FeedFollowQuerySet(AngeeQuerySet[Any]):
 class FeedFollowManager(RebacManager.from_queryset(FeedFollowQuerySet)):  # type: ignore[misc]
     """Owns the follow/unfollow writes over the ``(feed, handle)`` subscription."""
 
-    def follow(self, *, feed: Any, handle: Any, owner_id: Any = None, using: str | None = None) -> Any:
+    def follow(self, *, feed: Any, handle: Any, owner_id: Any = None) -> Any:
         """Open (or re-open) the follow of ``feed`` by ``handle``; idempotent."""
 
-        using = get_write_alias(self.model, using=using, bound=self)
-        follow, created = self.db_manager(using).get_or_create(
+        follow, created = self.get_or_create(
             feed_id=feed.pk,
             handle_id=handle.pk,
             defaults={"started_at": timezone.now(), "created_by_id": owner_id},
@@ -56,14 +54,13 @@ class FeedFollowManager(RebacManager.from_queryset(FeedFollowQuerySet)):  # type
         if not created and follow.ended_at is not None:
             follow.ended_at = None
             follow.started_at = timezone.now()
-            follow.save(using=using, update_fields=["ended_at", "started_at", "updated_at"])
+            follow.save(update_fields=["ended_at", "started_at", "updated_at"])
         return follow
 
-    def unfollow(self, *, feed: Any, handle: Any, using: str | None = None) -> int:
+    def unfollow(self, *, feed: Any, handle: Any) -> int:
         """Close the open follow of ``feed`` by ``handle``; returns rows closed."""
 
-        using = get_write_alias(self.model, using=using, bound=self)
-        return self.db_manager(using).filter(feed=feed, handle=handle, ended_at__isnull=True).update(
+        return self.filter(feed=feed, handle=handle, ended_at__isnull=True).update(
             ended_at=timezone.now(),
         )
 
@@ -71,7 +68,7 @@ class FeedFollowManager(RebacManager.from_queryset(FeedFollowQuerySet)):  # type
 class PostMetricsManager(AngeeManager):
     """Owns the one-to-one engagement-counter upsert for a message."""
 
-    def upsert(self, *, message: Any, metrics: Any, owner_id: Any = None, using: str | None = None) -> Any:
+    def upsert(self, *, message: Any, metrics: Any, owner_id: Any = None) -> Any:
         """Write the rolled-up engagement counters for ``message`` (idempotent).
 
         ``metrics`` is a :class:`~angee.posts.backends.ParsedMetrics`. Counters are a
@@ -79,8 +76,7 @@ class PostMetricsManager(AngeeManager):
         ``F()`` delta (unlike thread counters, which the ingest owner increments).
         """
 
-        using = get_write_alias(self.model, using=using, bound=self)
-        row, _created = self.db_manager(using).update_or_create(
+        row, _created = self.update_or_create(
             message_id=message.pk,
             defaults={
                 "view_count": metrics.view_count,
@@ -124,37 +120,22 @@ class QuotaManager(RebacManager.from_queryset(QuotaQuerySet)):  # type: ignore[m
     _DEFAULT_WINDOW = timedelta(days=1)
 
     def open_period(
-        self,
-        *,
-        integration: Any,
-        limit: int,
-        now: datetime | None = None,
-        window: timedelta | None = None,
-        using: str | None = None,
+        self, *, integration: Any, limit: int, now: datetime | None = None, window: timedelta | None = None
     ) -> Any:
         """Return the current ledger row for ``integration``, opening one if due."""
 
-        using = get_write_alias(self.model, using=using, bound=self)
         moment = now or timezone.now()
         span = window or self._DEFAULT_WINDOW
         epoch = datetime(1970, 1, 1, tzinfo=moment.tzinfo)
         period_start = epoch + ((moment - epoch) // span) * span
-        row, _created = self.db_manager(using).get_or_create(
+        row, _created = self.get_or_create(
             integration_id=integration.pk,
             period_start=period_start,
             defaults={"period_end": period_start + span, "quota_limit": limit},
         )
         return row
 
-    def consume(
-        self,
-        *,
-        integration: Any,
-        units: int,
-        limit: int,
-        now: datetime | None = None,
-        using: str | None = None,
-    ) -> bool:
+    def consume(self, *, integration: Any, units: int, limit: int, now: datetime | None = None) -> bool:
         """Atomically consume ``units`` from the current period; ``False`` if it would exceed.
 
         Bumps ``quota_used`` with an ``F()`` delta under a row lock so concurrent
@@ -162,14 +143,13 @@ class QuotaManager(RebacManager.from_queryset(QuotaQuerySet)):  # type: ignore[m
         when the budget is insufficient.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self)
         moment = now or timezone.now()
-        with transaction.atomic(using=using):
-            period = self.db_manager(using).open_period(integration=integration, limit=limit, now=moment)
-            locked = self.db_manager(using).locked_get(pk=period.pk)
+        with transaction.atomic():
+            period = self.open_period(integration=integration, limit=limit, now=moment)
+            locked = self.locked_get(pk=period.pk)
             if locked.quota_used + units > locked.quota_limit:
                 return False
-            self.db_manager(using).filter(pk=locked.pk).update(
+            self.filter(pk=locked.pk).update(
                 quota_used=models.F("quota_used") + units,
                 last_updated=moment,
             )

@@ -7,11 +7,10 @@ from typing import Any
 
 from django.apps import apps
 
-from angee.base.db import get_write_alias, related_on
 from angee.posts.backends import ParsedPost
 
 
-def land_posts(channel: Any, posts: list[ParsedPost], *, owner_id: Any, using: str | None = None) -> list[Any]:
+def land_posts(channel: Any, posts: list[ParsedPost], *, owner_id: Any) -> list[Any]:
     """Land public posts through messaging, then apply the posts-owned overlay.
 
     Message/thread/part persistence stays on ``Message.objects.ingest``. This
@@ -21,7 +20,6 @@ def land_posts(channel: Any, posts: list[ParsedPost], *, owner_id: Any, using: s
     """
 
     message_model = apps.get_model("messaging", "Message")
-    using = get_write_alias(message_model, using=using, instance=channel)
     thread_model = apps.get_model("messaging", "Thread")
     messages = message_model.objects.ingest(
         [
@@ -36,20 +34,12 @@ def land_posts(channel: Any, posts: list[ParsedPost], *, owner_id: Any, using: s
         modality=thread_model.Modality.PUBLIC_THREAD,
         visibility=thread_model.Visibility.PUBLIC,
         quote_edges=False,
-        using=using,
     )
-    _overlay_engagement(channel, posts, messages, owner_id=owner_id, using=using)
+    _overlay_engagement(channel, posts, messages, owner_id=owner_id)
     return messages
 
 
-def _overlay_engagement(
-    channel: Any,
-    posts: list[ParsedPost],
-    messages: list[Any],
-    *,
-    owner_id: Any,
-    using: str,
-) -> None:
+def _overlay_engagement(channel: Any, posts: list[ParsedPost], messages: list[Any], *, owner_id: Any) -> None:
     """Attach public payload and engagement to the rows messaging returned."""
 
     if not posts:
@@ -66,11 +56,11 @@ def _overlay_engagement(
     ]
 
     for message, post in landed:
-        _write_public_payload(message, post, using=using)
+        _write_public_payload(message, post)
         if post.metrics is not None:
-            metrics_model.objects.upsert(message=message, metrics=post.metrics, owner_id=owner_id, using=using)
+            metrics_model.objects.upsert(message=message, metrics=post.metrics, owner_id=owner_id)
 
-    handles = _resolve_reaction_handles(landed, handle_model, owner_id, using=using)
+    handles = _resolve_reaction_handles(landed, handle_model, owner_id)
     reaction_model.objects.attribute(
         (
             (message, handles[(reaction.handle.platform, reaction.handle.value)], reaction.reaction)
@@ -78,18 +68,17 @@ def _overlay_engagement(
             for reaction in post.reactions
         ),
         owner_id=owner_id,
-        using=using,
     )
 
-    targets = _resolve_relation_targets(landed, by_key, channel_id=channel.pk, using=using)
+    targets = _resolve_relation_targets(landed, by_key, channel_id=channel.pk)
     for message, post in landed:
         for relation in post.relations:
             target = targets.get((post.message.platform, relation.dst_external_id))
             if target is not None:
-                edge_model.objects.relate(message, target, kind=relation.kind, owner_id=owner_id, using=using)
+                edge_model.objects.relate(message, target, kind=relation.kind, owner_id=owner_id)
 
 
-def _resolve_reaction_handles(landed: list[Any], handle_model: Any, owner_id: Any, *, using: str) -> dict:
+def _resolve_reaction_handles(landed: list[Any], handle_model: Any, owner_id: Any) -> dict:
     """Upsert each distinct reactor handle once."""
 
     specs: dict[tuple[str, str], Any] = {}
@@ -104,13 +93,12 @@ def _resolve_reaction_handles(landed: list[Any], handle_model: Any, owner_id: An
             display_name=parsed.display_name,
             external_id=parsed.external_id,
             metadata=parsed.metadata,
-            using=using,
         )
         for key, parsed in specs.items()
     }
 
 
-def _resolve_relation_targets(landed: list[Any], by_key: dict, *, channel_id: Any, using: str) -> dict:
+def _resolve_relation_targets(landed: list[Any], by_key: dict, *, channel_id: Any) -> dict:
     """Key every cross-post target by platform and external id."""
 
     message_model = apps.get_model("messaging", "Message")
@@ -123,23 +111,23 @@ def _resolve_relation_targets(landed: list[Any], by_key: dict, *, channel_id: An
                 missing.setdefault(post.message.platform, set()).add(relation.dst_external_id)
     for platform, external_ids in missing.items():
         rows = list(
-            message_model.objects.db_manager(using).with_external_ids(sorted(external_ids)).filter(platform=platform)
+            message_model.objects.with_external_ids(sorted(external_ids)).filter(platform=platform)
         )
         for row in sorted(rows, key=lambda row: row.channel_id == channel_id):
             targets[(platform, row.external_id)] = row
     return targets
 
 
-def _write_public_payload(message: Any, post: ParsedPost, *, using: str) -> None:
+def _write_public_payload(message: Any, post: ParsedPost) -> None:
     """Fold parsed public-post fields onto the shared message/thread rows."""
 
     if message.is_original_post != post.is_original_post:
         message.is_original_post = post.is_original_post
-        message.save(using=using, update_fields=("is_original_post", "updated_at"))
-    thread = related_on(message, "thread", using=using)
+        message.save(update_fields=("is_original_post", "updated_at"))
+    thread = message.thread
     if thread is None:
         return
     subject_url = post.subject_url or ""
     if thread.subject_url != subject_url:
         thread.subject_url = subject_url
-        thread.save(using=using, update_fields=("subject_url", "updated_at"))
+        thread.save(update_fields=("subject_url", "updated_at"))

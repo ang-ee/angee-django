@@ -8,11 +8,9 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from rebac import PermissionDenied
 
-from angee.base.db import get_write_alias
 from angee.base.fields import enum_member_for
 from angee.base.mixins import ConditionalSharedReaderQuerySet, HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.permissions import require_authorization_database
 from angee.base.scoping import bind_actor
 from angee.parties.mixins import LinkSource
 
@@ -28,7 +26,7 @@ class GroupManager(AngeeManager.from_queryset(GroupQuerySet)):  # type: ignore[m
 class MembershipManager(AngeeManager):
     """Own confirmed manual roster writes and their role-grant reconciliation."""
 
-    def add_confirmed(self, *, group: Any, party: Any, role: Any, using: str | None = None) -> Any:
+    def add_confirmed(self, *, group: Any, party: Any, role: Any) -> Any:
         """Create or confirm one manual membership with the selected group role.
 
         The row and its derived REBAC grant commit in one transaction through the
@@ -36,15 +34,13 @@ class MembershipManager(AngeeManager):
         that durable row instead of competing with its unique group/party key.
         """
 
-        using = get_write_alias(self.model, using=using, bound=self, instance=group)
-        require_authorization_database(using, operation="Space membership authorization")
         role_member = enum_member_for(self.model.MembershipRole, role)
         if role_member is None:
             raise ValidationError({"role": ["Select a valid membership role."]})
 
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             membership = (
-                self.get_queryset().using(using)
+                self.get_queryset()
                 .lock_if_supported()
                 .filter(group=group, party=party)
                 .first()
@@ -58,7 +54,6 @@ class MembershipManager(AngeeManager):
                 membership.is_confirmed = True
                 membership.is_dismissed = False
                 membership.save(
-                    using=using,
                     update_fields=[
                         "role",
                         "confidence",
@@ -80,8 +75,8 @@ class MembershipManager(AngeeManager):
                 is_confirmed=True,
                 is_dismissed=False,
             )
-            membership.full_clean_for_write(using=using, validate_unique=False, validate_constraints=False)
+            membership.full_clean(validate_unique=False, validate_constraints=False)
             membership.sudo(reason="spaces.membership.add_confirmed")
-            membership.save(using=using)
+            membership.save()
             bind_actor(membership, actor)
             return membership

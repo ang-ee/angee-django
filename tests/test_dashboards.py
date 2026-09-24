@@ -190,7 +190,7 @@ def test_resource_reload_reconciles_unchanged_installed_readers(
     group = ResourceGroup(entry, DashboardTarget._meta.label, dataset, [1])
     for expected_created in (1, 0):
         result = DashboardResourceLedger.objects._import_groups(
-            (entry,), (group,), (), dry_run=False, addon_aliases={addon.label: addon.name}, using="default"
+            (entry,), (group,), (), dry_run=False, addon_aliases={addon.label: addon.name}
         )
         assert result.created == expected_created
         assert result.skipped == 1 - expected_created

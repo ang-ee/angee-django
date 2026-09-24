@@ -9,7 +9,6 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context
 
-from angee.base.db import refresh_deferred, related_on
 from angee.iam_integrate_oidc.errors import ONLY_SIGN_IN_METHOD
 from angee.integrate.credentials import CredentialKind
 
@@ -32,23 +31,21 @@ class CredentialOidc(models.Model):
 
         super().check_disconnect()
         credential = cast("Credential", self)
-        using = credential._state.db
-        assert using is not None, "Disconnect requires a persisted credential."
-        refresh_deferred(credential, using=using, fields=("kind",))
+        assert not credential._state.adding, "Disconnect requires a persisted credential."
+        if "kind" in credential.get_deferred_fields():
+            credential.refresh_from_db(fields=["kind"])
         if credential.kind != CredentialKind.OAUTH:
             return
-        oauth_client = related_on(credential, "oauth_client", using=using)
+        oauth_client = credential.oauth_client
         if oauth_client is None or not oauth_client.login_enabled:
             return
-        user = related_on(credential, "user", using=using)
+        user = credential.user
         assert user is not None
         if user.has_usable_password():
             return
         with system_context(reason="iam_integrate_oidc.unlink.guard"):
             account_count = (
-                type(credential)
-                .objects.db_manager(using)
-                .filter(
+                type(credential).objects.filter(
                     user_id=credential.user_id,
                     kind=CredentialKind.OAUTH,
                     oauth_client__login_enabled=True,

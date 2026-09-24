@@ -248,9 +248,8 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
     related = SimpleNamespace(pk=7)
     calls: dict[str, Any] = {}
 
-    def fake_write_queryset(model: type[models.Model], *, using: str | None = None) -> object:
+    def fake_write_queryset(model: type[models.Model]) -> object:
         calls["write_model"] = model
-        calls["using"] = using
         return sentinel_queryset
 
     def fake_instance_from_public_id(
@@ -267,13 +266,12 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
 
-    assert backend._decode_public_id_fields({"owner": "pub-owner", "name": "Row"}, using="parent_writer") == {
+    assert backend._decode_public_id_fields({"owner": "pub-owner", "name": "Row"}) == {
         "owner_id": related.pk,
         "name": "Row",
     }
     assert calls == {
         "write_model": ManagedThing,
-        "using": "parent_writer",
         "decode": (ManagedThing, "pub-owner", sentinel_queryset),
     }
 

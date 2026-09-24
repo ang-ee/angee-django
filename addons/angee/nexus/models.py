@@ -30,7 +30,6 @@ from django.db import models
 from rebac import current_actor
 
 from angee.base.actors import actor_user_id
-from angee.base.db import get_write_alias
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeModel
 from angee.nexus.managers import CadenceManager, TieManager
@@ -188,20 +187,19 @@ class Cadence(SqidMixin, AngeeModel):
 
         return f"cadence:{self.user_id}:{self.party_id}"
 
-    def derive_touch_due(self, *, using: str | None = None) -> datetime.datetime | None:
+    def derive_touch_due(self) -> datetime.datetime | None:
         """Derive the next due date from the viewer's party edge."""
 
         if self.user_id is None or self.party_id is None:
             return None
-        using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
         party_model = apps.get_model("parties", "Party")
-        viewer = party_model.objects.db_manager(using).identity_for_user_id(self.user_id)
+        viewer = party_model.objects.identity_for_user_id(self.user_id)
         if viewer is None or viewer.pk == self.party_id:
             return None
         tie_model = apps.get_model("nexus", "Tie")
         party_a_id, party_b_id = sorted((viewer.pk, self.party_id))
         last_at = (
-            tie_model._base_manager.using(using).filter(party_a_id=party_a_id, party_b_id=party_b_id)
+            tie_model._base_manager.filter(party_a_id=party_a_id, party_b_id=party_b_id)
             .values_list("last_interaction_at", flat=True)
             .first()
         )
@@ -209,18 +207,16 @@ class Cadence(SqidMixin, AngeeModel):
             return None
         return last_at + datetime.timedelta(days=self.cadence_days)
 
-    def refresh_touch_due(self, *, using: str | None = None) -> None:
+    def refresh_touch_due(self) -> None:
         """Recompute and persist the server-owned due date."""
 
-        using = get_write_alias(type(self), using=using, instance=self)
-        self._state.db = using
         touch_due_at = self.derive_touch_due()
         if self.touch_due_at == touch_due_at:
             return
         self.touch_due_at = touch_due_at
-        super().save(using=using, update_fields=["touch_due_at", "updated_at"])
+        super().save(update_fields=["touch_due_at", "updated_at"])
 
-    def _default_user(self, *, using: str) -> None:
+    def _default_user(self) -> None:
         """Bind a blank user relation to the authenticated REBAC actor."""
 
         if self.user_id is not None:
@@ -229,7 +225,7 @@ class Cadence(SqidMixin, AngeeModel):
         if user_id is None:
             raise ValidationError({"user": "An authenticated user is required."})
         user_model = type(self)._meta.get_field("user").related_model
-        user = user_model._base_manager.using(using).filter(pk=user_id).first()
+        user = user_model._base_manager.filter(pk=user_id).first()
         if user is None:
             raise ValidationError({"user": "The authenticated user no longer exists."})
         self.user = user
@@ -237,18 +233,13 @@ class Cadence(SqidMixin, AngeeModel):
     def clean(self) -> None:
         """Supply the required user after native validation of authored fields."""
 
-        using = get_write_alias(type(self), using=self._state.db, instance=self)
-        self._state.db = using
-        self._default_user(using=using)
+        self._default_user()
         super().clean()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Refresh the server-owned due date whenever cadence intent changes."""
 
-        using = get_write_alias(type(self), using=kwargs.get("using"), instance=self)
-        kwargs["using"] = using
-        self._state.db = using
-        self._default_user(using=using)
+        self._default_user()
         self.touch_due_at = self.derive_touch_due()
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:

@@ -346,10 +346,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             ),
             local_manifest.name: (local_manifest, tmp_path / "unavailable"),
         }
-        count_aliases = []
-
-        def resource_counts(*, using):
-            count_aliases.append(using)
+        def resource_counts():
             return {loaded.name: 7, "fakeaddon.base": 99}
 
         patch.setattr(platform_models, "available_addons", lambda _dirs: available)
@@ -388,14 +385,13 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
                 vcs_path="addons/unavailable",
             )
 
-            addon.objects.reconcile_from_registry("default", desired=frozenset({loaded.name}))
+            addon.objects.reconcile_from_registry(desired=frozenset({loaded.name}))
 
             enabled = addon.objects.get(name=loaded.name)
             disabled = addon.objects.get(name="fakeaddon.base")
             historical.refresh_from_db()
             remote.refresh_from_db()
             materialised.refresh_from_db()
-        assert count_aliases == ["default"]
         assert (enabled.state, enabled.source, enabled.kind) == (
             addon.State.ENABLED,
             addon.Source.LOCAL,
@@ -460,7 +456,7 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
         before = tuple(apps.get_app_configs())
 
         with system_context(reason="test.platform.disabled-native-config"):
-            addon.objects.reconcile_from_registry("default", desired=frozenset({declaration}))
+            addon.objects.reconcile_from_registry(desired=frozenset({declaration}))
             row = addon.objects.get(name=manifest.name)
             preview = addon.objects.change_preview(manifest.name, "install")
 
@@ -475,7 +471,7 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
         assert tuple(apps.get_app_configs()) == before
 
         with system_context(reason="test.platform.unknown-desired-preserves-pending"):
-            addon.objects.reconcile_from_registry("default", desired=None)
+            addon.objects.reconcile_from_registry(desired=None)
             row.refresh_from_db()
         assert row.pending is True
 
@@ -515,35 +511,7 @@ def resource_model(monkeypatch):
         yield Resource
 
 
-def test_resource_counts_forward_the_requested_database_alias(monkeypatch, resource_model) -> None:
-    resource = resource_model
-    queryset_type = type(resource.objects.all())
-    aliases = []
-    routing = []
-
-    def counts_by_addon(queryset):
-        aliases.append(queryset.db)
-        return {"example.addon": 3}
-
-    def allow_migrate_model(alias, model):
-        routing.append((alias, model))
-        return True
-
-    monkeypatch.setattr(queryset_type, "counts_by_addon", counts_by_addon)
-    monkeypatch.setattr(platform_models.composed.router, "allow_migrate_model", allow_migrate_model)
-    monkeypatch.setattr(
-        platform_models.composed,
-        "connections",
-        {"catalogue": SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: [resource._meta.db_table]))},
-    )
-
-    assert platform_models.composed.resource_counts(using="catalogue") == {"example.addon": 3}
-    assert aliases == ["catalogue"]
-    assert routing == [("catalogue", resource)]
-
-
-@pytest.mark.parametrize("routed_here", [False, True])
-def test_resource_counts_tolerate_routed_away_or_uncreated_ledger(monkeypatch, resource_model, routed_here) -> None:
+def test_resource_counts_tolerate_uncreated_ledger(monkeypatch, resource_model) -> None:
     resource = resource_model
     queryset_type = type(resource.objects.all())
     queried = []
@@ -553,14 +521,13 @@ def test_resource_counts_tolerate_routed_away_or_uncreated_ledger(monkeypatch, r
         raise AssertionError("a missing ledger must not be queried")
 
     monkeypatch.setattr(queryset_type, "counts_by_addon", unavailable)
-    monkeypatch.setattr(platform_models.composed.router, "allow_migrate_model", lambda alias, model: routed_here)
     monkeypatch.setattr(
         platform_models.composed,
-        "connections",
-        {"catalogue": SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: []))} if routed_here else {},
+        "connection",
+        SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: [])),
     )
 
-    assert platform_models.composed.resource_counts(using="catalogue") == {}
+    assert platform_models.composed.resource_counts() == {}
     assert queried == []
 
 
@@ -573,15 +540,14 @@ def test_resource_counts_propagate_database_failures(monkeypatch, resource_model
         raise DatabaseError("ledger unavailable")
 
     monkeypatch.setattr(type(resource.objects.all()), "counts_by_addon", unavailable)
-    monkeypatch.setattr(platform_models.composed.router, "allow_migrate_model", lambda alias, model: True)
     monkeypatch.setattr(
         platform_models.composed,
-        "connections",
-        {"catalogue": SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: [resource._meta.db_table]))},
+        "connection",
+        SimpleNamespace(introspection=SimpleNamespace(table_names=lambda: [resource._meta.db_table])),
     )
 
     with pytest.raises(DatabaseError, match="ledger unavailable"):
-        platform_models.composed.resource_counts(using="catalogue")
+        platform_models.composed.resource_counts()
 
 
 @pytest.mark.parametrize("addon_count", [1, 3])
@@ -600,10 +566,10 @@ def test_unknown_desired_reads_pending_flags_once(platform_tables, tmp_path, mon
             addon.objects.all().delete()
             for name, value in pending.items():
                 addon.objects.create(name=name, pending=value)
-            pending_sql = str(addon.objects.using("default").values_list("name", "pending").query)
+            pending_sql = str(addon.objects.values_list("name", "pending").query)
 
             with CaptureQueriesContext(connection) as queries:
-                addon.objects.reconcile_from_registry("default", desired=None)
+                addon.objects.reconcile_from_registry(desired=None)
 
             assert sum(query["sql"] == pending_sql for query in queries) == 1
             assert dict(addon.objects.values_list("name", "pending")) == pending
@@ -668,7 +634,7 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
         (tmp_path / "settings.yaml").write_text(f"INSTALLED_APPS:\n  - {root.name}\n")
 
         with system_context(reason="test.platform.loaded-root-pending"):
-            addon.objects.reconcile_from_registry("default", desired=frozenset())
+            addon.objects.reconcile_from_registry(desired=frozenset())
             root_row = addon.objects.get(name=root.name)
             dependency_row = addon.objects.get(name=dependency.name)
             assert root_row.pending is True
@@ -681,7 +647,7 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
             assert "required" in refused.refusal
             assert addon.objects.change_preview(root.name, "disable").can_apply is True
 
-            addon.objects.reconcile_from_registry("default", desired=frozenset({root.name}))
+            addon.objects.reconcile_from_registry(desired=frozenset({root.name}))
             root_row.refresh_from_db()
             assert root_row.pending is False
 

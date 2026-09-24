@@ -15,7 +15,6 @@ from typing import Any, ClassVar, cast
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 
-from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import StateField
 
 
@@ -83,33 +82,26 @@ class Stage(models.Model):
         return cast(Any, field)
 
     @classmethod
-    def for_container(cls, container: models.Model, *, using: str | None = None) -> models.QuerySet[Any]:
+    def for_container(cls, container: models.Model) -> models.QuerySet[Any]:
         """Return every stage configured for ``container`` in pipeline order."""
 
-        using = get_write_alias(cls, using=using, instance=container)
         cls.container_field()
-        queryset = cls._base_manager.db_manager(using).all()
+        queryset = cls._base_manager.all()
         sudo = getattr(queryset, "sudo", None)
         if callable(sudo):
             queryset = sudo(reason="base.stage.for_container")
         return queryset.filter(**{cls.container_field_name: container}).order_by("position", "pk")
 
     @classmethod
-    def resolve_default(cls, container: models.Model, *, using: str | None = None) -> Any | None:
+    def resolve_default(cls, container: models.Model) -> Any | None:
         """Return the container's configured default stage, or its first stage.
 
         The container is the single owner of an explicit default.  A stage model
         never carries an ``is_default`` flag; if no explicit default is set, the
         deterministic ordered first row is the primitive's fallback.
-        The caller must supply a container already pinned to the operation's
-        database; resolving a stage never changes a foreign object's affinity.
         """
 
-        using = get_write_alias(cls, using=using, instance=container)
-        if container._state.db != using:
-            raise ValueError("Pin the stage container to the operation database before resolving its default.")
         default_attname = f"{cls.default_stage_field_name}_id"
-        refresh_deferred(container, using=using, fields=(default_attname,))
         default_id = getattr(container, default_attname, None)
         stages = cls.for_container(container)
         if default_id is not None:
@@ -167,25 +159,22 @@ class StagedModelMixin(models.Model):
             )
         return related_model
 
-    def resolve_default_stage(self, *, using: str | None = None) -> Stage | None:
+    def resolve_default_stage(self) -> Stage | None:
         """Resolve this record's container-owned default stage."""
 
-        using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
-        container = self._stage_container(using=using)
+        container = self._stage_container()
         if container is None:
             return None
         return cast(Stage | None, self.stage_model().resolve_default(container))
 
-    def validate_stage_scope(self, *, using: str | None = None) -> None:
+    def validate_stage_scope(self) -> None:
         """Reject a stage that does not belong to this record's container."""
 
-        using = get_write_alias(type(self), using=using if using is not None else self._state.db, instance=self)
         stage_attname = f"{self.stage_field_name}_id"
-        refresh_deferred(self, using=using, fields=(stage_attname,))
         stage_id = getattr(self, stage_attname, None)
         if stage_id is None:
             return
-        container = self._stage_container(using=using)
+        container = self._stage_container()
         if container is None:
             raise ValidationError({self.stage_container_field_name: "A staged record requires its stage container."})
         stage_model = self.stage_model()
@@ -198,7 +187,7 @@ class StagedModelMixin(models.Model):
         super().clean()
         self.validate_stage_scope()
 
-    def _stage_container(self, *, using: str) -> models.Model | None:
+    def _stage_container(self) -> models.Model | None:
         """Return the declared container object, failing fast on a bad convention."""
 
         if not self.stage_container_field_name:
@@ -210,4 +199,4 @@ class StagedModelMixin(models.Model):
                 f"{self._meta.label}.stage_container_field_name names unknown field "
                 f"{self.stage_container_field_name!r}."
             ) from error
-        return related_on(self, self.stage_container_field_name, using=using)
+        return getattr(self, self.stage_container_field_name)

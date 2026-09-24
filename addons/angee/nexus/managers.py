@@ -13,7 +13,6 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rebac import current_actor
 
-from angee.base.db import get_write_alias
 from angee.base.models import AngeeManager, AngeeQuerySet
 
 
@@ -547,17 +546,13 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
         party_a_id, party_b_id = sorted((first.pk, second.pk))
         return self.filter(party_a_id=party_a_id, party_b_id=party_b_id).first()
 
-    def recompute(
-        self, party_ids: Iterable[Any] | None = None, *, now: Any | None = None, using: str | None = None,
-    ) -> int:
+    def recompute(self, party_ids: Iterable[Any] | None = None, *, now: Any | None = None) -> int:
         """Replace derived edges from addressed messages, replies, and mentions."""
 
-        using = get_write_alias(self.model, using=using, bound=self)
-        manager = self.db_manager(using)
         now = now or timezone.now()
         selected_ids = set(party_ids) if party_ids is not None else None
         rollups: dict[tuple[Any, Any], _PairRollup] = {}
-        for rows in self._derivation_rows(selected_ids, using=using):
+        for rows in self._derivation_rows(selected_ids):
             for message_id, thread_id, source_id, target_id, platform, interaction_at in rows:
                 pair = tuple(sorted((source_id, target_id)))
                 rollups.setdefault(pair, _PairRollup()).add(
@@ -570,11 +565,11 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
                 )
 
         live_pairs = set(rollups)
-        with transaction.atomic(using=using):
+        with transaction.atomic():
             for (party_a_id, party_b_id), rollup in rollups.items():
                 platforms = sorted(rollup.platforms)
                 message_count = len(rollup.message_ids)
-                manager.update_or_create(
+                self.update_or_create(
                     party_a_id=party_a_id,
                     party_b_id=party_b_id,
                     defaults={
@@ -602,7 +597,7 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
                     },
                 )
 
-            candidates = manager.all()
+            candidates = self.all()
             if selected_ids is not None:
                 candidates = candidates.filter(
                     models.Q(party_a_id__in=selected_ids) | models.Q(party_b_id__in=selected_ids)
@@ -613,11 +608,11 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
                 if (party_a_id, party_b_id) not in live_pairs
             ]
             if stale_ids:
-                manager.filter(pk__in=stale_ids).delete()
-            apps.get_model("nexus", "Cadence").objects.db_manager(using).refresh_touch_due()
+                self.filter(pk__in=stale_ids).delete()
+            apps.get_model("nexus", "Cadence").objects.refresh_touch_due()
         return len(live_pairs)
 
-    def _derivation_rows(self, party_ids: set[Any] | None, *, using: str) -> tuple[Any, Any, Any]:
+    def _derivation_rows(self, party_ids: set[Any] | None) -> tuple[Any, Any, Any]:
         """Return one projected queryset for each deliberate-interaction source."""
 
         participant_model = apps.get_model("messaging", "Participant")
@@ -625,7 +620,7 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
         edge_model = apps.get_model("messaging", "MessageEdge")
         interaction_at = Coalesce("message__sent_at", "message__created_at")
         addressed = (
-            participant_model._base_manager.using(using).filter(
+            participant_model._base_manager.filter(
                 message__isnull=False,
                 role__in=(
                     participant_model.ParticipantRole.TO,
@@ -657,7 +652,7 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
 
         reply_at = Coalesce("sent_at", "created_at")
         replies = (
-            message_model._base_manager.using(using).filter(
+            message_model._base_manager.filter(
                 sender__party__isnull=False,
                 parent__sender__party__isnull=False,
                 thread__attachments__isnull=True,
@@ -684,7 +679,7 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
 
         mention_at = Coalesce("src__sent_at", "src__created_at")
         mentions = (
-            edge_model._base_manager.using(using).filter(
+            edge_model._base_manager.filter(
                 kind=edge_model.EdgeKind.MENTION,
                 src__sender__party__isnull=False,
                 dst__sender__party__isnull=False,
@@ -715,10 +710,9 @@ class TieManager(AngeeManager.from_queryset(TieQuerySet)):  # type: ignore[misc]
 class CadenceManager(AngeeManager):
     """Own derived due-date refreshes for the human cadence collection."""
 
-    def refresh_touch_due(self, *, using: str | None = None) -> None:
+    def refresh_touch_due(self) -> None:
         """Refresh every cadence after the derived edge collection changes."""
 
-        using = get_write_alias(self.model, using=using, bound=self)
-        cadences = list(self.db_manager(using).all())
+        cadences = list(self.all())
         for cadence in cadences:
             cadence.refresh_touch_due()

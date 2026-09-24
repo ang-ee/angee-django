@@ -45,7 +45,6 @@ from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
 from sqids import Sqids
 
-from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.scoping import system_queryset
 
 
@@ -287,9 +286,7 @@ class FractionalRankField(models.FloatField):
         Hasura input generation uses Django's field-owned ``has_default`` fact
         to decide whether an insert column may be omitted.  A fractional rank
         has no context-free literal default; ``pre_save`` supplies its
-        contextual append rank when omitted. Explicitly routed writers must
-        preallocate through get_append_rank_for_instance(using=...) because
-        Django does not pass their alias to pre_save.
+        contextual append rank when omitted.
         """
 
         return True
@@ -307,11 +304,7 @@ class FractionalRankField(models.FloatField):
         super().validate(value, model_instance)
 
     def pre_save(self, model_instance: models.Model, add: bool) -> float:
-        """Honor an explicit rank or append using the instance/write-router alias.
-
-        Django does not provide the save/compiler alias to this hook; explicit
-        alias overrides must allocate and assign the rank before saving.
-        """
+        """Honor an explicit rank or append within the instance's context."""
 
         value = super().pre_save(model_instance, add)
         if value is not None:
@@ -320,26 +313,20 @@ class FractionalRankField(models.FloatField):
         setattr(model_instance, self.attname, rank)
         return rank
 
-    def get_append_rank_for_instance(self, instance: models.Model, *, using: str | None = None) -> float:
-        """Read the context's next rank on the selected write database.
-
-        Set this result on the rank attribute before save(using=...) or an
-        alias-bound bulk_create when choosing a database explicitly. Django's
-        Field.pre_save receives no using argument, so implicit allocation cannot
-        observe a save alias that differs from the instance/write-router alias.
-        The arithmetic-only get_append_rank/get_rank_between need no database.
-        """
+    def get_append_rank_for_instance(self, instance: models.Model) -> float:
+        """Read the next rank within the instance's unique context."""
 
         model = type(instance)
-        database = get_write_alias(model, using=using, instance=instance)
         context_fields = self._unique_context_fields(model)
-        refresh_deferred(instance, using=database, fields=(field.attname for field in context_fields))
+        deferred = instance.get_deferred_fields() & {field.attname for field in context_fields}
+        if deferred:
+            instance.refresh_from_db(fields=sorted(deferred))
         context = {
             context_field.attname: getattr(instance, context_field.attname)
             for context_field in context_fields
         }
         previous = (
-            system_queryset(model, using=database, lock=())
+            system_queryset(model, lock=())
             .filter(**context)
             .order_by(f"-{self.name}")
             .values_list(self.name, flat=True)
@@ -426,7 +413,7 @@ class FractionalRankField(models.FloatField):
             )
         return candidate
 
-    def rebalance(self, *, context: Mapping[str, Any], using: str | None = None) -> int:
+    def rebalance(self, *, context: Mapping[str, Any]) -> int:
         """Rewrite this field to a clean spread inside one exact context.
 
         Returns the number of rows whose rank changed. Rows are read in committed
@@ -440,10 +427,9 @@ class FractionalRankField(models.FloatField):
         if model is None or self.name is None:
             raise ImproperlyConfigured("FractionalRankField must be bound to a model before rebalance().")
         context_filter = self._context_filter(context)
-        database = get_write_alias(model, using=using)
 
-        with transaction.atomic(using=database):
-            writer = system_queryset(model, using=database, lock=()).filter(**context_filter)
+        with transaction.atomic():
+            writer = system_queryset(model, lock=()).filter(**context_filter)
             rows = list(writer.only(model._meta.pk.name, self.name).order_by(self.name, model._meta.pk.name))
             current = [self._coerce_endpoint(getattr(row, self.attname), name=self.attname) for row in rows]
             clean = self._clean_ranks(len(rows))

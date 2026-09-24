@@ -10,7 +10,6 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rebac import bearer_token
 
-from angee.base.db import get_write_alias
 from angee.storage import exceptions
 from angee.storage.uploads import (
     DOWNLOAD_TOKEN_HEADER,
@@ -40,10 +39,9 @@ def upload(request: HttpRequest) -> JsonResponse:
     # must not have the JWT mistaken for the upload token.
     token = request.headers.get(UPLOAD_TOKEN_HEADER, "") or str(request.GET.get("token") or "") or bearer_token(request)
     file_model = apps.get_model("storage", "File")
-    using = get_write_alias(file_model)
     try:
-        row = file_model.objects.for_upload_token(token, using=using)
-        row.receive_bytes(request, using=using)
+        row = file_model.objects.for_upload_token(token)
+        row.receive_bytes(request)
     except exceptions.UploadError as error:
         return JsonResponse({"error": str(error), "code": error.code}, status=error.status_code)
     return JsonResponse({"id": str(row.sqid)})

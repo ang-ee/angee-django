@@ -20,27 +20,27 @@ class GrantCounts:
     registry_relationships: int
     resources: int
 
-def grant_counts(*, using: str) -> GrantCounts:
+def grant_counts() -> GrantCounts:
     """Return counts for both local relationship stores and their registry."""
 
     if app_settings.REBAC_BACKEND != "local":
         raise CommandError("reset_rebac_grants supports only the local REBAC backend")
     return GrantCounts(
-        relationships=Relationship._base_manager.using(using).count(),
-        registry_relationships=RelationshipRegistry._base_manager.using(using).count(),
-        resources=RebacResource._base_manager.using(using).count(),
+        relationships=Relationship._base_manager.count(),
+        registry_relationships=RelationshipRegistry._base_manager.count(),
+        resources=RebacResource._base_manager.count(),
     )
 
 
-def reset_rebac_grants(*, using: str) -> GrantCounts:
+def reset_rebac_grants() -> GrantCounts:
     """Atomically clear both local grant stores and their identity registry."""
 
-    with transaction.atomic(using=using):
-        counts = grant_counts(using=using)
-        Relationship._base_manager.using(using).all().delete()
-        RelationshipRegistry._base_manager.using(using).all().delete()
-        RebacResource._base_manager.using(using).all().delete()
-        transaction.on_commit(mark_relationships_changed, using=using)
+    with transaction.atomic():
+        counts = grant_counts()
+        Relationship._base_manager.all().delete()
+        RelationshipRegistry._base_manager.all().delete()
+        RebacResource._base_manager.all().delete()
+        transaction.on_commit(mark_relationships_changed)
     return counts
 
 
@@ -56,12 +56,10 @@ class Command(BaseCommand):
             action="store_true",
             help="Discard both local relationship stores and their resource registry.",
         )
-        parser.add_argument("--database", default="default", help="Database alias to reset.")
 
     def handle(self, *args: Any, **options: Any) -> None:
         del args
-        using = options["database"]
-        counts = reset_rebac_grants(using=using) if options["apply"] else grant_counts(using=using)
+        counts = reset_rebac_grants() if options["apply"] else grant_counts()
         action = "discarded" if options["apply"] else "would discard"
         self.stdout.write(
             f"REBAC grant reset {action}: {counts.relationships} denormalized relationships, "

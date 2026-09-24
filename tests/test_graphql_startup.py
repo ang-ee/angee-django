@@ -120,7 +120,7 @@ def test_graphql_startup_discovers_publishers_without_building_schema(tmp_path: 
         from django.core.checks.registry import registry
         from django.db.models.signals import post_delete, post_save
         from cold_graphql_addon.models import PublishedNote
-        from angee.graphql.checks import check_graphql_schemas
+        from angee.graphql.checks import check_graphql_schemas, check_rebac_database
         from angee.graphql.schema import GraphQLSchemas
 
         with redirect_stdout(io.StringIO()):
@@ -133,6 +133,7 @@ def test_graphql_startup_discovers_publishers_without_building_schema(tmp_path: 
         config.ready()
         config.ready()
         assert sum(check is check_graphql_schemas for check in registry.registered_checks) == 1
+        assert sum(check is check_rebac_database for check in registry.registered_checks) == 1
         assert builds == [], f"check registration constructed Strawberry schemas: {builds}"
 
         schemas = GraphQLSchemas.from_discovery()

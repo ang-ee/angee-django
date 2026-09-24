@@ -599,11 +599,9 @@ def test_connect_account_complete_uses_bounded_provider_error_message(
         code: str,
         state_token: str,
         redirect_uri: str,
-        using: str | None = None,
     ) -> Any:
         del code, state_token, redirect_uri
         assert selected_oauth_client.pk == oauth_client.pk
-        assert using == "default"
         raise OAuthFlowError(
             "token_exchange_failed",
             429,
@@ -1122,14 +1120,14 @@ def test_credential_crud_create_delete_are_admin_only(
         assert credential.kind == CredentialKind.STATIC_TOKEN
         assert credential.oauth_client_id is None
     credential_id = str(credential.sqid)
-    scheduled: list[tuple[Any, str | None, bool]] = []
+    scheduled: list[tuple[Any, bool]] = []
     revoked: list[Any] = []
     monkeypatch.setattr(
         integrate_schema.transaction,
         "on_commit",
-        lambda callback, using=None, robust=False: scheduled.append((callback, using, robust)),
+        lambda callback, robust=False: scheduled.append((callback, robust)),
     )
-    monkeypatch.setattr(Credential, "revoke_remote", lambda credential, *, using=None: revoked.append(credential.pk))
+    monkeypatch.setattr(Credential, "revoke_remote", lambda credential: revoked.append(credential.pk))
 
     delete_credential = """
         mutation DeleteCredential($id: ID!) {
@@ -1147,8 +1145,7 @@ def test_credential_crud_create_delete_are_admin_only(
     assert deleted["total_deleted_count"] >= 1
     assert revoked == []
     assert len(scheduled) == 1
-    callback, using, robust = scheduled.pop()
-    assert using == "default"
+    callback, robust = scheduled.pop()
     assert robust is True
     callback()
     assert revoked == [credential.pk]

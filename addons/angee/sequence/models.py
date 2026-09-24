@@ -39,7 +39,6 @@ from django.db import models
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.db import get_write_alias
 from angee.base.fields import StateField
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeModel, role_anchor
 
@@ -55,7 +54,7 @@ class PeriodReset(models.TextChoices):
 class SequenceManager(AngeeManager):
     """Draws and previews formatted numbers from a keyed sequence."""
 
-    def next_value(self, key: str, *, on_date: date | None = None, using: str | None = None) -> str:
+    def next_value(self, key: str, *, on_date: date | None = None) -> str:
         """Reserve and return the next formatted number for ``key``.
 
         Runs the module's allocation protocol under ``system_context``: resolves
@@ -64,19 +63,16 @@ class SequenceManager(AngeeManager):
         the incremented value. Call this **inside the caller's transaction**
         (see the module docstring): the row lock is held until that transaction
         commits, so a rollback returns the number and concurrent draws serialize.
-        The caller's transaction must use the same write alias as this manager
-        or the explicit ``using`` argument.
         """
 
-        db = get_write_alias(self.model, using=using, bound=self)
         draw_date = on_date or timezone.localdate()
         with system_context(reason="sequence.next_value"):
-            sequence = self.using(db).get(key=key)
+            sequence = self.get(key=key)
             period = sequence.period_key(draw_date)
-            value = self._counter_model().objects.db_manager(db).draw(sequence, period)
+            value = self._counter_model().objects.draw(sequence, period)
             return sequence.format_number(value, draw_date)
 
-    def preview_next(self, key: str, *, on_date: date | None = None, using: str | None = None) -> str | None:
+    def preview_next(self, key: str, *, on_date: date | None = None) -> str | None:
         """Return the number ``next_value`` would draw, without reserving it.
 
         A non-locking, non-reserving peek for draft forms: returns ``None``
@@ -87,14 +83,13 @@ class SequenceManager(AngeeManager):
         the authoritative, fail-fast draw.
         """
 
-        alias = get_write_alias(self.model, using=using, bound=self)
         draw_date = on_date or timezone.localdate()
         with system_context(reason="sequence.preview_next"):
-            sequence = self.using(alias).filter(key=key).first()
+            sequence = self.filter(key=key).first()
             if sequence is None or not sequence.preview_enabled:
                 return None
             period = sequence.period_key(draw_date)
-            current = self._counter_model().objects.db_manager(alias).peek(sequence, period)
+            current = self._counter_model().objects.peek(sequence, period)
             return sequence.format_number(current + 1, draw_date)
 
     def _counter_model(self) -> type[models.Model]:
@@ -169,7 +164,7 @@ class SequenceCounterManager(AngeeManager):
     :class:`SequenceManager`, which brackets them in ``system_context``.
     """
 
-    def draw(self, sequence: models.Model, period: str, *, using: str | None = None) -> int:
+    def draw(self, sequence: models.Model, period: str) -> int:
         """Lock, create-if-absent, increment and return this counter's value.
 
         Steps 3–5 of the allocation protocol. ``lock_if_supported`` applies
@@ -179,8 +174,7 @@ class SequenceCounterManager(AngeeManager):
         re-read under the lock — landing on the one row and serializing there.
         """
 
-        db = get_write_alias(self.model, using=using, bound=self, instance=sequence)
-        counters = self.using(db)
+        counters = self.all()
         row = counters.lock_if_supported().filter(sequence=sequence, period=period).first()
         if row is None:
             counters.bulk_create(
@@ -192,7 +186,7 @@ class SequenceCounterManager(AngeeManager):
             # mid-draw), rather than silently returning None.
             row = counters.locked_get(sequence=sequence, period=period)
         row.value += 1
-        row.save(using=db, update_fields=["value", "updated_at"])
+        row.save(update_fields=["value", "updated_at"])
         return row.value
 
     def peek(self, sequence: models.Model, period: str) -> int:

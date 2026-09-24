@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import patch
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, connections, migrations, models
+from django.db import connection, migrations, models
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase, override_settings
 from rebac import ObjectRef, RelationshipTuple, SubjectRef
@@ -36,8 +36,6 @@ def _tuple(resource_id: str, *, caveat_name: str = "", expires_at=None):
 class HistoricalRelationshipTests(TransactionTestCase):
     """The helper writes exact historical tuples without a live manager."""
 
-    databases = {"default", "historical_relationships_other"}
-
     def test_resource_retarget_preserves_exact_grants_and_registry_identity(self) -> None:
         """Both stores merge identical grants or retain the old FK row in place."""
 
@@ -65,20 +63,20 @@ class HistoricalRelationshipTests(TransactionTestCase):
                     )
                     with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
                         apps = _historical_state().apps
-                        ensure_historical_relationships(apps, using=connection.alias, relationships=(original,))
+                        ensure_historical_relationships(apps, relationships=(original,))
                         if target_exists:
-                            ensure_historical_relationships(apps, using=connection.alias, relationships=(replacement,))
+                            ensure_historical_relationships(apps, relationships=(replacement,))
                         old_registry_pk = None
                         if storage == "registry":
-                            resources = apps.get_model("rebac", "RebacResource")._base_manager.using(connection.alias)
+                            resources = apps.get_model("rebac", "RebacResource")._base_manager
                             old_registry_pk = resources.get(
                                 resource_type=old.resource_type,
                                 resource_id=old.resource_id,
                             ).pk
-                        retarget_historical_resource(apps, using=connection.alias, old=old, new=new)
-                        retarget_historical_resource(apps, using=connection.alias, old=old, new=new)
+                        retarget_historical_resource(apps, old=old, new=new)
+                        retarget_historical_resource(apps, old=old, new=new)
                         model_name = "RelationshipRegistry" if storage == "registry" else "Relationship"
-                        rows = apps.get_model("rebac", model_name)._base_manager.using(connection.alias)
+                        rows = apps.get_model("rebac", model_name)._base_manager
                         if storage == "registry":
                             rows = rows.filter(
                                 resource_fk__resource_type=new.resource_type,
@@ -133,11 +131,11 @@ class HistoricalRelationshipTests(TransactionTestCase):
                 )
                 with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
                     apps = _historical_state().apps
-                    ensure_historical_relationships(apps, using=connection.alias, relationships=grants)
+                    ensure_historical_relationships(apps, relationships=grants)
                     with self.assertRaisesRegex(ImproperlyConfigured, "conflicting grant facts"):
-                        retarget_historical_resource(apps, using=connection.alias, old=old, new=new)
+                        retarget_historical_resource(apps, old=old, new=new)
                     model_name = "RelationshipRegistry" if storage == "registry" else "Relationship"
-                    rows = apps.get_model("rebac", model_name)._base_manager.using(connection.alias)
+                    rows = apps.get_model("rebac", model_name)._base_manager
                     for resource in (old, new):
                         lookup = (
                             {
@@ -167,16 +165,14 @@ class HistoricalRelationshipTests(TransactionTestCase):
                 with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
                     ensure_historical_relationships(
                         apps,
-                        using=connection.alias,
                         relationships=(requested, retained),
                     )
                     ensure_historical_relationships(
                         apps,
-                        using=connection.alias,
                         relationships=(requested,),
                     )
 
-                    rows = apps.get_model("rebac", model_name)._base_manager.using(connection.alias)
+                    rows = apps.get_model("rebac", model_name)._base_manager
                     resource_ids = (
                         requested.resource.resource_id,
                         retained.resource.resource_id,
@@ -195,7 +191,6 @@ class HistoricalRelationshipTests(TransactionTestCase):
 
                     delete_historical_relationships(
                         apps,
-                        using=connection.alias,
                         relationships=(requested,),
                     )
                     self.assertEqual(rows.count(), 1)
@@ -206,7 +201,7 @@ class HistoricalRelationshipTests(TransactionTestCase):
                     self.assertEqual(remaining.expires_at, retained.expires_at)
 
                     if storage == "registry":
-                        resources = apps.get_model("rebac", "RebacResource")._base_manager.using(connection.alias)
+                        resources = apps.get_model("rebac", "RebacResource")._base_manager
                         self.assertEqual(
                             resources.filter(
                                 resource_type="example/document",
@@ -222,7 +217,7 @@ class HistoricalRelationshipTests(TransactionTestCase):
         requested = _tuple("conflict")
         relationship = apps.get_model("rebac", "RelationshipRegistry")
         resource = apps.get_model("rebac", "RebacResource")
-        resources = resource._base_manager.using(connection.alias)
+        resources = resource._base_manager
         resource_row = resources.create(
             resource_type=requested.resource.resource_type,
             resource_id=requested.resource.resource_id,
@@ -231,7 +226,7 @@ class HistoricalRelationshipTests(TransactionTestCase):
             resource_type=requested.subject.subject_type,
             resource_id=requested.subject.subject_id,
         )
-        relationship._base_manager.using(connection.alias).create(
+        relationship._base_manager.create(
             resource_fk_id=resource_row.pk,
             subject_fk_id=subject_row.pk,
             relation=requested.relation,
@@ -243,7 +238,6 @@ class HistoricalRelationshipTests(TransactionTestCase):
         with self.assertRaisesRegex(ImproperlyConfigured, "conflicting exact facts"):
             ensure_historical_relationships(
                 apps,
-                using=connection.alias,
                 relationships=(requested,),
             )
 
@@ -252,7 +246,6 @@ class HistoricalRelationshipTests(TransactionTestCase):
         with self.assertRaisesRegex(ImproperlyConfigured, "storage shape is unsupported"):
             ensure_historical_relationships(
                 malformed_fields.apps,
-                using=connection.alias,
                 relationships=(requested,),
             )
 
@@ -267,43 +260,33 @@ class HistoricalRelationshipTests(TransactionTestCase):
         ):
             ensure_historical_relationships(
                 duplicate_prone.apps,
-                using=connection.alias,
                 relationships=(requested,),
             )
 
-    def test_every_historical_write_binds_the_supplied_alias(self) -> None:
-        """Both stores bind SQL and transactional lock requests to the caller alias."""
+    def test_historical_retarget_locks_rows_inside_its_transaction(self) -> None:
+        """Both stores retain transaction and lock semantics for exact grant merges."""
 
         apps = _historical_state().apps
         resource = apps.get_model("rebac", "RebacResource")
-        other_alias = "historical_relationships_other"
-
-        def reject_default_sql(execute, sql, params, many, context):
-            raise AssertionError(f"historical relationship helper used default DB: {sql}")
-
-        other = connections[other_alias]
-        self.assertIsNot(other, connection)
         for storage in ("denormalized", "registry"):
             with (
                 self.subTest(storage=storage),
                 override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage),
-                connection.execute_wrapper(reject_default_sql),
             ):
-                requested = _tuple(f"{storage}-alias-bound")
-                replacement = _tuple(f"{storage}-alias-retargeted")
+                requested = _tuple(f"{storage}-locked")
+                replacement = _tuple(f"{storage}-retargeted")
                 model_name = "RelationshipRegistry" if storage == "registry" else "Relationship"
                 relationship = apps.get_model("rebac", model_name)
                 ensure_historical_relationships(
                     apps,
-                    using=other_alias,
                     relationships=(requested, replacement),
                 )
-                rows = relationship._base_manager.using(other_alias)
+                rows = relationship._base_manager
                 resource_lookup = "resource_fk__resource_id" if storage == "registry" else "resource_id"
                 self.assertEqual(rows.filter(**{resource_lookup: requested.resource.resource_id}).count(), 1)
                 if storage == "registry":
                     self.assertEqual(
-                        resource._base_manager.using(other_alias)
+                        resource._base_manager
                         .filter(
                             resource_type=requested.resource.resource_type,
                             resource_id=requested.resource.resource_id,
@@ -316,15 +299,13 @@ class HistoricalRelationshipTests(TransactionTestCase):
                 native_select_for_update = models.QuerySet.select_for_update
 
                 def select_for_update(queryset, *args, **kwargs):
-                    self.assertEqual(queryset.db, other_alias)
-                    self.assertTrue(other.in_atomic_block)
+                    self.assertTrue(connection.in_atomic_block)
                     locked_models.add(queryset.model)
                     return native_select_for_update(queryset, *args, **kwargs)
 
                 with patch.object(models.QuerySet, "select_for_update", select_for_update):
                     retarget_historical_resource(
                         apps,
-                        using=other_alias,
                         old=requested.resource,
                         new=replacement.resource,
                     )
@@ -335,7 +316,6 @@ class HistoricalRelationshipTests(TransactionTestCase):
                 self.assertEqual(retained_rows.count(), 1)
                 delete_historical_relationships(
                     apps,
-                    using=other_alias,
                     relationships=(replacement,),
                 )
                 self.assertFalse(retained_rows.exists())

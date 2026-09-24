@@ -15,7 +15,6 @@ from rebac import PermissionDenied, RebacMixin, system_context
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
 
-from angee.base.db import get_write_alias
 from angee.base.scoping import read_scoped_queryset
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
@@ -144,8 +143,6 @@ def authorized_action_target(
     model: type[_RebacActionTarget],
     id: PublicID,
     permission: str,
-    *,
-    using: str | None = None,
 ) -> _RebacActionTarget:
     """Return the actor-authorized row a domain action targets.
 
@@ -156,7 +153,7 @@ def authorized_action_target(
     1. An unauthenticated session raises ``rebac.PermissionDenied`` — a GraphQL
        error, the same contract as ``angee.iam``'s ``session_user`` gate, so the
        client re-authenticates instead of toasting.
-    2. The row resolves through the actor's writer-bound queryset: a row the actor cannot
+    2. The row resolves through the actor's write-scoped queryset: a row the actor cannot
        reach reads as plain not-found, never an existence oracle.
     3. The resolved row must grant the per-row REBAC ``permission`` (e.g.
        ``"write"``, ``"write__status"``).
@@ -173,7 +170,7 @@ def authorized_action_target(
     user = getattr(info.context.request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
-    instance = instance_for_write(model, id, using=using)
+    instance = instance_for_write(model, id)
     return _require_action_permission(instance, model, id, permission)
 
 
@@ -182,21 +179,13 @@ def authorized_permission_target(
     model: type[_RebacActionTarget],
     id: PublicID,
     permission: str,
-    *,
-    using: str | None = None,
 ) -> _RebacActionTarget:
-    """Resolve a target through the exact requested permission scope.
-
-    Read callers keep native read routing. Mutation callers pass their selected
-    ``using`` alias without changing the permission or actor scope.
-    """
+    """Resolve a target through the exact requested permission scope."""
 
     user = getattr(info.context.request, "user", None)
     if user is None or not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication required.")
     scoped = read_scoped_queryset(model, user, action=permission)
-    if scoped is not None and using is not None:
-        scoped = scoped.using(using)
     instance = instance_for_id(model, id, queryset=scoped) if scoped is not None else None
     return _require_action_permission(instance, model, id, permission)
 
@@ -223,7 +212,6 @@ def resolve_action_target(
     reason: str,
     queryset: models.QuerySet[_ActionTarget] | None = None,
     select_related: tuple[str, ...] = (),
-    using: str | None = None,
 ) -> _ActionTarget:
     """Return an elevated action target addressed by one GraphQL public id.
 
@@ -237,14 +225,10 @@ def resolve_action_target(
     For a domain verb authorized by the row itself (the ceremony
     session gate → actor-scoped lookup → per-row check, returning in-band
     failures), use :func:`authorized_action_target` instead.
-
-    ``using`` pins a related target to the primary target's selected writer;
-    otherwise an existing queryset binding takes precedence over write routing.
     """
 
     active_queryset = queryset if queryset is not None else model._default_manager.all()
-    alias = get_write_alias(model, using=using, bound=active_queryset)
-    active_queryset = active_queryset.using(alias)
+
     if select_related:
         active_queryset = active_queryset.select_related(*select_related)
     with system_context(reason=reason):
@@ -265,7 +249,6 @@ def action_target(
     reason: str,
     queryset: models.QuerySet[_ActionTarget] | None = None,
     select_related: tuple[str, ...] = (),
-    using: str | None = None,
 ) -> Iterator[_ActionTarget]:
     """Yield a resolved action target inside the matching elevated context."""
 
@@ -275,7 +258,6 @@ def action_target(
         reason=reason,
         queryset=queryset,
         select_related=select_related,
-        using=using,
     )
     with system_context(reason=reason):
         yield target

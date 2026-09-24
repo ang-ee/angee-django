@@ -11,7 +11,6 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.addons import available_addons
-from angee.base.db import get_write_alias, related_on
 from angee.base.models import AngeeManager, AngeeModel
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
 
@@ -46,7 +45,7 @@ class CatalogProvenance(models.Model):
 class AddonCatalogManager(AngeeManager):
     """Owns the reconcile of marketplace rows from an addon ``Source``."""
 
-    def sync_from_source(self, source: Any, *, using: str | None = None) -> int:
+    def sync_from_source(self, source: Any) -> int:
         """Discover ``addon.toml`` under ``source`` and reconcile ``platform.Addon`` rows.
 
         Mirrors ``TemplateManager.sync_from_source`` but writes into ``platform.Addon``
@@ -58,16 +57,12 @@ class AddonCatalogManager(AngeeManager):
         """
 
         addon = apps.get_model("platform", "Addon")
-        using = get_write_alias(addon, using=using, bound=self, instance=source)
-        repository: Any = related_on(
-            source, "repository", using=using, select_related=("vcs_bridge__credential__oauth_client",),
-        )
-        source._meta.get_field("repository").set_cached_value(source, repository)
+        repository: Any = source.repository
         vcs_bridge = repository.vcs_bridge
         descriptors = vcs_bridge.discover(source, marker="addon.toml", parse=parse_addon_meta)
         available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))
         seen: set[str] = set()
-        with system_context(reason="platform_integrate_vcs.catalog.sync"), transaction.atomic(using=using):
+        with system_context(reason="platform_integrate_vcs.catalog.sync"), transaction.atomic():
             for descriptor in descriptors:
                 name = str(descriptor.get("name", ""))
                 if not name:
@@ -75,9 +70,9 @@ class AddonCatalogManager(AngeeManager):
                 seen.add(name)
                 provenance = {"vcs_source_id": source.pk, "vcs_path": str(descriptor.get("path", ""))}
                 if name in available:
-                    addon.objects.using(using).filter(name=name).update(**provenance)
+                    addon.objects.filter(name=name).update(**provenance)
                     continue
-                addon.objects.using(using).update_or_create(
+                addon.objects.update_or_create(
                     name=name,
                     defaults={
                         "label": "",
@@ -97,12 +92,12 @@ class AddonCatalogManager(AngeeManager):
                     },
                 )
             (
-                addon.objects.using(using).filter(vcs_source=source, source=addon.Source.REMOTE)
+                addon.objects.filter(vcs_source=source, source=addon.Source.REMOTE)
                 .exclude(name__in=seen)
                 .update(state=addon.State.REMOVED, **addon.reset_runtime_facts())
             )
             source.last_synced_at = timezone.now()
-            source.save(using=using, update_fields=["last_synced_at", "updated_at"])
+            source.save(update_fields=["last_synced_at", "updated_at"])
         return len(descriptors)
 
 

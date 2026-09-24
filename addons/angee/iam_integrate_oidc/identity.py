@@ -20,8 +20,6 @@ from django.contrib.auth.base_user import AbstractBaseUser
 from django.db import models, transaction
 from rebac import system_context
 
-from angee.base.db import get_write_alias
-from angee.base.permissions import require_authorization_database
 from angee.iam.auth import can_authenticate_user
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
@@ -177,15 +175,14 @@ class OidcIdentityResolver:
         _require_login_enabled(oauth_client)
 
     def resolve(
-        self, *, sub: str, email: str | None, claims: dict[str, Any], using: str | None = None,
+        self, *, sub: str, email: str | None, claims: dict[str, Any],
     ) -> AbstractBaseUser:
         """Return the user for one verified OIDC identity, or fail closed."""
 
         Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
-        using = get_write_alias(type(self.oauth_client), using=using, instance=self.oauth_client)
-        require_authorization_database(using, operation="OIDC external-account ownership")
-        manager = Account.objects.db_manager(using)
-        with system_context(reason="iam_integrate_oidc.resolve"), transaction.atomic(using=using):
+
+        manager = Account.objects
+        with system_context(reason="iam_integrate_oidc.resolve"), transaction.atomic():
             account = manager.filter(oauth_client=self.oauth_client, external_id=sub).first()
             if account is not None:
                 # A revoked/expired/disabled account or a deactivated user must not log in.
@@ -204,7 +201,7 @@ class OidcIdentityResolver:
                 and email_verified
                 and self.oauth_client.allows_email_domain(normalized_email)
             ):
-                user = self._find_by_email(normalized_email, using=using)
+                user = self._find_by_email(normalized_email)
                 if user is not None and can_authenticate_user(user):
                     manager.link(
                         self.oauth_client,
@@ -219,7 +216,7 @@ class OidcIdentityResolver:
             if self.oauth_client.create_on_login and (
                 not normalized_email or (email_verified and self.oauth_client.allows_email_domain(normalized_email))
             ):
-                user = self._create_for_identity(normalized_email, sub, claims=claims, using=using)
+                user = self._create_for_identity(normalized_email, sub, claims=claims)
                 manager.link(
                     self.oauth_client,
                     sub,
@@ -232,14 +229,14 @@ class OidcIdentityResolver:
 
         raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
 
-    def user_for_link_state(self, record: StateRecord, *, using: str | None = None) -> AbstractBaseUser:
+    def user_for_link_state(self, record: StateRecord) -> AbstractBaseUser:
         """Return the user captured when the authenticated link flow started."""
 
         if not record.user_id:
             raise OAuthFlowError(INVALID_STATE, 400)
         user_model = get_user_model()
-        using = get_write_alias(type(self.oauth_client), using=using, instance=self.oauth_client)
-        manager = cast(Any, user_model.objects.db_manager(using))
+
+        manager = cast(Any, user_model.objects)
         with system_context(reason="iam_integrate_oidc.link_user"):
             try:
                 user = manager.get(pk=record.user_id)
@@ -247,20 +244,20 @@ class OidcIdentityResolver:
                 raise OAuthFlowError(INVALID_STATE, 400) from exc
         return cast(AbstractBaseUser, user)
 
-    def _find_by_email(self, email: str, *, using: str) -> AbstractBaseUser | None:
+    def _find_by_email(self, email: str) -> AbstractBaseUser | None:
         """Return the unique user matching ``email`` case-insensitively."""
 
-        manager = cast(Any, get_user_model().objects.db_manager(using))
+        manager = cast(Any, get_user_model().objects)
         queryset = manager.all().people()
         matches = list(queryset.filter(email__iexact=email).order_by("pk")[:2])
         if len(matches) > 1:
             raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
         return cast(AbstractBaseUser | None, matches[0] if matches else None)
 
-    def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any], using: str) -> AbstractBaseUser:
+    def _create_for_identity(self, email: str, sub: str, *, claims: dict[str, Any]) -> AbstractBaseUser:
         """Create a non-superuser user for one OIDC identity."""
 
-        manager = cast(Any, get_user_model().objects.db_manager(using))
+        manager = cast(Any, get_user_model().objects)
         user_fields: dict[str, Any] = {}
         if given_name := claims.get("given_name"):
             user_fields["first_name"] = str(given_name)
@@ -269,7 +266,7 @@ class OidcIdentityResolver:
         return cast(
             AbstractBaseUser,
             manager.create_user(
-                username=self._available_username(email or f"oidc-{sub}", using=using),
+                username=self._available_username(email or f"oidc-{sub}"),
                 email=email,
                 password=None,
                 is_staff=False,
@@ -278,10 +275,10 @@ class OidcIdentityResolver:
             ),
         )
 
-    def _available_username(self, seed: str, *, using: str) -> str:
+    def _available_username(self, seed: str) -> str:
         """Return a unique Django username derived from ``seed``."""
 
-        manager = cast(Any, get_user_model().objects.db_manager(using))
+        manager = cast(Any, get_user_model().objects)
         base = re.sub(r"[^\w.@+-]", "-", seed).strip("-")[:140] or "oidc-user"
         candidate = base
         suffix = 1
@@ -293,7 +290,7 @@ class OidcIdentityResolver:
 
 
 def resolve(
-    oauth_client: Any, *, sub: str, email: str | None, claims: dict[str, Any], using: str | None = None,
+    oauth_client: Any, *, sub: str, email: str | None, claims: dict[str, Any],
 ) -> AbstractBaseUser:
     """Resolve OIDC claims to a host user, linking or provisioning when policy allows.
 
@@ -301,8 +298,6 @@ def resolve(
     substitute); delegates to :class:`OidcIdentityResolver`.
     """
 
-    using = get_write_alias(type(oauth_client), using=using, instance=oauth_client)
-    oauth_client._state.db = using
     return OidcIdentityResolver(oauth_client).resolve(sub=sub, email=email, claims=claims)
 
 
@@ -316,7 +311,7 @@ def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
     """
 
     handle_model = apps.get_model("parties", "Handle")
-    handle_model.objects.db_manager(get_write_alias(type(user), instance=user)).claim_own(
+    handle_model.objects.claim_own(
         user,
         platform=handle_model.Platform.EMAIL,
         value=email,

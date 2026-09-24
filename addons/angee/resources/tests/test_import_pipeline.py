@@ -10,7 +10,7 @@ import pytest
 import tablib
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection, models, router, transaction
+from django.db import connection, models, transaction
 from django.db.models.fields import NOT_PROVIDED
 from rebac.models import active_relationship_model
 
@@ -221,16 +221,6 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
         assert unchanged.loaded == 0
         assert unchanged.skipped == 4
 
-        route = router.db_for_write
-        with monkeypatch.context() as patch:
-            patch.setattr(
-                router,
-                "db_for_write",
-                lambda model, **hints: "other" if model is PipelineItem else route(model, **hints),
-            )
-            with pytest.raises(ResourceLoadError, match="default authorization database"):
-                PipelineLedger.objects.load_addons((owner,), tiers=["master"])
-        assert PipelineItem._base_manager.get().model == "v2"
     finally:
         with connection.schema_editor() as editor:
             for model in reversed(models_to_create):

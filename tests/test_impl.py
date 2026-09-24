@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Callable
-from contextlib import AbstractContextManager
 from datetime import date, datetime
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 import pytest
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.db import connection, models, router
+from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer
@@ -26,7 +24,6 @@ from angee.base.impl import (
 )
 from angee.workflows.configs import EmitConfig, JoinContinuationConfig
 from tests.conftest import Integration, OAuthClient, VcsBridge
-from tests.test_transitions import TransitionRouter
 
 
 class _BaseImpl(ImplBase):
@@ -182,39 +179,11 @@ def test_model_impl_field_is_the_public_declared_accessor() -> None:
     assert not hasattr(Integration, "_impl_field")
 
 
-def test_validation_overrides_receive_write_alias_without_new_keyword() -> None:
-    """Legacy hooks see the selected writer and restore state on failure."""
-
-    seen: list[tuple[str, str | None, object]] = []
-
-    class ConfigValidationProbe(ImplDefaultsMixin):
-        class Meta:
-            app_label = "tests"
-
-        def validate_impl_keys(self, *, update_fields: object = None) -> None:
-            seen.append(("keys", self._state.db, update_fields))
-
-        def validate_impl_configs(self, *, update_fields: object = None) -> None:
-            seen.append(("config", self._state.db, update_fields))
-            raise ValidationError("Invalid probe config.")
-
-    instance = ConfigValidationProbe()
-    instance._state.db = "read_replica"
-
-    with pytest.raises(ValidationError, match="Invalid probe config"):
-        instance.save(using="writer", update_fields={"config"})
-
-    assert seen == [("keys", "writer", {"config"}), ("config", "writer", {"config"})]
-    assert instance._state.db == "read_replica"
-
-
 @pytest.mark.django_db(transaction=True)
 @override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
 @isolate_apps()
-def test_base_validation_updates_deferred_config_on_selected_write_alias(
-    database_alias: Callable[[str], AbstractContextManager[str]], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Inherited validation refreshes and normalizes deferred config on the writer."""
+def test_base_validation_refreshes_and_normalizes_deferred_config() -> None:
+    """Inherited validation refreshes deferred config before normalizing a write."""
 
     class DeferredConfigRecord(ImplDefaultsMixin):
         adapter = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS", create_only=True)
@@ -226,25 +195,15 @@ def test_base_validation_updates_deferred_config_on_selected_write_alias(
     with connection.schema_editor() as editor:
         editor.create_model(DeferredConfigRecord)
     try:
-        with database_alias("impl_config_writer") as alias:
-            record = DeferredConfigRecord.objects.using(alias).create(adapter="typed", config={"retries": 1})
-            DeferredConfigRecord.objects.using(alias).filter(pk=record.pk).update(config={"retries": "3"})
-            deferred = DeferredConfigRecord.objects.using(alias).only("pk").get(pk=record.pk)
-            assert deferred.get_deferred_fields() == {"adapter", "config"}
-            deferred._state.db = "default"
-            routing = TransitionRouter("default")
-            monkeypatch.setattr(router, "routers", [routing])
+        record = DeferredConfigRecord.objects.create(adapter="typed", config={"retries": 1})
+        DeferredConfigRecord.objects.filter(pk=record.pk).update(config={"retries": "3"})
+        deferred = DeferredConfigRecord.objects.only("pk").get(pk=record.pk)
+        assert deferred.get_deferred_fields() == {"adapter", "config"}
 
-            def reject_default_query(*args: Any) -> None:
-                raise AssertionError("Impl validation queried the default database.")
+        deferred.save(update_fields={"config"})
+        stored = DeferredConfigRecord.objects.get(pk=record.pk)
 
-            with connection.execute_wrapper(reject_default_query):
-                deferred.save(using=alias, update_fields={"config"})
-                stored = DeferredConfigRecord.objects.using(alias).get(pk=record.pk)
-
-            assert stored.config == {"endpoint": "https://example.test", "retries": 3}
-            assert deferred._state.db == alias
-            assert routing.writes == []
+        assert stored.config == {"endpoint": "https://example.test", "retries": 3}
     finally:
         with connection.schema_editor() as editor:
             editor.delete_model(DeferredConfigRecord)
