@@ -80,7 +80,7 @@ class SDKInferenceBackend(InferenceBackend):
         except TypeError, ValueError:
             raise ValueError("Inference provider timeout_seconds must be numeric.") from None
         if timeout:
-            self._validate_timeout(timeout)
+            self.validate_timeout(timeout)
         kwargs: dict[str, Any] = self._credential_auth(credential=credential, using=using)
         if self.endpoint:
             kwargs["base_url"] = self.endpoint

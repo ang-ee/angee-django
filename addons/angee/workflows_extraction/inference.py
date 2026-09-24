@@ -20,7 +20,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.settings import ModelSettings
 
 from angee.agents.backends import InferenceBackend
-from angee.agents.models import InferenceModelUse
 from angee.workflows_agents.inference import InferenceCallError, InferRequest, call_inference
 from angee.workflows_extraction.contracts import (
     DocumentPart,
@@ -29,6 +28,7 @@ from angee.workflows_extraction.contracts import (
     PageImage,
     RecognitionResult,
 )
+from angee.workflows_extraction.enums import ExtractionRole
 
 RETAINED_AUTHORITY_COMPLETION_REVIEW = "retained_authority_completion_requires_review"
 RETAINED_CARRIER_UNAVAILABLE = "retained_carrier_unavailable"
@@ -167,8 +167,8 @@ def recognize_page(
                 images=[BinaryContent(page.image_bytes, media_type=page.mime_type)],
                 settings=dict(settings),
             ),
-            role="recognition",
-            uses={InferenceModelUse.MULTIMODAL, InferenceModelUse.IMAGE},
+            role=ExtractionRole.RECOGNITION,
+            uses=ExtractionRole.RECOGNITION.accepted_model_uses,
             using=using,
         )
     except InferenceCallError as error:
@@ -221,8 +221,8 @@ def map_text_parts(
                 output_schema=schema,
                 settings=dict(settings),
             ),
-            role="mapping",
-            uses={InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL},
+            role=ExtractionRole.MAPPING,
+            uses=ExtractionRole.MAPPING.accepted_model_uses,
             using=using,
         )
     except InferenceCallError as error:
@@ -260,7 +260,7 @@ def _inference_settings(config: Mapping[str, Any], *, timeout: float, stage: str
 
     try:
         timeout = float(timeout)
-        InferenceBackend._validate_timeout(timeout)
+        InferenceBackend.validate_timeout(timeout)
         max_tokens = int(config.get("max_tokens", 8192))
         temperature = float(config.get("temperature", 0))
         if max_tokens <= 0:

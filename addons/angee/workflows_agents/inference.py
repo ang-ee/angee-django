@@ -11,7 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import BinaryContent, ModelMessage, ModelResponse
 from rebac import system_context
 
-from angee.agents.models import InferenceModelUse, InferenceOutputError, InferenceOutputSchema, InferenceResult
+from angee.agents.models import (
+    IMAGE_INFERENCE_MODEL_USES,
+    TEXT_INFERENCE_MODEL_USES,
+    InferenceModelUse,
+    InferenceOutputError,
+    InferenceOutputSchema,
+    InferenceResult,
+)
 from angee.base.db import get_write_alias, related_on
 from angee.workflows.steps import TransientStepError
 
@@ -68,11 +75,7 @@ def call_inference(
         if actor is None:
             raise PermissionDenied("Inference requires the workflow admission actor.")
         if uses is None:
-            uses = (
-                {InferenceModelUse.MULTIMODAL, InferenceModelUse.IMAGE}
-                if request.images
-                else {InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL}
-            )
+            uses = IMAGE_INFERENCE_MODEL_USES if request.images else TEXT_INFERENCE_MODEL_USES
         model.require_usable(actor, role, uses=uses, using=alias)
         provider: Any = related_on(model, "provider", using=alias)
         backend = provider.backend

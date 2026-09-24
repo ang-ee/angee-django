@@ -16,7 +16,6 @@ from django.db.models import Prefetch, prefetch_related_objects
 from jsonschema import Draft202012Validator
 from rebac import current_actor, system_context
 
-from angee.agents.models import InferenceModelUse
 from angee.base.actors import actor_user_id
 from angee.base.db import get_write_alias, related_on
 from angee.base.impl import resolve_impl_class
@@ -32,10 +31,11 @@ from angee.workflows_extraction.contracts import (
     DocumentResult,
     DocumentSource,
     ExtractionPartKind,
+    MappingResult,
     PageImage,
     PageResult,
 )
-from angee.workflows_extraction.enums import ExtractionErrorCode
+from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionRole
 from angee.workflows_extraction.inference import (
     RETAINED_AUTHORITY_COMPLETION_REVIEW,
     RETAINED_CARRIER_UNAVAILABLE,
@@ -439,12 +439,12 @@ def process(
     actor = current_actor()
     if actor is None:
         raise PermissionDenied("Authentication required.")
-    for candidate, role, uses in (
-        (model, "mapping", {InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL}),
-        (recognition_model, "recognition", {InferenceModelUse.MULTIMODAL, InferenceModelUse.IMAGE}),
+    for candidate, role in (
+        (model, ExtractionRole.MAPPING),
+        (recognition_model, ExtractionRole.RECOGNITION),
     ):
         if candidate is not None:
-            candidate.require_usable(actor, role, uses=uses, using=alias)
+            candidate.require_usable(actor, role, uses=role.accepted_model_uses, using=alias)
     requested_mapping = dict(identity_mapping or {})
     requested_retirement = dict(retired_identities or {})
     if any(not isinstance(key, str) or not isinstance(value, str) for key, value in requested_mapping.items()):
@@ -754,7 +754,7 @@ def infer(
     if not authorized_target.with_actor(actor).has_access("read"):
         raise PermissionDenied("Read access to the extraction target is required.")
     model.require_usable(
-        actor, "mapping", uses={InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL}, using=alias,
+        actor, ExtractionRole.MAPPING, uses=ExtractionRole.MAPPING.accepted_model_uses, using=alias,
     )
     if base.model_id is not None and base.model_id != model.pk:
         raise ValidationError({"inference": "The inferred model differs from the frozen base policy."})
@@ -1159,7 +1159,7 @@ def _retain_failed_inference(
     requested_mapping: Mapping[str, str],
     requested_retirement: Mapping[str, str],
     automatic_correspondence: bool,
-    mapping_result: Any,
+    mapping_result: MappingResult | None,
     error: DocumentPipelineError,
     using: str,
 ) -> RetainedInference | SupersededInference:
@@ -1171,7 +1171,7 @@ def _retain_failed_inference(
         value for value in (error.stage, error.code) if value
     ) or type(error).__name__
     provider = {
-        **dict(getattr(mapping_result, "provider_metadata", None) or {}),
+        **(mapping_result.provider_metadata if mapping_result is not None else {}),
         "usage": usage_delta,
     }
     inference = {

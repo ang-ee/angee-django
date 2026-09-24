@@ -66,6 +66,13 @@ class InferenceModelUse(models.TextChoices, StrEnum):
     IMAGE = "image", "Image"
 
 
+TEXT_INFERENCE_MODEL_USES = frozenset((InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL))
+"""Catalogue uses accepted for text inference requests."""
+
+IMAGE_INFERENCE_MODEL_USES = frozenset((InferenceModelUse.MULTIMODAL, InferenceModelUse.IMAGE))
+"""Catalogue uses accepted for inference requests containing images."""
+
+
 class InferenceModelStatus(models.TextChoices):
     """Lifecycle of a model in a provider's catalogue."""
 

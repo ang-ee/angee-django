@@ -1,8 +1,26 @@
-"""Owned extraction failure vocabulary shared by retention and callers."""
+"""Owned extraction role and outcome vocabulary shared by retention and callers."""
 
 from enum import StrEnum
 
 from django.db.models import TextChoices
+
+from angee.agents.models import IMAGE_INFERENCE_MODEL_USES, TEXT_INFERENCE_MODEL_USES, InferenceModelUse
+
+
+class ExtractionRole(StrEnum):
+    """Inference roles and their accepted model capabilities."""
+
+    MAPPING = "mapping"
+    RECOGNITION = "recognition"
+
+    @property
+    def accepted_model_uses(self) -> frozenset[InferenceModelUse]:
+        """Return the model uses accepted by this extraction role."""
+
+        return {
+            self.MAPPING: TEXT_INFERENCE_MODEL_USES,
+            self.RECOGNITION: IMAGE_INFERENCE_MODEL_USES,
+        }[self]
 
 
 class ExtractionErrorCode(TextChoices, StrEnum):

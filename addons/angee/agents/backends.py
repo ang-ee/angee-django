@@ -164,11 +164,11 @@ class InferenceBackend(ImplBase):
         unknown = result.keys() - (ModelSettings.__required_keys__ | ModelSettings.__optional_keys__)
         if unknown:
             raise ValueError(f"Unknown inference request settings: {', '.join(sorted(unknown))}.")
-        self._validate_timeout(result.get("timeout"))
+        self.validate_timeout(result.get("timeout"))
         return cast(ModelSettings, result)
 
     @staticmethod
-    def _validate_timeout(timeout: Any) -> None:
+    def validate_timeout(timeout: Any) -> None:
         """Reject invalid timeout configuration before it reaches network transport."""
 
         values = timeout.as_dict().values() if isinstance(timeout, Timeout) else (timeout,)

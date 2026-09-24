@@ -27,7 +27,7 @@ from angee.workflows_extraction.contracts import (
     MappingResult,
     PageImage,
 )
-from angee.workflows_extraction.enums import ExtractionErrorCode
+from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionRole
 from angee.workflows_extraction.inference import (
     map_text_parts,
     recognize_page,
@@ -386,7 +386,7 @@ def test_inference_mapping_uses_shared_request_and_parsed_output(monkeypatch: py
     args, kwargs = call.call_args
     assert args[:2] == (step, model)
     assert kwargs == {
-        "role": "mapping", "uses": {InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL}, "using": "default",
+        "role": "mapping", "uses": ExtractionRole.MAPPING.accepted_model_uses, "using": "default",
     }
     assert args[2].settings == {"timeout": 5, "max_tokens": 128, "temperature": 0, "thinking": False}
     assert args[2].output_schema == SCHEMA
@@ -435,7 +435,7 @@ def test_inference_recognition_carries_native_image_and_zero_temperature(monkeyp
     assert len(request.images) == 1 and isinstance(request.images[0], BinaryContent)
     assert request.images[0].data == b"synthetic"
     assert call.call_args.kwargs == {
-        "role": "recognition", "uses": {InferenceModelUse.IMAGE, InferenceModelUse.MULTIMODAL}, "using": "default",
+        "role": "recognition", "uses": ExtractionRole.RECOGNITION.accepted_model_uses, "using": "default",
     }
     assert result.provider_metadata["usage"] == usage == result.usage_delta
 
@@ -582,10 +582,22 @@ def test_inference_mapping_failure_retains_acquired_evidence_and_bounds_vendor_e
     assert "private" not in str(failure.value)
 
 
-@pytest.mark.parametrize("operation", ["mapping", "recognition"])
+@pytest.mark.parametrize(
+    "operation,model_use,compatible",
+    [
+        ("mapping", InferenceModelUse.CHAT, True),
+        ("mapping", InferenceModelUse.MULTIMODAL, True),
+        ("mapping", InferenceModelUse.IMAGE, False),
+        ("recognition", InferenceModelUse.CHAT, False),
+        ("recognition", InferenceModelUse.MULTIMODAL, True),
+        ("recognition", InferenceModelUse.IMAGE, True),
+    ],
+)
 @pytest.mark.parametrize("readable", [False, True])
 def test_extraction_inference_authorizes_model_once_before_provider(
     operation: str,
+    model_use: InferenceModelUse,
+    compatible: bool,
     readable: bool,
     monkeypatch: pytest.MonkeyPatch,
     settings,
@@ -596,7 +608,7 @@ def test_extraction_inference_authorizes_model_once_before_provider(
     monkeypatch.setattr(workflow_inference, "system_context", lambda **kwargs: nullcontext())
 
     actor = object()
-    model = _InferenceModel(name="test", model_use="multimodal", status="available")
+    model = _InferenceModel(name="test", model_use=model_use, status="available")
     read = MagicMock(return_value=SimpleNamespace(has_access=MagicMock(return_value=readable)))
     monkeypatch.setattr(model, "with_actor", read)
     identity = {"provider": "provider", "backend": "test", "endpoint": "local", "model": "test"}
@@ -620,13 +632,16 @@ def test_extraction_inference_authorizes_model_once_before_provider(
             return recognize_page(_page(0, 0), step_run=step, model=model, config={}, timeout=5, using="default")
         return map_text_parts((), SCHEMA, step_run=step, model=model, config={}, timeout=5, using="default")
 
-    if readable:
+    if readable and compatible:
         invoke()
         provider_call.assert_called_once()
         assert provider_call.call_args.kwargs["using"] == "default"
         run.debit_budget.assert_called_once_with(usage, using="default")
     else:
-        with pytest.raises(PermissionDenied, match="cannot read"):
+        with pytest.raises(
+            PermissionDenied if not readable else ValueError,
+            match="cannot read" if not readable else "requires a model with one of these uses",
+        ):
             invoke()
         provider_call.assert_not_called()
         run.debit_budget.assert_not_called()

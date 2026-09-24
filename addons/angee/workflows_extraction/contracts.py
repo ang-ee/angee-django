@@ -157,7 +157,11 @@ class DocumentPart:
 
 @dataclass(frozen=True, slots=True)
 class DocumentResult:
-    """A final schema candidate plus its retained raw evidence and claims."""
+    """A final schema candidate plus its retained raw evidence and claims.
+
+    ``provider_metadata`` also carries routing facts from deterministic profiles
+    that do not invoke a provider.
+    """
 
     value: dict[str, Any]
     parts: tuple[DocumentPart, ...]

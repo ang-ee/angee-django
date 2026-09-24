@@ -36,7 +36,6 @@ from rebac import (
     write_relationships,
 )
 
-from angee.agents.models import InferenceModelUse
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.workflows import engine as workflow_engine
 from angee.workflows.states import Verdict
@@ -48,7 +47,7 @@ from angee.workflows_extraction.contracts import (
     MappingResult,
     PageImage,
 )
-from angee.workflows_extraction.enums import ExtractionErrorCode
+from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionRole
 from angee.workflows_extraction.inference import (
     RETAINED_AUTHORITY_COMPLETION_REVIEW,
     RETAINED_CARRIER_UNAVAILABLE,
@@ -1376,11 +1375,11 @@ class ExtractionServiceTests(TestCase):
         with actor_context(self.owner), override_settings(ANGEE_INFERENCE_APPROVED_DEPLOYMENTS=policy):
             with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
                 unapproved.require_usable(
-                    self.owner, "mapping", uses={InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL},
+                    self.owner, "mapping", uses=ExtractionRole.MAPPING.accepted_model_uses,
                 )
             with self.assertRaisesRegex(DjangoPermissionDenied, "recognition model deployment is not approved"):
                 self.model.require_usable(
-                    self.owner, "recognition", uses={InferenceModelUse.IMAGE, InferenceModelUse.MULTIMODAL},
+                    self.owner, "recognition", uses=ExtractionRole.RECOGNITION.accepted_model_uses,
                 )
 
         provider = self.model.provider
