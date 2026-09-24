@@ -34,6 +34,14 @@ contact points still use `Handle.objects.upsert`. A local person added to a sync
 folder receives a stable `angee-<primary key>` remote UID on its first push. A
 later pull reuses that person through the same ingest owner.
 
+On the first baseline, existing people matched by `(folder, source_uid)` use the
+driver's [baseline adoption rule](../integrate/README.md): remote values win,
+comparison bases and ETags are established, and no write-back occurs. Local-only
+people stay local for that entire cycle and become eligible for creation on the
+next cycle. Upgrading a previously pull-only Directory therefore does not create
+remote cards during adoption. Later concurrent edits still require conflict
+resolution.
+
 [`contact_projection`](backends.py) declares exactly the fields synchronized in
 both directions. It includes names, notes, dates, email/phone contact points,
 postal addresses, the source employment edge and the avatar content hash and MIME

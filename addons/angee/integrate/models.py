@@ -3278,6 +3278,28 @@ class SyncStream(SqidMixin, AuditMixin, AngeeModel):
     objects = SyncStreamManager()
     unscoped_objects = AngeeUnscopedManager()
 
+    def has_completed_baseline(self, *, using: str | None = None) -> bool:
+        """Read completion across retained epochs, including this persisted row.
+
+        Cursor seeds and interrupted baselines are not completion. A later epoch
+        retains an earlier completion even while its own baseline is unfinished.
+        """
+
+        using = get_write_alias(type(self), using=using, instance=self)
+        refresh_deferred(self, using=using, fields=("integration_id", "key", "partition", "generation"))
+        return (
+            type(self)
+            .objects.db_manager(using)
+            .filter(
+                integration_id=self.integration_id,
+                key=self.key,
+                partition=self.partition,
+                generation__lte=self.generation,
+                phase=StreamPhase.DELTA,
+            )
+            .exists()
+        )
+
     class Meta:
         abstract = True
         base_manager_name = "unscoped_objects"

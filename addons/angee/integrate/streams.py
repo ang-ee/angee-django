@@ -286,8 +286,19 @@ def reset_stream(stream: Any, *, cursor: dict[str, Any], using: str | None = Non
     return PageResult(stream, reset=True)
 
 
-def _decision(link: Any, record: RecordChange, *, using: str) -> ChangeKind:
+def _baseline_adoption(stream: Any, *, using: str) -> bool:
+    """Two-way replicas adopt existing identities until their first baseline completes."""
+    return (
+        stream.kind == StreamKind.RECORD_REPLICA
+        and stream.direction == StreamDirection.BIDIRECTIONAL
+        and not stream.has_completed_baseline(using=using)
+    )
+
+
+def _decision(link: Any, record: RecordChange, *, adopting: bool, using: str) -> ChangeKind:
     revision = _manager("RecordRevision", using=using).latest_for(link).first()
+    if adopting and revision is None and record.target is not None and not record.tombstone:
+        return ChangeKind.APPLY
     return classify_change(
         remote_hash=record.source_hash,
         local_hash=record.local_hash,
@@ -402,6 +413,7 @@ def _apply_page(
     """Apply page or identity observations through the same fenced transaction."""
 
     page = replace(page, cursor=_validated_cursor(page.cursor))
+    adopting = _baseline_adoption(stream, using=using)
     # Conditional remote writes precede the transaction. Compare link bases
     # again before reflecting the response; a later local edit remains dirty.
     written: dict[str, tuple[tuple[str, str, str], WriteBackResult | SemanticError]] = {}
@@ -414,7 +426,7 @@ def _apply_page(
                 link is not None
                 and record.external_key not in force_apply
                 and not _has_conflict(link, using=using)
-                and _decision(link, record, using=using) == ChangeKind.WRITE_BACK
+                and _decision(link, record, adopting=adopting, using=using) == ChangeKind.WRITE_BACK
             ):
                 bases = (link.remote_base_hash, link.local_base_hash, link.remote_version)
                 result: WriteBackResult | SemanticError
@@ -432,6 +444,7 @@ def _apply_page(
         locked = _manager("SyncStream", using=using).lock_current(stream, using=using)
         if (
             locked.cursor != original_cursor
+            or locked.phase != stream.phase
             or locked.reconcile_state != stream.reconcile_state
             or locked.resync_required
         ):
@@ -464,7 +477,7 @@ def _apply_page(
                         decision = (
                             ChangeKind.APPLY
                             if record.external_key in force_apply
-                            else _decision(link, record, using=using)
+                            else _decision(link, record, adopting=adopting, using=using)
                         )
                         if decision == ChangeKind.UNCHANGED and record.external_key in reapply:
                             decision = ChangeKind.APPLY
@@ -555,7 +568,7 @@ def push_stream(
     deadline: float | None = None,
     using: str | None = None,
 ) -> PageResult:
-    """Compare local candidates to their bases and conditionally write changed rows."""
+    """Conditionally write local candidates after a two-way replica's first baseline."""
 
     using = get_write_alias(type(stream), using=using, instance=stream)
     if connections[using].in_atomic_block:
@@ -565,6 +578,8 @@ def push_stream(
     count = 0
     discrepancies: list[int] = []
     with system_context(reason="integrate.stream.push"):
+        if _baseline_adoption(stream, using=using):
+            return PageResult(stream, exhausted=True)
         for candidate in adapter.local_changes(stream, keys=external_keys, using=using):
             if deadline is not None and monotonic() >= deadline:
                 return PageResult(stream, count, discrepancy_ids=tuple(discrepancies))
@@ -923,6 +938,7 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
         using=using,
     )
     landed, resets = 0, 0
+    adopting = _baseline_adoption(stream, using=using)
     page_bound = max(1, int(bridge.config.get("sync_page_bound", 100)))
     exhausted = False
     previous = None
@@ -947,7 +963,8 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
         )
         if exhausted:
             if monotonic() < deadline:
-                landed += push_stream(stream, adapter, deadline=deadline, using=using).count
+                if not adopting:
+                    landed += push_stream(stream, adapter, deadline=deadline, using=using).count
                 while monotonic() < deadline:
                     reconcile_stream(stream, adapter, page_bound=page_bound, deadline=deadline, using=using)
                     if not stream.reconcile_state:

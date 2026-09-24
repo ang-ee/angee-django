@@ -107,6 +107,42 @@ def test_resync_request_follows_latest_epoch_and_leaves_bump_to_driver(replica: 
     assert fresh.phase == StreamPhase.BASELINE and not fresh.resync_required
 
 
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_baseline_completion_survives_epochs_and_reads_persisted_progress(replica: Any, exhausted: bool) -> None:
+    # Another partition's completed baseline never enables this one's pushes.
+    other = SyncStream.objects.create(
+        integration_id=replica.integration_id,
+        key=replica.key,
+        partition="other-book",
+        kind=replica.kind,
+        direction=replica.direction,
+        phase=StreamPhase.DELTA,
+    )
+    assert other.has_completed_baseline()
+    assert not replica.has_completed_baseline()
+    fresh = SyncStream.objects.get(pk=replica.pk)
+    SyncStream.objects.advance(fresh, {"page": 1}, exhausted=exhausted)
+    assert replica.phase == StreamPhase.BASELINE
+    assert replica.has_completed_baseline() is exhausted
+    successor = SyncStream.objects.bump_generation(replica)
+    assert successor.phase == StreamPhase.BASELINE
+    assert successor.has_completed_baseline() is exhausted
+
+
+def test_baseline_completion_reads_deferred_identity_on_operation_alias(replica: Any, database_alias: Any) -> None:
+    deferred = SyncStream.objects.only("pk").get(pk=replica.pk)
+
+    def reject_default_query(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Baseline completion must read only the operation alias.")
+
+    with database_alias("baseline_completion") as alias:
+        other = SyncStream.objects.using(alias).get(pk=replica.pk)
+        SyncStream.objects.db_manager(alias).advance(other, {}, exhausted=True, using=alias)
+        with connections["default"].execute_wrapper(reject_default_query):
+            assert deferred.has_completed_baseline(using=alias)
+    assert not replica.has_completed_baseline()
+
+
 def test_sweep_absence_unavailable_then_tombstone_and_reappearance(replica: Any) -> None:
     link = RecordLink.objects.observe(replica, "person:1")
     assert RecordLink.objects.mark_absent(replica, [link.external_key]) == 1

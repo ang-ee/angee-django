@@ -48,6 +48,16 @@ conditional deletion returns `WriteBackResult(tombstone=True)` so the driver
 retains the link's deletion and local origin. [Directory](../parties/README.md)
 composes this protocol for bidirectional CardDAV contacts.
 
+Before a two-way replica completes its first baseline, an adapter's identity
+match to an existing local row with no link revision is adopted with remote wins.
+The driver applies the remote projection and records its version and both applied
+bases without a conflict or write-back. Each identity can be adopted across
+baseline pages and cursor resets; retained revisions still use ordinary
+three-way comparison. The adoption cycle does not push local-only rows, even
+after its final page completes the baseline. They become eligible on the next
+cycle. This lets formerly pull-only stacks adopt existing data without creating
+remote records during the upgrade pass.
+
 Changes to mapping version or dependency digest also require application. The
 adapter returns applied evidence in `ApplyResult`; only the driver promotes the
 primary link. `apply_record` returns one result for one record. An adapter promotion of that link aborts the page. Optional
@@ -68,7 +78,9 @@ Bounded callers resolve declarations through `open_stream`, use `begin_stream_cy
 once, then `advance_stream` until its
 result is exhausted, passing the returned stream after an epoch reset. The
 caller closes its adapter. `push_stream` and `reconcile_stream` complete the
-cycle when applicable. These functions contain no workflow runtime dependency;
+cycle when applicable; for two-way replicas, defer push until the next cycle
+when `SyncStream.has_completed_baseline()` was false at cycle start. These
+functions contain no workflow runtime dependency;
 execution composition belongs to `workflows_integrate`. That addon contributes
 the run link through the Integration record-action slot using a public workflow
 identity; progress details remain replaceable telemetry.

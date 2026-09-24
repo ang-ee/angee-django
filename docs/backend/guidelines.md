@@ -767,6 +767,10 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Migrations and runtime
 
+- **Upgrading pull-only record sync must not create remote records on adoption.**
+  The [record-sync driver](../../addons/angee/integrate/README.md) adopts matching
+  local identities with remote wins during the first baseline and defers
+  local-only pushes until the following cycle.
 - [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
   subclasses from historical models because their expressions belong to the live
   row. Its `ModelHistory` owner allocates a separate nullable text change-reason
