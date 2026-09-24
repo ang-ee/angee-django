@@ -44,6 +44,12 @@ from angee.platform.installer import (
 )
 
 
+def get_addon_display_label(name: str, label: str) -> str:
+    """Return the native Django label, falling back to the canonical addon name."""
+
+    return label or name
+
+
 @dataclass(frozen=True, slots=True)
 class AddonChangeImpact:
     """An addon entering or leaving the composed dependency graph."""
@@ -265,8 +271,8 @@ class AddonManager(AngeeManager):
                 configs[config.name] = config
         return aliases, configs
 
+    @staticmethod
     def _change_impacts(
-        self,
         names: Iterable[str],
         manifests: Mapping[str, AddonManifest],
         roots: Iterable[str],
@@ -280,7 +286,7 @@ class AddonManager(AngeeManager):
             impacts.append(
                 AddonChangeImpact(
                     name=name,
-                    label=self.model(name=name, label=config.label if config is not None else "").get_display_label(),
+                    label=get_addon_display_label(name, config.label if config is not None else ""),
                     root=name in declarations,
                     depends_on=manifests[name].depends_on,
                 )
@@ -514,9 +520,9 @@ class Addon(AngeeModel):
         return self.name
 
     def get_display_label(self) -> str:
-        """Return the Django label, or the canonical name for unresolved catalogue entries."""
+        """Return the display label for this catalogue entry."""
 
-        return self.label or self.name
+        return get_addon_display_label(self.name, self.label)
 
     @staticmethod
     def reset_runtime_facts() -> dict[str, Any]:

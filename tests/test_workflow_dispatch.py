@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import OperationalError, models, transaction
+from django.db import IntegrityError, OperationalError, models, transaction
 from django.db.models.signals import post_save
 from django.utils import timezone
 from rebac import system_context
@@ -280,8 +280,8 @@ def test_dispatch_and_attempt_fields_hydrate_native_enums(
         attempt.refresh_from_db()
         dispatch.refresh_from_db()
     assert dispatch.kind is WorkflowDispatchKind.EXECUTE
-    assert attempt.result_kind == ""
-    assert attempt.lease_revocation_reason == ""
+    assert attempt.result_kind is None
+    assert attempt.lease_revocation_reason is None
 
     StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=now)
     StepAttempt.objects.revoke(attempt.pk, lease_token=attempt.lease_token, reason=revocation_reason, at=now)
@@ -295,6 +295,25 @@ def test_dispatch_and_attempt_fields_hydrate_native_enums(
         attempt.refresh_from_db()
     assert attempt.result_kind is result.kind
     assert attempt.lease_revocation_reason is revocation_reason
+
+
+@pytest.mark.django_db(transaction=True)
+def test_nullable_attempt_states_keep_database_evidence_constraints(run: WorkflowRun) -> None:
+    """A NULL kind cannot satisfy an evidence CHECK through SQL UNKNOWN."""
+
+    now = timezone.now()
+    with system_context(reason="nullable attempt constraint fixture"):
+        step_run = run.step_runs.create(step=run.workflow.steps.get(key="start"), status="scheduled")
+    attempt = StepAttempt.objects.claim(step_run, claimed_at=now).attempt
+
+    with system_context(reason="verify nullable attempt database constraints"):
+        for changes, constraint in (
+            ({"result_recorded_at": now}, "chk_wsa_result_pair"),
+            ({"lease_revoked_at": now}, "chk_wsa_revocation_pair"),
+            ({"orchestration_error": "retry setup failed"}, "chk_wsa_orchestration_error"),
+        ):
+            with pytest.raises(IntegrityError, match=constraint), transaction.atomic():
+                models.QuerySet.update(StepAttempt.objects.filter(pk=attempt.pk), **changes)
 
 
 @pytest.mark.django_db(transaction=True)

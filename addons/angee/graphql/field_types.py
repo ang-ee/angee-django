@@ -12,7 +12,9 @@ the type exists before any schema resource that uses the field can be constructe
 independent of ``INSTALLED_APPS`` order.
 
 State and id fields need no entry: strawberry-django resolves ``StateField`` by
-``isinstance`` against ``django-choices-field``'s ``TextChoicesField``, and the
+``isinstance`` against ``django-choices-field``'s ``TextChoicesField``. Optional
+states declare ``null=True, blank=True`` on the model, so native ``auto`` emits
+a nullable enum without a resolver or type rewrite. The
 opaque-id ``SqidField`` is a non-concrete column projected explicitly as
 ``strawberry.ID`` by ``AngeeNode`` — neither reaches ``field_type_map``.
 """

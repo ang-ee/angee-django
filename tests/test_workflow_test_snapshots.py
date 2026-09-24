@@ -11,7 +11,7 @@ from threading import Barrier
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import close_old_connections, connection, connections, models, transaction
+from django.db import IntegrityError, close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -2511,6 +2511,13 @@ def test_node_test_pins_selected_copied_step_and_reuses_exact_scope(
     )
     assert retried.pk == run.pk
 
+    with (
+        system_context(reason="node scope database constraint"),
+        pytest.raises(IntegrityError, match="chk_wfr_test_scope"),
+        transaction.atomic(),
+    ):
+        models.QuerySet.update(WorkflowRun.objects.filter(pk=run.pk), test_scope=None)
+
     with pytest.raises(ValidationError, match="request"):
         WorkflowRun.objects.start_test(
             workflow,
@@ -2522,7 +2529,7 @@ def test_node_test_pins_selected_copied_step_and_reuses_exact_scope(
         )
 
 
-def test_legacy_test_scope_blank_is_read_as_whole_but_new_writes_are_explicit(
+def test_legacy_test_scope_absence_is_read_as_whole_but_new_writes_are_explicit(
     workflow_engine_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="legacy-test-runner")
@@ -2539,10 +2546,10 @@ def test_legacy_test_scope_blank_is_read_as_whole_but_new_writes_are_explicit(
         copied_step = run.workflow.steps.get(key=step.key)
     assert run.allows_test_step(copied_step) is True
 
-    models.QuerySet.update(WorkflowRun.objects.filter(pk=run.pk), test_scope="")
+    models.QuerySet.update(WorkflowRun.objects.filter(pk=run.pk), test_scope=None)
     with system_context(reason="load legacy test scope"):
         run = WorkflowRun.objects.get(pk=run.pk)
-    assert run.test_scope == ""
+    assert run.test_scope is None
     assert run.allows_test_step(copied_step) is True
     run.error = "legacy row remains writable through unrelated owners"
     with system_context(reason="legacy test unrelated update"):

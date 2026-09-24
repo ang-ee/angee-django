@@ -1456,7 +1456,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         blank=True,
         related_name="child_runs",
     )
-    parent_relation = StateField(choices_enum=ParentRelation, blank=True, default="", editable=False)
+    parent_relation = StateField(choices_enum=ParentRelation, null=True, blank=True, editable=False)
     reprocessed_from = models.ForeignKey(
         "self", on_delete=models.PROTECT, null=True, blank=True, related_name="reprocessed_runs", editable=False
     )
@@ -1474,7 +1474,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
     occurrence_id = models.CharField(max_length=255, null=True, blank=True, editable=False)
     admitted_actor_ref = models.CharField(max_length=255, blank=True, default="", editable=False)
     test_request_actor_ref = models.CharField(max_length=255, blank=True, editable=False)
-    test_scope = StateField(choices_enum=WorkflowScope, blank=True, default="", editable=False)
+    test_scope = StateField(choices_enum=WorkflowScope, null=True, blank=True, editable=False)
     test_step = models.ForeignKey(
         "workflows.Step",
         on_delete=models.PROTECT,
@@ -1553,22 +1553,25 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             ),
             models.CheckConstraint(
                 condition=(
-                    models.Q(
+                    (
+                        models.Q(test_scope__isnull=True)
+                        | models.Q(test_scope__isnull=False, test_scope=WorkflowScope.WHOLE)
+                    ) & models.Q(
                         origin=RunOrigin.TEST,
-                        test_scope__in=("", WorkflowScope.WHOLE),
                         test_step__isnull=True,
                         test_source_step_id__isnull=True,
                     )
                     | models.Q(
                         origin=RunOrigin.TEST,
                         test_scope=WorkflowScope.NODE,
+                        test_scope__isnull=False,
                         test_step__isnull=False,
                         test_source_step_id__isnull=False,
                     )
                     | (
                         ~models.Q(origin=RunOrigin.TEST)
                         & models.Q(
-                            test_scope="",
+                            test_scope__isnull=True,
                             test_step__isnull=True,
                             test_source_step_id__isnull=True,
                         )
@@ -1699,7 +1702,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
 
         if step is None or step.workflow_id != self.workflow_id:
             return False
-        if self.origin != RunOrigin.TEST or self.test_scope in {"", WorkflowScope.WHOLE}:
+        if self.origin != RunOrigin.TEST or self.test_scope in {None, WorkflowScope.WHOLE}:
             return True
         if self.test_scope != WorkflowScope.NODE or self.test_step_id is None:
             return False
@@ -1722,7 +1725,7 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
         scheduled = waiting.filter(waiting_kind=WaitingKind.SCHEDULED)
         return {
             "_workflow_waiting_kind": models.Case(
-                models.When(~models.Q(status=RunStatus.WAITING), then=models.Value("")),
+                models.When(~models.Q(status=RunStatus.WAITING), then=models.Value(None)),
                 models.When(
                     models.Exists(waiting.filter(waiting_kind=WaitingKind.APPROVAL)),
                     then=models.Value(WaitingKind.APPROVAL),
@@ -1736,8 +1739,8 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                     then=models.Value(WaitingKind.CHILDREN),
                 ),
                 models.When(models.Exists(scheduled), then=models.Value(WaitingKind.SCHEDULED)),
-                default=models.Value(""),
-                output_field=models.CharField(),
+                default=models.Value(None),
+                output_field=step_run._meta.get_field("waiting_kind"),
             ),
             "_workflow_next_wake_at": models.Subquery(
                 scheduled.filter(run__status=RunStatus.WAITING)
@@ -1898,12 +1901,27 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
             if field.attname in cls.invocation_identity_attnames
         )
 
+    @classmethod
+    def normalize_parent_relation(
+        cls, parent_step_run_id: int | None, relation: ParentRelation | str | None,
+    ) -> ParentRelation | None:
+        """Normalize the declared relationship and require it exactly for child runs."""
+
+        try:
+            relation = cls._meta.get_field("parent_relation").to_python(relation)
+        except ValidationError as error:
+            raise ValidationError({"parent_relation": error}) from error
+        if (parent_step_run_id is None) != (relation is None):
+            raise ValidationError({"parent_relation": "Parent relationship is required exactly for a parent step."})
+        return cast(ParentRelation | None, relation)
+
     def _save_run_guarded(self, *args: Any, **kwargs: Any) -> None:
         """Validate new-run shape; existing identity is checked on the locked row."""
 
         if self._state.adding:
-            if (self.parent_step_run_id is None) != (self.parent_relation == ""):
-                raise ValidationError({"parent_relation": "Parent relationship is required exactly for a parent step."})
+            cast(Any, self).parent_relation = self.normalize_parent_relation(
+                self.parent_step_run_id, self.parent_relation,
+            )
             if self.result is not None:
                 raise ValidationError({"result": "A new workflow run cannot have a terminal result."})
         self._raise_if_test_identity_changed(using=kwargs["using"])
@@ -2143,7 +2161,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         editable=False,
     )
     wait_until = models.DateTimeField(null=True, blank=True, db_index=True)
-    waiting_kind = StateField(choices_enum=WaitingKind, blank=True, default="")
+    waiting_kind = StateField(choices_enum=WaitingKind, null=True, blank=True)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     error = models.TextField(blank=True)
     stacktrace = models.TextField(blank=True)
@@ -2354,7 +2372,7 @@ class StepRun(AuditMixin, AngeeDataModel):
 
         self.heartbeat_at = heartbeat_at
         self.claimed_deliveries = claimed_deliveries
-        self.waiting_kind = cast(WaitingKind, "")
+        cast(Any, self).waiting_kind = None
         self._transition_fields = {"heartbeat_at", "claimed_deliveries", "waiting_kind"}
 
     @transition(
@@ -2409,7 +2427,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.error = ""
         self.stacktrace = ""
         self.wait_until = None
-        self.waiting_kind = cast(WaitingKind, "")
+        cast(Any, self).waiting_kind = None
         self._transition_fields = {
             "output",
             "output_present",
@@ -2435,7 +2453,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.stacktrace = stacktrace
         self.outcome = outcome
         self.wait_until = None
-        self.waiting_kind = cast(WaitingKind, "")
+        cast(Any, self).waiting_kind = None
         self._transition_fields = {"error", "stacktrace", "outcome", "wait_until", "waiting_kind"}
 
     @transition(
@@ -2448,7 +2466,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         """Mark this row as skipped by routing or join semantics."""
 
         self.wait_until = None
-        self.waiting_kind = cast(WaitingKind, "")
+        cast(Any, self).waiting_kind = None
         self._transition_fields = {"wait_until", "waiting_kind", "resume_state"}
 
     @transition(
@@ -2461,7 +2479,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         """Mark this row as canceled."""
 
         self.wait_until = None
-        self.waiting_kind = cast(WaitingKind, "")
+        cast(Any, self).waiting_kind = None
         self._transition_fields = {"wait_until", "waiting_kind", "resume_state"}
 
     @transition(
@@ -2479,7 +2497,7 @@ class StepRun(AuditMixin, AngeeDataModel):
         self.claimed_deliveries = 0
         self.outcome = ""
         self.wait_until = None
-        self.waiting_kind = cast(WaitingKind, "")
+        cast(Any, self).waiting_kind = None
         self.heartbeat_at = None
         self.error = ""
         self.stacktrace = ""
@@ -2575,8 +2593,8 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     external_object_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     lease_revoked_at = models.DateTimeField(null=True, blank=True)
-    lease_revocation_reason = StateField(choices_enum=LeaseRevocationReason, blank=True, db_index=False)
-    result_kind = StateField(choices_enum=AttemptResultKind, blank=True, db_index=False)
+    lease_revocation_reason = StateField(choices_enum=LeaseRevocationReason, null=True, blank=True, db_index=False)
+    result_kind = StateField(choices_enum=AttemptResultKind, null=True, blank=True, db_index=False)
     result_recorded_at = models.DateTimeField(null=True, blank=True)
     output_present = models.BooleanField(default=False)
     output = models.JSONField(null=True, blank=True)
@@ -2625,15 +2643,15 @@ class StepAttempt(AuditMixin, AngeeDataModel):
             ),
             models.CheckConstraint(
                 condition=(
-                    models.Q(lease_revoked_at__isnull=True, lease_revocation_reason="")
-                    | (models.Q(lease_revoked_at__isnull=False) & ~models.Q(lease_revocation_reason=""))
+                    models.Q(lease_revoked_at__isnull=True, lease_revocation_reason__isnull=True)
+                    | models.Q(lease_revoked_at__isnull=False, lease_revocation_reason__isnull=False)
                 ),
                 name="chk_wsa_revocation_pair",
             ),
             models.CheckConstraint(
                 condition=(
-                    models.Q(result_recorded_at__isnull=True, result_kind="")
-                    | (models.Q(result_recorded_at__isnull=False) & ~models.Q(result_kind=""))
+                    models.Q(result_recorded_at__isnull=True, result_kind__isnull=True)
+                    | models.Q(result_recorded_at__isnull=False, result_kind__isnull=False)
                 ),
                 name="chk_wsa_result_pair",
             ),
@@ -2660,7 +2678,9 @@ class StepAttempt(AuditMixin, AngeeDataModel):
                 name="chk_wsa_retry_series",
             ),
             models.CheckConstraint(
-                condition=models.Q(orchestration_error="") | models.Q(result_kind=AttemptResultKind.TRANSIENT_ERROR),
+                condition=models.Q(orchestration_error="") | models.Q(
+                    result_kind__isnull=False, result_kind=AttemptResultKind.TRANSIENT_ERROR
+                ),
                 name="chk_wsa_orchestration_error",
             ),
             models.CheckConstraint(

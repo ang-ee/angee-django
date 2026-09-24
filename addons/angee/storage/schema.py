@@ -30,7 +30,6 @@ from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.permissions import RolePermission
 from angee.storage import exceptions
-from angee.storage.models import Folder as FolderModel
 from angee.storage.models import UploadState
 
 Backend = apps.get_model("storage", "Backend")
@@ -92,15 +91,9 @@ class FolderType(AngeeNode):
     name: auto
     description: auto
     is_virtual: auto
+    smart_kind: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["smart_kind"])
-    def smart_kind(self) -> FolderModel.SmartKind | None:
-        """Return the smart-folder kind; real folders have no kind."""
-
-        value = cast(Any, self).smart_kind
-        return FolderModel.SmartKind(value) if value else None
 
     @strawberry_django.field(only=["drive_id"])
     def drive(self) -> strawberry.ID | None:

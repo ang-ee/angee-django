@@ -204,7 +204,7 @@ def test_run_start_validates_only_new_exact_admission(
         input=JsonPresence(True, {"scope": "frozen"}), validate_new=validate_new,
     )
     retained = WorkflowRun.objects.start(
-        published, subject, owner, dedup_key="admission:exact",
+        published, subject, owner, dedup_key="admission:exact", parent_relation="",
         input=JsonPresence(True, {"scope": "frozen"}),
         validate_new=lambda: pytest.fail("retained admission was revalidated"),
     )
@@ -690,7 +690,7 @@ def test_workflow_step_config_query_projects_legacy_and_preserves_invalid_raw_va
         models.QuerySet.update(Step._base_manager.filter(pk=step.pk), config="invalid root")
     projected = result_data(execute_schema(_console_schema(), query, {"id": step.sqid}, user=admin))
     assert projected["workflow_steps_by_pk"]["config"] == "invalid root"
-    assert projected["workflow_steps_by_pk"]["config_errors"] == {"config": ["Gate config must be an object."]}
+    assert projected["workflow_steps_by_pk"]["config_errors"] == {"config": ["Step config must be a JSON object."]}
     step.refresh_from_db()
     assert step.config == "invalid root"
 

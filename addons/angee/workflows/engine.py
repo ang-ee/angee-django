@@ -104,7 +104,7 @@ def start(
     *,
     trigger: Any = None,
     parent_step_run: Any = None,
-    parent_relation: str = "",
+    parent_relation: str | None = None,
     dedup_key: str | None = None,
     origin: RunOrigin | None = None,
     input: JsonPresence = JsonPresence(),

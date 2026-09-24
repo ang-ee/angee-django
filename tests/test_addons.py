@@ -480,7 +480,9 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
         assert row.pending is True
 
 
-def test_install_preview_uses_name_for_unresolvable_identity(tmp_path, settings, monkeypatch) -> None:
+def test_install_preview_uses_canonical_name_when_django_label_is_unknown(tmp_path, settings, monkeypatch) -> None:
+    """An unresolved addon's display label falls back to its canonical name."""
+
     manifest = AddonManifest(name="unavailable_package.addon", depends_on=("unavailable_package.dependency",))
     monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: {manifest.name: (manifest, tmp_path)})
     monkeypatch.setattr(platform_models.composed, "addons", lambda: [])

@@ -193,7 +193,7 @@ def test_reap_records_revocation_without_fabricating_physical_result(
         ).count()
     assert attempt.lease_revocation_reason == str(LeaseRevocationReason.HEARTBEAT_LOST)
     assert attempt.result_recorded_at is None
-    assert attempt.result_kind == ""
+    assert attempt.result_kind is None
     assert attempt.output_present is False
     assert attempt.output is None
     assert attempt.applied_at is None

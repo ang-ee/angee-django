@@ -1040,7 +1040,7 @@ def test_timer_wait_resumes_from_wake_sweep(
     assert run.status == run_status.SUCCEEDED
     with system_context(reason="test completed wait projection"):
         projected = WorkflowRun.objects.annotate(**WorkflowRun.waiting_projection_annotation()).get(pk=run.pk)
-    assert projected._workflow_waiting_kind == ""
+    assert projected._workflow_waiting_kind is None
     assert projected._workflow_next_wake_at is None
 
 
