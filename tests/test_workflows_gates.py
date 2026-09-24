@@ -59,8 +59,10 @@ from angee.workflows.steps import (
     GateStep,
     StepEffect,
     StepExecutionMode,
+    StepImpl,
     StepOutcome,
     StepResult,
+    retry_policy_from_config,
 )
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.conftest import create_platform_admin as _platform_admin
@@ -387,7 +389,24 @@ def test_gate_config_rejects_static_action_unions_before_admission(slot_schema: 
         GateConfig.model_validate(config)
     with pytest.raises(ValidationError, match="oneOf"):
         GateStep.normalize_config(config)
+    with pytest.raises(ValidationError, match="oneOf"):
+        GateStep.gate_config(SimpleNamespace(step=SimpleNamespace(config=config)))
     assert GateConfig.model_validate(config, context={"resolved_bindings": True})
+
+
+@pytest.mark.parametrize("config", [None, False, 1, "invalid", []])
+def test_step_config_validation_rejects_non_objects_consistently(config: Any) -> None:
+    step_run = SimpleNamespace(step=SimpleNamespace(config=config))
+    validators = (
+        lambda: StepImpl.validate_config(config),
+        lambda: retry_policy_from_config(config),
+        lambda: GateStep.gate_config(step_run),
+    )
+
+    for validate in validators:
+        with pytest.raises(ValidationError) as error:
+            validate()
+        assert error.value.message_dict == {"config": ["Step config must be a JSON object."]}
 
 
 @pytest.mark.parametrize(

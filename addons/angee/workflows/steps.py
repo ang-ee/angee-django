@@ -596,8 +596,7 @@ def heartbeat_timeout() -> timedelta:
 def retry_policy_from_config(config: Any) -> StepRetryPolicy:
     """Return the queue retry policy declared by ``config``."""
 
-    if not isinstance(config, Mapping):
-        raise ValidationError({"config": "Step config must be a JSON object."})
+    StepImpl.validate_config(config)
     retry = config.get("retry")
     if retry is None:
         return StepRetryPolicy()
@@ -991,8 +990,7 @@ class GateStep(StepImpl):
         """Return the authored config; domain adapters may derive it from admitted input."""
 
         config = step_run.step.config
-        if not isinstance(config, Mapping):
-            raise ValidationError({"config": "Gate config must be an object."})
+        cls.validate_config(config)
         return config
 
     @classmethod

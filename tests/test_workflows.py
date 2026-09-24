@@ -204,7 +204,7 @@ def test_run_start_validates_only_new_exact_admission(
         input=JsonPresence(True, {"scope": "frozen"}), validate_new=validate_new,
     )
     retained = WorkflowRun.objects.start(
-        published, subject, owner, dedup_key="admission:exact",
+        published, subject, owner, dedup_key="admission:exact", parent_relation="",
         input=JsonPresence(True, {"scope": "frozen"}),
         validate_new=lambda: pytest.fail("retained admission was revalidated"),
     )

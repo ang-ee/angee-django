@@ -333,12 +333,12 @@ def test_committed_success_replay_does_not_repeat_domain_command(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("parent_relation", ("", "owned_call", "continuation"))
+@pytest.mark.parametrize("parent_relation", (None, "owned_call", "continuation"))
 def test_run_cancel_waits_for_committed_cancellation_before_continuing(
     workflow_engine_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
-    parent_relation: str,
+    parent_relation: str | None,
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
     actor = User.objects.create_user(username="run-cancel-owner")

@@ -652,9 +652,9 @@ export function waitLabel(
   t: ReturnType<typeof useWorkflowsT>,
 ): string | null {
   if (status !== "WAITING") return null;
-  if (waitingKind === "scheduled") return t("runs.waitScheduled");
-  if (waitingKind === "approval") return t("runs.waitApproval");
-  if (waitingKind === "external") return t("runs.waitExternal");
-  if (waitingKind === "children") return t("runs.waitChildren");
+  if (waitingKind === "SCHEDULED") return t("runs.waitScheduled");
+  if (waitingKind === "APPROVAL") return t("runs.waitApproval");
+  if (waitingKind === "EXTERNAL") return t("runs.waitExternal");
+  if (waitingKind === "CHILDREN") return t("runs.waitChildren");
   return t("runs.waitUnknown");
 }

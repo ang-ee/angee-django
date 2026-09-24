@@ -473,7 +473,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
     is_virtual = models.BooleanField(default=False, db_index=True, editable=False)
     smart_kind = StateField(
         choices_enum=SmartKind,
-        default="",
+        null=True,
         blank=True,
         editable=False,
     )
@@ -499,7 +499,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
             ),
             models.UniqueConstraint(
                 fields=("owner", "smart_kind"),
-                condition=Q(is_virtual=True) & ~Q(smart_kind=""),
+                condition=Q(is_virtual=True, smart_kind__isnull=False),
                 name="uniq_storage_folder_owner_smart_kind",
             ),
             models.CheckConstraint(

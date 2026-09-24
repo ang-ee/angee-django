@@ -30,10 +30,10 @@ describe("RunsPage presentation", () => {
   });
 
   test.each([
-    ["scheduled", "Scheduled"],
-    ["approval", "Needs approval"],
-    ["external", "Waiting for input"],
-    ["children", "Waiting for steps"],
+    ["SCHEDULED", "Scheduled"],
+    ["APPROVAL", "Needs approval"],
+    ["EXTERNAL", "Waiting for input"],
+    ["CHILDREN", "Waiting for steps"],
     ["", "Waiting"],
     [null, "Waiting"],
   ])("labels a waiting run with kind %s", (kind, expected) => {
@@ -41,8 +41,8 @@ describe("RunsPage presentation", () => {
   });
 
   test("does not surface stale wait metadata after a run leaves WAITING", () => {
-    expect(waitLabel("scheduled", "SUCCEEDED", t)).toBeNull();
-    expect(waitLabel("external", "RUNNING", t)).toBeNull();
+    expect(waitLabel("SCHEDULED", "SUCCEEDED", t)).toBeNull();
+    expect(waitLabel("EXTERNAL", "RUNNING", t)).toBeNull();
   });
 
   test("identifies test runs without presenting version zero as a publication", () => {

@@ -402,6 +402,11 @@ Use these owners instead of maintaining another contract in an addon:
   `kind` column. Reach for a child model, not a `StateField`, when the kinds carry
   their own fields (e.g. a `Person` linking to an `iam.User` that an `Organization`
   never has).
+  Optional states declare `null=True, blank=True`; absence is `None` in Python
+  and NULL in storage, so native Strawberry-Django `auto` emits a nullable enum.
+  Do not add blank-string sentinels or per-field GraphQL coercion. The legacy
+  non-null blank constructor remains available for historical migration fields;
+  active model declarations are guarded by `tests/test_layering.py`.
 - **Reference codes with upstream labels remain string fields.** A country code
   identifies external ISO reference data; it is not a row lifecycle state.
   `angee.parties.fields.CountryCodeField` therefore retains the GraphQL/string
@@ -784,6 +789,18 @@ and current contracts before applying a historical example to a new deployment.
   check against a restored database copy before the real upgrade, then verify
   that no affected active runs remain in the deployment. Retain the stack's
   runtime migration history throughout the rehearsal and upgrade.
+- **Convert optional-state sentinels when upgrading existing databases.**
+  Nullable state declarations require a coordinated runtime migration: remove
+  affected checks, alter the columns to nullable, convert existing empty strings
+  to NULL, and install the current constraints before resuming writers. This
+  applies to `WorkflowRun.parent_relation` and `test_scope`, `StepRun.waiting_kind`,
+  `StepAttempt.result_kind` and `lease_revocation_reason` in
+  [`workflows/models.py`](../../addons/angee/workflows/models.py), plus
+  `Folder.smart_kind` in [`storage/models.py`](../../addons/angee/storage/models.py).
+  Preserve retained rows and historical migration bodies; a generated schema
+  alteration alone does not perform the data conversion. Regenerate SDL and
+  client types after migration: workflow wait reasons now use the `WaitingKind`
+  enum's uppercase member names on the wire.
 - **A structural marker consumed after runtime emission must be emitted too.**
   A non-inherited `__dict__` source-model marker stops at the abstract source unless
   the composer carries it into the concrete runtime class body.

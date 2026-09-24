@@ -10,17 +10,19 @@ from unittest.mock import Mock
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.utils import timezone
-from graphql import parse, validate
+from graphql import GraphQLEnumType, GraphQLObjectType, get_named_type, parse, validate
 from rebac import system_context
 from strawberry.schema.config import StrawberryConfig
 
 from angee.workflows import engine
 from angee.workflows.attempts import AttemptResult, AttemptResultKind, LeaseRevocationReason
+from angee.workflows.models import RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import StepResult
 from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _published_workflow
-from tests.workflows import FixtureStep, StepAttempt, Workflow, WorkflowDispatch, advance_once
+from tests.workflows import FixtureStep, StepAttempt, Workflow, WorkflowDispatch, WorkflowRun, advance_once
 
 User = get_user_model()
 # Schema resolves concrete workflow models registered by the fixture imports above.
@@ -88,8 +90,19 @@ def test_attempt_resource_lists_bounded_summary_and_reads_selected_payload(
     )
     run = engine.start(workflow, subject=subject, actor=owner)
     assert run.created_by == owner
+    assert run.parent_relation is None
+    root = result_data(execute_schema(schema, """
+      query RootRun($id: String!) {
+        workflow_runs(where: {id: {_eq: $id}}) { id parent_relation waiting_kind }
+      }
+    """, {"id": run.sqid}, user=owner))["workflow_runs"]
+    assert root == [{"id": run.sqid, "parent_relation": None, "waiting_kind": None}]
     step_run = advance_once(run)[0]
+    with pytest.raises(ValidationError, match="Parent relationship"):
+        engine.start(workflow, subject=subject, actor=owner, parent_step_run=step_run, parent_relation="")
     with system_context(reason="test workflow inspection attempt"):
+        with pytest.raises(ValidationError, match="Parent relationship"):
+            WorkflowRun.objects.create(workflow=workflow, parent_step_run=step_run, parent_relation="")
         attempt = step_run.current_attempt
         assert WorkflowDispatch.objects.filter(step_attempt=attempt).exists()
 
@@ -174,6 +187,49 @@ def test_attempt_resource_lists_bounded_summary_and_reads_selected_payload(
     assert result_filter is not None
     assert result_filter.scalar == "String"
     assert ("ERROR", "error") in {(entry.from_value, entry.to_value) for entry in result_filter.value_map}
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("kind", list(WaitingKind))
+def test_run_and_step_waiting_kind_share_native_enum(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    kind: WaitingKind,
+) -> None:
+    """Stored and annotation-backed wait reasons share one nullable enum."""
+
+    del workflow_engine_tables, no_workflow_queue
+    schema = _console_schema()
+    owner = User.objects.create_user(username="workflow-waiting-reader")
+    subject, workflow = _published_workflow(
+        name="Waiting inspection workflow", subject_declaration="workflows.workflow", owner=owner,
+    )
+    run = engine.start(workflow, subject=subject, actor=owner)
+    row = advance_once(run)[0]
+    with system_context(reason="test waiting inspection projection"):
+        row.mark_waiting(waiting_kind=kind)
+        run.refresh_from_db()
+        run.mark_waiting()
+    assert row.status == StepRunStatus.WAITING
+    assert run.status == RunStatus.WAITING
+
+    data = result_data(execute_schema(schema, """
+      query WaitingRows($run: String!, $step: String!) {
+        workflow_runs_by_pk(id: $run) { waiting_kind }
+        workflow_step_runs_by_pk(id: $step) { waiting_kind }
+      }
+    """, {"run": run.sqid, "step": row.sqid}, user=owner))
+    assert data == {
+        "workflow_runs_by_pk": {"waiting_kind": kind.name},
+        "workflow_step_runs_by_pk": {"waiting_kind": kind.name},
+    }
+    run_type = schema._schema.get_type("WorkflowRunType")
+    step_type = schema._schema.get_type("StepRunType")
+    assert isinstance(run_type, GraphQLObjectType)
+    assert isinstance(step_type, GraphQLObjectType)
+    wait_enum = get_named_type(step_type.fields["waiting_kind"].type)
+    assert isinstance(wait_enum, GraphQLEnumType)
+    assert get_named_type(run_type.fields["waiting_kind"].type) is wait_enum
 
 
 @pytest.mark.django_db(transaction=True)

@@ -477,8 +477,8 @@ def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
         assert row.pending is True
 
 
-def test_install_preview_keeps_unresolvable_identity_unknown(tmp_path, settings, monkeypatch) -> None:
-    """Display the canonical name without inventing a native Django identity."""
+def test_install_preview_uses_canonical_name_when_django_label_is_unknown(tmp_path, settings, monkeypatch) -> None:
+    """An unresolved addon's display label falls back to its canonical name."""
 
     manifest = AddonManifest(name="unavailable_package.addon", depends_on=("unavailable_package.dependency",))
     monkeypatch.setattr(platform_models, "available_addons", lambda _dirs: {manifest.name: (manifest, tmp_path)})
@@ -495,7 +495,6 @@ def test_install_preview_keeps_unresolvable_identity_unknown(tmp_path, settings,
     assert len(preview.addons_to_enable) == 1
     impact = preview.addons_to_enable[0]
     assert (impact.name, impact.label, impact.depends_on) == (manifest.name, manifest.name, manifest.depends_on)
-    assert resolve_app_config(manifest.name) is None
 
 
 @pytest.fixture

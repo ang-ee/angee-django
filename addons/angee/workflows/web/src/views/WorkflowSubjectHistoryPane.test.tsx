@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
           id: "run-waiting",
           status: "WAITING",
           origin: "TEST",
-          waiting_kind: "external",
+          waiting_kind: "EXTERNAL",
           next_wake_at: null,
           active_step: "Prepare supplier review",
           updated_at: "2026-09-18T10:00:00Z",
@@ -52,7 +52,7 @@ const mocks = vi.hoisted(() => ({
             step_run: {
               id: "step-run-waiting",
               status: "WAITING",
-              waiting_kind: "external",
+              waiting_kind: "EXTERNAL",
               run: { id: "run-waiting" },
               current_attempt: { id: "attempt-current" },
             },
@@ -68,7 +68,7 @@ const mocks = vi.hoisted(() => ({
             step_run: {
               id: "step-run-waiting",
               status: "WAITING",
-              waiting_kind: "external",
+              waiting_kind: "EXTERNAL",
               run: { id: "run-waiting" },
               current_attempt: { id: "attempt-current" },
             },
@@ -84,7 +84,7 @@ const mocks = vi.hoisted(() => ({
             step_run: {
               id: "step-run-waiting",
               status: "WAITING",
-              waiting_kind: "external",
+              waiting_kind: "EXTERNAL",
               run: { id: "run-waiting" },
               current_attempt: { id: "attempt-current" },
             },

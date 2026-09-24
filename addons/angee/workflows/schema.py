@@ -34,7 +34,6 @@ from angee.graphql.data import (
     hasura_model_resource,
     public_pk_decoder,
 )
-from angee.graphql.field_types import blank_state_field
 from angee.graphql.ids import PublicID, instance_for_id, to_public_id
 from angee.graphql.impl import ImplChoice as GraphQLImplChoice
 from angee.graphql.node import AngeeNode
@@ -69,7 +68,7 @@ from angee.workflows.definitions import (
     StaleDefinitionError,
 )
 from angee.workflows.graph import GraphDiagnostic, GraphIdentity, GraphLocation
-from angee.workflows.models import TriggerKind
+from angee.workflows.models import TriggerKind, WaitingKind
 from angee.workflows.steps import StepEffect, StepImpl, StepOperation
 from angee.workflows.trigger_conditions import EventConditionCatalogue, EventConditionClause
 from angee.workflows.trigger_declarations import (
@@ -911,11 +910,14 @@ class WorkflowRunType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(annotate=cast(Any, WorkflowRun).waiting_projection_annotation())
-    def waiting_kind(self) -> str | None:
+    @strawberry_django.field(
+        annotate=cast(Any, WorkflowRun).waiting_projection_annotation(),
+        graphql_type=strawberry.enum(StepRun._meta.get_field("waiting_kind").choices_enum) | None,
+    )
+    def waiting_kind(self) -> WaitingKind | None:
         """Return the declared runtime wait reason, when one is known."""
 
-        return cast(str, cast(Any, self)._workflow_waiting_kind) or None
+        return cast(WaitingKind | None, cast(Any, self)._workflow_waiting_kind)
 
     @strawberry_django.field(annotate=cast(Any, WorkflowRun).waiting_projection_annotation())
     def next_wake_at(self) -> datetime | None:
@@ -947,17 +949,12 @@ class StepRunType(AngeeNode):
     attempt: auto
     current_attempt: "StepAttemptType | None"
     wait_until: auto
+    waiting_kind: auto
     heartbeat_at: auto
     error: auto
     stacktrace: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["waiting_kind"])
-    def waiting_kind(self) -> str | None:
-        """Return a declared wait reason, or null for legacy/nonwaiting rows."""
-
-        return str(cast(Any, self).waiting_kind) or None
 
 
 @strawberry_django.type(StepAttempt)
@@ -986,8 +983,8 @@ class StepAttemptType(AngeeNode):
     started_at: auto
     heartbeat_at: auto
     lease_revoked_at: auto
-    lease_revocation_reason = blank_state_field(StepAttempt._meta.get_field("lease_revocation_reason"))
-    result_kind = blank_state_field(StepAttempt._meta.get_field("result_kind"))
+    lease_revocation_reason: auto
+    result_kind: auto
     result_recorded_at: auto
     output_present: auto
     output: JSON | None

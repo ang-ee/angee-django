@@ -681,7 +681,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         trigger: Any = None,
         parent_step_run: Any = None,
-        parent_relation: ParentRelation | str = "",
+        parent_relation: ParentRelation | str | None = None,
         dedup_key: str | None = None,
         origin: RunOrigin | None = None,
         input: JsonPresence | Callable[[str], JsonPresence] = JsonPresence(),
@@ -706,12 +706,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise PermissionDenied("Starting a workflow requires an explicit actor.") from error
         if not callable(input):
             input = validate_json_presence(input, label="workflow run input")
-        if (parent_step_run is None) != (parent_relation == ""):
-            raise ValidationError(
-                {"parent_relation": "Choose a parent relationship exactly when starting from a parent step."}
-            )
-        if parent_relation and parent_relation not in ParentRelation.values:
-            raise ValidationError({"parent_relation": "Unknown parent relationship."})
+        parent_relation = self.model.normalize_parent_relation(
+            None if parent_step_run is None else parent_step_run.pk, parent_relation,
+        )
         if dedup_key is not None and len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
             raise ValidationError({"dedup_key": "Workflow run dedup key is too long."})
         alias = get_write_alias(self.model, using=using, bound=self, instance=workflow)
@@ -971,7 +968,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         trigger: Any = None,
         parent_step_run: Any = None,
-        parent_relation: ParentRelation | str = "",
+        parent_relation: ParentRelation | str | None = None,
         dedup_key: str | None = None,
         occurrence_id: str | None = None,
         origin: RunOrigin | None = None,
@@ -2231,13 +2228,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         trigger: Any = None,
         parent_step_run: Any = None,
-        parent_relation: ParentRelation | str = "",
+        parent_relation: ParentRelation | str | None = None,
         dedup_key: str | None = None,
         occurrence_id: str | None = None,
         origin: RunOrigin | None = None,
         input: JsonPresence = JsonPresence(),
         test_request_actor_ref: str = "",
-        test_scope: WorkflowScope | str = "",
+        test_scope: WorkflowScope | str | None = None,
         test_step: Any = None,
         test_source_step_id: int | None = None,
         test_repair_source_attempt: Any = None,
@@ -5547,7 +5544,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             step_run.stacktrace = result.stacktrace or ""
             step_run.outcome = result.outcome or "failed"
             step_run.wait_until = None
-            step_run.waiting_kind = ""
+            step_run.waiting_kind = None
             step_run._transition_fields = {"error", "stacktrace", "outcome", "wait_until", "waiting_kind"}
             step_run.mark_preparation_failed(using=alias)
             return ()

@@ -944,6 +944,24 @@ def test_users_get_a_trash_smart_folder(storage_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("schema_name", ["public", "console"])
+def test_folder_kind_projects_native_null_and_enum(drive: Any, schema_name: str) -> None:
+    """Real folders persist absence as NULL and smart folders expose their enum."""
+
+    with system_context(reason="test.storage.folder.kind"):
+        real = Folder.objects.create(drive=drive, name="Reports", created_by=drive.alice)
+        trash = Folder.objects.get(owner=drive.alice, smart_kind=Folder.SmartKind.TRASH)
+        assert Folder.objects.filter(pk=real.pk, smart_kind__isnull=True).exists()
+
+    schema = addon_schema(storage_schema.schemas, schema_name)
+    query = "query FolderKind($id: String!) { folders_by_pk(id: $id) { smart_kind } }"
+    for folder, kind in ((real, None), (trash, "TRASH")):
+        assert result_data(execute_schema(schema, query, {"id": str(folder.sqid)}, user=drive.alice)) == {
+            "folders_by_pk": {"smart_kind": kind},
+        }
+
+
+@pytest.mark.django_db(transaction=True)
 def test_backend_storage_cache_tracks_resolved_env_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

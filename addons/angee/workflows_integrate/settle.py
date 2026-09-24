@@ -33,12 +33,15 @@ def settle_bridge_run(run: Any, *, using: str | None = None) -> None:
     if not run.is_terminal:
         return
     content_type = related_on(run, "subject_content_type", using=using)
-    model = None if content_type is None else content_type.model_class()
+    if content_type is None:
+        return
+    model = content_type.model_class()
     if model is None or not issubclass(model, Bridge):
         return
     with system_context(reason="workflows_integrate.settle"):
-        bridge = model.objects.db_manager(using).filter(pk=run.subject_object_id).first()
-        if bridge is None:
+        try:
+            bridge = content_type.get_object_for_this_type(using=using, pk=run.subject_object_id)
+        except model.DoesNotExist:
             return
         if run.status == RunStatus.SUCCEEDED:
             steps = run._meta.apps.get_model("workflows", "StepRun")

@@ -52,10 +52,10 @@ export function RunsPage(): React.ReactElement {
   const collection = search.tab === "sessions" ? "sessions" : "automations";
   const waitOptions = React.useMemo(
     () => [
-      { value: "scheduled", label: t("runs.waitScheduled") },
-      { value: "approval", label: t("runs.waitApproval") },
-      { value: "external", label: t("runs.waitExternal") },
-      { value: "children", label: t("runs.waitChildren") },
+      { value: "SCHEDULED", label: t("runs.waitScheduled") },
+      { value: "APPROVAL", label: t("runs.waitApproval") },
+      { value: "EXTERNAL", label: t("runs.waitExternal") },
+      { value: "CHILDREN", label: t("runs.waitChildren") },
     ],
     [t],
   );

@@ -29,7 +29,6 @@ from angee.base.models import AngeeModel
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.graphql.field_types import blank_state_field
 from angee.graphql.revisions import revisions
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
@@ -129,7 +128,7 @@ class BlankWorkflowItem(models.Model):
     class State(models.TextChoices):
         ENABLED = "enabled", "Enabled"
 
-    state = StateField(choices_enum=State, blank=True)
+    state = StateField(choices_enum=State, null=True, blank=True)
 
     class Meta:
         app_label = "tests"
@@ -897,13 +896,15 @@ def test_state_field_accepts_graphql_enum_member_names() -> None:
         field.to_python("MISSING")
 
 
-@pytest.mark.parametrize(("state", "expected"), [("", None), ("enabled", "ENABLED")])
-def test_blank_state_field_preserves_native_enum_across_schema_builds(state: str, expected: str | None) -> None:
+@pytest.mark.parametrize(("state", "expected"), [(None, None), ("enabled", "ENABLED")])
+def test_nullable_state_auto_preserves_native_enum_across_schema_builds(
+    state: str | None, expected: str | None,
+) -> None:
     """Null projection preserves declared enum metadata and remains reusable."""
 
     @strawberry_django.type(BlankWorkflowItem)
     class BlankWorkflowItemType:
-        state = blank_state_field(BlankWorkflowItem._meta.get_field("state"))
+        state: strawberry.auto
 
     @strawberry.type
     class Query:
