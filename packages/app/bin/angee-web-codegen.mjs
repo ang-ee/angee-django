@@ -19,9 +19,11 @@ import {
   schemaFieldMetadataFromAngeeSchemaMetadata,
 } from "@angee/metadata/headless";
 import {
+  GraphQLID,
   GraphQLObjectType,
   buildSchema,
   getNamedType,
+  isRequiredArgument,
   parse,
   print,
   validate,
@@ -504,7 +506,7 @@ function buildOperationDocuments(name, runtimeDir) {
     `// Generated from runtime/schemas/${name}.graphql - do not edit by hand.`,
     "// Run `pnpm codegen` to regenerate.",
     "//",
-    "// Mutation fields with arguments returning ActionResult, plus authored",
+    "// Eligible ActionResult mutation fields, plus authored",
     "// aggregate, group, delete-preview, and revision operation documents.",
     "",
     "import type { TypedDocumentNode } from \"@graphql-typed-document-node/core\";",
@@ -687,6 +689,17 @@ function actionFields(schema) {
         return [];
       }
       if (field.args.length === 0) return [];
+      const requiredArgs = field.args.filter(isRequiredArgument);
+      if (
+        requiredArgs.length !== field.args.length &&
+        !(
+          requiredArgs.length === 1 &&
+          requiredArgs[0].name === "id" &&
+          requiredArgs[0].type.ofType === GraphQLID
+        )
+      ) {
+        return [];
+      }
       return [{
         name,
         args: field.args.map((arg) => ({

@@ -1,14 +1,13 @@
+import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Button, Dialog, Glyph, LoadingPanel, MutationDialog, errorMessage, mutationDialogValueCodecs, textRoleVariants, useAuthoredResourceMutation, useRelationOptions, useToast, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
+import { Button, Dialog, Glyph, LoadingPanel, MutationDialog, errorMessage, mutationDialogValueCodecs, textRoleVariants, useActionOutcomeMutation, useActionResultRun, useRelationOptions, useToast, type MutationDialogField, type MutationDialogValues } from "@angee/ui";
 import { ErrorBanner } from "@angee/ui/fragments/ErrorBanner";
 import { RepositoryPicker, VCS_BRIDGE_RELATION } from "@angee/integrate-vcs";
 import { PLATFORM_ADDON_MUTATION_INVALIDATES } from "@angee/platform";
 
 import {
-  AddAddonSource,
   AddonSources,
-  ScanAddonSource,
   type AddonSourceRow,
 } from "./documents";
 import { usePlatformIntegrateVcsT } from "./i18n";
@@ -57,9 +56,9 @@ function AddSourceDialog({
   const soleBridge = bridgeOptions.length === 1 ? bridgeOptions[0] : undefined;
   const vcsBridgeId = soleBridge?.value ?? "";
 
-  const [addSource] = useAuthoredResourceMutation(AddAddonSource, {
+  const [addSource] = useActionOutcomeMutation<ActionFieldName>("add_source", {
+    idArgument: null,
     invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
-    shouldInvalidate: (data) => Boolean(data?.add_source?.ok),
   });
   const fields = React.useMemo<readonly MutationDialogField[]>(
     () => [
@@ -124,9 +123,7 @@ function AddSourceDialog({
       errorFallback={t("apps.actionFailed")}
       parseValues={parseAddonSourceValues}
       onSubmit={async (values) => {
-        const result = (
-          await addSource(values)
-        )?.add_source;
+        const result = await addSource("", values);
         if (result?.ok) {
           toast.success({ title: result.message });
           return;
@@ -161,36 +158,29 @@ function ScanSourcesDialog({
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
   const t = usePlatformIntegrateVcsT();
-  const toast = useToast();
   const query = useAuthoredQuery(AddonSources, undefined, { enabled: open });
   const sources = query.data?.sources ?? [];
   const { refetch } = query;
-  const [scan] = useAuthoredResourceMutation(ScanAddonSource, {
+  const [scan] = useActionOutcomeMutation<ActionFieldName>("scan", {
+    idArgument: "source_id",
     invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
-    shouldInvalidate: (data) => Boolean(data?.scan?.ok),
   });
+  const settle = useActionResultRun({ noResultTitle: t("apps.actionFailed") });
   const [scanning, setScanning] = React.useState<string | null>(null);
 
   const runScan = React.useCallback(
     async (id: string) => {
       setScanning(id);
       try {
-        const result = (await scan({ sourceId: id }))?.scan;
-        if (result?.ok) {
-          toast.success({ title: result.message });
-          refetch();
-        } else {
-          toast.danger({ title: result?.message ?? t("apps.actionFailed") });
-        }
-      } catch (cause) {
-        toast.danger({ title: errorMessage(cause, t("apps.actionFailed")) });
+        const result = await settle(() => scan(id));
+        if (result?.ok) void refetch();
       } finally {
         setScanning(null);
       }
     },
     // `refetch` is the stable, memoized query member — depend on it, not the whole
     // result object (which gets a fresh identity every render).
-    [scan, toast, t, refetch],
+    [scan, settle, refetch],
   );
 
   return (

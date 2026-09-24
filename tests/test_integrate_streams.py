@@ -10,7 +10,15 @@ from threading import Barrier, Lock
 from typing import Any, ClassVar
 
 import pytest
-from django.db import OperationalError, close_old_connections, connection, connections, models
+from django.db import (
+    DatabaseError,
+    OperationalError,
+    close_old_connections,
+    connection,
+    connections,
+    models,
+    transaction,
+)
 from django.utils import timezone
 from rebac import system_context
 
@@ -1058,6 +1066,40 @@ def test_seed_rejects_falsy_non_object_cursors(stream_bridge: Channel, cursor: A
     stream = SyncStream.objects.current_for_bridge(stream_bridge, "records").get()
     assert stream.cursor == {}
     assert stream.last_advanced_at is None
+
+
+def test_seed_cutover_locks_bridge_before_stream(stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch) -> None:
+    if connection.vendor != "postgresql":
+        pytest.skip("Bridge cutover row-lock ordering requires PostgreSQL.")
+    stream_bridge.cursor = {"legacy": 1}
+    stream_bridge.save(update_fields=["cursor"])
+    SyncStream.objects.current(stream_bridge, "records")
+    manager_class = type(SyncStream.objects)
+    lock_current = manager_class.lock_current
+
+    def try_bridge_lock() -> None:
+        close_old_connections()
+        try:
+            with (
+                system_context(reason="test competing bridge cutover"),
+                pytest.raises(DatabaseError) as denied,
+                transaction.atomic(using="default"),
+            ):
+                Channel.objects.using("default").select_for_update(nowait=True).get(pk=stream_bridge.pk)
+            assert denied.value.__cause__.sqlstate == "55P03"
+        finally:
+            connections.close_all()
+
+    def verify_bridge_locked(manager: Any, stream: Any, *, using: str | None = None) -> Any:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(try_bridge_lock).result(timeout=10)
+        return lock_current(manager, stream, using=using)
+
+    monkeypatch.setattr(manager_class, "lock_current", verify_bridge_locked)
+    adapter = MemoryAdapter()
+    adapter.integration = stream_bridge
+    stream = open_stream(stream_bridge, "records", "", adapter)
+    assert stream.last_advanced_at is not None
 
 
 @pytest.mark.parametrize("boundary", ["page", "reset", "definition"])

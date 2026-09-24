@@ -408,15 +408,6 @@ export const CreateWorkflowEdgeDocument = graphql(`
   }
 `);
 
-export const PublishWorkflowDocument = graphql(`
-  mutation PublishWorkflow($id: ID!) {
-    publish_workflow(workflow: $id) {
-      ok
-      message
-    }
-  }
-`);
-
 export const WorkflowsForSubjectDeclarationDocument = graphql(`
   query WorkflowsForSubjectDeclaration($subjectDeclaration: String!) {
     workflows_for_subject_declaration(
@@ -456,15 +447,6 @@ export const RunWorkflowDocument = graphql(`
       message
       validation_errors
       id
-    }
-  }
-`);
-
-export const CancelWorkflowRunDocument = graphql(`
-  mutation CancelWorkflowRun($id: ID!) {
-    cancel_workflow_run(run: $id) {
-      ok
-      message
     }
   }
 `);

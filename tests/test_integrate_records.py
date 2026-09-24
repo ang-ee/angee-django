@@ -8,7 +8,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connections, models, transaction
+from django.db import IntegrityError, connections, models, transaction
 from django.utils import timezone
 from rebac import system_context
 
@@ -250,6 +250,39 @@ def test_discrepancy_coalescing_rescan_and_resolution_history(replica: Any) -> N
     )
     assert replacement.pk not in (first.pk, future.pk)
     assert SyncDiscrepancy.objects.filter(pk=first.pk, status=DiscrepancyStatus.RESOLVED).exists()
+
+
+@pytest.mark.parametrize("status", [DiscrepancyStatus.OPEN, DiscrepancyStatus.RETRY])
+def test_open_discrepancy_unique_index_preserves_resolved_history(replica: Any, status: str) -> None:
+    """The database enforces uniqueness through the generated openness column."""
+
+    using = replica._state.db
+    identity = {
+        "stream": replica,
+        "kind": DiscrepancyKind.SEMANTIC,
+        "code": "invalid",
+        "source_hash": "same-version",
+        "mapping_version": 1,
+    }
+    first = SyncDiscrepancy.objects.db_manager(using).record(**identity)
+    if status == DiscrepancyStatus.RETRY:
+        first = SyncDiscrepancy.objects.db_manager(using).retry(first)
+    first.refresh_from_db(using=using)
+    assert first.is_open
+
+    # Bypass manager coalescing so this exercises the native partial index.
+    with pytest.raises(IntegrityError), transaction.atomic(using=using):
+        SyncDiscrepancy.objects.db_manager(using).create(**identity, status=status)
+
+    resolved = SyncDiscrepancy.objects.db_manager(using).resolve(first)
+    assert not resolved.is_open
+    replacement = SyncDiscrepancy.objects.db_manager(using).create(**identity, status=status)
+    replacement.refresh_from_db(using=using)
+    assert replacement.is_open
+    assert set(SyncDiscrepancy.objects.db_manager(using).values_list("pk", "is_open")) == {
+        (resolved.pk, False),
+        (replacement.pk, True),
+    }
 
 
 def test_retry_is_due_now_but_preserves_conflict_and_resolved_history_guards(replica: Any) -> None:

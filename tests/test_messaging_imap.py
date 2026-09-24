@@ -1657,6 +1657,7 @@ def test_legacy_future_only_policy_survives_a_stream_reset(imap_tables: None, mo
         assert channel.config["delivery_mode"] == "new_only"
         assert channel.config["source_identity"] == identity
         assert channel.config["mailbox_selection"] == ["INBOX"]
+        assert channel.cursor == {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
         assert stream.config == {}
         account.folders["INBOX"]["uidvalidity"] = 200
         account.folders["INBOX"]["messages"][2] = {"raw": _eml(message_id="<old-epoch@example.com>")}
@@ -1670,8 +1671,46 @@ def test_legacy_future_only_policy_survives_a_stream_reset(imap_tables: None, mo
     assert not Message._base_manager.exists()
 
 
+@pytest.mark.django_db(transaction=True)
+def test_new_mailbox_cannot_restore_removed_legacy_policy(imap_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<retained-inbox@example.com>"))})
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel()
+    positions = {name: {"uidvalidity": 100, "last_uid": 1} for name in ("Archive", "INBOX")}
+    with system_context(reason="test imap removed legacy policy"):
+        channel.cursor = {"delivery_mode": "new_only", "source_identity": "legacy", "mailboxes": positions}
+        channel.save(update_fields=["cursor"])
+        first = open_stream(
+            channel,
+            "messages",
+            "INBOX",
+            channel.backend,
+            definition=StreamDefinition(key="messages", partition="INBOX"),
+        )
+        assert first.cursor == positions["INBOX"]
+        assert channel.config["delivery_mode"] == "new_only"
+        assert channel.cursor == {"mailboxes": positions}
+        channel.config.pop("delivery_mode")
+        channel.save(update_fields=["config"])
+        account.folders["Archive"] = _folder(
+            _eml(message_id="<retained-archive@example.com>"),
+            _eml(message_id="<archive-arrival@example.com>"),
+        )
+        account.folders["New"] = _folder(_eml(message_id="<new-mailbox-history@example.com>"))
+
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 2
+
+        channel.refresh_from_db()
+        assert "delivery_mode" not in channel.config
+        assert channel.cursor == {"mailboxes": positions}
+        assert set(Message._base_manager.values_list("external_id", flat=True)) == {
+            "archive-arrival@example.com",
+            "new-mailbox-history@example.com",
+        }
+
+
 def test_legacy_imap_seed_hooks_only_translate_state() -> None:
-    """Seeding never writes, aliases the legacy input, or installs adapter state."""
+    """Seeding never writes, mutates the legacy input, or installs adapter state."""
 
     legacy = {
         "delivery_mode": "new_only",
@@ -1681,12 +1720,16 @@ def test_legacy_imap_seed_hooks_only_translate_state() -> None:
     bridge = SimpleNamespace(config={"host": "192.0.2.10"}, cursor=legacy)
     stream = SimpleNamespace(partition="INBOX")
     backend = ImapChannelBackend(bridge)
-    assert backend.seed_config(legacy) == {
+    config, retained = backend.seed_config(legacy)
+    assert config == {
         "delivery_mode": "new_only",
         "source_identity": "legacy-account",
         "mailbox_selection": ["INBOX"],
     }
-    cursor = backend.seed_cursor(stream, legacy)
+    assert retained == {"mailboxes": legacy["mailboxes"]}
+    assert legacy["delivery_mode"] == "new_only"
+    assert legacy["source_identity"] == "legacy-account"
+    cursor = backend.seed_cursor(stream, retained)
     assert cursor == {"uidvalidity": 100, "last_uid": 1}
     assert cursor is not legacy["mailboxes"]["INBOX"]
     assert bridge.config == {"host": "192.0.2.10"}
@@ -1726,6 +1769,8 @@ def test_legacy_imap_cutover_uses_one_alias_and_preserves_config(
         assert stream._state.db == using
         assert stream.cursor == {"uidvalidity": 100, "last_uid": 1}
         assert stream.config == {}
+        assert saved.cursor == channel.cursor == {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
+        assert Channel._base_manager.using("default").get(pk=channel.pk).cursor["delivery_mode"] == "new_only"
         assert Channel._base_manager.using("default").get(pk=channel.pk).config == original_config
         assert not SyncStream._base_manager.using("default").filter(integration_id=channel.pk).exists()
 

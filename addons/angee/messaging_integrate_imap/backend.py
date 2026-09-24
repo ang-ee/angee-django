@@ -426,16 +426,19 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         names = sorted(self._select_mailboxes(client))
         return tuple(StreamDefinition(key="messages", partition=name) for name in names)
 
-    def seed_config(self, legacy_cursor: dict[str, Any]) -> dict[str, Any]:
-        """Translate legacy delivery policy for the driver's locked bridge cutover."""
+    def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Move legacy delivery policy while retaining per-mailbox positions."""
 
         if legacy_cursor.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE:
-            return {
-                "delivery_mode": NEW_MAIL_DELIVERY_MODE,
-                "source_identity": legacy_cursor.get("source_identity", ""),
-                "mailbox_selection": sorted(legacy_cursor.get("mailboxes") or {}),
-            }
-        return {}
+            return (
+                {
+                    "delivery_mode": NEW_MAIL_DELIVERY_MODE,
+                    "source_identity": legacy_cursor.get("source_identity", ""),
+                    "mailbox_selection": sorted(legacy_cursor.get("mailboxes") or {}),
+                },
+                {key: value for key, value in legacy_cursor.items() if key not in ("delivery_mode", "source_identity")},
+            )
+        return {}, legacy_cursor
 
     def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
         """Translate only the mailbox position on its first stream."""

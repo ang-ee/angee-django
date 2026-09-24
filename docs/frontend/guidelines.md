@@ -118,9 +118,12 @@ history uses native Query pages with domain-owned
   valibot schema (`safeParse`), never asserted into an application shape; a
   recursive shape a declarative schema cannot express may wrap its type guard
   in `v.custom`, keeping the parse boundary in the schema.
-- **ActionResult mutations with arguments are derived, not authored.**
-  Codegen owns eligibility in `packages/app/bin/angee-web-codegen.mjs` and
-  preserves the schema's argument types and defaults, including optional input. Call
+- **Eligible ActionResult mutations are derived, not authored.** Codegen in
+  `packages/app/bin/angee-web-codegen.mjs` derives mutations with at least one
+  argument when every argument is required (non-null without a default), or
+  when `id: ID!` is the sole required argument and all others are optional or
+  defaulted. Other shapes stay authored. Generated documents preserve the
+  schema's argument types and defaults. Call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
   rendered-view code, or
   `useRecordActionMutation<ActionFieldName>("field")` for a rendered
@@ -192,6 +195,13 @@ history uses native Query pages with domain-owned
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
   `useSlot` read the composed `AppRuntime`; menu declarations project into refine
   resources and chrome renders refine `useMenu`.
+- **Custom resource widget keys use `namespace.addon.widgetName`.** Keep namespace
+  segments lowercase (digits and underscores are allowed); use camelCase for a
+  multiword terminal widget name, matching the web widget registry. Backend field
+  metadata and the owning addon's `widgets` contribution use the identical key,
+  for example `angee.integrate.integrationSyncCursor`. The validator in
+  [`angee.data.field_classification`](../../angee/data/field_classification.py)
+  also accepts existing underscore names; unknown bare names remain errors.
 - **A resource registry key is the emitted canonical `modelLabel`** (for example
   `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
   lowercase spelling only because `createApp` canonicalizes it fail-fast against

@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { rowPublicId } from "@angee/metadata";
-import { useActionMutation, useAuthoredMutation } from "@angee/refine";
+import { useActionMutation } from "@angee/refine";
 import {
   Action,
   Column,
@@ -13,6 +13,7 @@ import {
   ResourceList,
   routeSearchParam,
   TopMenuTabs,
+  useRecordActionMutation,
   useResourceRecordHrefLookup,
   useRouteSearch,
   type ActionContext,
@@ -21,7 +22,6 @@ import {
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
-import { CancelWorkflowRunDocument } from "../documents.console";
 import { DECISION_SEARCH_KEY, decisionSearch } from "../decision-navigation";
 import { useWorkflowsT } from "../i18n";
 import {
@@ -60,27 +60,16 @@ export function RunsPage(): React.ReactElement {
     ],
     [t],
   );
-  // Correct as-is: WorkflowRun and Decision have changes(), while StepRun is read by an authored query.
-  const [cancelRun] = useAuthoredMutation(CancelWorkflowRunDocument, {
+  // WorkflowRun and Decision have changes(), while StepRun is read by an authored query.
+  const [cancel] = useRecordActionMutation<ActionFieldName>("cancel_workflow_run", {
+    idArgument: "run",
     invalidateModels: [RUN_MODEL, STEP_RUN_MODEL, DECISION_MODEL],
-    errorFrom: (data) =>
-      data?.cancel_workflow_run.ok === false ? data.cancel_workflow_run.message : null,
   });
   const [reprocessRun] = useActionMutation<ActionFieldName>("reprocess_workflow_run", {
     idArgument: "run",
     invalidateModels: [RUN_MODEL, STEP_RUN_MODEL, DECISION_MODEL],
   });
   const reprocessKeys = React.useRef(new Map<string, string>());
-  const cancel = React.useCallback(
-    async (context: ActionContext) => {
-      const id = rowPublicId(context.record);
-      if (!id) return;
-      const data = await cancelRun({ id });
-      context.refresh();
-      return data?.cancel_workflow_run?.message;
-    },
-    [cancelRun],
-  );
   const reprocessById = React.useCallback(async (id: string) => {
     let requestKey = reprocessKeys.current.get(id);
     if (!requestKey) {

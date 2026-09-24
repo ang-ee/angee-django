@@ -893,14 +893,18 @@ def open_stream(
                 locked_bridge = type(bridge).objects.db_manager(using).filter(pk=bridge.pk).lock_if_supported().get()
                 stream = manager.lock_current(stream, using=using)
                 if not stream.cursor and stream.last_advanced_at is None:
-                    config = {**adapter.seed_config(locked_bridge.cursor), **locked_bridge.config}
-                    if config != locked_bridge.config:
+                    seeded_config, legacy_cursor = adapter.seed_config(locked_bridge.cursor)
+                    config = {**seeded_config, **locked_bridge.config}
+                    legacy_cursor = _validated_cursor(legacy_cursor)
+                    if config != locked_bridge.config or legacy_cursor != locked_bridge.cursor:
                         locked_bridge.config = config
-                        locked_bridge.save(using=using, update_fields=["config", "updated_at"])
+                        locked_bridge.cursor = legacy_cursor
+                        locked_bridge.save(using=using, update_fields=["config", "cursor", "updated_at"])
                     cursor = adapter.seed_cursor(stream, locked_bridge.cursor)
                     # A no-op seed is still a completed cutover attempt.
                     manager.advance(stream, _validated_cursor({} if cursor is None else cursor), using=using)
                 bridge.config = adapter.bridge.config = locked_bridge.config
+                bridge.cursor = adapter.bridge.cursor = locked_bridge.cursor
         return stream
 
 

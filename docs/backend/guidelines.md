@@ -334,11 +334,10 @@ Use these owners instead of maintaining another contract in an addon:
 - Field classes own data-resource classification declarations. Field authors set
   `angee_widget`, `angee_scalar_hint`, and `angee_currency_field` on the field;
   `angee.data.field_classification` reads those declarations and does
-  not special-case addon-owned field classes. Custom widget keys use
-  `namespace.addon.widget` (lowercase namespace segments with digits/underscores;
-  the final widget name also accepts camelCase); the
-  owning web addon registers the identical key. Unknown bare built-in names
-  remain schema errors.
+  not special-case addon-owned field classes. Custom widget keys follow the
+  [frontend registry naming rule](../frontend/guidelines.md#rules); the owning
+  web addon registers the identical key. Unknown bare built-in names remain
+  schema errors.
 - A computed GraphQL field may declare presentation facts through
   `strawberry_django.field(metadata=...)`. The shared classifiers in
   `angee.data.field_classification` own resolution: surface metadata first,

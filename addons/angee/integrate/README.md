@@ -27,9 +27,11 @@ Event feeds compose their domain's idempotent ingest verb and never create links
 or revisions. Messaging uses conversation partitions for Slack and mailbox
 partitions for IMAP. Their legacy bridge cursor slices seed the first stream row
 only, through the pure `BridgeImpl.seed_cursor` hook. Legacy delivery policy
-translates through `seed_config`; the driver fills missing `Bridge.config` keys
-under the bridge row lock in the same transaction as cursor seeding. Subsequent
-progress belongs to the stream. `Bridge.cursor` remains for
+translates through `seed_config`, which returns config defaults and the retained
+cursor with migrated policy removed. The driver fills missing `Bridge.config`
+keys and saves that cursor under the bridge row lock in the same transaction as
+stream seeding. Later partitions retain their positions without resurrecting
+removed policy. Subsequent progress belongs to the stream. `Bridge.cursor` remains for
 Mount's existing cursor cleanup and Feed's declared backend contract, as well as
 the first-generation messaging seeds; its presence does not authorize a second
 cursor writer for an adopted stream.
