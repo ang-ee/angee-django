@@ -269,18 +269,16 @@ class WorkflowDefinitionResource(AngeeResource):
                 # declaration updates only while the step's config contract still
                 # declares them; an explicit empty object still clears.
                 declared = instance.resolve_impl("step_class").declared_config_keys()
-                if declared is not None:
-                    for key in sorted(old_config.keys() - declared):
-                        logger.warning(
-                            "Dropping retired config key %r from step %r (xref=%s.%s).",
-                            key,
-                            instance.key,
-                            self.entry.addon.name,
-                            row["_xref"],
-                        )
-                kept_config = old_config if declared is None else {
-                    key: value for key, value in old_config.items() if key in declared
-                }
+                retired = old_config.keys() - declared if declared is not None else set()
+                for key in sorted(retired):
+                    logger.warning(
+                        "Dropping retired config key %r from step %r (xref=%s.%s).",
+                        key,
+                        instance.key,
+                        self.entry.addon.name,
+                        row["_xref"],
+                    )
+                kept_config = {key: value for key, value in old_config.items() if key not in retired}
                 instance.config = {**kept_config, **instance.config}
             if instance._state.adding or "config" in row or changed_class:
                 instance.validate_impl_configs()

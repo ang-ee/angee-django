@@ -360,6 +360,18 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None, using: str |
     return {"runs": len(delivered_run_ids), "woken": woken}
 
 
+def deliver_artifact_dispatch(
+    dispatch_id: int, *, now: datetime | None = None, using: str | None = None
+) -> dict[str, int]:
+    """Consume one committed domain intent and deliver to current subscribers."""
+
+    return (
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY, now=now)
+    )
+
+
 def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any, using: str | None = None) -> tuple[Any, bool]:
     """Retain one cross-run cancellation from this fenced database command."""
 
@@ -377,6 +389,18 @@ def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any, using: str | Non
             actor=actor,
             lease_token=attempt.lease_token,
         )
+    )
+
+
+def cancel_run_dispatch(
+    dispatch_id: int, *, expected_run_id: int | None = None, using: str | None = None
+) -> dict[str, int]:
+    """Deliver one persisted cross-run cancellation through the run owner."""
+
+    return (
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.RUN_CANCEL, expected_target_id=expected_run_id)
     )
 
 
@@ -867,9 +891,7 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any, using: str 
     """Cancel active rows, insert an override journal row, and schedule next steps."""
 
     return (
-        apps.get_model("workflows", "WorkflowRun")
-        .objects.db_manager(using)
-        .override_run(run, next_steps, actor=actor)
+        apps.get_model("workflows", "WorkflowRun").objects.db_manager(using).override_run(run, next_steps, actor=actor)
     )
 
 
@@ -1131,8 +1153,11 @@ def _ensure_map_children(run: Any, step_run: Any, *, target: Any, items: list[An
 
 def _route_success(run: Any, step_run: Any, *, alias: str) -> None:
     outgoing = list(
-        apps.get_model("workflows", "Edge").objects.db_manager(alias)
-        .filter(source_id=step_run.step_id).select_related("target").order_by("pk")
+        apps.get_model("workflows", "Edge")
+        .objects.db_manager(alias)
+        .filter(source_id=step_run.step_id)
+        .select_related("target")
+        .order_by("pk")
     )
     by_target: dict[int, tuple[Any, list[Any]]] = {}
     for edge in outgoing:
@@ -1149,8 +1174,11 @@ def _route_success(run: Any, step_run: Any, *, alias: str) -> None:
 
 def _route_skip(run: Any, step_run: Any, *, alias: str) -> None:
     outgoing = list(
-        apps.get_model("workflows", "Edge").objects.db_manager(alias)
-        .filter(source_id=step_run.step_id).select_related("target").order_by("pk")
+        apps.get_model("workflows", "Edge")
+        .objects.db_manager(alias)
+        .filter(source_id=step_run.step_id)
+        .select_related("target")
+        .order_by("pk")
     )
     by_target: dict[int, tuple[Any, list[Any]]] = {}
     for edge in outgoing:
@@ -1168,8 +1196,11 @@ def _route_skip(run: Any, step_run: Any, *, alias: str) -> None:
 
 def _route_done(run: Any, step_run: Any, *, alias: str) -> None:
     for edge in (
-        apps.get_model("workflows", "Edge").objects.db_manager(alias)
-        .filter(source_id=step_run.step_id).select_related("target").order_by("pk")
+        apps.get_model("workflows", "Edge")
+        .objects.db_manager(alias)
+        .filter(source_id=step_run.step_id)
+        .select_related("target")
+        .order_by("pk")
     ):
         if edge.condition and edge.condition != step_run.outcome:
             continue
@@ -1238,8 +1269,11 @@ def _upstream_join_state(
     step_run_model = apps.get_model("workflows", "StepRun")
     by_source: dict[int, list[Any]] = {}
     for edge in (
-        apps.get_model("workflows", "Edge").objects.db_manager(alias)
-        .filter(target_id=target.pk).select_related("source").order_by("pk")
+        apps.get_model("workflows", "Edge")
+        .objects.db_manager(alias)
+        .filter(target_id=target.pk)
+        .select_related("source")
+        .order_by("pk")
     ):
         by_source.setdefault(edge.source_id, []).append(edge)
     previous: list[Any] = []

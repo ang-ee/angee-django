@@ -25,7 +25,11 @@ live in code docstrings.
   `provider_metadata` before schema autodetection, avoiding rename/default prompts.
 - Replace `ANGEE_EXTRACTION_ENGINE_CLASSES` with
   `ANGEE_EXTRACTION_PROFILE_CLASSES`. Consumer domain keys retain their spelling;
-  the transport-only built-in `inference` key maps to `none`. Retained JSON
+  the disabled built-in `none` key carries forward unchanged, and the
+  transport-only built-in `inference` key maps to `none` regardless of current
+  settings. Reversing the migration preserves `none`; the original distinction
+  between disabled and inference rows cannot be recovered. Consumers that need
+  to retain `inference` must declare their own key migration. Retained JSON
   evidence is preserved. Drain runs with old extraction input contracts before
   upgrading; see the [migration guidance](docs/backend/guidelines.md#migrations-and-runtime).
 - Run `rebac sync` after migrate for the new dashboards `shared` relation and
@@ -34,6 +38,13 @@ live in code docstrings.
 - Messaging bridge extractors can continue importing `ArchiveExtractor` and
   `ArchiveExecutionReporter` from the public `angee.workflows_integrate.steps`
   path; implementation remains in `archive_steps`.
+- `StateField` `db_index=False` opt-outs now round-trip through migrations;
+  schema autodetection can remove indexes previously retained by incorrect
+  field serialization. Optional states must declare `null=True, blank=True`;
+  concrete models with blank non-null states fail Django's field checks.
+- The public `angee.workflows.engine.deliver_artifact_dispatch` and
+  `cancel_run_dispatch` entrypoints retain their signatures and delegate to
+  `WorkflowDispatch.objects.deliver(...)`.
 - The integration ownership guard now belongs to its consumer addon. The
   framework no longer supplies `angee.integrate.ownership`; consumers own their
   ownership policy through the declared integration contract.

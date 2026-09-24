@@ -6,11 +6,14 @@ import math
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
 from django.db import connection, models
+from django.db.migrations.state import ModelState, ProjectState
 from django.db.models import F, Value
 from django.db.models.functions import Concat
+from django.test.utils import isolate_apps
 
 from angee.base.fields import (
     EncryptedField,
@@ -453,33 +456,83 @@ def test_state_field_deconstruct_and_clone_preserve_index_choice(db_index: bool)
     assert cloned.deconstruct() == declaration
 
 
-@pytest.mark.django_db(transaction=True)
-def test_state_field_supports_blank_string_states() -> None:
-    """StateField owns nullable-free blank-string state columns."""
+def test_active_model_state_fields_pass_checks() -> None:
+    """Concrete composed fields satisfy the optional-state declaration rule."""
+
+    errors = [
+        error
+        for model in apps.get_models()
+        for field in model._meta.get_fields()
+        if isinstance(field, StateField)
+        for error in field.check()
+    ]
+    assert not errors
+
+
+@pytest.mark.parametrize(
+    ("blank", "nullable", "is_abstract", "default", "expected_errors"),
+    [
+        (True, False, False, "", ["angee.E019"]),
+        (True, False, False, "enabled", ["angee.E019"]),
+        (True, True, False, None, []),
+        (False, False, False, "enabled", []),
+        (True, False, True, "", []),
+    ],
+)
+@isolate_apps()
+def test_state_field_check_requires_null_for_concrete_optional_states(
+    blank: bool,
+    nullable: bool,
+    is_abstract: bool,
+    default: str | None,
+    expected_errors: list[str],
+) -> None:
+    """Model checks reject optional-state sentinels, including real defaults."""
 
     class OptionalKind(models.TextChoices):
-        """Finite states for blank-compatible state-field tests."""
-
         ENABLED = "enabled", "Enabled"
 
-    class FieldBlankState(models.Model):
-        """Concrete model used for blank-compatible state tests."""
-
-        state = StateField(choices_enum=OptionalKind, default="", blank=True)
+    class CheckedState(models.Model):
+        state = StateField(choices_enum=OptionalKind, blank=blank, null=nullable, default=default)
 
         class Meta:
-            """Django model options for the test model."""
+            app_label = "tests"
+            abstract = is_abstract
 
-            app_label = "auth"
+    field = CheckedState._meta.get_field("state")
+    errors = field.check()
+    assert [error.id for error in errors] == expected_errors
+    if errors:
+        assert errors[0].obj is field
+        assert "migrate stored empty strings to NULL" in errors[0].hint
+        assert any(error.id == "angee.E019" for error in CheckedState.check())
+
+
+@pytest.mark.django_db(transaction=True)
+def test_historical_state_field_supports_blank_string_rows() -> None:
+    """Retained migration states can still reconstruct and read legacy rows."""
+
+    state = ProjectState()
+    state.add_model(
+        ModelState(
+            "auth",
+            "FieldBlankState",
+            fields=[
+                ("id", models.AutoField(primary_key=True)),
+                ("state", StateField(choices=[("enabled", "Enabled")], default="", blank=True)),
+            ],
+        )
+    )
+    FieldBlankState = state.apps.get_model("auth", "FieldBlankState")
 
     with connection.schema_editor() as schema_editor:
         schema_editor.create_model(FieldBlankState)
     try:
         blank = FieldBlankState.objects.create()
-        enabled = FieldBlankState.objects.create(state="ENABLED")
+        enabled = FieldBlankState.objects.create(state="enabled")
 
         assert FieldBlankState.objects.get(pk=blank.pk).state == ""
-        assert FieldBlankState.objects.get(pk=enabled.pk).state == OptionalKind.ENABLED
+        assert FieldBlankState.objects.get(pk=enabled.pk).state == "enabled"
     finally:
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(FieldBlankState)

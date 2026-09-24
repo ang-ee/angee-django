@@ -12,81 +12,21 @@ the type exists before any schema resource that uses the field can be constructe
 independent of ``INSTALLED_APPS`` order.
 
 State and id fields need no map entry: strawberry-django resolves ``StateField``
-through ``django-choices-field``'s ``TextChoicesField``. ``AngeeSchema.get_fields``
-projects optional states as nullable enums, including legacy blank, non-null
-declarations, and converts their empty-string sentinel to GraphQL null. New
-optional states still declare ``null=True, blank=True`` on the model. The
+through ``django-choices-field``'s ``TextChoicesField``. Optional states declare
+``null=True, blank=True`` on the model and project natively as nullable enums. The
 opaque-id ``SqidField`` is a non-concrete column projected explicitly as
 ``strawberry.ID`` by ``AngeeNode`` — neither reaches ``field_type_map``.
 """
 
 from __future__ import annotations
 
-import copy
-from inspect import isawaitable
 from typing import Any
 
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from strawberry.extensions import FieldExtension
-from strawberry.extensions.field_extension import AsyncExtensionResolver, SyncExtensionResolver
-from strawberry.types import Info
-from strawberry.types.base import StrawberryOptional
-from strawberry.types.enum import StrawberryEnumDefinition
-from strawberry.types.field import StrawberryField
-from strawberry.utils.aio import resolve_awaitable
-from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.fields.types import field_type_map
 
-from angee.base.fields import FractionalRankField, StateField
-
-
-class _OptionalStateExtension(FieldExtension):
-    """Translate the legacy storage sentinel at the GraphQL output boundary."""
-
-    @staticmethod
-    def _nullable(value: Any) -> Any:
-        return None if value == "" else value
-
-    def resolve(self, next_: SyncExtensionResolver, source: Any, info: Info, **kwargs: Any) -> Any:
-        value = next_(source, info, **kwargs)
-        if isawaitable(value):
-            return resolve_awaitable(value, self._nullable)
-        return self._nullable(value)
-
-    async def resolve_async(self, next_: AsyncExtensionResolver, source: Any, info: Info, **kwargs: Any) -> Any:
-        return await resolve_awaitable(next_(source, info, **kwargs), self._nullable)
-
-
-def project_state_field(field: StrawberryField) -> StrawberryField:
-    """Project an optional model state on a schema-local copy of its native field.
-
-    Strawberry's ``Schema.get_fields`` hook runs before conversion of each output
-    field. Keeping the projection there preserves native enum metadata and leaves
-    shared declarations intact across schema builds; resolver extensions only
-    translate values and never rewrite types during ``apply``.
-    """
-
-    if not isinstance(field, StrawberryDjangoField):
-        return field
-    definition = field.origin_django_type
-    if definition is None or definition.is_input:
-        return field
-    try:
-        model_field = definition.model._meta.get_field(field.django_name or field.python_name)
-    except FieldDoesNotExist:
-        return field
-    if not isinstance(model_field, StateField) or not (model_field.blank or model_field.null):
-        return field
-
-    projected = copy.copy(field)
-    resolved = projected.type
-    enum = resolved.of_type if isinstance(resolved, StrawberryOptional) else resolved
-    if not isinstance(enum, StrawberryEnumDefinition):
-        return field
-    projected.type = StrawberryOptional(enum)
-    projected.extensions.append(_OptionalStateExtension())
-    return projected
+from angee.base.fields import FractionalRankField
 
 
 def register_field_type(field_class: type[models.Field[Any, Any]], wire_type: type) -> None:

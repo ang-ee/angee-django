@@ -406,10 +406,8 @@ Use these owners instead of maintaining another contract in an addon:
   and NULL in storage, so native Strawberry-Django `auto` emits a nullable enum.
   Do not add blank-string sentinels or per-field GraphQL coercion. The legacy
   non-null blank constructor remains available for historical migration fields;
-  active model declarations are guarded by `tests/test_layering.py`.
-  The [GraphQL projection owner](../../addons/angee/graphql/field_types.py) also
-  maps legacy blank states exposed through `auto` to nullable enums and converts
-  empty strings to null, so consumers do not need per-field resolvers.
+  [`StateField.check()`](../../angee/base/fields.py) rejects that declaration on
+  concrete models, and `tests/test_layering.py` guards active source declarations.
 - **Reference codes with upstream labels remain string fields.** A country code
   identifies external ISO reference data; it is not a row lifecycle state.
   `angee.parties.fields.CountryCodeField` therefore retains the GraphQL/string
@@ -800,10 +798,12 @@ and current contracts before applying a historical example to a new deployment.
   The declared [workflow transition](../../addons/angee/workflows/runtime_migrations/optional_states_nullable.py)
   and [storage transition](../../addons/angee/storage/runtime_migrations/smart_kind_nullable.py)
   remove affected checks, make the columns nullable, convert empty strings to
-  NULL, and restore the current constraints. Build materializes these guarded,
-  reversible migrations before downstream schema autodetection. Preserve retained
-  rows and historical migration bodies; a generated schema alteration alone does
-  not perform the data conversion. Regenerate SDL and client types after
+  NULL, and restore the frozen target constraints. Build materializes these guarded,
+  reversible migrations before downstream schema autodetection. A partial
+  nullable transition retaining legacy checks is rejected: complete or reverse
+  that transition through the consumer's migration history before upgrading.
+  Preserve retained rows and historical migration bodies; a generated schema
+  alteration alone does not perform the data conversion. Regenerate SDL and client types after
   migration: workflow wait reasons use the `WaitingKind` enum's uppercase member
   names on the wire.
 - **A structural marker consumed after runtime emission must be emitted too.**

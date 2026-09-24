@@ -21,7 +21,7 @@ from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
 from strawberry.tools import merge_types
-from strawberry.types.base import StrawberryObjectDefinition, get_object_definition
+from strawberry.types.base import get_object_definition
 from strawberry.types.execution import ExecutionContext
 from strawberry.types.field import StrawberryField
 from strawberry_django_hasura import hasura_config
@@ -33,7 +33,6 @@ from angee.graphql.data.metadata import (
     finalize_data_resources,
     readable_model_field_names,
 )
-from angee.graphql.field_types import project_state_field
 from angee.graphql.ids import assert_unique_sqid_prefixes
 from angee.graphql.introspection import (
     django_model,
@@ -81,11 +80,6 @@ class AngeeSchema(strawberry.Schema):
 
     angee_resources: tuple[DataResourceMetadata, ...] = ()
     """Model resource metadata carried by this built schema."""
-
-    def get_fields(self, type_definition: StrawberryObjectDefinition) -> list[StrawberryField]:
-        """Apply model-owned state optionality to every composed output type."""
-
-        return [project_state_field(field) for field in super().get_fields(type_definition)]
 
     def process_errors(
         self,

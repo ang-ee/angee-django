@@ -123,8 +123,8 @@ class WorkflowItem(models.Model):
         app_label = "tests"
 
 
-class BlankWorkflowItem(models.Model):
-    """Blank state with enum metadata supplied by its owning declaration."""
+class OptionalWorkflowItem(models.Model):
+    """Optional state with enum metadata supplied by its owning declaration."""
 
     @strawberry.enum(name="OptionalWorkflowState", description="An explicitly named state.")
     class State(models.TextChoices):
@@ -132,7 +132,6 @@ class BlankWorkflowItem(models.Model):
 
     state = StateField(choices_enum=State, null=True, blank=True)
     nullable_state = StateField(choices_enum=State, null=True)
-    legacy_state = StateField(choices_enum=State, blank=True, default="")
 
     class Meta:
         app_label = "tests"
@@ -900,47 +899,37 @@ def test_state_field_accepts_graphql_enum_member_names() -> None:
         field.to_python("MISSING")
 
 
-@pytest.mark.parametrize(("state", "expected"), [(None, None), ("", None), ("enabled", "ENABLED")])
-@pytest.mark.parametrize("async_resolver", [False, True])
+@pytest.mark.parametrize(("state", "expected"), [(None, None), ("enabled", "ENABLED")])
 def test_nullable_state_auto_preserves_native_enum_across_schema_builds(
     state: str | None,
     expected: str | None,
-    async_resolver: bool,
 ) -> None:
-    """Every optional state uses one nullable enum, even legacy non-null blanks."""
+    """Native nullable enum projection preserves model metadata and values."""
 
-    async def resolve_legacy_state(root: BlankWorkflowItem) -> Any:
-        return root.legacy_state
-
-    @strawberry_django.type(BlankWorkflowItem)
-    class BlankWorkflowItemType:
+    @strawberry_django.type(OptionalWorkflowItem)
+    class OptionalWorkflowItemType:
         state: strawberry.auto
         nullable_state: strawberry.auto
-        legacy_state: strawberry.auto = strawberry_django.field(
-            resolver=resolve_legacy_state if async_resolver else None,
-        )
 
     @strawberry.type
     class Query:
-        @strawberry.field(graphql_type=BlankWorkflowItemType)
+        @strawberry.field(graphql_type=OptionalWorkflowItemType)
         def item(self) -> Any:
-            return BlankWorkflowItem(state=state, nullable_state=state, legacy_state=state)
+            return OptionalWorkflowItem(state=state, nullable_state=state)
 
     for _ in range(2):
         schema = AngeeSchema(query=Query)
         enum = schema._schema.get_type("OptionalWorkflowState")
         assert isinstance(enum, GraphQLEnumType)
         assert enum.description == "An explicitly named state."
-        item = schema._schema.get_type("BlankWorkflowItemType")
+        item = schema._schema.get_type("OptionalWorkflowItemType")
         assert isinstance(item, GraphQLObjectType)
         assert all(field.type is enum for field in item.fields.values())
-        query = "{ item { state nullableState legacyState } }"
-        results = [asyncio.run(schema.execute(query))]
-        if not async_resolver:
-            results.append(schema.execute_sync(query))
+        query = "{ item { state nullableState } }"
+        results = [asyncio.run(schema.execute(query)), schema.execute_sync(query)]
         for result in results:
             assert result.errors is None
-            assert result.data == {"item": {"state": expected, "nullableState": expected, "legacyState": expected}}
+            assert result.data == {"item": {"state": expected, "nullableState": expected}}
 
 
 def test_revisions_query_surface_exposes_revision_mixin_versions() -> None:

@@ -39,11 +39,12 @@ The declared [profile migration](runtime_migrations/extraction_profiles.py) rena
 autodetection. Retained JSON payloads and consumer domain keys stay unchanged;
 register those keys under `ANGEE_EXTRACTION_PROFILE_CLASSES` instead of
 `ANGEE_EXTRACTION_ENGINE_CLASSES`. The old built-in `inference` key selected only
-transport and maps to `none`, meaning no domain profile; rollback maps `none`
-back to `inference`. An explicitly registered `inference` domain profile retains
-that key instead. New interpretation requires an explicit domain profile.
-An old consumer engine named `none` conflicts with the new reserved key. The
-migration rejects that ambiguity before changing columns; declare a consumer key
-migration first so both directions preserve its identity.
+transport and always maps to `none`, meaning no domain profile. The old disabled
+`none` engine carries forward unchanged. The mapping does not depend on current
+settings; consumers that need to retain an `inference` domain key must declare
+their own migration. Rollback restores the column names but preserves `none`,
+including rows created after the upgrade: the old `inference`/`none` distinction
+is lost, so rollback never enables previously disabled extraction. New
+interpretation requires an explicit domain profile.
 Drain retained runs with old input contracts before the cutover, as described in
 the [upgrade guidance](../../../docs/backend/guidelines.md#migrations-and-runtime).

@@ -442,9 +442,7 @@ def test_event_before_subscription_is_read_as_current_domain_state(
     user, step_run, attempt, dispatch = _scheduled_subscription(monkeypatch)
     event = _confirm_and_retain_intent(user)
     assert event.kind == WorkflowDispatchKind.ARTIFACT_DELIVERY
-    assert WorkflowDispatch.objects.deliver(
-        event.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
-    ) == {"runs": 0, "woken": 0}
+    assert engine.deliver_artifact_dispatch(event.pk, now=timezone.now()) == {"runs": 0, "woken": 0}
 
     assert engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)["executed"] == 1
     with system_context(reason="verify event before subscription"):
@@ -452,9 +450,7 @@ def test_event_before_subscription_is_read_as_current_domain_state(
         attempt.refresh_from_db()
     assert step_run.status == StepRunStatus.SUCCEEDED, (attempt.error, attempt.stacktrace)
     assert attempt.output == {"confirmed": True}
-    assert WorkflowDispatch.objects.deliver(
-        event.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
-    ) == {"runs": 0, "woken": 0}
+    assert engine.deliver_artifact_dispatch(event.pk) == {"runs": 0, "woken": 0}
     with system_context(reason="verify no resurrection"):
         step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.SUCCEEDED
@@ -503,9 +499,10 @@ def test_event_after_predicate_read_before_wait_commit_is_retained(
         assert step_run.wait_until is not None and step_run.wait_until <= attempt.result_recorded_at
         assert subscription.target == user
         assert attempt.external_object_id is None
-        assert WorkflowDispatch.objects.deliver(
-            event.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
-        ) == {"runs": 0, "woken": 0}
+        assert WorkflowDispatch.objects.deliver(event.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY) == {
+            "runs": 0,
+            "woken": 0,
+        }
     finally:
         release.set()
         _SubscribedPredicate.read_done = None

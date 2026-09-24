@@ -910,10 +910,7 @@ class WorkflowRunType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(
-        annotate=cast(Any, WorkflowRun).waiting_projection_annotation(),
-        graphql_type=strawberry.enum(StepRun._meta.get_field("waiting_kind").choices_enum) | None,
-    )
+    @strawberry_django.field(annotate=cast(Any, WorkflowRun).waiting_projection_annotation())
     def waiting_kind(self) -> WaitingKind | None:
         """Return the declared runtime wait reason, when one is known."""
 

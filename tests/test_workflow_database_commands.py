@@ -395,11 +395,10 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
     assert step_run.status == StepRunStatus.WAITING
     assert target.status == RunStatus.RUNNING
 
-    assert WorkflowDispatch.objects.deliver(
-        intent.pk,
-        expected_kind=WorkflowDispatchKind.RUN_CANCEL,
-        expected_target_id=target.pk,
-    ) == {"canceled": 1}
+    with pytest.raises(ValidationError, match="Transport envelope"):
+        engine.cancel_run_dispatch(intent.pk, expected_run_id=target.pk + 1)
+    assert engine.cancel_run_dispatch(intent.pk, expected_run_id=target.pk) == {"canceled": 1}
+    assert engine.cancel_run_dispatch(intent.pk, expected_run_id=target.pk) == {"canceled": 0}
     with system_context(reason="run cancellation delivery verification"):
         target.refresh_from_db()
         intent.refresh_from_db()
@@ -410,17 +409,19 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
         )
     assert target.status == RunStatus.CANCELED
     assert intent.consumed_at is not None
-    assert WorkflowDispatch.objects.deliver(
-        delivery.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
-    )["woken"] == 1
+    assert engine.deliver_artifact_dispatch(delivery.pk)["woken"] == 1
 
     with system_context(reason="run cancellation continuation"):
-        continuation = WorkflowDispatch.objects.filter(
-            kind=WorkflowDispatchKind.ADVANCE,
-            run=step_run.run,
-            available_at__lte=timezone.now(),
-            consumed_at__isnull=True,
-        ).order_by("pk").first()
+        continuation = (
+            WorkflowDispatch.objects.filter(
+                kind=WorkflowDispatchKind.ADVANCE,
+                run=step_run.run,
+                available_at__lte=timezone.now(),
+                consumed_at__isnull=True,
+            )
+            .order_by("pk")
+            .first()
+        )
     assert continuation is not None
     assert engine.advance_dispatch(continuation.pk)["claimed"] == 1
     with system_context(reason="run cancellation continuation execution"):
@@ -493,14 +494,16 @@ def test_concurrent_database_commands_share_one_run_cancel_intent(
             )
         assert outcomes == ({"executed": 1}, {"executed": 1})
         with system_context(reason="concurrent run cancellation verification"):
-            assert WorkflowDispatch.objects.filter(
-                kind=WorkflowDispatchKind.RUN_CANCEL,
-                run=target,
-                consumed_at__isnull=True,
-            ).count() == 1
+            assert (
+                WorkflowDispatch.objects.filter(
+                    kind=WorkflowDispatchKind.RUN_CANCEL,
+                    run=target,
+                    consumed_at__isnull=True,
+                ).count()
+                == 1
+            )
             assert all(
-                StepRun.objects.get(pk=values[0].pk).status == StepRunStatus.WAITING
-                for values in (first, second)
+                StepRun.objects.get(pk=values[0].pk).status == StepRunStatus.WAITING for values in (first, second)
             )
     finally:
         _RunCancelDatabaseCommand.rendezvous = None

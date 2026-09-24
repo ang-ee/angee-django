@@ -21,6 +21,8 @@ from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.state import ModelState, ProjectState
 from django.db.migrations.writer import MigrationWriter
 
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
 from angee.compose.migrations import RuntimeMigrations
 from tests.conftest import make_addon, write_addon_manifest
 
@@ -823,8 +825,12 @@ def test_validated_plan_render_uses_the_hashed_source_snapshot(runtime_migration
 
 
 def _upgrade_states(label):
-    """Minimal populated historical tables, including every affected constraint."""
-    from angee.base.impl import ImplClassField
+    """Freeze affected field/constraint shapes from the 0a55a6fb upgrade floor.
+
+    Legacy declarations use that revision's field classes, choices and defaults,
+    independently of live models. Unrelated columns are omitted; relation targets
+    outside the affected tables use scalar stand-ins for this isolated database.
+    """
     from angee.storage.models import Folder
     from angee.workflows.models import StepAttempt, StepRun, WorkflowRun
     from angee.workflows_extraction.models import Extraction, ExtractionPage
@@ -847,6 +853,42 @@ def _upgrade_states(label):
                 "lease_revoked_at": models.DateTimeField(null=True),
                 "result_recorded_at": models.DateTimeField(null=True),
                 "orchestration_error": models.TextField(default=""),
+            },
+        }
+        legacy_fields = {
+            "workflowrun": {
+                "parent_relation": StateField(
+                    choices=[("owned_call", "Owned call"), ("continuation", "Continuation")],
+                    blank=True, default="", editable=False,
+                ),
+                "test_scope": StateField(
+                    choices=[("whole", "Whole workflow"), ("node", "Selected node")],
+                    blank=True, default="", editable=False,
+                ),
+            },
+            "steprun": {
+                "waiting_kind": StateField(
+                    choices=[
+                        ("scheduled", "Scheduled"), ("approval", "Approval"),
+                        ("external", "External input"), ("children", "Child steps"),
+                    ],
+                    blank=True, default="",
+                ),
+            },
+            "stepattempt": {
+                "lease_revocation_reason": models.CharField(
+                    max_length=32, blank=True,
+                    choices=[("canceled", "Canceled"), ("heartbeat_lost", "Heartbeat_Lost"),
+                             ("superseded", "Superseded")],
+                ),
+                "result_kind": models.CharField(
+                    max_length=32, blank=True,
+                    choices=[
+                        ("done", "Done"), ("wait", "Wait"), ("suspend", "Suspend"), ("error", "Error"),
+                        ("no_result", "No_Result"), ("preparation_error", "Preparation_Error"),
+                        ("transient_error", "Transient_Error"),
+                    ],
+                ),
             },
         }
         legacy_constraints = {
@@ -881,6 +923,9 @@ def _upgrade_states(label):
     elif label == "storage":
         declarations = ((Folder, ("smart_kind",), ("uniq_storage_folder_owner_smart_kind",)),)
         extras = {"folder": {"owner": models.IntegerField(null=True), "is_virtual": models.BooleanField(default=False)}}
+        legacy_fields = {"folder": {"smart_kind": StateField(
+            choices=[("trash", "Trash")], blank=True, default="", editable=False,
+        )}}
         legacy_constraints = {"folder": [models.UniqueConstraint(
             fields=("owner", "smart_kind"), condition=models.Q(is_virtual=True) & ~models.Q(smart_kind=""),
             name="uniq_storage_folder_owner_smart_kind",
@@ -898,7 +943,7 @@ def _upgrade_states(label):
                 fields[new_name] = model._meta.get_field(new_name).clone()
                 old_fields[old_name] = (
                     ImplClassField(registry_setting="ANGEE_EXTRACTION_ENGINE_CLASSES", editable=False)
-                    if old_name == "engine" else fields[new_name].clone()
+                    if old_name == "engine" else models.JSONField(default=dict, blank=True, editable=False)
                 )
             old.add_model(ModelState(label, model.__name__, old_fields))
             current.add_model(ModelState(label, model.__name__, fields))
@@ -913,11 +958,7 @@ def _upgrade_states(label):
         for field_name in names:
             field = model._meta.get_field(field_name)
             fields[field_name] = field.clone()
-            # The floor used both CharField choices and blank non-null StateField;
-            # raw historical varchar fields retain '' without modern enum coercion.
-            old_fields[field_name] = models.CharField(
-                max_length=32, blank=True, default="", choices=field.choices,
-            )
+            old_fields[field_name] = legacy_fields[name][field_name]
         old.add_model(ModelState(label, model.__name__, old_fields, options={
             "constraints": legacy_constraints.get(name, []),
         }))
@@ -953,7 +994,7 @@ def isolated_upgrade_database():
     ("workflows", True, False), ("storage", True, False), ("workflows_extraction", False, True),
 ])
 @pytest.mark.django_db(transaction=True)
-def test_declared_upgrades_preserve_rows_reverse_and_leave_no_schema_prompts(
+def test_declared_upgrades_preserve_floor_rows_or_reject_partial_schema(
     runtime_migration_probe, settings, monkeypatch, isolated_upgrade_database, label, schema_nullable, domain_inference,
 ):
     """Materialize real declarations, migrate test tables, and compare live owners."""
@@ -981,6 +1022,15 @@ def test_declared_upgrades_preserve_rows_reverse_and_leave_no_schema_prompts(
     monkeypatch.setitem(settings.MIGRATION_MODULES, label, f"{runtime_dir.name}.{label}.migrations")
     importlib.invalidate_caches()
     materializer = RuntimeMigrations((apps.get_app_config(label),), runtime_dir=runtime_dir, labels=(label,))
+    if schema_nullable:
+        # Recompiling a legacy '' constraint through an already-nullable
+        # StateField changes its meaning. Reject this partial graph before writes.
+        with pytest.raises(RuntimeError, match=r"applies\(project_state\) failed") as caught:
+            materializer.materialize()
+        assert isinstance(caught.value.__cause__, ValueError)
+        assert "partial nullable transition" in str(caught.value.__cause__)
+        assert sorted(path.name for path in package.glob("[0-9]*.py")) == ["0001_legacy.py"]
+        return
     (plan,) = materializer.plan()
     source = importlib.import_module(f"angee.{label}.runtime_migrations.{plan.origin.split(':')[1]}")
     assert not source.applies(ProjectState())
@@ -1032,7 +1082,7 @@ def test_declared_upgrades_preserve_rows_reverse_and_leave_no_schema_prompts(
                 cursor.executemany(
                     f"INSERT INTO {connection.ops.quote_name(extraction._meta.db_table)} "
                     "(engine, engine_config) VALUES (%s, %s)",
-                    [(key, json.dumps({"retained": key})) for key in ("inference", "custom_domain")],
+                    [(key, json.dumps({"retained": key})) for key in ("inference", "none", "custom_domain")],
                 )
             before.apps.get_model(label, "ExtractionPage")._base_manager.create(engine_metadata={"retained": [1, 2]})
 
@@ -1055,13 +1105,21 @@ def test_declared_upgrades_preserve_rows_reverse_and_leave_no_schema_prompts(
         upgraded = snapshot(after)
         if label == "workflows_extraction":
             rows = upgraded[label, "extraction"]
-            assert [row["profile"] for row in rows] == ["inference" if domain_inference else "none", "custom_domain"]
+            assert [row["profile"] for row in rows] == ["none", "none", "custom_domain"]
             assert [row["profile_config"] for row in rows] == [
                 row["engine_config"] for row in original[label, "extraction"]
             ]
             assert upgraded[label, "extractionpage"][0]["provider_metadata"] == (
                 original[label, "extractionpage"][0]["engine_metadata"]
             )
+            # Rollback is deliberately lossy only for the obsolete transport key.
+            original[label, "extraction"][0]["engine"] = "none"
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"INSERT INTO {connection.ops.quote_name(extraction._meta.db_table)} "
+                    "(profile, profile_config) VALUES (%s, %s)", ("none", "{}"),
+                )
+            original[label, "extraction"].append({"id": 4, "engine": "none", "engine_config": "{}"})
         else:
             assert upgraded == {
                 key: [{name: None if value == "" and name in current.models[key].fields
@@ -1080,24 +1138,31 @@ def test_declared_upgrades_preserve_rows_reverse_and_leave_no_schema_prompts(
                 editor.delete_model(before.apps.get_model(*key))
 
 
-@pytest.mark.django_db(transaction=True)
-def test_extraction_profile_upgrade_rejects_reserved_key_collision_before_renaming(isolated_upgrade_database):
-    from angee.workflows_extraction.runtime_migrations.extraction_profiles import Migration
+@pytest.mark.parametrize("label,name", [
+    ("workflows", "optional_states_nullable"), ("storage", "smart_kind_nullable"),
+])
+@pytest.mark.parametrize("change", ["condition", "name", "remove"])
+def test_optional_state_upgrade_skips_evolved_current_constraints(label, name, change):
+    source = importlib.import_module(f"angee.{label}.runtime_migrations.{name}")
+    _, current = _upgrade_states(label)
+    for key, model in current.models.items():
+        for index in range(len(model.options.get("constraints", []))):
+            evolved = current.clone()
+            constraints = [constraint.clone() for constraint in model.options["constraints"]]
+            evolved.models[key].options["constraints"] = constraints
+            if change == "condition":
+                constraints[index].condition &= models.Q(pk__gt=0)
+            elif change == "name":
+                constraints[index].name += "_revised"
+            else:
+                del constraints[index]
+            assert not source.applies(evolved), (key, index, change)
 
-    legacy, _ = _upgrade_states("workflows_extraction")
-    model = legacy.apps.get_model("workflows_extraction", "Extraction")
-    with connection.schema_editor() as editor:
-        editor.create_model(model)
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"INSERT INTO {connection.ops.quote_name(model._meta.db_table)} "
-                "(engine, engine_config) VALUES (%s, %s)", ("none", "{}"),
-            )
-        with connection.schema_editor() as editor, pytest.raises(ValueError, match="consumer key migration"):
-            Migration("profile_upgrade", "workflows_extraction").apply(legacy, editor)
-        # The legacy column and exact key remain usable after the failed preflight.
-        assert model._base_manager.filter(engine=models.Value("none", output_field=models.CharField())).count() == 1
-    finally:
-        with connection.schema_editor() as editor:
-            editor.delete_model(model)
+
+def test_workflow_state_upgrade_rejects_mixed_nullability():
+    from angee.workflows.runtime_migrations.optional_states_nullable import applies
+
+    legacy, _ = _upgrade_states("workflows")
+    legacy.models["workflows", "steprun"].fields["waiting_kind"].null = True
+    with pytest.raises(ValueError, match="partial nullable transition"):
+        applies(legacy)

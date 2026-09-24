@@ -37,6 +37,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from django.conf import settings
+from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, FieldError, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
@@ -220,6 +221,22 @@ class StateField(TextChoicesField):
         name, path, args, kwargs = super().deconstruct()
         kwargs["db_index"] = self.db_index
         return name, path, args, kwargs
+
+    def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Reject blank-string state declarations on active concrete models."""
+
+        errors = super().check(**kwargs)
+        model = getattr(self, "model", None)
+        if self.blank and not self.null and model is not None and not model._meta.abstract:
+            errors.append(
+                checks.Error(
+                    "Optional StateField requires null=True.",
+                    hint="Declare null=True and migrate stored empty strings to NULL.",
+                    obj=self,
+                    id="angee.E019",
+                )
+            )
+        return errors
 
     def to_python(self, value: Any) -> Any:
         """Accept stored values and GraphQL enum member names for this state."""

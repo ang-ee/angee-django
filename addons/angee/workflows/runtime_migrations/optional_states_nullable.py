@@ -3,6 +3,8 @@
 Field choices and constraints are frozen here, independently of live models.
 Rollback restores the empty-string representation before NOT NULL and the old
 checks return. Only the five columns named in STATE_FIELDS are rewritten.
+An already-started nullable transition must be completed or reversed through its
+own migration history first; its old checks no longer compile with floor semantics.
 """
 
 from django.db import migrations, models
@@ -18,6 +20,34 @@ STATE_FIELDS = (
     ("stepattempt", "result_kind"),
 )
 
+LEGACY_CONSTRAINTS = (
+    ("workflowrun", models.CheckConstraint(
+        condition=(
+            models.Q(origin="test", test_scope__in=("", "whole"),
+                     test_step__isnull=True, test_source_step_id__isnull=True)
+            | models.Q(origin="test", test_scope="node",
+                       test_step__isnull=False, test_source_step_id__isnull=False)
+            | (~models.Q(origin="test") & models.Q(
+                test_scope="", test_step__isnull=True, test_source_step_id__isnull=True,
+            ))
+        ), name="chk_wfr_test_scope",
+    )),
+    ("stepattempt", models.CheckConstraint(
+        condition=(models.Q(lease_revoked_at__isnull=True, lease_revocation_reason="")
+                   | (models.Q(lease_revoked_at__isnull=False) & ~models.Q(lease_revocation_reason=""))),
+        name="chk_wsa_revocation_pair",
+    )),
+    ("stepattempt", models.CheckConstraint(
+        condition=(models.Q(result_recorded_at__isnull=True, result_kind="")
+                   | (models.Q(result_recorded_at__isnull=False) & ~models.Q(result_kind=""))),
+        name="chk_wsa_result_pair",
+    )),
+    ("stepattempt", models.CheckConstraint(
+        condition=models.Q(orchestration_error="") | models.Q(result_kind="transient_error"),
+        name="chk_wsa_orchestration_error",
+    )),
+)
+
 
 def applies(project_state: ProjectState) -> bool:
     if not all(
@@ -26,17 +56,23 @@ def applies(project_state: ProjectState) -> bool:
         for model_name, field_name in STATE_FIELDS
     ):
         return False
-    # A schema-only nullability alteration can leave the old sentinel checks.
-    # Already-current checks must not be replaced: their rollback requires NULL.
-    return any(
+    non_nullable = [
         not project_state.models["workflows", model_name].fields[field_name].null
         for model_name, field_name in STATE_FIELDS
-    ) or any(
-        operation.constraint not in project_state.models["workflows", operation.model_name].options.get(
-            "constraints", [],
+    ]
+    if all(non_nullable):
+        return True
+    # A nullable StateField changes how Django compiles the old '' checks, so
+    # an already-started transition cannot safely use this migration's rollback.
+    if any(non_nullable) or any(
+        constraint in project_state.models["workflows", model_name].options.get("constraints", [])
+        for model_name, constraint in LEGACY_CONSTRAINTS
+    ):
+        raise ValueError(
+            "Workflow optional states have a partial nullable transition; "
+            "complete or reverse it through its own migration history before upgrading."
         )
-        for operation in Migration.operations if isinstance(operation, migrations.AddConstraint)
-    )
+    return False
 
 
 def forwards(apps, schema_editor):

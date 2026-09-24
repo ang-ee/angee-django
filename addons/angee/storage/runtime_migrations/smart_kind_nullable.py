@@ -1,20 +1,33 @@
-"""Replace the empty smart-folder kind with NULL, retaining folder identities."""
+"""Replace the empty smart-folder kind with NULL, retaining folder identities.
+
+Complete or reverse an already-started nullable transition through its own
+migration history first; the old sentinel constraint would compile differently.
+"""
 
 from django.db import migrations, models
 from django.db.migrations.state import ProjectState
 
 from angee.base.fields import StateField
 
+LEGACY_CONSTRAINT = models.UniqueConstraint(
+    fields=("owner", "smart_kind"),
+    condition=models.Q(is_virtual=True) & ~models.Q(smart_kind=""),
+    name="uniq_storage_folder_owner_smart_kind",
+)
+
 
 def applies(project_state: ProjectState) -> bool:
     model = project_state.models.get(("storage", "folder"))
-    return model is not None and "smart_kind" in model.fields and (
-        not model.fields["smart_kind"].null
-        or any(
-            operation.constraint not in model.options.get("constraints", [])
-            for operation in Migration.operations if isinstance(operation, migrations.AddConstraint)
+    if model is None or "smart_kind" not in model.fields:
+        return False
+    if not model.fields["smart_kind"].null:
+        return True
+    if LEGACY_CONSTRAINT in model.options.get("constraints", []):
+        raise ValueError(
+            "Folder smart_kind has a partial nullable transition; "
+            "complete or reverse it through its own migration history before upgrading."
         )
-    )
+    return False
 
 
 def forwards(apps, schema_editor):
