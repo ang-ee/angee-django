@@ -80,3 +80,11 @@ export function isStructuredPresenceField(field: FieldDescriptor): boolean {
     || field.minItems !== undefined || field.maxItems !== undefined
   );
 }
+
+/** Update one structured value without dropping retained sibling fields. */
+export function updatedRecord(value: Readonly<Record<string, unknown>>, key: string, next: unknown): Record<string, unknown> {
+  if (next !== undefined) return { ...value, [key]: next };
+  const updated = { ...value };
+  delete updated[key];
+  return updated;
+}

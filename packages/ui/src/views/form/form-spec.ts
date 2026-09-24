@@ -24,7 +24,7 @@ export type FormSpecRelationCreate = Pick<
  * `type`/`properties`/`required`/`items`/`enum`/`const` are the recursive schema
  * vocabulary. Presentation extensions live on each property: string-only
  * `widget`/`label`/`description`/`placeholder`, list `addLabel`/`removeLabel`,
- * `readOnly`, JSON `defaultValue`
+ * `readOnly`, `hidden` (retained in values without a control), JSON `defaultValue`
  * (overriding the standard schema `default` when both are supplied),
  * string-labelled `options`, and the pure-data `relation` config. A property's
  * key becomes the descriptor's `name`; no function-valued extension is admitted.
@@ -251,7 +251,7 @@ function deserializeField(
     : undefined;
   const {
     relation, widget: authoredWidget, label, addLabel, removeLabel,
-    description, placeholder, readOnly, layout,
+    description, placeholder, readOnly, hidden, layout,
   } = field;
   const options = optionsFrom(field);
   if (rowTemplate && authoredWidget && authoredWidget !== "rows") {
@@ -287,6 +287,7 @@ function deserializeField(
     ...(field.minItems !== undefined ? { minItems: field.minItems } : {}),
     ...(field.maxItems !== undefined ? { maxItems: field.maxItems } : {}),
     ...(readOnly ? { readOnly: true } : {}),
+    ...(hidden ? { hidden: true } : {}),
     ...(layout ? { layout } : {}),
     ...(Object.hasOwn(field, "defaultValue") ? { defaultValue: field.defaultValue, hasDefault: true }
       : Object.hasOwn(field, "default") ? { defaultValue: field.default, hasDefault: true } : {}),

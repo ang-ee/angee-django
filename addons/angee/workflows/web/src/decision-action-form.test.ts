@@ -73,7 +73,9 @@ test("native terms, bank, and source action schemas retain exact branch values a
     },
     oneOf: [
       { type: "object", required: ["action", "party_id"], properties: {
-        action: { const: "approve" }, party_id: { type: "string" }, note: { type: "string" },
+        action: { const: "approve" },
+        party_id: { type: "string", relation: { resource: "parties.Party", permission: "read" } },
+        note: { type: "string", minLength: 1 },
       }, additionalProperties: false },
       { type: "object", required: ["action", "note"], properties: {
         action: { const: "reject" }, note: { type: "string", minLength: 1 },
@@ -83,6 +85,10 @@ test("native terms, bank, and source action schemas retain exact branch values a
       }, additionalProperties: false },
     ],
   }, widgets, t);
+  expect(terms.fieldsFor("approve")[0]).toEqual(expect.objectContaining({
+    name: "party_id",
+    relation: { resource: "parties.Party", permission: "read" },
+  }));
   expect(terms.options.map((option) => option.verdict)).toEqual(["COMPLETE", "REJECT", "ESCALATE"]);
   expect(terms.project("reject", { party_id: "pty_existing", note: "", reviewed: [] }))
     .toEqual({ action: "reject", note: "" });
@@ -148,6 +154,75 @@ test("native terms, bank, and source action schemas retain exact branch values a
   expect(source.validate({ action: "keep_separate", reason: "   " }).valid).toBe(false);
 });
 
+test("action branches consume the complete relation descriptors emitted by the Decision owner", () => {
+  const frozen = "pty_frozen";
+  const form = compileDecisionActionFormSpec({
+    type: "object", required: ["action"], properties: {
+      action: { type: "string", enum: ["bind", "other"], options: [
+        { value: "bind", label: "Select candidate", verdict: "COMPLETE" },
+        { value: "other", label: "Select another", verdict: "COMPLETE" },
+      ] },
+      party_id: {
+        type: "string", label: "Party", defaultValue: frozen,
+        relation: {
+          resource: "parties.Party", permission: "read",
+          create: { resource: "parties.Organization", actionLabel: "Create party" },
+        },
+      },
+    },
+    oneOf: [
+      { type: "object", required: ["action", "party_id"], properties: {
+        action: { const: "bind" },
+        party_id: {
+          type: "string", label: "Party", defaultValue: frozen, enum: [frozen],
+          relation: {
+            resource: "parties.Party", permission: "read",
+            filters: [{ field: "id", operator: "in", value: [frozen] }],
+          },
+        },
+      }, additionalProperties: false },
+      { type: "object", required: ["action", "party_id"], properties: {
+        action: { const: "other" },
+        party_id: {
+          type: "string", label: "Party", defaultValue: frozen, not: { enum: [frozen] },
+          relation: {
+            resource: "parties.Party", permission: "read",
+            filters: [{ field: "id", operator: "nin", value: [frozen] }],
+            create: { resource: "parties.Organization", actionLabel: "Create party" },
+          },
+        },
+      }, additionalProperties: false },
+    ],
+  }, widgets, t);
+
+  expect(form.fieldsFor("bind")).toEqual([expect.objectContaining({
+    name: "party_id",
+    required: true,
+    label: "Party",
+    defaultValue: frozen,
+    options: [{ value: frozen, label: frozen }],
+    relation: {
+      resource: "parties.Party", permission: "read",
+      filters: [{ field: "id", operator: "in", value: [frozen] }],
+    },
+  })]);
+  expect(form.fieldsFor("other")).toEqual([expect.objectContaining({
+    name: "party_id",
+    required: true,
+    label: "Party",
+    defaultValue: frozen,
+    relation: {
+      resource: "parties.Party", permission: "read",
+      filters: [{ field: "id", operator: "nin", value: [frozen] }],
+      create: { resource: "parties.Organization", actionLabel: "Create party" },
+    },
+  })]);
+  expect(form.validate({ action: "bind", party_id: frozen }).valid).toBe(true);
+  expect(form.validate({ action: "bind", party_id: "pty_other" }).valid).toBe(false);
+  expect(form.validate({ action: "other", party_id: "pty_other" }).valid).toBe(true);
+  expect(form.validate(form.project("other", { party_id: frozen })).valid).toBe(false);
+});
+
 test("alternative correction fields produce one labelled instruction without duplicate branch errors", () => {
   const form = compileDecisionActionFormSpec({
     type: "object", required: ["action"], properties: {
@@ -162,16 +237,17 @@ test("alternative correction fields produce one labelled instruction without dup
     },
     oneOf: [
       { type: "object", required: ["action", "note"], properties: {
-        action: { const: "correct" }, note: { type: "string", minLength: 1 },
-        currency: { type: ["string", "null"] }, invoice_date: { type: ["string", "null"] },
-        vendor_name: { type: ["string", "null"] },
+        action: { const: "correct" }, note: { type: "string", label: "Review explanation", minLength: 1 },
+        currency: { type: ["string", "null"], label: "Invoice currency", omittable: true },
+        invoice_date: { type: ["string", "null"], label: "Invoice date", omittable: true },
+        vendor_name: { type: ["string", "null"], label: "Supplier name", omittable: true },
       }, anyOf: [
         { required: ["currency"], properties: { currency: { type: "string", minLength: 1 } } },
         { required: ["invoice_date"], properties: { invoice_date: { type: "string", minLength: 1 } } },
         { required: ["vendor_name"], properties: { vendor_name: { type: "string", minLength: 1 } } },
       ], additionalProperties: false },
       { type: "object", required: ["action", "note"], properties: {
-        action: { const: "reject" }, note: { type: "string", minLength: 1 },
+        action: { const: "reject" }, note: { type: "string", label: "Review explanation", minLength: 1 },
       }, additionalProperties: false },
     ],
   }, widgets, t);
@@ -195,7 +271,7 @@ test("alternative correction fields produce one labelled instruction without dup
   })).toEqual({ valid: true, messages: {} });
 });
 
-test("nested Decision errors remain visible through their owning top-level field", () => {
+test("nested Decision errors use full dotted paths with bare messages", () => {
   const form = compileDecisionActionFormSpec({
     type: "object", required: ["action"], properties: {
       action: { type: "string", enum: ["apply"], options: [
@@ -211,7 +287,7 @@ test("nested Decision errors remain visible through their owning top-level field
       action: { const: "apply" },
       documents: { type: "array", items: { type: "object", properties: {
         lines: { type: "array", items: { type: "object", properties: {
-          account_id: { type: "string" },
+          account_id: { type: "string", label: "Expense account" },
         } } },
       } } },
     }, additionalProperties: false }],
@@ -222,9 +298,7 @@ test("nested Decision errors remain visible through their owning top-level field
   })).toEqual({
     valid: false,
     messages: {
-      documents: [
-        "documents.0.lines.0.account_id: account_id has an invalid value.",
-      ],
+      "documents.0.lines.0.account_id": ["account_id has an invalid value."],
     },
   });
 });
@@ -232,7 +306,7 @@ test("nested Decision errors remain visible through their owning top-level field
 test.each(["$defs", "definitions"])("resolves %s row references without losing Decision constraints or annotations", (definitions) => {
   const choices = { type: "array", label: "Choices", items: { $ref: `#/${definitions}/Choice` } };
   const form = compileDecisionActionFormSpec({
-    type: "object", required: ["action"], properties: {
+    type: "object", required: ["action"], propertyOrder: ["action", "reviewed", "choices"], properties: {
       action: { type: "string", enum: ["apply", "reject"], options: [
         { value: "apply", label: "Apply choices", verdict: "COMPLETE" },
         { value: "reject", label: "Reject", verdict: "REJECT" },
@@ -261,7 +335,7 @@ test.each(["$defs", "definitions"])("resolves %s row references without losing D
   }, widgets, t);
 
   expect(form.fieldsFor("apply")).toEqual([{
-    name: "choices", kind: "array", widget: "rows", label: "Choices",
+    name: "choices", kind: "array", widget: "rows", label: "Choices", required: true,
     rowTemplate: [
       { name: "identity", kind: "string", widget: "select", label: "Selected identity", required: true,
         options: [
@@ -276,9 +350,9 @@ test.each(["$defs", "definitions"])("resolves %s row references without losing D
   expect(form.project("apply", values)).toEqual({ action: "apply", ...values });
   expect(form.validate(form.project("apply", values))).toEqual({ valid: true, messages: {} });
   expect(form.validate({ action: "apply", choices: [{ identity: "unknown", reason: "Reviewed" }] }))
-    .toEqual({ valid: false, messages: { choices: ["choices.0.identity: identity has an invalid value."] } });
+    .toEqual({ valid: false, messages: { "choices.0.identity": ["identity has an invalid value."] } });
   expect(form.validate({ action: "apply", choices: [{ identity: "first", reason: "" }] }))
-    .toEqual({ valid: false, messages: { choices: ["choices.0.reason: reason must contain at least 1 character."] } });
+    .toEqual({ valid: false, messages: { "choices.0.reason": ["reason must contain at least 1 character."] } });
   expect(form.fieldsFor("reject")).toEqual([]);
   expect(form.project("reject", values)).toEqual({ action: "reject" });
   expect(form.validate(form.project("reject", values))).toEqual({ valid: true, messages: {} });
@@ -300,7 +374,7 @@ test("retains omitted optional reasons inside a structured Decision object", () 
     },
     oneOf: [{ type: "object", required: ["action", "retired_reasons"], properties: {
       action: { const: "apply" },
-      retired_reasons: { type: "object", properties: {
+      retired_reasons: { type: "object", widget: "object", properties: {
         source_1: { type: "string", minLength: 1 },
         source_2: { type: "string", minLength: 1 },
       }, additionalProperties: false },

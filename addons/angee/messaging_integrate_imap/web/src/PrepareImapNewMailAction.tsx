@@ -5,7 +5,7 @@ import {
 import { useMessagingT } from "@angee/messaging";
 import * as React from "react";
 
-/** Establish the paused channel's future-only cursor before the normal Resume. */
+/** Establish the paused channel's future-only delivery boundary before resuming. */
 export function PrepareImapNewMailAction(): React.ReactElement {
   const t = useMessagingT();
   return (

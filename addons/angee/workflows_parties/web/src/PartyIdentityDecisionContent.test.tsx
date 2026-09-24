@@ -18,7 +18,6 @@ afterEach(cleanup);
 describe("PartyIdentityDecisionContent", () => {
   test("compares readable identity facts without exposing retained technical IDs", () => {
     render(<PartyIdentityDecisionContent {...decisionProps({
-      party_id: "pty_supplier",
       current: {
         name: "Existing Supplier",
         addresses: [{
@@ -37,8 +36,8 @@ describe("PartyIdentityDecisionContent", () => {
       },
       evidence: [{
         label: "Supplier extraction",
-        source_model: "workflows_extraction.Extraction",
-        source_id: "ext_private",
+        model: "workflows_extraction.Extraction",
+        id: "ext_private",
       }],
     })} />);
 
@@ -58,7 +57,6 @@ describe("PartyIdentityDecisionContent", () => {
 
   test("does not infer a proposed contact when the proposal has no value or link", () => {
     render(<PartyIdentityDecisionContent {...decisionProps({
-      party_id: "pty_supplier",
       current: {
         name: "Existing Supplier",
         addresses: [],
@@ -79,13 +77,43 @@ describe("PartyIdentityDecisionContent", () => {
     expect(screen.getAllByText("Not provided").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("Dismissed")).toBeTruthy();
   });
+
+  test("keeps native actions available when retained identity facts are incomplete", () => {
+    render(<PartyIdentityDecisionContent {...decisionProps({
+      current: { name: "Existing Supplier", addresses: [], handles: [] },
+      proposed: undefined,
+      evidence: [],
+    })} />);
+
+    expect(screen.getByText("Review context unavailable")).toBeTruthy();
+    expect(screen.getByText("Native identity actions")).toBeTruthy();
+  });
 });
 
-function decisionProps(payload: Record<string, unknown>): WorkflowDecisionContentProps {
+function decisionProps({ current, proposed, evidence }: {
+  current: Record<string, unknown>;
+  proposed?: Record<string, unknown>;
+  evidence: Array<{ label: string; model: string; id: string }>;
+}): WorkflowDecisionContentProps {
+  const facts = [{
+    pointer: "/current",
+    label: "Current Party identity",
+    value: current,
+    subject: { model: "parties.Party", id: "pty_supplier", label: "Current Party" },
+    authority: "source",
+    evidence: [],
+  }, ...(proposed === undefined ? [] : [{
+    pointer: "/proposed",
+    label: "Proposed Party identity",
+    value: proposed,
+    authority: "unverified",
+    evidence,
+  }])];
   return {
-    approval: { id: "wdc_identity", payload } as WorkflowDecisionContentProps["approval"],
-    contextFields: [], contextValues: { review_context: payload }, inputFields: [], values: {},
+    approval: { id: "wdc_identity", payload: { facts } } as unknown as WorkflowDecisionContentProps["approval"],
+    contextFields: [], contextValues: { facts }, inputFields: [], values: {},
     setValue: vi.fn(), selectAction: vi.fn(), messagesFor: () => [],
+    actionPicker: <span>Native identity actions</span>,
     editable: true, fetching: false, readOnly: false,
   };
 }

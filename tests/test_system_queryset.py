@@ -12,8 +12,11 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import RebacMixin
 
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.scoping import system_queryset
+from angee.workflows.managers import StepAttemptQuerySet
+from tests.conftest import Drive, File, Integration
+from tests.workflows import StepAttempt, StepRun
 
 POSTGRESQL_ONLY = pytest.mark.skipif(
     connection.vendor != "postgresql",
@@ -82,6 +85,29 @@ class ThirdPartySystemQueryThing(RebacMixin):
         base_manager_name = "objects"
 
 
+@pytest.mark.parametrize("model", [Drive, File, Integration, StepRun, StepAttempt])
+def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model: type[models.Model]) -> None:
+    """Native base managers expose backend-gated locks without replacing actor managers."""
+
+    manager = model._base_manager
+    assert model._default_manager is model.objects
+    assert callable(manager.lock_if_supported)
+    queryset = manager.db_manager("default").lock_if_supported(of=("self",))
+    assert queryset.model is model
+    assert queryset._db == "default"
+    assert queryset.query.select_for_update is connection.features.has_select_for_update
+    if connection.features.has_select_for_update and connection.features.has_select_for_update_of:
+        assert queryset.query.select_for_update_of == ("self",)
+    if model is StepAttempt:
+        assert manager is model.system_objects
+        assert isinstance(queryset, StepAttemptQuerySet)
+        with pytest.raises(TypeError, match="Step attempts do not support collection updates"):
+            queryset.update(status="bypassed")
+    else:
+        assert isinstance(manager, AngeeUnscopedManager)
+        assert isinstance(queryset, AngeeUnscopedQuerySet)
+
+
 @pytest.fixture
 def system_query_tables() -> Iterator[None]:
     """Create the concrete system-query test tables."""
@@ -140,6 +166,24 @@ def test_system_querysets_preserve_domain_queryset_and_manager_policy(system_que
         owned.update(name="bypassed")
     with pytest.raises(TypeError, match="name is guarded"):
         adapted.update(name="bypassed")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_unscoped_locks_keep_native_base_manager_visibility(system_query_tables: None) -> None:
+    """Adding locks must not hide rows excluded by the default manager's policy."""
+
+    selected = GuardedSystemQueryThing._base_manager.create(name="selected", selected=True)
+    excluded = GuardedSystemQueryThing._base_manager.create(name="excluded", selected=False)
+    manager = AngeeUnscopedManager()
+    manager.model = GuardedSystemQueryThing
+
+    with transaction.atomic():
+        queryset = manager.db_manager("default").lock_if_supported()
+        assert set(queryset.values_list("pk", flat=True)) == {selected.pk, excluded.pk}
+        assert manager.db_manager("default").locked_get(pk=excluded.pk) == excluded
+
+    assert type(GuardedSystemQueryThing._base_manager) is models.Manager
+    assert list(GuardedSystemQueryThing.system_queryset()) == [selected]
 
 
 @pytest.mark.django_db(transaction=True)

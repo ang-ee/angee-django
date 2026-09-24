@@ -54,7 +54,7 @@ from angee.base.fields import EncryptedField, StateField
 from angee.base.identity import public_id_for
 from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager
 from angee.base.permissions import require_authorization_database
 from angee.base.serialization import canonical_json
 from angee.base.transitions import StateTransitions, save_state, transition
@@ -1749,11 +1749,13 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     )
 
     objects = IntegrationManager()
+    unscoped_objects = AngeeUnscopedManager()
 
     class Meta:
         """Django model options for integrations."""
 
         abstract = True
+        base_manager_name = "unscoped_objects"
         ordering = ("-updated_at",)
         rebac_resource_type = "integrate/integration"
 

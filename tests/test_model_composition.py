@@ -363,6 +363,24 @@ class Child(ResourceLoadMixin):
 
 
 @isolate_apps()
+def test_native_history_change_reason_fields_belong_to_each_historical_model(modules):
+    create, emit = modules
+    config, module = create("native_history_reasons")
+    for name in ("First", "Second"):
+        source(module, name, config.label, bases=(HistoryMixin, models.Model), runtime=True)
+
+    generated = emit(ModelComposition.discover((config,)))[config.label]
+    histories = (generated.First.history.model, generated.Second.history.model)
+    reasons = [history._meta.get_field("history_change_reason") for history in histories]
+
+    assert reasons[0] is not reasons[1]
+    for history, reason in zip(histories, reasons, strict=True):
+        assert reason.model is history
+        assert isinstance(reason, models.TextField)
+        assert reason.null is True
+
+
+@isolate_apps()
 def test_native_history_excludes_generated_fields_from_final_model(modules):
     create, emit = modules
     config, module = create("native_generated_history")

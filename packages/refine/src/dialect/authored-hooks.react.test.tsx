@@ -26,7 +26,10 @@ const invalidationMock = vi.hoisted(() => ({
 vi.mock("@refinedev/core", () => ({
   useCustom: vi.fn(),
   useDataProvider: vi.fn(),
-  useCustomMutation: () => {
+  useCustomMutation: ({ mutationOptions }: { mutationOptions: {
+    onMutate: () => unknown;
+    onSuccess: (response: { data: { data: unknown } }, variables: { values: Record<string, unknown> }, context: unknown) => Promise<void>;
+  } }) => {
     mutationMock.generation += 1;
     const generation = mutationMock.generation;
     return {
@@ -35,16 +38,19 @@ vi.mock("@refinedev/core", () => ({
           dataProviderName: string;
           values: Record<string, unknown>;
         }) => {
+          const context = mutationOptions.onMutate();
           mutationMock.calls.push({
             dataProviderName: payload.dataProviderName,
             generation,
             values: payload.values,
           });
-          return {
+          const response = {
             data: {
               data: mutationMock.data ?? { generation, variables: payload.values },
             },
           };
+          await mutationOptions.onSuccess(response, payload, context);
+          return response;
         },
       ),
       mutation: { isPending: false, error: null },

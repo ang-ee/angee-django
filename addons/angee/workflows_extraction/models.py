@@ -228,6 +228,21 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         return self.provenance.get("document", {})
 
     @property
+    def failed_at_inference(self) -> bool:
+        """Return whether this failed revision retains an inference-stage failure.
+
+        The structured stage is authoritative; a legacy row without it does not
+        establish an inference failure from its composite error code alone.
+        """
+
+        failure = self.stage_provenance.get("failure", {})
+        return (
+            self.status == ExtractionStatus.FAILED
+            and isinstance(failure, Mapping)
+            and failure.get("stage") == "inference"
+        )
+
+    @property
     def unresolved_reasons(self) -> tuple[str, ...]:
         return tuple(self.provenance.get("unresolved_reasons", ()))
 

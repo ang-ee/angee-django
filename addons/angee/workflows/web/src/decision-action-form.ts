@@ -7,6 +7,7 @@ import {
   FORM_SPEC_ANNOTATIONS,
   JsonValueSchema,
   deserializeFormSpec,
+  isJsonObject,
   normalizeFormSpecValues,
   parseFormSpec,
   parseFormSpecPayload,
@@ -56,10 +57,10 @@ export function compileDecisionActionFormSpec(
   locale: string = "en",
 ): DecisionActionFormSpec {
   const checkedJson = v.safeParse(JsonValueSchema, value);
-  if (!checkedJson.success || checkedJson.output === null || Array.isArray(checkedJson.output)
-      || typeof checkedJson.output !== "object") {
+  if (!checkedJson.success || !isJsonObject(checkedJson.output)) {
     throw new Error(t("inbox.validation.schemaObject"));
   }
+  const schema = checkedJson.output;
   let presented: ReturnType<typeof parseFormSpec>;
   try {
     presented = parseFormSpec(value);
@@ -124,7 +125,7 @@ export function compileDecisionActionFormSpec(
   }
   let validate: ValidateFunction;
   try {
-    validate = ajv.compile(checkedJson.output);
+    validate = ajv.compile(schema);
   } catch {
     throw new Error(t("inbox.validation.invalidSchema"));
   }
@@ -136,20 +137,33 @@ export function compileDecisionActionFormSpec(
   }
   const contextFields = fields.filter((field) => contextNames.has(field.name));
   const inputFields = fields.filter((field) => field.name !== "action" && !contextNames.has(field.name));
+  const { oneOf: _branches, ...rootWithoutBranches } = presented;
+  const fieldsByBranch = new Map<string, readonly FormSpecFieldDescriptor[]>();
+  for (const branch of branches) {
+    const selected = branch.properties?.action?.const;
+    if (typeof selected !== "string") {
+      throw new Error(t("inbox.validation.invalidSchema"));
+    }
+    const names = byBranch.get(selected)!;
+    const branchFields = deserializeFormSpec({
+      ...rootWithoutBranches,
+      propertyOrder: presented.propertyOrder?.filter((name) => names.has(name)),
+      required: branch.required,
+      properties: branch.properties,
+    }, widgets);
+    fieldsByBranch.set(selected, branchFields.filter((field) => field.name !== "action"));
+  }
   const contextValidators = Object.fromEntries([...contextNames].map((name) => {
-    const root = checkedJson.output as Record<string, unknown>;
-    const raw = root.properties;
-    const properties = raw && typeof raw === "object" && !Array.isArray(raw)
-      ? raw as Record<string, unknown> : {};
-    const fieldSchema = properties[name];
-    if (!fieldSchema || typeof fieldSchema !== "object" || Array.isArray(fieldSchema)) {
+    const properties = schema.properties;
+    const fieldSchema = isJsonObject(properties) ? properties[name] : undefined;
+    if (!isJsonObject(fieldSchema)) {
       throw new Error(t("inbox.validation.contextSchema", { name }));
     }
     try {
       return [name, ajv.compile({
         ...fieldSchema,
-        ...(root.$defs ? { $defs: root.$defs } : {}),
-        ...(root.definitions ? { definitions: root.definitions } : {}),
+        ...(schema.$defs ? { $defs: schema.$defs } : {}),
+        ...(schema.definitions ? { definitions: schema.definitions } : {}),
       })];
     } catch {
       throw new Error(t("inbox.validation.invalidSchema"));
@@ -159,9 +173,9 @@ export function compileDecisionActionFormSpec(
   return {
     options: values.map((selected) => byValue.get(selected)!), inputFields, contextFields,
     fieldsFor(selected) {
-      const names = byBranch.get(selected);
-      if (!names) throw new Error(t("inbox.validation.chooseAction"));
-      return inputFields.filter((field) => names.has(field.name));
+      const branchFields = fieldsByBranch.get(selected);
+      if (!branchFields) throw new Error(t("inbox.validation.chooseAction"));
+      return branchFields;
     },
     project(selected, current) {
       return { ...normalizeFormSpecValues(this.fieldsFor(selected), current), action: selected };
@@ -254,13 +268,10 @@ function ajvErrorMessages(
       ? error.params.missingProperty : "";
     const path = jsonPointerName(error.instancePath);
     const fullPath = [path, missing].filter(Boolean).join(".");
-    const name = fullPath.split(".")[0] || "root";
+    const name = fullPath || "root";
     const leaf = fullPath.split(".").at(-1) || name;
     const label = labels.get(leaf) ?? leaf;
-    const detail = decisionValidationMessage(error, label, t);
-    const message = fullPath && fullPath !== name
-      ? t("inbox.validation.detail", { label: fullPath, detail })
-      : detail;
+    const message = decisionValidationMessage(error, label, t);
     const key = `${name}\u0000${message}`;
     if (!seen.has(key)) {
       seen.add(key);

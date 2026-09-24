@@ -55,6 +55,7 @@ const FieldBaseSchema = v.object({
   description: v.optional(NonEmptyString),
   placeholder: v.optional(NonEmptyString),
   readOnly: v.optional(v.boolean()),
+  hidden: v.optional(v.boolean()),
   layout: v.optional(FieldLayoutSchema),
   nullable: v.optional(v.boolean()),
   omittable: v.optional(v.boolean()),
@@ -138,5 +139,5 @@ export function parseFormSpecPayload(payload: unknown): Record<string, unknown> 
 /** Presentation annotations registered with full JSON Schema validators. */
 export const FORM_SPEC_ANNOTATIONS = [
   "widget", "label", "addLabel", "removeLabel", "placeholder", "layout", "defaultValue", "propertyOrder",
-  "omittable", "presenceRequired", "options", "relation",
+  "omittable", "presenceRequired", "options", "relation", "hidden",
 ] as const;

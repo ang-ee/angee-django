@@ -402,14 +402,16 @@ def _inference_settings(config: Mapping[str, Any], *, timeout: float) -> ModelSe
 def _structured_response(response: ModelResponse) -> dict[str, Any]:
     """Read one native text or output-tool response as a JSON object."""
 
-    if response.text is not None:
-        return mapping_object(response.text)
     output_calls = [
         part for part in response.parts if isinstance(part, ToolCallPart) and part.tool_name == INFERENCE_OUTPUT_TOOL
     ]
-    if len(output_calls) != 1:
-        raise ValueError("Structured inference response is missing or ambiguous.")
-    return output_calls[0].args_as_dict(raise_if_invalid=True)
+    if output_calls:
+        if len(output_calls) != 1:
+            raise ValueError("Structured inference response is missing or ambiguous.")
+        return output_calls[0].args_as_dict(raise_if_invalid=True)
+    if response.text is not None:
+        return mapping_object(response.text)
+    raise ValueError("Structured inference response is missing or ambiguous.")
 
 
 def _response_metadata(

@@ -19,7 +19,7 @@ const decisionSchema = {
     note: { type: "string", label: "Review note" },
   },
   oneOf: [{ type: "object", required: ["action"], properties: {
-    action: { const: "complete" }, note: { type: "string" },
+    action: { const: "complete" }, note: { type: "string", label: "Review note" },
   }, additionalProperties: false }],
 };
 vi.mock("@angee/refine", async (importOriginal) => {

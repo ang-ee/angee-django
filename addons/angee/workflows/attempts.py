@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -194,6 +195,12 @@ class JsonPresence:
 _STRICT_JSON: TypeAdapter[JsonValue] = TypeAdapter(
     JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False)
 )
+
+
+def validate_json_value[T](validator: Callable[[str], T], value: Any) -> T:
+    """Validate a finite JSON round-trip through the schema's JSON entrypoint."""
+
+    return validator(json.dumps(value, allow_nan=False))
 
 
 def validate_json_presence(value: JsonPresence, *, label: str = "JSON value") -> JsonPresence:
@@ -505,7 +512,7 @@ def serialize_decision_specs(specs: tuple[DecisionSpec, ...]) -> list[dict[str, 
 def deserialize_decision_specs(value: Any) -> tuple[DecisionSpec, ...]:
     """Decode retained decision declarations through their typed owner."""
 
-    return _DECISION_SPECS.validate_json(json.dumps(value, allow_nan=False))
+    return validate_json_value(_DECISION_SPECS.validate_json, value)
 
 
 @dataclass(frozen=True, slots=True)

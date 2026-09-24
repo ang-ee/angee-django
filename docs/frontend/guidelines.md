@@ -477,7 +477,10 @@ history uses native Query pages with domain-owned
 - Authored mutation result envelopes are decoded at the hook boundary. Pass
   `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
   hook throws before invalidating, so pages do not repeat result-error checks or
-  accidentally refresh failed writes.
+  accidentally refresh failed writes. Its native pending lifecycle includes
+  result validation and awaited invalidation. Clear settled failures through
+  the hook's `reset`; resetting a pending mutation detaches its observer without
+  cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
 - No Python view DSL, no frontend metadata hidden in backend decorators.
 
@@ -759,6 +762,10 @@ Hard-won traps — the wise learn from others' mistakes
 - **One keyset feed hook.** Compose `useAuthoredKeysetFeed` from `@angee/refine`;
   domain adapters supply documents, scopes, live interests and presentation order.
   Native Query pages own loaded history; do not introduce a second row cache.
+  Live feeds supply retained-ID revalidation; explicit remote snapshots can omit
+  it and configure native freshness/refetch options on the same owner. Use its
+  restart operation for a fresh snapshot, rather than remount keys or manual page
+  accumulation. See the [IMAP sample preview](../../addons/angee/messaging_integrate_imap/README.md).
 - **Enum casing is decided once.** `useEnumOptions` owns read/write casing; a
   caller that re-uppercases option values is working around the owner. Select its
   casing option for authored enum actions and retain lowercase CRUD inputs.

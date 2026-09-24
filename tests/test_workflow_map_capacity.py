@@ -10,6 +10,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.workflows import engine
+from angee.workflows.attempts import AttemptInput
 from angee.workflows.models import RunStatus, StepRunStatus
 from tests.workflows import StepAttempt, StepRun, Workflow, start_run, workflow_with_steps
 
@@ -173,7 +174,7 @@ def test_waiting_map_recovery_counts_existing_children_once(
         map_row = StepRun.objects.select_related("step").get(run=run, step__key="map_one")
         body = workflow.steps.get(key="body_one")
         expansion, _plan = StepAttempt.objects.record_map_expansion(
-            map_row, at=timezone.now()
+            map_row, input=AttemptInput(), at=timezone.now()
         )
         StepRun.objects.create(
             run=run,

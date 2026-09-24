@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
+from io import BytesIO
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from pydantic import ValidationError as PydanticValidationError
-from pydantic_ai.messages import BinaryContent, ModelResponse, ToolCallPart
+from pydantic_ai.messages import BinaryContent, ModelResponse, TextPart, ToolCallPart
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows.steps import TransientStepError
 from angee.workflows_extraction import service
+from angee.workflows_extraction import steps as extraction_steps
 from angee.workflows_extraction.engines import (
     DocumentPart,
     DocumentPipelineError,
@@ -30,7 +34,7 @@ from angee.workflows_extraction.steps import (
     RecognizePageStepImpl,
 )
 from tests.conftest import SchemaAddon
-from tests.extraction_models import Extraction as _Extraction  # noqa: F401 - registers composed test models.
+from tests.extraction_models import Extraction
 from tests.test_agents import InferenceModel as _InferenceModel  # noqa: F401 - registers composed test models.
 
 SCHEMA = {
@@ -40,6 +44,32 @@ SCHEMA = {
     "required": ["number"],
     "additionalProperties": False,
 }
+
+
+@pytest.mark.parametrize(
+    ("status", "provenance", "error_code", "expected"),
+    [
+        (
+            "failed",
+            {"document": {"failure": {"stage": "inference", "code": "invalid_response"}}},
+            "inference:invalid_response",
+            True,
+        ),
+        ("failed", {"document": {"failure": {"stage": "inference"}}}, "recognition:failed", True),
+        ("failed", {"document": {"failure": {"stage": "recognition"}}}, "inference:failed", False),
+        ("succeeded", {"document": {"failure": {"stage": "inference"}}}, "inference:failed", False),
+        ("failed", {}, "inference:failed", False),
+        ("failed", {"document": {}}, "inference:failed", False),
+        ("failed", {"document": {"failure": {"code": "failed"}}}, "inference:failed", False),
+        ("failed", {"document": {"failure": None}}, "inference:failed", False),
+    ],
+)
+def test_extraction_failed_at_inference_uses_retained_stage(
+    status: str, provenance: dict[str, object], error_code: str, expected: bool,
+) -> None:
+    extraction = Extraction(status=status, provenance=provenance, error_code=error_code)
+
+    assert extraction.failed_at_inference is expected
 
 
 def test_extraction_evidence_uses_native_closed_kind_enums() -> None:
@@ -173,6 +203,69 @@ def test_recognize_page_input_owns_inference_defaults_and_validates_timeout() ->
         })
 
 
+def test_recognize_page_uses_retained_actor_subject_for_file_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    image_bytes = b"synthetic page"
+    image_digest = hashlib.sha256(image_bytes).hexdigest()
+    actor = object()
+    actor_subject = object()
+    owner_subjects: list[object] = []
+    image_file = MagicMock(
+        sqid="fil_image", upload_state="ready", content_hash=image_digest,
+        drive=SimpleNamespace(sqid="drv_test"),
+    )
+    image_file.with_actor.return_value.has_access.return_value = True
+    image_file.open_stream.return_value = BytesIO(image_bytes)
+    model = MagicMock(sqid="imd_recognition")
+    model.with_actor.return_value.has_access.return_value = True
+    text_file = SimpleNamespace(sqid="fil_text")
+    file_model = MagicMock()
+    file_manager = file_model.objects.db_manager.return_value
+    file_manager.select_related.return_value.get.return_value = image_file
+    file_manager.ingest_stream.return_value = text_file
+    model_model = MagicMock()
+    model_model.objects.db_manager.return_value.get.return_value = model
+    run = SimpleNamespace(
+        admission_actor=lambda: actor,
+        admission_actor_subject=lambda: actor_subject,
+        debit_budget=lambda usage, using: None,
+    )
+    value = SimpleNamespace(
+        source_position=0, page_position=0, image_file_id="fil_image", image_digest=image_digest,
+        width=100, height=200, dpi=300, model_id="imd_recognition", config_digest="digest",
+        engine_config={}, engine="test", timeout=60,
+    )
+    engine = MagicMock()
+    engine.recognize_page.return_value = SimpleNamespace(
+        text="recognized text", usage_delta=None, duration_ms=1,
+    )
+    monkeypatch.setattr(extraction_steps, "related_on", lambda *args, **kwargs: run)
+    monkeypatch.setattr(
+        extraction_steps, "external_operation_request",
+        lambda *args, **kwargs: SimpleNamespace(request_key="recognition-request", input={}),
+    )
+    monkeypatch.setattr(RecognizePageStepImpl, "validate_input", staticmethod(lambda request: value))
+    monkeypatch.setattr(extraction_steps, "canonical_json_sha256", lambda config: "digest")
+    monkeypatch.setattr(extraction_steps, "actor_context", lambda value: nullcontext())
+    monkeypatch.setattr(
+        extraction_steps.apps,
+        "get_model",
+        lambda app, name: file_model if (app, name) == ("storage", "File") else model_model,
+    )
+    monkeypatch.setattr(extraction_steps, "require_approved_model_deployment", lambda *args, **kwargs: None)
+    monkeypatch.setattr(extraction_steps, "resolve_impl_class", lambda *args, **kwargs: lambda: engine)
+    monkeypatch.setattr(
+        extraction_steps,
+        "actor_user_id",
+        lambda value: owner_subjects.append(value) or 7,
+    )
+
+    result = RecognizePageStepImpl()._recognize(SimpleNamespace(), using="default")
+
+    assert result.outcome == "recognized"
+    assert owner_subjects == [actor_subject]
+    assert file_manager.ingest_stream.call_args.kwargs["owner_id"] == 7
+
+
 @pytest.mark.parametrize("role", ["body", "title", "quoted", "signature", "header"])
 def test_retained_textual_message_roles_are_authorized_source_evidence(role: str) -> None:
     part = _message_part(role=role)
@@ -240,8 +333,8 @@ def test_schema_owner_requires_object_root() -> None:
 
 
 def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -> None:
-    response = SimpleNamespace(
-        text='{"number":"INV-42"}',
+    response = ModelResponse(
+        parts=[TextPart('{"number":"INV-42"}')],
         provider_response_id="response-1",
     )
     requested = {}
@@ -289,8 +382,8 @@ def test_inference_mapping_uses_catalogue_model_without_provider_restriction() -
 
 def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -> None:
     raw_output = "invoice data, but not JSON"
-    response = SimpleNamespace(
-        text=raw_output,
+    response = ModelResponse(
+        parts=[TextPart(raw_output)],
         provider_response_id="response-invalid",
         finish_reason="length",
     )
@@ -326,7 +419,10 @@ def test_inference_mapping_invalid_json_retains_bounded_response_diagnostics() -
 
 
 def test_inference_mapping_consumes_native_structured_tool_result() -> None:
-    response = ModelResponse(parts=[ToolCallPart("inference_output", {"number": "INV-43"}, "call-1")])
+    response = ModelResponse(parts=[
+        TextPart("The structured invoice facts follow."),
+        ToolCallPart("inference_output", {"number": "INV-43"}, "call-1"),
+    ])
     model = SimpleNamespace(
         status="available",
         model_use="chat",
@@ -346,6 +442,52 @@ def test_inference_mapping_consumes_native_structured_tool_result() -> None:
 
     assert result.value == {"number": "INV-43"}
     assert isinstance(result, MappingResult)
+
+
+def test_inference_mapping_consumes_text_with_non_output_tool_call() -> None:
+    response = ModelResponse(parts=[
+        TextPart('{"number":"INV-43"}'),
+        ToolCallPart("lookup_invoice", {"number": "INV-44"}, "call-1"),
+    ])
+    model = SimpleNamespace(
+        status="available",
+        model_use="chat",
+        infer=lambda *args, **kwargs: (response, {}),
+    )
+
+    result = InferenceMappingEngine().map_text_parts(
+        (DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-43", "native", "hash"),),
+        SCHEMA,
+        model=model,
+        config={},
+        timeout=5,
+    )
+
+    assert result.value == {"number": "INV-43"}
+
+
+def test_inference_mapping_rejects_multiple_output_tool_calls() -> None:
+    response = ModelResponse(parts=[
+        TextPart('{"number":"INV-43"}'),
+        ToolCallPart("inference_output", {"number": "INV-43"}, "call-1"),
+        ToolCallPart("inference_output", {"number": "INV-44"}, "call-2"),
+    ])
+    model = SimpleNamespace(
+        status="available",
+        model_use="chat",
+        infer=lambda *args, **kwargs: (response, {}),
+    )
+
+    with pytest.raises(DocumentPipelineError) as raised:
+        InferenceMappingEngine().map_text_parts(
+            (DocumentPart(0, None, "text/plain", "native_text", "Invoice INV-43", "native", "hash"),),
+            SCHEMA,
+            model=model,
+            config={},
+            timeout=5,
+        )
+    assert raised.value.stage == "mapping_response"
+    assert raised.value.code == "ValueError"
 
 
 def test_inference_model_roles_and_retired_status_share_the_execution_validator():

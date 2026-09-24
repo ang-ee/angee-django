@@ -70,7 +70,7 @@ from angee.base.db import get_read_alias, get_write_alias, related_on
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, role_anchor
 from angee.base.refs import RecordRefMixin, canonical_record_target
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
@@ -222,11 +222,13 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
     prefix = models.CharField(max_length=512, blank=True)
 
     objects = StorageMasterManager()
+    unscoped_objects = AngeeUnscopedManager()
 
     class Meta:
         """Django model options for drives."""
 
         abstract = True
+        base_manager_name = "unscoped_objects"
         ordering = ("slug",)
         rebac_resource_type = "storage/drive"
         constraints = (
@@ -1236,11 +1238,13 @@ class File(SqidMixin, AuditMixin, AngeeModel):
     )
 
     objects = FileManager()
+    unscoped_objects = AngeeUnscopedManager()
 
     class Meta:
         """Django model options for files."""
 
         abstract = True
+        base_manager_name = "unscoped_objects"
         ordering = ("-updated_at", "filename", "sqid")
         rebac_resource_type = "storage/file"
         constraints = (

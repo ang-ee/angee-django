@@ -18,6 +18,24 @@ const Fact = v.object({
   authority: v.picklist(["source", "correction", "unverified"]),
   evidence: v.optional(v.array(RecordRef), []),
 });
+const ReviewContext = v.pipe(v.object({
+  facts: v.optional(v.array(Fact)),
+  references: v.optional(v.union([RecordRef, v.array(RecordRef)])),
+}), v.check((context) => context.facts !== undefined || context.references !== undefined));
+
+/** Parse the framework-owned facts/references envelope retained by a Decision. */
+export function decisionReviewContext(value: unknown): v.InferOutput<typeof ReviewContext> | undefined {
+  const parsed = v.safeParse(ReviewContext, value);
+  return parsed.success ? parsed.output : undefined;
+}
+
+/** Select an exact retained fact key, without evaluating it as a JSON pointer. */
+export function decisionReviewFact(facts: unknown, pointer: string): v.InferOutput<typeof Fact> | undefined {
+  const parsed = v.safeParse(v.array(Fact), facts);
+  if (!parsed.success) return undefined;
+  const matches = parsed.output.filter((fact) => fact.pointer === pointer);
+  return matches.length === 1 ? matches[0] : undefined;
+}
 const Difference = v.object({
   field: v.string(), label: v.string(), left: Json, right: Json,
   changed: v.boolean(), leftRecord: v.optional(v.nullable(RecordRef)),

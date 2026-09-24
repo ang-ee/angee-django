@@ -94,7 +94,8 @@ def test_json_pointer_value_resolves_rfc6901_tokens_and_rejects_missing() -> Non
         json_pointer_value({"vendor": {}}, "/vendor/name")
 
 
-def test_inference_provider_failure_routes_retained_base_to_manual_review() -> None:
+@pytest.mark.parametrize("message", ["The inferred candidate does not match the frozen schema.", ""])
+def test_inference_provider_failure_routes_retained_base_to_manual_review(message: str) -> None:
     actor = object()
     target = SimpleNamespace(pk=11)
     base_manager = SimpleNamespace()
@@ -163,9 +164,15 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review() -> N
         )),
         patch("angee.workflows_extraction.steps.resolve_impl_class", return_value=Profile),
         patch("angee.workflows_extraction.steps.infer", side_effect=DocumentPipelineError(
-            "The inferred candidate does not match the frozen schema.",
+            message,
             stage="inference",
             code="candidate_schema_mismatch",
+            metadata={
+                "provider_response_id": "response-invalid",
+                "finish_reason": "length",
+                "output_text_length": 24,
+                "output_text_sha256": "bounded-digest",
+            },
         )),
     ):
         result = InferEvidenceStepImpl().run(step_run, now=None)
@@ -177,19 +184,82 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review() -> N
     assert result.output["extraction_id"] == "ext_base"
     assert result.output["inference_failure"] == {
         "type": "DocumentPipelineError",
-        "message": "The inferred candidate does not match the frozen schema.",
+        "message": message,
         "stage": "inference",
         "code": "candidate_schema_mismatch",
+        "provider_response_id": "response-invalid",
+        "finish_reason": "length",
+        "output_text_length": "24",
+        "output_text_sha256": "bounded-digest",
     }
 
 
-def test_inference_step_retry_reuses_failed_successor_without_second_debit() -> None:
+@pytest.mark.parametrize("metadata_source", [
+    "sibling_metadata",
+    "nested_metadata",
+    "empty_nested_metadata",
+    "missing_metadata",
+    "legacy_failure_details",
+])
+def test_inference_step_routes_superseded_successor_by_retained_status(metadata_source: str) -> None:
+    metadata = {
+        "provider_response_id": "response-invalid",
+        "finish_reason": "length",
+        "output_text_length": 24,
+        "output_text_sha256": "bounded-digest",
+        "output_text": "Unbounded provider output must not enter the journal.",
+        "usage": {"tokens": 7},
+    }
+    failure: dict[str, Any] = {
+        "type": "DocumentPipelineError",
+        "message": "Malformed candidate.",
+        "stage": "inference",
+        "code": "invalid_document_layout",
+    }
+    if metadata_source == "legacy_failure_details":
+        failure.pop("type")
+        failure.pop("message")
+    provenance: dict[str, Any] = {"failure": failure}
+    if metadata_source in {"sibling_metadata", "legacy_failure_details"}:
+        provenance.update(metadata)
+    elif metadata_source in {"nested_metadata", "empty_nested_metadata"}:
+        provenance.update({
+            "provider_response_id": "stale-response",
+            "finish_reason": "stale-reason",
+            "output_text_length": 999,
+            "output_text_sha256": "stale-digest",
+        })
+        failure["metadata"] = metadata if metadata_source == "nested_metadata" else {}
+    has_diagnostics = metadata_source in {
+        "sibling_metadata", "nested_metadata", "legacy_failure_details",
+    }
+    message = "Inference failed." if metadata_source == "legacy_failure_details" else "Malformed candidate."
+    live_error = DocumentPipelineError(
+        message,
+        stage="inference",
+        code="invalid_document_layout",
+        metadata=metadata if has_diagnostics else {},
+    )
+    expected_failure = {
+        "type": "DocumentPipelineError",
+        "message": message,
+        "stage": "inference",
+        "code": "invalid_document_layout",
+    }
+    if has_diagnostics:
+        expected_failure.update({
+            "provider_response_id": "response-invalid",
+            "finish_reason": "length",
+            "output_text_length": "24",
+            "output_text_sha256": "bounded-digest",
+        })
     actor = object()
     target = SimpleNamespace(pk=11)
     base_manager = SimpleNamespace()
     extraction_fixture = type("ExtractionFixture", (), {"objects": base_manager})
     base = extraction_fixture()
     failed = extraction_fixture()
+    succeeded = extraction_fixture()
     for name, value in {
         "pk": 7,
         "sqid": "ext_base",
@@ -212,18 +282,24 @@ def test_inference_step_retry_reuses_failed_successor_without_second_debit() -> 
         "status": "failed",
         "error_code": "inference:invalid_document_layout",
         "unresolved_reasons": ["inference:invalid_document_layout"],
-        "stage_provenance": {
-            "failure": {
-                "type": "DocumentPipelineError",
-                "message": "Malformed candidate.",
-                "stage": "inference",
-                "code": "invalid_document_layout",
-            }
-        },
+        "stage_provenance": provenance,
     }.items():
         setattr(failed, name, value)
+    for name, value in {
+        "pk": 9,
+        "sqid": "ext_succeeded",
+        "revision": 4,
+        "status": "succeeded",
+        "error_code": "",
+        "unresolved_reasons": [],
+    }.items():
+        setattr(succeeded, name, value)
     current = base
-    base_manager.get = lambda **_kwargs: base
+    base_manager.get = lambda **kwargs: {
+        "ext_base": base,
+        "ext_failed": failed,
+        "ext_succeeded": succeeded,
+    }[kwargs["sqid"]]
     base_manager.inference_current_head = lambda _base, *, actor: current
     model = object()
     models = {
@@ -277,19 +353,31 @@ def test_inference_step_retry_reuses_failed_successor_without_second_debit() -> 
         patch(
             "angee.workflows_extraction.steps.infer",
             side_effect=(
+                live_error,
                 InferenceResult(failed, {"tokens": 7}),
-                InferenceResult(failed, {}),
+                SupersededInference("ext_base", "ext_failed", {}),
+                SupersededInference("ext_base", "ext_succeeded", {}),
             ),
         ),
     ):
+        live = InferEvidenceStepImpl().run(step_run, now=None)
         first = InferEvidenceStepImpl().run(step_run, now=None)
         current = failed
         retry = InferEvidenceStepImpl().run(step_run, now=None)
+        current = succeeded
+        superseded = InferEvidenceStepImpl().run(step_run, now=None)
 
     related_run.assert_called_with(step_run, "run", using="default")
-    assert first.outcome == retry.outcome == "inference_failed"
+    assert live.outcome == first.outcome == retry.outcome == "inference_failed"
+    assert live.output["extraction_id"] == "ext_base"
     assert first.output["extraction_id"] == retry.output["extraction_id"] == "ext_failed"
-    assert debits == [{"tokens": 7}, {}]
+    assert live.output["inference_failure"] == expected_failure
+    assert first.output["inference_failure"] == retry.output["inference_failure"] == expected_failure
+    assert retry.output["superseded_by"] == "ext_failed"
+    assert superseded.outcome == "superseded"
+    assert superseded.output["extraction_id"] == "ext_succeeded"
+    assert superseded.output["superseded_by"] == "ext_succeeded"
+    assert debits == [{}, {"tokens": 7}, {}, {}]
 
 
 def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relabeling() -> None:
@@ -2034,6 +2122,17 @@ class ExtractionServiceTests(TestCase):
             failed.stage_provenance["failure"]["code"],
             "candidate_schema_mismatch",
         )
+        with actor_context(self.owner):
+            authority = type(base).objects.latest_succeeded_identity_authority(
+                failed, actor=self.owner
+            )
+            binding, revision_parent = type(base).objects.prepare_correction_binding(
+                base, actor=self.owner
+            )
+        self.assertEqual(authority.pk, base.pk)
+        self.assertEqual(revision_parent.pk, failed.pk)
+        self.assertEqual(binding.authority, base.reference)
+        self.assertEqual(binding.revision_parent, failed.reference)
 
     def test_inference_superseded_race_exposes_provider_usage_delta(self) -> None:
         base = self._inference_base()

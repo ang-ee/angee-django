@@ -7,6 +7,7 @@ import {
   type MetaGridRow,
 } from "@angee/ui";
 import {
+  decisionReviewFact,
   WorkflowDecisionScaffold,
   textValue,
   type WorkflowDecisionContentProps,
@@ -62,6 +63,7 @@ export function PartyIdentityDecisionContent(
   const t = useWorkflowsPartiesT();
   return <WorkflowDecisionScaffold
     props={props}
+    context={identityReviewContext(props.contextValues.facts)}
     schema={IdentityReviewSchema}
     actionPickerPlacement="before-content"
     header={(review) => ({
@@ -105,6 +107,27 @@ export function PartyIdentityDecisionContent(
 }
 
 PartyIdentityDecisionContent.placesActionPicker = true;
+
+function identityReviewContext(facts: unknown): unknown {
+  const current = decisionReviewFact(facts, "/current");
+  const proposed = decisionReviewFact(facts, "/proposed");
+  if (
+    current === undefined
+    || proposed === undefined
+    || current.subject?.model.toLowerCase() !== "parties.party"
+    || !current.subject.id
+  ) return undefined;
+  return {
+    party_id: current.subject.id,
+    current: current.value,
+    proposed: proposed.value,
+    evidence: proposed.evidence.map((reference) => ({
+      label: reference.label,
+      source_model: reference.model,
+      source_id: reference.id,
+    })),
+  };
+}
 
 function PartyIdentityComparison({ review }: {
   review: v.InferOutput<typeof IdentityReviewSchema>;

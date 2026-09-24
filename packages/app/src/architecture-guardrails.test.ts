@@ -100,6 +100,7 @@ const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
   frameworkCriticalExport("expectValidBaseAddon", "@angee/app", "src/testing.tsx"),
   frameworkCriticalExport("MutationDialog", "@angee/ui", "src/views/form/MutationDialog.tsx"),
   frameworkCriticalExport("parseFormSpec", "@angee/ui", "src/views/form/form-spec-schema.ts"),
+  frameworkCriticalExport("isCompositeFieldDescriptor", "@angee/ui", "src/views/form/form-view-model.ts"),
   frameworkCriticalExport("JsonValueSchema", "@angee/ui", "src/widgets/json-value.ts"),
   frameworkCriticalExport("FORM_SPEC_ANNOTATIONS", "@angee/ui", "src/views/form/form-spec-schema.ts"),
   frameworkCriticalExport("GraphViewGeometry", "@angee/ui", "src/views/GraphView.tsx"),

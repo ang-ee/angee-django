@@ -449,6 +449,17 @@ class ModelHistory(HistoricalRecords):
         options["app_label"] = model._meta.app_label
         return options
 
+    def _get_history_change_reason_field(self) -> models.TextField:
+        """Give each historical model its own nullable, unbounded change reason.
+
+        The inherited descriptor is shared, and django-simple-history reuses a
+        field passed to its constructor. Its native factory hook keeps field
+        instances independent and this policy local to HistoryMixin instead of
+        changing all history consumers through a project-wide setting.
+        """
+
+        return models.TextField(null=True)
+
     def copy_fields(self, model: type[models.Model]) -> dict[str, models.Field]:
         """Copy MTI identity as a regular historical relation, not an inheritance link."""
 

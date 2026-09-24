@@ -208,12 +208,14 @@ class ExtractionManager(EvidenceManager):
             raise PermissionDenied("Read access to the retained authority base is required.")
         return authority
 
-    def latest_succeeded_identity_authority(self, head: Any, *, actor: Any) -> Any:
-        """Resolve the latest successful fact owner for one exact lineage head."""
+    def _latest_succeeded_identity_authority(
+        self, head: Any, *, using: str | None
+    ) -> Any:
+        """Resolve one lineage head's latest successful fact owner."""
 
         with system_context(reason="workflows_extraction.infer.latest_succeeded_authority"):
             authority = (
-                self.model._base_manager.using(self._db)
+                self.model._base_manager.using(using)
                 .filter(
                     lineage_key=head.lineage_key,
                     revision__lt=head.revision,
@@ -224,12 +226,18 @@ class ExtractionManager(EvidenceManager):
             )
         if authority is None:
             raise ValidationError({"inference": "The lineage has no successful identity authority."})
-        if not authority.with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to the retained identity authority is required.")
         if not _same_fact_identity(authority, head):
             raise ValidationError({
                 "inference": "The retained identity authority differs from the current extraction."
             })
+        return authority
+
+    def latest_succeeded_identity_authority(self, head: Any, *, actor: Any) -> Any:
+        """Resolve the actor-readable successful fact owner for one exact lineage head."""
+
+        authority = self._latest_succeeded_identity_authority(head, using=self._db)
+        if not authority.with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to the retained identity authority is required.")
         return authority
 
     def identity_preserving_pipeline_successor(
@@ -312,8 +320,17 @@ class ExtractionManager(EvidenceManager):
             )
         if revision_parent.pk == authority.pk:
             return revision_parent
-        selectors = self.inference_candidate_selectors(revision_parent)
-        retained_authority = self._inference_authority_base(revision_parent, using=using)
+        failed_inference = revision_parent.failed_at_inference
+        selectors = (
+            ()
+            if failed_inference
+            else self.inference_candidate_selectors(revision_parent)
+        )
+        retained_authority = (
+            self._latest_succeeded_identity_authority(revision_parent, using=using)
+            if failed_inference
+            else self._inference_authority_base(revision_parent, using=using)
+        )
         if (
             selectors
             or retained_authority.pk != authority.pk

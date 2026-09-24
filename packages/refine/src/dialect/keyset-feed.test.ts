@@ -15,6 +15,39 @@ const message = (position: number, values: { id?: string; body?: string; visible
   ...values,
 });
 
+test("feeds without revalidation retain empty continuations and use fresh native cursors on refetch", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  let rows = [5, 4, 3, 2, 1].map(position => message(position));
+  const options = keysetFeedOptions(client, {
+    queryKey: ["snapshot"], pageSize: 2,
+    async window(before, through, limit) {
+      expect(through).toBeNull();
+      const selected = rows.filter(row => before === null || row.position < Number(before)).slice(0, limit);
+      return {
+        rows: selected, count: rows.length, older_cursor: selected.at(-1)?.position.toString() ?? null,
+        has_older: selected.length === limit, has_more_in_window: false, has_older_than_through: false,
+      };
+    },
+  });
+  const observer = new InfiniteQueryObserver(client, options);
+  const stop = observer.subscribe(() => {});
+  const positions = () => orderedRows(observer.getCurrentResult().data).map(row => row.position);
+  try {
+    await observer.refetch();
+    await observer.fetchNextPage();
+    rows = rows.slice(0, 4);
+    await observer.fetchNextPage();
+    expect(positions()).toEqual([5, 4, 3, 2]);
+    expect(observer.getCurrentResult().hasNextPage).toBe(false);
+    await observer.refetch();
+    expect(positions()).toEqual([5, 4, 3, 2]);
+    rows = [message(6), ...rows];
+    await observer.refetch();
+    expect(positions()).toEqual([6, 5, 4, 3, 2]);
+    expect(observer.getCurrentResult().data?.pageParams).toEqual([{ start: true }, "5", "3"]);
+  } finally { stop(); client.clear(); }
+});
+
 test("an anchored native feed grows both ways and revalidates newer windows", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   let rows = [1, 2, 3, 4, 5, 6].map(position => message(position));
