@@ -9,6 +9,7 @@ import {
   List,
   UploadDropTarget,
   formatSize,
+  useStatusTone,
   type ListProps,
   type ResourceListSnapshot,
 } from "@angee/ui";
@@ -17,7 +18,7 @@ import { useStorageT } from "../i18n";
 import { fileDragPayload, type StorageFileRow } from "../data/file-rows";
 import type { StorageUpload, UploadTarget } from "../data/use-upload";
 import { fileGalleryCard } from "./file-columns";
-import { fileStage, formatDate } from "../lib/file-display";
+import { fileStageLabel, formatDate } from "../lib/file-display";
 import { StorageUploadTasks } from "./StorageUploadTasks";
 
 export interface FileBrowserContentProps {
@@ -60,6 +61,7 @@ export function FileBrowserContent({
   canUpload,
 }: FileBrowserContentProps): ReactElement {
   const t = useStorageT();
+  const statusTone = useStatusTone();
   const inputRef = useRef<HTMLInputElement>(null);
 
   function startUpload(files: FileList | readonly File[] | null): void {
@@ -120,10 +122,11 @@ export function FileBrowserContent({
       <Column<StorageFileRow>
         field="upload_state"
         header={t("column.stage")}
-        render={(row) => {
-          const stage = fileStage(row.upload_state, t);
-          return <Badge tone={stage.tone}>{stage.label}</Badge>;
-        }}
+        render={(row) => (
+          <Badge tone={statusTone(row.upload_state, undefined, { unknownTone: "neutral" })}>
+            {fileStageLabel(row.upload_state, t)}
+          </Badge>
+        )}
       />
       <Column<StorageFileRow>
         field="size_bytes"

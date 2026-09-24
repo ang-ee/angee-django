@@ -160,6 +160,7 @@ def prepare_pages(
     *,
     files: Sequence[Any],
     authorized_target: Any,
+    profile: ExtractionProfile,
     message_parts: Sequence[Any] = (),
     config: Mapping[str, Any] | None = None,
     using: str | None = None,
@@ -193,6 +194,7 @@ def prepare_pages(
     options = _json_object(config or {}, field="config")
     acquired = acquire_native_parts(
         sources,
+        profile=profile,
         **{
             key: int(options[key])
             for key in ("dpi", "max_edge", "max_pages", "max_text_bytes")
@@ -257,6 +259,7 @@ def restore_prepared_pages(
     *,
     files: Sequence[Any],
     authorized_target: Any,
+    profile: ExtractionProfile,
     message_parts: Sequence[Any] = (),
     config: Mapping[str, Any] | None = None,
     using: str | None = None,
@@ -265,6 +268,7 @@ def restore_prepared_pages(
 
     prepared = prepare_pages(
         files=files,
+        profile=profile,
         message_parts=message_parts,
         authorized_target=authorized_target,
         config=config,
@@ -459,14 +463,15 @@ def process(
     _authorize(files, message_parts, authorized_target, actor=actor)
     normalized_schema = _validated_schema(schema)
     normalized_config = _json_object(config or {}, field="config")
-    profile_class = resolve_impl_class("ANGEE_EXTRACTION_PROFILE_CLASSES", profile, base_class=ExtractionProfile)
-    profile_layout = _json_object(profile_class.evidence_layout, field="evidence_layout")
+    profile_impl = resolve_impl_class("ANGEE_EXTRACTION_PROFILE_CLASSES", profile, base_class=ExtractionProfile)()
+    profile_layout = _json_object(profile_impl.evidence_layout, field="evidence_layout")
     if "evidence_layout" in normalized_config and normalized_config["evidence_layout"] != profile_layout:
         raise ValidationError({"config": "The published profile owns its evidence layout."})
     normalized_config["evidence_layout"] = profile_layout
     prepared = restore_prepared_pages(
         prepared.manifest,
         files=files,
+        profile=profile_impl,
         message_parts=message_parts,
         authorized_target=authorized_target,
         config=normalized_config,
@@ -496,7 +501,7 @@ def process(
             "source_facts": source_facts,
             "schema": normalized_schema,
             "profile": profile,
-            "pipeline_version": str(profile_class.pipeline_version),
+            "pipeline_version": str(profile_impl.pipeline_version),
             "model": _model_fingerprint(model, using=alias),
             "recognition_model": _model_fingerprint(recognition_model, using=alias),
             "config": normalized_config,
@@ -610,7 +615,7 @@ def process(
         metadata = {"source_hold_reasons": hold_reasons}
     else:
         try:
-            document_result = profile_class().process_parts(
+            document_result = profile_impl.process_parts(
                 prepared.sources,
                 collected.parts,
                 normalized_schema,

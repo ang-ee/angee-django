@@ -802,7 +802,7 @@ class AddressManager(AngeeManager):
         party: models.Model,
         values: Mapping[str, Any],
         actor: Any,
-        label: str = "Billing",
+        label: str = "Primary",
         is_primary: bool = True,
         conflict: str = "raise",
     ) -> tuple[str, models.Model | None]:
@@ -853,7 +853,7 @@ class AddressManager(AngeeManager):
         values: Mapping[str, Any],
         actor: Any,
         expected_id: Any | None,
-        label: str = "Billing",
+        label: str = "Primary",
     ) -> tuple[str, models.Model]:
         """Replace the frozen primary address, or create it when none existed."""
 

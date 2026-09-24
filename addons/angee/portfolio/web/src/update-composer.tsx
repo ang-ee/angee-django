@@ -6,7 +6,7 @@ import {
   RelativeTime,
   canonicalOptionValue,
   mutationDialogValueCodecs,
-  statusTone,
+  useStatusTone,
   useActionOutcomeMutation,
   useEnumOptions,
   useRecordChromeContext,
@@ -55,6 +55,7 @@ export function PortfolioHealthSummary({
   health: unknown;
   updatedAt: unknown;
 }): React.ReactElement {
+  const statusTone = useStatusTone();
   const t = usePortfolioT();
   const normalized = normalizeHealth(health);
   const copy = {

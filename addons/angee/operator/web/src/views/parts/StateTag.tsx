@@ -1,4 +1,4 @@
-import { Badge, StatusDot, statusLabel, statusTone } from "@angee/ui";
+import { Badge, StatusDot, statusLabel, useStatusTone } from "@angee/ui";
 import type * as React from "react";
 
 export interface StateTagProps {
@@ -6,6 +6,7 @@ export interface StateTagProps {
 }
 
 export function StateTag({ state }: StateTagProps): React.ReactNode {
+  const statusTone = useStatusTone();
   const tone = statusTone(state, undefined, { unknownTone: "neutral" });
   const label = statusLabel(state.trim() || "unknown");
 

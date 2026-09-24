@@ -4,6 +4,7 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { colorDotWidget } from "./colorDot";
+import { AppRuntimeProvider } from "../runtime/runtime";
 
 const Dot = colorDotWidget.read;
 
@@ -15,6 +16,15 @@ function dotClass(container: HTMLElement): string {
 describe("colorDot widget tone", () => {
   afterEach(() => {
     cleanup();
+  });
+
+  test("reads addon status vocabulary from the composed runtime", () => {
+    const { container } = render(
+      <AppRuntimeProvider runtime={{ statusTones: { reviewed: "accent" } }}>
+        <Dot value="REVIEWED" />
+      </AppRuntimeProvider>,
+    );
+    expect(dotClass(container)).toContain("bg-accent");
   });
 
   // The run-state axis the dot was built for, colored from the shared STATUS_TONES

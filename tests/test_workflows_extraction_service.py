@@ -44,6 +44,7 @@ from angee.workflows_extraction.contracts import (
     DocumentPipelineError,
     DocumentResult,
     DocumentSource,
+    ExtractionPartKind,
     MappingResult,
     PageImage,
 )
@@ -79,9 +80,15 @@ from angee.workflows_extraction.service import (
     prepare_pages,
     process,
 )
-from angee.workflows_extraction.steps import InferEvidenceStepImpl, PreparePagesStepImpl, _restore_prepared
+from angee.workflows_extraction.steps import (
+    InferEvidenceStepImpl,
+    PreparePagesStepImpl,
+    ProcessEvidenceStepImpl,
+    _restore_prepared,
+)
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
 from tests.extraction_models import EXTRACTION_MODELS, Extraction, ExtractionPage, ExtractionSource
+from tests.extraction_profiles import FakeDocumentProfile, RecordCarrierProfile
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
 from tests.test_integrate_vcs import VCS_TEST_MODELS
 from tests.test_messaging import MESSAGING_TEST_MODELS
@@ -1122,6 +1129,73 @@ class ExtractionServiceTests(TestCase):
                 [RelationshipTuple(to_object_ref(file), "viewer", to_subject_ref(self.owner)) for file in self.files]
             )
 
+    def test_profile_carrier_survives_preparation_restoration_and_processing(self) -> None:
+        with actor_context(self.owner):
+            source = apps.get_model("storage", "File").objects.ingest_bytes(
+                b"record:R-7", filename="record.txt", owner_id=self.owner.pk, drive_id=str(self.drive.sqid),
+            )
+        step_run = SimpleNamespace(
+            _state=SimpleNamespace(adding=False, db="default"),
+            input={
+                "files": [str(source.sqid)], "profile": "record_carrier",
+                "target_model": self.drive._meta.label, "target_id": str(self.drive.sqid),
+            },
+        )
+        with patch(
+            "angee.workflows_extraction.steps.related_on",
+            return_value=SimpleNamespace(admission_actor=lambda **kwargs: self.owner),
+        ):
+            result = PreparePagesStepImpl().run(step_run, now=timezone.now())
+        self.assertEqual(result.output["profile"], "record_carrier")
+        with actor_context(self.owner):
+            prepared, _manifest = _restore_prepared(result.output, {}, using="default")
+            self.assertEqual(prepared.recognition_pages, ())
+            (page,) = prepared.pages
+            self.assertEqual(page.native_parts[0].value, {"number": "R-7"})
+            self.assertEqual(page.carrier_files, (source,))
+            profile = RecordCarrierProfile()
+            profile_class = MagicMock(return_value=profile)
+            with patch(
+                "angee.workflows_extraction.service.resolve_impl_class", return_value=profile_class,
+            ) as resolve_profile, patch.object(
+                profile, "detect_carriers", wraps=profile.detect_carriers,
+            ) as detect, patch.object(
+                profile, "process_parts", wraps=profile.process_parts,
+            ) as process_parts:
+                retained = process(
+                    prepared, (), schema=SCHEMA, authorized_target=self.drive,
+                    profile="record_carrier", config={"result": {"number": "R-7", "rows": []}},
+                )
+            resolve_profile.assert_called_once()
+            profile_class.assert_called_once_with()
+            detect.assert_called_once()
+            process_parts.assert_called_once()
+
+            legacy_output = {key: value for key, value in result.output.items() if key != "profile"}
+            legacy_prepared, legacy_manifest = _restore_prepared(legacy_output, {}, using="default")
+            self.assertEqual(legacy_manifest.profile, "none")
+            self.assertEqual(legacy_prepared.pages[0].native_parts[0].kind, ExtractionPartKind.NATIVE_TEXT)
+            self.assertEqual(legacy_prepared.manifest, prepared.manifest)
+        self.assertEqual(retained.status, "succeeded")
+        self.assertEqual(retained.result, {"number": "R-7", "rows": []})
+
+        for output, selected_profile in ((result.output, "fake_document"), (legacy_output, "record_carrier")):
+            with self.subTest(prepared_profile=output.get("profile"), selected_profile=selected_profile):
+                step_run.input = {
+                    "prepared": output, "recognition_results": [], "hold_reasons": [],
+                    "completed_page_count": 1, "schema": SCHEMA, "profile": selected_profile,
+                }
+                with patch(
+                    "angee.workflows_extraction.steps.related_on",
+                    return_value=SimpleNamespace(admission_actor=lambda **kwargs: self.owner),
+                ), patch("angee.workflows_extraction.steps.process") as process_evidence:
+                    with self.assertRaises(ValidationError) as mismatch:
+                        ProcessEvidenceStepImpl().run(step_run, now=timezone.now())
+                self.assertEqual(mismatch.exception.message_dict, {
+                    "profile": ["The selected profile differs from the prepared profile."],
+                })
+                process_evidence.assert_not_called()
+
     def test_restore_prepared_preserves_nonempty_recognition_subset_and_rejects_changes(self) -> None:
         with system_context(reason="recognition image MIME types"):
             for mime_type in ("image/png", "image/jpeg"):
@@ -1155,6 +1229,10 @@ class ExtractionServiceTests(TestCase):
 
         with actor_context(self.owner):
             prepared, manifest = _restore_prepared(result.output, {}, using="default")
+            legacy_output = {key: value for key, value in result.output.items() if key != "profile"}
+            legacy_prepared, legacy_manifest = _restore_prepared(legacy_output, {}, using="default")
+            self.assertEqual(legacy_manifest.profile, "none")
+            self.assertEqual(legacy_prepared.manifest, prepared.manifest)
             self.assertEqual(len(prepared.pages), 2)
             [page] = prepared.recognition_pages
             [recognition] = manifest.recognition_pages
@@ -1175,6 +1253,7 @@ class ExtractionServiceTests(TestCase):
     def _extract(self, *, config: dict[str, Any]) -> Any:
         with actor_context(self.owner):
             prepared = prepare_pages(
+                profile=FakeDocumentProfile(),
                 files=self.files,
                 message_parts=(),
                 authorized_target=self.drive,
@@ -1211,6 +1290,7 @@ class ExtractionServiceTests(TestCase):
         }
         with actor_context(self.owner):
             prepared = prepare_pages(
+                profile=FakeDocumentProfile(),
                 files=self.files,
                 message_parts=(),
                 authorized_target=self.drive,
@@ -1237,6 +1317,7 @@ class ExtractionServiceTests(TestCase):
         message_parts: Any = (),
     ) -> Any:
         prepared = prepare_pages(
+            profile=FakeDocumentProfile(),
             files=files,
             message_parts=message_parts,
             authorized_target=authorized_target,
@@ -1666,6 +1747,7 @@ class ExtractionServiceTests(TestCase):
             config["evidence_layout"],
         ), actor_context(self.owner):
             prepared = prepare_pages(
+                profile=FakeDocumentProfile(),
                 files=self.files[:1],
                 message_parts=(),
                 authorized_target=self.drive,
@@ -2002,6 +2084,7 @@ class ExtractionServiceTests(TestCase):
         }
         with actor_context(self.owner):
             prepared = prepare_pages(
+                profile=FakeDocumentProfile(),
                 files=self.files[:1],
                 message_parts=(),
                 authorized_target=self.files[0],
@@ -2225,6 +2308,7 @@ class ExtractionServiceTests(TestCase):
         target = self.files[0]
         with actor_context(self.owner):
             prepared = prepare_pages(
+                profile=FakeDocumentProfile(),
                 files=(target,),
                 message_parts=(),
                 authorized_target=target,
@@ -2358,6 +2442,7 @@ class ExtractionServiceTests(TestCase):
             }
             with actor_context(self.owner):
                 prepared = prepare_pages(
+                    profile=FakeDocumentProfile(),
                     files=(target,), message_parts=(), authorized_target=target,
                     config=authority_config,
                 )
@@ -2367,6 +2452,7 @@ class ExtractionServiceTests(TestCase):
                     config=authority_config,
                 )
                 prepared = prepare_pages(
+                    profile=FakeDocumentProfile(),
                     files=(target,), message_parts=(), authorized_target=target,
                     config=preliminary_config,
                 )
@@ -2546,6 +2632,7 @@ class ExtractionServiceTests(TestCase):
 
         def retain(config: dict[str, Any], schema: dict[str, Any]) -> Any:
             prepared = prepare_pages(
+                profile=FakeDocumentProfile(),
                 files=(target,), message_parts=(), authorized_target=target,
                 config=config,
             )
@@ -3551,6 +3638,7 @@ class ExtractionServiceTests(TestCase):
             message_part = message.parts.get(fragment__text="Message-only retained evidence")
             with override_settings(ANGEE_STORAGE_DEFAULT_DRIVE="missing-drive"):
                 prepared = prepare_pages(
+                    profile=FakeDocumentProfile(),
                     files=(),
                     message_parts=(message_part,),
                     authorized_target=self.files[0],

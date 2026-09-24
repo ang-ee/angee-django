@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Alert, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, EmptyState, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, SlotOutlet, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, optionToken, statusTone, textRoleVariants, useModelSlot } from "@angee/ui";
+import { Alert, ChatBar, ChatBubble, ChatHeaderAction, ChatTypingIndicator, ContextBlock, DialogBackdrop, DialogBody, DialogContent, DialogPortal, DialogRoot, DialogTitle, DropdownMenu, EmptyState, Glyph, InfoRow, LazyBoundary, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageReasoningFrame, SlotOutlet, StatusDot, ToolFallback, buttonVariants, cn, messageComposerInputClassName, optionToken, useStatusTone, textRoleVariants, useModelSlot } from "@angee/ui";
 import {
   ActionBarPrimitive,
   AssistantRuntimeProvider,
@@ -96,6 +96,7 @@ export function AgentChatContent({
   fallbackName,
   runtimeState,
 }: AgentChatProps & { runtimeState: AcpRuntime }): React.ReactElement {
+  const statusTone = useStatusTone();
   const t = useAgentsT();
   const {
     runtime,

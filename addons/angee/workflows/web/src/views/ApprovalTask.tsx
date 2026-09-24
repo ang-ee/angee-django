@@ -6,7 +6,7 @@ import {
   Glyph, JsonValueView, LabeledDescriptorField, LazyBoundary, TextLink, formSpecInitialValues,
   LARGE_VIEWPORT_QUERY,
   PageAside,
-  deserializeFormSpec, errorMessage, jsonValueFromUnknown, normalizeFormSpecValues, statusTone, useAppRuntime, useConfirm, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
+  deserializeFormSpec, errorMessage, jsonValueFromUnknown, normalizeFormSpecValues, useStatusTone, useAppRuntime, useConfirm, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
   optionalTranslation, useT,
   recordTargetHref, useMediaQuery, useModelSlot,
   useRecordPeek,
@@ -150,6 +150,7 @@ export function useInitialDecisionPeek(
 
 /** The workflow-owned approval task, shared by approval and run surfaces. */
 export function ApprovalTask({ approval, available = true, onBack, onResolved, reconcile, onDirtyChange, onSkip, onOpenRecord, onOpenEvidence }: ApprovalTaskProps): React.ReactElement {
+  const statusTone = useStatusTone();
   const t = useWorkflowsT();
   const openRecord = useRecordPeek();
   const active = approval.verdict === "PENDING";

@@ -85,6 +85,7 @@ class ExtractionOutput(BaseModel):
 class PreparePagesInput(ExtractionConfigInput, ExtractionSourceInput):
     """The original source/target refs; provider work happens later."""
 
+    profile: str = Field(default="none", min_length=1)
     model: str | None = None
     recognition_model: str | None = None
 
@@ -106,6 +107,7 @@ class RecognitionPageInput(BaseModel):
 
 class PreparePagesOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    profile: str = Field(default="none", min_length=1)
     manifest: dict[str, Any]
     recognition_pages: list[RecognitionPageInput]
     recognition_model_id: str
@@ -140,6 +142,9 @@ class PreparePagesStepImpl(StepImpl):
             files, parts, target = _resolve_sources(value, using=alias)
             prepared = prepare_pages(
                 files=files, message_parts=parts, authorized_target=target, config=options,
+                profile=resolve_impl_class(
+                    "ANGEE_EXTRACTION_PROFILE_CLASSES", value.profile, base_class=ExtractionProfile,
+                )(),
                 using=alias,
             )
         model_id = value.recognition_model or ""
@@ -150,6 +155,7 @@ class PreparePagesStepImpl(StepImpl):
             for page in prepared.recognition_pages
         ]
         return StepResult.done(output={
+            "profile": value.profile,
             "manifest": prepared.manifest,
             "recognition_pages": recognition_pages,
             "recognition_model_id": model_id,
@@ -396,6 +402,8 @@ class ProcessEvidenceStepImpl(StepImpl):
             raise PermissionDenied("Evidence processing requires the workflow actor.")
         with actor_context(actor):
             prepared, manifest = _restore_prepared(value.prepared, value.profile_config, using=alias)
+            if manifest.profile != value.profile:
+                raise ValidationError({"profile": "The selected profile differs from the prepared profile."})
             collected = collect_carriers(
                 prepared, value.recognition_results,
                 recognition_model_id=manifest.recognition_model_id,
@@ -767,6 +775,9 @@ def _restore_prepared(
     prepared = restore_prepared_pages(
         manifest.manifest, files=files, message_parts=parts,
         authorized_target=target, config=options,
+        profile=resolve_impl_class(
+            "ANGEE_EXTRACTION_PROFILE_CLASSES", manifest.profile, base_class=ExtractionProfile,
+        )(),
         using=using,
     )
     if [

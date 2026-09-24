@@ -1,33 +1,25 @@
-import { formatDate as formatBaseDate, statusTone as resolveStatusTone, type Tone } from "@angee/ui";
+import { formatDate as formatBaseDate } from "@angee/ui";
 
 // Presentational mappings for file rows: the upload-state → stage badge and a
 // date display. Byte sizes reuse `formatSize` from `@angee/ui` (the preview
 // model owns it) — this module never re-coins it.
 
-export interface FileStage {
-  label: string;
-  tone: Tone;
-}
-
-/** Map the byte-lifecycle state to a stage badge. Case-insensitive: the enum
+/** Map the byte-lifecycle state to its stage label. Case-insensitive: the enum
  * may arrive as the member name or the stored value. `t` is threaded in from the
  * rendering component (this module is not a component). */
-export function fileStage(
+export function fileStageLabel(
   uploadState: string,
   t: (key: string) => string,
-): FileStage {
-  const tone = resolveStatusTone(uploadState, undefined, {
-    unknownTone: "neutral",
-  });
+): string {
   switch (uploadState.toLowerCase()) {
     case "ready":
-      return { label: t("stage.ready"), tone };
+      return t("stage.ready");
     case "draft":
-      return { label: t("stage.uploading"), tone };
+      return t("stage.uploading");
     case "failed":
-      return { label: t("stage.failed"), tone };
+      return t("stage.failed");
     default:
-      return { label: uploadState || t("stage.unknown"), tone };
+      return uploadState || t("stage.unknown");
   }
 }
 

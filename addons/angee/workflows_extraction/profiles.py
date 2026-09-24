@@ -17,6 +17,16 @@ class ExtractionProfile(ImplBase):
     pipeline_version: ClassVar[str] = "page-v1"
     evidence_layout: ClassVar[dict[str, Any]] = {}
 
+    def detect_carriers(self, source: DocumentSource) -> tuple[DocumentPart, ...]:
+        """Return domain-native evidence, or no parts for generic acquisition.
+
+        Called for byte-backed files before text/image routing. Implementations
+        own format detection, bounded parsing and field interpretation. They must
+        use only the retained source snapshot and perform no external I/O.
+        """
+
+        return ()
+
     def inference_required(self, result: Mapping[str, Any], unresolved_reasons: Sequence[str]) -> bool:
         """Return whether retained unresolved facts require another model call.
 

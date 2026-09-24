@@ -7,5 +7,6 @@ keywords = ["carddav", "contacts", "sync"]
 category = "Integration"
 depends_on = ["angee.parties", "angee.integrate"]
 dependencies = [
+  "defusedxml>=0.7,<1",
   "vobject>=0.9.9",
 ]

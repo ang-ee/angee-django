@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
@@ -20,7 +20,7 @@ from angee.workflows_extraction.contracts import (
     ExtractionPartKind,
     PageImage,
 )
-from angee.workflows_extraction.structured import extract_structured_sources
+from angee.workflows_extraction.profiles import ExtractionProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +43,7 @@ class AcquiredPage:
 def acquire_native_parts(
     sources: Sequence[DocumentSource],
     *,
+    profile: ExtractionProfile,
     dpi: int = 200,
     max_edge: int = 3500,
     max_pages: int = 10,
@@ -53,6 +54,7 @@ def acquire_native_parts(
     try:
         return _acquire_native_parts(
             sources,
+            profile=profile,
             dpi=dpi,
             max_edge=max_edge,
             max_pages=max_pages,
@@ -67,6 +69,7 @@ def acquire_native_parts(
 def _acquire_native_parts(
     sources: Sequence[DocumentSource],
     *,
+    profile: ExtractionProfile,
     dpi: int,
     max_edge: int,
     max_pages: int,
@@ -88,30 +91,9 @@ def _acquire_native_parts(
             content = source.content
             if not isinstance(content, bytes):
                 raise ValueError("File sources require a byte snapshot.")
-            filename = str(getattr(source.file, "filename", "") or getattr(source.file, "name", ""))
-            structured = extract_structured_sources(
-                content, media_type=source.mime_type, filename=filename, source_position=source.source_position
-            )
-            if structured:
-                for item in structured:
-                    value = {
-                        "facts": [asdict(fact) for fact in item.facts],
-                        "evidence": asdict(item.evidence),
-                        "review_reasons": list(item.review_reasons),
-                        "carrier": item.carrier,
-                        "name": item.name,
-                    }
-                    parts.append(
-                        DocumentPart(
-                            source.source_position,
-                            None,
-                            item.media_type,
-                            ExtractionPartKind.STRUCTURED,
-                            value,
-                            f"structured:{item.kind}",
-                            item.content_sha256,
-                        )
-                    )
+            carriers = profile.detect_carriers(source)
+            if carriers:
+                parts.extend(carriers)
                 continue
             declared_type = source.mime_type.lower().split(";", 1)[0]
             if declared_type in {"text/plain", "text/html"}:
@@ -123,7 +105,7 @@ def _acquire_native_parts(
                 continue
             if declared_type == "message/rfc822" or (
                 declared_type in {"", "application/octet-stream"}
-                and filename.lower().endswith(".eml")
+                and source.filename.lower().endswith(".eml")
             ):
                 text = _rfc822_text(content)
                 text_bytes = _bounded_text_size(text, text_bytes, max_text_bytes)

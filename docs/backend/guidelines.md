@@ -778,9 +778,13 @@ and current contracts before applying a historical example to a new deployment.
   upgrading a stack from extraction engines to profiles, inventory active durable
   extraction runs, including suspended runs and retained recognition-page items,
   for frozen inputs containing `engine`, `engine_config`, `recognition_engine`,
-  or `mapping_engine`. Stop admission and drain or cancel those runs through the
-  workflow owner before deploying the new input contracts; no permanent
-  compatibility shim accepts those keys. Rehearse this inventory and drain/cancel
+  or `mapping_engine`. Stop admission and drain or cancel affected runs through
+  the workflow owner before deploying the new input contracts; no permanent
+  compatibility shim accepts the superseded engine inputs. Retained
+  `prepare_pages` outputs without `profile` restore under `none` and must still
+  match their source carriers. Runs that need a domain carrier profile must
+  prepare again: processing rejects a profile that differs from preparation.
+  Rehearse this inventory and drain/cancel
   check against a restored database copy before the real upgrade, then verify
   that no affected active runs remain in the deployment. Retain the stack's
   runtime migration history throughout the rehearsal and upgrade.
