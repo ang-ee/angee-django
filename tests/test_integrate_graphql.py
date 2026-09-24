@@ -24,14 +24,16 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection
 from django.db.models.signals import post_save
-from django.test import RequestFactory
+from django.test import RequestFactory, TestCase
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
+from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus, StreamKind
 from angee.integrate.webhooks import WebhookDeliveryError
 from tests.conftest import (
     POSTS_TEST_MODELS,
@@ -53,7 +55,7 @@ from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import (
     result_data as _data,
 )
-from tests.integrate_models import SyncStream
+from tests.integrate_models import RecordLink, SyncDiscrepancy, SyncStream
 from tests.messaging_models import Channel
 from tests.test_agents import InferenceProvider
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
@@ -143,6 +145,211 @@ def test_sync_stream_filter_and_batched_integration_projection(
     assert len(rows) == 5
     assert all(row["integration"] == first[0]["integration"] for row in rows)
     assert len(many) <= len(one) + 1
+
+
+@pytest.mark.parametrize(
+    ("root", "bridge_filter", "group_field"),
+    [
+        ("sync_streams", "integration", "KEY"),
+        ("record_links", "stream__integration", "STATUS"),
+        ("sync_discrepancies", "stream__integration", "STATUS"),
+    ],
+)
+def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
+    integrate_console_tables: None,
+    record_sync_tables: None,
+    root: str,
+    bridge_filter: str,
+    group_field: str,
+) -> None:
+    """Rows, aggregates and facet/group buckets preserve the Integration owner scope."""
+
+    del integrate_console_tables, record_sync_tables
+    bridge = make_integration("stream-data-owner", model=Channel)
+    other = make_integration("stream-data-other", model=Channel)
+    with system_context(reason="test sync data-view graph"):
+        owner, outsider = bridge.owner, other.owner
+        for item in (bridge, other):
+            stream = SyncStream.objects.current(item, "contacts", kind=StreamKind.RECORD_REPLICA)
+            link = RecordLink.objects.observe(stream, "person:1")
+            SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.SEMANTIC, code="invalid")
+    schema = _schema()
+    query = """
+        query ScopedSync($bridge: String!) {
+          rows: ROOT(where: {BRIDGE_FILTER: {_eq: $bridge}}, limit: 20) { id }
+          total: ROOT_aggregate(where: {BRIDGE_FILTER: {_eq: $bridge}}) { aggregate { count } }
+          groups: ROOT_groups(
+            where: {BRIDGE_FILTER: {_eq: $bridge}}, group_by: [{field: GROUP_FIELD}]
+          ) { aggregate { count } }
+          group_count: ROOT_groups_count(
+            where: {BRIDGE_FILTER: {_eq: $bridge}}, group_by: [{field: GROUP_FIELD}]
+          )
+        }
+    """.replace("ROOT", root).replace("BRIDGE_FILTER", bridge_filter).replace("GROUP_FIELD", group_field)
+    visible = _data(_execute(schema, query, {"bridge": _public_id(bridge)}, user=owner))
+    assert len(visible["rows"]) == 1
+    assert visible["total"]["aggregate"]["count"] == visible["group_count"] == 1
+    assert visible["groups"] == [{"aggregate": {"count": 1}}]
+    hidden = _data(_execute(schema, query, {"bridge": _public_id(bridge)}, user=outsider))
+    assert hidden == {"rows": [], "total": {"aggregate": {"count": 0}}, "groups": [], "group_count": 0}
+
+
+def test_sync_counts_are_native_annotations_without_row_growth_queries(
+    integrate_console_tables: None,
+    record_sync_tables: None,
+) -> None:
+    """Narrow simultaneous count selections neither multiply joins nor fetch per row."""
+
+    del integrate_console_tables, record_sync_tables
+    bridge = make_integration("stream-counts", model=Channel)
+    with system_context(reason="test stream count fixtures"):
+        owner = bridge.owner
+        stream = SyncStream.objects.current(bridge, "contacts", "one", kind=StreamKind.RECORD_REPLICA)
+        for index in range(3):
+            RecordLink.objects.observe(stream, f"person:{index}")
+        for index in range(3):
+            discrepancy = SyncDiscrepancy.objects.record(
+                stream, kind=DiscrepancyKind.SEMANTIC, code=f"invalid-{index}"
+            )
+            if index == 1:
+                SyncDiscrepancy.objects.retry(discrepancy)
+            elif index == 2:
+                SyncDiscrepancy.objects.resolve(discrepancy)
+    schema = _schema()
+    query = """
+        query Counts($bridge: String!) {
+          sync_streams(where: {integration: {_eq: $bridge}}, limit: 20, order_by: [{partition: asc}]) {
+            open_discrepancy_count link_count
+          }
+        }
+    """
+    variables = {"bridge": _public_id(bridge)}
+    _data(_execute(schema, query, variables, user=owner))
+    with CaptureQueriesContext(connection) as one:
+        initial = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
+    assert initial == [{"open_discrepancy_count": 2, "link_count": 3}]
+    with system_context(reason="test extra zero-count streams"):
+        for index in range(5):
+            SyncStream.objects.current(bridge, "contacts", f"zero-{index}", kind=StreamKind.RECORD_REPLICA)
+    with TestCase().assertNumQueries(len(one)):
+        many = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
+    assert many == [*initial, *[{"open_discrepancy_count": 0, "link_count": 0}] * 5]
+
+
+def test_integration_stream_count_is_inherited_by_bridge_projection(
+    integrate_console_tables: None,
+    record_sync_tables: None,
+) -> None:
+    """Saved-record tab visibility reads the same count on a parent and its child."""
+
+    del integrate_console_tables, record_sync_tables
+    admin = _platform_admin("stream-tab-count-admin")
+    bridge = make_integration("stream-tab-count", model=VcsBridge)
+    empty = make_integration("stream-tab-empty", model=VcsBridge)
+    with system_context(reason="test inherited stream count"):
+        SyncStream.objects.current(bridge, "repository", "one")
+        SyncStream.objects.current(bridge, "repository", "two")
+    rows = _data(
+        _execute(_schema(), "{ integrations { id stream_count } vcs_bridges { id stream_count } }", user=admin)
+    )
+    expected = {_public_id(bridge): 2, _public_id(empty): 0}
+    for root in ("integrations", "vcs_bridges"):
+        assert {row["id"]: row["stream_count"] for row in rows[root]} == expected
+
+
+def test_record_link_target_uses_shared_public_reference(
+    integrate_console_tables: None,
+    record_sync_tables: None,
+) -> None:
+    """The target projection carries resource identity and a public id, never a raw PK."""
+
+    del integrate_console_tables, record_sync_tables
+    bridge = make_integration("link-target", model=Channel)
+    with system_context(reason="test record link target"):
+        owner = bridge.owner
+        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "bound", target=stream)
+        empty = RecordLink.objects.observe(stream, "unbound")
+    rows = _data(_execute(_schema(), "{ record_links { id model_label record_id } }", user=owner))["record_links"]
+    assert {row["id"]: (row["model_label"], row["record_id"]) for row in rows} == {
+        _public_id(link): ("integrate.SyncStream", _public_id(stream)),
+        _public_id(empty): ("", ""),
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "model", "verb"),
+    [
+        ("resolveSyncDiscrepancy", SyncDiscrepancy, "resolve"),
+        ("retrySyncDiscrepancy", SyncDiscrepancy, "retry"),
+        ("resyncSyncStream", SyncStream, "request_resync"),
+    ],
+)
+def test_sync_actions_dispatch_managers_and_refuse_non_admins(
+    integrate_console_tables: None,
+    record_sync_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    model: Any,
+    verb: str,
+) -> None:
+    """Even the integration owner needs the admin role; admitted writes use manager verbs."""
+
+    del integrate_console_tables, record_sync_tables
+    bridge = make_integration("sync-action", model=Channel)
+    admin = _platform_admin("sync-action-admin")
+    outsider = User.objects.create_user(username="sync-action-outsider")
+    with system_context(reason="test sync action fixtures"):
+        owner = bridge.owner
+        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        discrepancy = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="invalid")
+    target = stream if model is SyncStream else discrepancy
+    original = getattr(type(model.objects), verb)
+    calls: list[tuple[int, str]] = []
+
+    def tracked(manager: Any, row: Any, *, using: str) -> Any:
+        calls.append((row.pk, using))
+        return original(manager, row, using=using)
+
+    monkeypatch.setattr(type(model.objects), verb, tracked)
+    schema = _schema()
+    query = "mutation Action($id: ID!) { ACTION(id: $id) { ok message } }".replace("ACTION", mutation)
+    for denied in (owner, outsider, AnonymousUser()):
+        result = _execute(schema, query, {"id": _public_id(target)}, user=denied)
+        assert result.errors and result.errors[0].extensions["code"] == "PERMISSION_DENIED"
+    assert calls == []
+    before = timezone.now()
+    assert _data(_execute(schema, query, {"id": _public_id(target)}, user=admin))[mutation]["ok"]
+    assert calls == [(target.pk, "default")]
+    with system_context(reason="test sync action outcome"):
+        target.refresh_from_db()
+        if verb == "request_resync":
+            assert target.resync_required and target.generation == 1
+        elif verb == "retry":
+            assert target.status == DiscrepancyStatus.RETRY and target.retry_at >= before
+        else:
+            assert target.status == DiscrepancyStatus.RESOLVED and target.resolved_at >= before
+
+
+def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() -> None:
+    """The existing Hasura owner supplies queries, grouping and facet axes without CRUD."""
+
+    schema = _schema()
+    resources = {item.model_label: item for item in schema.angee_resources}
+    for label, root, axes in (
+        ("SyncStream", "sync_streams", {"key", "partition", "kind", "direction", "phase", "resync_required"}),
+        ("RecordLink", "record_links", {"status", "origin"}),
+        ("SyncDiscrepancy", "sync_discrepancies", {"kind", "code", "status"}),
+    ):
+        metadata = resources[f"integrate.{label}"]
+        assert metadata.roots.list_name == root
+        assert metadata.roots.aggregate_name == f"{root}_aggregate"
+        assert metadata.roots.group_name == f"{root}_groups"
+        assert metadata.roots.create_name is metadata.roots.update_name is metadata.roots.delete_name is None
+        assert set(metadata.query.axes) == axes
+    sdl = schema.as_str()
+    for action in ("resolveSyncDiscrepancy", "retrySyncDiscrepancy", "resyncSyncStream"):
+        assert f"{action}(id: ID!): ActionResult!" in sdl
 
 
 def test_integration_capabilities_are_native_creatable_children(

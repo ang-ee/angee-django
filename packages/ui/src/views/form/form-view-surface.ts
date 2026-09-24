@@ -1,12 +1,14 @@
 import * as React from "react";
 import {
   lineReadSelectionPaths,
+  refineResourceName,
   useModelMetadata,
   useSchemaFieldMetadata,
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
 import { refineFieldsFromPaths } from "@angee/refine";
+import { useOne } from "@refinedev/core";
 
 import { useFormOverride, useModelSlot } from "../../runtime";
 import { useUiT, type UiTranslate } from "../../i18n";
@@ -224,12 +226,13 @@ export function useFormViewSurface({
   const dataResource = modelMetadata?.resource ?? null;
   const modelLabel = dataResource?.modelLabel ?? "";
   const canonicalResource = dataResource?.canonicalLabel ?? modelLabel;
+  const canonicalMetadata = useModelMetadata(canonicalResource);
   const formOverride = useFormOverride(modelLabel);
-  const sectionTarget = React.useMemo(
-    () => formViewSectionsSlot(modelLabel),
-    [modelLabel],
+  const sectionTargets = React.useMemo(
+    () => [...new Set([canonicalResource, modelLabel])].map(formViewSectionsSlot),
+    [canonicalResource, modelLabel],
   );
-  const sectionEntries = useModelSlot(sectionTarget);
+  const sectionEntries = useModelSlot(sectionTargets);
   React.useEffect(() => {
     if (!developmentMode()) return;
     for (const entry of sectionEntries) {
@@ -241,13 +244,13 @@ export function useFormViewSurface({
           continue;
         }
         console.warn(
-          `FormView slot "${sectionTarget.slot}" contribution "${entry.id}" `
+          `FormView slot "${entry.slot}" contribution "${entry.id}" `
             + `has unsupported direct marker "${marker ?? "unmarked"}"; `
             + "only Group, Action, and Tab declarations are discovered.",
         );
       }
     }
-  }, [sectionEntries, sectionTarget.slot]);
+  }, [sectionEntries]);
   const slotDeclarations = React.useMemo(
     () =>
       sectionEntries.flatMap((entry, entryOrder) => {
@@ -287,27 +290,6 @@ export function useFormViewSurface({
       ),
     [slotDeclarations],
   );
-  const slotRecordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
-    () =>
-      slotDeclarations.flatMap((declaration) =>
-        declaration.kind === "tab" && declaration.tab.hidden !== true
-          ? [
-              {
-                id: declaration.tab.id,
-                label: declaration.tab.label,
-                ...(declaration.tab.icon !== undefined
-                  ? { icon: declaration.tab.icon }
-                  : {}),
-                ...(declaration.tab.badge !== undefined
-                  ? { badge: declaration.tab.badge }
-                  : {}),
-                render: () => declaration.tab.children,
-              },
-            ]
-          : [],
-      ),
-    [slotDeclarations],
-  );
   const slotActions = React.useMemo(
     () =>
       sectionEntries.flatMap((entry) =>
@@ -315,6 +297,20 @@ export function useFormViewSurface({
       ),
     [sectionEntries],
   );
+  // A canonical section may depend on a parent field omitted by a child's
+  // projection. Read that field from its declared owner, never select invalid
+  // child fields or require every consumer to duplicate the parent projection.
+  const canonicalTabFields = React.useMemo(() => [...new Set(
+    slotDeclarations.flatMap((declaration) => declaration.kind === "tab"
+      ? (declaration.tab.requiredFields ?? []).filter((path) => {
+          const head = path.split(".")[0]!;
+          return canonicalResource !== modelLabel
+            && !modelMetadata?.fields[head]
+            && canonicalMetadata?.fields[head]?.readable !== false
+            && Boolean(canonicalMetadata?.fields[head]);
+        })
+      : []),
+  )], [canonicalMetadata, canonicalResource, modelLabel, modelMetadata, slotDeclarations]);
   const isCreate = id == null;
   const overrideNode =
     isCreate && React.isValidElement(formOverride) ? formOverride : null;
@@ -416,6 +412,12 @@ export function useFormViewSurface({
       }
     }
     for (const extra of returning ?? []) paths.add(extra);
+    for (const declaration of slotDeclarations) {
+      if (declaration.kind !== "tab") continue;
+      for (const path of declaration.tab.requiredFields ?? []) {
+        if (!canonicalTabFields.includes(path)) paths.add(path);
+      }
+    }
     const representation = modelMetadata?.resource.recordRepresentation;
     if (representation && modelMetadata.fields[representation]) paths.add(representation);
     // The artifact emits only projected/readable impl columns, so every name is
@@ -425,7 +427,7 @@ export function useFormViewSurface({
       if (path) paths.add(path);
     }
     return [...paths];
-  }, [formFields, modelMetadata, relationByField, returning, schemaMetadata]);
+  }, [canonicalTabFields, formFields, modelMetadata, relationByField, returning, schemaMetadata, slotDeclarations]);
   const refineFields = React.useMemo(
     () => refineFieldsFromPaths(selection),
     [selection],
@@ -453,13 +455,30 @@ export function useFormViewSurface({
     t,
     readOnly,
   });
+  const canonicalTabSelection = React.useMemo(
+    () => refineFieldsFromPaths(["id", ...canonicalTabFields]),
+    [canonicalTabFields],
+  );
+  const canonicalRead = useOne({
+    resource: canonicalMetadata ? refineResourceName(canonicalMetadata.resource) : "__angee_disabled__",
+    id: id ?? undefined,
+    dataProviderName: canonicalMetadata?.resource.schemaName,
+    meta: { fields: canonicalTabSelection },
+    queryOptions: {
+      enabled: !isCreate && canonicalTabFields.length > 0 && Boolean(canonicalMetadata?.resource.roots.detail),
+    },
+  });
+  const tabRecord = React.useMemo(() => save.displayRecord == null ? null : {
+    ...(canonicalTabFields.length > 0 ? canonicalRead.result : undefined),
+    ...save.displayRecord,
+  }, [canonicalRead.result, canonicalTabFields, save.displayRecord]);
   const chrome = useFormViewRecordChrome({
     dataResource,
     modelLabel,
     canonicalResource,
     id,
     isCreate,
-    record: save.displayRecord,
+    record: tabRecord,
     formReadOnly: save.formReadOnly,
   });
 
@@ -539,8 +558,23 @@ export function useFormViewSurface({
       ? undefined
       : deleteAction;
   const recordTabList = React.useMemo(
-    () => mergeRecordTabs(recordTabs ?? EMPTY_RECORD_TABS, slotRecordTabs),
-    [recordTabs, slotRecordTabs],
+    () => mergeRecordTabs(
+      recordTabs ?? EMPTY_RECORD_TABS,
+      slotDeclarations.flatMap((declaration): RecordTabDescriptor[] => {
+        if (declaration.kind !== "tab") return [];
+        const tab = declaration.tab;
+        if (tab.hidden || (tab.visibleWhen &&
+          (tabRecord == null || !tab.visibleWhen(tabRecord)))) return [];
+        return [{
+          id: tab.id,
+          label: tab.label,
+          icon: tab.icon,
+          badge: tab.badge,
+          render: () => tab.children,
+        }];
+      }),
+    ),
+    [recordTabs, slotDeclarations, tabRecord],
   );
   const activeRecordTab = recordTabList.some((tab) => tab.id === requestedRecordTab)
     ? requestedRecordTab

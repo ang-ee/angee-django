@@ -404,6 +404,16 @@ history uses native Query pages with domain-owned
   ungrouped fields stay above the tab strip. It is per-form — existing stacked forms
   are untouched — and reuses the same `<Group>` declarations, so no field metadata is
   duplicated. Group your fields for the stacked layout and tabbing is one prop away.
+- **Contribute a saved-record tab from the data view** through
+  `formViewSectionsSlot(resource)` with a direct `<Tab>` declaration. Canonical
+  parent sections are inherited by concrete child forms; contribute once at the
+  owning model. Declare `requiredFields` for the tab's `visibleWhen` predicate,
+  which evaluates the loaded record; fields omitted by a child projection are
+  read from the canonical resource. Use `useRecordChromeContext()` inside
+  the panel to scope an embedded `ListView` with resource filters. The model's
+  Hasura resource owns filter/order/group/facet capabilities; the list owns
+  controls, paging and `rowActions`, including confirmations for generated action
+  callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the

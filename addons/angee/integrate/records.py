@@ -24,6 +24,7 @@ from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.fields import StateField
 from angee.base.mixins import AppendOnlyQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.refs import RecordRefMixin
 
 UNSET = object()
 """Omitted record binding; ``None`` explicitly clears the target."""
@@ -179,21 +180,8 @@ class SyncStreamManager(AngeeManager):
 
         using = get_write_alias(self.model, using=using, bound=self, instance=stream)
         with system_context(reason="integrate.stream.bump_generation"), transaction.atomic(using=using):
-            refresh_deferred(stream, using=using)
-            integration = apps.get_model("integrate", "Integration")
-            integration.objects.db_manager(using).filter(pk=stream.bridge_id).lock_if_supported().get()
             manager = self.db_manager(using)
-            latest = (
-                manager.filter(
-                    bridge_ct_id=stream.bridge_ct_id,
-                    bridge_id=stream.bridge_id,
-                    key=stream.key,
-                    partition=stream.partition,
-                )
-                .order_by("-generation")
-                .lock_if_supported()
-                .first()
-            )
+            latest = manager._lock_latest(stream, using=using)
             if latest.pk != stream.pk:
                 return latest
             successor = manager.create(
@@ -213,6 +201,40 @@ class SyncStreamManager(AngeeManager):
                     stream=successor,
                 )
             return successor
+
+    def request_resync(self, stream: Any, *, using: str | None = None) -> Any:
+        """Request a baseline on the next cycle, even from a retained old epoch.
+
+        The driver owns the generation bump. Serialize this intent with that
+        transition so a concurrent bump cannot lose the request on the old row.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=stream)
+        with system_context(reason="integrate.stream.request_resync"), transaction.atomic(using=using):
+            latest = self.db_manager(using)._lock_latest(stream, using=using)
+            if not latest.resync_required:
+                latest.resync_required = True
+                latest.save(using=using, update_fields=["resync_required", "updated_at"])
+            return latest
+
+    def _lock_latest(self, stream: Any, *, using: str) -> Any:
+        """Lock the integration and its latest epoch in generation-change order."""
+
+        refresh_deferred(stream, using=using)
+        integration = apps.get_model("integrate", "Integration")
+        integration.objects.db_manager(using).filter(pk=stream.bridge_id).lock_if_supported().get()
+        return (
+            self.db_manager(using)
+            .filter(
+                bridge_ct_id=stream.bridge_ct_id,
+                bridge_id=stream.bridge_id,
+                key=stream.key,
+                partition=stream.partition,
+            )
+            .order_by("-generation")
+            .lock_if_supported()
+            .first()
+        )
 
     def advance(
         self,
@@ -478,7 +500,7 @@ class RecordLinkManager(AngeeManager):
             return link
 
 
-class RecordLink(SqidMixin, AuditMixin, AngeeModel):
+class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
     """A stable remote identity with the two last-applied comparison bases."""
 
     runtime = True
@@ -500,6 +522,14 @@ class RecordLink(SqidMixin, AuditMixin, AngeeModel):
     metadata = models.JSONField(default=dict, blank=True)
     tombstoned_at = models.DateTimeField(null=True, blank=True)
     objects = RecordLinkManager()
+
+    @classmethod
+    def _record_ref_content_type_field_name(cls) -> str:
+        return "target_ct"
+
+    @classmethod
+    def _record_ref_object_id_field_name(cls) -> str:
+        return "target_id"
 
     class Meta:
         abstract = True
@@ -665,6 +695,23 @@ class SyncDiscrepancyManager(AngeeManager):
                     LinkStatus.CURRENT if link.remote_base_hash and link.local_base_hash else LinkStatus.OBSERVED
                 )
                 link.save(using=using, update_fields=["status", "updated_at"])
+            return row
+
+    def retry(self, discrepancy: Any, *, using: str | None = None) -> Any:
+        """Make unresolved quarantine due now without bypassing conflict policy.
+
+        Resolved history cannot be reopened: a later observation may already own
+        the unresolved source-version identity. Conflicts still require explicit
+        resolution before the normal rescan owner will apply their records.
+        """
+
+        using = get_write_alias(self.model, using=using, bound=self, instance=discrepancy)
+        with system_context(reason="integrate.discrepancy.retry"), transaction.atomic(using=using):
+            row = self.db_manager(using).filter(pk=discrepancy.pk).lock_if_supported().get()
+            if row.status == DiscrepancyStatus.RESOLVED:
+                raise ValidationError("A resolved discrepancy cannot be retried.")
+            row.status, row.retry_at = DiscrepancyStatus.RETRY, timezone.now()
+            row.save(using=using, update_fields=["status", "retry_at", "updated_at"])
             return row
 
     def rescan(self, stream: Any, *, limit: int | None = None, using: str | None = None) -> tuple[Any, ...]:
