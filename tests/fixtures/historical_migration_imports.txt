@@ -1,69 +1,67 @@
-# Materialized runtime/*/migrations/*.py import census; no migration bodies or data.
-# Sources: ~/.angee (167 files), dsmile-angee (45), apexive-angee (153).
+# Import census of materialized runtime migrations from real deployments.
+# Names only: no migration bodies, data, or deployment identities.
 # Import compatibility only: this census does not validate migration dependencies.
-# apexive-angee accounting/0003_initial depends on the absent workflows_ocr label;
-# it must stop at the upgrade floor in docs/backend/guidelines.md#migrations-and-runtime.
 # AST imports include deferred imports; multi-name headers are split by name.
 # Dotted attribute references include their parent chains and expand import aliases.
-# The optional Telegram module below is an origin supplement, not a direct import:
-# ~/.angee messaging/0010_broadcast_thread_visibility.py records its angee_origin.
-angee.base  # apexive-angee, dsmile-angee, ~/.angee
-angee.base.fields  # apexive-angee, dsmile-angee, ~/.angee
-angee.base.fields.EncryptedField  # apexive-angee, dsmile-angee, ~/.angee
-angee.base.fields.FractionalRankField  # ~/.angee
-angee.base.fields.ImplClassField  # ~/.angee
-angee.base.fields.StateField  # apexive-angee, dsmile-angee, ~/.angee
-angee.base.impl  # apexive-angee, dsmile-angee, ~/.angee
-angee.base.impl.ImplClassField  # apexive-angee, dsmile-angee, ~/.angee
-angee.base.indexes  # apexive-angee, dsmile-angee, ~/.angee
-angee.base.indexes.PatternOpsIndex  # apexive-angee, dsmile-angee, ~/.angee
-angee.iam  # apexive-angee, dsmile-angee, ~/.angee
-angee.iam.models  # apexive-angee, dsmile-angee, ~/.angee
-angee.iam.models.UserManager  # apexive-angee, dsmile-angee, ~/.angee
-angee.integrate  # apexive-angee, dsmile-angee, ~/.angee
-angee.integrate.net  # apexive-angee, dsmile-angee, ~/.angee
-angee.integrate.net.validate_public_url  # apexive-angee, dsmile-angee, ~/.angee
-angee.messaging  # apexive-angee, dsmile-angee, ~/.angee
-angee.messaging.webforms  # apexive-angee, dsmile-angee, ~/.angee
-angee.messaging.webforms.default_webform_schema  # apexive-angee, dsmile-angee, ~/.angee
-angee.money  # apexive-angee, ~/.angee
-angee.money.fields  # apexive-angee, ~/.angee
-angee.money.fields.MoneyField  # apexive-angee, ~/.angee
-angee.parties  # dsmile-angee
-angee.parties.fields  # dsmile-angee
-angee.parties.fields.CountryCodeField  # dsmile-angee
-angee.scheduling  # ~/.angee
-angee.scheduling.fields  # ~/.angee
-angee.scheduling.fields.RecurrenceField  # ~/.angee
-angee.workflows  # apexive-angee, dsmile-angee, ~/.angee
-angee.workflows.attempts  # apexive-angee, dsmile-angee, ~/.angee
-angee.workflows.attempts.AttemptCause  # apexive-angee, dsmile-angee, ~/.angee
-angee.workflows.attempts.AttemptResultKind  # apexive-angee, dsmile-angee, ~/.angee
-angee.workflows.dispatch  # apexive-angee, dsmile-angee, ~/.angee
-angee.workflows.dispatch.WorkflowDispatchKind  # apexive-angee, dsmile-angee, ~/.angee
-angee.workflows.models  # dsmile-angee, ~/.angee
-angee.workflows.models._empty_workflow_output_schema  # dsmile-angee, ~/.angee
-from angee.base.fields import SqidField  # apexive-angee, ~/.angee
-from angee.base.fields import StateField  # apexive-angee, dsmile-angee, ~/.angee
-from angee.base.historical_relationships import delete_historical_relationships  # apexive-angee, ~/.angee
-from angee.base.historical_relationships import ensure_historical_relationships  # apexive-angee, ~/.angee
-from angee.base.historical_relationships import retarget_historical_resource  # ~/.angee
-from angee.base.identity import SqidPublicIdentity  # apexive-angee, dsmile-angee, ~/.angee
-from angee.base.indexes import PatternOpsIndex  # apexive-angee
-from angee.integrate.models import integration_status_axes  # ~/.angee
-from angee.money.fields import MoneyField  # apexive-angee
-from angee.parties.fields import CountryCodeField  # apexive-angee, ~/.angee
-from angee.storage.uploads import fallback_attachment_name  # ~/.angee
-import angee.base.fields  # apexive-angee, dsmile-angee, ~/.angee
-import angee.base.impl  # apexive-angee, dsmile-angee, ~/.angee
-import angee.base.indexes  # apexive-angee, dsmile-angee, ~/.angee
-import angee.iam.models  # apexive-angee, dsmile-angee, ~/.angee
-import angee.integrate.net  # apexive-angee, dsmile-angee, ~/.angee
-import angee.messaging.webforms  # apexive-angee, dsmile-angee, ~/.angee
-import angee.messaging_integrate_telegram  # ~/.angee (origin: broadcast_thread_visibility)
-import angee.money.fields  # apexive-angee, ~/.angee
-import angee.parties.fields  # dsmile-angee
-import angee.scheduling.fields  # ~/.angee
-import angee.workflows.attempts  # apexive-angee, dsmile-angee, ~/.angee
-import angee.workflows.dispatch  # apexive-angee, dsmile-angee, ~/.angee
-import angee.workflows.models  # dsmile-angee, ~/.angee
+# The optional Telegram module is an origin supplement recorded by a materialized
+# messaging migration's angee_origin, not a direct import.
+angee.base
+angee.base.fields
+angee.base.fields.EncryptedField
+angee.base.fields.FractionalRankField
+angee.base.fields.ImplClassField
+angee.base.fields.StateField
+angee.base.impl
+angee.base.impl.ImplClassField
+angee.base.indexes
+angee.base.indexes.PatternOpsIndex
+angee.iam
+angee.iam.models
+angee.iam.models.UserManager
+angee.integrate
+angee.integrate.net
+angee.integrate.net.validate_public_url
+angee.messaging
+angee.messaging.webforms
+angee.messaging.webforms.default_webform_schema
+angee.money
+angee.money.fields
+angee.money.fields.MoneyField
+angee.parties
+angee.parties.fields
+angee.parties.fields.CountryCodeField
+angee.scheduling
+angee.scheduling.fields
+angee.scheduling.fields.RecurrenceField
+angee.workflows
+angee.workflows.attempts
+angee.workflows.attempts.AttemptCause
+angee.workflows.attempts.AttemptResultKind
+angee.workflows.dispatch
+angee.workflows.dispatch.WorkflowDispatchKind
+angee.workflows.models
+angee.workflows.models._empty_workflow_output_schema
+from angee.base.fields import SqidField
+from angee.base.fields import StateField
+from angee.base.historical_relationships import delete_historical_relationships
+from angee.base.historical_relationships import ensure_historical_relationships
+from angee.base.historical_relationships import retarget_historical_resource
+from angee.base.identity import SqidPublicIdentity
+from angee.base.indexes import PatternOpsIndex
+from angee.integrate.models import integration_status_axes
+from angee.money.fields import MoneyField
+from angee.parties.fields import CountryCodeField
+from angee.storage.uploads import fallback_attachment_name
+import angee.base.fields
+import angee.base.impl
+import angee.base.indexes
+import angee.iam.models
+import angee.integrate.net
+import angee.messaging.webforms
+import angee.messaging_integrate_telegram
+import angee.money.fields
+import angee.parties.fields
+import angee.scheduling.fields
+import angee.workflows.attempts
+import angee.workflows.dispatch
+import angee.workflows.models
