@@ -207,7 +207,7 @@ export function FormViewRecordHeader({
                 : "";
               return value ? (
                 <Badge
-                  tone={statusTone(value, currentStatusField.tone)}
+                  tone={statusTone(value)}
                   density="compact"
                   shape="pill"
                   className="self-start"

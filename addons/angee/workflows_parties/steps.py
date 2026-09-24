@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -30,7 +30,7 @@ from angee.workflows.attempts import (
     RecoveryCapability,
     RecoveryMode,
 )
-from angee.workflows.configs import WorkflowStepConfig
+from angee.workflows.configs import NonBlankString, WorkflowStepConfig
 from angee.workflows.decision_actions import (
     ReviewAction,
     ReviewFact,
@@ -65,8 +65,8 @@ class IdentityReviewConfig(WorkflowStepConfig):
     action: str = "review-party-identity"
     assignee: str = ""
     max_attempts: int = Field(default=3, ge=1)
-    party_label: str = Field(default="Party", min_length=1, pattern=r"\S")
-    default_address_label: str = Field(default="Primary", min_length=1, max_length=64, pattern=r"\S")
+    party_label: NonBlankString = "Party"
+    default_address_label: Annotated[NonBlankString, Field(max_length=64)] = "Primary"
 
 
 class IdentityReviewPassThrough(BaseModel):
