@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -10,7 +10,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.db import get_write_alias, related_on
-from angee.base.identity import public_id_for
+from angee.base.identity import public_id_for, public_id_of
 from angee.integrate.sync import BridgeProgressReporter
 from angee.workflows import engine
 from angee.workflows.attempts import JsonPresence
@@ -45,13 +45,13 @@ class SettlementStream(BoundedStreamStage):
     """Exercise stream output settlement without performing a transport page."""
 
     key = "settlement_stream"
-    input_model = None
     config_model = SettlementStreamConfig
 
-    def run(self, step_run: Any, *, now: Any, using: str | None = None) -> StepResult:
+    def run(self, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
         del self, now
         using = get_write_alias(type(step_run), using=using, instance=step_run)
         step = related_on(step_run, "step", using=using)
+        assert step is not None
         if step.config.get("mode") == "failure":
             raise RuntimeError("private provider response must stay in workflow evidence")
         return StepResult.done(
@@ -93,7 +93,18 @@ def _admit(bridge: Channel, *, occurrence: str, mode: str = "success") -> Any:
         actor=actor,
         subject_declaration="messaging.channel",
         steps=(
-            {"key": "stream", "step_class": "settlement_stream", "config": config},
+            {
+                "key": "stream",
+                "step_class": "settlement_stream",
+                "config": config,
+                "input_binding": {
+                    "kind": "constant",
+                    "value": {
+                        "bridge": {"model": bridge._meta.label_lower, "id": public_id_of(bridge)},
+                        "key": "records",
+                    },
+                },
+            },
             {"key": "unrelated", "is_entry": False, "config": {"output": {"counts": {"cycle_items": 99}}}},
         ),
         edges=(("stream", "unrelated", ""),),
@@ -118,7 +129,9 @@ def _finish(run: Any, *, mode: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     else:
         if mode == "retry_exhaustion":
 
-            def fail(self: SettlementStream, step_run: Any, *, now: Any, using: str | None = None) -> Any:
+            def fail(
+                self: SettlementStream, step_run: Any, *, now: datetime, using: str | None = None
+            ) -> StepResult:
                 del self, step_run, now, using
                 raise TransientStepError("private retry response")
 
@@ -164,11 +177,11 @@ def test_each_terminal_path_settles_once_and_clears_busy_stage(
     calls: list[str] = []
     native_success, native_error = Channel.record_sync, Channel.record_sync_error
 
-    def record_sync(self: Channel, result: int, *, now: Any, using: str | None = None) -> None:
+    def record_sync(self: Channel, result: int, *, now: datetime, using: str | None = None) -> None:
         calls.append("success")
         native_success(self, result, now=now, using=using)
 
-    def record_sync_error(self: Channel, error: Exception, *, now: Any, using: str | None = None) -> None:
+    def record_sync_error(self: Channel, error: Exception, *, now: datetime, using: str | None = None) -> None:
         calls.append("error")
         native_error(self, error, now=now, using=using)
 

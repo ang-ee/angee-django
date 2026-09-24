@@ -337,7 +337,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             prior = by_href.get(href)
             if prior is None and isinstance(parsed, ParsedContact) and requested_keys is None:
                 owner = identities.get(parsed.uid)
-                if owner in contacts and contacts[owner] is None:
+                if owner is not None and owner in contacts and contacts[owner] is None:
                     prior = by_href.get(owner)
             if parsed is None and prior is None and requested_keys is None:
                 continue
@@ -355,8 +355,11 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
                 owner = identities.get(parsed.uid)
                 duplicate = owner and owner != href and not (owner in contacts and contacts[owner] is None)
                 key_owner = occupied.get(key)
-                moved = key_owner in contacts and contacts[key_owner] is None and (
-                    key == parsed.uid or (prior is not None and prior.metadata.get("uid") == parsed.uid)
+                moved = (
+                    key_owner is not None
+                    and key_owner in contacts
+                    and contacts[key_owner] is None
+                    and (key == parsed.uid or (prior is not None and prior.metadata.get("uid") == parsed.uid))
                 )
                 if duplicate or (key_owner not in (None, href) and not moved):
                     if requested_keys is None:

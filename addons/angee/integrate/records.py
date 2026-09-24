@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Any
 
 from django.apps import apps
@@ -31,14 +32,14 @@ UNSET = object()
 """Omitted record binding; ``None`` explicitly clears the target."""
 
 
-class StreamKind(models.TextChoices):
+class StreamKind(models.TextChoices, StrEnum):
     """Whether a stream carries append-only events or mutable replicas."""
 
     EVENT_FEED = "event_feed", "Event feed"
     RECORD_REPLICA = "record_replica", "Record replica"
 
 
-class StreamDirection(models.TextChoices):
+class StreamDirection(models.TextChoices, StrEnum):
     """The sides a stream may write."""
 
     PULL = "pull", "Pull"
@@ -46,14 +47,14 @@ class StreamDirection(models.TextChoices):
     BIDIRECTIONAL = "bidirectional", "Bidirectional"
 
 
-class StreamPhase(models.TextChoices):
+class StreamPhase(models.TextChoices, StrEnum):
     """A new epoch verifies a baseline before accepting deltas."""
 
     BASELINE = "baseline", "Baseline"
     DELTA = "delta", "Delta"
 
 
-class LinkStatus(models.TextChoices):
+class LinkStatus(models.TextChoices, StrEnum):
     """Observed identity and reconciliation state."""
 
     CURRENT = "current", "Current"
@@ -64,7 +65,7 @@ class LinkStatus(models.TextChoices):
     TOMBSTONE = "tombstone", "Tombstone"
 
 
-class DiscrepancyKind(models.TextChoices):
+class DiscrepancyKind(models.TextChoices, StrEnum):
     """Recoverable record failures, independent of transport failures."""
 
     SEMANTIC = "semantic", "Semantic"
@@ -73,7 +74,7 @@ class DiscrepancyKind(models.TextChoices):
     REMOTE_REJECTED = "remote_rejected", "Remote rejected"
 
 
-class DiscrepancyStatus(models.TextChoices):
+class DiscrepancyStatus(models.TextChoices, StrEnum):
     """Quarantine remains open until a successful rescan resolves it."""
 
     OPEN = "open", "Open"
@@ -130,8 +131,8 @@ class SyncStreamManager(AngeeManager):
         key: str,
         partition: str = "",
         *,
-        kind: str = StreamKind.EVENT_FEED,
-        direction: str = StreamDirection.PULL,
+        kind: StreamKind = StreamKind.EVENT_FEED,
+        direction: StreamDirection = StreamDirection.PULL,
         cursor: Any = None,
         reconcile_interval: timedelta | None = None,
         absence_threshold: int = 2,
@@ -632,7 +633,7 @@ class SyncDiscrepancyManager(AngeeManager):
         self,
         stream: Any,
         *,
-        kind: str,
+        kind: DiscrepancyKind,
         code: str,
         source_hash: str = "",
         mapping_version: int = 1,

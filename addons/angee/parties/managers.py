@@ -2192,15 +2192,15 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     },
                 )
                 if not created:
-                    values = {
+                    employment_values = {
                         "other_name": parsed.organization,
                         "title": parsed.title,
                         "notes": parsed.role,
                     }
-                    dirty = [name for name, value in values.items() if getattr(edge, name) != value]
+                    dirty = [name for name, value in employment_values.items() if getattr(edge, name) != value]
                     if dirty:
                         for name in dirty:
-                            setattr(edge, name, values[name])
+                            setattr(edge, name, employment_values[name])
                         edge.save(using=alias, update_fields=[*dirty, "updated_at"])
 
             return person

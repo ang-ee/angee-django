@@ -323,8 +323,8 @@ class ExternalOwnershipQuerySet(AngeeQuerySet[Any]):
                 batch_size=batch_size,
                 ignore_conflicts=ignore_conflicts,
                 update_conflicts=update_conflicts,
-                update_fields=update_fields,
-                unique_fields=unique_fields,
+                update_fields=None if update_fields is None else tuple(update_fields),
+                unique_fields=None if unique_fields is None else tuple(unique_fields),
             )
 
     def bulk_update(
@@ -443,7 +443,9 @@ class ExternalOwnershipManager(AngeeManager.from_queryset(ExternalOwnershipQuery
                 using=using,
                 source=source,
             )
-            super(ExternalOwnershipQuerySet, queryset.filter(pk=pk)).update(**changes)
+            queryset = queryset.filter(pk=pk)
+            assert isinstance(queryset, ExternalOwnershipQuerySet)
+            super(ExternalOwnershipQuerySet, queryset).update(**changes)
             return proposed
 
 
@@ -482,18 +484,19 @@ class ExternalOwnershipMixin(models.Model):
         alias = get_write_alias(type(self), using=using, instance=self)
         self._state.db = alias
         refresh_deferred(self, using=alias)
-        value = self
-        field = None
+        value: models.Model = self
         for name in declaration.company_field.split("__"):
             field = value._meta.get_field(name)
             identity = getattr(value, field.attname, None)
             if identity is None:
                 return None
-            value = related_on(value, name, using=alias) if field.is_relation else identity
-        assert field is not None
-        company_type = value._meta.label_lower if isinstance(value, models.Model) else field.model._meta.label_lower
-        company_id = value.pk if isinstance(value, models.Model) else value
-        return (company_type, str(company_id))
+            if not field.is_relation:
+                return (field.model._meta.label_lower, str(identity))
+            next_value = related_on(value, name, using=alias)
+            if next_value is None:
+                return None
+            value = next_value
+        return (value._meta.label_lower, str(value.pk))
 
     def require_external_identity(
         self,
@@ -577,6 +580,7 @@ class ExternalOwnershipMixin(models.Model):
                 setattr(row, name, value)
             row._check_external_ownership_relations(using=using)
             queryset = type(self).objects.db_manager(using).filter(pk=row.pk)
+            assert isinstance(queryset, ExternalOwnershipQuerySet)
             # Only this owner admits the empty-to-complete transition. Later
             # domain/REBAC queryset behavior remains in the cooperative MRO.
             super(ExternalOwnershipQuerySet, queryset).update(**values)

@@ -277,6 +277,8 @@ class CoverageGate(GateStep):
             ]
             if conflicts:
                 run = related_on(step_run, "run", using=alias)
+                if run is None:
+                    raise ValidationError({"run": "Coverage review requires an admitted workflow run."})
                 actor = run.admission_actor_subject()
                 if actor is None:
                     raise ValidationError({"actor": "Coverage review requires the run's admitted actor."})
@@ -315,6 +317,8 @@ def bridge_for_step(step_run: Any, reference: BridgeReference, *, using: str) ->
     """Resolve only the Bridge that was admitted as this run's subject."""
 
     run = related_on(step_run, "run", using=using)
+    if run is None:
+        raise ValidationError({"run": "The stage requires an admitted workflow run."})
     content_type = related_on(run, "subject_content_type", using=using)
     model = content_type.model_class() if content_type is not None else None
     if model is None or not issubclass(model, Bridge) or model._meta.label_lower != reference.model.lower():

@@ -218,6 +218,8 @@ class CardDavDirectoryBackend(DirectoryBackend):
         using = get_write_alias(type(self.bridge), instance=self.bridge, using=using)
         refresh_deferred(link, using=using)
         stream = related_on(link, "stream", using=using)
+        if stream is None:
+            raise CardDavError("A CardDAV record link must belong to a stream.")
         if link.status == LinkStatus.TOMBSTONE:
             raise RemoteRejected("remote_deleted")
         source = self._source_payload(link, using=using)
@@ -491,7 +493,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 card = vobject.readOne(data)
                 if card.name != "VCARD":
                     raise ValueError("The address object is not a vCard.")
-                contacts[href] = _parse_vcard(card, etag=etag, href=href, raw=data)
+                contact = _parse_vcard(card, etag=etag, href=href, raw=data)
             except Exception:  # noqa: BLE001 — the driver quarantines semantic input per record.
                 payload = {"href": href, "source_digest": canonical_json_sha256(data), "error": "invalid_vcard"}
                 contacts[href] = RecordChange(
@@ -503,7 +505,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 )
                 continue
             contacts[href] = self._prepare_contact(
-                self._resolve_photo(contacts[href], collection=collection, using=using), using=using
+                self._resolve_photo(contact, collection=collection, using=using), using=using
             )
         if set(contacts) != set(hrefs):
             raise CardDavError("The CardDAV multiget omitted a requested resource.")

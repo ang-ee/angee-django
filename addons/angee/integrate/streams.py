@@ -46,8 +46,8 @@ class StreamDefinition:
 
     key: str
     partition: str = ""
-    kind: str = StreamKind.EVENT_FEED
-    direction: str = StreamDirection.PULL
+    kind: StreamKind = StreamKind.EVENT_FEED
+    direction: StreamDirection = StreamDirection.PULL
     cursor: dict[str, Any] = field(default_factory=dict)
     reconcile_interval: timedelta | None = None
     absence_threshold: int = 2
@@ -139,7 +139,7 @@ class SemanticError(Exception):
     """An adapter-owned, JSON-safe record refusal that does not abort its page."""
 
     def __init__(
-        self, code: str, *, details: dict[str, Any] | None = None, kind: str = DiscrepancyKind.SEMANTIC
+        self, code: str, *, details: dict[str, Any] | None = None, kind: DiscrepancyKind = DiscrepancyKind.SEMANTIC
     ) -> None:
         super().__init__(code)
         self.code, self.details, self.kind = code, details or {}, kind
@@ -263,7 +263,9 @@ def _manager(name: str, *, using: str) -> Any:
 def _source_hash(record: Any) -> str:
     if isinstance(record, RecordChange):
         return record.source_hash
-    return canonical_json_sha256(json_safe(asdict(record) if is_dataclass(record) else record))
+    if is_dataclass(record) and not isinstance(record, type):
+        record = asdict(record)
+    return canonical_json_sha256(json_safe(record))
 
 
 def _unresolved(stream: Any, record: Any, *, using: str) -> Any:
@@ -449,7 +451,7 @@ def _apply_page(
 
     # Conditional remote writes precede the transaction. Compare link bases
     # again before reflecting the response; a later local edit remains dirty.
-    written: dict[str, tuple[Any, WriteBackResult | SemanticError]] = {}
+    written: dict[str, tuple[tuple[str, str, str], WriteBackResult | SemanticError]] = {}
     if stream.kind == StreamKind.RECORD_REPLICA and stream.direction != StreamDirection.PULL:
         for record in page.records:
             if not isinstance(record, RecordChange):
@@ -461,6 +463,7 @@ def _apply_page(
                 and _decision(link, record, using=using) == ChangeKind.WRITE_BACK
             ):
                 bases = (link.remote_base_hash, link.local_base_hash, link.remote_version)
+                result: WriteBackResult | SemanticError
                 try:
                     result = adapter.write_back(
                         link, record.projection, expected_version=link.remote_version, using=using
@@ -468,7 +471,8 @@ def _apply_page(
                 except RemoteRejected as error:
                     result = error
                 written[record.external_key] = (bases, result)
-    count, discrepancies = 0, []
+    count = 0
+    discrepancies: list[int] = []
     applied: list[ApplyResult] = []
     with transaction.atomic(using=using):
         locked = _manager("SyncStream", using=using).lock_current(stream, using=using)
@@ -532,13 +536,14 @@ def _apply_page(
                         if decision == ChangeKind.WRITE_BACK:
                             if locked.direction == StreamDirection.PULL:
                                 raise SemanticError("local_change_on_pull", kind=DiscrepancyKind.CONFLICT)
-                            bases, result = written.get(record.external_key, (None, None))
+                            write = written.get(record.external_key)
+                            if write is None:
+                                raise RuntimeError("A conditional write result is missing.")
+                            bases, result = write
                             if bases != (link.remote_base_hash, link.local_base_hash, link.remote_version):
                                 raise RuntimeError("Record bases changed during extraction; retry the page.")
                             if isinstance(result, SemanticError):
                                 raise result
-                            if result is None:
-                                raise RuntimeError("A conditional write result is missing.")
                             _reflect_write(link, record, result, using=using)
                             _resolve_applied(locked, record, using=using)
                             count += 1
@@ -599,7 +604,8 @@ def push_stream(stream: Any, adapter: StreamAdapter, *, using: str | None = None
         raise RuntimeError("Remote writes must run outside a database transaction.")
     if stream.kind != StreamKind.RECORD_REPLICA or stream.direction == StreamDirection.PULL:
         return PageResult(stream, exhausted=True)
-    count, discrepancies = 0, []
+    count = 0
+    discrepancies: list[int] = []
     with system_context(reason="integrate.stream.push"):
         for candidate in adapter.local_changes(stream, using=using):
             if adapter.sync_deadline is not None and monotonic() >= adapter.sync_deadline:
@@ -840,7 +846,7 @@ def begin_stream_cycle(
             if retry:
                 manager.filter(pk=stream.pk).update(resync_required=True)
                 stream.resync_required = True
-            if stream.resync_required or not due:
+            if stream.resync_required or not due or adapter is None:
                 return stream
             links = (
                 _manager("RecordLink", using=using)

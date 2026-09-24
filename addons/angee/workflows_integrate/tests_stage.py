@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -15,10 +15,10 @@ from rebac import system_context
 
 from angee.base.identity import public_id_of
 from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus, StreamKind
-from angee.integrate.streams import RecordChange, StreamDefinition, StreamPage, open_stream
+from angee.integrate.streams import RecordChange, StreamAdapter, StreamDefinition, StreamPage, open_stream
 from angee.workflows.attempts import AttemptResultKind
 from angee.workflows.models import StepRunStatus
-from angee.workflows.steps import StepExecutionMode, TransientStepError
+from angee.workflows.steps import StepExecutionMode, StepResult, TransientStepError
 from angee.workflows_integrate import steps as integrate_steps
 from angee.workflows_integrate.steps import BoundedStreamStage, CoverageGate
 from tests.integrate_models import RecordLink, SyncDiscrepancy, SyncStream
@@ -57,7 +57,7 @@ def stage_registry() -> Iterator[None]:
 def _start_stage(
     bridge: Channel, *, coverage: bool = False, retry: bool = False, rescan_bound: int = 100
 ) -> tuple[Any, Any]:
-    value = {"bridge": {"model": bridge._meta.label_lower, "id": public_id_of(bridge)}}
+    value: dict[str, Any] = {"bridge": {"model": bridge._meta.label_lower, "id": public_id_of(bridge)}}
     value.update({"streams": [{"key": "records"}]} if coverage else {"key": "records", "page_bound": 2})
     config: dict[str, Any] = {"retry": {"max_attempts": 3, "backoff": {"wait": 7}}} if retry else {}
     if coverage:
@@ -167,7 +167,9 @@ def test_infrastructure_failure_raises_and_engine_retains_declared_retry(
     raised = []
     invoke = BoundedStreamStage.run
 
-    def capture_error(self: Any, step_run: Any, *, now: Any, using: str | None = None) -> Any:
+    def capture_error(
+        self: BoundedStreamStage, step_run: Any, *, now: datetime, using: str | None = None
+    ) -> StepResult:
         try:
             return invoke(self, step_run, now=now, using=using)
         except TransientStepError as error:
@@ -254,11 +256,13 @@ def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
     prepare = integrate_steps.begin_stream_cycle
     calls = []
 
-    def interrupted_prepare(stream: Any, adapter: Any = None, *, using: str | None = None) -> Any:
+    def interrupted_prepare(
+        stream: Any, adapter: StreamAdapter | None = None, *, page_bound: int = 100, using: str | None = None
+    ) -> Any:
         calls.append(stream.pk)
         if len(calls) == 1:
             raise ConnectionError("first preparation interrupted")
-        return prepare(stream, adapter, using=using)
+        return prepare(stream, adapter, page_bound=page_bound, using=using)
 
     monkeypatch.setattr(integrate_steps, "begin_stream_cycle", interrupted_prepare)
     run, step_run = _start_stage(stream_bridge, retry=True)
@@ -300,7 +304,7 @@ def test_stage_rejects_a_bridge_other_than_the_admitted_subject(
 
 @pytest.mark.parametrize("kind", [DiscrepancyKind.SEMANTIC, DiscrepancyKind.MISSING_DEPENDENCY])
 def test_coverage_waits_for_unresolved_semantic_and_dependency_rows(
-    kind: str,
+    kind: DiscrepancyKind,
     stream_bridge: Channel,
     workflow_engine_tables: None,
     no_workflow_queue: None,

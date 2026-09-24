@@ -28,10 +28,12 @@ from typing import cast
 
 from django.db import models
 
+from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.integrate.models import Bridge
+from angee.integrate.sync import SyncDispatch
 from angee.posts.backends import FeedBackend
 from angee.posts.ingest import land_posts
 from angee.posts.managers import (
@@ -92,7 +94,7 @@ class Feed(Bridge):
         backend_class = cast("type[FeedBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
 
-    def sync(self) -> int:
+    def sync(self, *, using: str | None = None) -> int | SyncDispatch:
         """Fetch new posts, ingest their message core, and overlay engagement.
 
         The message core (thread/message/parts) is the messaging owner's job, so a
@@ -105,9 +107,15 @@ class Feed(Bridge):
         does not mint spurious email ``quote`` edges.
         """
 
+        using = get_write_alias(type(self), using=using, instance=self)
+        self._state.db = using
+        refresh_deferred(self, using=using)
+        dispatched = self.dispatch_sync()
+        if dispatched is not None:
+            return dispatched
         posts = self.backend.fetch_posts()
         # last_sync_items reports messages ingested, consistent with Channel.sync.
-        return len(land_posts(self, posts, owner_id=self.owner_id))
+        return len(land_posts(self, posts, owner_id=self.owner_id, using=using))
 
 
 class FeedFollow(SqidMixin, AuditMixin, AngeeModel):
