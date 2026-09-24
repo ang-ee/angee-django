@@ -357,8 +357,9 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
     assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
 
 
-def test_local_only_contact_waits_until_cycle_after_first_baseline(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("bounded", [False, True])
+def test_local_only_contact_waits_until_first_baseline_completes(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, bounded: bool
 ) -> None:
     folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
     person = Person.objects.create(
@@ -376,19 +377,17 @@ def test_local_only_contact_waits_until_cycle_after_first_baseline(
     assert not RecordLink.objects.exists()
     assert not replica.server.requests
 
-    assert sync_bridge(replica.directory, using="default") == 1
+    if bounded:
+        replica.stream = advance_stream(replica.stream, replica.backend, using="default").stream
+        assert set(replica.server.cards) == {_HREF}
+        assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
+        assert push_stream(replica.stream, replica.backend, using="default").count == 1
+    else:
+        assert sync_bridge(replica.directory, using="default") == 2
 
     replica.stream.refresh_from_db()
     assert replica.stream.phase == StreamPhase.DELTA
     assert Person.objects.filter(pk=person.pk).exists()
-    assert not RecordLink.objects.filter(stream=replica.stream, target_id=str(person.pk)).exists()
-    assert set(replica.server.cards) == {_HREF}
-    assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
-    assert not SyncDiscrepancy.objects.exists()
-    replica.server.requests.clear()
-
-    assert sync_bridge(replica.directory, using="default") == 1
-
     link = RecordLink.objects.get(stream=replica.stream, target_id=str(person.pk))
     puts = [request for request in replica.server.requests if request[0] == "PUT"]
     assert len(puts) == 1
@@ -399,6 +398,10 @@ def test_local_only_contact_waits_until_cycle_after_first_baseline(
     assert link.origin == "local"
     assert vobject.readOne(replica.server.cards[puts[0][1]][0]).fn.value == "Grace Hopper"
     assert not SyncDiscrepancy.objects.exists()
+    replica.server.requests.clear()
+
+    assert sync_bridge(replica.directory, using="default") == 0
+    assert not [request for request in replica.server.requests if request[0] in {"PUT", "DELETE"}]
 
 
 def test_remote_edit_updates_same_party_through_adapter(replica: Replica) -> None:
