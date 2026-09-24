@@ -692,10 +692,14 @@ class ImplClassField(TextChoicesField):
         keys = sorted(self._registry())
         if not keys:
             if self.base_class is None:
+                # A migration-state field (``deconstruct`` drops ``base_class`` and
+                # ``choices``) only describes its varchar column, so it must load
+                # even when its registry was renamed or retired after the migration
+                # was written.
                 default = self._historical_default
-                if isinstance(default, str) and default:
-                    members = [(default.upper(), (default, default))]
-                    return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
+                key = default if isinstance(default, str) and default else "historical"
+                members = [(key.upper(), (key, key))]
+                return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
             raise ImproperlyConfigured(
                 f"ImplClassField registry settings.{self.registry_setting} is empty; an addon must "
                 "contribute at least one impl (e.g. a noop/null-object default) before the field is built."

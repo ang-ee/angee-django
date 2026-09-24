@@ -161,6 +161,19 @@ def test_historical_impl_field_reconstructs_without_removed_registry() -> None:
     assert reconstructed.deconstruct()[3]["registry_setting"] == "ANGEE_EMPTY_IMPLS"
 
 
+@override_settings(ANGEE_RENAMED_IMPLS={})
+def test_historical_impl_field_loads_when_its_registry_was_renamed() -> None:
+    """A migration state whose registry setting no longer exists still loads as a column."""
+
+    historical = ImplClassField(editable=False, max_length=100, registry_setting="ANGEE_RENAMED_IMPLS")
+    _, _, args, kwargs = historical.deconstruct()
+    reconstructed = ImplClassField(*args, **kwargs)
+
+    assert reconstructed.base_class is None
+    assert "choices" not in reconstructed.deconstruct()[3]
+    assert reconstructed.deconstruct()[3]["registry_setting"] == "ANGEE_RENAMED_IMPLS"
+
+
 def test_model_impl_field_is_the_public_declared_accessor() -> None:
     """Models expose their impl field through the declared public seam."""
 
