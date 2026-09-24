@@ -9,26 +9,14 @@ from typing import Annotated, Any, Literal, TypeAlias
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_slug
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from angee.workflows.attempts import DecisionRecordAccess
-from angee.workflows.bindings import BindingNode, is_binding, parse_binding
+from angee.workflows.bindings import BindingNode, is_binding, is_gate_binding_mapping, parse_binding
 from angee.workflows.data_contracts import JsonPath, JsonSchemaDict, schema_data_contract
 from angee.workflows.decision_actions import ReviewAction, build_decision_action
 
 NonBlankString = Annotated[str, Field(min_length=1)]
-_GATE_BINDING_KINDS = frozenset({"constant", "workflow_input", "step_output", "map_item", "object", "array"})
-
-
-def is_gate_binding_mapping(value: Any) -> bool:
-    """Identify gate bindings while rejecting the reserved discriminator on literals."""
-
-    if not isinstance(value, Mapping) or "kind" not in value:
-        return False
-    kind = value.get("kind")
-    if not isinstance(kind, str) or kind not in _GATE_BINDING_KINDS:
-        raise ValueError("The top-level key 'kind' is reserved for workflow bindings in gate mapping fields.")
-    return True
 
 
 class RetryBackoffConfig(BaseModel):
@@ -226,15 +214,7 @@ class GateConfig(WorkflowStepConfig):
             GateBinding.model_validate(literals)
         return value
 
-    @field_validator(
-        "slots",
-        "payload",
-        "decision_schema",
-        "targets",
-        "record_access",
-        "clean",
-        mode="before",
-    )
+    @field_validator(*GateBinding.model_fields, mode="before")
     @classmethod
     def validate_binding(cls, value: Any) -> Any:
         """Parse every binding-shaped value through the one workflow grammar."""
@@ -245,11 +225,23 @@ class GateConfig(WorkflowStepConfig):
 
     @field_validator("slots")
     @classmethod
-    def non_empty_static_slots(cls, value: BindingNode | _GateSlots) -> BindingNode | _GateSlots:
+    def valid_static_slots(cls, value: BindingNode | _GateSlots, info: ValidationInfo) -> BindingNode | _GateSlots:
         """Require at least one statically declared slot; bound lists check at runtime."""
 
         if isinstance(value, list) and not value:
             raise ValueError("Gate slots must contain at least one slot.")
+        if not (info.context or {}).get("resolved_bindings") and isinstance(value, list):
+            if any(slot.decision_schema is not None and "oneOf" in slot.decision_schema for slot in value):
+                raise ValueError("Static gate slots cannot declare hand-written oneOf schemas.")
+        return value
+
+    @field_validator("decision_schema")
+    @classmethod
+    def valid_static_schema(cls, value: BindingNode | _GateObject, info: ValidationInfo) -> BindingNode | _GateObject:
+        """Admit action unions only from resolved producers, never static declarations."""
+
+        if not (info.context or {}).get("resolved_bindings") and isinstance(value, dict) and "oneOf" in value:
+            raise ValueError("Static gates declare actions, not hand-written oneOf.")
         return value
 
     @field_validator("policy", mode="before")

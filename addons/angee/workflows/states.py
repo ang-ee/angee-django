@@ -176,4 +176,5 @@ StepRunStatus.TERMINAL = frozenset(
 )
 StepRunStatus.ACTIVE = frozenset({StepRunStatus.SCHEDULED, StepRunStatus.STARTED, StepRunStatus.WAITING})
 Verdict.TERMINAL = frozenset({Verdict.COMPLETED, Verdict.REJECTED, Verdict.ESCALATED, Verdict.EXPIRED})
+# An archived publication supersedes older published versions and retires the lineage.
 CURRENT_PUBLICATION_STATUSES = (WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED)

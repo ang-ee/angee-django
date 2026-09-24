@@ -24,13 +24,12 @@ class WorkflowsConfig(AppConfig):
             check_database_command_replay_declarations,
             check_event_trigger_publishers,
         )
-        from angee.workflows.settlement import subject_settlement_handlers
+        from angee.workflows.settlement import rebuild_subject_settlers
         from angee.workflows.triggers import connect_event_trigger_receiver
 
         _register_checks(check_event_trigger_publishers, check_database_command_replay_declarations)
         connect_event_trigger_receiver()
-        subject_settlement_handlers.cache_clear()
-        subject_settlement_handlers()
+        rebuild_subject_settlers()
 
 
 def _register_checks(*functions: Callable[..., list[checks.CheckMessage]]) -> None:

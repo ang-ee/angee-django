@@ -166,6 +166,7 @@ BindingNode: TypeAlias = Annotated[
 ObjectBinding.model_rebuild(_types_namespace={"BindingNode": BindingNode})
 ArrayBinding.model_rebuild(_types_namespace={"BindingNode": BindingNode})
 _binding_adapter: TypeAdapter[BindingNode] = TypeAdapter(BindingNode)
+_BINDING_KINDS = frozenset(_binding_adapter.json_schema()["discriminator"]["mapping"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +276,17 @@ def is_binding(value: Any) -> bool:
     return isinstance(value, _Binding)
 
 
+def is_gate_binding_mapping(value: Any) -> bool:
+    """Identify gate bindings while reserving their discriminator on literals."""
+
+    if not isinstance(value, Mapping) or "kind" not in value:
+        return False
+    kind = value.get("kind")
+    if not isinstance(kind, str) or kind not in _BINDING_KINDS:
+        raise ValueError("The top-level key 'kind' is reserved for workflow bindings in gate mapping fields.")
+    return True
+
+
 def binding_error_locations(value: JsonValue, error: PydanticValidationError) -> tuple[BindingPath, ...]:
     """Remove Pydantic union branch tags while preserving exact stored binding keys."""
 
@@ -300,9 +312,6 @@ def _binding_error_message(item: Mapping[str, Any]) -> str:
     if item.get("type") in {"union_tag_not_found", "union_tag_invalid"}:
         return "Choose a value type."
     return str(item["msg"])
-
-
-_BINDING_KINDS = frozenset({"constant", "workflow_input", "step_output", "map_item", "object", "array"})
 
 
 def _binding_error_location(value: Any, location: tuple[Any, ...]) -> BindingPath:

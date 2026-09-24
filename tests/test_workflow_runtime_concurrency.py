@@ -251,7 +251,7 @@ def test_decision_timer_waits_on_run_before_locking_decision(
             return execute(sql, params, many, context)
 
         with connection.execute_wrapper(observe_run_lock):
-            return engine.expire_decision_dispatch(dispatch.pk, now=now)
+            return WorkflowDispatch.objects.deliver(dispatch.pk, now=now)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with system_context(reason="decision lock order holder"), transaction.atomic():
@@ -315,11 +315,11 @@ def test_due_decision_timers_serialize_to_one_policy_projection(
 
     def escalate_due() -> dict[str, int]:
         starting.wait(timeout=5)
-        return engine.escalate_decision_dispatch(escalate.pk, now=now)
+        return WorkflowDispatch.objects.deliver(escalate.pk, now=now)
 
     def expire_due() -> dict[str, int]:
         starting.wait(timeout=5)
-        return engine.expire_decision_dispatch(expire.pk, now=now)
+        return WorkflowDispatch.objects.deliver(expire.pk, now=now)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = (

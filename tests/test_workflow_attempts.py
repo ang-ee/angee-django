@@ -13,12 +13,13 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, connection, models, transaction
+from django.db import IntegrityError, connection, models
 from django.db.models.signals import post_save, pre_save
 from django.utils import timezone
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.workflows import engine
 from angee.workflows.attempts import (
     ArtifactSpec,
     AttemptCause,
@@ -27,6 +28,7 @@ from angee.workflows.attempts import (
     AttemptResultKind,
     DecisionSpec,
     DecisionTimerKind,
+    GateResumeState,
     InvocationAdmission,
     JsonPresence,
     LeaseRevocationReason,
@@ -358,6 +360,7 @@ def test_late_unapplied_result_still_retains_explicit_artifact(
 def test_gate_normalizes_legacy_naive_deadlines_before_retained_roundtrip() -> None:
     result = GateStep().run(
         SimpleNamespace(
+            resume_state={},
             step=SimpleNamespace(
                 config={
                     "action": "approve",
@@ -963,8 +966,9 @@ def test_applicable_suspension_creates_ordered_decisions_rebac_and_timer_intents
         scheduled_step_run.refresh_from_db()
 
     assert [decision.declaration_index for decision in decisions] == [0, 1]
-    assert scheduled_step_run.resume_state["_decision_ids"] == [decision.pk for decision in decisions]
-    retained_schema = scheduled_step_run.resume_state["_decision_schemas"][str(decisions[1].pk)]
+    state = GateResumeState.from_checkpoint(scheduled_step_run.resume_state)
+    assert state.decision_ids == [decision.pk for decision in decisions]
+    retained_schema = state.decision_schemas[str(decisions[1].pk)]
     assert retained_schema["propertyOrder"] == ["action", "invoice"]
     invoice_schema = retained_schema["properties"]["invoice"]
     assert invoice_schema["propertyOrder"] == ["supplier", "reference", "lines"]
@@ -1943,6 +1947,7 @@ def test_lease_operations_are_visible_to_pre_save_reentry(scheduled_step_run: St
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL execution ancestry row locks")
 def test_database_command_locks_execution_ancestors_before_consumer_rows(
     scheduled_step_run: StepRun,
+    monkeypatch: pytest.MonkeyPatch,
     relationship: str,
     entry_point: str,
 ) -> None:
@@ -1984,7 +1989,8 @@ def test_database_command_locks_execution_ancestors_before_consumer_rows(
         consumer = StepRun.objects.create(run=consumer_run, step=scheduled_step_run.step)
     attempt = StepAttempt.objects.claim(consumer, cause=cause, claimed_at=timezone.now()).attempt
     dispatch, _ = WorkflowDispatch.objects.schedule_execute(attempt)
-    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
+    if entry_point != "dispatch":
+        StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=timezone.now())
     events: list[tuple[str, tuple[Any, ...]]] = []
 
     def observe(execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
@@ -2005,21 +2011,20 @@ def test_database_command_locks_execution_ancestors_before_consumer_rows(
 
     with connection.execute_wrapper(observe):
         if entry_point == "dispatch":
-            at = timezone.now()
-            with (
-                transaction.atomic(),
-                system_context(reason="execution lock-order dispatch"),
-                WorkflowDispatch.objects._owner_transition(
-                    dispatch_id=dispatch.pk,
-                    lease_token=attempt.lease_token,
-                    at=at,
-                    using="default",
-                ) as preflight,
-            ):
-                finalization = command()
-                WorkflowDispatch.objects._consume_locked(
-                    dispatch.pk, envelope=preflight.envelope, at=at, alias="default"
-                )
+            finalizations = []
+
+            def execute_attempt(*args: Any, **kwargs: Any) -> dict[str, int]:
+                finalizations.append(command())
+                return {"executed": 1}
+
+            monkeypatch.setattr(engine, "execute_attempt", execute_attempt)
+            WorkflowDispatch.objects.deliver(
+                dispatch.pk,
+                expected_target_id=attempt.pk,
+                lease_token=attempt.lease_token,
+                now=timezone.now(),
+            )
+            finalization = finalizations[0]
         else:
             finalization = command()
     assert finalization is not None and finalization.recorded and finalization.applied

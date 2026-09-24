@@ -38,6 +38,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.db import get_write_alias, related_on
@@ -52,6 +53,7 @@ from angee.workflows.attempts import (
     DecisionRecordAccess,
     DecisionSpec,
     ExternalOperationPolicy,
+    GateResumeState,
     JsonPresence,
     LeaseRevocationReason,
     RecoveryCapability,
@@ -64,16 +66,17 @@ from angee.workflows.bindings import (
     SourceValue,
     UnavailableSource,
     evaluate_binding,
+    is_gate_binding_mapping,
     parse_binding,
 )
 from angee.workflows.configs import (
     CallWorkflowConfig,
     EmitConfig,
+    GateBinding,
     GateConfig,
     JoinContinuationConfig,
     MapConfig,
     WaitConfig,
-    is_gate_binding_mapping,
     map_items_expression_path,
 )
 from angee.workflows.data_contracts import (
@@ -82,6 +85,7 @@ from angee.workflows.data_contracts import (
     model_data_contract,
     schema_data_contract,
 )
+from angee.workflows.states import ParentRelation, RunOrigin, RunStatus
 
 _MODEL_LABEL_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$")
 _OUTCOME_KEY_FIELD = models.SlugField(max_length=100)
@@ -537,8 +541,14 @@ class StepImpl(ImplBase):
 
         def pulse(*, using: str) -> None:
             with system_context(reason="workflows.step.heartbeat_during"):
-                accepted = type(attempt).objects.db_manager(using).heartbeat(
-                    attempt.pk, lease_token=attempt.lease_token, at=timezone.now(),
+                accepted = (
+                    type(attempt)
+                    .objects.db_manager(using)
+                    .heartbeat(
+                        attempt.pk,
+                        lease_token=attempt.lease_token,
+                        at=timezone.now(),
+                    )
                 )
                 if not accepted:
                     reason = (
@@ -649,11 +659,7 @@ class CallWorkflow(StepImpl):
         workflow_key = config.get("workflow_key")
         if workflow_key:
             with system_context(reason="workflows.call.lineage"):
-                head = (
-                    system_queryset(workflow_model, using=using, lock=None)
-                    .filter(published_from__isnull=True, key=workflow_key)
-                    .first()
-                )
+                head = system_queryset(workflow_model, using=using, lock=None).lineage_heads(workflow_key).first()
             if head is None:
                 raise ValidationError({"workflow_key": "CallWorkflow requires an existing workflow key."})
             return head
@@ -721,9 +727,6 @@ class CallWorkflow(StepImpl):
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         del now
-        from angee.workflows import engine  # Runtime edge; the operation registry imports this module first.
-        from angee.workflows.states import RunOrigin, RunStatus
-
         alias = get_write_alias(type(step_run), instance=step_run)
         config = type(self).normalize_config(step_run.step.config)
         payload = step_run.input
@@ -751,14 +754,13 @@ class CallWorkflow(StepImpl):
                 raise ValidationError({"subject": "Child subject is unavailable to the execution actor."})
         else:
             raise ValidationError({"subject": "Child subject must be an exact record reference or null."})
-        child = engine.start(
+        child = run_model.objects.db_manager(alias).start(
             workflow,
             subject,
             actor,
             parent_step_run=step_run,
-            parent_relation="owned_call",
+            parent_relation=ParentRelation.OWNED_CALL,
             origin=RunOrigin.WORKFLOW,
-            using=alias,
             input=JsonPresence("input" in payload, payload.get("input")),
         )
         type(self)._validate_publication_contract(child.workflow, config)
@@ -833,12 +835,16 @@ class JoinContinuation(StepImpl):
         child_id = json_value_at_path(step_run.input, config["child_id_path"], field="child")
         if not isinstance(child_id, str) or not child_id:
             raise ValidationError({"child": "Continuation child identity must be a public id."})
-        child, completion = apps.get_model("workflows", "StepAttempt").objects.db_manager(alias).join_continuation(
-            step_run.pk,
-            lease_token=step_run.current_attempt.lease_token,
-            child_id=child_id,
-            expected_starter_class=config["expected_starter_class"],
-            actor=actor,
+        child, completion = (
+            apps.get_model("workflows", "StepAttempt")
+            .objects.db_manager(alias)
+            .join_continuation(
+                step_run.pk,
+                lease_token=step_run.current_attempt.lease_token,
+                child_id=child_id,
+                expected_starter_class=config["expected_starter_class"],
+                actor=actor,
+            )
         )
         type(self)._validate_child_contract(child, config)
         if completion is None:
@@ -971,29 +977,6 @@ class GateStep(StepImpl):
     effect_description = "Creates workflow decision journals without changing the workflow subject."
     config_model: ClassVar[type[BaseModel] | None] = GateConfig
 
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Reject hand-authored static unions at the workflow definition boundary."""
-
-        if not isinstance(config, Mapping):
-            raise ValidationError({"config": "Gate config must be an object."})
-        decision_schema = config.get("decision_schema", {})
-        try:
-            bound_schema = is_gate_binding_mapping(decision_schema)
-        except ValueError as error:
-            raise ValidationError({"decision_schema": str(error)}) from error
-        if isinstance(decision_schema, Mapping) and not bound_schema and "oneOf" in decision_schema:
-            raise ValidationError({"decision_schema": "Static gates declare actions, not hand-written oneOf."})
-        slots = config.get("slots")
-        if isinstance(slots, list) and any(
-            isinstance(slot, Mapping)
-            and isinstance(slot.get("decision_schema"), Mapping)
-            and "oneOf" in slot["decision_schema"]
-            for slot in slots
-        ):
-            raise ValidationError({"slots": "Static gate slots cannot declare hand-written oneOf schemas."})
-        super().validate_config(config)
-
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
         """Resolve bound declarations and suspend or complete a resumed gate."""
 
@@ -1026,13 +1009,13 @@ class GateStep(StepImpl):
         if resolved is None:
             output = DecisionGateOutput(resolutions=(), outcome="completed").model_dump(mode="json")
             return StepResult.done(output=output, outcome="completed")
-        state: dict[str, Any] = {"gate": {"policy": resolved["policy"]}}
-        if retained_state:
-            state["state"] = copy.deepcopy(dict(retained_state))
-        if resolved["resume"]:
-            state["_resume_after_decisions"] = True
+        state = GateResumeState(
+            gate={"policy": resolved["policy"]},
+            state=copy.deepcopy(dict(retained_state or {})),
+            resume_after_decisions=resolved["resume"],
+        )
         return StepResult.suspend(
-            resume_state=state,
+            resume_state=state.model_dump(mode="json", exclude_defaults=True),
             decisions=_decision_specs_from_config(resolved),
         )
 
@@ -1040,21 +1023,10 @@ class GateStep(StepImpl):
     def resumption(cls, step_run: Any) -> GateResumption | None:
         """Return the exact settled slots of this step's current resumable suspension."""
 
-        state = getattr(step_run, "resume_state", {})
-        if not isinstance(state, Mapping) or not state.get("_resume_after_decisions"):
+        state = GateResumeState.from_checkpoint(step_run.resume_state or {})
+        if not state.resume_after_decisions or state.decision_outcome is None:
             return None
-        outcome = state.get("_decision_outcome")
-        resolutions = state.get("_decision_resolutions")
-        decision_ids = state.get("_decision_ids")
-        if outcome is None and resolutions is None:
-            return None
-        if (
-            not isinstance(outcome, str)
-            or not isinstance(resolutions, dict)
-            or not isinstance(decision_ids, list)
-            or any(type(decision_id) is not int for decision_id in decision_ids)
-        ):
-            raise ValidationError({"gate": "Resumable gate state is incomplete."})
+        decision_ids = state.decision_ids
         decisions = {
             decision.pk: decision
             for decision in step_run.decisions.filter(pk__in=decision_ids).order_by("declaration_index", "pk")
@@ -1074,13 +1046,13 @@ class GateStep(StepImpl):
             }
             for decision_id in decision_ids
         )
-        retained = state.get("state")
-        if retained is not None and not isinstance(retained, dict):
+        assert state.decision_resolutions is not None
+        if not isinstance(state.state, dict):
             raise ValidationError({"gate": "Resumable gate retained state must be an object."})
         return GateResumption(
-            outcome=outcome,
-            resolutions=copy.deepcopy(resolutions),
-            state=copy.deepcopy(retained or {}),
+            outcome=state.decision_outcome,
+            resolutions=copy.deepcopy(state.decision_resolutions),
+            state=copy.deepcopy(state.state),
             slots=slots,
         )
 
@@ -1099,10 +1071,13 @@ class GateStep(StepImpl):
         if clean:
             return None
         resolved["clean"] = False
-        for name in ("slots", "payload", "decision_schema", "targets", "record_access"):
+        for name in GateBinding.model_fields:
             if name in resolved:
                 resolved[name] = cls._bound_value(step_run, resolved[name], field=name)
-        return GateStep.normalize_config(resolved)
+        try:
+            return GateConfig.model_validate(resolved, context={"resolved_bindings": True}).model_dump(mode="json")
+        except PydanticValidationError as error:
+            raise ValidationError({"config": str(error)}) from error
 
     @staticmethod
     def _bound_value(step_run: Any, value: Any, *, field: str) -> Any:
@@ -1176,8 +1151,10 @@ class DecisionApplyStep(StepImpl):
         """Load the predecessor identity and preserve the command's typed result."""
 
         alias = get_write_alias(type(step_run), instance=step_run)
-        decision = apps.get_model("workflows", "Decision").objects.db_manager(alias).predecessor_decision(
-            step_run, type(self).gate_step_class
+        decision = (
+            apps.get_model("workflows", "Decision")
+            .objects.db_manager(alias)
+            .predecessor_decision(step_run, type(self).gate_step_class)
         )
         actor = decision.resolution_actor_subject()
         result = self.invoke_command(step_run, decision_id=decision.pk, actor=actor, now=now)
@@ -1247,9 +1224,7 @@ class MapStep(StepImpl):
         """Return the configured target step for one map parent row."""
 
         alias = get_write_alias(type(step_run), using=using, instance=step_run)
-        step_run = (
-            type(step_run)._base_manager.using(alias).select_related("step", "run").get(pk=step_run.pk)
-        )
+        step_run = type(step_run)._base_manager.using(alias).select_related("step", "run").get(pk=step_run.pk)
 
         config = cls.config_mapping(step_run)
         key = str(config.get("target_step") or "")
@@ -1272,9 +1247,7 @@ class MapStep(StepImpl):
         """Return the item list resolved from this map step's config."""
 
         alias = get_write_alias(type(step_run), using=using, instance=step_run)
-        step_run = (
-            type(step_run)._base_manager.using(alias).select_related("step", "run").get(pk=step_run.pk)
-        )
+        step_run = type(step_run)._base_manager.using(alias).select_related("step", "run").get(pk=step_run.pk)
 
         expression = cls.config_mapping(step_run).get("items")
         value = cls.expression_value(expression, step_run, input=input)
@@ -1426,7 +1399,7 @@ def optional_non_negative_int(value: Any) -> int | None:
 def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec, ...]:
     """Return gate decision specs from declarative config."""
 
-    gate_config = GateConfig.model_validate(config)
+    gate_config = GateConfig.model_validate(config, context={"resolved_bindings": True})
     slots = config.get("slots")
     if not isinstance(slots, list) or not slots:
         raise ValidationError({"slots": "Gate slots must resolve to a non-empty list."})

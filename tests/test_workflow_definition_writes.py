@@ -112,6 +112,44 @@ def test_workflow_definition_fields_join_the_revision_owner(workflow_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("field_name", ["error_workflow", "error_workflow_id"])
+def test_foreign_key_declaration_changes_honor_native_update_fields(
+    workflow_tables: None, field_name: str
+) -> None:
+    """A saved relation advances the revision through its name or storage name."""
+
+    del workflow_tables
+    with system_context(reason="test declaration foreign key revision"):
+        workflow = Workflow.objects.create(name="Settings")
+        handler = Workflow.objects.create(name="Error handler")
+        workflow.error_workflow_id = handler.pk
+        workflow.save(update_fields={field_name})
+        workflow.refresh_from_db()
+        assert workflow.error_workflow_id == handler.pk
+        assert workflow.draft_revision == 1
+
+        workflow.save(update_fields={field_name})
+        workflow.refresh_from_db()
+        assert workflow.draft_revision == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_lineage_heads_remains_chainable_and_excludes_publications(workflow_tables: None) -> None:
+    """Stable-key lookup selects the editable head from a shared-key lineage."""
+
+    del workflow_tables
+    with system_context(reason="test lineage head lookup"):
+        workflow = Workflow.objects.create(name="Lineage", key="lineage")
+        Step.objects.create(workflow=workflow, key="entry", name="Entry", step_class="fixture", is_entry=True)
+        publication = workflow.publish()
+        Workflow.objects.create(name="Other", key="other")
+
+        assert publication.key == workflow.key
+        assert list(Workflow.objects.lineage_heads("lineage").filter(name="Lineage")) == [workflow]
+        assert not Workflow.objects.lineage_heads("missing").exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_stale_workflow_instance_cannot_regress_database_revision(workflow_tables: None) -> None:
     """The database revision remains authoritative across stale head saves."""
 

@@ -19,7 +19,7 @@ from angee.base.db import get_write_alias, related_on
 
 
 @cache
-def subject_settlement_handlers() -> dict[tuple[str, str], Callable[..., None]]:
+def subject_settlers() -> dict[tuple[str, str], Callable[..., None]]:
     """Expand declared model bases into exact content-type natural keys.
 
     ``ANGEE_WORKFLOW_SUBJECT_SETTLERS`` maps a model class's dotted import
@@ -46,20 +46,26 @@ def subject_settlement_handlers() -> dict[tuple[str, str], Callable[..., None]]:
     return handlers
 
 
+def rebuild_subject_settlers() -> None:
+    """Rebuild declarations after app population or a native settings change."""
+
+    subject_settlers.cache_clear()
+    if apps.models_ready:
+        subject_settlers()
+
+
 @receiver(setting_changed)
-def _refresh_subject_settlement_handlers(*, setting: str, **kwargs: Any) -> None:
+def _refresh_subject_settlers(*, setting: str, **kwargs: Any) -> None:
     if setting in {"ANGEE_WORKFLOW_SUBJECT_SETTLERS", "INSTALLED_APPS"}:
-        subject_settlement_handlers.cache_clear()
-        if apps.models_ready:
-            subject_settlement_handlers()
+        rebuild_subject_settlers()
 
 
-def subject_settlement_handler(content_type: ContentType | None) -> Callable[..., None] | None:
+def subject_settler(content_type: ContentType | None) -> Callable[..., None] | None:
     """Return the declared owner shared by terminal admission and delivery."""
 
     if content_type is None:
         return None
-    return subject_settlement_handlers().get((content_type.app_label, content_type.model))
+    return subject_settlers().get((content_type.app_label, content_type.model))
 
 
 def settle_subject(run: Any, *, using: str | None = None) -> None:
@@ -72,6 +78,6 @@ def settle_subject(run: Any, *, using: str | None = None) -> None:
 
     alias = get_write_alias(type(run), using=using, instance=run)
     content_type = related_on(run, "subject_content_type", using=alias)
-    handler = subject_settlement_handler(content_type)
+    handler = subject_settler(content_type)
     if handler is not None:
         handler(run, using=alias)

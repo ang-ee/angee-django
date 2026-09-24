@@ -60,15 +60,18 @@ from angee.workflows.attempts import (
     AttemptResultKind,
     AttemptStatus,
     FixtureRole,
+    GateResumeState,
     JsonPresence,
     LeaseRevocationReason,
     WorkflowScope,
     json_values_equal,
     validate_json_presence,
 )
+from angee.workflows.definitions import declaration_changed
 from angee.workflows.dispatch import (
     WorkflowDispatchEnvelope,
     WorkflowDispatchKind,
+    dispatch_constraints,
 )
 from angee.workflows.graph import GraphIdentity, WorkflowGraph
 from angee.workflows.managers import (
@@ -93,8 +96,9 @@ from angee.workflows.managers import (
     _definition_rows,
 )
 from angee.workflows.resources import WorkflowDefinitionResource
-from angee.workflows.settlement import subject_settlement_handler
+from angee.workflows.settlement import subject_settler
 from angee.workflows.states import (
+    CURRENT_PUBLICATION_STATUSES,
     DecisionGate,
     JoinRule,
     ParentRelation,
@@ -200,12 +204,6 @@ def _save_workflow_status(instance: models.Model, source: Any, target: Any) -> N
     cast("Workflow", instance).persist_status(source=source, using=_transition_write_alias(instance))
 
 
-
-#: Statuses that participate in version currency: a newer ARCHIVED row
-#: supersedes older PUBLISHED rows, retiring the whole lineage.
-_CURRENCY_STATUSES = (WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED)
-
-
 class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """Editable workflow lineage head or immutable published workflow version.
 
@@ -214,6 +212,22 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """
 
     resource_class = WorkflowDefinitionResource
+    declaration_fields = frozenset(
+        {
+            "key",
+            "name",
+            "description",
+            "purpose",
+            "subject_declaration",
+            "error_workflow",
+            "max_steps",
+            "budget",
+            "input_schema",
+            "output_schema",
+            "result_rules",
+        }
+    )
+    editable_declaration_fields = declaration_fields - {"key"}
     runtime = True
     rebac_grantable = {"editor": "write", "viewer": "write"}
 
@@ -303,7 +317,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             published_from_id=models.OuterRef("_workflow_lineage_id")
         )
         current = cls.objects.current_published().filter(lineage)
-        latest = cls.objects.filter(lineage, status__in=_CURRENCY_STATUSES).order_by("-version", "-pk")
+        latest = cls.objects.filter(lineage, status__in=CURRENT_PUBLICATION_STATUSES).order_by("-version", "-pk")
         return {
             "_workflow_lineage_id": models.functions.Coalesce("published_from_id", "pk"),
             "_workflow_publication_status": models.functions.Coalesce(
@@ -471,28 +485,11 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 self.full_clean_for_write(using=alias)
             self._raise_if_key_changed(persisted)
             update_fields = kwargs.get("update_fields")
-            definition_fields = {
-                "name",
-                "description",
-                "purpose",
-                "subject_declaration",
-                "error_workflow",
-                "error_workflow_id",
-                "max_steps",
-                "budget",
-                "input_schema",
-                "output_schema",
-                "result_rules",
-            }
-            updated = None if update_fields is None else set(update_fields)
-            considered = definition_fields if updated is None else {
-                field for field in definition_fields if field in updated or field.removesuffix("_id") in updated
-            }
-            changed = any(getattr(persisted, field) != getattr(self, field) for field in considered)
+            changed = declaration_changed(
+                self, persisted, fields=self.editable_declaration_fields, update_fields=update_fields
+            )
             assigns_stable_key = (
-                not persisted.key
-                and bool(self.key)
-                and (update_fields is None or "key" in update_fields)
+                not persisted.key and bool(self.key) and (update_fields is None or "key" in update_fields)
             )
             super().save(*args, **kwargs)
             if assigns_stable_key:
@@ -760,6 +757,20 @@ class Step(ResourceLoadMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     """One node in a workflow definition graph."""
 
     resource_class = WorkflowDefinitionResource
+    declaration_fields = frozenset(
+        {
+            "workflow",
+            "key",
+            "name",
+            "step_class",
+            "config",
+            "input_binding",
+            "join_rule",
+            "is_entry",
+            "position",
+        }
+    )
+    editable_declaration_fields = declaration_fields - {"workflow"}
     runtime = True
 
     sqid_prefix = "wfs_"
@@ -843,9 +854,9 @@ class Step(ResourceLoadMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
         kwargs["using"] = alias
         old_parent_id = None
         if not self._state.adding:
-            old_parent_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
-                "workflow_id", flat=True
-            ).first()
+            old_parent_id = (
+                _definition_rows(type(self), alias).filter(pk=self.pk).values_list("workflow_id", flat=True).first()
+            )
         parent_ids = {value for value in (old_parent_id, self.workflow_id) if value is not None}
         manager = self._meta.get_field("workflow").remote_field.model.objects.db_manager(alias)
         with manager._definition_write(parent_ids, using=alias, session=session) as session:
@@ -856,9 +867,11 @@ class Step(ResourceLoadMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
             if not self._state.adding and (old is None or old.workflow_id != old_parent_id):
                 raise ValidationError("The stored workflow step changed while it was being edited.")
             if old is not None and old.workflow_id != self.workflow_id:
-                if _definition_rows(type(self), alias).filter(
-                    models.Q(outgoing_edges__isnull=False) | models.Q(incoming_edges__isnull=False), pk=self.pk
-                ).exists():
+                if (
+                    _definition_rows(type(self), alias)
+                    .filter(models.Q(outgoing_edges__isnull=False) | models.Q(incoming_edges__isnull=False), pk=self.pk)
+                    .exists()
+                ):
                     raise ValidationError({"workflow": "A connected step cannot move to another workflow."})
             with DefinitionQuerySet.caller_context(self):
                 self.full_clean_for_write(using=alias)
@@ -869,25 +882,7 @@ class Step(ResourceLoadMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
                 self.validate_impl_configs(update_fields=update_fields)
             finally:
                 self._state.db = original_alias
-            fields = {
-                "workflow_id",
-                "key",
-                "name",
-                "step_class",
-                "config",
-                "input_binding",
-                "join_rule",
-                "is_entry",
-                "position",
-            }
-            updated = None if update_fields is None else set(update_fields)
-            considered = fields if updated is None else {
-                field for field in fields if field in updated or field.removesuffix("_id") in updated
-            }
-            changed = old is None or any(
-                getattr(old, field) != getattr(self, field)
-                for field in considered
-            )
+            changed = declaration_changed(self, old, fields=self.declaration_fields, update_fields=update_fields)
             with _workflow_child_create(self, using=kwargs["using"]):
                 super().save(*args, **kwargs)
             if changed:
@@ -925,10 +920,13 @@ class Step(ResourceLoadMixin, ImplDefaultsMixin, AuditMixin, AngeeDataModel):
                 session.changed(workflow_id)
             return _combined_delete_results(edges, step)
 
+
 class Edge(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     """Directed edge between two workflow steps."""
 
     resource_class = WorkflowDefinitionResource
+    declaration_fields = frozenset({"workflow", "source", "target", "condition"})
+    editable_declaration_fields = declaration_fields - {"workflow", "source", "target"}
     runtime = True
 
     sqid_prefix = "wfe_"
@@ -980,9 +978,9 @@ class Edge(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         kwargs["using"] = alias
         old_parent_id = None
         if not self._state.adding:
-            old_parent_id = _definition_rows(type(self), alias).filter(pk=self.pk).values_list(
-                "workflow_id", flat=True
-            ).first()
+            old_parent_id = (
+                _definition_rows(type(self), alias).filter(pk=self.pk).values_list("workflow_id", flat=True).first()
+            )
         parent_ids = {value for value in (old_parent_id, self.workflow_id) if value is not None}
         manager = self._meta.get_field("workflow").remote_field.model.objects.db_manager(alias)
         with manager._definition_write(parent_ids, using=alias, session=session) as session:
@@ -995,15 +993,7 @@ class Edge(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             with DefinitionQuerySet.caller_context(self):
                 self.full_clean_for_write(using=alias)
             update_fields = kwargs.get("update_fields")
-            fields = {"workflow_id", "source_id", "target_id", "condition"}
-            updated = None if update_fields is None else set(update_fields)
-            considered = fields if updated is None else {
-                field for field in fields if field in updated or field.removesuffix("_id") in updated
-            }
-            changed = old is None or any(
-                getattr(old, field) != getattr(self, field)
-                for field in considered
-            )
+            changed = declaration_changed(self, old, fields=self.declaration_fields, update_fields=update_fields)
             with _workflow_child_create(self, using=kwargs["using"]):
                 super().save(*args, **kwargs)
             if changed:
@@ -1032,6 +1022,7 @@ class Edge(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             if session is not None:
                 session.changed(workflow_id)
             return result
+
 
 def check_event_trigger_publishers(
     app_configs: list[object] | None = None,
@@ -1868,7 +1859,8 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                 for field in self.invocation_identity_attnames
                 if not (
                     json_values_equal(retained[field], getattr(self, field))
-                    if field == "input" else retained[field] == getattr(self, field)
+                    if field == "input"
+                    else retained[field] == getattr(self, field)
                 )
             }
             if changed:
@@ -1888,9 +1880,13 @@ class WorkflowRun(AuditMixin, RecordRefMixin, AngeeDataModel):
                     delivery_target = self.delivery_target(using=alias)
                     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
                     dispatch_model.objects.db_manager(alias).schedule_artifact_delivery(delivery_target)
-                    if self.subject_content_type_id is not None and subject_settlement_handler(
-                        related_on(self, "subject_content_type", using=alias),
-                    ) is not None:
+                    if (
+                        self.subject_content_type_id is not None
+                        and subject_settler(
+                            related_on(self, "subject_content_type", using=alias),
+                        )
+                        is not None
+                    ):
                         dispatch_model.objects.db_manager(alias).schedule_run_settle(self, using=alias)
 
     @classmethod
@@ -2509,6 +2505,16 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     sqid_prefix = "wsa_"
     step_run = models.ForeignKey("workflows.StepRun", on_delete=models.PROTECT, related_name="attempts")
 
+    @property
+    def is_held_suspension(self) -> bool:
+        """Whether this applied suspension still holds its execution lease."""
+
+        return (
+            self.result_kind == AttemptResultKind.SUSPEND
+            and self.applied_at is not None
+            and self.lease_revoked_at is None
+        )
+
     def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
         """Invalidate exact reads of this attempt's execution journal row."""
 
@@ -2517,6 +2523,7 @@ class StepAttempt(AuditMixin, AngeeDataModel):
             step_run_model._meta.label,
             step_run_model.public_id_from_pk(self.step_run_id),
         ),)
+
     retry_of = models.OneToOneField(
         "self",
         on_delete=models.PROTECT,
@@ -2568,16 +2575,8 @@ class StepAttempt(AuditMixin, AngeeDataModel):
     external_object_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     heartbeat_at = models.DateTimeField(null=True, blank=True)
     lease_revoked_at = models.DateTimeField(null=True, blank=True)
-    lease_revocation_reason = models.CharField(
-        max_length=32,
-        blank=True,
-        choices=[(value.value, value.name.title()) for value in LeaseRevocationReason],
-    )
-    result_kind = models.CharField(
-        max_length=32,
-        blank=True,
-        choices=[(value.value, value.name.title()) for value in AttemptResultKind],
-    )
+    lease_revocation_reason = StateField(choices_enum=LeaseRevocationReason, blank=True, db_index=False)
+    result_kind = StateField(choices_enum=AttemptResultKind, blank=True, db_index=False)
     result_recorded_at = models.DateTimeField(null=True, blank=True)
     output_present = models.BooleanField(default=False)
     output = models.JSONField(null=True, blank=True)
@@ -3083,14 +3082,14 @@ class Decision(AuditMixin, AngeeDataModel):
             state = self.step_run.resume_state
         if not isinstance(state, dict):
             return None
-        schemas = state.get("_decision_schemas", {})
-        if isinstance(schemas, dict) and str(self.pk) in schemas:
+        schemas = GateResumeState.from_checkpoint(state).decision_schemas
+        if str(self.pk) in schemas:
             schema = schemas[str(self.pk)]
-            return dict(schema) if isinstance(schema, dict) and schema else None
+            return dict(schema) if schema else None
         gate = state.get("gate")
         if isinstance(gate, dict):
-            schema = gate.get("decision_schema")
-            return dict(schema) if isinstance(schema, dict) and schema else None
+            gate_schema = gate.get("decision_schema")
+            return dict(gate_schema) if isinstance(gate_schema, dict) and gate_schema else None
         return None
 
     def resolution_actor_subject(self) -> Any | None:
@@ -3254,10 +3253,7 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
     runtime = True
 
     sqid_prefix = "wfd_"
-    kind = models.CharField(
-        max_length=32,
-        choices=[(value.value, value.name.title()) for value in WorkflowDispatchKind],
-    )
+    kind = StateField(choices_enum=WorkflowDispatchKind)
     run = models.ForeignKey(
         "workflows.WorkflowRun", on_delete=models.PROTECT, null=True, blank=True, related_name="dispatches"
     )
@@ -3285,85 +3281,13 @@ class WorkflowDispatch(AuditMixin, AngeeDataModel):
         abstract = True
         base_manager_name = "objects"
         ordering = ("available_at", "pk")
-        constraints = (
-            models.CheckConstraint(
-                condition=(
-                    models.Q(kind=WorkflowDispatchKind.ADVANCE, run__isnull=False, step_attempt__isnull=True,
-                             decision__isnull=True, generation__isnull=True,
-                             artifact_content_type__isnull=True, artifact_object_id__isnull=True)
-                    | models.Q(kind=WorkflowDispatchKind.EXECUTE, run__isnull=True, step_attempt__isnull=False,
-                               decision__isnull=True, generation__isnull=True,
-                               artifact_content_type__isnull=True, artifact_object_id__isnull=True)
-                    | models.Q(kind__in=[WorkflowDispatchKind.DECISION_EXPIRE,
-                                         WorkflowDispatchKind.DECISION_ESCALATE], run__isnull=True,
-                               step_attempt__isnull=True, decision__isnull=False, generation__isnull=False,
-                               artifact_content_type__isnull=True, artifact_object_id__isnull=True)
-                    | models.Q(kind=WorkflowDispatchKind.ARTIFACT_DELIVERY, run__isnull=True,
-                               step_attempt__isnull=True, decision__isnull=True, generation__isnull=True,
-                               artifact_content_type__isnull=False, artifact_object_id__isnull=False)
-                    | models.Q(kind=WorkflowDispatchKind.CHILD_CANCEL, run__isnull=False,
-                               step_attempt__isnull=True, decision__isnull=True, generation__isnull=True,
-                               artifact_content_type__isnull=True, artifact_object_id__isnull=True)
-                    | models.Q(kind__in=[WorkflowDispatchKind.RUN_CANCEL, WorkflowDispatchKind.RUN_SETTLE],
-                               run__isnull=False,
-                               step_attempt__isnull=True, decision__isnull=True, generation__isnull=True,
-                               artifact_content_type__isnull=True, artifact_object_id__isnull=True)
-                ),
-                name="chk_wfd_target_shape",
-            ),
-            models.UniqueConstraint(
-                fields=("step_attempt",),
-                condition=models.Q(kind=WorkflowDispatchKind.EXECUTE),
-                name="uniq_wfd_execute_attempt",
-            ),
-            models.UniqueConstraint(
-                fields=("kind", "decision", "generation"),
-                condition=models.Q(kind__in=[WorkflowDispatchKind.DECISION_EXPIRE,
-                                             WorkflowDispatchKind.DECISION_ESCALATE]),
-                name="uniq_wfd_decision_timer",
-            ),
-            models.UniqueConstraint(
-                fields=("kind", "run"), condition=models.Q(kind=WorkflowDispatchKind.CHILD_CANCEL),
-                name="uniq_wfd_child_cancel",
-            ),
-            models.UniqueConstraint(
-                fields=("kind", "run"), condition=models.Q(kind=WorkflowDispatchKind.RUN_CANCEL),
-                name="uniq_wfd_run_cancel",
-            ),
-            models.UniqueConstraint(
-                fields=("kind", "run"), condition=models.Q(kind=WorkflowDispatchKind.RUN_SETTLE),
-                name="uniq_wfd_run_settle",
-            ),
-        )
-
-    @property
-    def target_identity(self) -> tuple[int | None, ...]:
-        """Return immutable target fields used by the exact-row write guard."""
-
-        return (
-            self.run_id, self.step_attempt_id, self.decision_id, self.generation,
-            self.artifact_content_type_id, self.artifact_object_id,
-        )
+        constraints = dispatch_constraints()
 
     @property
     def envelope(self) -> WorkflowDispatchEnvelope:
-        """Return the identifier-only transport message for this validated row."""
+        """Return the transport envelope declared by this kind's specification."""
 
-        kind = WorkflowDispatchKind(self.kind)
-        target_id = (
-            self.pk if kind == WorkflowDispatchKind.ARTIFACT_DELIVERY else
-            self.run_id if kind in {
-                WorkflowDispatchKind.ADVANCE,
-                WorkflowDispatchKind.CHILD_CANCEL,
-                WorkflowDispatchKind.RUN_CANCEL,
-                WorkflowDispatchKind.RUN_SETTLE,
-            } else
-            self.step_attempt_id if kind == WorkflowDispatchKind.EXECUTE else self.decision_id
-        )
-        if target_id is None:
-            raise ValueError("Workflow dispatch target does not match its kind.")
-        lease_token = self.step_attempt.lease_token if kind == WorkflowDispatchKind.EXECUTE else None
-        return WorkflowDispatchEnvelope(self.pk, kind, target_id, self.generation, lease_token)
+        return self.kind.spec.envelope(self)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         raise TypeError("Workflow dispatches can only be saved by WorkflowDispatchManager.")

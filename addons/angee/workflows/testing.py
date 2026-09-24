@@ -1,4 +1,4 @@
-"""Typed admission contracts shared by workflow test persistence and APIs."""
+"""Synchronous drivers for retained workflow runs without a live task queue."""
 
 from __future__ import annotations
 
@@ -14,7 +14,8 @@ from rebac import current_actor, system_context
 
 from angee.base.db import get_write_alias
 from angee.workflows import engine
-from angee.workflows.models import RunStatus, StepRunStatus, WorkflowDispatchKind
+from angee.workflows.dispatch import WorkflowDispatchKind
+from angee.workflows.states import ParentRelation, RunStatus, StepRunStatus, WaitingKind
 
 
 def _workflow_model(run: Any, name: str) -> type[models.Model]:
@@ -42,10 +43,12 @@ def _run_tree(root: Any, *, using: str) -> list[Any]:
     while True:
         with system_context(reason="workflows.testing run tree"):
             children = list(
-                run_model.objects.db_manager(alias).filter(
+                run_model.objects.db_manager(alias)
+                .filter(
                     parent_step_run__run_id__in=tuple(seen),
-                    parent_relation__in=("owned_call", "continuation"),
-                ).order_by("pk")
+                    parent_relation__in=(ParentRelation.OWNED_CALL, ParentRelation.CONTINUATION),
+                )
+                .order_by("pk")
             )
         added = [child for child in children if child.pk not in seen]
         if not added:
@@ -87,11 +90,12 @@ def _retained_run_targets(root: Any, *, using: str) -> tuple[int, ...]:
     with system_context(reason="workflows.testing retained run targets"):
         run_type = ContentType.objects.db_manager(alias).get_for_model(run_model)
         return tuple(
-            step_artifact.objects.db_manager(alias).filter(
+            step_artifact.objects.db_manager(alias)
+            .filter(
                 attempt__step_run__run_id__in=tree_ids,
                 attempt__step_run__current_attempt_id=F("attempt_id"),
                 attempt__step_run__status=StepRunStatus.WAITING,
-                attempt__step_run__waiting_kind="external",
+                attempt__step_run__waiting_kind=WaitingKind.EXTERNAL,
                 target_content_type=run_type,
             )
             .order_by("target_object_id")
@@ -111,47 +115,27 @@ def _deliver_results(root: Any, *, now: datetime | None = None, using: str) -> N
     tree_ids = {current.pk for current in _run_tree(root, using=alias)}
     descendant_ids = tree_ids - {root.pk}
     retained_ids = set(_retained_run_targets(root, using=alias))
-    with system_context(reason="workflows.testing due cancellations"):
-        cancellations = list(
-            dispatch_model.objects.db_manager(alias).filter(
-                Q(kind=WorkflowDispatchKind.CHILD_CANCEL, run_id__in=descendant_ids)
-                | Q(kind=WorkflowDispatchKind.RUN_CANCEL, run_id__in=retained_ids),
-                available_at__lte=timestamp,
-                consumed_at__isnull=True,
-            ).order_by("pk")
-        )
-    for dispatch in cancellations:
-        if dispatch.kind == WorkflowDispatchKind.CHILD_CANCEL:
-            engine.cancel_child_dispatch(dispatch.pk, expected_child_id=dispatch.run_id, using=alias)
-        else:
-            engine.cancel_run_dispatch(dispatch.pk, expected_run_id=dispatch.run_id, using=alias)
-
-    delivery_targets = descendant_ids | retained_ids
-    with system_context(reason="workflows.testing due artifact deliveries"):
+    with system_context(reason="workflows.testing artifact content type"):
         run_type = ContentType.objects.db_manager(alias).get_for_model(run_model)
-        deliveries = list(
-            dispatch_model.objects.db_manager(alias).filter(
-                kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
-                artifact_content_type=run_type,
-                artifact_object_id__in=delivery_targets,
-                available_at__lte=timestamp,
-                consumed_at__isnull=True,
-            ).order_by("pk")
-        )
-    for dispatch in deliveries:
-        engine.deliver_artifact_dispatch(dispatch.pk, now=timestamp, using=alias)
-
-    with system_context(reason="workflows.testing due subject settlements"):
-        settlements = list(
-            dispatch_model.objects.db_manager(alias).filter(
-                kind=WorkflowDispatchKind.RUN_SETTLE,
-                run_id__in=tree_ids,
-                available_at__lte=timestamp,
-                consumed_at__isnull=True,
-            ).order_by("pk")
-        )
-    for dispatch in settlements:
-        engine.settle_run_dispatch(dispatch.pk, expected_run_id=dispatch.run_id, using=alias)
+    delivery_scopes = (
+        Q(kind=WorkflowDispatchKind.CHILD_CANCEL, run_id__in=descendant_ids)
+        | Q(kind=WorkflowDispatchKind.RUN_CANCEL, run_id__in=retained_ids),
+        Q(
+            kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
+            artifact_content_type=run_type,
+            artifact_object_id__in=descendant_ids | retained_ids,
+        ),
+        Q(kind=WorkflowDispatchKind.RUN_SETTLE, run_id__in=tree_ids),
+    )
+    manager = dispatch_model.objects.db_manager(alias)
+    # Each phase can retain intents consumed by a later phase in this pass.
+    for scope in delivery_scopes:
+        with system_context(reason="workflows.testing due result deliveries"):
+            deliveries = list(
+                manager.filter(scope, available_at__lte=timestamp, consumed_at__isnull=True).order_by("pk")
+            )
+        for dispatch in deliveries:
+            manager.deliver(dispatch.pk, now=timestamp)
 
 
 def start_run(workflow: Any, *, subject: Any = None, actor: Any = None, using: str | None = None) -> Any:
@@ -175,9 +159,7 @@ def advance_once(run: Any, *, now: datetime | None = None, using: str | None = N
     step_run_model = _workflow_model(run, "StepRun")
     with system_context(reason="workflows.testing read started"):
         return list(
-            step_run_model.objects.db_manager(alias)
-            .filter(run=run, status=StepRunStatus.STARTED)
-            .order_by("pk")
+            step_run_model.objects.db_manager(alias).filter(run=run, status=StepRunStatus.STARTED).order_by("pk")
         )
 
 
@@ -221,7 +203,12 @@ def execute_started(
             )
         if attempt is None or dispatch is None:
             raise AssertionError(f"Started StepRun {row.pk} has no retained execution dispatch.")
-        engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token, now=now, using=alias)
+        dispatch_model.objects.db_manager(alias).deliver(
+            dispatch.pk,
+            expected_target_id=attempt.pk,
+            lease_token=attempt.lease_token,
+            now=now,
+        )
 
 
 def run_to_terminal(
@@ -254,7 +241,8 @@ def run_to_terminal(
         tree_ids = [current.pk for current in tree]
         with system_context(reason="workflows.testing inspect run tree"):
             started = list(
-                step_run_model.objects.db_manager(alias).filter(
+                step_run_model.objects.db_manager(alias)
+                .filter(
                     run_id__in=tree_ids,
                     status=StepRunStatus.STARTED,
                 )
@@ -277,14 +265,8 @@ def run_to_terminal(
             unexpected = [
                 (current.pk, current.status)
                 for current in tree
-                if (
-                    current.status == RunStatus.FAILED
-                    and current.pk not in allowed_failed_ids
-                )
-                or (
-                    current.status == RunStatus.CANCELED
-                    and current.pk not in allowed_canceled_ids
-                )
+                if (current.status == RunStatus.FAILED and current.pk not in allowed_failed_ids)
+                or (current.status == RunStatus.CANCELED and current.pk not in allowed_canceled_ids)
             ]
             if unexpected:
                 raise AssertionError(
@@ -295,10 +277,7 @@ def run_to_terminal(
                 run.refresh_from_db(using=alias)
             return run
 
-    raise AssertionError(
-        f"Workflow run tree did not settle after {max_cycles} cycles: "
-        f"{_run_states(run, using=alias)}"
-    )
+    raise AssertionError(f"Workflow run tree did not settle after {max_cycles} cycles: {_run_states(run, using=alias)}")
 
 
 def step_run_for(run: Any, key: str, *, using: str | None = None) -> Any:

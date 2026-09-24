@@ -1281,7 +1281,7 @@ def test_cancellation_propagates_to_journal_and_child_runs(
             kind=WorkflowDispatchKind.CHILD_CANCEL,
         )
     assert child.status == run_status.WAITING
-    assert engine.cancel_child_dispatch(cancel_dispatch.pk, expected_child_id=child.pk) == {
+    assert WorkflowDispatch.objects.deliver(cancel_dispatch.pk, expected_target_id=child.pk) == {
         "canceled": 1,
     }
     child.refresh_from_db()
@@ -1672,9 +1672,11 @@ def test_error_workflow_run_does_not_start_another_error_workflow(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("fixture_calls")
+@pytest.mark.parametrize("actor_source", ["model", "subject", "ambient"])
 def test_override_run_reuses_existing_terminal_step_run(
     workflow_engine_tables: None,
     no_workflow_queue: None,
+    actor_source: str,
 ) -> None:
     """Overriding to a failed step reschedules its existing journal row."""
 
@@ -1700,9 +1702,12 @@ def test_override_run_reuses_existing_terminal_step_run(
             outcome="failed",
         )
 
-    override = engine.override_run(run, [retry], actor=admin)
+    actor = {"model": admin, "subject": to_subject_ref(admin), "ambient": None}[actor_source]
+    with actor_context(admin):
+        override = engine.override_run(run, [retry], actor=actor)
 
     failed.refresh_from_db()
+    assert override.created_by_id == admin.pk
     assert failed.status == workflow_models.StepRunStatus.SCHEDULED
     assert failed.error == ""
     assert failed.outcome == ""

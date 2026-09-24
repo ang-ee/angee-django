@@ -89,16 +89,6 @@ class WorkflowDefinitionResource(AngeeResource):
     def workflow_model(self) -> type[Any]:
         return apps.get_model("workflows", "Workflow")
 
-    @property
-    def declaration_fields(self) -> frozenset[str]:
-        manager = self.workflow_model.objects
-        model = self._meta.model
-        if model is self.workflow_model:
-            return manager._WORKFLOW_FIELDS | {"key"}
-        if model is self.workflow_model._meta.get_field("steps").related_model:
-            return manager._NODE_FIELDS | {"workflow"}
-        return manager._EDGE_FIELDS | {"workflow", "source", "target"}
-
     @classmethod
     def lock_imports(cls, loaded_groups: Sequence[tuple[Any, AngeeResource]], *, using: str | None = None) -> None:
         """Lock all existing affected heads, including omissions and adoption.
@@ -236,7 +226,7 @@ class WorkflowDefinitionResource(AngeeResource):
         headers = set(dataset.headers or ())
         if any(field.name in headers for field in self._meta.model._meta.many_to_many):
             raise ResourceLoadError("Workflow definition resources do not support imported many-to-many fields.")
-        unsupported = headers - self.declaration_fields - {"_xref"}
+        unsupported = headers - self._meta.model.declaration_fields - {"_xref"}
         if unsupported:
             raise ResourceLoadError(f"Unsupported workflow declaration fields: {', '.join(sorted(unsupported))}")
 
@@ -256,7 +246,7 @@ class WorkflowDefinitionResource(AngeeResource):
         )
         defaults = self._meta.model()
         retained = {"config", "key"} if self._meta.model is self.workflow_model else {"config"}
-        for name in self.declaration_fields - set(row) - retained:
+        for name in self._meta.model.declaration_fields - set(row) - retained:
             field = instance._meta.get_field(name)
             setattr(instance, field.attname, getattr(defaults, field.attname))
         super().import_instance(instance, row, **kwargs)

@@ -14,7 +14,7 @@ from angee.base.db import related_on
 from angee.base.identity import public_id_of
 from angee.integrate.records import DiscrepancyKind, DiscrepancyStatus, StreamKind
 from angee.integrate.streams import RecordChange, StreamAdapter, StreamDefinition, StreamPage, open_stream
-from angee.workflows.attempts import AttemptResultKind
+from angee.workflows.attempts import AttemptResultKind, GateResumeState
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepExecutionMode, StepResult, TransientStepError
 from angee.workflows_integrate import steps as integrate_steps
@@ -426,7 +426,7 @@ def test_coverage_raises_one_native_decision_per_conflict(
         decisions = list(Decision.objects.filter(step_run=step_run).order_by("pk"))
     assert len(decisions) == 2
     assert {decision.payload["discrepancy"] for decision in decisions} == {public_id_of(row) for row in rows}
-    assert step_run.resume_state["_resume_after_decisions"] is True
+    assert GateResumeState.from_checkpoint(step_run.resume_state).resume_after_decisions is True
     # Re-evaluating the data predicate cannot recreate those Decisions or accept
     # an unresolved row merely because the operator has already reviewed it.
     with system_context(reason="test recheck retains admitted coverage input"):

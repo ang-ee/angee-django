@@ -16,6 +16,27 @@ cannot be proved within that bound is rejected. Binding checks prove required
 source paths and simple JSON Schema shapes, and reject unsupported constraints
 conservatively. Completion validates the exact JSON output again.
 
+[`engine`](engine.py) is the public function facade for workflow operations.
+Its domain owners enforce the operation contracts. Operations accepting a run,
+decision, or step take the retained model instance. The existing public
+`advance_dispatch`, `execute_dispatch`, `deliver_artifact_dispatch`,
+`cancel_run_dispatch`, and `settle_run_dispatch` signatures delegate to
+`WorkflowDispatch.objects.deliver`, as do durable task transport and the
+synchronous test driver. Transport supplies a complete `WorkflowDispatchEnvelope`
+for validation under the delivery locks.
+
+Each member of the closed dispatch enum has one spec owning target selection,
+lock order, constraint shape, handler selection, and consumption results. Adding
+a kind requires its enum member and spec; scheduling policy belongs to the
+manager verb that admits that intent. The spec does not define scheduling policy.
+
+`GateResumeState` in [`attempts.py`](attempts.py) owns retained gate checkpoint
+fields. Its typed attributes preserve the established `_resume_after_decisions`
+and `_decision_*` storage keys, which are reserved. Custom operation checkpoint
+values survive admission and settlement. `from_checkpoint()` reads these reserved
+keys and reports malformed gate data as Django validation errors; only GateStep
+resumption requires its retained `state` to be an object.
+
 Resource files declare separate native Workflow, Step, and Edge rows, in dependency
 order. Every Step names its `step_class` explicitly; the model has no fallback
 operation. Test-only or consumer operations belong in their own composed registry.
@@ -93,13 +114,13 @@ Terminal transitions with a registered subject retain one `RUN_SETTLE` intent
 in their own transaction. Addons register database-only subject handlers through
 `ANGEE_WORKFLOW_SUBJECT_SETTLERS:append`, mapping an explicit model-class import
 path to a callable import path. Abstract declarations expand to their installed
-concrete content types; overlapping declarations fail at startup. A handler
-implements `handler(run, *, using=None)`, locks its subject on that alias, and
-guards settlement against a newer operation on the subject. Delivery commits
+concrete content types; overlapping declarations fail at startup. A subject settler
+accepts `(run, *, using=None)`, locks its subject on that alias, and guards
+settlement against a newer operation on the subject. Delivery commits
 the handler's writes and consumes the intent together; failures leave it pending
 for the existing dispatch publisher. Subjectless runs and unregistered subjects
-create no settlement intent. The handler map is built at app startup and rebuilt
-when Django settings change.
+create no settlement intent. `settlement.rebuild_subject_settlers()` builds the
+handler map at app startup and rebuilds it when Django settings change.
 
 Long STANDARD steps compose `StepImpl.heartbeat_during(step_run, using=alias)`
 around bounded external I/O. It refreshes only the captured attempt lease on a
