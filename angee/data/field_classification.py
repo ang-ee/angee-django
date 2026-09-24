@@ -30,12 +30,15 @@ RESOURCE_FIELD_WIDGETS = frozenset(
 def is_resource_field_widget(value: str) -> bool:
     """Accept built-ins or an addon-qualified registry key (namespace.addon.widget).
 
-    The addon contributes the same key to its web widget registry. Bare unknown
-    names remain errors so typos in the built-in vocabulary fail at schema build.
+    Namespace segments stay lowercase; the terminal widget name also accepts
+    camelCase, matching web registry names. The addon contributes that same key
+    to its web registry. Bare unknown names remain errors so built-in typos fail
+    at schema build.
     """
 
     return (
-        value in RESOURCE_FIELD_WIDGETS or re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){2,}", value) is not None
+        value in RESOURCE_FIELD_WIDGETS
+        or re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+\.[a-z][a-zA-Z0-9_]*", value) is not None
     )
 
 

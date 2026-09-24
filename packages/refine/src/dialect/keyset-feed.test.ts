@@ -48,6 +48,32 @@ test("feeds without revalidation retain empty continuations and use fresh native
   } finally { stop(); client.clear(); }
 });
 
+test.each([false, true])("page metadata survives an empty window and refresh (revalidation=%s)", async (revalidate) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  let revision = 1;
+  const options = keysetFeedOptions(client, {
+    queryKey: ["snapshot-metadata", revalidate], pageSize: 2,
+    async window() {
+      return {
+        rows: [] as { id: string }[], count: 0, older_cursor: "opaque-snapshot",
+        has_older: false, has_more_in_window: false, has_older_than_through: false,
+        metadata: { revision },
+      };
+    },
+    revalidate: revalidate ? async () => ({ rows: [], absent_ids: [] }) : undefined,
+  });
+  const observer = new InfiniteQueryObserver(client, options);
+  const stop = observer.subscribe(() => {});
+  try {
+    await observer.refetch();
+    expect(observer.getCurrentResult().data?.pages[0]?.metadata?.revision).toBe(1);
+    revision = 2;
+    await observer.refetch();
+    expect(observer.getCurrentResult().data?.pages[0]?.metadata?.revision).toBe(2);
+    expect(observer.getCurrentResult().data?.pages[0]?.rows).toEqual([]);
+  } finally { stop(); client.clear(); }
+});
+
 test("an anchored native feed grows both ways and revalidates newer windows", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   let rows = [1, 2, 3, 4, 5, 6].map(position => message(position));

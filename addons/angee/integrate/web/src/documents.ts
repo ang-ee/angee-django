@@ -1,8 +1,5 @@
-// Bespoke custom operations for the integrate console. Model CRUD is model-driven
-// (ResourceList reads the SDL); these are the non-CRUD operations a ResourceList needs that
-// aren't single-id `{ ok, message }` actions. Single-id action mutations use
-// `useActionMutation(field)` from `@angee/refine` at the call site — no document is
-// authored here.
+// Authored reads and bespoke result shapes for the integrate console.
+// ActionResult mutations use generated action documents through the shared hooks.
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
@@ -57,5 +54,16 @@ export const ConnectIntegration = graphql(`
 export const RotateWebhookSecret = graphql(`
   mutation RotateWebhookSecret($id: ID!) {
     rotate_webhook_secret(id: $id) { ok secret }
+  }
+`);
+
+/** Route search keeps identity only; its label comes from the retained stream. */
+export const IntegrationSyncStream = graphql(`
+  query IntegrationSyncStream($id: String!) {
+    sync_streams_by_pk(id: $id) {
+      id
+      key
+      partition
+    }
   }
 `);

@@ -14,9 +14,9 @@ import {
   CONNECT_CALLBACK_PATH,
 } from "./connect/redirects";
 import { enIntegrateMessages } from "./i18n";
-import { integrationSyncProgressWidget } from "./sync-fragments";
 import {
   INTEGRATION_STREAMS_TAB_ID,
+  INTEGRATION_STREAM_SEARCH_KEYS,
   IntegrationStreamsPane,
   StreamsLabel,
   integrationHasStreams,
@@ -115,11 +115,11 @@ const integrateMenu: readonly BaseMenuItem[] = [
 const integrate = defineBaseAddon({
   id: INTEGRATE_ID,
   routes: integrateRoutes,
+  recordSearchKeys: Object.values(INTEGRATION_STREAM_SEARCH_KEYS),
   menus: integrateMenu,
   i18n: { integrate: enIntegrateMessages },
   widgets: {
-    integrationSyncProgress: integrationSyncProgressWidget,
-    "angee.integrate.sync_cursor": integrationSyncCursorWidget,
+    "angee.integrate.integrationSyncCursor": integrationSyncCursorWidget,
   },
   // The credential CRUD form: used by the Credentials page "New" and the
   // relation-picker inline create (e.g. an Integration's credential field).

@@ -9,6 +9,7 @@ import environ
 from django.apps import AppConfig
 
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
+from angee.jobs.autoconfig import SETTINGS as JOB_SETTINGS
 from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
 
 
@@ -122,6 +123,9 @@ DATABASES["historical_relationships_other"] = {
 }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "iam.User"
+# Bare tests use the job owner's defaults without running composition.
+CELERY_TASK_SOFT_TIME_LIMIT = JOB_SETTINGS["CELERY_TASK_SOFT_TIME_LIMIT"]
+
 # Bare tests skip addon autoconfig; reuse IAM's native REBAC policy binding.
 REBAC_UNIVERSAL_ADMIN_ROLE = IAM_SETTINGS["REBAC_UNIVERSAL_ADMIN_ROLE"]
 USE_TZ = True

@@ -4,3 +4,5 @@ description = "Archive extraction and bounded bridge cycles composed over workfl
 keywords = ["workflows", "integrations", "archives", "sync"]
 category = "Workflows"
 depends_on = ["angee.workflows", "angee.integrate", "angee.storage"]
+
+[web]

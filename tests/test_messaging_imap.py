@@ -25,9 +25,14 @@ from imapclient.exceptions import LoginError
 from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.streams import CursorInvalid, advance_stream
+from angee.integrate.streams import CursorInvalid, StreamDefinition, advance_stream, open_stream
 from angee.messaging_integrate_imap import parser as imap_parser
-from angee.messaging_integrate_imap.backend import ImapChannelBackend, ImapError, ImapSamplePreviewRequest
+from angee.messaging_integrate_imap.backend import (
+    MAX_SAMPLE_MESSAGES,
+    ImapChannelBackend,
+    ImapError,
+    ImapSamplePreviewRequest,
+)
 from angee.messaging_integrate_imap.parser import (
     fallback_message,
     html_to_text,
@@ -767,14 +772,26 @@ def _drain(backend: ImapChannelBackend) -> list[Any]:
     return collected
 
 
+def test_web_sample_selection_limit_matches_backend() -> None:
+    """The preview's selection cap must stay within the import owner's bound."""
+
+    action = Path(__file__).parents[1] / "addons/angee/messaging_integrate_imap/web/src/ImportImapSampleAction.tsx"
+    assert f"const IMAP_SAMPLE_LIMIT = {MAX_SAMPLE_MESSAGES};" in action.read_text()
+
+
 def test_sample_preview_is_bounded_readonly_and_keeps_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
     account = FakeImapAccount({"INBOX": _folder(_eml(subject="A"), _eml(subject="B"), _eml(subject="C"))})
     backend = _backend(monkeypatch, account)
     backend.bridge.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
 
-    result = backend.preview_sample(ImapSamplePreviewRequest(
-        mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), limit=2,
-    ))
+    result = backend.preview_sample(
+        ImapSamplePreviewRequest(
+            mailbox="INBOX",
+            since=date(2026, 7, 1),
+            before=date(2026, 8, 1),
+            limit=2,
+        )
+    )
 
     assert [message.uid for message in result.messages] == [3, 2]
     assert result.uidvalidity == 100
@@ -792,20 +809,42 @@ def test_sample_preview_pages_one_all_dates_snapshot_and_excludes_new_mail(
     account = FakeImapAccount({"INBOX": _folder(*(_eml(subject=str(index)) for index in range(1, 6)))})
     backend = _backend(monkeypatch, account)
 
-    first = backend.preview_sample(ImapSamplePreviewRequest(
-        mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
-    ))
+    first = backend.preview_sample(
+        ImapSamplePreviewRequest(
+            mailbox="INBOX",
+            since=None,
+            before=None,
+            all_dates=True,
+            limit=2,
+        )
+    )
     account.folders["INBOX"]["messages"][6] = {"raw": _eml(subject="new")}
-    second = backend.preview_sample(ImapSamplePreviewRequest(
-        mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
-        uidvalidity=first.uidvalidity, upper_uid=first.upper_uid,
-        before_uid=first.next_before_uid, total_count=first.total_count,
-    ))
-    third = backend.preview_sample(ImapSamplePreviewRequest(
-        mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
-        uidvalidity=second.uidvalidity, upper_uid=second.upper_uid,
-        before_uid=second.next_before_uid, total_count=second.total_count,
-    ))
+    second = backend.preview_sample(
+        ImapSamplePreviewRequest(
+            mailbox="INBOX",
+            since=None,
+            before=None,
+            all_dates=True,
+            limit=2,
+            uidvalidity=first.uidvalidity,
+            upper_uid=first.upper_uid,
+            before_uid=first.next_before_uid,
+            total_count=first.total_count,
+        )
+    )
+    third = backend.preview_sample(
+        ImapSamplePreviewRequest(
+            mailbox="INBOX",
+            since=None,
+            before=None,
+            all_dates=True,
+            limit=2,
+            uidvalidity=second.uidvalidity,
+            upper_uid=second.upper_uid,
+            before_uid=second.next_before_uid,
+            total_count=second.total_count,
+        )
+    )
 
     assert first.total_count == second.total_count == third.total_count == 5
     assert first.upper_uid == second.upper_uid == third.upper_uid == 5
@@ -822,15 +861,11 @@ def test_sample_preview_pages_one_all_dates_snapshot_and_excludes_new_mail(
 def test_sample_preview_rejects_still_present_unanswered_header(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    account = FakeImapAccount(
-        {"INBOX": _folder(_eml(subject="A"), _eml(subject="B"))}
-    )
+    account = FakeImapAccount({"INBOX": _folder(_eml(subject="A"), _eml(subject="B"))})
     backend = _backend(monkeypatch, account)
     original_fetch = FakeIMAPClient.fetch
 
-    def omit_second_header(
-        self: FakeIMAPClient, uids: list[int], data: list[bytes]
-    ) -> dict[int, dict[bytes, Any]]:
+    def omit_second_header(self: FakeIMAPClient, uids: list[int], data: list[bytes]) -> dict[int, dict[bytes, Any]]:
         response = original_fetch(self, uids, data)
         if b"BODY.PEEK[HEADER]" in data:
             response.pop(2, None)
@@ -839,9 +874,15 @@ def test_sample_preview_rejects_still_present_unanswered_header(
     monkeypatch.setattr(FakeIMAPClient, "fetch", omit_second_header)
 
     with pytest.raises(ImapError, match="still contains UID"):
-        backend.preview_sample(ImapSamplePreviewRequest(
-            mailbox="INBOX", since=None, before=None, all_dates=True, limit=2,
-        ))
+        backend.preview_sample(
+            ImapSamplePreviewRequest(
+                mailbox="INBOX",
+                since=None,
+                before=None,
+                all_dates=True,
+                limit=2,
+            )
+        )
 
     assert ("INBOX", ["UID", "2"]) in account.searches
     assert backend.bridge.cursor == {}
@@ -849,7 +890,8 @@ def test_sample_preview_rejects_still_present_unanswered_header(
 
 @pytest.mark.parametrize("expunged", [(3,), (3, 2)])
 def test_sample_preview_confirmed_expunges_reduce_retained_count_and_advance(
-    monkeypatch: pytest.MonkeyPatch, expunged: tuple[int, ...],
+    monkeypatch: pytest.MonkeyPatch,
+    expunged: tuple[int, ...],
 ) -> None:
     account = FakeImapAccount({"INBOX": _folder(*(_eml(subject=str(uid)) for uid in range(1, 6)))})
     backend = _backend(monkeypatch, account)
@@ -858,7 +900,9 @@ def test_sample_preview_confirmed_expunges_reduce_retained_count_and_advance(
     original_fetch = FakeIMAPClient.fetch
 
     def expunge_before_headers(
-        self: FakeIMAPClient, uids: list[int], data: list[bytes],
+        self: FakeIMAPClient,
+        uids: list[int],
+        data: list[bytes],
     ) -> dict[int, dict[bytes, Any]]:
         if b"BODY.PEEK[HEADER]" in data:
             for uid in set(uids) & set(expunged):
@@ -866,14 +910,26 @@ def test_sample_preview_confirmed_expunges_reduce_retained_count_and_advance(
         return original_fetch(self, uids, data)
 
     monkeypatch.setattr(FakeIMAPClient, "fetch", expunge_before_headers)
-    second = backend.preview_sample(request.model_copy(update={
-        "uidvalidity": first.uidvalidity, "upper_uid": first.upper_uid,
-        "before_uid": first.next_before_uid, "total_count": first.total_count,
-    }))
-    third = backend.preview_sample(request.model_copy(update={
-        "uidvalidity": second.uidvalidity, "upper_uid": second.upper_uid,
-        "before_uid": second.next_before_uid, "total_count": second.total_count,
-    }))
+    second = backend.preview_sample(
+        request.model_copy(
+            update={
+                "uidvalidity": first.uidvalidity,
+                "upper_uid": first.upper_uid,
+                "before_uid": first.next_before_uid,
+                "total_count": first.total_count,
+            }
+        )
+    )
+    third = backend.preview_sample(
+        request.model_copy(
+            update={
+                "uidvalidity": second.uidvalidity,
+                "upper_uid": second.upper_uid,
+                "before_uid": second.next_before_uid,
+                "total_count": second.total_count,
+            }
+        )
+    )
 
     assert [message.uid for message in second.messages] == [uid for uid in (3, 2) if uid not in expunged]
     assert second.total_count == third.total_count == 5 - len(expunged)
@@ -894,24 +950,30 @@ def test_sample_preview_date_window_continuation_preserves_server_search_scope(
     request = ImapSamplePreviewRequest(mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), limit=2)
 
     first = backend.preview_sample(request)
-    second = backend.preview_sample(request.model_copy(update={
-        "uidvalidity": first.uidvalidity, "upper_uid": first.upper_uid,
-        "before_uid": first.next_before_uid, "total_count": first.total_count,
-    }))
+    second = backend.preview_sample(
+        request.model_copy(
+            update={
+                "uidvalidity": first.uidvalidity,
+                "upper_uid": first.upper_uid,
+                "before_uid": first.next_before_uid,
+                "total_count": first.total_count,
+            }
+        )
+    )
 
     assert [message.uid for message in first.messages] == [5, 4]
     assert [message.uid for message in second.messages] == [3, 2]
     assert first.total_count == second.total_count == 4
     assert second.next_before_uid is None
     assert account.searches == [
-        ("INBOX", ["UID", f"1:{upper}", "SINCE", request.since, "BEFORE", request.before])
-        for upper in (6, 3)
+        ("INBOX", ["UID", f"1:{upper}", "SINCE", request.since, "BEFORE", request.before]) for upper in (6, 3)
     ]
 
 
 @pytest.mark.parametrize("changed_epoch", [False, True])
 def test_sample_preview_rejects_unavailable_snapshot_or_changed_continuation_epoch(
-    monkeypatch: pytest.MonkeyPatch, changed_epoch: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_epoch: bool,
 ) -> None:
     account = FakeImapAccount({"INBOX": _folder(_eml(), _eml())})
     backend = _backend(monkeypatch, account)
@@ -925,10 +987,16 @@ def test_sample_preview_rejects_unavailable_snapshot_or_changed_continuation_epo
 
     message = "UID identity changed" if changed_epoch else "snapshot is no longer available"
     with pytest.raises(ValidationError, match=message):
-        backend.preview_sample(request.model_copy(update={
-            "uidvalidity": first.uidvalidity, "upper_uid": first.upper_uid,
-            "before_uid": first.next_before_uid, "total_count": first.total_count,
-        }))
+        backend.preview_sample(
+            request.model_copy(
+                update={
+                    "uidvalidity": first.uidvalidity,
+                    "upper_uid": first.upper_uid,
+                    "before_uid": first.next_before_uid,
+                    "total_count": first.total_count,
+                }
+            )
+        )
 
     assert len(account.searches) == searched
     assert backend.bridge.cursor == {}
@@ -937,7 +1005,8 @@ def test_sample_preview_rejects_unavailable_snapshot_or_changed_continuation_epo
 
 @pytest.mark.parametrize("operation", ["preview", "prepare", "sync"])
 def test_missing_uidnext_is_an_actionable_imap_error(
-    monkeypatch: pytest.MonkeyPatch, operation: str,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
     account = FakeImapAccount({"INBOX": _folder(_eml())})
     backend = _backend(monkeypatch, account)
@@ -953,7 +1022,7 @@ def test_missing_uidnext_is_an_actionable_imap_error(
         if operation == "preview":
             backend.preview_sample(ImapSamplePreviewRequest(mailbox="INBOX", all_dates=True))
         elif operation == "prepare":
-            backend.prepare_new_mail_cursor({})
+            backend.prepare_new_mail_boundary()
         else:
             backend.test_pages.next_batch()
     assert backend.bridge.cursor.get("mailboxes", {}) == {}
@@ -992,21 +1061,41 @@ def test_sample_rejects_unbounded_requests_before_connect(monkeypatch: pytest.Mo
     account = FakeImapAccount({"INBOX": _folder(_eml())})
     backend = _backend(monkeypatch, account)
     with pytest.raises(ValidationError, match="sample limit"):
-        backend.preview_sample(ImapSamplePreviewRequest(
-            mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), limit=51,
-        ))
+        backend.preview_sample(
+            ImapSamplePreviewRequest(
+                mailbox="INBOX",
+                since=date(2026, 7, 1),
+                before=date(2026, 8, 1),
+                limit=51,
+            )
+        )
     with pytest.raises(ValidationError, match="one year"):
-        backend.preview_sample(ImapSamplePreviewRequest(
-            mailbox="INBOX", since=date(2024, 7, 1), before=date(2026, 8, 1),
-        ))
+        backend.preview_sample(
+            ImapSamplePreviewRequest(
+                mailbox="INBOX",
+                since=date(2024, 7, 1),
+                before=date(2026, 8, 1),
+            )
+        )
     with pytest.raises(ValidationError, match="Do not combine all-dates"):
-        backend.preview_sample(ImapSamplePreviewRequest(
-            mailbox="INBOX", since=date(2026, 7, 1), before=date(2026, 8, 1), all_dates=True,
-        ))
+        backend.preview_sample(
+            ImapSamplePreviewRequest(
+                mailbox="INBOX",
+                since=date(2026, 7, 1),
+                before=date(2026, 8, 1),
+                all_dates=True,
+            )
+        )
     with pytest.raises(ValidationError, match="Preview this mailbox scope again"):
-        backend.preview_sample(ImapSamplePreviewRequest(
-            mailbox="INBOX", since=None, before=None, all_dates=True, uidvalidity=100,
-        ))
+        backend.preview_sample(
+            ImapSamplePreviewRequest(
+                mailbox="INBOX",
+                since=None,
+                before=None,
+                all_dates=True,
+                uidvalidity=100,
+            )
+        )
     with pytest.raises(ValidationError, match="positive message UIDs"):
         backend.fetch_sample(mailbox="INBOX", uidvalidity=100, uids=list(range(1, 52)))
     assert account.logins == []
@@ -1086,7 +1175,8 @@ def test_confirmed_expunged_uid_allows_cursor_advance(monkeypatch: pytest.Monkey
 
 @pytest.mark.parametrize("operation", ["sync", "preview", "sample"])
 def test_unanswered_uid_confirmation_rejects_changed_epoch(
-    monkeypatch: pytest.MonkeyPatch, operation: str,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
     """Existence confirmation cannot cross into a regenerated UID namespace."""
 
@@ -1508,6 +1598,216 @@ def _wire_fake(monkeypatch: pytest.MonkeyPatch, account: FakeImapAccount) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("existing_stream", [False, True])
+def test_legacy_imap_position_seeds_only_an_empty_stream(
+    imap_tables: None, monkeypatch: pytest.MonkeyPatch, existing_stream: bool
+) -> None:
+    """Retained mailbox UIDs continue at cutover and never replace a stream cursor."""
+
+    account = FakeImapAccount(
+        {"INBOX": _folder(*(_eml(message_id=f"<seed-{uid}@example.com>", subject=str(uid)) for uid in range(1, 4)))}
+    )
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel()
+    seeds: list[str] = []
+    seed_cursor = ImapChannelBackend.seed_cursor
+
+    def track_seed(self: Any, stream: Any, legacy_cursor: Any) -> Any:
+        seeds.append(stream.partition)
+        return seed_cursor(self, stream, legacy_cursor)
+
+    monkeypatch.setattr(ImapChannelBackend, "seed_cursor", track_seed)
+    with system_context(reason="test imap legacy stream position"):
+        channel.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
+        channel.save(update_fields=["cursor"])
+        if existing_stream:
+            SyncStream.objects.current(channel, "messages", "INBOX", cursor={"uidvalidity": 100, "last_uid": 2})
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == (1 if existing_stream else 2)
+        assert seeds == ([] if existing_stream else ["INBOX"])
+        channel.cursor = {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 0}}}
+        channel.save(update_fields=["cursor"])
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 0
+        assert seeds == ([] if existing_stream else ["INBOX"])
+    assert set(Message._base_manager.values_list("external_id", flat=True)) == (
+        {"seed-3@example.com"} if existing_stream else {"seed-2@example.com", "seed-3@example.com"}
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_legacy_future_only_policy_survives_a_stream_reset(imap_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<legacy-old@example.com>"))})
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel()
+    with system_context(reason="test imap legacy future-only policy"):
+        backend = channel.backend
+        try:
+            backend.streams(using="default")
+            identity = backend._source_identity_digest()
+        finally:
+            backend.close()
+        channel.cursor = {
+            "delivery_mode": "new_only",
+            "source_identity": identity,
+            "mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}},
+        }
+        channel.save(update_fields=["cursor"])
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 0
+        stream = SyncStream.objects.current(channel, "messages", "INBOX")
+        channel.refresh_from_db()
+        assert channel.config["delivery_mode"] == "new_only"
+        assert channel.config["source_identity"] == identity
+        assert channel.config["mailbox_selection"] == ["INBOX"]
+        assert channel.cursor == {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
+        assert stream.config == {}
+        account.folders["INBOX"]["uidvalidity"] = 200
+        account.folders["INBOX"]["messages"][2] = {"raw": _eml(message_id="<old-epoch@example.com>")}
+        stream.resync_required = True
+        stream.save(update_fields=["resync_required"])
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 0
+        successor = SyncStream.objects.current(channel, "messages", "INBOX")
+        assert successor.generation == stream.generation + 1
+        assert successor.config == stream.config
+        assert successor.cursor == {"uidvalidity": 200, "last_uid": 2}
+    assert not Message._base_manager.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_new_mailbox_cannot_restore_removed_legacy_policy(imap_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<retained-inbox@example.com>"))})
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel()
+    positions = {name: {"uidvalidity": 100, "last_uid": 1} for name in ("Archive", "INBOX")}
+    with system_context(reason="test imap removed legacy policy"):
+        channel.cursor = {"delivery_mode": "new_only", "source_identity": "legacy", "mailboxes": positions}
+        channel.save(update_fields=["cursor"])
+        first = open_stream(
+            channel,
+            "messages",
+            "INBOX",
+            channel.backend,
+            definition=StreamDefinition(key="messages", partition="INBOX"),
+        )
+        assert first.cursor == positions["INBOX"]
+        assert channel.config["delivery_mode"] == "new_only"
+        assert channel.cursor == {"mailboxes": positions}
+        channel.config.pop("delivery_mode")
+        channel.save(update_fields=["config"])
+        account.folders["Archive"] = _folder(
+            _eml(message_id="<retained-archive@example.com>"),
+            _eml(message_id="<archive-arrival@example.com>"),
+        )
+        account.folders["New"] = _folder(_eml(message_id="<new-mailbox-history@example.com>"))
+
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 2
+
+        channel.refresh_from_db()
+        assert "delivery_mode" not in channel.config
+        assert channel.cursor == {"mailboxes": positions}
+        assert set(Message._base_manager.values_list("external_id", flat=True)) == {
+            "archive-arrival@example.com",
+            "new-mailbox-history@example.com",
+        }
+
+
+def test_legacy_imap_seed_hooks_only_translate_state() -> None:
+    """Seeding never writes, mutates the legacy input, or installs adapter state."""
+
+    legacy = {
+        "delivery_mode": "new_only",
+        "source_identity": "legacy-account",
+        "mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}},
+    }
+    bridge = SimpleNamespace(config={"host": "192.0.2.10"}, cursor=legacy)
+    stream = SimpleNamespace(partition="INBOX")
+    backend = ImapChannelBackend(bridge)
+    config, retained = backend.seed_config(legacy)
+    assert config == {
+        "delivery_mode": "new_only",
+        "source_identity": "legacy-account",
+        "mailbox_selection": ["INBOX"],
+    }
+    assert retained == {"mailboxes": legacy["mailboxes"]}
+    assert legacy["delivery_mode"] == "new_only"
+    assert legacy["source_identity"] == "legacy-account"
+    cursor = backend.seed_cursor(stream, retained)
+    assert cursor == {"uidvalidity": 100, "last_uid": 1}
+    assert cursor is not legacy["mailboxes"]["INBOX"]
+    assert bridge.config == {"host": "192.0.2.10"}
+    assert backend.delivery_boundary() == {}
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("existing_policy", [{}, {"delivery_mode": "new_only", "source_identity": "configured"}])
+def test_legacy_imap_cutover_uses_one_alias_and_preserves_config(
+    imap_tables: None, database_alias: Any, existing_policy: dict[str, Any]
+) -> None:
+    channel = _imap_channel(**existing_policy)
+    original_config = dict(channel.config)
+    with system_context(reason="test imap cutover alias setup"):
+        channel.cursor = {
+            "delivery_mode": "new_only",
+            "source_identity": "legacy",
+            "mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}},
+        }
+        channel.save(update_fields=["cursor"])
+    with database_alias("imap_cutover") as using, system_context(reason="test imap cutover alias"):
+        stream = open_stream(
+            channel,
+            "messages",
+            "INBOX",
+            channel.backend,
+            definition=StreamDefinition(key="messages", partition="INBOX"),
+            using=using,
+        )
+        saved = Channel._base_manager.using(using).get(pk=channel.pk)
+        assert saved.config == {
+            **original_config,
+            "delivery_mode": "new_only",
+            "source_identity": existing_policy.get("source_identity", "legacy"),
+            "mailbox_selection": ["INBOX"],
+        }
+        assert stream._state.db == using
+        assert stream.cursor == {"uidvalidity": 100, "last_uid": 1}
+        assert stream.config == {}
+        assert saved.cursor == channel.cursor == {"mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}}}
+        assert Channel._base_manager.using("default").get(pk=channel.pk).cursor["delivery_mode"] == "new_only"
+        assert Channel._base_manager.using("default").get(pk=channel.pk).config == original_config
+        assert not SyncStream._base_manager.using("default").filter(integration_id=channel.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_new_mail_boundary_preserves_legacy_exclusion(imap_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A repeated starting-point action must not exclude arrivals after cutover."""
+
+    account = FakeImapAccount(
+        {"INBOX": _folder(_eml(message_id="<old@example.com>"), _eml(message_id="<new@example.com>"))}
+    )
+    _wire_fake(monkeypatch, account)
+    channel = _imap_channel()
+    with system_context(reason="test imap legacy boundary replay"):
+        backend = channel.backend
+        try:
+            backend.streams(using="default")
+            identity = backend._source_identity_digest()
+        finally:
+            backend.close()
+        channel.cursor = {
+            "delivery_mode": "new_only",
+            "source_identity": identity,
+            "mailboxes": {"INBOX": {"uidvalidity": 100, "last_uid": 1}},
+        }
+        channel.save(update_fields=["cursor"])
+        boundary = backend.prepare_new_mail_boundary(using="default")
+        assert not boundary.changed
+        assert boundary.cursors == {"INBOX": {"uidvalidity": 100, "last_uid": 1}}
+        channel.refresh_from_db()
+        assert channel.config["delivery_mode"] == "new_only"
+        assert all(stream.config == {} for stream in boundary.streams)
+        assert channel.run_sync(now=datetime(2026, 7, 22, 10, 0, tzinfo=UTC)) == 1
+    assert set(Message._base_manager.values_list("external_id", flat=True)) == {"new@example.com"}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_channel_sync_partitions_mailboxes(
     imap_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1718,8 +2018,8 @@ def test_channel_sync_lands_threads_parts_and_attachments(
     assert channel.sync_progress["stage"] == Channel.SyncStage.COMPLETED
     assert channel.sync_progress["message"] == "Applied stream page"
     assert channel.sync_progress["details"]["backend"] == "ImapChannelBackend"
-    assert channel.sync_progress["details"]["mailbox"] == "INBOX"
-    assert channel.sync_progress["details"]["batch_size"] == 1
+    assert channel.sync_progress["details"]["partition"] == "INBOX"
+    assert "batch_size" not in channel.sync_progress["details"]
     assert channel.sync_progress["details"]["landed"] == 3
     assert channel.next_sync_at is not None
 

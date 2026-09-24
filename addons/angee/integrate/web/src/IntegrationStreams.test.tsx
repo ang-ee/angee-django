@@ -12,14 +12,19 @@ import {
   baseIcons,
   defaultWidgets,
   formViewSectionsSlot,
+  RECORD_TAB_SEARCH_KEY,
+  routeSearchParam,
+  updateRouteSearch,
+  useRouteSearch,
   type ListViewProps,
 } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import {
-  RouterContextProvider,
+  RouterProvider,
   createMemoryHistory,
   createRootRoute,
   createRouter,
+  useNavigate,
 } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -37,13 +42,15 @@ vi.mock("@angee/ui", async (importOriginal) => {
       return <div data-testid="sync-data-view" data-resource={props.resource}>{props.toolbarActions}</div>;
     },
     useActionResultMutation: (field: string) => [
-      (id: string) => state.mutate(field, id),
+      (id: string, arguments_?: Readonly<Record<string, unknown>>) => arguments_ === undefined
+        ? state.mutate(field, id) : state.mutate(field, id, arguments_),
       { fetching: false, error: null },
     ],
   });
 });
 
 import integrate from "./index";
+import { IntegrationSyncStream } from "./documents";
 import { INTEGRATION_MODEL } from "./IntegrationLifecycleActions";
 import {
   RECORD_LINK_MODEL,
@@ -90,7 +97,7 @@ afterEach(() => {
   clearClients();
 });
 
-function renderIntegration(resource = INTEGRATION_MODEL, streamCount: number | null = 2, saved = true) {
+function renderIntegration(resource = INTEGRATION_MODEL, streamCount: number | null = 2, saved = true, initialEntry = "/") {
   const record: Row = { id: "bridge_1", display_name: "Calendar bridge", stream_count: streamCount };
   const selectedFields: string[] = [];
   const requests: { resource: string | undefined; fields: string[] }[] = [];
@@ -106,27 +113,42 @@ function renderIntegration(resource = INTEGRATION_MODEL, streamCount: number | n
       return { data: Object.fromEntries(Object.entries(record).filter(([name]) => fields.includes(name))) };
     }),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
+    custom: vi.fn(async ({ meta }) => {
+      expect(meta?.gqlQuery).toBe(IntegrationSyncStream);
+      return { data: { sync_streams_by_pk: {
+        id: meta?.gqlVariables.id, key: "contacts", partition: "address-book",
+      } } };
+    }),
   } satisfies RefineTestDataProvider;
-  const router = createRouter({
-    routeTree: createRootRoute(),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
-  });
   const target = formViewSectionsSlot(INTEGRATION_MODEL);
+  const router = createRouter({
+    routeTree: createRootRoute({
+      validateSearch: (search: Record<string, unknown>) => search,
+      component: function IntegrationForm() {
+        const search = useRouteSearch();
+        const navigate = useNavigate();
+        return (
+        <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{
+          widgets: { ...defaultWidgets, ...integrate.widgets },
+          icons: { ...baseIcons, ...integrate.icons },
+          slots: (integrate.slots ?? []).filter((entry) => entry.slot === target.slot),
+        }}>
+          <FormView resource={resource} id={saved ? "bridge_1" : null}
+            recordTab={routeSearchParam(search, RECORD_TAB_SEARCH_KEY)}
+            onRecordTabChange={(tab) => { void navigate({ to: ".", search: updateRouteSearch({ [RECORD_TAB_SEARCH_KEY]: tab }) }); }}>
+            <Field name="display_name" label="Name" title />
+          </FormView>
+        </AppRuntimeProvider></ToastProvider></ModalsHost>
+      );
+      },
+    }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
+  });
   render(<Provider resources={resources} dataProvider={provider}
     queryClientConfig={{ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }}>
-    <RouterContextProvider router={router}>
-      <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{
-        widgets: { ...defaultWidgets, ...integrate.widgets },
-        icons: { ...baseIcons, ...integrate.icons },
-        slots: (integrate.slots ?? []).filter((entry) => entry.slot === target.slot),
-      }}>
-        <FormView resource={resource} id={saved ? "bridge_1" : null}>
-          <Field name="display_name" label="Name" title />
-        </FormView>
-      </AppRuntimeProvider></ToastProvider></ModalsHost>
-    </RouterContextProvider>
+    <RouterProvider router={router} />
   </Provider>);
-  return { selectedFields, requests };
+  return { selectedFields, requests, router };
 }
 
 function listProps(): ListViewProps {
@@ -193,25 +215,61 @@ describe("Integration Streams contribution", () => {
       "last_advanced_at", "last_reconciled_at", "open_discrepancy_count", "link_count", "resync_required",
     ]);
     expect(listProps().columns.find((column) => column.field === "cursor")?.widget)
-      .toBe("angee.integrate.sync_cursor");
+      .toBeUndefined();
   });
 
   test("opens only the selected stream's discrepancies, with Resolve and Retry actions", async () => {
     await openStreams();
     await selectRowAction("open-discrepancies", { id: "stream_1", key: "contacts", kind: "RECORD_REPLICA" });
-    expect(listProps().resource).toBe(SYNC_DISCREPANCY_MODEL);
+    await waitFor(() => expect(listProps().resource).toBe(SYNC_DISCREPANCY_MODEL));
     expect(listProps().baseFilter).toMatchObject({ stream: { exact: "stream_1" } });
-    expect(listProps().baseFilter).toMatchObject({ status: { inList: ["open", "retry"] } });
-    expect(listProps().rowActions?.map((action) => action.label)).toEqual(["Resolve", "Retry"]);
-    await selectRowAction("resolve", { id: "discrepancy_1", status: "OPEN" });
-    await selectRowAction("retry", { id: "discrepancy_2", status: "RETRY" });
+    expect(listProps().baseFilter).toMatchObject({ is_open: { exact: true } });
+    expect(listProps().fields).toContain("is_open");
+    expect(listProps().rowActions?.map((action) => action.label)).toEqual(["Resolve", "Keep remote", "Keep local", "Retry"]);
+    await selectRowAction("resolve", { id: "discrepancy_1", kind: "MISSING_REMOTE", is_open: true });
+    await selectRowAction("retry", { id: "discrepancy_2", kind: "MISSING_REMOTE", is_open: true });
     expect(state.mutate.mock.calls).toEqual([
       ["resolveSyncDiscrepancy", "discrepancy_1"],
       ["retrySyncDiscrepancy", "discrepancy_2"],
     ]);
+    await screen.findByText("Discrepancies · contacts · address-book");
     for (const action of listProps().rowActions ?? []) {
-      expect(action.visible({ id: "resolved_1", status: "RESOLVED" })).toBe(false);
+      expect(action.visible({ id: "resolved_1", is_open: false })).toBe(false);
     }
+  });
+
+  test("conflicts require an explicit keep choice instead of plain resolution", async () => {
+    await openStreams();
+    await selectRowAction("open-discrepancies", { id: "stream_1", kind: "RECORD_REPLICA" });
+    await waitFor(() => expect(listProps().resource).toBe(SYNC_DISCREPANCY_MODEL));
+    const row = { id: "conflict_1", kind: "CONFLICT", is_open: true };
+    expect(listProps().rowActions?.find((action) => action.id === "resolve")?.visible(row)).toBe(false);
+    await selectRowAction("keep-remote", row);
+    await selectRowAction("keep-local", row);
+    expect(state.mutate.mock.calls).toEqual([
+      ["resolveSyncDiscrepancy", "conflict_1", { keep: "REMOTE" }],
+      ["resolveSyncDiscrepancy", "conflict_1", { keep: "LOCAL" }],
+    ]);
+    for (const [id, overwritten] of [["keep-remote", "local"], ["keep-local", "remote"]] as const) {
+      const action = listProps().rowActions?.find((candidate) => candidate.id === id);
+      expect(action?.confirm).toMatchObject({
+        title: expect.any(Function), body: expect.any(Function), confirm: expect.any(Function),
+      });
+      expect(action?.confirm?.body?.(row)).toContain(`overwrite ${overwritten} changes`);
+    }
+  });
+
+  test("reloads a stream drill-down from route search and preserves unrelated search", async () => {
+    const { router } = renderIntegration(INTEGRATION_MODEL, 2, true,
+      "/?recordTab=streams&syncIntegration=bridge_1&syncStream=stream_7&syncView=links&filter=retained");
+    await screen.findByTestId("sync-data-view");
+    expect(listProps().resource).toBe(RECORD_LINK_MODEL);
+    expect(listProps().baseFilter).toEqual({ stream: { exact: "stream_7" } });
+    await screen.findByText("Links · contacts · address-book");
+    fireEvent.click(screen.getByRole("button", { name: /back/i }));
+    await waitFor(() => expect(listProps().resource).toBe(SYNC_STREAM_MODEL));
+    expect(router.state.location.search).toMatchObject({ filter: "retained", recordTab: "streams" });
+    expect(router.state.location.search.syncStream).toBeUndefined();
   });
 
   test("opens record links only for replica streams and returns to the same bridge", async () => {
@@ -220,14 +278,14 @@ describe("Integration Streams contribution", () => {
     expect(linksAction?.visible({ id: "stream_1", kind: "RECORD_REPLICA" })).toBe(true);
     expect(linksAction?.visible({ id: "stream_2", kind: "EVENT_FEED" })).toBe(false);
     await selectRowAction("open-links", { id: "stream_1", key: "contacts", kind: "RECORD_REPLICA" });
-    expect(listProps().resource).toBe(RECORD_LINK_MODEL);
+    await waitFor(() => expect(listProps().resource).toBe(RECORD_LINK_MODEL));
     expect(listProps().baseFilter).toEqual({ stream: { exact: "stream_1" } });
     expect(listProps().columns.map((column) => column.field)).toEqual([
       "external_key", "status", "origin", "remote_version", "last_seen_at", "record_id",
     ]);
     expect(listProps().fields).toContain("model_label");
     fireEvent.click(screen.getByRole("button", { name: /back/i }));
-    expect(listProps().resource).toBe(SYNC_STREAM_MODEL);
+    await waitFor(() => expect(listProps().resource).toBe(SYNC_STREAM_MODEL));
     expect(listProps().baseFilter).toEqual({ integration: { exact: "bridge_1" } });
   });
 

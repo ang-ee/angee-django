@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from functools import cache
 from typing import Any
 
-from django.core.signals import setting_changed
-from django.db import transaction
-from django.dispatch import receiver
-from django.utils import timezone
 from rebac import system_context
 
 from angee.base.db import get_write_alias, related_on
-from angee.base.identity import public_id_for
 from angee.base.impl import resolve_all_impl_classes
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import Bridge
@@ -22,7 +15,6 @@ from angee.workflows.steps import StepImpl
 from angee.workflows_integrate.steps import BoundedStreamStage, StreamStageOutput
 
 
-@cache
 def _stream_step_keys() -> tuple[str, ...]:
     return tuple(
         implementation.key
@@ -31,21 +23,9 @@ def _stream_step_keys() -> tuple[str, ...]:
     )
 
 
-@receiver(setting_changed)
-def _refresh_stream_step_keys(*, setting: str, **kwargs: Any) -> None:
-    if setting == "ANGEE_WORKFLOW_STEP_CLASSES":
-        _stream_step_keys.cache_clear()
-        _stream_step_keys()
-
-
-_stream_step_keys()
-
-
 def settle_bridge_run(run: Any, *, using: str | None = None) -> None:
-    """Settle exactly the current run, at most once, under the Bridge row lock.
+    """Project the terminal outcome through Bridge's expected-run settlement.
 
-    The run pointer remains as inspection evidence. The busy-stage predicate is
-    the second CAS component: repeated deliveries cannot move cadence twice.
     Never copy untrusted workflow/provider error text into integration telemetry.
     """
 
@@ -56,20 +36,10 @@ def settle_bridge_run(run: Any, *, using: str | None = None) -> None:
     model = None if content_type is None else content_type.model_class()
     if model is None or not issubclass(model, Bridge):
         return
-    with system_context(reason="workflows_integrate.settle"), transaction.atomic(using=using):
-        bridge = model.objects.db_manager(using).lock_if_supported().filter(pk=run.subject_object_id).first()
+    with system_context(reason="workflows_integrate.settle"):
+        bridge = model.objects.db_manager(using).filter(pk=run.subject_object_id).first()
         if bridge is None:
             return
-        expected = public_id_for(type(run), run.pk)
-        progress = bridge.sync_progress if isinstance(bridge.sync_progress, Mapping) else {}
-        details = progress.get("details")
-        pointer = details.get("run") if isinstance(details, Mapping) else None
-        if pointer != expected or bridge.sync_stage not in (
-            bridge.SyncStage.QUEUED,
-            *bridge.LIVE_SYNC_STAGES,
-        ):
-            return
-        now = timezone.now()
         if run.status == RunStatus.SUCCEEDED:
             steps = run._meta.apps.get_model("workflows", "StepRun")
             outputs = (
@@ -82,7 +52,7 @@ def settle_bridge_run(run: Any, *, using: str | None = None) -> None:
                 .values_list("output", flat=True)
             )
             items = sum(StreamStageOutput.model_validate(output).counts["cycle_items"] for output in outputs)
-            bridge.record_sync(items, now=now, using=using)
+            bridge.settle_dispatch(run.pk, result=items, using=using)
         else:
             message = "Sync workflow was canceled." if run.status == RunStatus.CANCELED else "Sync workflow failed."
-            bridge.record_sync_error(IntegrationError(message), now=now, using=using)
+            bridge.settle_dispatch(run.pk, error=IntegrationError(message), using=using)

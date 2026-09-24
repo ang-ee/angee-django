@@ -10,7 +10,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.db import get_write_alias, related_on
-from angee.base.identity import public_id_for, public_id_of
+from angee.base.identity import public_id_of
 from angee.integrate.sync import BridgeProgressReporter
 from angee.workflows import engine
 from angee.workflows.attempts import JsonPresence
@@ -128,9 +128,7 @@ def _finish(run: Any, *, mode: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     else:
         if mode == "retry_exhaustion":
 
-            def fail(
-                self: SettlementStream, step_run: Any, *, now: datetime, using: str | None = None
-            ) -> StepResult:
+            def fail(self: SettlementStream, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
                 del self, step_run, now, using
                 raise TransientStepError("private retry response")
 
@@ -170,9 +168,9 @@ def test_each_terminal_path_settles_once_and_clears_busy_stage(
 ) -> None:
     bridge = settlement_bridge
     run = _admit(bridge, occurrence="first", mode=mode)
-    pointer = public_id_for(type(run), run.pk)
+    pointer = run.pk
     with system_context(reason="test Bridge busy stage before settlement"):
-        BridgeProgressReporter(bridge).report(stage, details={"run": pointer})
+        BridgeProgressReporter(bridge).report(stage, details={"records": 7})
     calls: list[str] = []
     native_success, native_error = Channel.record_sync, Channel.record_sync_error
 
@@ -199,7 +197,7 @@ def test_each_terminal_path_settles_once_and_clears_busy_stage(
         dispatch.refresh_from_db()
         assert WorkflowDispatch.objects.filter(run=run, kind=WorkflowDispatchKind.RUN_SETTLE).count() == 1
     assert dispatch.consumed_at is not None
-    assert bridge.sync_progress["details"]["run"] == pointer
+    assert bridge.sync_run_id == pointer
     assert bridge.sync_stage not in (bridge.SyncStage.QUEUED, *bridge.LIVE_SYNC_STAGES)
     if mode == "success":
         assert run.status == RunStatus.SUCCEEDED
@@ -224,13 +222,13 @@ def test_late_terminal_delivery_cannot_settle_a_newer_bridge_cycle(
     old_run = _admit(bridge, occurrence="old")
     old_dispatch = _finish(old_run, mode="success", monkeypatch=monkeypatch)
     new_run = _admit(bridge, occurrence="new")
-    pointer = public_id_for(type(new_run), new_run.pk)
+    pointer = new_run.pk
 
     assert engine.settle_run_dispatch(old_dispatch.pk, expected_run_id=old_run.pk) == {"settled": 1}
     settle_bridge_run(old_run)
     with system_context(reason="test late settlement preserves current cycle"):
         bridge.refresh_from_db()
-    assert bridge.sync_progress["details"]["run"] == pointer
+    assert bridge.sync_run_id == pointer
     assert bridge.sync_stage == bridge.SyncStage.SYNCING
     assert bridge.last_sync_status == ""
 
@@ -243,29 +241,30 @@ def test_late_terminal_delivery_cannot_settle_a_newer_bridge_cycle(
     with system_context(reason="test current cycle settles after late delivery"):
         bridge.refresh_from_db()
     assert bridge.sync_stage == bridge.SyncStage.FAILED
-    assert bridge.sync_progress["details"]["run"] == pointer
+    assert bridge.sync_run_id == pointer
 
 
 @pytest.mark.parametrize("details", [None, [], "malformed"])
-def test_malformed_run_pointer_consumes_delivery_without_settling(
+def test_malformed_telemetry_does_not_prevent_terminal_settlement(
     settlement_bridge: Channel,
     monkeypatch: pytest.MonkeyPatch,
     details: Any,
 ) -> None:
     bridge = settlement_bridge
-    run = _admit(bridge, occurrence="malformed-pointer")
+    run = _admit(bridge, occurrence="malformed-progress")
     dispatch = _finish(run, mode="success", monkeypatch=monkeypatch)
     with system_context(reason="test malformed Bridge progress"):
         bridge.refresh_from_db()
         bridge.sync_progress = {**bridge.sync_progress, "details": details}
         bridge.save(update_fields=["sync_progress", "updated_at"])
-        before = bridge.sync_progress
 
     assert engine.settle_run_dispatch(dispatch.pk, expected_run_id=run.pk) == {"settled": 1}
-    with system_context(reason="test malformed Bridge pointer is fenced"):
+    with system_context(reason="test malformed telemetry does not own dispatch identity"):
         bridge.refresh_from_db()
         dispatch.refresh_from_db()
     assert dispatch.consumed_at is not None
-    assert bridge.sync_progress == before
-    assert bridge.sync_stage == bridge.SyncStage.SYNCING
-    assert bridge.last_sync_status == ""
+    assert bridge.sync_progress["details"] == details
+    assert bridge.sync_run_id == run.pk
+    assert bridge.sync_stage == bridge.SyncStage.COMPLETED
+    assert bridge.last_sync_status == "ok"
+    assert bridge.last_sync_items == 9

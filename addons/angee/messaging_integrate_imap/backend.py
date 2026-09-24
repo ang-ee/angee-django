@@ -10,8 +10,8 @@ Incremental state lives on one ``SyncStream.cursor`` per mailbox::
     {"uidvalidity": 123456, "last_uid": 4211}
 
 An operator may establish a future-only boundary while the channel is paused.
-That operator intent belongs to ``bridge.config``; an epoch reset therefore
-cannot discard it together with the old stream cursor.
+That operator intent belongs to ``bridge.config``; the driver moves legacy
+intent there during the first stream cutover. Epoch resets preserve that policy.
 
 Correctness rests on three facts. UIDVALIDITY is checked every run: a changed
 value raises ``CursorInvalid`` and starts a new stream generation. A normal
@@ -60,7 +60,7 @@ from angee.base.db import get_write_alias, related_on
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.net import is_unsafe_address, resolved_addresses
-from angee.integrate.streams import CursorInvalid, StreamDefinition, StreamPage
+from angee.integrate.streams import CursorInvalid, StreamDefinition, StreamPage, open_stream, reset_stream
 from angee.integrate.sync import current_bridge_progress
 from angee.messaging.backends import ParsedMessage
 from angee.messaging.email import AnymailEmailChannelBackend
@@ -153,6 +153,16 @@ class ImapSampleImport(BaseModel):
     flags_unchanged: bool
 
 
+@dataclass(frozen=True)
+class ImapDeliveryBoundary:
+    """An account binding and one retained future-only cursor per mailbox."""
+
+    source_identity: str
+    cursors: dict[str, dict[str, Any]]
+    streams: tuple[Any, ...]
+    changed: bool
+
+
 @dataclass
 class _MailboxWork:
     """One selected mailbox's remaining fetch plan for the current run."""
@@ -213,7 +223,9 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             else None
         )
 
-    def extract(self, stream: Any, page_bound: int, *, using: str | None = None) -> StreamPage:
+    def extract(
+        self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
+    ) -> StreamPage:
         """Fetch a bounded mailbox page without mutating its durable cursor."""
 
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
@@ -237,7 +249,9 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                 if isinstance(message.metadata, dict) and message.metadata.get("uid") is not None
             }
             self._confirm_expunged(
-                work.name, work.uidvalidity, set(chunk) - answered,
+                work.name,
+                work.uidvalidity,
+                set(chunk) - answered,
                 retry_hint="Retry the sync before advancing its cursor.",
             )
             self._cursor.update(uidvalidity=work.uidvalidity, last_uid=chunk[-1])
@@ -270,14 +284,24 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             if request.since is None or request.before is None or not 0 < (request.before - request.since).days <= 366:
                 raise ValidationError("Choose a positive date window of at most one year.")
             criteria = ["SINCE", request.since, "BEFORE", request.before]
-        continuation = any(value is not None for value in (
-            request.uidvalidity, request.upper_uid, request.before_uid, request.total_count,
-        ))
+        continuation = any(
+            value is not None
+            for value in (
+                request.uidvalidity,
+                request.upper_uid,
+                request.before_uid,
+                request.total_count,
+            )
+        )
         if continuation and (
-            request.uidvalidity is None or request.uidvalidity <= 0
-            or request.upper_uid is None or request.upper_uid < 0
-            or request.before_uid is None or not 0 < request.before_uid <= request.upper_uid
-            or request.total_count is None or request.total_count < 0
+            request.uidvalidity is None
+            or request.uidvalidity <= 0
+            or request.upper_uid is None
+            or request.upper_uid < 0
+            or request.before_uid is None
+            or not 0 < request.before_uid <= request.upper_uid
+            or request.total_count is None
+            or request.total_count < 0
         ):
             raise ValidationError("Preview this mailbox scope again before loading its next page.")
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
@@ -295,26 +319,27 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                 raise ValidationError("The mailbox snapshot is no longer available. Preview it again.")
             page_upper_uid = (
                 min(snapshot_upper_uid, request.before_uid - 1)
-                if request.before_uid is not None else snapshot_upper_uid
+                if request.before_uid is not None
+                else snapshot_upper_uid
             )
             # Never send 1:0: IMAP treats reversed UID ranges as inclusive too.
             criteria = ["UID", f"1:{page_upper_uid}", *criteria]
-            found = sorted(
-                (int(uid) for uid in client.search(criteria) if 0 < int(uid) <= page_upper_uid),
-                reverse=True,
-            ) if page_upper_uid > 0 else []
-            chosen = found[:request.limit]
-            rows = client.fetch(chosen, [b"BODY.PEEK[HEADER]", b"FLAGS", b"RFC822.SIZE"]) if chosen else {}
-            answered = {
-                uid: item
-                for uid in chosen
-                if (item := rows.get(uid)) is not None and b"BODY[HEADER]" in item
-            }
-            self._report_unanswered(
-                request.mailbox, chosen, answered, phase="sample header fetch"
+            found = (
+                sorted(
+                    (int(uid) for uid in client.search(criteria) if 0 < int(uid) <= page_upper_uid),
+                    reverse=True,
+                )
+                if page_upper_uid > 0
+                else []
             )
+            chosen = found[: request.limit]
+            rows = client.fetch(chosen, [b"BODY.PEEK[HEADER]", b"FLAGS", b"RFC822.SIZE"]) if chosen else {}
+            answered = {uid: item for uid in chosen if (item := rows.get(uid)) is not None and b"BODY[HEADER]" in item}
+            self._report_unanswered(request.mailbox, chosen, answered, phase="sample header fetch")
             confirmed_expunged = self._confirm_expunged(
-                request.mailbox, current_uidvalidity, set(chosen) - set(answered),
+                request.mailbox,
+                current_uidvalidity,
+                set(chosen) - set(answered),
                 retry_hint="Retry the preview before advancing its page.",
             )
             total_count = len(found) if request.total_count is None else request.total_count
@@ -328,11 +353,16 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                 if len(raw) > 1_000_000:
                     raise ValidationError("A message header is too large to preview safely.")
                 header = BytesHeaderParser(policy=policy.default).parsebytes(raw)
-                messages.append(ImapSampleMessage(
-                    uid=uid, subject=str(header.get("Subject", "")), sender=str(header.get("From", "")),
-                    sent_at=str(header.get("Date", "")), size=int(item.get(b"RFC822.SIZE", 0)),
-                    flags=sorted(_text(flag) for flag in item.get(b"FLAGS", ())),
-                ))
+                messages.append(
+                    ImapSampleMessage(
+                        uid=uid,
+                        subject=str(header.get("Subject", "")),
+                        sender=str(header.get("From", "")),
+                        sent_at=str(header.get("Date", "")),
+                        size=int(item.get(b"RFC822.SIZE", 0)),
+                        flags=sorted(_text(flag) for flag in item.get(b"FLAGS", ())),
+                    )
+                )
             self._sample_mailbox(request.mailbox, uidvalidity=current_uidvalidity)
             return ImapSamplePreview(
                 mailbox=request.mailbox,
@@ -387,19 +417,34 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         finally:
             self.close()
 
-    def streams(self, *, using: str | None = None) -> tuple[StreamDefinition, ...]:
-        """Declare one event-feed partition per mailbox, seeding legacy cursor slices."""
+    def streams(self, *, deadline: float | None = None, using: str | None = None) -> tuple[StreamDefinition, ...]:
+        """Declare one event-feed partition per mailbox."""
 
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
         self._load_credentials(using=using)
         client = self._connect()
         names = sorted(self._select_mailboxes(client))
-        legacy = self.bridge.cursor if isinstance(self.bridge.cursor, dict) else {}
-        mailboxes = legacy.get("mailboxes") or {}
-        return tuple(
-            StreamDefinition(key="messages", partition=name, cursor=deepcopy(mailboxes.get(name) or {}))
-            for name in names
-        )
+        return tuple(StreamDefinition(key="messages", partition=name) for name in names)
+
+    def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Move legacy delivery policy while retaining per-mailbox positions."""
+
+        if legacy_cursor.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE:
+            return (
+                {
+                    "delivery_mode": NEW_MAIL_DELIVERY_MODE,
+                    "source_identity": legacy_cursor.get("source_identity", ""),
+                    "mailbox_selection": sorted(legacy_cursor.get("mailboxes") or {}),
+                },
+                {key: value for key, value in legacy_cursor.items() if key not in ("delivery_mode", "source_identity")},
+            )
+        return {}, legacy_cursor
+
+    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
+        """Translate only the mailbox position on its first stream."""
+
+        mailbox = (legacy_cursor.get("mailboxes") or {}).get(stream.partition)
+        return deepcopy(mailbox) if mailbox else None
 
     def _report_progress(self, stage: str, message: str, **details: Any) -> None:
         """Publish IMAP-specific progress into the generic bridge reporter."""
@@ -407,20 +452,11 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         reporter = current_bridge_progress()
         if reporter is None:
             return
-        previous_details = {}
-        if isinstance(self.bridge.sync_progress, dict):
-            previous_details = dict(self.bridge.sync_progress.get("details") or {})
-        previous_details.update({"backend": self.key, **details})
-        reporter.report(stage, message=message, details=previous_details)
+        reporter.report(stage, message=message, details={"backend": self.key, **details})
 
     # --- discovery ---
 
-    def prepare_new_mail_cursor(
-        self,
-        current_cursor: object,
-        *,
-        using: str | None = None,
-    ) -> tuple[dict[str, Any], bool]:
+    def prepare_new_mail_boundary(self, *, using: str | None = None) -> ImapDeliveryBoundary:
         """Return a durable boundary that excludes every currently selected message.
 
         The read-only STATUS/SELECT pair pins each mailbox epoch and captures its
@@ -428,16 +464,13 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         epochs returns the retained boundary unchanged: losing the first action's
         response can never make a retry skip mail that arrived after it committed.
 
-        Persistence belongs to the Channel action. This transport method only
-        reads the server and closes its session, so a failed snapshot has no local
-        side effect.
+        The snapshot precedes opening any missing stream. The Channel action
+        locks and validates its configuration before installing the boundaries;
+        all remote IO has finished before that transaction begins.
         """
 
-        cursor = dict(current_cursor) if isinstance(current_cursor, dict) else {}
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
         self._load_credentials(using=using)
-        retained = cursor.get("mailboxes")
-        retained_mailboxes = retained if isinstance(retained, dict) else {}
         try:
             client = self._connect()
             source_identity = self._source_identity_digest()
@@ -463,23 +496,29 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         finally:
             self.close()
 
-        same_epochs = (
-            cursor.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE
-            and cursor.get("source_identity") == source_identity
-            and set(retained_mailboxes) == set(snapshot)
-            and all(
-                int(retained_mailboxes[name].get("uidvalidity", -1)) == entry["uidvalidity"]
-                for name, entry in snapshot.items()
-                if isinstance(retained_mailboxes.get(name), dict)
+        try:
+            streams = tuple(
+                open_stream(self.bridge, "messages", partition, self, using=using) for partition in sorted(snapshot)
             )
-            and all(isinstance(retained_mailboxes.get(name), dict) for name in snapshot)
+        finally:
+            self.close()
+        retained = {stream.partition: stream.cursor for stream in streams}
+        same_epochs = (
+            self.bridge.config.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE
+            and self.bridge.config.get("source_identity") == source_identity
+            and self.bridge.config.get("mailbox_selection") == sorted(snapshot)
+            and all(retained[name].get("uidvalidity") == value["uidvalidity"] for name, value in snapshot.items())
         )
-        if same_epochs:
-            return cursor, False
-        cursor["delivery_mode"] = NEW_MAIL_DELIVERY_MODE
-        cursor["source_identity"] = source_identity
-        cursor["mailboxes"] = snapshot
-        return cursor, True
+        return ImapDeliveryBoundary(source_identity, retained if same_epochs else snapshot, streams, not same_epochs)
+
+    def apply_new_mail_boundary(self, boundary: ImapDeliveryBoundary, *, using: str | None = None) -> None:
+        """Install mailbox boundaries through the driver's stream and epoch owners."""
+
+        using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
+        for stream in boundary.streams:
+            cursor = boundary.cursors[stream.partition]
+            if stream.cursor != cursor:
+                reset_stream(stream, cursor=cursor, using=using)
 
     def _discover(self, name: str) -> deque[_MailboxWork]:
         """Plan the selected partition after validating its mailbox epoch."""
@@ -490,7 +529,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         new_only = bool(boundary)
         if new_only and boundary.get("source_identity") != self._source_identity_digest():
             raise ImapError("The IMAP account changed. Pause the channel and set the starting point again.")
-        selection = boundary.get("mailbox_selection", boundary.get("mailboxes", ()))
+        selection = boundary.get("mailbox_selection", ())
         if new_only and sorted(selection) != sorted(self._select_mailboxes(client)):
             raise ImapError("The selected IMAP mailboxes changed. Pause the channel and set the starting point again.")
         status = client.folder_status(name, [b"UIDVALIDITY", b"UIDNEXT"])
@@ -510,13 +549,12 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._report_progress("discovering", "Planned IMAP mailbox sync", mailbox=name, queued_messages=len(uids))
         return deque([_MailboxWork(name=name, uidvalidity=uidvalidity, uids=uids)])
 
-    def delivery_boundary(self, *, using: str | None = None) -> dict[str, Any]:
-        """Read operator intent, including an unmigrated legacy boundary."""
+    def delivery_boundary(self) -> dict[str, Any]:
+        """Read the bridge's future-only delivery policy."""
 
         if self.bridge.config.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE:
             return self.bridge.config
-        legacy = self.bridge.cursor if isinstance(self.bridge.cursor, dict) else {}
-        return legacy if legacy.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE else {}
+        return {}
 
     def _invalidate_cursor(self, name: str, *, uidvalidity: int, uidnext: int | None = None) -> None:
         """Force a new epoch while preserving a future-only exclusion of history."""
@@ -628,7 +666,12 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         return uidnext
 
     def _confirm_expunged(
-        self, mailbox: str, uidvalidity: int, unanswered: set[int], *, retry_hint: str,
+        self,
+        mailbox: str,
+        uidvalidity: int,
+        unanswered: set[int],
+        *,
+        retry_hint: str,
     ) -> set[int]:
         """Permit advancing only when every unanswered UID is confirmed absent."""
 

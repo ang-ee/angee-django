@@ -32,8 +32,8 @@ export const WorkCycleContextDocument = graphql(`
   }
 `);
 
-// `stage` has a schema default, so this mutation intentionally stays authored:
-// generated action hooks only cover verbs whose arguments are all required.
+// Optional/defaulted action arguments are derived only for an `id: ID!` target;
+// this `task`-scoped verb with an optional `stage` stays authored.
 export const AcceptTaskDocument = graphql(`
   mutation WorkAcceptTask($task: ID!, $stage: ID!) {
     accept_task(task: $task, stage: $stage) {

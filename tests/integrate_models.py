@@ -1,10 +1,10 @@
 """Canonical concrete Integration shared by bare-Django test fixtures."""
 
 from angee.integrate.models import Integration as AbstractIntegration
-from angee.integrate.records import RecordLink as AbstractRecordLink
-from angee.integrate.records import RecordRevision as AbstractRecordRevision
-from angee.integrate.records import SyncDiscrepancy as AbstractSyncDiscrepancy
-from angee.integrate.records import SyncStream as AbstractSyncStream
+from angee.integrate.models import RecordLink as AbstractRecordLink
+from angee.integrate.models import RecordRevision as AbstractRecordRevision
+from angee.integrate.models import SyncDiscrepancy as AbstractSyncDiscrepancy
+from angee.integrate.models import SyncStream as AbstractSyncStream
 from angee.projects.models import IntegrationProjects
 
 

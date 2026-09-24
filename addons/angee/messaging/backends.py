@@ -17,7 +17,7 @@ installed.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, ClassVar
@@ -205,33 +205,23 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     quote_edges: ClassVar[bool] = True
     """Whether ingest should build the email shared-fragment quotation graph."""
 
-    def streams(self, *, using: str | None = None) -> tuple[StreamDefinition, ...]:
+    def streams(self, *, deadline: float | None = None, using: str | None = None) -> tuple[StreamDefinition, ...]:
         """Declare pull streams; manual, live and outbound-only channels have none."""
 
         return ()
 
-    def extract(self, stream: Any, page_bound: int, *, using: str | None = None) -> StreamPage:
-        """Fetch one bounded source page without changing its durable cursor."""
-
-        raise NotImplementedError("A polling channel backend must implement extract().")
-
-    def apply(self, stream: Any, page: StreamPage, *, using: str | None = None) -> Iterable[ApplyResult]:
+    def apply_record(self, stream: Any, record: ParsedMessage, *, using: str | None = None) -> ApplyResult:
         """Compose messaging's idempotent ingest inside the driver's page transaction."""
 
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        if any(not message.external_id for message in page.records):
+        if not record.external_id:
             raise SemanticError("missing_external_id")
-        messages = (
+        (message,) = (
             apps.get_model("messaging", "Message")
             .objects.db_manager(using)
-            .ingest(
-                list(page.records),
-                channel=self.bridge,
-                quote_edges=False,
-                using=using,
-            )
+            .ingest([record], channel=self.bridge, quote_edges=False, using=using)
         )
-        return tuple(ApplyResult(external_key=message.external_id, target=message) for message in messages)
+        return ApplyResult(target=message)
 
     def finish_page(
         self,
@@ -246,7 +236,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         if self.quote_edges:
             using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
             apps.get_model("messaging", "Message").objects.db_manager(using).resolve_ingest_edges(
-                [outcome.target for outcome in outcomes if outcome.target is not None],
+                [outcome.bound_target for outcome in outcomes if outcome.bound_target is not None],
                 using=using,
             )
 
@@ -276,14 +266,6 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
             getattr(message, "pk", None),
         )
         return False
-
-    def close(self) -> None:
-        """Release any transport this backend holds; called when the drain ends.
-
-        ``Channel.sync`` calls this in ``finally``, so a run that fails mid-drain
-        does not leak an authenticated connection. The default is a no-op for
-        connectionless backends.
-        """
 
     def start_live(self, *, using: str | None = None) -> None:
         """Dispatch this source's live ingest (start a session, renew a subscription).

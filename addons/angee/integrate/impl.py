@@ -18,7 +18,18 @@ from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey
 
 if TYPE_CHECKING:
-    from angee.integrate.streams import ApplyResult, LocalChange, StreamPage, WriteBackResult
+    from angee.integrate.streams import (
+        ApplyResult,
+        LocalChange,
+        RecordChange,
+        StreamDefinition,
+        StreamPage,
+        WriteBackResult,
+    )
+
+
+class AdapterContractError(TypeError):
+    """A bridge implementation violated the record-sync contract."""
 
 
 class IntegrationImpl(ImplBase):
@@ -68,8 +79,46 @@ class BridgeImpl(IntegrationImpl):
     icon = "plug"
     sync_parallelism: ClassVar[int | None] = None
     """Optional protocol cap; the bridge config and database may lower it."""
-    sync_deadline: float | None = None
-    """Monotonic budget shared with bounded transport retries."""
+    supports_identity_reads: ClassVar[bool] = False
+    """Declare identity reads; otherwise retries request a fresh baseline."""
+
+    def streams(self, *, deadline: float | None = None, using: str | None = None) -> Iterable[StreamDefinition]:
+        """Declare each independently ordered partition exactly once."""
+        raise AdapterContractError("Stream adapters must declare their partitions.")
+
+    def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return config defaults and the remaining legacy cursor without mutating it.
+
+        Remove migrated policy from the returned cursor so later partitions cannot
+        restore it after an operator changes config. Retain their progress for
+        ``seed_cursor``. The driver persists both values under the bridge lock.
+        """
+        return {}, legacy_cursor
+
+    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
+        """Translate a legacy bridge position once when opening its first empty epoch."""
+        return None
+
+    def extract(
+        self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
+    ) -> StreamPage:
+        """Fetch at most page_bound records outside transactions within the deadline."""
+        raise AdapterContractError("Stream adapters must extract bounded pages.")
+
+    def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
+        """Read every requested identity exactly once, including missing-key tombstones."""
+        raise AdapterContractError("This adapter does not support identity reads.")
+
+    def apply_record(self, stream: Any, record: Any, *, using: str | None = None) -> ApplyResult:
+        """Apply one record using database work only; return its applied evidence.
+
+        The driver owns primary link promotion. Record-local refusals raise
+        SemanticError or ValidationError; infrastructure failures propagate.
+        """
+        raise AdapterContractError("Stream adapters must apply individual records.")
+
+    def close(self) -> None:
+        """Release any transport resources after the caller finishes the cycle."""
 
     @property
     def bridge(self) -> Any:
@@ -84,7 +133,7 @@ class BridgeImpl(IntegrationImpl):
         replaying its prefix. The adapter owns its identity ordering.
         """
 
-        raise NotImplementedError("Replica adapters must enumerate remote keys.")
+        raise AdapterContractError("Replica adapters must enumerate remote keys.")
 
     def prepare_page(self, stream: Any, page: StreamPage, *, using: str | None = None) -> None:
         """Lock the page's complete identity/target set before record savepoints.
@@ -104,17 +153,19 @@ class BridgeImpl(IntegrationImpl):
     ) -> None:
         """Finish domain batch relationships before the page cursor commits."""
 
-    def local_changes(self, stream: Any, *, using: str | None = None) -> Iterable[LocalChange]:
-        """Project local replica candidates on the supplied operation database."""
+    def local_changes(
+        self, stream: Any, *, keys: frozenset[str] | None = None, using: str | None = None
+    ) -> Iterable[LocalChange]:
+        """Project only selected local identities, or all candidates when keys is None."""
 
-        raise NotImplementedError("Push adapters must project local changes.")
+        raise AdapterContractError("Push adapters must project local changes.")
 
     def write_back(
         self, link: Any, projection: Any, *, expected_version: str, using: str | None = None
     ) -> WriteBackResult:
         """Conditionally write a remote record or raise RemoteRejected."""
 
-        raise NotImplementedError("Push adapters must implement conditional write-back.")
+        raise AdapterContractError("Push adapters must implement conditional write-back.")
 
 
 class LiveBridgeImpl(BridgeImpl):

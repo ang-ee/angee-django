@@ -19,11 +19,13 @@ import {
   schemaFieldMetadataFromAngeeSchemaMetadata,
 } from "@angee/metadata/headless";
 import {
+  GraphQLID,
   GraphQLObjectType,
   buildSchema,
   getNamedType,
-  isNonNullType,
+  isRequiredArgument,
   parse,
+  print,
   validate,
 } from "graphql";
 import {
@@ -504,7 +506,7 @@ function buildOperationDocuments(name, runtimeDir) {
     `// Generated from runtime/schemas/${name}.graphql - do not edit by hand.`,
     "// Run `pnpm codegen` to regenerate.",
     "//",
-    "// Mutation fields with required arguments returning ActionResult, plus authored",
+    "// Eligible ActionResult mutation fields, plus authored",
     "// aggregate, group, delete-preview, and revision operation documents.",
     "",
     "import type { TypedDocumentNode } from \"@graphql-typed-document-node/core\";",
@@ -687,16 +689,24 @@ function actionFields(schema) {
         return [];
       }
       if (field.args.length === 0) return [];
+      const requiredArgs = field.args.filter(isRequiredArgument);
       if (
-        field.args.some(
-          (arg) => arg.defaultValue !== undefined || !isNonNullType(arg.type),
+        requiredArgs.length !== field.args.length &&
+        !(
+          requiredArgs.length === 1 &&
+          requiredArgs[0].name === "id" &&
+          requiredArgs[0].type.ofType === GraphQLID
         )
       ) {
         return [];
       }
       return [{
         name,
-        args: field.args.map((arg) => ({ name: arg.name, type: String(arg.type) })),
+        args: field.args.map((arg) => ({
+          name: arg.name,
+          type: String(arg.type),
+          defaultValue: arg.astNode?.defaultValue,
+        })),
       }];
     })
     .sort((left, right) => left.name.localeCompare(right.name));
@@ -935,7 +945,7 @@ function actionDocument(action) {
   // record the verb created, and `validation_errors` carries the field-keyed
   // (or non-field) domain-failure reasons the settle owner surfaces.
   const variables = action.args
-    .map((arg) => `$${assertGraphQLName(arg.name)}: ${arg.type}`)
+    .map((arg) => `$${assertGraphQLName(arg.name)}: ${arg.type}${arg.defaultValue ? ` = ${print(arg.defaultValue)}` : ""}`)
     .join(", ");
   const argumentsList = action.args
     .map((arg) => `${assertGraphQLName(arg.name)}: $${assertGraphQLName(arg.name)}`)

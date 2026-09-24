@@ -1,7 +1,7 @@
 # Integrations and record sync
 
 An integration owns credentials, connection intent and permissions. A concrete
-bridge adds scheduling and telemetry; its backend declares independently ordered
+bridge adds scheduling, a dedicated `sync_run_id` dispatch pointer, and telemetry; its backend declares independently ordered
 stream partitions. `Bridge.sync()` drives those declarations by default, while
 existing capability overrides remain valid.
 
@@ -13,11 +13,11 @@ defers terminal telemetry to that owner. Direct bridges still return an integer.
 | Concern | Owner |
 |---|---|
 | Connection, cadence, queue admission and run telemetry | [Integration and Bridge](models.py) |
-| Stream identity, opaque cursor, baseline generation and reconciliation policy | [SyncStream and its manager](records.py) |
-| External identity, last-synced remote/local hashes and retained tombstones | [RecordLink and its manager](records.py) |
-| Immutable observed and applied evidence | [RecordRevision and its manager](records.py) |
-| Record quarantine and due rescan candidates | [SyncDiscrepancy and its manager](records.py) |
-| Bounded page, conditional push and inventory execution | [StreamAdapter and driver](streams.py) |
+| Stream identity, opaque cursor, baseline generation and reconciliation policy | [SyncStream and its manager](models.py) |
+| External identity, last-synced remote/local hashes and retained tombstones | [RecordLink and its manager](models.py) |
+| Immutable observed and applied evidence | [RecordRevision and its manager](models.py) |
+| Record quarantine and due rescan candidates | [SyncDiscrepancy and its manager](models.py) |
+| Bounded page, conditional push and inventory execution | [BridgeImpl](impl.py) and [stream driver](streams.py) |
 | Concurrent nested JSON edits | [merge_json_state](models.py) |
 | Operator inspection | Read-only record-sync resources in [the console schema](schema.py), inheriting [Integration permissions](permissions.zed) |
 | Saved-record Streams tab, discrepancy/link drill-downs and cursor summary | [Generic Streams data views](web/src/IntegrationStreams.tsx), contributed once to Integration forms by [the web addon](web/src/index.tsx) |
@@ -25,7 +25,12 @@ defers terminal telemetry to that owner. Direct bridges still return an integer.
 Event feeds compose their domain's idempotent ingest verb and never create links
 or revisions. Messaging uses conversation partitions for Slack and mailbox
 partitions for IMAP. Their legacy bridge cursor slices seed the first stream row
-only. Subsequent progress belongs to that stream. `Bridge.cursor` remains for
+only, through the pure `BridgeImpl.seed_cursor` hook. Legacy delivery policy
+translates through `seed_config`, which returns config defaults and the retained
+cursor with migrated policy removed. The driver fills missing `Bridge.config`
+keys and saves that cursor under the bridge row lock in the same transaction as
+stream seeding. Later partitions retain their positions without resurrecting
+removed policy. Subsequent progress belongs to the stream. `Bridge.cursor` remains for
 Mount's existing cursor cleanup and Feed's declared backend contract, as well as
 the first-generation messaging seeds; its presence does not authorize a second
 cursor writer for an adopted stream.
@@ -45,7 +50,7 @@ composes this protocol for bidirectional CardDAV contacts.
 
 Changes to mapping version or dependency digest also require application. The
 adapter returns applied evidence in `ApplyResult`; only the driver promotes the
-primary link. An adapter promotion of that link aborts the page. Optional
+primary link. `apply_record` returns one result for one record. An adapter promotion of that link aborts the page. Optional
 `prepare_page` locks a page's compound identities and targets once, before the
 record savepoints; it and the visibility hooks perform database work only.
 
@@ -64,31 +69,43 @@ once, then `advance_stream` until its
 result is exhausted, passing the returned stream after an epoch reset. The
 caller closes its adapter. `push_stream` and `reconcile_stream` complete the
 cycle when applicable. These functions contain no workflow runtime dependency;
-execution composition belongs to `workflows_integrate`.
+execution composition belongs to `workflows_integrate`. That addon contributes
+the run link through the Integration record-action slot using a public workflow
+identity; progress details remain replaceable telemetry.
+
+The Streams tab keeps its drill-down in route search state. Its open discrepancy
+view uses the backend `is_open` filter and offers explicit remote/local choices
+for conflicts.
 
 At cycle start, due non-conflict replica discrepancies with links are re-read
-through the optional `read_keys(stream, keys, *, using)` adapter operation. It
+through `read_keys(stream, keys, *, using)` when the adapter declares
+`supports_identity_reads`. It
 returns one `RecordChange` for every requested external key, including a remote
 tombstone when that key no longer exists. Transport runs outside transactions;
 the shared page apply path commits the observations without changing the cursor,
 phase or advancement timestamps. Successful apply resolves earlier non-conflict
 failures for that identity. Event feeds are excluded from discrepancy rescan.
-An adapter without `read_keys` requests a baseline instead, recording the fallback
+An adapter without `supports_identity_reads` requests a baseline instead, recording the fallback
 and reason in the discrepancy details. No private work queue is retained.
 
 Semantic quarantine increments `attempts` and sets an exponential retry delay
 starting at one minute, capped by the smaller of a positive reconciliation
 interval or 24 hours. A zero interval means continuous inventory reconciliation,
 so it retains the 24-hour retry cap. Conflicts keep `retry_at=None` and require
-explicit resolution before either side can be written again.
+explicit resolution before either side can be written again. `resolve_conflict`
+requires `keep="remote"` (re-read and apply remotely owned facts) or `keep="local"`
+(re-read the remote base/version, then conditionally write the local projection).
+Plain `resolve` refuses conflicts. A newer remote edit may reject the chosen
+local write again and retain fresh quarantine.
 An invalid/expired cursor or `resync_required` creates a new baseline generation,
 carrying existing links and quarantine forward while retaining revision history.
 
 Inventory sweeps read and apply newly enumerated identities before incrementing
 absence counts. Each `reconcile_stream(..., page_bound=100)` call commits one
-bounded pulse; repeat while `_angee_reconcile` remains in the stream cursor.
+bounded pulse; repeat while `SyncStream.reconcile_state` is nonempty.
 Adapters implement `enumerate_keys(..., after=None, using=None)` as a stable
-iterator with exclusive seek, and treat the reserved cursor member as opaque.
+iterator with exclusive seek. The driver stores its checkpoint separately from
+the adapter-owned opaque cursor.
 `read_keys` handles unseen identities as well as existing links. Without that
 operation, the driver first extracts a separate bounded baseline. Root and child
 absence passes also checkpoint their progress; completion alone updates
@@ -96,6 +113,10 @@ absence passes also checkpoint their progress; completion alone updates
 tombstone at the declared threshold. `on_absent` runs once per status transition;
 `on_revalidated` runs after each successful unchanged observation. Both share the
 status transaction so domain visibility changes roll back with the link.
+
+`RecordRevision` retention is unbounded by design. Each substantive application
+retains full source and mapped payloads; deployments must budget storage for
+this growing history. No automatic pruning is performed.
 
 A compound link declares one immutable root `parent` in the same stream. Children
 follow parent absence and retries read the parent's identity; their own successful
