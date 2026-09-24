@@ -124,7 +124,7 @@ def dispatch_bridge_cycle(
     with system_context(reason="workflows_integrate.dispatch"):
         workflow = (
             workflow_model.objects.db_manager(using)
-            .filter(published_from__isnull=True, key=bridge.sync_workflow_key)
+            .lineage_heads(bridge.sync_workflow_key)
             .order_by("pk")
             .first()
         )

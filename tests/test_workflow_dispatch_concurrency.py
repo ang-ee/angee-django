@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from threading import Barrier
 from typing import Any
 
 import pytest
-from django.db import close_old_connections, connection, connections, transaction
+from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context
 
-from angee.workflows.dispatch import DispatchPreflightDisposition, publish_due
+from angee.workflows import engine
+from angee.workflows.dispatch import DispatchTarget, publish_due
 from tests.workflows import Workflow, WorkflowDispatch, WorkflowRun
 
 pytestmark = [
@@ -59,7 +61,10 @@ def test_two_publishers_may_duplicate_send_without_losing_telemetry(workflow_eng
     assert dispatch.consumed_at is None
 
 
-def test_two_consumers_serialize_to_ready_then_duplicate(workflow_engine_tables: None) -> None:
+def test_two_consumers_commit_one_domain_effect(
+    workflow_engine_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with system_context(reason="dispatch consumption race setup"):
         workflow = Workflow.objects.create(name="Dispatch consumption race")
         run = WorkflowRun.objects.create(workflow=workflow)
@@ -67,22 +72,25 @@ def test_two_consumers_serialize_to_ready_then_duplicate(workflow_engine_tables:
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
     starting = Barrier(2)
 
-    def consume() -> str:
+    def apply(target: DispatchTarget, *, at: datetime) -> bool:
+        target.row.deliveries += 1
+        target.row.save(using=target.row._state.db, update_fields=["deliveries", "updated_at"])
+        target.result["claimed"] = 1
+        return True
+
+    monkeypatch.setattr(engine, "advance_locked", apply)
+
+    def consume() -> dict[str, int]:
         starting.wait(timeout=5)
-        with transaction.atomic(), WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-        ) as preflight:
-            if preflight.disposition == DispatchPreflightDisposition.READY:
-                WorkflowDispatch.objects._consume_locked(
-                    dispatch.pk, envelope=preflight.envelope, at=now, alias="default"
-                )
-            return preflight.disposition
+        return WorkflowDispatch.objects.deliver(dispatch.pk, expected_target_id=run.pk, now=now)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = (pool.submit(_thread, consume), pool.submit(_thread, consume))
-        outcomes = {future.result(timeout=10) for future in futures}
+        outcomes = [future.result(timeout=10) for future in futures]
 
-    assert outcomes == {
-        DispatchPreflightDisposition.READY,
-        DispatchPreflightDisposition.DUPLICATE,
-    }
+    assert sorted(outcomes, key=lambda result: result["claimed"]) == [{"claimed": 0}, {"claimed": 1}]
+    with system_context(reason="verify exactly one concurrent dispatch effect"):
+        run.refresh_from_db()
+        dispatch.refresh_from_db()
+    assert run.deliveries == 1
+    assert dispatch.consumed_at == now

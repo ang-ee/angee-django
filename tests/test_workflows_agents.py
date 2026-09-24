@@ -39,7 +39,7 @@ from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from angee.workflows.attempts import AttemptResultKind, JsonPresence
+from angee.workflows.attempts import AttemptResultKind, GateResumeState, JsonPresence
 from angee.workflows.steps import GateStep, StepImpl, TransientStepError
 from angee.workflows_agents import sessions
 from tests.conftest import (
@@ -52,7 +52,6 @@ from tests.test_agents import InferenceModel, _provider
 from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, AgentSession, AgentTurn
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
-    StepAttempt,
     WorkflowDispatch,
     WorkflowRun,
     admit_workflow_actor,
@@ -88,11 +87,11 @@ def test_agent_approval_uses_dynamic_all_done_resumable_gate_slots() -> None:
     assert config["policy"] == "all_done"
     assert config["resume"] is True
     assert len(config["slots"]) == 2
-    assert result.resume_state == {
-        "gate": {"policy": "all_done"},
-        "state": {"turn": "turn-1"},
-        "_resume_after_decisions": True,
-    }
+    assert GateResumeState.model_validate(result.resume_state) == GateResumeState(
+        gate={"policy": "all_done"},
+        state={"turn": "turn-1"},
+        resume_after_decisions=True,
+    )
     assert [decision.payload["tool_call_id"] for decision in result.decisions] == [
         "call-1",
         "call-2",
@@ -641,21 +640,13 @@ def test_quiet_turn_heartbeat_cadence_survives_reaper_then_expires_without_pulse
     with system_context(reason="test quiet heartbeat admit"):
         attempt = step_run.current_attempt
         dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
-    with system_context(reason="test quiet heartbeat admit"), transaction.atomic():
-        with WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk,
-            lease_token=attempt.lease_token,
-            at=started_at,
-            using=WorkflowDispatch.objects.db,
-        ) as preflight:
-            StepAttempt.objects.admit_invocation(
-                attempt.pk,
-                lease_token=attempt.lease_token,
-                at=started_at,
-            )
-            WorkflowDispatch.objects._consume_locked(
-                dispatch.pk, envelope=preflight.envelope, at=started_at, alias="default"
-            )
+    monkeypatch.setattr(engine, "execute_attempt", lambda *args, **kwargs: {"executed": 0})
+    WorkflowDispatch.objects.deliver(
+        dispatch.pk,
+        expected_target_id=attempt.pk,
+        lease_token=attempt.lease_token,
+        now=started_at,
+    )
     clock = {"now": started_at, "sleeps": 0}
 
     class StopHeartbeat(Exception):

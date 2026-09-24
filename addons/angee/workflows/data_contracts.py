@@ -1,4 +1,10 @@
-"""Bounded path discovery for Pydantic workflow data contracts."""
+"""Bounded static path discovery for Pydantic workflow data contracts.
+
+JSON Schema's validators check concrete instances; workflow publication must
+also prove that a binding path exists for every value a producer can emit.
+This analyser supplies that conservative static check over supported shapes,
+while jsonschema owns declaration and runtime instance validation.
+"""
 
 from __future__ import annotations
 

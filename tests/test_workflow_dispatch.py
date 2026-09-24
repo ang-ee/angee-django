@@ -1,8 +1,9 @@
-"""Focused contracts for unused durable workflow dispatch."""
+"""Focused contracts for durable workflow dispatch admission and delivery."""
 
 from __future__ import annotations
 
-from datetime import timedelta
+from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import patch
 
@@ -13,12 +14,15 @@ from django.db.models.signals import post_save
 from django.utils import timezone
 from rebac import system_context
 
-from angee.workflows.attempts import AttemptResult, AttemptResultKind
+from angee.base.refs import canonical_record_target
+from angee.workflows import engine
+from angee.workflows.attempts import AttemptResult, AttemptResultKind, LeaseRevocationReason
 from angee.workflows.dispatch import (
-    DispatchConsumption,
-    DispatchPreflightDisposition,
+    DISPATCH_KINDS,
+    DispatchTarget,
     WorkflowDispatchEnvelope,
     WorkflowDispatchKind,
+    dispatch_constraints,
     publish_due,
 )
 from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
@@ -30,6 +34,16 @@ def run(workflow_engine_tables: None) -> WorkflowRun:
         workflow = Workflow.objects.create(name="Dispatch owner")
         Step.objects.create(workflow=workflow, key="start", name="Start", step_class="agent_session", is_entry=True)
         return WorkflowRun.objects.create(workflow=workflow)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_artifact_facade_accepts_a_canonical_target_without_an_explicit_alias(run: WorkflowRun) -> None:
+    with system_context(reason="canonical artifact delivery"), transaction.atomic():
+        target = canonical_record_target(run, using="default")
+        dispatch = engine.schedule_artifact_delivery(target)
+    assert dispatch._state.db == "default"
+    assert dispatch.artifact_content_type_id == target.content_type.pk
+    assert dispatch.artifact_object_id == target.object_id
 
 
 @pytest.mark.django_db(transaction=True)
@@ -55,8 +69,6 @@ def test_advance_error_is_visible_until_the_exact_durable_intent_retries(run: Wo
     now = timezone.now()
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
 
-    from angee.workflows import engine
-
     route = engine._route_completed_steps
     failed = False
 
@@ -76,14 +88,11 @@ def test_advance_error_is_visible_until_the_exact_durable_intent_retries(run: Wo
             dispatch.refresh_from_db()
         assert run.status == "pending"
         assert run.error == (
-            f"Workflow advancement {dispatch.sqid} could not continue: "
-            "['Map evidence is structurally invalid.']"
+            f"Workflow advancement {dispatch.sqid} could not continue: ['Map evidence is structurally invalid.']"
         )
         assert dispatch.consumed_at is None
 
-        assert engine.advance_dispatch(
-            dispatch.pk, expected_run_id=run.pk, now=now
-        ) == {"claimed": 0}
+        assert engine.advance_dispatch(dispatch.pk, expected_run_id=run.pk, now=now) == {"claimed": 0}
 
     with system_context(reason="verify successful advance retry"):
         run.refresh_from_db()
@@ -93,10 +102,17 @@ def test_advance_error_is_visible_until_the_exact_durable_intent_retries(run: Wo
     assert dispatch.consumed_at == now
 
     masked = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
-    with patch.object(
-        engine, "_route_completed_steps", side_effect=ValidationError("Original advance failure."),
-    ), patch.object(
-        WorkflowDispatch.objects, "record_advance_error", side_effect=RuntimeError("Telemetry unavailable."),
+    with (
+        patch.object(
+            engine,
+            "_route_completed_steps",
+            side_effect=ValidationError("Original advance failure."),
+        ),
+        patch.object(
+            WorkflowDispatch.objects,
+            "record_advance_error",
+            side_effect=RuntimeError("Telemetry unavailable."),
+        ),
     ):
         with pytest.raises(ValidationError, match="Original advance failure"):
             engine.advance_dispatch(masked.pk, expected_run_id=run.pk, now=now)
@@ -128,7 +144,8 @@ def test_advance_error_is_visible_until_the_exact_durable_intent_retries(run: Wo
         canceled_run = WorkflowRun.objects.create(workflow=run.workflow)
     pending = WorkflowDispatch.objects.schedule_advance(canceled_run, available_at=now)
     assert WorkflowDispatch.objects.record_advance_error(
-        pending.pk, error=ValidationError("Retained before cancellation."),
+        pending.pk,
+        error=ValidationError("Retained before cancellation."),
     )
     with system_context(reason="retain active error through cancellation"):
         canceled_run.refresh_from_db()
@@ -141,6 +158,24 @@ def test_advance_error_is_visible_until_the_exact_durable_intent_retries(run: Wo
     assert canceled_run.status == "canceled"
     assert canceled_run.error == retained_error
     assert pending.consumed_at == now
+
+
+@pytest.mark.django_db(transaction=True)
+def test_publication_bulk_loads_execution_envelopes(run: WorkflowRun, django_assert_num_queries: Any) -> None:
+    now = timezone.now()
+    intents = []
+    with system_context(reason="execution publication batch"):
+        step = run.workflow.steps.get(key="start")
+        other = WorkflowRun.objects.create(workflow=run.workflow)
+        for current in (run, other):
+            slot = current.step_runs.create(step=step, status="scheduled")
+            attempt = StepAttempt.objects.claim(slot, claimed_at=now).attempt
+            intent, _ = WorkflowDispatch.objects.schedule_execute(attempt)
+            intents.append((intent.pk, attempt.pk, attempt.lease_token))
+    # One system-context audit insert and one SELECT, independent of batch size.
+    with django_assert_num_queries(2):
+        envelopes = WorkflowDispatch.objects.due_envelopes(now=now, limit=10)
+    assert [(item.dispatch_id, item.target_id, item.lease_token) for item in envelopes] == intents
 
 
 @pytest.mark.django_db(transaction=True)
@@ -166,14 +201,57 @@ def test_execute_dispatch_uses_attempt_availability_and_exact_lease(run: Workflo
     after_completion, created_after_completion = WorkflowDispatch.objects.schedule_execute(attempt)
     assert not created_after_completion and after_completion.pk == dispatch.pk
 
-    with transaction.atomic():
-        with WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk,
-            lease_token=None,
-            at=timezone.now(),
-            using="default",
-        ) as preflight:
-            assert preflight.disposition == DispatchPreflightDisposition.FENCED
+    assert WorkflowDispatch.objects.deliver(dispatch.pk, expected_target_id=attempt.pk) == {"executed": 0}
+    with system_context(reason="verify wrong lease remains pending"):
+        dispatch.refresh_from_db()
+    assert dispatch.consumed_at is None
+    assert WorkflowDispatch.objects.deliver(
+        dispatch.pk,
+        expected_target_id=attempt.pk,
+        lease_token=attempt.lease_token,
+    ) == {"executed": 0}
+    with system_context(reason="verify completed execution is fenced"):
+        dispatch.refresh_from_db()
+    assert dispatch.consumed_at is not None
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("result", "revocation_reason"),
+    [
+        (AttemptResult(AttemptResultKind.DONE), LeaseRevocationReason.CANCELED),
+        (AttemptResult(AttemptResultKind.ERROR, error="Late failure"), LeaseRevocationReason.SUPERSEDED),
+    ],
+)
+def test_dispatch_and_attempt_fields_hydrate_native_enums(
+    run: WorkflowRun,
+    result: AttemptResult,
+    revocation_reason: LeaseRevocationReason,
+) -> None:
+    now = timezone.now()
+    with system_context(reason="native workflow enum fixture"):
+        step_run = run.step_runs.create(step=run.workflow.steps.get(key="start"), status="scheduled")
+    attempt = StepAttempt.objects.claim(step_run, claimed_at=now).attempt
+    dispatch, _ = WorkflowDispatch.objects.schedule_execute(attempt)
+    with system_context(reason="native workflow empty enum roundtrip"):
+        attempt.refresh_from_db()
+        dispatch.refresh_from_db()
+    assert dispatch.kind is WorkflowDispatchKind.EXECUTE
+    assert attempt.result_kind == ""
+    assert attempt.lease_revocation_reason == ""
+
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=now)
+    StepAttempt.objects.revoke(attempt.pk, lease_token=attempt.lease_token, reason=revocation_reason, at=now)
+    StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=result,
+        recorded_at=now,
+    )
+    with system_context(reason="native workflow enum roundtrip"):
+        attempt.refresh_from_db()
+    assert attempt.result_kind is result.kind
+    assert attempt.lease_revocation_reason is revocation_reason
 
 
 @pytest.mark.django_db(transaction=True)
@@ -192,7 +270,7 @@ def test_publish_due_rejects_ambient_transactions_and_bounds_transport_errors(ru
 
 
 @pytest.mark.django_db(transaction=True)
-def test_direct_dispatch_mutations_and_unowned_consumption_are_rejected(run: WorkflowRun) -> None:
+def test_direct_dispatch_mutations_and_invalid_targets_are_rejected(run: WorkflowRun) -> None:
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=timezone.now())
     dispatch.send_count = 99
     with pytest.raises(TypeError, match="WorkflowDispatchManager"):
@@ -208,46 +286,30 @@ def test_direct_dispatch_mutations_and_unowned_consumption_are_rejected(run: Wor
         queryset.delete()
     with pytest.raises(TypeError, match="durable delivery evidence"):
         queryset._raw_delete(using=queryset.db)
-    with transaction.atomic(), pytest.raises(RuntimeError, match="identity"):
-        WorkflowDispatch.objects._consume_locked(
-            dispatch.pk + 1000, envelope=dispatch.envelope, at=timezone.now(), alias="default"
-        )
+    with pytest.raises(ValidationError, match="envelope does not match"):
+        WorkflowDispatch.objects.deliver(dispatch.pk, expected_target_id=run.pk + 1000)
+    with system_context(reason="verify invalid target remains pending"):
+        dispatch.refresh_from_db()
+    assert dispatch.consumed_at is None
 
 
 @pytest.mark.django_db(transaction=True)
 def test_exact_owner_consumption_leaves_early_intent_pending(run: WorkflowRun) -> None:
     available_at = timezone.now() + timedelta(minutes=5)
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=available_at)
-    with (
-        transaction.atomic(),
-        WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk,
-            lease_token=None,
-            at=available_at - timedelta(microseconds=1),
-            using="default",
-        ) as preflight,
-    ):
-        assert preflight.disposition == DispatchPreflightDisposition.EARLY
+    assert WorkflowDispatch.objects.deliver(
+        dispatch.pk,
+        expected_target_id=run.pk,
+        now=available_at - timedelta(microseconds=1),
+    ) == {"claimed": 0}
     with system_context(reason="verify early dispatch"):
         dispatch.refresh_from_db()
     assert dispatch.consumed_at is None
 
-    with (
-        transaction.atomic(),
-        WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk,
-            lease_token=None,
-            at=available_at,
-            using="default",
-        ) as preflight,
-    ):
-        assert preflight.disposition == DispatchPreflightDisposition.READY
-        assert (
-            WorkflowDispatch.objects._consume_locked(
-                dispatch.pk, envelope=preflight.envelope, at=available_at, alias="default"
-            )
-            == DispatchConsumption.CONSUMED
-        )
+    WorkflowDispatch.objects.deliver(dispatch.pk, expected_target_id=run.pk, now=available_at)
+    with system_context(reason="verify due dispatch"):
+        dispatch.refresh_from_db()
+    assert dispatch.consumed_at == available_at
 
 
 @pytest.mark.django_db(transaction=True)
@@ -261,9 +323,7 @@ def test_decision_timer_uses_locked_native_deadline_and_generation(run: Workflow
             expires_at=timezone.now() + timedelta(minutes=10),
         )
 
-    dispatch, created = WorkflowDispatch.objects.schedule_decision(
-        WorkflowDispatchKind.DECISION_EXPIRE, decision
-    )
+    dispatch, created = WorkflowDispatch.objects.schedule_decision(WorkflowDispatchKind.DECISION_EXPIRE, decision)
     duplicate, duplicate_created = WorkflowDispatch.objects.schedule_decision(
         WorkflowDispatchKind.DECISION_EXPIRE, decision
     )
@@ -284,23 +344,8 @@ def test_publication_records_send_that_is_consumed_before_sender_returns(run: Wo
     now = timezone.now()
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
 
-    def consume(_envelope: WorkflowDispatchEnvelope) -> None:
-        with (
-            transaction.atomic(),
-            WorkflowDispatch.objects._owner_transition(
-                dispatch_id=dispatch.pk,
-                lease_token=None,
-                at=now,
-                using="default",
-            ) as preflight,
-        ):
-            assert preflight.disposition == DispatchPreflightDisposition.READY
-            assert (
-                WorkflowDispatch.objects._consume_locked(
-                    dispatch.pk, envelope=preflight.envelope, at=now, alias="default"
-                )
-                == DispatchConsumption.CONSUMED
-            )
+    def consume(envelope: WorkflowDispatchEnvelope) -> None:
+        WorkflowDispatch.objects.deliver(envelope.dispatch_id, expected_target_id=envelope.target_id, now=now)
 
     publish_due(consume, now=now)
     with system_context(reason="verify consumed publication telemetry"):
@@ -314,33 +359,27 @@ def test_publication_records_send_that_is_consumed_before_sender_returns(run: Wo
 def test_duplicate_is_preflighted_before_owner_mutation(run: WorkflowRun) -> None:
     now = timezone.now()
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
-    with (
-        transaction.atomic(),
-        WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-        ) as preflight,
-    ):
-        assert preflight.disposition == DispatchPreflightDisposition.READY
-        WorkflowDispatch.objects._consume_locked(dispatch.pk, envelope=preflight.envelope, at=now, alias="default")
-
-    with (
-        transaction.atomic(),
-        WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-        ) as preflight,
-    ):
-        assert preflight.disposition == DispatchPreflightDisposition.DUPLICATE
+    with patch.object(engine, "advance_locked", wraps=engine.advance_locked) as handler:
+        WorkflowDispatch.objects.deliver(dispatch.pk, expected_target_id=run.pk, now=now)
+        assert WorkflowDispatch.objects.deliver(
+            dispatch.pk,
+            expected_target_id=run.pk,
+            now=now,
+        ) == {"claimed": 0}
+    assert handler.call_count == 1
 
 
 @pytest.mark.django_db(transaction=True)
-def test_ready_owner_must_consume_or_roll_back(run: WorkflowRun) -> None:
+@pytest.mark.parametrize("handled", [False, True])
+def test_delivery_consumes_handled_and_fenced_intents(run: WorkflowRun, handled: bool) -> None:
     now = timezone.now()
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
-    with pytest.raises(RuntimeError, match="without consuming"):
-        with transaction.atomic(), WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-        ) as preflight:
-            assert preflight.disposition == DispatchPreflightDisposition.READY
+    with patch.object(engine, "advance_locked", return_value=handled) as handler:
+        WorkflowDispatch.objects.deliver(dispatch.pk, expected_target_id=run.pk, now=now)
+    assert handler.call_count == 1
+    with system_context(reason="verify dispatcher consumes handler outcome"):
+        dispatch.refresh_from_db()
+    assert dispatch.consumed_at == now
 
 
 @pytest.mark.django_db(transaction=True)
@@ -349,21 +388,17 @@ def test_failed_consume_cannot_commit_owner_changes(run: WorkflowRun) -> None:
     dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
     original_deliveries = run.deliveries
 
-    with pytest.raises(RuntimeError, match="without consuming"):
-        with (
-            transaction.atomic(),
-            WorkflowDispatch.objects._owner_transition(
-                dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-            ) as preflight,
-        ):
-            assert preflight.disposition == DispatchPreflightDisposition.READY
-            with system_context(reason="simulate dispatch owner mutation"):
-                run.deliveries += 1
-                run.save(update_fields=["deliveries", "updated_at"])
-            with pytest.raises(RuntimeError, match="identity"):
-                WorkflowDispatch.objects._consume_locked(
-                    dispatch.pk + 1000, envelope=preflight.envelope, at=now, alias="default"
-                )
+    def mutate(target: DispatchTarget, *, at: datetime) -> bool:
+        target.row.deliveries += 1
+        target.row.save(using=target.row._state.db, update_fields=["deliveries", "updated_at"])
+        return True
+
+    with (
+        patch.object(engine, "advance_locked", side_effect=mutate),
+        patch.object(type(WorkflowDispatch.objects.get_queryset()), "_consume", return_value=0),
+        pytest.raises(RuntimeError, match="already consumed|admission changed"),
+    ):
+        WorkflowDispatch.objects.deliver(dispatch.pk, expected_target_id=run.pk, now=now)
 
     with system_context(reason="verify failed consume rollback"):
         run.refresh_from_db()
@@ -380,10 +415,8 @@ def test_dispatch_telemetry_signal_cannot_reconsume_or_save(run: WorkflowRun) ->
 
     def attack(sender: type[WorkflowDispatch], instance: WorkflowDispatch, **kwargs: object) -> None:
         del sender, kwargs
-        try:
-            WorkflowDispatch.objects._consume_locked(instance.pk, envelope=instance.envelope, at=now, alias="default")
-        except RuntimeError:
-            rejected.append("consume")
+        assert WorkflowDispatch.objects.deliver(instance.pk, expected_target_id=run.pk, now=now) == {"claimed": 0}
+        rejected.append("duplicate")
         try:
             instance.save(update_fields=["updated_at"])
         except TypeError:
@@ -391,19 +424,12 @@ def test_dispatch_telemetry_signal_cannot_reconsume_or_save(run: WorkflowRun) ->
 
     post_save.connect(attack, sender=WorkflowDispatch, weak=False)
     try:
-        with (
-            transaction.atomic(),
-            WorkflowDispatch.objects._owner_transition(
-                dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-            ) as preflight,
-        ):
-            assert preflight.disposition == DispatchPreflightDisposition.READY
-            WorkflowDispatch.objects._consume_locked(dispatch.pk, envelope=preflight.envelope, at=now, alias="default")
+        WorkflowDispatch.objects.deliver(dispatch.pk, expected_target_id=run.pk, now=now)
         WorkflowDispatch.objects.record_publication(dispatch.pk, attempted_at=now, error="")
     finally:
         post_save.disconnect(attack, sender=WorkflowDispatch)
 
-    assert rejected == ["consume", "save"]
+    assert rejected == ["duplicate", "save"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -431,14 +457,12 @@ def test_owner_preflight_rejects_ancestry_drift_during_locking(run: WorkflowRun)
         return native_system_queryset(model, **kwargs)
 
     with patch.object(workflow_managers, "system_queryset", side_effect=drift_before_run_lock):
-        with transaction.atomic(), pytest.raises(OperationalError, match="ancestry changed"):
-            with WorkflowDispatch.objects._owner_transition(
-                dispatch_id=dispatch.pk,
+        with pytest.raises(OperationalError, match="ancestry changed"):
+            WorkflowDispatch.objects.deliver(
+                dispatch.pk,
+                expected_target_id=attempt.pk,
                 lease_token=attempt.lease_token,
-                at=timezone.now(),
-                using="default",
-            ):
-                pytest.fail("drifted ancestry must not issue preflight authority")
+            )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -459,34 +483,52 @@ def test_publication_telemetry_keeps_latest_attempt_facts(run: WorkflowRun) -> N
 
 
 def test_dispatch_kind_is_closed() -> None:
-    assert {kind.value for kind in WorkflowDispatchKind} == {
-        "advance",
-        "execute",
-        "decision_expire",
-        "decision_escalate",
-        "artifact_delivery",
-        "child_cancel",
-        "run_cancel",
-        "run_settle",
-    }
+    assert set(DISPATCH_KINDS) == set(WorkflowDispatchKind)
+    assert all(kind.spec is DISPATCH_KINDS[kind] for kind in WorkflowDispatchKind)
+
+
+def deliver_declared_spec(target: DispatchTarget, *, at: datetime) -> bool:
+    """One test declaration changes its target, result, and handler together."""
+
+    assert target.row.pk == target.dispatch.pk
+    assert target.dispatch.available_at <= at
+    target.result["selected"] = 1
+    return True
 
 
 @pytest.mark.django_db(transaction=True)
-def test_dispatch_conditional_consumption_checks_rowcount(run: WorkflowRun) -> None:
+def test_one_kind_spec_drives_constraints_envelope_and_delivery(
+    run: WorkflowRun,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = timezone.now()
-    dispatch = WorkflowDispatch.objects.schedule_advance(run, available_at=now)
-    with (
-        transaction.atomic(),
-        WorkflowDispatch.objects._owner_transition(
-            dispatch_id=dispatch.pk, lease_token=None, at=now, using="default"
-        ) as preflight,
-    ):
-        assert (
-            WorkflowDispatch.objects._consume_locked(dispatch.pk, envelope=preflight.envelope, at=now, alias="default")
-            == DispatchConsumption.CONSUMED
-        )
-        with pytest.raises(RuntimeError, match="already consumed"):
-            WorkflowDispatch.objects._consume_locked(dispatch.pk, envelope=preflight.envelope, at=now, alias="default")
-    with system_context(reason="verify consumed dispatch row count"):
+    candidates = [WorkflowDispatch.objects.schedule_advance(run, available_at=now) for _ in range(2)]
+    dispatch = next(candidate for candidate in candidates if candidate.pk != run.pk)
+    monkeypatch.setitem(
+        DISPATCH_KINDS,
+        WorkflowDispatchKind.ADVANCE,
+        replace(
+            WorkflowDispatchKind.ADVANCE.spec,
+            target_field="pk",
+            lock_plan=(),
+            uniqueness=("run",),
+            handler_path=f"{__name__}.deliver_declared_spec",
+            result_fields=("selected",),
+        ),
+    )
+
+    assert dispatch.envelope.target_id == dispatch.pk
+    constraints = dispatch_constraints()
+    with system_context(reason="validate declared dispatch shape and uniqueness"):
+        constraints[0].validate(WorkflowDispatch, dispatch, using="default")
+        unique = next(constraint for constraint in constraints if constraint.name == "uniq_wfd_advance")
+        with pytest.raises(ValidationError):
+            unique.validate(WorkflowDispatch, dispatch, using="default")
+    assert WorkflowDispatch.objects.deliver(
+        dispatch.pk,
+        expected_target_id=dispatch.pk,
+        now=now,
+    ) == {"selected": 1}
+    with system_context(reason="verify declared delivery consumed intent"):
         dispatch.refresh_from_db()
     assert dispatch.consumed_at == now

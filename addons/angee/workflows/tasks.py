@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, cast
+from typing import Any
 
 from celery import shared_task
 from django.apps import apps
@@ -93,30 +93,15 @@ def consume_workflow_dispatch(
     dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     alias = get_write_alias(dispatch_model, using=using)
     with system_context(reason="workflows.dispatch.envelope"):
-        durable = dispatch_model.objects.db_manager(alias).select_related("step_attempt").get(pk=dispatch_id).envelope
+        durable = dispatch_model.objects.db_manager(alias).with_envelope().get(pk=dispatch_id).envelope
     supplied = WorkflowDispatchEnvelope(dispatch_id, parsed, target_id, generation, parsed_lease)
     if supplied != durable:
         raise ValidationError({"dispatch": "Transport envelope does not match its durable intent."})
-    if parsed == WorkflowDispatchKind.ADVANCE:
-        engine.advance_dispatch(dispatch_id, expected_run_id=target_id, using=alias)
-    elif parsed == WorkflowDispatchKind.EXECUTE:
-        engine.execute_dispatch(dispatch_id, target_id, cast(uuid.UUID, parsed_lease), using=alias)
-    elif parsed == WorkflowDispatchKind.DECISION_ESCALATE:
-        engine.escalate_decision_dispatch(
-            dispatch_id, expected_decision_id=target_id, expected_generation=generation, using=alias
-        )
-    elif parsed == WorkflowDispatchKind.DECISION_EXPIRE:
-        engine.expire_decision_dispatch(
-            dispatch_id, expected_decision_id=target_id, expected_generation=generation, using=alias
-        )
-    elif parsed == WorkflowDispatchKind.ARTIFACT_DELIVERY:
-        engine.deliver_artifact_dispatch(dispatch_id, using=alias)
-    elif parsed == WorkflowDispatchKind.CHILD_CANCEL:
-        engine.cancel_child_dispatch(dispatch_id, expected_child_id=target_id, using=alias)
-    elif parsed == WorkflowDispatchKind.RUN_CANCEL:
-        engine.cancel_run_dispatch(dispatch_id, expected_run_id=target_id, using=alias)
-    elif parsed == WorkflowDispatchKind.RUN_SETTLE:
-        engine.settle_run_dispatch(dispatch_id, expected_run_id=target_id, using=alias)
+    dispatch_model.objects.db_manager(alias).deliver(
+        dispatch_id,
+        expected_target_id=target_id,
+        lease_token=parsed_lease,
+    )
 
 
 @shared_task(bind=True, name="workflows.publish_dispatches")
@@ -127,7 +112,9 @@ def publish_workflow_dispatches(self: Any, timestamp: int | None = None, using: 
     alias = get_write_alias(apps.get_model("workflows", "WorkflowDispatch"), using=using)
     workflow_dispatch.publish_due(
         lambda envelope: _send_dispatch(envelope, using=alias),
-        now=_periodic_timestamp(timestamp), limit=100, using=alias,
+        now=_periodic_timestamp(timestamp),
+        limit=100,
+        using=alias,
     )
 
 

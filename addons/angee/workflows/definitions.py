@@ -30,6 +30,26 @@ if TYPE_CHECKING:
     from angee.workflows.managers import DefinitionWriteSession, WorkflowQuerySet
 
 
+def declaration_changed(
+    instance: Any,
+    persisted: Any | None,
+    *,
+    fields: Iterable[str],
+    update_fields: Iterable[str] | None,
+) -> bool:
+    """Compare only persisted declaration values, using native FK storage names."""
+
+    if persisted is None:
+        return True
+    updated = None if update_fields is None else set(update_fields)
+    for name in fields:
+        attname = instance._meta.get_field(name).attname
+        if updated is None or name in updated or attname in updated:
+            if getattr(instance, attname) != getattr(persisted, attname):
+                return True
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class EndpointRef:
     """Reference exactly one persisted or command-created step."""
@@ -215,15 +235,6 @@ class WorkflowDefinitionManagerMixin:
             _allow_status_transition: bool = False,
         ) -> AbstractContextManager[DefinitionWriteSession]: ...
 
-    _WORKFLOW_FIELDS = frozenset(
-        {"name", "description", "purpose", "subject_declaration", "error_workflow", "max_steps", "budget",
-         "input_schema", "output_schema", "result_rules"}
-    )
-    _NODE_FIELDS = frozenset(
-        {"key", "name", "step_class", "config", "input_binding", "join_rule", "is_entry", "position"}
-    )
-    _EDGE_FIELDS = frozenset({"condition"})
-
     def install_definition(
         self,
         model: type[Any],
@@ -293,7 +304,9 @@ class WorkflowDefinitionManagerMixin:
                             if row.key != snapshot.workflow.key:
                                 # The model owns one-time key backfill and rejects renames.
                                 row.save(using=alias, update_fields={"key"})
-                            patch = self._installation_patch(row, snapshot.workflow, self._WORKFLOW_FIELDS)
+                            patch = self._installation_patch(
+                                row, snapshot.workflow, self.model.declaration_fields - {"key"}
+                            )
                             if patch:
                                 self.db_manager(alias).apply_definition(
                                     row, expected_revision=snapshot.revision, edit=DefinitionEdit(workflow=patch),
@@ -346,7 +359,7 @@ class WorkflowDefinitionManagerMixin:
             row._state.db = using
             if not row._state.adding and row.pk not in saved:
                 raise ValidationError(f"{xref}: a resource definition cannot move to another workflow.")
-            names = self._NODE_FIELDS if is_step else self._EDGE_FIELDS
+            names = model.declaration_fields - ({"workflow"} if is_step else {"workflow", "source", "target"})
             wanted = {name: getattr(row, name) for name in names}
             if is_step:
                 if row._state.adding:
@@ -579,12 +592,11 @@ class WorkflowDefinitionManagerMixin:
                     raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
                 draft.edges.db_manager(alias).all().delete(session=session)
                 draft.steps.db_manager(alias).all().delete(session=session)
-                for field_name in self._WORKFLOW_FIELDS:
-                    if field_name == "error_workflow":
-                        draft.error_workflow_id = locked_source.error_workflow_id
-                    else:
-                        setattr(draft, field_name, copy.deepcopy(getattr(locked_source, field_name)))
-                draft.save(using=alias, update_fields=[*sorted(self._WORKFLOW_FIELDS), "updated_at"], session=session)
+                fields = self.model.declaration_fields - {"key"}
+                for field_name in sorted(fields):
+                    attname = draft._meta.get_field(field_name).attname
+                    setattr(draft, attname, copy.deepcopy(getattr(locked_source, attname)))
+                draft.save(using=alias, update_fields=[*sorted(fields), "updated_at"], session=session)
                 locked_source._copy_definition_to(draft, session=session)
                 projected_revision = session.revision(draft.pk, draft.draft_revision)
                 draft.draft_revision = projected_revision
@@ -807,26 +819,31 @@ class _DefinitionState:
             "workflow",
             GraphIdentity(existing_id=self.workflow.pk),
             self.workflow_fields,
-            WorkflowDefinitionManagerMixin._WORKFLOW_FIELDS,
+            self.workflow.declaration_fields - {"key"},
         )
         for node_create in self.edit.node_creates:
             self._fields(
                 "node",
                 GraphIdentity(client_key=node_create.client_key),
                 node_create.fields,
-                self.manager._NODE_FIELDS,
+                self.step_model.declaration_fields - {"workflow"},
             )
         for node_patch in self.edit.node_patches:
-            self._fields("node", _edit_identity(node_patch), node_patch.fields, self.manager._NODE_FIELDS)
+            self._fields(
+                "node", _edit_identity(node_patch), node_patch.fields, self.step_model.declaration_fields - {"workflow"}
+            )
         for edge_create in self.edit.edge_creates:
             self._fields(
                 "edge",
                 GraphIdentity(client_key=edge_create.client_key),
                 edge_create.fields,
-                self.manager._EDGE_FIELDS,
+                self.edge_model.declaration_fields - {"workflow", "source", "target"},
             )
         for edge_patch in self.edit.edge_patches:
-            self._fields("edge", _edit_identity(edge_patch), edge_patch.fields, self.manager._EDGE_FIELDS)
+            self._fields(
+                "edge", _edit_identity(edge_patch), edge_patch.fields,
+                self.edge_model.declaration_fields - {"workflow", "source", "target"},
+            )
         self._unique("node", "client_key", [item.client_key for item in self.edit.node_creates], client=True)
         self._unique("edge", "client_key", [item.client_key for item in self.edit.edge_creates], client=True)
         self._unique(

@@ -99,6 +99,52 @@ def test_advance_routes_and_claims_after_admission_on_selected_writer(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_advance_loads_linked_error_workflow_on_explicit_writer(
+    engine_writer: str,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failure routing reloads its uncached workflow relation on the pulse's writer."""
+
+    del no_workflow_queue
+    error_workflow = workflow_with_steps(name="Error handler", steps=({"key": "recover"},), edges=())
+    workflow = workflow_with_steps(
+        name="Failing workflow", steps=({"key": "entry", "config": {"mode": "error"}},), edges=()
+    )
+    with system_context(reason="writer error workflow setup"):
+        draft = workflow.published_from
+        draft.error_workflow = error_workflow.published_from
+        draft.save(update_fields={"error_workflow"})
+        workflow = draft.publish()
+    run = start_run(workflow)
+    failed_step = advance_once(run)[0]
+    execute_started(run)
+    with system_context(reason="writer error workflow pulse"):
+        pulse = WorkflowDispatch.objects.schedule_advance(run, available_at=timezone.now())
+    admissions: list[tuple[int, str, str, int, int]] = []
+
+    def start_error(lineage: Any, **kwargs: Any) -> None:
+        admissions.append(
+            (
+                lineage.pk,
+                lineage._state.db,
+                kwargs["using"],
+                kwargs["subject"].pk,
+                kwargs["parent_step_run"].pk,
+            )
+        )
+
+    monkeypatch.setattr(engine, "start", start_error)
+    monkeypatch.setattr(router, "routers", [WorkflowWriteRouter("default")])
+
+    assert engine.advance_dispatch(pulse.pk, expected_run_id=run.pk, using=engine_writer) == {"claimed": 0}
+    assert admissions == [(error_workflow.published_from_id, engine_writer, engine_writer, run.pk, failed_step.pk)]
+    with system_context(reason="writer error workflow assertions"):
+        pulse.refresh_from_db(using=engine_writer)
+    assert pulse.consumed_at is not None
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("mode", [StepExecutionMode.STANDARD, StepExecutionMode.DATABASE_COMMAND])
 @pytest.mark.parametrize("result_kind", ["done", "wait", "retry"])
 def test_execute_reloads_invokes_and_schedules_result_on_selected_writer(

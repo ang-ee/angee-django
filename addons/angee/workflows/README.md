@@ -16,6 +16,18 @@ cannot be proved within that bound is rejected. Binding checks prove required
 source paths and simple JSON Schema shapes, and reject unsupported constraints
 conservatively. Completion validates the exact JSON output again.
 
+[`engine`](engine.py) is the public function facade for workflow operations.
+Addons may call its admission, execution, cancellation, and delivery functions;
+their domain owners enforce the operation contracts. Operations accepting a
+run, decision, or step take the retained model instance; identifier-only delivery
+functions take primary keys. Durable task transport and the synchronous test
+driver call `WorkflowDispatch.objects.deliver`
+so the dispatch kind's declared spec owns target selection, locking, admission,
+and consumption.
+
+`GateResumeState` in [`attempts.py`](attempts.py) owns retained gate checkpoint
+fields. Custom operation checkpoint values survive admission and settlement.
+
 Resource files declare separate native Workflow, Step, and Edge rows, in dependency
 order. Every Step names its `step_class` explicitly; the model has no fallback
 operation. Test-only or consumer operations belong in their own composed registry.
@@ -93,13 +105,13 @@ Terminal transitions with a registered subject retain one `RUN_SETTLE` intent
 in their own transaction. Addons register database-only subject handlers through
 `ANGEE_WORKFLOW_SUBJECT_SETTLERS:append`, mapping an explicit model-class import
 path to a callable import path. Abstract declarations expand to their installed
-concrete content types; overlapping declarations fail at startup. A handler
-implements `handler(run, *, using=None)`, locks its subject on that alias, and
-guards settlement against a newer operation on the subject. Delivery commits
+concrete content types; overlapping declarations fail at startup. A subject settler
+accepts `(run, *, using=None)`, locks its subject on that alias, and guards
+settlement against a newer operation on the subject. Delivery commits
 the handler's writes and consumes the intent together; failures leave it pending
 for the existing dispatch publisher. Subjectless runs and unregistered subjects
-create no settlement intent. The handler map is built at app startup and rebuilt
-when Django settings change.
+create no settlement intent. `settlement.rebuild_subject_settlers()` builds the
+handler map at app startup and rebuilds it when Django settings change.
 
 Long STANDARD steps compose `StepImpl.heartbeat_during(step_run, using=alias)`
 around bounded external I/O. It refreshes only the captured attempt lease on a

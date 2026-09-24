@@ -19,6 +19,7 @@ from angee.workflows.attempts import AttemptResultKind, LeaseRevocationReason
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.states import RunStatus
 from angee.workflows.steps import StepResult, TransientStepError
+from angee.workflows.tasks import consume_workflow_dispatch
 from tests.workflows import (
     FixtureStep,
     StepAttempt,
@@ -133,6 +134,34 @@ def test_every_engine_terminal_path_retains_one_subject_settlement(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_transport_settles_registered_subject_once(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    settlement_calls: list[tuple[int, str | None]],
+) -> None:
+    workflow = workflow_with_steps(steps=({"key": "page"},), edges=())
+    run = start_run(workflow, subject=workflow)
+    with system_context(reason="subject settlement transport fixture"):
+        run.mark_failed()
+        intent = WorkflowDispatch.objects.get(kind=WorkflowDispatchKind.RUN_SETTLE, run=run)
+        envelope = intent.envelope
+
+    for _ in range(2):
+        consume_workflow_dispatch.run(
+            envelope.dispatch_id,
+            kind=envelope.kind.value,
+            target_id=envelope.target_id,
+            generation=envelope.generation,
+            using="default",
+        )
+
+    assert settlement_calls == [(run.pk, "default")]
+    with system_context(reason="inspect subject settlement transport delivery"):
+        intent.refresh_from_db()
+        assert intent.consumed_at is not None
+
+
+@pytest.mark.django_db(transaction=True)
 def test_failed_subject_settlement_preserves_pending_delivery(
     workflow_engine_tables: None,
     no_workflow_queue: None,
@@ -172,7 +201,7 @@ def test_subject_settlement_requires_terminal_transaction_and_exact_envelope(
     with system_context(reason="subject settlement mismatched envelope fixture"):
         run.mark_failed()
         intent = WorkflowDispatch.objects.get(kind=WorkflowDispatchKind.RUN_SETTLE, run=run)
-    with pytest.raises(ValidationError, match="envelope changed"):
+    with pytest.raises(ValidationError, match="envelope does not match"):
         engine.settle_run_dispatch(intent.pk, expected_run_id=run.pk + 1)
     with system_context(reason="mismatched settlement remains pending"):
         intent.refresh_from_db()
@@ -182,11 +211,11 @@ def test_subject_settlement_requires_terminal_transaction_and_exact_envelope(
 def test_settlement_registration_is_explicit_and_collisions_fail(
     settlement_calls: list[tuple[int, str | None]],
 ) -> None:
-    handlers = settlement.subject_settlement_handlers()
+    handlers = settlement.subject_settlers()
     assert set(handlers) == {(Workflow._meta.app_label, Workflow._meta.model_name)}
     with override_settings(ANGEE_WORKFLOW_SUBJECT_SETTLERS={}):
-        assert settlement.subject_settlement_handlers() == {}
-    assert settlement.subject_settlement_handlers() == handlers
+        assert settlement.subject_settlers() == {}
+    assert settlement.subject_settlers() == handlers
     with (
         pytest.raises(ImproperlyConfigured, match="Multiple subject settlement handlers"),
         override_settings(
@@ -196,7 +225,7 @@ def test_settlement_registration_is_explicit_and_collisions_fail(
             }
         ),
     ):
-        settlement.subject_settlement_handlers()
+        settlement.subject_settlers()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -305,7 +334,7 @@ def test_bounded_io_lost_lease_retains_transient_unapplied_result(
     execute_started(run)
     with system_context(reason="inspect retained lost-lease evidence"):
         attempt = related_on(row, "current_attempt", using="default")
-        assert attempt.result_kind == str(AttemptResultKind.TRANSIENT_ERROR)
+        assert attempt.result_kind == AttemptResultKind.TRANSIENT_ERROR
         assert attempt.applied_at is None
-        assert attempt.lease_revocation_reason == str(LeaseRevocationReason.SUPERSEDED)
+        assert attempt.lease_revocation_reason == LeaseRevocationReason.SUPERSEDED
         assert "superseded" in attempt.error

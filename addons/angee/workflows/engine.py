@@ -9,7 +9,6 @@ records cancellation. Step implementations run only through retained
 from __future__ import annotations
 
 import json
-import logging
 import traceback
 import uuid
 from collections.abc import Callable, Iterable, Mapping
@@ -32,13 +31,13 @@ from angee.base.actors import actor_user_id
 from angee.base.db import get_write_alias, related_on
 from angee.base.identity import canonical_subject_ref
 from angee.base.refs import CanonicalRecordTarget, canonical_record_target
+from angee.workflows import settlement
 from angee.workflows.attempts import (
     AttemptCause,
     AttemptInput,
     AttemptResult,
     AttemptResultKind,
     DecisionAttemptResult,
-    DecisionSubmission,
     ExternalOperationPolicy,
     ExternalOperationRequest,
     FixtureRole,
@@ -59,13 +58,14 @@ from angee.workflows.bindings import (
     parse_binding,
 )
 from angee.workflows.dispatch import (
-    DispatchPreflightDisposition,
+    DispatchTarget,
     WorkflowDispatchKind,
     enqueue_dispatch_publisher,
 )
 from angee.workflows.managers import retained_gate_output
-from angee.workflows.models import (
+from angee.workflows.states import (
     JoinRule,
+    ParentRelation,
     RunOrigin,
     RunStatus,
     StepRunStatus,
@@ -73,18 +73,6 @@ from angee.workflows.models import (
     WaitingKind,
 )
 from angee.workflows.steps import MapStep, StepExecutionMode, TransientStepError, heartbeat_timeout
-
-VERDICT_PENDING = cast(Verdict, Verdict.PENDING)
-VERDICT_COMPLETED = cast(Verdict, Verdict.COMPLETED)
-VERDICT_REJECTED = cast(Verdict, Verdict.REJECTED)
-VERDICT_ESCALATED = cast(Verdict, Verdict.ESCALATED)
-VERDICT_EXPIRED = cast(Verdict, Verdict.EXPIRED)
-DECISION_VERBS: dict[str, Verdict] = {
-    "complete": VERDICT_COMPLETED,
-    "reject": VERDICT_REJECTED,
-    "escalate": VERDICT_ESCALATED,
-}
-logger = logging.getLogger(__name__)
 
 
 def _exception_message(error: BaseException) -> str:
@@ -132,21 +120,22 @@ def start(
     rows; ``validate_new`` supplies an additional domain admission check.
     """
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowRun"), using=using, instance=workflow)
-
-    run_model = apps.get_model("workflows", "WorkflowRun")
-    return run_model.objects.db_manager(alias).start(
-        workflow,
-        subject,
-        actor,
-        trigger=trigger,
-        parent_step_run=parent_step_run,
-        parent_relation=parent_relation,
-        dedup_key=dedup_key,
-        origin=origin,
-        input=input,
-        validate_new=validate_new,
-        using=alias,
+    return (
+        apps.get_model("workflows", "WorkflowRun")
+        .objects.db_manager(using)
+        .start(
+            workflow,
+            subject,
+            actor,
+            trigger=trigger,
+            parent_step_run=parent_step_run,
+            parent_relation=parent_relation,
+            dedup_key=dedup_key,
+            origin=origin,
+            input=input,
+            validate_new=validate_new,
+            using=using,
+        )
     )
 
 
@@ -155,11 +144,9 @@ def recover(
 ) -> Any:
     """Start or recover one exact same-revision retained recovery request."""
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowRun"), using=using, instance=source_attempt)
-
     return (
         apps.get_model("workflows", "WorkflowRun")
-        .objects.db_manager(alias)
+        .objects.db_manager(using)
         .start_recovery(
             source_attempt,
             request_key=request_key,
@@ -227,14 +214,8 @@ def subscribe_external(step_run: Any, resources: Iterable[Any], *, using: str | 
 def schedule_artifact_delivery(resource: Any, *, using: str | None = None) -> Any:
     """Keep a domain event in its native transaction without locking a run."""
 
-    alias = get_write_alias(
-        apps.get_model("workflows", "WorkflowDispatch"),
-        using=using,
-        instance=resource.content_type if isinstance(resource, CanonicalRecordTarget) else resource,
-    )
-
     return (
-        apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(alias).schedule_artifact_delivery(resource)
+        apps.get_model("workflows", "WorkflowDispatch").objects.db_manager(using).schedule_artifact_delivery(resource)
     )
 
 
@@ -385,32 +366,11 @@ def deliver_artifact_dispatch(
 ) -> dict[str, int]:
     """Consume one committed domain intent and deliver to current subscribers."""
 
-    timestamp = now or timezone.now()
-    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-    alias = get_write_alias(dispatch_model, using=using)
-    dispatch_owner = dispatch_model.objects.db_manager(alias)
-    with system_context(reason="workflows.engine.deliver_artifact_dispatch"), transaction.atomic(using=alias):
-        with dispatch_owner._owner_transition(
-            dispatch_id=dispatch_id,
-            lease_token=None,
-            at=timestamp,
-            using=alias,
-        ) as preflight:
-            if preflight.disposition != DispatchPreflightDisposition.READY:
-                return {"runs": 0, "woken": 0}
-            if (
-                preflight.envelope.kind != WorkflowDispatchKind.ARTIFACT_DELIVERY
-                or preflight.envelope.target_id != dispatch_id
-            ):
-                raise ValidationError({"dispatch": "Artifact delivery envelope is invalid."})
-            dispatch = dispatch_owner.select_related("artifact_content_type").get(pk=dispatch_id)
-            target = CanonicalRecordTarget(
-                dispatch.artifact_content_type,
-                dispatch.artifact_object_id,
-            )
-            outcome = deliver_artifact(target, now=timestamp, using=alias)
-            dispatch_owner._consume_locked(dispatch_id, envelope=preflight.envelope, at=timestamp, alias=alias)
-    return outcome
+    return (
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY, now=now)
+    )
 
 
 def cancel_child_dispatch(
@@ -418,16 +378,10 @@ def cancel_child_dispatch(
 ) -> dict[str, int]:
     """Deliver one persisted owned-child cancellation through the run owner."""
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowRun"), using=using)
-
     return (
-        apps.get_model("workflows", "WorkflowRun")
-        .objects.db_manager(alias)
-        .cancel_from_dispatch(
-            dispatch_id,
-            kind=WorkflowDispatchKind.CHILD_CANCEL,
-            expected_run_id=expected_child_id,
-        )
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.CHILD_CANCEL, expected_target_id=expected_child_id)
     )
 
 
@@ -456,16 +410,10 @@ def cancel_run_dispatch(
 ) -> dict[str, int]:
     """Deliver one persisted cross-run cancellation through the run owner."""
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowRun"), using=using)
-
     return (
-        apps.get_model("workflows", "WorkflowRun")
-        .objects.db_manager(alias)
-        .cancel_from_dispatch(
-            dispatch_id,
-            kind=WorkflowDispatchKind.RUN_CANCEL,
-            expected_run_id=expected_run_id,
-        )
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.RUN_CANCEL, expected_target_id=expected_run_id)
     )
 
 
@@ -474,10 +422,10 @@ def settle_run_dispatch(
 ) -> dict[str, int]:
     """Deliver a terminal subject settlement through the retained run owner."""
 
-    model = apps.get_model("workflows", "WorkflowRun")
-    alias = get_write_alias(model, using=using)
-    return model.objects.db_manager(alias).settle_from_dispatch(
-        dispatch_id, expected_run_id=expected_run_id, using=alias,
+    return (
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.RUN_SETTLE, expected_target_id=expected_run_id)
     )
 
 
@@ -502,49 +450,106 @@ def advance_dispatch(
 ) -> dict[str, int]:
     """Apply one durable ADVANCE delivery through its exact owner preflight."""
 
-    timestamp = now or timezone.now()
-    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-    alias = get_write_alias(dispatch_model, using=using)
-    dispatch_owner = dispatch_model.objects.db_manager(alias)
-    admitted = False
-    try:
-        with system_context(reason="workflows.engine.advance_dispatch"), transaction.atomic(using=alias):
-            with dispatch_owner._owner_transition(
-                dispatch_id=dispatch_id, lease_token=None, at=timestamp, using=alias
-            ) as preflight:
-                if preflight.disposition != DispatchPreflightDisposition.READY:
-                    return {"claimed": 0}
-                if expected_run_id is not None and preflight.envelope.target_id != expected_run_id:
-                    raise ValidationError({"dispatch": "ADVANCE envelope target does not match its durable intent."})
-                if preflight.envelope.kind != WorkflowDispatchKind.ADVANCE:
-                    raise ValidationError({"dispatch": "ADVANCE envelope kind does not match its durable intent."})
-                admitted = True
-                run = (
-                    apps.get_model("workflows", "WorkflowRun")
-                    .objects.db_manager(alias)
-                    .select_related("workflow__error_workflow", "recovery_source_attempt__step_run")
-                    .get(pk=preflight.envelope.target_id)
-                )
-                claimed_ids: list[int] = []
-                if run.status not in RunStatus.TERMINAL:
-                    _activate_run_if_needed(run, timestamp=timestamp, alias=alias)
-                    _route_completed_steps(run, alias=alias)
-                    _process_recovery_map_aggregate(run, timestamp=timestamp, alias=alias)
-                    _route_completed_steps(run, alias=alias)
-                    if _process_map_steps(run, timestamp=timestamp, alias=alias):
-                        _route_completed_steps(run, alias=alias)
-                        if not _fail_if_budget_exceeded(run, alias=alias):
-                            claimed_ids = _claim_due_steps(run, timestamp=timestamp, alias=alias)
-                            _update_run_status(run, timestamp=timestamp, alias=alias)
-                dispatch_owner._consume_locked(dispatch_id, envelope=preflight.envelope, at=timestamp, alias=alias)
-    except Exception as error:
-        if admitted:
-            try:
-                dispatch_owner.record_advance_error(dispatch_id, error=error)
-            except Exception:  # noqa: BLE001 - preserve the original advancement failure.
-                logger.exception("Could not retain workflow ADVANCE failure visibility.")
-        raise
-    return {"claimed": len(claimed_ids)}
+    return (
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.ADVANCE, expected_target_id=expected_run_id, now=now)
+    )
+
+
+def advance_locked(target: DispatchTarget, *, at: datetime) -> bool:
+    """Advance the locked run and clear only this intent's retry diagnostic."""
+
+    run = target.row
+    alias = run._state.db
+    if not run.is_terminal:
+        _activate_run_if_needed(run, timestamp=at, alias=alias)
+        _route_completed_steps(run, alias=alias)
+        _process_recovery_map_aggregate(run, timestamp=at, alias=alias)
+        _route_completed_steps(run, alias=alias)
+        if _process_map_steps(run, timestamp=at, alias=alias):
+            _route_completed_steps(run, alias=alias)
+            if not _fail_if_budget_exceeded(run, alias=alias):
+                target.result["claimed"] = len(_claim_due_steps(run, timestamp=at, alias=alias))
+                _update_run_status(run, timestamp=at, alias=alias)
+    prefix = type(target.dispatch).objects.advance_error_prefix(target.dispatch)
+    if run.status not in {RunStatus.FAILED, RunStatus.CANCELED} and run.error.startswith(prefix):
+        run.error = ""
+        run.save(using=alias, update_fields=["error", "updated_at"])
+    return True
+
+
+def admit_execution(target: DispatchTarget, *, at: datetime) -> bool:
+    """Admit an invocation now and defer its implementation until locks exit."""
+
+    attempt = target.row
+    alias = attempt._state.db
+    admitted = (
+        type(attempt).objects.db_manager(alias).admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=at)
+    )
+    if admitted != InvocationAdmission.FIRST_START:
+        return False
+    target.after_unlock = lambda: execute_attempt(attempt.pk, attempt.lease_token, at=at, using=alias)
+    return True
+
+
+def deliver_artifact_locked(target: DispatchTarget, *, at: datetime) -> bool:
+    """Wake subscribers to the immutable artifact identity on this intent."""
+
+    dispatch = target.dispatch
+    alias = dispatch._state.db
+    resource = CanonicalRecordTarget(
+        related_on(dispatch, "artifact_content_type", using=alias), dispatch.artifact_object_id
+    )
+    target.result.update(deliver_artifact(resource, now=at, using=alias))
+    return True
+
+
+def cancel_run_locked(target: DispatchTarget, *, at: datetime) -> bool:
+    """Apply the cancellation admitted when this intent was retained."""
+
+    run = target.row
+    canceled = type(run).objects.db_manager(run._state.db).cancel_locked(run, at=at, alias=run._state.db)
+    target.result["canceled"] = int(canceled)
+    return canceled
+
+
+def cancel_child_locked(target: DispatchTarget, *, at: datetime) -> bool:
+    """Verify the terminal parent before applying its owned-child cancellation."""
+
+    child = target.row
+    alias = child._state.db
+    slot = related_on(child, "parent_step_run", using=alias)
+    parent = related_on(slot, "run", using=alias) if slot is not None else None
+    if child.parent_relation != ParentRelation.OWNED_CALL or slot is None or parent is None or not parent.is_terminal:
+        raise ValidationError({"child": "Owned-child cancellation requires its terminal parent."})
+    return cancel_run_locked(target, at=at)
+
+
+def settle_subject(target: DispatchTarget, *, at: datetime) -> bool:
+    """Settle a terminal run through the registered subject owner."""
+
+    if not target.row.is_terminal:
+        raise ValidationError({"run": "Subject settlement requires a terminal run."})
+    settlement.settle_subject(target.row, using=target.row._state.db)
+    target.result["settled"] = 1
+    return True
+
+
+def resolve_decision_timer(target: DispatchTarget, *, verdict: Verdict, at: datetime) -> bool:
+    decision = target.row
+    resolved = (
+        type(decision)
+        .objects.db_manager(decision._state.db)
+        .resolve_timed(
+            decision.pk,
+            generation=target.dispatch.generation,
+            verdict=verdict,
+            at=at,
+        )
+    )
+    target.result["resolved"] = int(resolved)
+    return resolved
 
 
 def external_operation_request(step_run: Any, *, using: str | None = None) -> ExternalOperationRequest:
@@ -612,35 +617,26 @@ def execute_dispatch(
 ) -> dict[str, int]:
     """Execute one exact retained attempt after atomic dispatch and lease admission."""
 
-    timestamp = now or timezone.now()
-    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-    attempt_model = apps.get_model("workflows", "StepAttempt")
-    alias = get_write_alias(dispatch_model, using=using)
-    dispatch_owner = dispatch_model.objects.db_manager(alias)
-    with system_context(reason="workflows.engine.execute_dispatch.admit"), transaction.atomic(using=alias):
-        with dispatch_owner._owner_transition(
-            dispatch_id=dispatch_id,
+    return (
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(
+            dispatch_id,
+            expected_kind=WorkflowDispatchKind.EXECUTE,
+            expected_target_id=attempt_id,
             lease_token=lease_token,
-            at=timestamp,
-            using=alias,
-        ) as preflight:
-            if preflight.disposition != DispatchPreflightDisposition.READY:
-                return {"executed": 0}
-            if preflight.envelope.kind != WorkflowDispatchKind.EXECUTE or preflight.envelope.target_id != attempt_id:
-                raise ValidationError({"dispatch": "EXECUTE envelope does not match its durable intent."})
-            admission = attempt_model.objects.db_manager(alias).admit_invocation(
-                attempt_id, lease_token=lease_token, at=timestamp
-            )
-            dispatch_owner._consume_locked(
-                dispatch_id,
-                envelope=preflight.envelope,
-                at=timestamp,
-                fenced=admission != InvocationAdmission.FIRST_START,
-                alias=alias,
-            )
-            if admission != InvocationAdmission.FIRST_START:
-                return {"executed": 0}
+            now=now,
+        )
+    )
 
+
+def execute_attempt(attempt_id: int, lease_token: uuid.UUID, *, at: datetime, using: str) -> dict[str, int]:
+    """Invoke and finalize a previously admitted attempt outside delivery locks."""
+
+    timestamp = at
+    alias = using
+    attempt_model = apps.get_model("workflows", "StepAttempt")
+    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
     with system_context(reason="workflows.engine.execute_dispatch.load"):
         attempt = (
             attempt_model.objects.db_manager(alias)
@@ -746,62 +742,27 @@ def execute_dispatch(
 def cancel(run: Any, *, actor: Any, using: str | None = None) -> None:
     """Dispatch an explicitly authorized cancellation to the run owner."""
 
-    alias = get_write_alias(
-        apps.get_model("workflows", "WorkflowRun"), using=using, instance=run if isinstance(run, models.Model) else None
-    )
-
-    apps.get_model("workflows", "WorkflowRun").objects.db_manager(alias).cancel(run, actor=actor)
+    return apps.get_model("workflows", "WorkflowRun").objects.db_manager(using).cancel(run, actor=actor)
 
 
 def expire_pending_decisions(run: Any, *, resolved_by: str, using: str | None = None) -> int:
-    """Expire every pending decision for ``run`` through the engine owner."""
+    """Expire every pending decision for a retained run instance."""
 
-    alias = get_write_alias(
-        apps.get_model("workflows", "WorkflowRun"), using=using, instance=run if isinstance(run, models.Model) else None
+    return (
+        apps.get_model("workflows", "WorkflowRun")
+        .objects.db_manager(using)
+        .expire_decisions(run, resolved_by=resolved_by, include_current=True)
     )
-
-    run_model = apps.get_model("workflows", "WorkflowRun")
-    step_run_model = apps.get_model("workflows", "StepRun")
-    run_id = run.pk if hasattr(run, "pk") else int(run)
-    expired = 0
-    with system_context(reason="workflows.engine.expire_pending_decisions"), transaction.atomic(using=alias):
-        locked_run = run_model.objects.db_manager(alias).lock_execution_ancestry((run_id,))[run_id]
-        step_runs = step_run_model.objects.db_manager(alias).lock_if_supported().filter(run=locked_run).order_by("pk")
-        for step_run in step_runs:
-            expired += (
-                apps.get_model("workflows", "Decision")
-                .objects.db_manager(alias)
-                .expire_pending(step_run.pk, resolved_by=resolved_by)
-            )
-            expired += (
-                apps.get_model("workflows", "Decision")
-                .objects.db_manager(alias)
-                .expire_orphaned_suspensions(step_run.pk, resolved_by=resolved_by)
-            )
-    return expired
 
 
 def expire_orphaned_decisions(run: Any, *, resolved_by: str, using: str | None = None) -> int:
-    """Expire only pending retained Decisions whose suspension is no longer active."""
+    """Expire decisions whose retained run instance no longer holds their suspension."""
 
-    alias = get_write_alias(
-        apps.get_model("workflows", "WorkflowRun"), using=using, instance=run if isinstance(run, models.Model) else None
+    return (
+        apps.get_model("workflows", "WorkflowRun")
+        .objects.db_manager(using)
+        .expire_decisions(run, resolved_by=resolved_by, include_current=False)
     )
-
-    run_model = apps.get_model("workflows", "WorkflowRun")
-    step_run_model = apps.get_model("workflows", "StepRun")
-    run_id = run.pk if hasattr(run, "pk") else int(run)
-    expired = 0
-    with system_context(reason="workflows.engine.expire_orphaned_decisions"), transaction.atomic(using=alias):
-        locked_run = run_model.objects.db_manager(alias).lock_execution_ancestry((run_id,))[run_id]
-        step_runs = step_run_model.objects.db_manager(alias).lock_if_supported().filter(run=locked_run).order_by("pk")
-        for step_run in step_runs:
-            expired += (
-                apps.get_model("workflows", "Decision")
-                .objects.db_manager(alias)
-                .expire_orphaned_suspensions(step_run.pk, resolved_by=resolved_by)
-            )
-    return expired
 
 
 def sweep(*, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
@@ -874,20 +835,14 @@ def decide(
 ) -> DecisionAttemptResult:
     """Dispatch a public decision submission to its complete manager operation."""
 
-    alias = get_write_alias(
-        apps.get_model("workflows", "Decision"),
-        using=using,
-        instance=decision if isinstance(decision, models.Model) else None,
-    )
-
-    decision_id = decision.pk if hasattr(decision, "pk") else int(decision)
     return (
         apps.get_model("workflows", "Decision")
-        .objects.db_manager(alias)
-        .decide(
-            decision_id,
-            actor=_actor_ref(actor),
-            resolution=DecisionSubmission(verdict=str(_verdict_for_verb(verdict)), payload=payload),
+        .objects.db_manager(using)
+        .submit(
+            decision,
+            verdict,
+            payload=payload,
+            actor=actor,
         )
     )
 
@@ -902,15 +857,16 @@ def escalate_decision_dispatch(
 ) -> dict[str, int]:
     """Consume one exact durable escalation timer."""
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowDispatch"), using=using)
-
-    return _consume_decision_dispatch(
-        dispatch_id,
-        WorkflowDispatchKind.DECISION_ESCALATE,
-        expected_decision_id=expected_decision_id,
-        expected_generation=expected_generation,
-        now=now,
-        alias=alias,
+    return (
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(
+            dispatch_id,
+            expected_kind=WorkflowDispatchKind.DECISION_ESCALATE,
+            expected_target_id=expected_decision_id,
+            expected_generation=expected_generation,
+            now=now,
+        )
     )
 
 
@@ -924,57 +880,17 @@ def expire_decision_dispatch(
 ) -> dict[str, int]:
     """Consume one exact durable expiry timer."""
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowDispatch"), using=using)
-
-    return _consume_decision_dispatch(
-        dispatch_id,
-        WorkflowDispatchKind.DECISION_EXPIRE,
-        expected_decision_id=expected_decision_id,
-        expected_generation=expected_generation,
-        now=now,
-        alias=alias,
+    return (
+        apps.get_model("workflows", "WorkflowDispatch")
+        .objects.db_manager(using)
+        .deliver(
+            dispatch_id,
+            expected_kind=WorkflowDispatchKind.DECISION_EXPIRE,
+            expected_target_id=expected_decision_id,
+            expected_generation=expected_generation,
+            now=now,
+        )
     )
-
-
-def _consume_decision_dispatch(
-    dispatch_id: int,
-    kind: WorkflowDispatchKind,
-    *,
-    expected_decision_id: int | None,
-    expected_generation: int | None,
-    now: datetime | None,
-    alias: str,
-) -> dict[str, int]:
-    timestamp = now or timezone.now()
-    dispatch_model = apps.get_model("workflows", "WorkflowDispatch")
-    dispatch_owner = dispatch_model.objects.db_manager(alias)
-    with system_context(reason="workflows.engine.decision_dispatch"), transaction.atomic(using=alias):
-        with dispatch_owner._owner_transition(
-            dispatch_id=dispatch_id, lease_token=None, at=timestamp, using=alias
-        ) as preflight:
-            if preflight.disposition != DispatchPreflightDisposition.READY:
-                return {"resolved": 0}
-            if (expected_decision_id is not None and preflight.envelope.target_id != expected_decision_id) or (
-                expected_generation is not None and preflight.envelope.generation != expected_generation
-            ):
-                raise ValidationError({"dispatch": "Decision envelope does not match its durable intent."})
-            if preflight.envelope.kind != kind or preflight.envelope.generation is None:
-                raise ValidationError({"dispatch": "Decision envelope kind does not match its durable intent."})
-            verdict = VERDICT_ESCALATED if kind == WorkflowDispatchKind.DECISION_ESCALATE else VERDICT_EXPIRED
-            resolved = (
-                apps.get_model("workflows", "Decision")
-                .objects.db_manager(alias)
-                .resolve_timed(
-                    preflight.envelope.target_id,
-                    generation=preflight.envelope.generation,
-                    verdict=verdict,
-                    at=timestamp,
-                )
-            )
-            dispatch_owner._consume_locked(
-                dispatch_id, envelope=preflight.envelope, at=timestamp, fenced=not resolved, alias=alias
-            )
-            return {"resolved": int(resolved)}
 
 
 def sweep_decisions(*, now: datetime | None = None, using: str | None = None) -> dict[str, int]:
@@ -988,13 +904,13 @@ def sweep_decisions(*, now: datetime | None = None, using: str | None = None) ->
     with system_context(reason="workflows.engine.decision_sweep"), transaction.atomic(using=alias):
         expired = list(
             decision_model.objects.db_manager(alias)
-            .filter(verdict=VERDICT_PENDING, expires_at__lte=timestamp)
+            .filter(verdict=Verdict.PENDING, expires_at__lte=timestamp)
             .order_by("pk")
             .select_related("step_run__run")
         )
         escalated = list(
             decision_model.objects.db_manager(alias)
-            .filter(verdict=VERDICT_PENDING, escalate_at__lte=timestamp)
+            .filter(verdict=Verdict.PENDING, escalate_at__lte=timestamp)
             .filter(models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=timestamp))
             .order_by("pk")
             .select_related("step_run__run")
@@ -1008,17 +924,20 @@ def sweep_decisions(*, now: datetime | None = None, using: str | None = None) ->
                 if decision.suspension_attempt_id is None:
                     raise ValidationError({"decision": "Decision timers require retained suspension evidence."})
                 dispatch, _created = dispatch_model.objects.db_manager(alias).schedule_decision(kind, decision)
-                dispatches.append((dispatch.pk, kind, decision.pk, decision.attempts))
+                dispatches.append((dispatch.pk, WorkflowDispatchKind(kind), decision.pk, decision.attempts))
     expired_count = 0
     escalated_count = 0
     for dispatch_id, kind, decision_id, generation in dispatches:
-        result = _consume_decision_dispatch(
-            dispatch_id,
-            kind,
-            expected_decision_id=decision_id,
-            expected_generation=generation,
-            now=timestamp,
-            alias=alias,
+        result = (
+            apps.get_model("workflows", "WorkflowDispatch")
+            .objects.db_manager(alias)
+            .deliver(
+                dispatch_id,
+                expected_kind=kind,
+                expected_target_id=decision_id,
+                expected_generation=generation,
+                now=timestamp,
+            )
         )
         if kind == WorkflowDispatchKind.DECISION_EXPIRE:
             expired_count += result["resolved"]
@@ -1036,10 +955,10 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any, using: str 
 
     run_model = apps.get_model("workflows", "WorkflowRun")
     step_run_model = apps.get_model("workflows", "StepRun")
-    run_id = run.pk if hasattr(run, "pk") else int(run)
+    run_id = run.pk
     actor_ref = _actor_ref(actor)
     actor_id = actor_user_id(actor_ref)
-    step_ids = [step.pk if hasattr(step, "pk") else int(step) for step in next_steps]
+    step_ids = [step.pk for step in next_steps]
 
     with system_context(reason="workflows.engine.override"), transaction.atomic(using=alias):
         locked = run_model.objects.db_manager(alias).lock_execution_ancestry((run_id,))[run_id]
@@ -1097,9 +1016,7 @@ def override_run(run: Any, next_steps: Iterable[Any], *, actor: Any, using: str 
 def enqueue_advance(run_id: int, *, using: str | None = None) -> None:
     """Retain an immediate advance and request transport publication."""
 
-    alias = get_write_alias(apps.get_model("workflows", "WorkflowRun"), using=using)
-
-    enqueue_advance_at(run_id, timezone.now(), using=alias)
+    return enqueue_advance_at(run_id, timezone.now(), using=using)
 
 
 def enqueue_advance_at(run_id: int, when: datetime, *, using: str | None = None) -> None:
@@ -1125,16 +1042,6 @@ def _actor_ref(actor: Any) -> SubjectRef:
     if actor is None:
         raise PermissionDenied("Authentication required.")
     return actor if isinstance(actor, SubjectRef) else to_subject_ref(actor)
-
-
-def _verdict_for_verb(verb: str) -> Verdict:
-    """Return the stored terminal verdict for a public resolution verb."""
-
-    value = str(getattr(verb, "value", verb)).lower()
-    try:
-        return DECISION_VERBS[value]
-    except KeyError as error:
-        raise ValidationError({"verdict": "Verdict must be complete, reject, or escalate."}) from error
 
 
 def _activate_run_if_needed(run: Any, *, timestamp: datetime, alias: str) -> None:
@@ -1663,7 +1570,7 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
         and run.recovery_source_attempt.step_run.map_index == step_run.map_index
         and not (
             run.recovery_mode == str(RecoveryMode.FRESH)
-            and run.recovery_source_attempt.result_kind == str(AttemptResultKind.PREPARATION_ERROR)
+            and run.recovery_source_attempt.result_kind == AttemptResultKind.PREPARATION_ERROR
         )
     ):
         source = run.recovery_source_attempt
@@ -1777,7 +1684,7 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
             source_attempt = evidence.source_attempt
             gate_decisions = (
                 list(source_attempt.decisions.db_manager(alias).order_by("priority", "pk"))
-                if source_attempt.result_kind == str(AttemptResultKind.SUSPEND)
+                if source_attempt.result_kind == AttemptResultKind.SUSPEND
                 else []
             )
             gate_output = retained_gate_output(source_attempt, gate_decisions) if gate_decisions else None
@@ -1813,12 +1720,12 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
             and attempt.lease_revoked_at is None
         )
         settled_decisions: list[Any] = []
-        if valid_attempt and attempt.result_kind == str(AttemptResultKind.SUSPEND):
+        if valid_attempt and attempt.result_kind == AttemptResultKind.SUSPEND:
             settled_decisions = list(
                 source.decisions.db_manager(alias).filter(suspension_attempt_id=attempt.pk).order_by("priority", "pk")
             )
         settled_output = retained_gate_output(attempt, settled_decisions) if settled_decisions else None
-        valid_done = valid_attempt and attempt.result_kind == str(AttemptResultKind.DONE)
+        valid_done = valid_attempt and attempt.result_kind == AttemptResultKind.DONE
         valid_settled_decisions = (
             bool(settled_decisions)
             and settled_output is not None
@@ -1872,7 +1779,7 @@ def _prepare_attempt_input(run: Any, step_run: Any, *, source_rows: list[Any], a
         map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
         items = map_state.get("items") if isinstance(map_state, dict) else None
         if (
-            expansion.result_kind == str(AttemptResultKind.WAIT)
+            expansion.result_kind == AttemptResultKind.WAIT
             and expansion.applied_at is not None
             and isinstance(items, list)
             and step_run.map_index < len(items)
@@ -2169,7 +2076,7 @@ def _start_error_workflow(run: Any, *, failed_step_run: Any, alias: str) -> None
 
     if _is_error_workflow_run(run):
         return
-    lineage = getattr(run.workflow, "error_workflow", None)
+    lineage = related_on(run.workflow, "error_workflow", using=alias)
     if lineage is None:
         return
     start(

@@ -137,7 +137,7 @@ class ArtifactSpec:
     label: str
 
 
-class AttemptResultKind(StrEnum):
+class AttemptResultKind(models.TextChoices, StrEnum):
     """Closed result variants that the attempt owner can project."""
 
     DONE = "done"
@@ -160,7 +160,7 @@ class AttemptStatus(StrEnum):
     LATE_RESULT = "late_result"
 
 
-class LeaseRevocationReason(StrEnum):
+class LeaseRevocationReason(models.TextChoices, StrEnum):
     """Why an attempt lease stopped being eligible to mutate logical state."""
 
     CANCELED = "canceled"
@@ -192,9 +192,7 @@ class JsonPresence:
     value: Any = None
 
 
-_STRICT_JSON: TypeAdapter[JsonValue] = TypeAdapter(
-    JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False)
-)
+_STRICT_JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
 
 
 def validate_json_value[T](validator: Callable[[str], T], value: Any) -> T:
@@ -450,6 +448,34 @@ class DecisionGateOutput(BaseModel):
 
     resolutions: tuple[DecisionResolution, ...]
     outcome: StrictStr
+
+
+class GateResumeState(BaseModel):
+    """Typed Decision checkpoint fields, retaining an operation's other checkpoint data.
+
+    Resume state is shared with custom suspended operations. Their additional
+    fields survive admission and settlement; Decision fields are validated here.
+    """
+
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True)
+
+    resume_after_decisions: bool = False
+    decision_ids: list[StrictInt] = Field(default_factory=list)
+    decision_outcome: StrictStr | None = None
+    decision_resolutions: dict[StrictStr, JsonValue] | None = None
+    decision_schemas: dict[StrictStr, dict[StrictStr, JsonValue]] = Field(default_factory=dict)
+    gate: JsonValue = Field(default_factory=dict)
+    state: dict[StrictStr, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def complete_settlement(self) -> Self:
+        """A settled resume includes its outcome, projection and exact Decision ids."""
+
+        if (self.decision_outcome is None) != (self.decision_resolutions is None):
+            raise ValueError("Resumable gate state is incomplete.")
+        if self.decision_outcome is not None and not self.decision_ids:
+            raise ValueError("Resumable gate state requires its Decision ids.")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
