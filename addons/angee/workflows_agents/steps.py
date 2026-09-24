@@ -31,6 +31,7 @@ from angee.agents.models import (
 )
 from angee.agents.runners import TurnOutcome
 from angee.base.db import get_write_alias
+from angee.workflows import engine
 from angee.workflows.decision_actions import ReviewAction, ReviewFact, build_decision_action
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import (
@@ -418,8 +419,6 @@ def _persist_turn_outcome(step_run: Any, session: Any, turn: Any, outcome: TurnO
 
 def _approval_gate_config(session: Any, requests: list[dict[str, Any]]) -> dict[str, Any]:
     """Build one resumable built-in gate with a dynamic slot per deferred tool call."""
-
-    from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
 
     assignee = str(engine.resolve_workflow_actor(session.owner).subject)
     slots = []
