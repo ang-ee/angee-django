@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models
 from django.utils.module_loading import import_string
 
 from angee.base.db import get_write_alias, related_on
@@ -30,58 +28,8 @@ if TYPE_CHECKING:
     )
 
 
-UNSET = object()
-"""Omitted record binding; ``None`` explicitly clears the target."""
-
-
-class StreamKind(models.TextChoices, StrEnum):
-    """Whether a stream carries append-only events or mutable replicas."""
-
-    EVENT_FEED = "event_feed", "Event feed"
-    RECORD_REPLICA = "record_replica", "Record replica"
-
-
-class StreamDirection(models.TextChoices, StrEnum):
-    """The sides a stream may write."""
-
-    PULL = "pull", "Pull"
-    PUSH = "push", "Push"
-    BIDIRECTIONAL = "bidirectional", "Bidirectional"
-
-
-class StreamPhase(models.TextChoices, StrEnum):
-    """A new epoch verifies a baseline before accepting deltas."""
-
-    BASELINE = "baseline", "Baseline"
-    DELTA = "delta", "Delta"
-
-
-class LinkStatus(models.TextChoices, StrEnum):
-    """Observed identity and reconciliation state."""
-
-    CURRENT = "current", "Current"
-    OBSERVED = "observed", "Observed"
-    UNAVAILABLE = "unavailable", "Unavailable"
-    DISCREPANT = "discrepant", "Discrepant"
-    WITHDRAWN = "withdrawn", "Withdrawn"
-    TOMBSTONE = "tombstone", "Tombstone"
-
-
-class DiscrepancyKind(models.TextChoices, StrEnum):
-    """Recoverable record failures, independent of transport failures."""
-
-    SEMANTIC = "semantic", "Semantic"
-    CONFLICT = "conflict", "Conflict"
-    MISSING_DEPENDENCY = "missing_dependency", "Missing dependency"
-    REMOTE_REJECTED = "remote_rejected", "Remote rejected"
-
-
-class DiscrepancyStatus(models.TextChoices, StrEnum):
-    """Quarantine remains open until a successful rescan resolves it."""
-
-    OPEN = "open", "Open"
-    RETRY = "retry", "Retry"
-    RESOLVED = "resolved", "Resolved"
+class AdapterContractError(TypeError):
+    """A bridge implementation violated the record-sync contract."""
 
 
 class IntegrationImpl(ImplBase):
@@ -136,7 +84,11 @@ class BridgeImpl(IntegrationImpl):
 
     def streams(self, *, deadline: float | None = None, using: str | None = None) -> Iterable[StreamDefinition]:
         """Declare each independently ordered partition exactly once."""
-        raise NotImplementedError("Stream adapters must declare their partitions.")
+        raise AdapterContractError("Stream adapters must declare their partitions.")
+
+    def seed_config(self, legacy_cursor: dict[str, Any]) -> dict[str, Any]:
+        """Translate legacy policy once; the driver fills missing bridge config under lock."""
+        return {}
 
     def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
         """Translate a legacy bridge position once when opening its first empty epoch."""
@@ -146,11 +98,11 @@ class BridgeImpl(IntegrationImpl):
         self, stream: Any, page_bound: int, *, deadline: float | None = None, using: str | None = None
     ) -> StreamPage:
         """Fetch at most page_bound records outside transactions within the deadline."""
-        raise NotImplementedError("Stream adapters must extract bounded pages.")
+        raise AdapterContractError("Stream adapters must extract bounded pages.")
 
     def read_keys(self, stream: Any, keys: Sequence[str], *, using: str | None = None) -> Iterable[RecordChange]:
         """Read every requested identity exactly once, including missing-key tombstones."""
-        raise NotImplementedError("This adapter does not support identity reads.")
+        raise AdapterContractError("This adapter does not support identity reads.")
 
     def apply_record(self, stream: Any, record: Any, *, using: str | None = None) -> ApplyResult:
         """Apply one record using database work only; return its applied evidence.
@@ -158,7 +110,7 @@ class BridgeImpl(IntegrationImpl):
         The driver owns primary link promotion. Record-local refusals raise
         SemanticError or ValidationError; infrastructure failures propagate.
         """
-        raise NotImplementedError("Stream adapters must apply individual records.")
+        raise AdapterContractError("Stream adapters must apply individual records.")
 
     def close(self) -> None:
         """Release any transport resources after the caller finishes the cycle."""
@@ -176,7 +128,7 @@ class BridgeImpl(IntegrationImpl):
         replaying its prefix. The adapter owns its identity ordering.
         """
 
-        raise NotImplementedError("Replica adapters must enumerate remote keys.")
+        raise AdapterContractError("Replica adapters must enumerate remote keys.")
 
     def prepare_page(self, stream: Any, page: StreamPage, *, using: str | None = None) -> None:
         """Lock the page's complete identity/target set before record savepoints.
@@ -196,17 +148,19 @@ class BridgeImpl(IntegrationImpl):
     ) -> None:
         """Finish domain batch relationships before the page cursor commits."""
 
-    def local_changes(self, stream: Any, *, using: str | None = None) -> Iterable[LocalChange]:
-        """Project local replica candidates on the supplied operation database."""
+    def local_changes(
+        self, stream: Any, *, keys: frozenset[str] | None = None, using: str | None = None
+    ) -> Iterable[LocalChange]:
+        """Project only selected local identities, or all candidates when keys is None."""
 
-        raise NotImplementedError("Push adapters must project local changes.")
+        raise AdapterContractError("Push adapters must project local changes.")
 
     def write_back(
         self, link: Any, projection: Any, *, expected_version: str, using: str | None = None
     ) -> WriteBackResult:
         """Conditionally write a remote record or raise RemoteRejected."""
 
-        raise NotImplementedError("Push adapters must implement conditional write-back.")
+        raise AdapterContractError("Push adapters must implement conditional write-back.")
 
 
 class LiveBridgeImpl(BridgeImpl):

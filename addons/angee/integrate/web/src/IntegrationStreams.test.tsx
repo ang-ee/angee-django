@@ -32,7 +32,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const state = vi.hoisted(() => ({
   list: null as ListViewProps | null,
   mutate: vi.fn(),
-  resolve: vi.fn(),
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -43,18 +42,15 @@ vi.mock("@angee/ui", async (importOriginal) => {
       return <div data-testid="sync-data-view" data-resource={props.resource}>{props.toolbarActions}</div>;
     },
     useActionResultMutation: (field: string) => [
-      (id: string) => state.mutate(field, id),
+      (id: string, arguments_?: Readonly<Record<string, unknown>>) => arguments_ === undefined
+        ? state.mutate(field, id) : state.mutate(field, id, arguments_),
       { fetching: false, error: null },
     ],
   });
 });
 
-vi.mock("@angee/refine", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@angee/refine")>(),
-  useAuthoredMutation: () => [state.resolve, { fetching: false, error: null }],
-}));
-
 import integrate from "./index";
+import { IntegrationSyncStream } from "./documents";
 import { INTEGRATION_MODEL } from "./IntegrationLifecycleActions";
 import {
   RECORD_LINK_MODEL,
@@ -95,7 +91,6 @@ const CursorSummary = integrationSyncCursorWidget.read;
 beforeEach(() => {
   state.list = null;
   state.mutate.mockReset().mockResolvedValue(undefined);
-  state.resolve.mockReset().mockResolvedValue({ resolveSyncDiscrepancy: { ok: true, message: "Resolved." } });
 });
 afterEach(() => {
   cleanup();
@@ -118,6 +113,12 @@ function renderIntegration(resource = INTEGRATION_MODEL, streamCount: number | n
       return { data: Object.fromEntries(Object.entries(record).filter(([name]) => fields.includes(name))) };
     }),
     getList: vi.fn(async () => ({ data: [], total: 0 })),
+    custom: vi.fn(async ({ meta }) => {
+      expect(meta?.gqlQuery).toBe(IntegrationSyncStream);
+      return { data: { sync_streams_by_pk: {
+        id: meta?.gqlVariables.id, key: "contacts", partition: "address-book",
+      } } };
+    }),
   } satisfies RefineTestDataProvider;
   const target = formViewSectionsSlot(INTEGRATION_MODEL);
   const router = createRouter({
@@ -228,9 +229,10 @@ describe("Integration Streams contribution", () => {
     await selectRowAction("resolve", { id: "discrepancy_1", kind: "MISSING_REMOTE", is_open: true });
     await selectRowAction("retry", { id: "discrepancy_2", kind: "MISSING_REMOTE", is_open: true });
     expect(state.mutate.mock.calls).toEqual([
+      ["resolveSyncDiscrepancy", "discrepancy_1"],
       ["retrySyncDiscrepancy", "discrepancy_2"],
     ]);
-    expect(state.resolve).toHaveBeenCalledWith({ id: "discrepancy_1" });
+    await screen.findByText("Discrepancies · contacts · address-book");
     for (const action of listProps().rowActions ?? []) {
       expect(action.visible({ id: "resolved_1", is_open: false })).toBe(false);
     }
@@ -244,10 +246,17 @@ describe("Integration Streams contribution", () => {
     expect(listProps().rowActions?.find((action) => action.id === "resolve")?.visible(row)).toBe(false);
     await selectRowAction("keep-remote", row);
     await selectRowAction("keep-local", row);
-    expect(state.resolve.mock.calls).toEqual([
-      [{ id: "conflict_1", keep: "remote" }],
-      [{ id: "conflict_1", keep: "local" }],
+    expect(state.mutate.mock.calls).toEqual([
+      ["resolveSyncDiscrepancy", "conflict_1", { keep: "REMOTE" }],
+      ["resolveSyncDiscrepancy", "conflict_1", { keep: "LOCAL" }],
     ]);
+    for (const [id, overwritten] of [["keep-remote", "local"], ["keep-local", "remote"]] as const) {
+      const action = listProps().rowActions?.find((candidate) => candidate.id === id);
+      expect(action?.confirm).toMatchObject({
+        title: expect.any(Function), body: expect.any(Function), confirm: expect.any(Function),
+      });
+      expect(action?.confirm?.body?.(row)).toContain(`overwrite ${overwritten} changes`);
+    }
   });
 
   test("reloads a stream drill-down from route search and preserves unrelated search", async () => {
@@ -256,6 +265,7 @@ describe("Integration Streams contribution", () => {
     await screen.findByTestId("sync-data-view");
     expect(listProps().resource).toBe(RECORD_LINK_MODEL);
     expect(listProps().baseFilter).toEqual({ stream: { exact: "stream_7" } });
+    await screen.findByText("Links · contacts · address-book");
     fireEvent.click(screen.getByRole("button", { name: /back/i }));
     await waitFor(() => expect(listProps().resource).toBe(SYNC_STREAM_MODEL));
     expect(router.state.location.search).toMatchObject({ filter: "retained", recordTab: "streams" });

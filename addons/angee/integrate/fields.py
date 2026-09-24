@@ -5,7 +5,7 @@ from typing import Any
 from django.db import models
 
 from angee.graphql.field_types import register_field_type
-from angee.integrate.impl import DiscrepancyStatus
+from angee.integrate.states import DiscrepancyStatus
 
 
 class DiscrepancyOpenField(models.GeneratedField):

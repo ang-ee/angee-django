@@ -24,24 +24,26 @@ from django.db import close_old_connections, connections, transaction
 from django.db.models import Q
 from django.utils import timezone
 from pydantic import ConfigDict, JsonValue, TypeAdapter
+from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.db import get_write_alias, related_on
 from angee.base.serialization import canonical_json_sha256
-from angee.integrate.impl import (
-    UNSET,
-    BridgeImpl,
-    DiscrepancyKind,
-    LinkStatus,
-    StreamDirection,
-    StreamKind,
-    StreamPhase,
-)
+from angee.integrate.impl import AdapterContractError, BridgeImpl
+from angee.integrate.states import UNSET, DiscrepancyKind, LinkStatus, StreamDirection, StreamKind, StreamPhase
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 
 _CURSOR: TypeAdapter[dict[str, Any]] = TypeAdapter(
     dict[str, JsonValue], config=ConfigDict(strict=True, allow_inf_nan=False)
 )
+
+
+def _validated_cursor(value: Any) -> dict[str, Any]:
+    """Reject malformed adapter cursor evidence at the driver contract boundary."""
+    try:
+        return _CURSOR.validate_python(value)
+    except PydanticValidationError as exc:
+        raise AdapterContractError("Stream cursors must contain plain finite JSON objects.") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,10 +168,6 @@ class RemoteRejected(SemanticError):
         )
 
 
-class AdapterContractError(TypeError):
-    """An adapter violated the stream contract; repeating transport cannot fix it."""
-
-
 class ChangeKind(StrEnum):
     """Three-way decision against the last synchronized bases."""
 
@@ -282,7 +280,7 @@ def _quarantine(stream: Any, record: Any, error: SemanticError, *, link: Any = N
 def reset_stream(stream: Any, *, cursor: dict[str, Any], using: str | None = None) -> PageResult:
     """Retire an epoch and seed its replacement through the stream manager."""
     using = get_write_alias(type(stream), using=using, instance=stream)
-    cursor = _CURSOR.validate_python(cursor)
+    cursor = _validated_cursor(cursor)
     manager = _manager("SyncStream", using=using)
     stream = manager.bump_generation(stream, cursor=cursor, using=using)
     return PageResult(stream, reset=True)
@@ -323,6 +321,8 @@ def _promote(link: Any, record: RecordChange, outcome: ApplyResult, *, origin: s
 
 
 def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult, *, using: str) -> None:
+    if not isinstance(result, WriteBackResult):
+        raise AdapterContractError("write_back must return WriteBackResult.")
     _manager("RecordLink", using=using).promote(
         link,
         source_payload=result.source_payload,
@@ -338,6 +338,20 @@ def _reflect_write(link: Any, record: RecordChange, result: WriteBackResult, *, 
     )
     if result.tombstone:
         _manager("RecordLink", using=using).tombstone(link, using=using)
+
+
+def _extract_page(
+    adapter: BridgeImpl, stream: Any, page_bound: int, *, deadline: float | None, using: str
+) -> StreamPage:
+    """Validate extracted page evidence before either advancement or reconciliation."""
+    page = adapter.extract(stream, page_bound, deadline=deadline, using=using)
+    if not isinstance(page, StreamPage):
+        raise AdapterContractError("extract must return StreamPage.")
+    if not isinstance(page.records, Sequence):
+        raise AdapterContractError("StreamPage.records must be a sequence.")
+    if len(page.records) > page_bound:
+        raise AdapterContractError("extract exceeded page_bound.")
+    return page
 
 
 def advance_stream(
@@ -359,19 +373,17 @@ def advance_stream(
         stream.refresh_from_db(using=using)
         if stream.resync_required or (stream.cursor_expires_at and stream.cursor_expires_at <= timezone.now()):
             return reset_stream(stream, cursor={}, using=using)
-        original_cursor = _CURSOR.validate_python(stream.cursor)
+        original_cursor = _validated_cursor(stream.cursor)
         try:
             page = (
                 StreamPage((), original_cursor)
                 if stream.direction == StreamDirection.PUSH
-                else adapter.extract(stream, page_bound, deadline=deadline, using=using)
+                else _extract_page(adapter, stream, page_bound, deadline=deadline, using=using)
             )
         except CursorInvalid as error:
             return reset_stream(stream, cursor=error.cursor, using=using)
         if page.resync_required:
             return reset_stream(stream, cursor={}, using=using)
-        if len(page.records) > page_bound:
-            raise AdapterContractError("extract exceeded page_bound.")
         return _apply_page(stream, adapter, page, original_cursor=original_cursor, using=using)
 
 
@@ -389,7 +401,7 @@ def _apply_page(
 ) -> PageResult:
     """Apply page or identity observations through the same fenced transaction."""
 
-    page = replace(page, cursor=_CURSOR.validate_python(page.cursor))
+    page = replace(page, cursor=_validated_cursor(page.cursor))
     # Conditional remote writes precede the transaction. Compare link bases
     # again before reflecting the response; a later local edit remains dirty.
     written: dict[str, tuple[tuple[str, str, str], WriteBackResult | SemanticError]] = {}
@@ -553,9 +565,7 @@ def push_stream(
     count = 0
     discrepancies: list[int] = []
     with system_context(reason="integrate.stream.push"):
-        for candidate in adapter.local_changes(stream, using=using):
-            if external_keys is not None and candidate.external_key not in external_keys:
-                continue
+        for candidate in adapter.local_changes(stream, keys=external_keys, using=using):
             if deadline is not None and monotonic() >= deadline:
                 return PageResult(stream, count, discrepancy_ids=tuple(discrepancies))
             links = _manager("RecordLink", using=using)
@@ -635,10 +645,10 @@ def reconcile_stream(
         return 0
     with system_context(reason="integrate.stream.reconcile"):
         manager = _manager("SyncStream", using=using)
-        identity_reads = adapter is not None and adapter.supports_identity_reads
+        identity_reads = adapter.supports_identity_reads
         with transaction.atomic(using=using):
             locked = manager.lock_current(stream, using=using)
-            state = _CURSOR.validate_python(locked.reconcile_state) or None
+            state = _validated_cursor(locked.reconcile_state) or None
             if state is None:
                 now = timezone.now()
                 if locked.last_reconciled_at and locked.last_reconciled_at + locked.reconcile_interval > now:
@@ -650,19 +660,17 @@ def reconcile_stream(
                     "after": None,
                 }
                 _save_reconcile(locked, state, using=using)
-            original_cursor = _CURSOR.validate_python(locked.cursor)
+            original_cursor = _validated_cursor(locked.cursor)
             original_reconcile = dict(locked.reconcile_state)
         if state["phase"] == "extract":
             baseline = copy(locked)
             baseline.cursor = state.get("cursor", {})
             baseline.phase = StreamPhase.BASELINE
-            page = adapter.extract(baseline, page_bound, deadline=deadline, using=using)
-            if len(page.records) > page_bound:
-                raise AdapterContractError("extract exceeded page_bound.")
+            page = _extract_page(adapter, baseline, page_bound, deadline=deadline, using=using)
             if page.resync_required:
                 raise CursorInvalid()
             if not page.exhausted and page.cursor == baseline.cursor:
-                raise RuntimeError("Reconciliation baseline did not advance its cursor.")
+                raise AdapterContractError("Reconciliation baseline did not advance its cursor.")
             state = {**state, "cursor": page.cursor, "phase": "enumerate" if page.exhausted else "extract"}
             locked = _apply_page(
                 locked,
@@ -703,7 +711,7 @@ def reconcile_stream(
                     links = _manager("RecordLink", using=using)
                     for key in keys:
                         if not links.filter(stream=locked, external_key=key).exists():
-                            raise RuntimeError("The extraction baseline omitted an enumerated identity.")
+                            raise AdapterContractError("The extraction baseline omitted an enumerated identity.")
                         links.observe(locked, key, using=using)
                     _save_reconcile(locked, next_state, using=using)
         else:
@@ -758,8 +766,9 @@ def begin_stream_cycle(
 ) -> Any:
     """Re-read due replica identities, or request a logged baseline fallback.
 
-    Call once per cycle before advance_stream, outside any transaction. Optional
-    read_keys returns RecordChange observations without moving the stream cursor.
+    Call once per cycle before advance_stream, outside any transaction. Adapters
+    declaring supports_identity_reads return RecordChange observations through
+    read_keys without moving the stream cursor.
     Conflicts require explicit resolution. Event feeds have no replica rescan.
     """
 
@@ -815,7 +824,7 @@ def begin_stream_cycle(
                 reapply.add(owner.external_key)
             if not keys:
                 return stream
-            original_cursor = _CURSOR.validate_python(stream.cursor)
+            original_cursor = _validated_cursor(stream.cursor)
         records = read_stream_keys(adapter, stream, tuple(sorted(keys)), using=using)
         return _apply_page(
             stream,
@@ -842,7 +851,8 @@ def open_stream(
     """Open a partition, seeding legacy progress only on its first epoch.
 
     A caller that already discovered declarations supplies its matching definition
-    to avoid repeating transport discovery; existing policy is still validated.
+    to avoid repeating transport discovery and validate the retained policy.
+    Without a definition, an existing partition is reused without rediscovery.
     """
 
     using = get_write_alias(type(bridge), using=using, instance=bridge)
@@ -870,7 +880,7 @@ def open_stream(
                 partition,
                 kind=definition.kind,
                 direction=definition.direction,
-                cursor=_CURSOR.validate_python(definition.cursor),
+                cursor=_validated_cursor(definition.cursor),
                 reconcile_interval=definition.reconcile_interval,
                 absence_threshold=definition.absence_threshold,
                 tombstone_retention=definition.tombstone_retention,
@@ -880,11 +890,17 @@ def open_stream(
         assert stream is not None
         if stream.generation == 1 and not stream.cursor and bridge.cursor:
             with transaction.atomic(using=using):
+                locked_bridge = type(bridge).objects.db_manager(using).filter(pk=bridge.pk).lock_if_supported().get()
                 stream = manager.lock_current(stream, using=using)
                 if not stream.cursor and stream.last_advanced_at is None:
-                    cursor = adapter.seed_cursor(stream, bridge.cursor)
+                    config = {**adapter.seed_config(locked_bridge.cursor), **locked_bridge.config}
+                    if config != locked_bridge.config:
+                        locked_bridge.config = config
+                        locked_bridge.save(using=using, update_fields=["config", "updated_at"])
+                    cursor = adapter.seed_cursor(stream, locked_bridge.cursor)
                     # A no-op seed is still a completed cutover attempt.
-                    manager.advance(stream, _CURSOR.validate_python(cursor or {}), using=using)
+                    manager.advance(stream, _validated_cursor({} if cursor is None else cursor), using=using)
+                bridge.config = adapter.bridge.config = locked_bridge.config
         return stream
 
 
@@ -912,7 +928,7 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
         landed += result.count
         resets += int(result.reset)
         if not result.reset and not exhausted and result.progress == previous:
-            raise RuntimeError("The stream repeated a page without advancing its cursor.")
+            raise AdapterContractError("The stream repeated a page without advancing its cursor.")
         previous = result.progress
         if resets > 1:
             raise RuntimeError("The remote rejected a fresh baseline cursor.")

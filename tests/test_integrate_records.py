@@ -13,7 +13,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.models import AngeeQuerySet, AngeeUnscopedQuerySet
-from angee.integrate.impl import DiscrepancyKind, DiscrepancyStatus, LinkStatus, StreamKind, StreamPhase
+from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, LinkStatus, StreamKind, StreamPhase
 from tests.conftest import make_integration
 from tests.integrate_models import Integration, RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from tests.messaging_models import Channel

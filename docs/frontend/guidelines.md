@@ -118,9 +118,9 @@ history uses native Query pages with domain-owned
   valibot schema (`safeParse`), never asserted into an application shape; a
   recursive shape a declarative schema cannot express may wrap its type guard
   in `v.custom`, keeping the parse boundary in the schema.
-- **ActionResult mutations with required arguments are derived, not authored.**
-  Codegen owns eligibility in `packages/app/bin/angee-web-codegen.mjs`: every
-  argument must be non-null without a default. Call
+- **ActionResult mutations with arguments are derived, not authored.**
+  Codegen owns eligibility in `packages/app/bin/angee-web-codegen.mjs` and
+  preserves the schema's argument types and defaults, including optional input. Call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
   rendered-view code, or
   `useRecordActionMutation<ActionFieldName>("field")` for a rendered

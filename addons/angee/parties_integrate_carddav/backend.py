@@ -29,7 +29,7 @@ from django.apps import apps
 
 from angee.base.db import get_write_alias, refresh_deferred, related_on
 from angee.base.serialization import canonical_json_sha256
-from angee.integrate.impl import LinkStatus
+from angee.integrate.states import LinkStatus
 from angee.integrate.streams import CursorInvalid, RecordChange, RemoteRejected, StreamPage, WriteBackResult
 from angee.parties.backends import (
     DirectoryBackend,

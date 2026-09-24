@@ -14,14 +14,15 @@ from datetime import date, timedelta
 from typing import Any
 
 from django.apps import apps
-from django.db.models import CharField, OuterRef, Q, Subquery
+from django.db.models import CharField, Exists, OuterRef, Q, Subquery, Value
 from django.db.models.fields.json import KeyTextTransform
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Cast, Coalesce, Concat, NullIf
 
 from angee.base.db import get_write_alias, refresh_deferred
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClientMixin
-from angee.integrate.impl import BridgeImpl, DiscrepancyKind, StreamDirection, StreamKind
+from angee.integrate.impl import BridgeImpl
+from angee.integrate.states import DiscrepancyKind, StreamDirection, StreamKind
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError, StreamDefinition
 
 
@@ -457,36 +458,53 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
             mapped_payload=projection,
         )
 
-    def local_changes(self, stream: Any, *, using: str | None = None) -> Iterable[LocalChange]:
-        """Compare every linked local projection to its base, including deletions."""
+    def local_changes(
+        self, stream: Any, *, keys: frozenset[str] | None = None, using: str | None = None
+    ) -> Iterable[LocalChange]:
+        """Compare selected local projections to their bases, including deletions."""
 
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
-        links = tuple(
-            apps.get_model("integrate", "RecordLink").objects.db_manager(using).filter(stream=stream).order_by("pk")
-        )
+        stream_links = apps.get_model("integrate", "RecordLink").objects.db_manager(using).filter(stream=stream)
+        links_query = stream_links
+        if keys is not None:
+            links_query = links_query.filter(external_key__in=keys)
+        links = tuple(links_query.order_by("pk"))
         states = self._local_states(stream, (link.external_key for link in links), links=links, using=using)
         for link in links:
             target, projection, local_hash = states[link.external_key]
             if local_hash != link.local_base_hash:
                 yield LocalChange(link.external_key, projection, local_hash, target=target)
-        people = tuple(
+        people_query = (
             apps.get_model("parties", "Person")
             .objects.db_manager(using)
             .filter(
                 folder=self._folder(stream, using=using),
             )
-            .exclude(pk__in=[link.target_id for link in links if link.target_id])
             .exclude(
-                source_uid__in=[link.external_key for link in links],
+                Exists(
+                    stream_links.filter(
+                        Q(target_id=Cast(OuterRef("pk"), output_field=CharField()))
+                        | Q(external_key=OuterRef("source_uid"))
+                    )
+                )
+            )
+            .annotate(
+                external_key=Coalesce(
+                    NullIf("source_uid", Value("")),
+                    Concat(Value("angee-"), "pk", output_field=CharField()),
+                )
             )
             .order_by("pk")
         )
+        if keys is not None:
+            people_query = people_query.filter(external_key__in=keys)
+        people = tuple(people_query)
         parties = apps.get_model("parties", "Party").objects.db_manager(using)
         parsed = parties.project_contacts(people, using=using)
         for person in people:
             projection = contact_projection(parsed[person.pk])
             yield LocalChange(
-                person.source_uid or f"angee-{person.pk}",
+                person.external_key,
                 projection,
                 canonical_json_sha256(projection),
                 target=person,

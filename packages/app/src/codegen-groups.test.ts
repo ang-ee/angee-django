@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildSchema, executeSync, type DocumentNode } from "graphql";
 
 import { afterEach, describe, expect, test } from "vitest";
 import type { DataResourceFieldMetadata } from "@angee/metadata";
@@ -38,11 +39,34 @@ describe("group operation codegen", () => {
     expect(generated).toContain('"value": "accepted"');
   });
 
-  test("leaves optional and defaulted ActionResult mutations authored", () => {
+  test("derives optional enum arguments and preserves schema defaults and nullability", () => {
     const generated = generateActions(METADATA);
-
-    expect(generated).not.toContain('"optional_action"');
-    expect(generated).not.toContain('"defaulted_action"');
+    const schema = buildSchema(SDL);
+    for (const [field, variables, expected] of [
+      ["optional_action", { id: "record_1" }, { id: "record_1" }],
+      ["optional_action", { id: "record_1", keep: "REMOTE" }, { id: "record_1", keep: "REMOTE" }],
+      ["optional_action", { id: "record_1", keep: null }, { id: "record_1", keep: null }],
+      ["defaulted_action", { id: "record_1" }, { id: "record_1", note: "" }],
+      ["defaulted_action", { id: "record_1", note: "value" }, { id: "record_1", note: "value" }],
+    ] as const) {
+      const result = executeSync({
+        schema,
+        document: generatedAction(generated, field),
+        variableValues: variables,
+        rootValue: { [field]: (args: unknown) => ({ ok: true, message: JSON.stringify(args) }) },
+      });
+      expect(result.errors).toBeUndefined();
+      expect(result.data?.[field]).toMatchObject({ ok: true, message: JSON.stringify(expected) });
+    }
+    for (const [field, variables] of [
+      ["optional_action", { id: "record_1", keep: "typo" }],
+      ["defaulted_action", { id: "record_1", note: null }],
+      ["optional_action", {}],
+    ] as const) {
+      expect(executeSync({
+        schema, document: generatedAction(generated, field), variableValues: variables,
+      }).errors).toHaveLength(1);
+    }
   });
 
   test("selects the exact count root with matching having", () => {
@@ -110,6 +134,12 @@ describe("group operation codegen", () => {
   });
 });
 
+function generatedAction(generated: string, field: string): DocumentNode {
+  const match = generated.match(new RegExp(`  "${field}": (\\{[\\s\\S]*?\\}) as ActionDocument<"${field}">`));
+  if (!match?.[1]) throw new Error(`Missing generated action: ${field}`);
+  return JSON.parse(match[1]) as DocumentNode;
+}
+
 function generateActions(metadata: unknown): string {
   const root = mkdtempSync(path.join(tmpdir(), "angee-group-codegen-"));
   roots.push(root);
@@ -150,11 +180,12 @@ const SDL = `
   type Mutation {
     submit_channel_password(id: ID!, password: String!): ActionResult!
     close_round(round: ID!, outcome: RoundOutcome!, accepted: [ID!]!): ActionResult!
-    optional_action(id: ID!, note: String): ActionResult!
+    optional_action(id: ID!, keep: ConflictKeep): ActionResult!
     defaulted_action(id: ID!, note: String! = ""): ActionResult!
     order_save(pk: ID!, lines: [OrderLineInput!]): OrderType!
   }
   enum RoundOutcome { AWARDED NO_AWARD }
+  enum ConflictKeep { REMOTE LOCAL }
   type ActionResult {
     ok: Boolean!
     message: String!

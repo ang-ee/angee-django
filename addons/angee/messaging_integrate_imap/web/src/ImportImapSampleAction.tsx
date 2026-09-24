@@ -7,6 +7,7 @@ import * as React from "react";
 import { ImportImapSample } from "./documents";
 import { useSamplePreviewFeed, type SampleRow } from "./sample-preview-feed";
 
+// Mirrors backend.MAX_SAMPLE_MESSAGES; test_messaging_imap pins this UI guard to its owner.
 const IMAP_SAMPLE_LIMIT = 50;
 
 type Outcome = DocumentType<typeof ImportImapSample>["import_imap_sample"];

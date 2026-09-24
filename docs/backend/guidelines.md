@@ -1202,7 +1202,8 @@ validated at the driver boundary.
   iterator page per pulse, reading and applying enumerated keys before absence.
   The driver retains its checkpoint in `SyncStream.reconcile_state`; adapters
   seek exclusively after the committed key in their own deterministic ordering.
-  Without `read_keys`, a bounded extraction baseline precedes enumeration.
+  Without `supports_identity_reads`, a bounded extraction baseline precedes
+  enumeration.
   Callers pulse until the checkpoint is empty; only then is reconciliation
   complete. Root and child absence passes are bounded too.
 - **Compound children belong to one aggregate.** A link's optional immutable

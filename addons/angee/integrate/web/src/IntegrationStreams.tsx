@@ -1,6 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
+import type { ConflictKeep, DiscrepancyKind, StreamKind } from "@angee/gql/console/graphql";
 import type { Row } from "@angee/metadata";
-import { extractActionOutcome, useAuthoredMutation } from "@angee/refine";
+import { useAuthoredQuery } from "@angee/refine";
 import {
   Button,
   Code,
@@ -8,9 +9,7 @@ import {
   TextLink,
   defineRowAction,
   jsonObjectFromUnknown,
-  optionToken,
   useActionResultMutation,
-  useActionResultRun,
   routeSearchParam,
   updateRouteSearch,
   useRouteSearch,
@@ -26,7 +25,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useMemo, type ReactElement } from "react";
 
 import { useIntegrateT } from "./i18n";
-import { ResolveSyncDiscrepancy } from "./documents";
+import { IntegrationSyncStream } from "./documents";
 
 export const INTEGRATION_STREAMS_TAB_ID = "integrate.streams";
 export const SYNC_STREAM_MODEL = "integrate.SyncStream";
@@ -36,12 +35,12 @@ export const RECORD_LINK_MODEL = "integrate.RecordLink";
 interface StreamRow extends StringIdRow {
   key?: string;
   partition?: string;
-  kind?: string;
+  kind?: StreamKind;
   resync_required?: boolean;
 }
 
 interface DiscrepancyRow extends StringIdRow {
-  kind?: string;
+  kind?: DiscrepancyKind;
   is_open?: boolean;
 }
 
@@ -80,6 +79,12 @@ export function IntegrationStreamsPane(): ReactElement {
   const requestedView = routeSearchParam(search, INTEGRATION_STREAM_SEARCH_KEYS.view);
   const view: StreamView = streamId && (requestedView === "discrepancies" || requestedView === "links")
     ? requestedView : "streams";
+  const streamRead = useAuthoredQuery(IntegrationSyncStream, { id: streamId ?? "" }, {
+    dataProviderName,
+    enabled: view !== "streams",
+    models: [SYNC_STREAM_MODEL],
+  });
+  const stream = streamRead.data?.sync_streams_by_pk;
   const show = useCallback((nextView: StreamView, id?: string): void => {
     void navigate({ to: ".", search: updateRouteSearch({
       [INTEGRATION_STREAM_SEARCH_KEYS.integration]: id ? integrationId : undefined,
@@ -91,11 +96,10 @@ export function IntegrationStreamsPane(): ReactElement {
     dataProviderName,
     invalidateModels: [SYNC_STREAM_MODEL],
   });
-  const [resolve] = useAuthoredMutation(ResolveSyncDiscrepancy, {
+  const [resolve] = useActionResultMutation<ActionFieldName>("resolveSyncDiscrepancy", {
     dataProviderName,
     invalidateModels: [SYNC_DISCREPANCY_MODEL, SYNC_STREAM_MODEL, RECORD_LINK_MODEL],
   });
-  const settle = useActionResultRun();
   const [retry] = useActionResultMutation<ActionFieldName>("retrySyncDiscrepancy", {
     dataProviderName,
     invalidateModels: [SYNC_DISCREPANCY_MODEL, SYNC_STREAM_MODEL],
@@ -143,7 +147,7 @@ export function IntegrationStreamsPane(): ReactElement {
       label: t("streams.openLinks"),
       variant: "ghost",
       pendingPolicy: "disable-actions",
-      visible: (row) => optionToken(row.kind) === "record_replica",
+      visible: (row) => row.kind === "RECORD_REPLICA",
       onSelect: (stream) => show("links", stream.id),
     }),
   ], [resync, show, t]);
@@ -162,21 +166,22 @@ export function IntegrationStreamsPane(): ReactElement {
       label: t("streams.resolve"),
       variant: "ghost",
       pendingPolicy: "active-row",
-      visible: (row) => row.is_open === true && optionToken(row.kind) !== "conflict",
-      onSelect: async (row) => { await settle(async () => extractActionOutcome(
-        await resolve({ id: row.id }), "resolveSyncDiscrepancy",
-      )); },
+      visible: (row) => row.is_open === true && row.kind !== "CONFLICT",
+      onSelect: (row) => resolve(row.id),
     }),
-    ...(["remote", "local"] as const).map((keep) => defineRowAction<DiscrepancyRow>({
+    ...(["REMOTE", "LOCAL"] as const satisfies readonly ConflictKeep[]).map((keep) => defineRowAction<DiscrepancyRow>({
       kind: "page",
-      id: `keep-${keep}`,
-      label: t(keep === "remote" ? "streams.keepRemote" : "streams.keepLocal"),
+      id: `keep-${keep.toLowerCase()}`,
+      label: t(keep === "REMOTE" ? "streams.keepRemote" : "streams.keepLocal"),
       variant: "ghost",
       pendingPolicy: "active-row",
-      visible: (row) => row.is_open === true && optionToken(row.kind) === "conflict",
-      onSelect: async (row) => { await settle(async () => extractActionOutcome(
-        await resolve({ id: row.id, keep }), "resolveSyncDiscrepancy",
-      )); },
+      visible: (row) => row.is_open === true && row.kind === "CONFLICT",
+      confirm: {
+        title: () => t(keep === "REMOTE" ? "streams.keepRemoteConfirm.title" : "streams.keepLocalConfirm.title"),
+        body: () => t(keep === "REMOTE" ? "streams.keepRemoteConfirm.body" : "streams.keepLocalConfirm.body"),
+        confirm: () => t(keep === "REMOTE" ? "streams.keepRemote" : "streams.keepLocal"),
+      },
+      onSelect: (row) => resolve(row.id, { keep }),
     })),
     defineRowAction<DiscrepancyRow>({
       kind: "page",
@@ -187,7 +192,7 @@ export function IntegrationStreamsPane(): ReactElement {
       visible: (row) => row.is_open === true,
       onSelect: (row) => retry(row.id),
     }),
-  ], [resolve, retry, settle, t]);
+  ], [resolve, retry, t]);
   const linkColumns = useMemo<readonly ListColumn<LinkRow>[]>(() => [
     { field: "external_key" },
     { field: "status" },
@@ -227,9 +232,11 @@ export function IntegrationStreamsPane(): ReactElement {
     <Button size="sm" variant="ghost" onClick={() => show("streams")}>
       {t("streams.back")}
     </Button>
-    <span className="text-13 text-fg-muted">
-      {t(view === "discrepancies" ? "streams.discrepancyScope" : "streams.linkScope", { stream: streamId })}
-    </span>
+    {stream ? <span className="text-13 text-fg-muted">
+      {t(view === "discrepancies" ? "streams.discrepancyScope" : "streams.linkScope", {
+        key: stream.key, partition: stream.partition,
+      })}
+    </span> : null}
   </>;
   return view === "discrepancies" ? (
     <ListView<DiscrepancyRow>

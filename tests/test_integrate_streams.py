@@ -14,8 +14,9 @@ from django.db import OperationalError, close_old_connections, connection, conne
 from django.utils import timezone
 from rebac import system_context
 
-from angee.integrate.impl import (
-    BridgeImpl,
+from angee.integrate.impl import AdapterContractError, BridgeImpl
+from angee.integrate.models import merge_json_state
+from angee.integrate.states import (
     DiscrepancyKind,
     DiscrepancyStatus,
     LinkStatus,
@@ -23,9 +24,7 @@ from angee.integrate.impl import (
     StreamKind,
     StreamPhase,
 )
-from angee.integrate.models import merge_json_state
 from angee.integrate.streams import (
-    AdapterContractError,
     ApplyResult,
     ChangeKind,
     CursorInvalid,
@@ -130,9 +129,11 @@ class MemoryAdapter(BridgeImpl):
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Any, *, using: str | None = None) -> None:
         assert connections[using].in_atomic_block
 
-    def local_changes(self, stream: Any, *, using: str | None = None) -> Iterable[LocalChange]:
+    def local_changes(
+        self, stream: Any, *, keys: frozenset[str] | None = None, using: str | None = None
+    ) -> Iterable[LocalChange]:
         assert not connections[using].in_atomic_block
-        return self.candidates
+        return [candidate for candidate in self.candidates if keys is None or candidate.external_key in keys]
 
     def write_back(
         self,
@@ -207,6 +208,64 @@ def test_three_way_classification(
         )
         == expected
     )
+
+
+@pytest.mark.parametrize("reconcile", [False, True])
+@pytest.mark.parametrize(
+    "page,message",
+    [
+        (None, "extract must return StreamPage"),
+        (StreamPage(None, {}), "records must be a sequence"),
+        (StreamPage(("one", "two"), {}), "extract exceeded page_bound"),
+    ],
+)
+def test_extraction_contract_is_checked_before_page_application(
+    stream_bridge: Channel, reconcile: bool, page: Any, message: str
+) -> None:
+    stream = SyncStream.objects.current(
+        stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, reconcile_interval=timedelta(0)
+    )
+    adapter = MemoryAdapter(pages=[page])
+
+    with pytest.raises(AdapterContractError, match=message):
+        if reconcile:
+            reconcile_stream(stream, adapter, page_bound=1)
+        else:
+            advance_stream(stream, adapter, page_bound=1)
+
+    stream.refresh_from_db()
+    assert stream.cursor == {}
+    assert not RecordLink.objects.filter(stream=stream).exists()
+
+
+@pytest.mark.parametrize("push", [False, True])
+def test_invalid_write_result_never_promotes_record_bases(stream_bridge: Channel, push: bool) -> None:
+    class InvalidWriteAdapter(MemoryAdapter):
+        def write_back(self, link: Any, projection: Any, *, expected_version: str, using: str | None = None) -> Any:
+            return None
+
+    stream = SyncStream.objects.current(
+        stream_bridge, "records", kind=StreamKind.RECORD_REPLICA, direction=StreamDirection.BIDIRECTIONAL
+    )
+    link = RecordLink.objects.observe(stream, "person:1")
+    RecordLink.objects.promote(
+        link, source_payload={}, source_hash="base", mapped_payload={}, local_hash="base", remote_version="v1"
+    )
+    adapter = InvalidWriteAdapter(
+        pages=[StreamPage((RecordChange("person:1", {}, "base", "changed", "v1"),), {"offset": 1})],
+        candidates=(LocalChange("person:1", {}, "changed"),),
+    )
+
+    with pytest.raises(AdapterContractError, match="write_back must return WriteBackResult"):
+        if push:
+            push_stream(stream, adapter)
+        else:
+            advance_stream(stream, adapter)
+
+    stream.refresh_from_db()
+    link.refresh_from_db()
+    assert stream.cursor == {}
+    assert (link.remote_base_hash, link.local_base_hash, link.remote_version) == ("base", "base", "v1")
 
 
 @pytest.mark.parametrize("trigger", ["invalid_cursor", "stream_flag", "page_flag"])
@@ -982,6 +1041,25 @@ def test_event_feed_accepts_message_with_noncopyable_timezone(stream_bridge: Cha
     assert not RecordRevision.objects.exists()
 
 
+@pytest.mark.parametrize("cursor", [[], 0, ""])
+def test_seed_rejects_falsy_non_object_cursors(stream_bridge: Channel, cursor: Any) -> None:
+    class InvalidSeedAdapter(MemoryAdapter):
+        def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> Any:
+            return cursor
+
+    stream_bridge.cursor = {"legacy": 1}
+    stream_bridge.save(update_fields=["cursor"])
+    adapter = InvalidSeedAdapter()
+    adapter.integration = stream_bridge
+
+    with pytest.raises(AdapterContractError, match="plain finite JSON"):
+        open_stream(stream_bridge, "records", "", adapter)
+
+    stream = SyncStream.objects.current_for_bridge(stream_bridge, "records").get()
+    assert stream.cursor == {}
+    assert stream.last_advanced_at is None
+
+
 @pytest.mark.parametrize("boundary", ["page", "reset", "definition"])
 @pytest.mark.parametrize(
     "cursor",
@@ -997,7 +1075,7 @@ def test_stream_rejects_non_json_cursors_before_applying(
     stream_bridge: Channel, boundary: str, cursor: dict[Any, Any]
 ) -> None:
     stream = SyncStream.objects.current(stream_bridge, "events")
-    with pytest.raises(ValueError):
+    with pytest.raises(AdapterContractError, match="plain finite JSON"):
         if boundary == "definition":
 
             class InvalidDefinitionAdapter(MemoryAdapter):

@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, Literal, cast
+from typing import Any, ClassVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from django.apps import apps
@@ -66,16 +66,7 @@ from angee.integrate.credentials import CredentialKind, CredentialKindHandler
 from angee.integrate.errors import INTEGRATION_FAILURE_MESSAGE, IntegrationError
 from angee.integrate.events import EventKind
 from angee.integrate.fields import DiscrepancyOpenField
-from angee.integrate.impl import (
-    UNSET,
-    DiscrepancyKind,
-    DiscrepancyStatus,
-    IntegrationImpl,
-    LinkStatus,
-    StreamDirection,
-    StreamKind,
-    StreamPhase,
-)
+from angee.integrate.impl import IntegrationImpl
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.locks import bridge_is_locked
 from angee.integrate.net import validate_public_url
@@ -83,6 +74,16 @@ from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
+from angee.integrate.states import (
+    UNSET,
+    ConflictKeep,
+    DiscrepancyKind,
+    DiscrepancyStatus,
+    LinkStatus,
+    StreamDirection,
+    StreamKind,
+    StreamPhase,
+)
 from angee.integrate.streams import begin_stream_cycle, push_stream, read_stream_keys, sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.integrate.webhooks import PinnedWebhookClient, WebhookDeliveryError
@@ -3670,23 +3671,19 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
                 link.status = LinkStatus.DISCREPANT
             return row
 
-    def resolve(
-        self, discrepancy: Any, *, keep: Literal["remote", "local"] | None = None, using: str | None = None
-    ) -> Any:
-        """Resolve non-conflict quarantine, or dispatch an explicit conflict choice."""
+    def resolve(self, discrepancy: Any, *, using: str | None = None) -> Any:
+        """Resolve non-conflict quarantine; conflicts require an explicit choice."""
         using = get_write_alias(self.model, using=using, bound=self, instance=discrepancy)
-        if keep is not None:
-            return self.db_manager(using).resolve_conflict(discrepancy, keep=keep, using=using)
         return self._mark_resolved(discrepancy, using=using)
 
-    def resolve_conflict(self, discrepancy: Any, *, keep: Literal["remote", "local"], using: str | None = None) -> Any:
+    def resolve_conflict(self, discrepancy: Any, *, keep: ConflictKeep, using: str | None = None) -> Any:
         """Keep a chosen side after a fresh read, preserving conditional remote writes.
 
         Transport stays outside transactions. A failed apply/write retains open
         quarantine; a newer remote version can reject the local choice again.
         """
         using = get_write_alias(self.model, using=using, bound=self, instance=discrepancy)
-        if keep not in ("remote", "local"):
+        if keep not in ConflictKeep.values:
             raise ValidationError("Choose remote or local changes.")
         if connections[using].in_atomic_block:
             raise RuntimeError("Conflict resolution must run outside a database transaction.")
@@ -3713,10 +3710,14 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
                     raise ValidationError("Conflict resolution requires an adapter with identity reads.")
                 if stream.resync_required:
                     raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
-                if keep == "local" and stream.direction == StreamDirection.PULL:
+                if keep == ConflictKeep.LOCAL and stream.direction == StreamDirection.PULL:
                     raise ValidationError("A pull-only stream cannot keep local changes remotely.")
                 bases = (owner.remote_base_hash, owner.local_base_hash, owner.remote_version)
-                remote = read_stream_keys(adapter, stream, tuple(keys), using=using)[0] if keep == "local" else None
+                remote = (
+                    read_stream_keys(adapter, stream, tuple(keys), using=using)[0]
+                    if keep == ConflictKeep.LOCAL
+                    else None
+                )
                 with transaction.atomic(using=using):
                     type(stream).objects.db_manager(using).lock_current(stream, using=using)
                     locked = type(owner).objects.db_manager(using).filter(pk=owner.pk).lock_if_supported().get()
@@ -3730,7 +3731,7 @@ class SyncDiscrepancyManager(AngeeManager.from_queryset(SyncDiscrepancyQuerySet)
                         locked.save(using=using, update_fields=["remote_base_hash", "remote_version", "updated_at"])
                     self._mark_resolved(current, conflict=True, using=using)
                 resolved = True
-                if keep == "remote":
+                if keep == ConflictKeep.REMOTE:
                     prepared = begin_stream_cycle(stream, adapter, force_apply=keys, using=using)
                     if prepared.resync_required:
                         raise ValidationError("Complete the requested stream baseline before resolving its conflict.")

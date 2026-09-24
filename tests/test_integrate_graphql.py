@@ -33,7 +33,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
-from angee.integrate.impl import DiscrepancyKind, DiscrepancyStatus, StreamKind
+from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
 from angee.integrate.webhooks import WebhookDeliveryError
 from tests.conftest import (
     POSTS_TEST_MODELS,
@@ -350,7 +350,10 @@ def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() ->
         assert metadata.roots.create_name is metadata.roots.update_name is metadata.roots.delete_name is None
         assert set(metadata.query.axes) == axes
     sdl = schema.as_str()
-    assert "resolveSyncDiscrepancy(id: ID!, keep: String = null): ActionResult!" in sdl
+    assert "resolveSyncDiscrepancy(id: ID!, keep: ConflictKeep = null): ActionResult!" in sdl
+    assert "sync_run_id:" not in sdl
+    assert "enum DiscrepancyKind {" in sdl
+    assert "enum StreamKind {" in sdl
     for action in ("retrySyncDiscrepancy", "resyncSyncStream"):
         assert f"{action}(id: ID!): ActionResult!" in sdl
 
@@ -1785,12 +1788,15 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
         return row
 
     monkeypatch.setattr(type(SyncDiscrepancy.objects), "resolve_conflict", resolve)
-    query = """mutation Resolve($id: ID!, $keep: String) {
+    query = """mutation Resolve($id: ID!, $keep: ConflictKeep) {
       resolveSyncDiscrepancy(id: $id, keep: $keep) { ok }
     }"""
-    result = _data(_execute(_schema(), query, {"id": _public_id(discrepancy), "keep": keep}, user=admin))
+    result = _data(_execute(_schema(), query, {"id": _public_id(discrepancy), "keep": keep.upper()}, user=admin))
     assert result["resolveSyncDiscrepancy"]["ok"]
     assert calls == [(discrepancy.pk, keep, "default")]
+    invalid = _execute(_schema(), query, {"id": _public_id(discrepancy), "keep": "TYPO"}, user=admin)
+    assert invalid.errors and "ConflictKeep" in invalid.errors[0].message
+    assert len(calls) == 1
     missing = _data(_execute(_schema(), query, {"id": _public_id(discrepancy)}, user=admin))
     assert not missing["resolveSyncDiscrepancy"]["ok"]
     assert len(calls) == 1

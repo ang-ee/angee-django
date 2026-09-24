@@ -8,11 +8,13 @@ from typing import Any
 import pytest
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.db import related_on
 from angee.base.identity import public_id_of
-from angee.integrate.impl import BridgeImpl, DiscrepancyKind, DiscrepancyStatus, StreamKind
+from angee.integrate.impl import BridgeImpl
+from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
 from angee.integrate.streams import RecordChange, StreamPage
 from angee.workflows.attempts import AttemptResultKind
 from angee.workflows.models import StepRunStatus
@@ -140,37 +142,72 @@ def test_semantic_failure_quarantines_and_continues_later_records(
     assert step_run.output["discrepancy_ids"] == [public_id_of(discrepancy)]
 
 
+@pytest.mark.parametrize("coverage", [False, True])
+@pytest.mark.parametrize(
+    "transport_error",
+    [
+        ConnectionError("transport unavailable"),
+        TypeError("provider transport failed"),
+        AttributeError("provider socket is unavailable"),
+        NotImplementedError("provider operation is unavailable"),
+        PydanticValidationError.from_exception_data(
+            "Provider response", [{"type": "missing", "loc": ("payload",), "input": {}}]
+        ),
+    ],
+    ids=["connection", "type", "attribute", "provider-operation", "provider-response"],
+)
 def test_infrastructure_failure_raises_and_engine_retains_declared_retry(
+    coverage: bool,
+    transport_error: Exception,
     stream_bridge: Channel,
     workflow_engine_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = MemoryAdapter(pages=[ConnectionError("transport unavailable")])
-    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
-    run, step_run = _start_stage(stream_bridge, retry=True)
-    raised = []
-    invoke = BoundedStreamStage.run
+    class UnavailableAdapter(ReadKeysAdapter):
+        def read_keys(self, stream: Any, keys: Any, *, using: str | None = None) -> tuple[RecordChange, ...]:
+            raise transport_error
 
-    def capture_error(
-        self: BoundedStreamStage, step_run: Any, *, now: datetime, using: str | None = None
-    ) -> StepResult:
+    adapter = UnavailableAdapter(pages=[transport_error])
+    if coverage:
+        stream = SyncStream.objects.current(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "retry")
+        SyncDiscrepancy.objects.record(
+            stream,
+            link=link,
+            kind=DiscrepancyKind.SEMANTIC,
+            code="needs-read",
+            retry_at=timezone.now() - timedelta(seconds=1),
+        )
+    monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
+    run, step_run = _start_stage(stream_bridge, coverage=coverage, retry=True)
+    if coverage:
+        execute_started(run)
+        step_run.refresh_from_db()
+        assert step_run.status == StepRunStatus.WAITING
+        advance_once(run, now=step_run.wait_until)
+        step_run.refresh_from_db()
+    raised = []
+    stage_type = CoverageGate if coverage else BoundedStreamStage
+    invoke = stage_type.run
+
+    def capture_error(self: Any, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
         try:
             return invoke(self, step_run, now=now, using=using)
         except TransientStepError as error:
             raised.append(str(error))
             raise
 
-    monkeypatch.setattr(BoundedStreamStage, "run", capture_error)
+    monkeypatch.setattr(stage_type, "run", capture_error)
     with system_context(reason="test original stream attempt"):
         original = related_on(step_run, "current_attempt", using="default")
     assert original is not None
 
-    execute_started(run)
+    execute_started(run, now=step_run.wait_until if coverage else None)
 
     step_run.refresh_from_db()
     original.refresh_from_db()
-    assert raised == ["transport unavailable"]
+    assert raised == [str(transport_error)]
     assert original.result_kind == AttemptResultKind.TRANSIENT_ERROR
     assert step_run.status == StepRunStatus.STARTED
     with system_context(reason="test retained stream retry"):
@@ -196,9 +233,10 @@ def test_adapter_contract_failure_does_not_retain_a_retry(
 ) -> None:
     class MissingIdentityAdapter(ReadKeysAdapter):
         def read_keys(self, stream: Any, keys: Any, *, using: str | None = None) -> tuple[RecordChange, ...]:
-            if missing_implementation:
-                raise NotImplementedError("The declared identity-read capability must be implemented.")
             return ()
+
+    class UnimplementedIdentityAdapter(MemoryAdapter):
+        supports_identity_reads = True
 
     stream = SyncStream.objects.current(stream_bridge, "records", kind=StreamKind.RECORD_REPLICA)
     link = RecordLink.objects.observe(stream, "missing")
@@ -209,7 +247,7 @@ def test_adapter_contract_failure_does_not_retain_a_retry(
         code="needs-read",
         retry_at=timezone.now() - timedelta(seconds=1),
     )
-    adapter = MissingIdentityAdapter()
+    adapter = UnimplementedIdentityAdapter() if missing_implementation else MissingIdentityAdapter()
     monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
     run, step_run = _start_stage(stream_bridge, coverage=coverage, retry=True)
 
@@ -230,13 +268,19 @@ def test_adapter_contract_failure_does_not_retain_a_retry(
         assert SyncStream.objects.get(pk=stream.pk).cursor == {}
 
 
-def test_invalid_adapter_cursor_fails_without_retry_or_page_commit(
+@pytest.mark.parametrize(
+    "page",
+    [None, StreamPage(("uncommitted",), {"offset": float("nan")})],
+    ids=["return-type", "cursor"],
+)
+def test_invalid_adapter_page_fails_without_retry_or_commit(
+    page: Any,
     stream_bridge: Channel,
     workflow_engine_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = MemoryAdapter(pages=[StreamPage(("uncommitted",), {"offset": float("nan")})])
+    adapter = MemoryAdapter(pages=[page])
     monkeypatch.setattr(Channel, "backend", property(lambda self: adapter))
     run, step_run = _start_stage(stream_bridge, retry=True)
 
@@ -244,7 +288,7 @@ def test_invalid_adapter_cursor_fails_without_retry_or_page_commit(
 
     step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.FAILED
-    with system_context(reason="test invalid cursor rejects the page without retry"):
+    with system_context(reason="test invalid page rejects the attempt without retry"):
         attempt = related_on(step_run, "current_attempt", using="default")
         assert attempt is not None
         assert attempt.result_kind == AttemptResultKind.ERROR

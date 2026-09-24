@@ -34,7 +34,7 @@ preview resets the query's pages through the shared owner.
 
 Mailbox polling uses one stream cursor per mailbox. On the first stream open,
 `seed_cursor` translates a retained `Bridge.cursor` position once; an existing
-stream never reseeds. Legacy future-only policy moves into the stream's config,
-so a later epoch reset preserves it. The paused starting-point action snapshots
-remote boundaries before its transaction and installs them through the driver's
-stream reset owner.
+stream never reseeds. The driver moves legacy future-only policy into the bridge's
+config under its row lock, so a later epoch reset preserves it. The paused
+starting-point action snapshots remote boundaries before its transaction and
+installs them through the driver's stream reset owner.

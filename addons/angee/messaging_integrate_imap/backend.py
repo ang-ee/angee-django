@@ -10,8 +10,8 @@ Incremental state lives on one ``SyncStream.cursor`` per mailbox::
     {"uidvalidity": 123456, "last_uid": 4211}
 
 An operator may establish a future-only boundary while the channel is paused.
-That operator intent belongs to ``bridge.config``; legacy intent is retained in
-``SyncStream.config`` during seeding. Epoch resets preserve both policy owners.
+That operator intent belongs to ``bridge.config``; the driver moves legacy
+intent there during the first stream cutover. Epoch resets preserve that policy.
 
 Correctness rests on three facts. UIDVALIDITY is checked every run: a changed
 value raises ``CursorInvalid`` and starts a new stream generation. A normal
@@ -209,7 +209,6 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._work: deque[_MailboxWork] | None = None
         self._own_addresses: frozenset[str] = frozenset()
         self._stream_identity: tuple[str, int] | None = None
-        self._stream: Any = None
         self._cursor: dict[str, Any] = {}
         self._credential: Any = None
         self._external_account: Any = None
@@ -231,7 +230,6 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
         using = get_write_alias(type(self.bridge), using=using, instance=self.bridge)
         self._load_credentials(using=using)
-        self._stream = stream
         identity = (stream.partition, stream.generation)
         if self._stream_identity != identity:
             self._stream_identity = identity
@@ -428,23 +426,22 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         names = sorted(self._select_mailboxes(client))
         return tuple(StreamDefinition(key="messages", partition=name) for name in names)
 
-    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
-        """Translate the mailbox position and retain legacy policy on its first stream."""
+    def seed_config(self, legacy_cursor: dict[str, Any]) -> dict[str, Any]:
+        """Translate legacy delivery policy for the driver's locked bridge cutover."""
 
-        mailbox = (legacy_cursor.get("mailboxes") or {}).get(stream.partition)
-        if not mailbox:
-            return None
         if legacy_cursor.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE:
-            # Driver seeding holds the stream lock; retain policy across later epochs.
-            using = get_write_alias(type(self.bridge), instance=self.bridge)
-            stream.config = {
-                **stream.config,
+            return {
                 "delivery_mode": NEW_MAIL_DELIVERY_MODE,
                 "source_identity": legacy_cursor.get("source_identity", ""),
-                "mailbox_selection": sorted(legacy_cursor["mailboxes"]),
+                "mailbox_selection": sorted(legacy_cursor.get("mailboxes") or {}),
             }
-            stream.save(using=using, update_fields=["config"])
-        return deepcopy(mailbox)
+        return {}
+
+    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
+        """Translate only the mailbox position on its first stream."""
+
+        mailbox = (legacy_cursor.get("mailboxes") or {}).get(stream.partition)
+        return deepcopy(mailbox) if mailbox else None
 
     def _report_progress(self, stage: str, message: str, **details: Any) -> None:
         """Publish IMAP-specific progress into the generic bridge reporter."""
@@ -529,7 +526,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         new_only = bool(boundary)
         if new_only and boundary.get("source_identity") != self._source_identity_digest():
             raise ImapError("The IMAP account changed. Pause the channel and set the starting point again.")
-        selection = boundary.get("mailbox_selection", boundary.get("mailboxes", ()))
+        selection = boundary.get("mailbox_selection", ())
         if new_only and sorted(selection) != sorted(self._select_mailboxes(client)):
             raise ImapError("The selected IMAP mailboxes changed. Pause the channel and set the starting point again.")
         status = client.folder_status(name, [b"UIDVALIDITY", b"UIDNEXT"])
@@ -549,13 +546,11 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._report_progress("discovering", "Planned IMAP mailbox sync", mailbox=name, queued_messages=len(uids))
         return deque([_MailboxWork(name=name, uidvalidity=uidvalidity, uids=uids)])
 
-    def delivery_boundary(self, *, using: str | None = None) -> dict[str, Any]:
-        """Read operator intent or legacy policy retained on this stream."""
+    def delivery_boundary(self) -> dict[str, Any]:
+        """Read the bridge's future-only delivery policy."""
 
         if self.bridge.config.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE:
             return self.bridge.config
-        if self._stream is not None and self._stream.config.get("delivery_mode") == NEW_MAIL_DELIVERY_MODE:
-            return self._stream.config
         return {}
 
     def _invalidate_cursor(self, name: str, *, uidvalidity: int, uidnext: int | None = None) -> None:

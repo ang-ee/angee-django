@@ -30,7 +30,7 @@ from rebac import system_context
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClient
-from angee.integrate.impl import (
+from angee.integrate.states import (
     DiscrepancyKind,
     DiscrepancyStatus,
     LinkStatus,
@@ -337,6 +337,56 @@ def test_local_edit_conditional_put_updates_version_and_both_bases(replica: Repl
     observed = _parse_vcard(vobject.readOne(raw), etag=etag, href=_HREF, raw=raw)
     assert link.remote_base_hash == canonical_json_sha256(contact_projection(observed))
     assert link.origin == "local"
+
+
+@pytest.mark.parametrize("selected", ["linked", "named", "generated", "empty", "bound-alias"])
+def test_selected_push_projects_only_requested_contacts(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, selected: str
+) -> None:
+    person, link = replica.baseline()
+    person.notes = "Local edit"
+    person.save(update_fields=["notes"])
+    named = Person.objects.create(
+        display_name="Grace Hopper",
+        source_uid="grace",
+        folder_id=person.folder_id,
+        created_by_id=replica.directory.owner_id,
+    )
+    generated = Person.objects.create(
+        display_name="Margaret Hamilton",
+        folder_id=person.folder_id,
+        created_by_id=replica.directory.owner_id,
+    )
+    choices = {
+        "linked": (link.external_key, person),
+        "named": (named.source_uid, named),
+        "generated": (f"angee-{generated.pk}", generated),
+        "bound-alias": (named.source_uid, named),
+    }
+    if selected == "bound-alias":
+        aliased = RecordLink.objects.observe(replica.stream, "remote-grace")
+        RecordLink.objects.promote(
+            aliased, source_payload={}, source_hash="base", mapped_payload={}, local_hash="base", target=named
+        )
+    keys = frozenset() if selected == "empty" else frozenset({choices[selected][0]})
+    expected = set() if selected in {"empty", "bound-alias"} else {choices[selected][1].pk}
+    projected = set()
+    manager_class = type(Party.objects)
+    project_contacts = manager_class.project_contacts
+
+    def capture_projection(self: Any, people: Any, *, using: str | None = None) -> Any:
+        people = tuple(people)
+        projected.update(person.pk for person in people)
+        return project_contacts(self, people, using=using)
+
+    monkeypatch.setattr(manager_class, "project_contacts", capture_projection)
+    replica.server.requests.clear()
+
+    result = push_stream(replica.stream, replica.backend, external_keys=keys, using="default")
+
+    assert projected == expected
+    assert result.count == len(expected)
+    assert len([request for request in replica.server.requests if request[0] == "PUT"]) == len(expected)
 
 
 @pytest.mark.parametrize("remote_deleted,local_deleted", [(False, False), (True, False), (False, True)])

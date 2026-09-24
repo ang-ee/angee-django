@@ -9,13 +9,13 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.db import get_write_alias, related_on
 from angee.base.identity import instance_from_public_id, public_id_of
-from angee.integrate.impl import DiscrepancyKind
+from angee.integrate.impl import AdapterContractError
 from angee.integrate.models import Bridge
+from angee.integrate.states import DiscrepancyKind
 from angee.integrate.streams import advance_stream, begin_stream_cycle, open_stream
 from angee.workflows.attempts import RecoveryMode
 from angee.workflows.configs import WorkflowStepConfig
@@ -24,10 +24,7 @@ from angee.workflows.steps import GateStep, StepEffect, StepExecutionMode, StepI
 
 _PASSTHROUGH_STREAM_ERRORS = (
     ValidationError,
-    PydanticValidationError,
-    TypeError,
-    AttributeError,
-    NotImplementedError,
+    AdapterContractError,
     TransientStepError,
 )
 """Preserve authoring/contract failures and explicit native retry classification."""

@@ -26,7 +26,10 @@ defers terminal telemetry to that owner. Direct bridges still return an integer.
 Event feeds compose their domain's idempotent ingest verb and never create links
 or revisions. Messaging uses conversation partitions for Slack and mailbox
 partitions for IMAP. Their legacy bridge cursor slices seed the first stream row
-only, through `BridgeImpl.seed_cursor`. Subsequent progress belongs to that stream. `Bridge.cursor` remains for
+only, through the pure `BridgeImpl.seed_cursor` hook. Legacy delivery policy
+translates through `seed_config`; the driver fills missing `Bridge.config` keys
+under the bridge row lock in the same transaction as cursor seeding. Subsequent
+progress belongs to the stream. `Bridge.cursor` remains for
 Mount's existing cursor cleanup and Feed's declared backend contract, as well as
 the first-generation messaging seeds; its presence does not authorize a second
 cursor writer for an adopted stream.
@@ -74,7 +77,8 @@ view uses the backend `is_open` filter and offers explicit remote/local choices
 for conflicts.
 
 At cycle start, due non-conflict replica discrepancies with links are re-read
-through the optional `read_keys(stream, keys, *, using)` adapter operation. It
+through `read_keys(stream, keys, *, using)` when the adapter declares
+`supports_identity_reads`. It
 returns one `RecordChange` for every requested external key, including a remote
 tombstone when that key no longer exists. Transport runs outside transactions;
 the shared page apply path commits the observations without changing the cursor,

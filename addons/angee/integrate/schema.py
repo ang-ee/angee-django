@@ -63,6 +63,7 @@ from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import models_with
+from angee.integrate.states import ConflictKeep
 
 logger = logging.getLogger(__name__)
 
@@ -1282,7 +1283,6 @@ class BridgeTypeMixin(IntegrationLabelMixin, BridgeSyncStatusMixin):
     last_sync_summary: strawberry.scalars.JSON
     sync_error: auto
     sync_progress: strawberry.scalars.JSON
-    sync_run_id: auto
     created_at: auto
     updated_at: auto
 
@@ -1417,7 +1417,7 @@ class SyncStreamType(AngeeNode):
     @strawberry_django.field(
         annotate=Count(
             "discrepancies",
-            filter=Q(discrepancies__in=SyncDiscrepancy.objects.unresolved().values("pk")),
+            filter=Q(discrepancies__is_open=True),
             distinct=True,
         )
     )
@@ -1594,18 +1594,27 @@ _SYNC_DISCREPANCY_RESOURCE = hasura_model_resource(
 )
 
 
+strawberry.enum(cast(Any, ConflictKeep))
+
+
 @strawberry.type
 class SyncRecordActionMutation:
     """Admin-gated operational transitions on the bridge-owned record protocol."""
 
     @strawberry.mutation(name="resolveSyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
     @action_guard("Could not resolve the discrepancy.")
-    def resolve_sync_discrepancy(self, info: strawberry.Info, id: PublicID, keep: str | None = None) -> ActionResult:
+    def resolve_sync_discrepancy(
+        self, info: strawberry.Info, id: PublicID, keep: ConflictKeep | None = None
+    ) -> ActionResult:
         """Dispatch resolution through the discrepancy manager after row authorization."""
 
         using = get_write_alias(SyncDiscrepancy)
         discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write", using=using)
-        SyncDiscrepancy.objects.db_manager(using).resolve(discrepancy, keep=keep, using=using)
+        manager = SyncDiscrepancy.objects.db_manager(using)
+        if keep is None:
+            manager.resolve(discrepancy, using=using)
+        else:
+            manager.resolve_conflict(discrepancy, keep=keep, using=using)
         return ActionResult(ok=True, message=_("Discrepancy resolved."))
 
     @strawberry.mutation(name="retrySyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
