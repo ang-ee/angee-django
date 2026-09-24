@@ -27,6 +27,7 @@ import {
   useResourceRecordHrefLookup,
   useRouteHref,
   useRouteSearch,
+  updateRouteSearch,
   type RecordTabDescriptor,
   type StringIdRow,
 } from "@angee/ui";
@@ -73,7 +74,7 @@ interface StepArtifactRow extends StringIdRow {
   target_reference?: { model?: string; id?: string } | null;
 }
 
-export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onReprocess?: () => Promise<string | undefined> }): React.ReactElement {
+export function RunTimelinePanel({ runId, onReprocess, reprocessing = false }: { runId: string; onReprocess?: () => Promise<void>; reprocessing?: boolean }): React.ReactElement {
   const t = useWorkflowsT();
   const navigate = useNavigate();
   const routeHref = useRouteHref();
@@ -84,8 +85,6 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
   const showingExecutionHistory = search.history === "executions";
   const selectedStepId = typeof search.step === "string" ? search.step : null;
   const [containerRef, wide] = useContainerQuery(960);
-  const [reprocessing, setReprocessing] = React.useState(false);
-  const [reprocessError, setReprocessError] = React.useState<string | null>(null);
   const runQuery = useAuthoredQuery(
     WorkflowRunInspectionDocument,
     { run: runId },
@@ -176,9 +175,9 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
     if (!validExecution || attemptId || showingAttemptHistory || !currentAttemptId) return;
     void navigate({
       to: ".",
-      search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, {
+      search: updateRouteSearch({
         attempt: currentAttemptId,
-        history: null,
+        history: undefined,
       }),
       replace: true,
     });
@@ -188,10 +187,10 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
     if (executionId || showingExecutionHistory || candidates.length !== 1) return;
     void navigate({
       to: ".",
-      search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, {
+      search: updateRouteSearch({
         execution: candidates[0]!.id,
-        attempt: null,
-        history: null,
+        attempt: undefined,
+        history: undefined,
       }),
       replace: true,
     });
@@ -217,10 +216,10 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
     || t("runs.failedSummaryFallback");
   const activeAdvanceError = TERMINAL_RUN_STATUSES.has(String(run.status)) ? null : run.error;
   const setExecution = (id: string | null) => {
-    void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { execution: id, attempt: null, history: id ? null : selectedStepId ? "executions" : null }) });
+    void navigate({ to: ".", search: updateRouteSearch({ execution: id ?? undefined, attempt: undefined, history: id ? undefined : selectedStepId ? "executions" : undefined }) });
   };
   const setAttempt = (id: string | null) => {
-    void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { attempt: id, history: id ? null : "attempts" }) });
+    void navigate({ to: ".", search: updateRouteSearch({ attempt: id ?? undefined, history: id ? undefined : "attempts" }) });
   };
   const executionList = (
     <ResourceList resource={STEP_RUN_MODEL} scope="local" placement="inline" hideCreate pageSize={20} recordId={validExecution ? executionId : null} onSelect={setExecution} onClose={() => setExecution(null)} baseFilter={{ run: { exact: runId }, ...(selectedStepId ? { step: { exact: selectedStepId } } : {}) }}>
@@ -244,7 +243,7 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
   ) : <GraphView className="h-full" ariaLabel={t("runs.graph")} fitViewOptions={{ padding: 0.18, maxZoom: 1 }} nodes={graphNodes} edges={graphEdges} nodeStyles={workflowNodeStyles} onNodeSelect={(node) => {
     const nodeId = node?.id ?? null;
     if (nodeId === selectedStepId) return;
-    void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { step: nodeId, execution: null, attempt: null, history: null }) });
+    void navigate({ to: ".", search: updateRouteSearch({ step: nodeId ?? undefined, execution: undefined, attempt: undefined, history: undefined }) });
   }} />;
   const narrowStack = (label: React.ReactNode, backLabel: React.ReactNode, onBack: () => void, content: React.ReactNode) => (
     <section aria-label={String(label)} className="flex h-full min-h-0 flex-col">
@@ -262,7 +261,7 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
       : executionId
         ? narrowStack(executionSummary, t("runs.backToExecutions"), () => setExecution(null), attemptList)
       : selectedStepId
-        ? narrowStack(t("runs.executionsForStep"), t("runs.backToGraph"), () => { void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, { step: null, history: null }) }); }, executionList)
+        ? narrowStack(t("runs.executionsForStep"), t("runs.backToGraph"), () => { void navigate({ to: ".", search: updateRouteSearch({ step: undefined, history: undefined }) }); }, executionList)
         : graph;
   return (
     <div ref={containerRef} className="flex h-full min-h-0 flex-col">
@@ -287,22 +286,17 @@ export function RunTimelinePanel({ runId, onReprocess }: { runId: string; onRepr
         <p className="mt-1 text-13 text-danger-text">{failedError}</p>
         {failedExecution ? <div className="mt-3 flex flex-wrap gap-2">
           <Button type="button" size="sm" variant="secondary" onClick={() => {
-            void navigate({ to: ".", search: (previous: Readonly<Record<string, unknown>>) => inspectionSelectionSearch(previous, {
-              step: failedExecution.step?.id ?? null,
+            void navigate({ to: ".", search: updateRouteSearch({
+              step: failedExecution.step?.id,
               execution: failedExecution.id,
-              attempt: failedAttemptId,
-              history: null,
+              attempt: failedAttemptId ?? undefined,
+              history: undefined,
             }) });
           }}>{t("runs.inspectFailure")}</Button>
           {onReprocess ? <Button type="button" size="sm" disabled={reprocessing} onClick={() => {
-            setReprocessing(true);
-            setReprocessError(null);
-            void onReprocess().catch((error) => {
-              setReprocessError(errorMessage(error, t("runs.reprocessFailed")));
-            }).finally(() => setReprocessing(false));
+            void onReprocess();
           }}>{reprocessing ? t("runs.reprocessing") : t("runs.reprocess")}</Button> : null}
         </div> : null}
-        {reprocessError ? <div className="mt-3"><ErrorBanner description={reprocessError} /></div> : null}
         {failedAttemptId ? <details className="mt-3">
           <summary className="cursor-pointer text-13 font-medium text-fg">{t("runs.recoveryNext")}</summary>
           <AttemptRecoveryPanel attemptId={failedAttemptId} />
@@ -545,18 +539,6 @@ function AttemptResultBadge({ kind, t }: { kind: unknown; t: ReturnType<typeof u
       : value === "SUSPEND" ? t("runs.resultSUSPEND")
         : value === "DONE" ? t("runs.resultDONE") : value;
   return <Badge tone={statusTone(value)}>{label}</Badge>;
-}
-
-export function inspectionSelectionSearch(
-  search: Readonly<Record<string, unknown>>,
-  update: { step?: string | null; execution?: string | null; attempt?: string | null; history?: string | null },
-): Record<string, unknown> {
-  const next = { ...search };
-  for (const [key, value] of Object.entries(update)) {
-    if (value) next[key] = value;
-    else delete next[key];
-  }
-  return next;
 }
 
 export function runCollectionFilter(

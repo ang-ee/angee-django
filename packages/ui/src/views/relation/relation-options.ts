@@ -81,7 +81,7 @@ export function useRelationSelectedOption(
     [labelField],
   );
   const read = useOne<RowRecord, HttpError>({
-    resource: resource ? refineResourceName(resource) : "__angee_disabled__",
+    resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     id: value ?? "",
     meta: { fields },
@@ -191,7 +191,7 @@ export function useRelationOptions(
     [extraFields, labelField],
   );
   const run = useList<RowRecord, HttpError>({
-    resource: resource ? refineResourceName(resource) : "__angee_disabled__",
+    resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     pagination: {
       mode: "server",

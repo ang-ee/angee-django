@@ -184,7 +184,7 @@ export function useFormViewSave({
   t,
 }: UseFormViewSaveProps): FormViewSaveSurface {
   const toast = useToast();
-  const refineResource = dataResource ? refineResourceName(dataResource) : "";
+  const refineResource = refineResourceName(dataResource);
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],
@@ -224,12 +224,12 @@ export function useFormViewSave({
   }, [formFields, isCreate, modelMetadata, submit]);
   const queryClient = useQueryClient();
   const { keys } = useKeys();
-  const { identifier } = useResourceParams({ resource: refineResource || "__angee_disabled__" });
+  const { identifier } = useResourceParams({ resource: refineResource });
   const detailKey = React.useMemo(() => keys().data(dataResource?.schemaName ?? "default")
     .resource(identifier ?? "").action("one").id(id ?? "")
     .params({ fields: refineFields }).get(), [dataResource?.schemaName, id, identifier, keys, refineFields]);
   const read = useOne<RowRecord, HttpError>({
-    resource: refineResource || "__angee_disabled__",
+    resource: refineResource,
     id: id ?? undefined,
     dataProviderName: dataResource?.schemaName,
     meta: { fields: refineFields },
@@ -252,7 +252,7 @@ export function useFormViewSave({
     void read.query.refetch();
   }, [acknowledgedSource, read.query.refetch]);
   const create = useCreate<RowRecord, HttpError, FormValues>({
-    resource: refineResource || "__angee_disabled__",
+    resource: refineResource,
     dataProviderName: dataResource?.schemaName,
     meta: { fields: refineFields },
     invalidates: ["list", "many"],
@@ -260,7 +260,7 @@ export function useFormViewSave({
     errorNotification: false,
   });
   const update = useUpdate<RowRecord, HttpError, FormValues>({
-    resource: refineResource || "__angee_disabled__",
+    resource: refineResource,
     dataProviderName: dataResource?.schemaName,
     meta: { fields: refineFields },
     invalidates: ["list", "many", "detail"],

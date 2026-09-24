@@ -9,10 +9,10 @@ import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, formSpecInitialValues, normalizeFormSpecValues } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
-import { listWidget, objectWidget, SectionedRowsField } from "./StructuredField";
+import { listWidget, objectWidget } from "./StructuredField";
 import { structuredFieldErrorPaths } from "./field-values";
 import type { WidgetRenderProps } from "../../widgets/types";
-import type { RowsValue } from "./RowsField";
+import { RowsField, type RowsValue } from "./RowsField";
 
 const metadata = schemaFieldMetadataFromDataResources([]);
 
@@ -263,7 +263,7 @@ describe("structured FormSpec widgets", () => {
 });
 
 function SectionedEdit(props: WidgetRenderProps<RowsValue>) {
-  return <SectionedRowsField {...props} rowTitle={(row) => String(row.title)} />;
+  return <RowsField {...props} rowTitle={(row) => String(row.title)} />;
 }
 
 const sectionedWidgets = {

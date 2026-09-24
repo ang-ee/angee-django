@@ -90,7 +90,7 @@ export {
   parseFormSpecPayload,
   type FormSpecWire,
 } from "./form/form-spec-schema";
-export { structuredFieldErrorPaths } from "./form/field-values";
+export { structuredFieldErrorPaths, textValue } from "./form/field-values";
 export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";
 export {
   ActionFormDialog,
@@ -247,7 +247,7 @@ export {
   type BoundFormValueProps,
   type BoundFormValueRenderProps,
 } from "./form/BoundDescriptorField";
-export { SectionedRowsField, type SectionedRowsFieldProps, useListIdentities } from "./form/StructuredField";
+export { useListIdentities } from "./form/StructuredField";
 export {
   diffLines,
   duplicateLineRow,

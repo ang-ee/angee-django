@@ -8,7 +8,6 @@ import type { FormSpecFieldDescriptor } from "./form-spec";
 import { initialFormSpecValue } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
 import { updatedRecord } from "./field-values";
-import { RowsField, type RowsValue } from "./RowsField";
 import { messagesForDottedPath } from "./validation-errors";
 
 type StructuredWidgetField = WidgetField & {
@@ -103,15 +102,6 @@ function moved<T>(values: readonly T[], from: number, to: number): T[] {
   const [entry] = updated.splice(from, 1);
   updated.splice(to, 0, entry as T);
   return updated;
-}
-
-export interface SectionedRowsFieldProps extends WidgetRenderProps<RowsValue> {
-  rowTitle: (row: Readonly<Record<string, unknown>>, index: number) => React.ReactNode;
-}
-
-/** Fixed object rows in titled sections; scalar fields share a two-column grid. */
-export function SectionedRowsField(props: SectionedRowsFieldProps): React.ReactElement {
-  return <RowsField {...props} />;
 }
 
 /** Stable client-only identities for controlled list rows across moves/removal. */

@@ -188,6 +188,7 @@ def test_agent_hasura_insert_accepts_enum_member_names(agents_console_tables: No
               ) {
                 id
                 runtime_class
+                expects_service
                 lifecycle
               }
             }
@@ -197,11 +198,35 @@ def test_agent_hasura_insert_accepts_enum_member_names(agents_console_tables: No
         )
     )["insert_agents_one"]
     assert created["runtime_class"] == "PYDANTIC"
+    assert created["expects_service"] is False
     assert created["lifecycle"] == "DRAFT"
     with system_context(reason="test.agents.enum_wire.verify"):
         row = Agent.objects.get(name="InProcess")
         assert row.runtime_class == "pydantic"
         assert row.lifecycle == "draft"
+
+
+@pytest.mark.parametrize(
+    ("runtime_class", "runtime_status", "service", "expected", "expects_service"),
+    [
+        ("claude_code", "running", "", False, True),
+        ("claude_code", "running", "agent-service", True, True),
+        ("opencode", "running", "", False, True),
+        ("opencode", "running", "agent-service", True, True),
+        ("pydantic", "running", "", True, False),
+        ("pydantic", "stopped", "", False, False),
+        ("claude_code", "stopped", "agent-service", False, True),
+        ("none", "running", "", False, False),
+    ],
+)
+def test_agent_chat_readiness_requires_its_runtime_transport(
+    runtime_class: str, runtime_status: str, service: str, expected: bool, expects_service: bool
+) -> None:
+    """Only in-process runtimes may chat without a rendered operator service."""
+
+    agent = Agent(runtime_class=runtime_class, runtime_status=runtime_status, service=service)
+    assert agent.can_chat is expected
+    assert agent.expects_service is expects_service
 
 
 def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> None:
@@ -220,6 +245,8 @@ def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> N
                 name
                 lifecycle
                 is_template
+                can_chat
+                expects_service
                 can_provision
                 can_deprovision
                 can_delete
@@ -236,6 +263,8 @@ def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> N
         "name": "Composer",
         "lifecycle": "DRAFT",
         "is_template": False,
+        "can_chat": False,
+        "expects_service": False,
         "can_provision": True,
         "can_deprovision": False,
         "can_delete": True,

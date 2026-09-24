@@ -87,6 +87,17 @@ def project_settings_yaml(tmp_path: Path, settings: Any) -> Path:
     return path
 
 
+@pytest.mark.parametrize("label", [None, "", "remote_label"])
+def test_change_impact_uses_addon_display_label(label: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Preview and catalogue labels agree for resolved and unresolved addons."""
+
+    name = "example.remote"
+    config = SimpleNamespace(label=label) if label is not None else None
+    monkeypatch.setattr(platform_models, "resolve_app_config", lambda *_args, **_kwargs: config)
+    impacts = Addon.objects._change_impacts([name], {name: AddonManifest(name=name)}, [name], {}, {})
+    assert impacts[0].label == (label or name)
+
+
 def test_install_appends_the_root_and_reflects_pending(
     platform_tables: None,
     project_settings_yaml: Path,

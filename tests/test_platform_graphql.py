@@ -173,7 +173,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(platform_table
     assert explorer["addons"] == [
         {
             "id": "example.remote",
-            "label": "",
+            "label": "example.remote",
             "model_labels": [],
             "resource_count": 0,
             "depends_on": [],
@@ -211,8 +211,8 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(platform_table
     }
 
 
-def test_addon_names_support_text_search_and_sort_with_unknown_labels(platform_tables: None) -> None:
-    """Canonical names remain searchable and ordered when Django identity is unknown."""
+def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(platform_tables: None) -> None:
+    """Unknown Django identities retain searchable names and non-empty display labels."""
 
     del platform_tables
     admin = _platform_admin("catalogue-search-admin")
@@ -237,7 +237,7 @@ def test_addon_names_support_text_search_and_sort_with_unknown_labels(platform_t
 
     assert data["platform_addons"] == [
         {"id": "example.alpha", "name": "example.alpha", "label": "Zulu"},
-        {"id": "example.zebra", "name": "example.zebra", "label": ""},
+        {"id": "example.zebra", "name": "example.zebra", "label": "example.zebra"},
     ]
 
 

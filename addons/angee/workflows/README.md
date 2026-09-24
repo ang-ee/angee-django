@@ -218,6 +218,18 @@ config:
 [DecisionContextFields](schema.py) exposes workflow and step context on
 authorized Decisions; journal references retain independent read checks.
 
+Frontend review content composes `WorkflowDecisionScaffold` for a domain-owned
+frozen schema or `NativeWorkflowDecisionScaffold` for native facts and references.
+The native scaffold parses and renders the retained context, selects the initial
+peek, and keeps correction controls available when context is missing. Its
+memoized `select` callback supplies one domain value to summaries and reference
+presentation; keep the selector stable to reuse its parse across renders.
+`ApprovalTask` owns action selection and submission. A content component may
+localize action labels with `actionPresentation: { namespace, keyPrefix }`;
+`${keyPrefix}.${action}` resolves against the addon's composed i18n bundle.
+Missing translations retain the frozen schema label; verdicts, confirmations,
+and submitted action values always come from that schema.
+
 A consumer pairs the gate with a `DecisionApplyStep` subclass. Declare
 `input_model`, `output_model`, `outcomes`, `effect`, `execution_mode`, and
 `idempotent`, plus a narrower `gate_step_class` when needed. The base loads the

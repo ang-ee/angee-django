@@ -67,7 +67,7 @@ test("keyset feeds forward native policy and avoid implicit focus, reconnect and
     actor: "reader", models: [], pageSize: 1, window: feedWindow, queryOptions,
   });
   const first = renderHook(useFeed, { wrapper: f.wrapper });
-  await waitFor(() => expect(first.result.current.data?.pages).toHaveLength(1));
+  await waitFor(() => expect(first.result.current.query.data?.pages).toHaveLength(1));
   const query = f.client.getQueryCache().find({ queryKey: ["angee", "authored", "keyset-feed"], exact: false });
   expect(query?.options).toMatchObject(queryOptions);
   const second = renderHook(useFeed, { wrapper: f.wrapper });
@@ -100,19 +100,19 @@ test.each([
   }), { wrapper: f.wrapper });
   if (!enabled) {
     expect(custom).not.toHaveBeenCalled();
-    expect(result.current.data).toBeUndefined();
+    expect(result.current.query.data).toBeUndefined();
     await act(async () => { await result.current.restart(); });
   }
-  await waitFor(() => expect(result.current.data?.pages).toHaveLength(1));
-  await act(async () => { await result.current.fetchNextPage(); });
-  await waitFor(() => expect(result.current.data?.pages).toHaveLength(2));
-  await act(async () => { await result.current.fetchNextPage(); });
-  await waitFor(() => expect(result.current.data?.pages).toHaveLength(3));
-  expect(keysetFeedRows(result.current.data, (left, right) => left.id.localeCompare(right.id))).toEqual([{ id: "one" }, { id: "two" }]);
-  expect(result.current.hasNextPage).toBe(false);
+  await waitFor(() => expect(result.current.query.data?.pages).toHaveLength(1));
+  await act(async () => { await result.current.query.fetchNextPage(); });
+  await waitFor(() => expect(result.current.query.data?.pages).toHaveLength(2));
+  await act(async () => { await result.current.query.fetchNextPage(); });
+  await waitFor(() => expect(result.current.query.data?.pages).toHaveLength(3));
+  expect(keysetFeedRows(result.current.query.data, (left, right) => left.id.localeCompare(right.id))).toEqual([{ id: "one" }, { id: "two" }]);
+  expect(result.current.query.hasNextPage).toBe(false);
   await act(async () => { await result.current.restart(); });
-  await waitFor(() => expect(result.current.data?.pages).toHaveLength(1));
-  expect(result.current.data?.pages[0]?.rows).toEqual([{ id: "fresh" }]);
+  await waitFor(() => expect(result.current.query.data?.pages).toHaveLength(1));
+  expect(result.current.query.data?.pages[0]?.rows).toEqual([{ id: "fresh" }]);
   expect(custom).toHaveBeenCalledTimes(4);
 });
 
@@ -123,6 +123,60 @@ test("keyset restart waits for an actor", async () => {
   }), { wrapper: f.wrapper });
   await act(async () => { await result.current.restart(); });
   expect(f.custom).not.toHaveBeenCalled();
+});
+
+test("keyset restart keeps identity for equivalent scopes and follows a changed scope", async () => {
+  const f = fixture();
+  const resetQueries = vi.spyOn(f.client, "resetQueries");
+  const { result, rerender } = renderHook(({ scope }) => useAuthoredKeysetFeed({
+    actor: "reader", enabled: false, models: [], pageSize: 1,
+    window: { ...feedWindow, variables: (before) => ({ id: before ?? scope }) },
+  }), { wrapper: f.wrapper, initialProps: { scope: "first" } });
+  const restart = result.current.restart;
+  expect(result.current.query).not.toHaveProperty("restart");
+  rerender({ scope: "first" });
+  expect(result.current.restart).toBe(restart);
+  rerender({ scope: "second" });
+  expect(result.current.restart).not.toBe(restart);
+  await act(async () => { await result.current.restart(); });
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  expect(resetQueries).toHaveBeenCalledWith({
+    queryKey: ["angee", "authored", "keyset-feed", "reader", authoredQueryKey(DOCUMENT, { id: "second" })],
+    exact: true,
+  }, { throwOnError: true });
+});
+
+test("data-only keyset consumers ignore background fetch-state changes", async () => {
+  const refreshed = deferred<{ data: Data }>();
+  const f = fixture();
+  const rendered = vi.fn();
+  const { result } = renderHook(() => {
+    const { query } = useAuthoredKeysetFeed({
+      actor: "reader", models: [], pageSize: 1, window: feedWindow,
+    });
+    rendered();
+    return query.data;
+  }, { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current?.pages).toHaveLength(1));
+  const renders = rendered.mock.calls.length;
+  const data = result.current;
+  f.custom.mockImplementationOnce(() => refreshed.promise);
+  let pending!: Promise<void>;
+  await act(async () => {
+    pending = f.client.refetchQueries();
+    // Flush Query's scheduled observer notification while the response is pending.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(f.client.isFetching()).toBe(1);
+  expect(rendered).toHaveBeenCalledTimes(renders);
+  await act(async () => {
+    refreshed.resolve({ data: { notes: [{ id: "one" }] } });
+    await pending;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(f.client.isFetching()).toBe(0);
+  expect(result.current).toBe(data);
+  expect(rendered).toHaveBeenCalledTimes(renders);
 });
 
 test("authored mutation reset clears native error state without another request", async () => {

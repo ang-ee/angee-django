@@ -53,7 +53,11 @@ export function OrganizationsPage(): React.ReactElement {
   );
 }
 
-/** Organization identity fields shared by organizations and their specializations. */
+/**
+ * Organization identity fields shared by organizations and their specializations.
+ * Form parses its children statically, so return field elements from a hook
+ * instead of hiding the declarations behind a rendered component.
+ */
 export function useOrganizationFields(): React.ReactElement {
   const t = usePartiesT();
   const extraFields = useSlot(ORGANIZATION_FORM_FIELDS_SLOT);

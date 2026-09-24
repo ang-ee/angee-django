@@ -1,4 +1,5 @@
 import {
+  hashKey,
   infiniteQueryOptions,
   useInfiniteQuery,
   useQueryClient,
@@ -9,6 +10,7 @@ import {
   type UseInfiniteQueryOptions,
   type UseInfiniteQueryResult,
 } from "@tanstack/react-query";
+import { useCallback } from "react";
 import { useDataProvider } from "@refinedev/core";
 import type { DocumentData } from "../typed-document";
 import type { AuthoredDocument, AuthoredVariables } from "./authored-hooks";
@@ -219,8 +221,7 @@ export interface AuthoredKeysetFeedOptions<
     KeysetFeedPage<TRow>, Error, InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>,
     QueryKey, KeysetFeedCursor
   >, "staleTime" | "gcTime" | "retry" | "retryDelay" | "retryOnMount"
-    | "refetchOnMount" | "refetchOnWindowFocus" | "refetchOnReconnect"
-    | "refetchInterval" | "refetchIntervalInBackground">;
+    | "refetchOnMount" | "refetchOnWindowFocus" | "refetchOnReconnect">;
   window: {
     document: TWindow;
     variables: (before: string | null, through: string | null, limit: number) => AuthoredVariables<TWindow>;
@@ -241,9 +242,9 @@ export function useAuthoredKeysetFeed<
   TRow extends KeysetRow,
   TWindow extends AuthoredDocument,
   TRevalidation extends AuthoredDocument,
->(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation>): UseInfiniteQueryResult<
-  InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>, Error
-> & {
+>(options: AuthoredKeysetFeedOptions<TRow, TWindow, TRevalidation>): {
+  /** Native tracked result; read only the properties the consumer needs. */
+  query: UseInfiniteQueryResult<InfiniteData<KeysetFeedPage<TRow>, KeysetFeedCursor>, Error>;
   /** Discard loaded history and explicitly fetch the first page, including disabled/static feeds. */
   restart: () => Promise<void>;
 } {
@@ -282,13 +283,14 @@ export function useAuthoredKeysetFeed<
     ...options.queryOptions, ...configured, enabled,
     meta: sharedAuthoredMeta(client, queryKey, models, [], [], options.queryOptions),
   });
-  // Preserve native tracked getters rather than observing every result field via a spread.
-  return Object.assign(result, {
-    async restart() {
-      if (!actor) return;
-      await client.resetQueries({ queryKey, exact: true }, { throwOnError: true });
-      // Native reset refetches active queries, but skips disabled/static observers.
-      if (client.getQueryData(queryKey) === undefined) await result.refetch({ throwOnError: true });
-    },
-  });
+  const { refetch } = result;
+  // Track queryKey through hashKey intentionally: TanStack treats equal hashes as the same query.
+  const queryHash = hashKey(queryKey);
+  const restart = useCallback(async () => {
+    if (!actor) return;
+    await client.resetQueries({ queryKey, exact: true }, { throwOnError: true });
+    // Native reset refetches active queries, but skips disabled/static observers.
+    if (client.getQueryData(queryKey) === undefined) await refetch({ throwOnError: true });
+  }, [actor, client, queryHash, refetch]);
+  return { query: result, restart };
 }

@@ -76,14 +76,17 @@ export class ResourceQuery {
     const contract = parse(DataResourceQuerySchema, data.query, "query");
     const declaredSearchFields = data.recordSearchFields ?? [];
     const supportedSearchFields = executableTextSearchFields(contract, declaredSearchFields);
+    const representationFields = executableTextSearchFields(
+      contract,
+      data.recordRepresentation ? [data.recordRepresentation] : [],
+    );
     const query = new ResourceQuery(
       contract,
       supportedSearchFields.length > 0
         ? supportedSearchFields
-        : executableTextSearchFields(
-            contract,
-            data.recordRepresentation ? [data.recordRepresentation] : [],
-          ),
+        : representationFields.length > 0
+          ? representationFields
+          : executableTextSearchFields(contract, Object.keys(contract.fields)).slice(0, 1),
     );
     ResourceQuery.cache.set(data, query);
     return query;
@@ -122,7 +125,11 @@ export class ResourceQuery {
   get fields(): DataResourceQuery["fields"] { return this.contract.fields; }
   get axes(): DataResourceQuery["axes"] { return this.contract.axes; }
 
-  /** Keep declared order while admitting only executable text comparisons. */
+  /**
+   * Keep declared order while admitting only executable text comparisons.
+   * Resource defaults prefer declared search fields, then the representation,
+   * then the first field supporting iContains. Explicit fields never broaden.
+   */
   textSearchFields(fields?: readonly string[]): readonly string[] {
     return fields === undefined
       ? this.defaultTextSearchFields

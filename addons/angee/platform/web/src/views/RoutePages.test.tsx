@@ -57,7 +57,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
             resource_type: "notes.note",
             depends_on: ["iam.User"],
           }
-        : { id: "example.notes", name: "example.notes", label: "" };
+        : { id: "example.notes", name: "example.notes", label: "example.notes" };
     return (
       <div
         data-testid={resource}
@@ -158,7 +158,7 @@ describe("platform route consumers", () => {
     });
   });
 
-  test("AddonsPage displays unknown labels and searches and sorts by canonical name", () => {
+  test("AddonsPage displays server labels and searches and sorts by canonical name", () => {
     render(<AddonsPage />);
 
     const list = screen.getByTestId("platform.Addon");

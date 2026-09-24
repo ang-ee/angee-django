@@ -59,10 +59,17 @@ export interface WorkflowDecisionContextDetails {
   label: React.ReactNode;
 }
 
-export interface NativeWorkflowDecisionScaffoldProps {
+export type WorkflowDecisionContext = NonNullable<ReturnType<typeof decisionReviewContext>>;
+
+export interface NativeWorkflowDecisionScaffoldProps<Context> extends Pick<
+  WorkflowDecisionScaffoldProps<Context>, "references" | "initialPeek"
+> {
   props: WorkflowDecisionContentProps;
   header: WorkflowDecisionHeader;
   contextDetails: WorkflowDecisionContextDetails;
+  /** Select domain facts once per retained context for the summary and references. */
+  select: (context: WorkflowDecisionContext) => Context;
+  summary?: (context: Context) => React.ReactNode;
   actionPickerPlacement?: "before-content" | "after-content" | false;
   children: React.ReactNode;
 }
@@ -89,17 +96,7 @@ export function DecisionContextUnavailable({
 }
 
 /** Own the common shell around domain-specific, frozen Decision review context. */
-export function WorkflowDecisionScaffold(props: NativeWorkflowDecisionScaffoldProps): React.ReactElement;
-export function WorkflowDecisionScaffold<Context>(props: WorkflowDecisionScaffoldProps<Context>): React.ReactElement;
-export function WorkflowDecisionScaffold<Context>(
-  props: WorkflowDecisionScaffoldProps<Context> | NativeWorkflowDecisionScaffoldProps,
-): React.ReactElement {
-  return "schema" in props
-    ? <ParsedDecisionScaffold {...props} />
-    : <NativeDecisionScaffold {...props} />;
-}
-
-function ParsedDecisionScaffold<Context>({
+export function WorkflowDecisionScaffold<Context>({
   props,
   context: retainedContext,
   schema,
@@ -115,10 +112,7 @@ function ParsedDecisionScaffold<Context>({
     [retainedContext, schema],
   );
   const context = parsed.success ? parsed.output : undefined;
-  const contextReferences = context === undefined ? [] : references?.(context) ?? [];
-  const initial = context === undefined ? undefined : initialPeek?.(context, contextReferences);
-  const initialReference = initial && "reference" in initial ? initial.reference : initial;
-  useInitialDecisionPeek(props, initialReference);
+  const contextReferences = useScaffoldReferences(props, context, references, initialPeek);
 
   if (context === undefined) {
     return <DecisionContextUnavailable
@@ -136,21 +130,31 @@ function ParsedDecisionScaffold<Context>({
   >{children(context)}</DecisionScaffoldShell>;
 }
 
-function NativeDecisionScaffold({
+/** Render native retained context once, alongside domain summaries and correction controls. */
+export function NativeWorkflowDecisionScaffold<Context>({
   props,
   header,
   contextDetails,
+  select,
+  summary,
+  references,
+  initialPeek,
   actionPickerPlacement,
   children,
-}: NativeWorkflowDecisionScaffoldProps): React.ReactElement {
-  const context = React.useMemo(
+}: NativeWorkflowDecisionScaffoldProps<Context>): React.ReactElement {
+  const nativeContext = React.useMemo(
     () => decisionReviewContext(props.contextValues),
     [props.contextValues],
   );
-  const references = context?.references;
-  useInitialDecisionPeek(props, Array.isArray(references) ? references[0] : references);
+  const context = React.useMemo(
+    () => nativeContext === undefined ? undefined : select(nativeContext),
+    [nativeContext, select],
+  );
+  const fallback = Array.isArray(nativeContext?.references)
+    ? nativeContext.references[0] : nativeContext?.references;
+  const contextReferences = useScaffoldReferences(props, context, references, initialPeek, fallback);
 
-  const details = context === undefined ? <DecisionContextUnavailable props={props} /> : (
+  const details = nativeContext === undefined ? <DecisionContextUnavailable props={props} /> : (
     <DetailSection title={contextDetails.title}>
       <div className="space-y-3">
         {contextDetails.description ? <p className="text-13 text-fg-muted">{contextDetails.description}</p> : null}
@@ -166,9 +170,30 @@ function NativeDecisionScaffold({
   return <DecisionScaffoldShell
     props={props}
     heading={header}
-    contextDetails={details}
+    references={contextReferences}
+    contextDetails={<>{context === undefined ? null : summary?.(context)}{details}</>}
     actionPickerPlacement={actionPickerPlacement}
   >{children}</DecisionScaffoldShell>;
+}
+
+function useScaffoldReferences<Context>(
+  props: WorkflowDecisionContentProps,
+  context: Context | undefined,
+  references: WorkflowDecisionScaffoldProps<Context>["references"],
+  initialPeek: WorkflowDecisionScaffoldProps<Context>["initialPeek"],
+  fallback?: RecordPeekReference,
+): readonly WorkflowDecisionReference[] {
+  const contextReferences = React.useMemo(
+    () => context === undefined ? [] : references?.(context) ?? [],
+    [context, references],
+  );
+  const initialReference = React.useMemo(() => {
+    const initial = context === undefined ? undefined
+      : initialPeek ? initialPeek(context, contextReferences) : fallback;
+    return initial && "reference" in initial ? initial.reference : initial;
+  }, [context, contextReferences, fallback, initialPeek]);
+  useInitialDecisionPeek(props, initialReference);
+  return contextReferences;
 }
 
 function DecisionScaffoldShell({
@@ -210,9 +235,4 @@ function DecisionScaffoldShell({
     {children}
     {actionPickerPlacement === "after-content" ? props.actionPicker : null}
   </section>;
-}
-
-/** Normalize retained scalar text without interpreting domain-specific objects. */
-export function textValue(value: unknown): string {
-  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }

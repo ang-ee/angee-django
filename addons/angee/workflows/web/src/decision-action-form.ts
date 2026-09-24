@@ -299,8 +299,6 @@ function decisionValidationMessage(error: ErrorObject, label: string, t: UiTrans
     return t("inbox.validation.maxLength", { label, count });
   }
   if (error.keyword === "format") return t("inbox.validation.invalidFormat", { label });
-  if (error.keyword === "pattern" || error.keyword === "type" || error.keyword === "enum"
-      || error.keyword === "const") return t("inbox.validation.invalidValue", { label });
   return t("inbox.validation.invalidValue", { label });
 }
 

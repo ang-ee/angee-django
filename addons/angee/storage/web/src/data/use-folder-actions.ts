@@ -37,7 +37,7 @@ export function useFolderActions(
   const metadata = useModelMetadata(FOLDER_MODEL);
   const resource = metadata?.resource ?? null;
   const fileResource = useModelMetadata(FILE_MODEL)?.resource ?? null;
-  const resourceName = resource ? refineResourceName(resource) : "";
+  const resourceName = refineResourceName(resource);
   const fields = refineFieldsFromPaths(["name"]);
   const createFolder = useCreate<RowRecord, HttpError, Record<string, unknown>>({
     resource: resourceName,

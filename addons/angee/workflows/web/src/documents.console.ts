@@ -460,15 +460,6 @@ export const RunWorkflowDocument = graphql(`
   }
 `);
 
-export const CancelWorkflowRunDocument = graphql(`
-  mutation CancelWorkflowRun($id: ID!) {
-    cancel_workflow_run(run: $id) {
-      ok
-      message
-    }
-  }
-`);
-
 export const WorkflowRunInspectionFields = graphql(`
   fragment WorkflowRunInspectionFields on WorkflowRunType {
     id origin occurrence_id status waiting_kind next_wake_at error

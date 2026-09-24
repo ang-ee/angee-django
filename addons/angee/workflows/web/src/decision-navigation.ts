@@ -1,26 +1,25 @@
-import { CHATTER_TAB_SEARCH_KEY, recordTargetHref, recordTargetSearch } from "@angee/ui";
+import { CHATTER_TAB_SEARCH_KEY, recordTargetHref } from "@angee/ui";
 
 /** The workflows addon owns its record-bound decision selection. */
 export const DECISION_SEARCH_KEY = "decision";
 export const WORKFLOW_RUN_SEARCH_KEY = "workflowRun";
 
-export function decisionSearch(search: Readonly<Record<string, unknown>>, decision: string | null): Record<string, unknown> {
-  return recordTargetSearch(search, { search: {
-    [CHATTER_TAB_SEARCH_KEY]: decision ? "workflows" : null,
-    [DECISION_SEARCH_KEY]: decision,
-    [WORKFLOW_RUN_SEARCH_KEY]: null,
-  } });
+/** Route-search patch for selecting or clearing a Decision in the shared chatter. */
+export function decisionSearchPatch(decision: string | null): Record<string, unknown> {
+  return {
+    [CHATTER_TAB_SEARCH_KEY]: decision ? "workflows" : undefined,
+    [DECISION_SEARCH_KEY]: decision ?? undefined,
+    [WORKFLOW_RUN_SEARCH_KEY]: undefined,
+  };
 }
 
-export function workflowSubjectActionSearch(
-  search: Readonly<Record<string, unknown>>,
-  runId: string,
-): Record<string, unknown> {
-  return recordTargetSearch(search, { search: {
+/** Route-search patch for following a subject action's WorkflowRun. */
+export function workflowSubjectActionSearchPatch(runId: string): Record<string, unknown> {
+  return {
     [CHATTER_TAB_SEARCH_KEY]: "workflows",
-    [DECISION_SEARCH_KEY]: null,
+    [DECISION_SEARCH_KEY]: undefined,
     [WORKFLOW_RUN_SEARCH_KEY]: runId,
-  } });
+  };
 }
 
 export function decisionHref(href: string, decision: string, tab?: string | null): string {

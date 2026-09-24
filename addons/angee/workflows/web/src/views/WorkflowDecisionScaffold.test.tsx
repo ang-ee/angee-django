@@ -12,7 +12,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
 vi.mock("../i18n", () => ({ useWorkflowsT: () => (key: string) => key }));
 
 import { DecisionField, type WorkflowDecisionContentProps } from "./ApprovalTask";
-import { WorkflowDecisionScaffold, type WorkflowDecisionReference } from "./WorkflowDecisionScaffold";
+import { NativeWorkflowDecisionScaffold, WorkflowDecisionScaffold, type WorkflowDecisionContext, type WorkflowDecisionReference } from "./WorkflowDecisionScaffold";
 import { decisionContextWidgets, decisionReviewFact } from "./DecisionContextWidgets";
 
 const ContextSchema = v.object({ title: v.string(), warning: v.string(), recordId: v.string() });
@@ -76,14 +76,16 @@ test("builds references once and selects the initial peek from the rendered refe
     _review: v.InferOutput<typeof ContextSchema>,
     actions: readonly WorkflowDecisionReference[],
   ) => actions.find((action) => action.kind === "evidence"));
-  render(<WorkflowDecisionScaffold
-    props={props}
+  const content = (fetching: boolean) => <WorkflowDecisionScaffold
+    props={{ ...props, fetching }}
     context={context}
     schema={ContextSchema}
     header={(review) => ({ eyebrow: "Review", title: review.title, description: "Description" })}
     references={references}
     initialPeek={initialPeek}
-  >{() => <div>Domain content</div>}</WorkflowDecisionScaffold>);
+  >{() => <div>Domain content</div>}</WorkflowDecisionScaffold>;
+  const { rerender } = render(content(false));
+  rerender(content(true));
 
   expect(references).toHaveBeenCalledTimes(1);
   expect(initialPeek).toHaveBeenCalledTimes(1);
@@ -110,11 +112,12 @@ test.each(["single", "list"] as const)("renders native facts and %s references, 
     openEvidence: vi.fn(),
   };
   const content = <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: { ...defaultWidgets, ...decisionContextWidgets } }}>
-    <WorkflowDecisionScaffold props={props}
+    <NativeWorkflowDecisionScaffold props={props}
+      select={(context) => context}
       header={{ eyebrow: "Review", title: "Native review", description: "Review retained context" }}
       contextDetails={{ title: "Evidence", description: "Frozen evidence", label: "Details" }}
       actionPickerPlacement="before-content"
-    ><div>Correction controls</div></WorkflowDecisionScaffold>
+    ><div>Correction controls</div></NativeWorkflowDecisionScaffold>
   </AppRuntimeProvider>;
   const { rerender } = render(content);
 
@@ -131,21 +134,65 @@ test.each(["single", "list"] as const)("renders native facts and %s references, 
     .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 });
 
+test("native summaries and reference actions share one domain selection across unrelated renders", () => {
+  const props = {
+    ...decisionProps(undefined),
+    contextValues: { facts: [{ pointer: "/title", label: "Title", value: "Retained title", authority: "source" }] },
+    openEvidence: vi.fn(),
+  };
+  const select = vi.fn((context: WorkflowDecisionContext) => ({ title: String(context.facts?.[0]?.value) }));
+  const summary = vi.fn((context: ReturnType<typeof select>) => <div>{context.title}</div>);
+  const references = vi.fn((_context: ReturnType<typeof select>): WorkflowDecisionReference[] => [{
+    label: "Open source", kind: "evidence", reference: { model: "storage.File", id: "file-1" },
+  }]);
+  const initialPeek = vi.fn((_context: ReturnType<typeof select>, actions: readonly WorkflowDecisionReference[]) => actions[0]);
+  const content = (contentProps: WorkflowDecisionContentProps) => <NativeWorkflowDecisionScaffold props={contentProps}
+    select={select}
+    header={{ eyebrow: "Review", title: "Native review", description: "Description" }}
+    contextDetails={{ title: "Evidence", label: "Details" }}
+    summary={summary} references={references} initialPeek={initialPeek}
+  ><div>Correction controls</div></NativeWorkflowDecisionScaffold>;
+  const { rerender } = render(content(props));
+  rerender(content({ ...props, fetching: true }));
+
+  expect(screen.getByText("Retained title")).toBeTruthy();
+  expect(select).toHaveBeenCalledTimes(1);
+  expect(references).toHaveBeenCalledTimes(1);
+  expect(initialPeek).toHaveBeenCalledTimes(1);
+  expect(summary).toHaveBeenCalledWith(references.mock.calls[0]![0]);
+  expect(references.mock.calls[0]![0]).toBe(select.mock.results[0]!.value);
+  expect(initialPeek).toHaveBeenCalledWith(summary.mock.calls[0]![0], references.mock.results[0]!.value);
+  expect(props.openEvidence).toHaveBeenCalledExactlyOnceWith(
+    references.mock.results[0]!.value[0]!.reference, { tabActivation: "initial" },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Open source" }));
+  expect(props.openEvidence).toHaveBeenLastCalledWith({ model: "storage.File", id: "file-1", label: "Open source" });
+  rerender(content({ ...props, contextValues: {
+    facts: [{ pointer: "/title", label: "Title", value: "Updated title", authority: "source" }],
+  } }));
+  expect(select).toHaveBeenCalledTimes(2);
+  expect(references).toHaveBeenCalledTimes(2);
+  expect(screen.getByText("Updated title")).toBeTruthy();
+});
+
 test.each([
   {},
   { references: [{ model: "notes.Note", id: 12 }] },
   { facts: [{ pointer: "/summary", label: "Facts", value: "Bad authority", authority: "trusted" }] },
 ])("missing or malformed native context retains the input controls and action picker", (contextValues) => {
   const props = { ...decisionProps(undefined), contextValues, openEvidence: vi.fn() };
-  render(<WorkflowDecisionScaffold props={props}
+  const select = vi.fn((context: WorkflowDecisionContext) => context);
+  render(<NativeWorkflowDecisionScaffold props={props}
+    select={select}
     header={{ eyebrow: "Review", title: "Native review", description: "Description" }}
     contextDetails={{ title: "Evidence", label: "Details" }}
     actionPickerPlacement="before-content"
-  ><div>Correction controls</div></WorkflowDecisionScaffold>);
+  ><div>Correction controls</div></NativeWorkflowDecisionScaffold>);
 
   expect(screen.getByText("inbox.contextUnavailableTitle")).toBeTruthy();
   expect(screen.getByText("Decision picker")).toBeTruthy();
   expect(screen.getByText("Correction controls")).toBeTruthy();
+  expect(select).not.toHaveBeenCalled();
   expect(props.openEvidence).not.toHaveBeenCalled();
   expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
 });

@@ -28,7 +28,7 @@ export function useSamplePreviewFeed(variables: PreviewVariables) {
     queryOptions: {
       staleTime: "static", gcTime: 0, retry: false,
       refetchOnMount: false, refetchOnWindowFocus: false,
-      refetchOnReconnect: false, refetchInterval: false,
+      refetchOnReconnect: false,
     },
     window: {
       document: PreviewImapSample,

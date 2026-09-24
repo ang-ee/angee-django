@@ -17,15 +17,12 @@ import {
 import { enWorkflowsMessages } from "./i18n";
 import { RunWorkflowMenu } from "./RunWorkflowMenu";
 import { decisionContextWidgets } from "./views/DecisionContextWidgets";
-export { decisionReviewContext, decisionReviewFact } from "./views/DecisionContextWidgets";
+export { decisionReviewFact } from "./views/DecisionContextWidgets";
 import { WorkflowImplementationDetails } from "./views/WorkflowImplementationDetails";
 export {
   WORKFLOW_DECISION_CONTENT_SLOT,
-  WORKFLOW_LAUNCH_CLAIM_SLOT,
   WORKFLOW_TRIGGER_FORM_FIELDS_SLOT,
-  workflowLaunchClaim,
 } from "./slots";
-export type { WorkflowLaunchClaim } from "./slots";
 export {
   compileDecisionActionFormSpec,
   type DecisionActionFormSpec,
@@ -38,8 +35,8 @@ import { DECISION_SEARCH_KEY, WORKFLOW_RUN_SEARCH_KEY } from "./decision-navigat
 export {
   DECISION_SEARCH_KEY,
   decisionHref,
-  decisionSearch,
-  workflowSubjectActionSearch,
+  decisionSearchPatch,
+  workflowSubjectActionSearchPatch,
 } from "./decision-navigation";
 
 const WORKFLOWS_ID = "workflows";
@@ -159,10 +156,11 @@ export type { ApprovalTaskProps, ApprovalVerdict, WorkflowDecisionContentCompone
 export {
   DecisionContextUnavailable,
   WorkflowDecisionScaffold,
-  textValue,
+  NativeWorkflowDecisionScaffold,
 } from "./views/WorkflowDecisionScaffold";
 export type {
   NativeWorkflowDecisionScaffoldProps,
+  WorkflowDecisionContext,
   WorkflowDecisionContextDetails,
   WorkflowDecisionHeader,
   WorkflowDecisionReference,

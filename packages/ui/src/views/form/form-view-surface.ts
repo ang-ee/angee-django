@@ -460,7 +460,7 @@ export function useFormViewSurface({
     [canonicalTabFields],
   );
   const canonicalRead = useOne({
-    resource: canonicalMetadata ? refineResourceName(canonicalMetadata.resource) : "__angee_disabled__",
+    resource: refineResourceName(canonicalMetadata?.resource),
     id: id ?? undefined,
     dataProviderName: canonicalMetadata?.resource.schemaName,
     meta: { fields: canonicalTabSelection },

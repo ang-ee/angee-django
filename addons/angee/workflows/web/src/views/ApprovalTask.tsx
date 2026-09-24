@@ -7,7 +7,7 @@ import {
   LARGE_VIEWPORT_QUERY,
   PageAside,
   deserializeFormSpec, errorMessage, jsonValueFromUnknown, normalizeFormSpecValues, statusTone, useAppRuntime, useConfirm, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
-  useNamespaceT,
+  optionalTranslation, useT,
   recordTargetHref, useMediaQuery, useModelSlot,
   useRecordPeek,
   type DottedPathFieldErrorMap, type FormSpecFieldDescriptor, type JsonValue, type RecordPeekOpen, type RecordPeekReference,
@@ -21,14 +21,12 @@ import { WORKFLOW_DECISION_CONTENT_SLOT } from "../slots";
 import { DECISION_OBJECT_WIDGET } from "./DecisionContextWidgets";
 
 const DECISION_MODEL = "workflows.Decision";
-const EMPTY_ACTION_MESSAGES: Readonly<Record<string, string>> = {};
 export type ApprovalVerdict = DocumentVariables<typeof DecideWorkflowDecisionDocument>["verdict"];
 export type WorkflowDecisionRecordReference = RecordPeekReference;
 export interface WorkflowDecisionActionPresentation {
   namespace: string;
-  messages: Readonly<Record<string, string>>;
-  /** Map frozen action values to addon-owned translation keys. */
-  labels: Readonly<Record<string, string>>;
+  /** Composed namespace key prefix; each action resolves `${keyPrefix}.${action}`. */
+  keyPrefix: string;
 }
 export interface WorkflowDecisionContentProps {
   approval: PendingWorkflowDecision;
@@ -53,7 +51,7 @@ export type WorkflowDecisionContentComponent = React.ComponentType<WorkflowDecis
   renderedInputFields?: readonly string[];
   /** The fragment places the framework-owned action picker in its review layout. */
   placesActionPicker?: boolean;
-  /** Override displayed action labels without changing the frozen Decision contract. */
+  /** Translate labels through the addon bundle; absent keys retain the frozen schema label. */
   actionPresentation?: WorkflowDecisionActionPresentation;
 };
 export interface ApprovalTaskProps {
@@ -396,14 +394,13 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   const submitting = React.useRef(false);
   const Content = useDecisionContent(approval.action);
   const actionPresentation = Content?.actionPresentation;
-  const actionT = useNamespaceT(
-    actionPresentation?.namespace ?? "workflows",
-    actionPresentation?.messages ?? EMPTY_ACTION_MESSAGES,
-  );
-  const presentedOptions = React.useMemo(() => form?.options.map((option) => {
-    const key = actionPresentation?.labels[option.value];
-    return key ? { ...option, label: actionT(key) } : option;
-  }) ?? [], [actionPresentation, actionT, form]);
+  const actionT = useT(actionPresentation?.namespace ?? "workflows");
+  const presentedOptions = React.useMemo(() => form?.options.map((option) => ({
+    ...option,
+    label: actionPresentation
+      ? optionalTranslation(actionT, `${actionPresentation.keyPrefix}.${option.value}`) ?? option.label
+      : option.label,
+  })) ?? [], [actionPresentation, actionT, form]);
   const renderedInputFields = new Set(Content?.renderedInputFields ?? []);
   const unclaimedBranchFields = branchFields.filter((field) => !renderedInputFields.has(field.name));
   const unsupportedBranchFields = unclaimedBranchFields.filter(isOpaqueDecisionInput);

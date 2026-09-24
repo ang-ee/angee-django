@@ -10,7 +10,6 @@ import {
   PLATFORM_ADDON_MUTATION_INVALIDATES,
 } from "../documents";
 import { usePlatformT } from "../i18n";
-import { addonDisplayLabel } from "../lib/rows";
 import { AddonChangeDialog, type AddonChangeAction } from "./AddonChangeDialog";
 
 /** The reflection resource the board reads + invalidates after every lifecycle write. */
@@ -67,7 +66,7 @@ export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
   return (
     <div className="grid min-w-0 gap-2">
       <span className="block min-w-0">
-        <span className="block truncate text-sm font-semibold text-fg">{addonDisplayLabel(row.label, row.id)}</span>
+        <span className="block truncate text-sm font-semibold text-fg">{row.label}</span>
         <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
       </span>
       {row.description ? (
@@ -165,7 +164,7 @@ export function AddonCardActions({
   const dialog = action ? (
     <AddonChangeDialog
       action={action}
-      addonLabel={addonDisplayLabel(row.label, row.id)}
+      addonLabel={row.label}
       preview={preview.data?.addon_change_preview ?? null}
       loading={preview.isFetching}
       applying={applying}

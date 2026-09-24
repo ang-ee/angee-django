@@ -265,8 +265,8 @@ class AddonManager(AngeeManager):
                 configs[config.name] = config
         return aliases, configs
 
-    @staticmethod
     def _change_impacts(
+        self,
         names: Iterable[str],
         manifests: Mapping[str, AddonManifest],
         roots: Iterable[str],
@@ -280,7 +280,7 @@ class AddonManager(AngeeManager):
             impacts.append(
                 AddonChangeImpact(
                     name=name,
-                    label=config.label if config is not None else "",
+                    label=self.model(name=name, label=config.label if config is not None else "").get_display_label(),
                     root=name in declarations,
                     depends_on=manifests[name].depends_on,
                 )
@@ -512,6 +512,11 @@ class Addon(AngeeModel):
         """Return the addon name for Django displays."""
 
         return self.name
+
+    def get_display_label(self) -> str:
+        """Return the Django label, or the canonical name for unresolved catalogue entries."""
+
+        return self.label or self.name
 
     @staticmethod
     def reset_runtime_facts() -> dict[str, Any]:

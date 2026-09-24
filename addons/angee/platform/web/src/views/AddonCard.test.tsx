@@ -127,11 +127,11 @@ describe("AddonCard", () => {
     expect(screen.getByText("Required")).toBeTruthy();
   });
 
-  test("shows the canonical name for an unresolved remote addon", () => {
+  test("shows the server's canonical-name label for an unresolved remote addon", () => {
     render(<AddonCard row={row({
       id: "example.remote",
       name: "example.remote",
-      label: "",
+      label: "example.remote",
       source: "remote",
       state: "disabled",
     })} />);
@@ -145,10 +145,10 @@ describe("AddonCard", () => {
 });
 
 describe("AddonCardActions", () => {
-  test("uses canonical names in the confirmation title and unresolved impacts", () => {
-    mocks.preview.enableLabel = "";
-    mocks.preview.disableLabel = "";
-    render(<AddonCardActions row={row({ label: "", state: "disabled" })} context={CONTEXT} />);
+  test("uses the server's labels in the confirmation title and unresolved impacts", () => {
+    mocks.preview.enableLabel = "angee.tags";
+    mocks.preview.disableLabel = "angee.legacy";
+    render(<AddonCardActions row={row({ label: "angee.notes", state: "disabled" })} context={CONTEXT} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
 

@@ -230,8 +230,13 @@ history uses native Query pages with domain-owned
   indeterminate `LoadingPanel`), which wraps every non-root match in Suspense
   inside its layout's `<Outlet/>`, so the chrome stays mounted. Do not hand-roll
   `React.lazy` + a manual `<Suspense>`
-  around a route's `<Outlet/>`. Split only routed pages — lighter manifest content
-  (slot/section content, forms, glyphs) stays eager. A transport or context shared
+  around a route's `<Outlet/>`. Lighter manifest content (slot/section content,
+  forms, glyphs) stays eager. A heavy optional surface may use `React.lazy` inside
+  the shared `LazyBoundary` when its dependency tree otherwise enters the boot
+  bundle. The [agents chat](../../addons/angee/agents/web/src/views/AgentChatterPane.tsx)
+  and its transport slots defer assistant-ui, streamdown and its code renderer
+  until chat opens; their slot declarations and context remain eager so addon
+  composition stays synchronous. A transport or context shared
   by pages and shell contributions declares
   `layoutProviders` on `defineBaseAddon`, keyed by layout and contribution id.
   The layout mounts these providers once inside its authenticated schema context,

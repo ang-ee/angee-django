@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  DISABLED_RESOURCE,
   refineResourceName,
   refineResourcesFromDataResources,
 } from "./resources";
@@ -14,6 +15,13 @@ import type { DataResourceMetadata } from "./metadata";
 describe("refine resource metadata", () => {
   test("uses the Hasura list root as the refine resource name", () => {
     expect(refineResourceName(resource())).toBe("notes");
+  });
+
+  test("disables route fallback only when resource metadata is absent", () => {
+    expect(refineResourceName(null)).toBe(DISABLED_RESOURCE);
+    expect(refineResourceName(undefined)).toBe(DISABLED_RESOURCE);
+    expect(() => refineResourceName({ ...resource(), roots: {} }))
+      .toThrow('Resource "notes.Note" does not declare a list root.');
   });
 
   test("maps backend resource metadata to refine resources", () => {

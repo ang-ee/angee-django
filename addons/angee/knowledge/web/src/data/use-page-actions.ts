@@ -42,7 +42,7 @@ export function usePageActions(
   const { onChanged } = options;
   const metadata = useModelMetadata(PAGE_MODEL);
   const resource = metadata?.resource ?? null;
-  const resourceName = resource ? refineResourceName(resource) : "";
+  const resourceName = refineResourceName(resource);
   const fields = useMemo(() => refineFieldsFromPaths(["id", "title"]), []);
   const createPageMutation = useCreate<RowRecord, HttpError, Record<string, unknown>>({
     resource: resourceName,

@@ -22,7 +22,7 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import { isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
+import { isStructuredPresenceField, structuredFieldErrorPaths, textValue } from "./field-values";
 
 export type FormValues = Record<string, unknown>;
 const MISSING_DOTTED_VALUE = Symbol("missing-dotted-value");
@@ -183,19 +183,13 @@ export function recordRepresentationValue(
   const values = record as Record<string, unknown>;
   const representation = metadata.resource.recordRepresentation;
   const value = representation ? values[representation] : undefined;
-  if (scalarTitleText(value)) return value;
+  if (textValue(value)) return value;
   return values[metadata.resource.query.identity.field];
 }
 
 export function titleText(value: unknown, fallback: string): string {
-  const text = scalarTitleText(value);
+  const text = textValue(value);
   return text || fallback;
-}
-
-function scalarTitleText(value: unknown): string {
-  return typeof value === "string" || typeof value === "number"
-    ? String(value).trim()
-    : "";
 }
 
 export function addFieldSelection(

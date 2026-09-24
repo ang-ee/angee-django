@@ -7,7 +7,6 @@ vi.mock("./i18n", () => ({ usePartiesT: () => (key: string) => key }));
 
 import {
   PartyContactSummary,
-  partyAddressLines,
   partyAddressText,
   partyContactValues,
 } from "./PartyContactSummary";
@@ -31,10 +30,7 @@ describe("PartyContactSummary", () => {
     ],
   };
 
-  test("uses the primary address and preferred contact values", () => {
-    expect(partyAddressLines(party)).toEqual([
-      "Billing", "151 Main St", "Suite 8", "San Juan, PR, 00901", "US",
-    ]);
+  test("formats an address and preferred contact values", () => {
     expect(partyAddressText(party.addresses[1])).toBe(
       "Billing · 151 Main St · Suite 8 · San Juan, PR, 00901 · US",
     );

@@ -42,7 +42,7 @@ export function useFileActions(
   const deleteWithPreview = useDeleteWithPreview(resource);
   const [restoreFile] = useAuthoredMutation(StorageRestoreFile);
   const updateFile = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
-    resource: resource ? refineResourceName(resource) : "",
+    resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     invalidates: ["list", "many", "detail"],
   });
