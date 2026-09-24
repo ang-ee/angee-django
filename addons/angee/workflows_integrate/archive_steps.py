@@ -26,7 +26,7 @@ from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_cla
 from angee.base.permissions import require_authorization_database
 from angee.workflows import engine
 from angee.workflows.attempts import DecisionGateOutput, validate_json_value
-from angee.workflows.configs import WorkflowStepConfig
+from angee.workflows.configs import NonBlankString, WorkflowStepConfig
 from angee.workflows.decision_actions import ReviewAction
 from angee.workflows.steps import (
     DecisionApplyStep,
@@ -45,8 +45,8 @@ ARCHIVE_EXTRACTOR_CLASSES_SETTING = "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES"
 class ArchiveGateConfig(WorkflowStepConfig):
     """Reviewer and action metadata for the archive mapping gate."""
 
-    action: str = Field(default="map-archive", min_length=1, pattern=r"\S")
-    assignee: str | None = Field(default=None, min_length=1, pattern=r"\S")
+    action: NonBlankString = "map-archive"
+    assignee: NonBlankString | None = None
     max_attempts: int = Field(default=3, ge=1)
 
 
