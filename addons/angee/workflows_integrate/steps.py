@@ -1,4 +1,8 @@
-"""Workflow execution and review composed over integrate's durable stream owners."""
+"""Workflow execution and review composed over integrate's durable stream owners.
+
+ArchiveExtractor and ArchiveExecutionReporter are public extension imports for
+messaging-bridge extractors; their implementations remain in archive_steps.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +25,8 @@ from angee.workflows.attempts import RecoveryMode
 from angee.workflows.configs import WorkflowStepConfig
 from angee.workflows.decision_actions import ReviewAction, ReviewRecordReference, build_decision_action
 from angee.workflows.steps import GateStep, StepEffect, StepExecutionMode, StepImpl, StepResult, TransientStepError
+from angee.workflows_integrate.archive_steps import ArchiveExecutionReporter as ArchiveExecutionReporter
+from angee.workflows_integrate.archive_steps import ArchiveExtractor as ArchiveExtractor
 
 _PASSTHROUGH_STREAM_ERRORS = (
     ValidationError,

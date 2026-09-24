@@ -23,12 +23,11 @@ from angee.workflows.steps import StepImpl
 from angee.workflows_integrate import archives
 from angee.workflows_integrate.archive_steps import (
     ArchiveExecuteStepImpl,
-    ArchiveExecutionReporter,
-    ArchiveExtractor,
     ArchiveGateStepImpl,
     ArchiveProbeStepImpl,
 )
 from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
+from angee.workflows_integrate.steps import ArchiveExecutionReporter, ArchiveExtractor
 from tests.conftest import STORAGE_TEST_MODELS, Backend, Drive, File
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,

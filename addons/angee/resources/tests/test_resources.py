@@ -2441,7 +2441,7 @@ def test_resource_factory_defaults_and_model_declared_native_subclass(tmp_path: 
     assert selected._meta.store_instance and selected._meta.report_skipped
 
     class InvalidModel(ResourceLoadMixin, DefaultModel):
-        resource_class = object
+        resource_class = object  # type: ignore[assignment]  # Negative test: reject a non-resource class.
 
         class Meta:
             abstract = True

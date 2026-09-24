@@ -11,3 +11,8 @@ dependencies = [
   "jsonschema>=4.26",
   "referencing>=0.37",
 ]
+
+[[migrations]]
+name = "optional_states_nullable"
+app_label = "workflows"
+module = "runtime_migrations.optional_states_nullable"

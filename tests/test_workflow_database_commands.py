@@ -395,9 +395,10 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
     assert step_run.status == StepRunStatus.WAITING
     assert target.status == RunStatus.RUNNING
 
-    assert engine.cancel_run_dispatch(
+    assert WorkflowDispatch.objects.deliver(
         intent.pk,
-        expected_run_id=target.pk,
+        expected_kind=WorkflowDispatchKind.RUN_CANCEL,
+        expected_target_id=target.pk,
     ) == {"canceled": 1}
     with system_context(reason="run cancellation delivery verification"):
         target.refresh_from_db()
@@ -409,7 +410,9 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
         )
     assert target.status == RunStatus.CANCELED
     assert intent.consumed_at is not None
-    assert engine.deliver_artifact_dispatch(delivery.pk)["woken"] == 1
+    assert WorkflowDispatch.objects.deliver(
+        delivery.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+    )["woken"] == 1
 
     with system_context(reason="run cancellation continuation"):
         continuation = WorkflowDispatch.objects.filter(

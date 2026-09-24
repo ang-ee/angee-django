@@ -10,6 +10,11 @@ dependencies = [
   "python-magic>=0.4.27",
 ]
 
+[[migrations]]
+name = "smart_kind_nullable"
+app_label = "storage"
+module = "runtime_migrations.smart_kind_nullable"
+
 [resources]
 master = [
   { path = "resources/master/010_storage.mimetype.yaml", adopt = "mime_type" },

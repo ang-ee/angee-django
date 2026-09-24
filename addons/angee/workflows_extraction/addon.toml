@@ -11,6 +11,11 @@ dependencies = [
   "pillow>=11.0",
 ]
 
+[[migrations]]
+name = "extraction_profiles"
+app_label = "workflows_extraction"
+module = "runtime_migrations.extraction_profiles"
+
 [resources]
 install = [
   { path = "resources/install/100_workflows.workflow.yaml", publish = true },

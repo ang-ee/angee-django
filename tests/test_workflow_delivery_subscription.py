@@ -277,7 +277,9 @@ def test_continuation_delivery_between_completion_read_and_wait_commit_is_retain
                         kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
                         artifact_object_id=child.pk,
                     )
-                assert engine.deliver_artifact_dispatch(delivery.pk) == {"runs": 1, "woken": 0}
+                assert WorkflowDispatch.objects.deliver(
+                    delivery.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+                ) == {"runs": 1, "woken": 0}
             finally:
                 release.set()
             assert executing.result(timeout=10)["executed"] == 1
@@ -440,7 +442,9 @@ def test_event_before_subscription_is_read_as_current_domain_state(
     user, step_run, attempt, dispatch = _scheduled_subscription(monkeypatch)
     event = _confirm_and_retain_intent(user)
     assert event.kind == WorkflowDispatchKind.ARTIFACT_DELIVERY
-    assert engine.deliver_artifact_dispatch(event.pk) == {"runs": 0, "woken": 0}
+    assert WorkflowDispatch.objects.deliver(
+        event.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+    ) == {"runs": 0, "woken": 0}
 
     assert engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)["executed"] == 1
     with system_context(reason="verify event before subscription"):
@@ -448,7 +452,9 @@ def test_event_before_subscription_is_read_as_current_domain_state(
         attempt.refresh_from_db()
     assert step_run.status == StepRunStatus.SUCCEEDED, (attempt.error, attempt.stacktrace)
     assert attempt.output == {"confirmed": True}
-    assert engine.deliver_artifact_dispatch(event.pk) == {"runs": 0, "woken": 0}
+    assert WorkflowDispatch.objects.deliver(
+        event.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+    ) == {"runs": 0, "woken": 0}
     with system_context(reason="verify no resurrection"):
         step_run.refresh_from_db()
     assert step_run.status == StepRunStatus.SUCCEEDED
@@ -481,7 +487,9 @@ def test_event_after_predicate_read_before_wait_commit_is_retained(
             try:
                 assert read_done.wait(timeout=5)
                 event = _confirm_and_retain_intent(user)
-                assert engine.deliver_artifact_dispatch(event.pk) == {"runs": 1, "woken": 0}
+                assert WorkflowDispatch.objects.deliver(
+                    event.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+                ) == {"runs": 1, "woken": 0}
             finally:
                 release.set()
             assert executing.result(timeout=10)["executed"] == 1
@@ -495,7 +503,9 @@ def test_event_after_predicate_read_before_wait_commit_is_retained(
         assert step_run.wait_until is not None and step_run.wait_until <= attempt.result_recorded_at
         assert subscription.target == user
         assert attempt.external_object_id is None
-        assert engine.deliver_artifact_dispatch(event.pk) == {"runs": 0, "woken": 0}
+        assert WorkflowDispatch.objects.deliver(
+            event.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+        ) == {"runs": 0, "woken": 0}
     finally:
         release.set()
         _SubscribedPredicate.read_done = None

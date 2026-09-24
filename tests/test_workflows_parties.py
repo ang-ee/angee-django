@@ -218,8 +218,12 @@ def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
             artifact_object_id=handle.pk,
         )
     assert delivery.consumed_at is None
-    assert engine.deliver_artifact_dispatch(delivery.pk) == {"runs": 2, "woken": 2}
-    assert engine.deliver_artifact_dispatch(handle_delivery.pk) == {"runs": 1, "woken": 1}
+    assert WorkflowDispatch.objects.deliver(
+        delivery.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+    ) == {"runs": 2, "woken": 2}
+    assert WorkflowDispatch.objects.deliver(
+        handle_delivery.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+    ) == {"runs": 1, "woken": 1}
 
     # The durable artifact delivery bumps the run-scoped generation only for the exact
     # external waits retaining this link; terminal and unrelated holds are left

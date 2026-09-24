@@ -360,18 +360,6 @@ def deliver_artifact(resource: Any, *, now: datetime | None = None, using: str |
     return {"runs": len(delivered_run_ids), "woken": woken}
 
 
-def deliver_artifact_dispatch(
-    dispatch_id: int, *, now: datetime | None = None, using: str | None = None
-) -> dict[str, int]:
-    """Consume one committed domain intent and deliver to current subscribers."""
-
-    return (
-        apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
-        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY, now=now)
-    )
-
-
 def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any, using: str | None = None) -> tuple[Any, bool]:
     """Retain one cross-run cancellation from this fenced database command."""
 
@@ -389,18 +377,6 @@ def schedule_run_cancel(step_run: Any, run: Any, *, actor: Any, using: str | Non
             actor=actor,
             lease_token=attempt.lease_token,
         )
-    )
-
-
-def cancel_run_dispatch(
-    dispatch_id: int, *, expected_run_id: int | None = None, using: str | None = None
-) -> dict[str, int]:
-    """Deliver one persisted cross-run cancellation through the run owner."""
-
-    return (
-        apps.get_model("workflows", "WorkflowDispatch")
-        .objects.db_manager(using)
-        .deliver(dispatch_id, expected_kind=WorkflowDispatchKind.RUN_CANCEL, expected_target_id=expected_run_id)
     )
 
 

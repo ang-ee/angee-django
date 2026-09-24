@@ -32,3 +32,18 @@ provider invocation and are never transient failures.
 `Extraction.awaiting_correspondence` identifies a retained candidate whose document
 or line identities need review. Callers use that property; retained writes use
 `ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED`.
+
+The declared [profile migration](runtime_migrations/extraction_profiles.py) renames
+`Extraction.engine` to `profile`, `engine_config` to `profile_config`, and
+`ExtractionPage.engine_metadata` to `provider_metadata` before Django's schema
+autodetection. Retained JSON payloads and consumer domain keys stay unchanged;
+register those keys under `ANGEE_EXTRACTION_PROFILE_CLASSES` instead of
+`ANGEE_EXTRACTION_ENGINE_CLASSES`. The old built-in `inference` key selected only
+transport and maps to `none`, meaning no domain profile; rollback maps `none`
+back to `inference`. An explicitly registered `inference` domain profile retains
+that key instead. New interpretation requires an explicit domain profile.
+An old consumer engine named `none` conflicts with the new reserved key. The
+migration rejects that ambiguity before changing columns; declare a consumer key
+migration first so both directions preserve its identity.
+Drain retained runs with old input contracts before the cutover, as described in
+the [upgrade guidance](../../../docs/backend/guidelines.md#migrations-and-runtime).

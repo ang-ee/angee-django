@@ -112,7 +112,12 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
     base_manager = SimpleNamespace()
     extraction_fixture = type(
         "ExtractionFixture", (),
-        {"objects": base_manager, "awaiting_correspondence": Extraction.awaiting_correspondence},
+        {
+            "objects": base_manager,
+            "awaiting_correspondence": Extraction.awaiting_correspondence,
+            "impl_field": Extraction.impl_field,
+            "resolve_impl": Extraction.resolve_impl,
+        },
     )
     base = extraction_fixture()
     for name, value in {
@@ -176,7 +181,7 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
         patch("angee.workflows_extraction.steps.canonical_record_target", return_value=SimpleNamespace(
             content_type=SimpleNamespace(pk=5), object_id=target.pk,
         )),
-        patch("angee.workflows_extraction.steps.resolve_impl_class", return_value=Profile),
+        patch.object(Extraction.impl_field("profile"), "resolve_class", return_value=Profile),
         patch("angee.workflows_extraction.steps.infer", side_effect=DocumentPipelineError(
             message,
             stage="inference",
@@ -275,7 +280,12 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
     base_manager = SimpleNamespace()
     extraction_fixture = type(
         "ExtractionFixture", (),
-        {"objects": base_manager, "awaiting_correspondence": Extraction.awaiting_correspondence},
+        {
+            "objects": base_manager,
+            "awaiting_correspondence": Extraction.awaiting_correspondence,
+            "impl_field": Extraction.impl_field,
+            "resolve_impl": Extraction.resolve_impl,
+        },
     )
     base = extraction_fixture()
     failed = extraction_fixture()
@@ -369,7 +379,7 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
             "angee.workflows_extraction.steps.canonical_record_target",
             return_value=SimpleNamespace(content_type=SimpleNamespace(pk=5), object_id=target.pk),
         ),
-        patch("angee.workflows_extraction.steps.resolve_impl_class", return_value=Profile),
+        patch.object(Extraction.impl_field("profile"), "resolve_class", return_value=Profile),
         patch(
             "angee.workflows_extraction.steps.infer",
             side_effect=(
@@ -418,7 +428,12 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
     base_manager = SimpleNamespace()
     extraction_fixture = type(
         "ExtractionFixture", (),
-        {"objects": base_manager, "awaiting_correspondence": Extraction.awaiting_correspondence},
+        {
+            "objects": base_manager,
+            "awaiting_correspondence": Extraction.awaiting_correspondence,
+            "impl_field": Extraction.impl_field,
+            "resolve_impl": Extraction.resolve_impl,
+        },
     )
     authority = extraction_fixture()
     for name, value in {
@@ -513,7 +528,7 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
             "angee.workflows_extraction.steps.canonical_record_target",
             return_value=SimpleNamespace(content_type=SimpleNamespace(pk=5), object_id=target.pk),
         ),
-        patch("angee.workflows_extraction.steps.resolve_impl_class", return_value=Profile),
+        patch.object(Extraction.impl_field("profile"), "resolve_class", return_value=Profile),
         patch("angee.workflows_extraction.steps.infer", side_effect=mismatch.value),
     ):
         result = InferEvidenceStepImpl().run(
@@ -547,7 +562,7 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
             "angee.workflows_extraction.steps.canonical_record_target",
             return_value=SimpleNamespace(content_type=SimpleNamespace(pk=5), object_id=target.pk),
         ),
-        patch("angee.workflows_extraction.steps.resolve_impl_class", return_value=Profile),
+        patch.object(Extraction.impl_field("profile"), "resolve_class", return_value=Profile),
         patch("angee.workflows_extraction.steps.infer", side_effect=mismatch.value),
     ):
         ordinary = InferEvidenceStepImpl().run(
@@ -568,7 +583,12 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
     base_manager = SimpleNamespace()
     extraction_fixture = type(
         "ExtractionFixture", (),
-        {"objects": base_manager, "awaiting_correspondence": Extraction.awaiting_correspondence},
+        {
+            "objects": base_manager,
+            "awaiting_correspondence": Extraction.awaiting_correspondence,
+            "impl_field": Extraction.impl_field,
+            "resolve_impl": Extraction.resolve_impl,
+        },
     )
     base = extraction_fixture()
     successor = extraction_fixture()
@@ -650,7 +670,7 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
                 content_type=SimpleNamespace(pk=5), object_id=target.pk
             ),
         ),
-        patch("angee.workflows_extraction.steps.resolve_impl_class") as resolve_profile,
+        patch.object(Extraction.impl_field("profile"), "resolve_class") as resolve_profile,
         patch("angee.workflows_extraction.steps.infer") as infer_call,
     ):
         result = InferEvidenceStepImpl().run(step_run, now=None)
@@ -1155,8 +1175,8 @@ class ExtractionServiceTests(TestCase):
             self.assertEqual(page.carrier_files, (source,))
             profile = RecordCarrierProfile()
             profile_class = MagicMock(return_value=profile)
-            with patch(
-                "angee.workflows_extraction.service.resolve_impl_class", return_value=profile_class,
+            with patch.object(
+                Extraction.impl_field("profile"), "resolve_class", return_value=profile_class,
             ) as resolve_profile, patch.object(
                 profile, "detect_carriers", wraps=profile.detect_carriers,
             ) as detect, patch.object(
@@ -1166,7 +1186,7 @@ class ExtractionServiceTests(TestCase):
                     prepared, (), schema=SCHEMA, authorized_target=self.drive,
                     profile="record_carrier", config={"result": {"number": "R-7", "rows": []}},
                 )
-            resolve_profile.assert_called_once()
+            resolve_profile.assert_called_once_with("record_carrier")
             profile_class.assert_called_once_with()
             detect.assert_called_once()
             process_parts.assert_called_once()
@@ -3042,7 +3062,7 @@ class ExtractionServiceTests(TestCase):
 
         with (
             actor_context(self.owner),
-            patch("angee.workflows_extraction.service.resolve_impl_class") as profile_class,
+            patch.object(Extraction.impl_field("profile"), "resolve_class") as profile_class,
             patch("angee.workflows_extraction.service._document_sources") as acquire_sources,
         ):
             corrected = self._retain_correction(

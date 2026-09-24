@@ -24,7 +24,8 @@ backend stream declarations.
 
 Backup/takeout extractors in messaging bridge addons contribute classes through
 `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES`. They import `ArchiveExtractor` and
-`ArchiveExecutionReporter` from `angee.workflows_integrate.archive_steps`, and compose
+`ArchiveExecutionReporter` from the public `angee.workflows_integrate.steps` path,
+which re-exports the canonical classes owned by `archive_steps.py`, and compose
 the shared `archives` utilities for bounded reads, safe ZIP member names and
 temporary subtree staging. Extractors own vendor parsing and call their target
 domain's idempotent ingest owner; the workflow addon owns orchestration.

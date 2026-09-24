@@ -18,7 +18,6 @@ from rebac import current_actor, system_context
 
 from angee.base.actors import actor_user_id
 from angee.base.db import get_write_alias, related_on
-from angee.base.impl import resolve_impl_class
 from angee.base.permissions import require_authorization_database
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset
@@ -436,9 +435,8 @@ def process(
 ) -> Any:
     """Retain one schema-valid deterministic profile result or explicit source hold."""
 
-    alias = get_write_alias(
-        apps.get_model("workflows_extraction", "Extraction"), using=using, instance=authorized_target
-    )
+    extraction_model = apps.get_model("workflows_extraction", "Extraction")
+    alias = get_write_alias(extraction_model, using=using, instance=authorized_target)
     require_authorization_database(alias, operation="Document processing authorization")
     actor = current_actor()
     if actor is None:
@@ -463,7 +461,7 @@ def process(
     _authorize(files, message_parts, authorized_target, actor=actor)
     normalized_schema = _validated_schema(schema)
     normalized_config = _json_object(config or {}, field="config")
-    profile_impl = resolve_impl_class("ANGEE_EXTRACTION_PROFILE_CLASSES", profile, base_class=ExtractionProfile)()
+    profile_impl = extraction_model.impl_field("profile").resolve_class(profile)()
     profile_layout = _json_object(profile_impl.evidence_layout, field="evidence_layout")
     if "evidence_layout" in normalized_config and normalized_config["evidence_layout"] != profile_layout:
         raise ValidationError({"config": "The published profile owns its evidence layout."})
@@ -766,9 +764,7 @@ def infer(
     config = _json_object(base.profile_config, field="config")
     if config.get("inference_mode") != "permitted":
         raise ValidationError({"inference": "This publication permits deterministic processing only."})
-    profile = resolve_impl_class(
-        "ANGEE_EXTRACTION_PROFILE_CLASSES", str(base.profile), base_class=ExtractionProfile,
-    )()
+    profile = base.resolve_impl("profile")()
     inference_required = profile.inference_required(base.result, base.unresolved_reasons)
     if not correspondence_hold and not inference_required:
         raise ValidationError({"inference": "The retained base has no unresolved source facts."})

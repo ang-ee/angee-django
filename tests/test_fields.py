@@ -437,6 +437,22 @@ def test_encrypted_field_corrupt_row_does_not_break_queryset() -> None:
             schema_editor.delete_model(FieldCorruptRow)
 
 
+@pytest.mark.parametrize("db_index", [True, False])
+def test_state_field_deconstruct_and_clone_preserve_index_choice(db_index: bool) -> None:
+    """Migration state cloning must not introduce an index on an opted-out column."""
+
+    class Status(models.TextChoices):
+        ENABLED = "enabled", "Enabled"
+
+    field = StateField(choices_enum=Status, db_index=db_index)
+    declaration = field.deconstruct()
+
+    assert declaration[3]["db_index"] is db_index
+    cloned = field.clone()
+    assert cloned.db_index is db_index
+    assert cloned.deconstruct() == declaration
+
+
 @pytest.mark.django_db(transaction=True)
 def test_state_field_supports_blank_string_states() -> None:
     """StateField owns nullable-free blank-string state columns."""

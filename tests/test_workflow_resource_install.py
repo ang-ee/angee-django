@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
@@ -265,11 +266,12 @@ def test_installer_patches_declared_config_without_erasing_operator_keys(
     assert entry.config == expected
 
 
-def test_installer_drops_retained_keys_the_config_contract_retired(
+def test_installer_reports_retained_keys_the_config_contract_retired(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A retained key survives a patch only while the step's config model declares it."""
+    """Retired keys are identified without exposing their operator-authored values."""
 
     class FixtureConfig(BaseModel):
         model_config = ConfigDict(extra="forbid")
@@ -278,13 +280,27 @@ def test_installer_drops_retained_keys_the_config_contract_retired(
         operator_policy: dict[str, Any] = Field(default_factory=dict)
 
     addon = _addon(tmp_path)
-    _install(addon, entry_config={"engine": {"prompt": "v1"}, "operator_policy": {"reviewers": ["r"]}})
+    _install(
+        addon,
+        entry_config={
+            "engine": {"prompt": "private prompt"},
+            "legacy_secret": "private secret",
+            "operator_policy": {"reviewers": ["r"]},
+        },
+    )
     monkeypatch.setattr(FixtureStep, "config_model", FixtureConfig)
 
-    _install(addon, entry_config={"profile": {"prompt": "v2"}})
+    with caplog.at_level(logging.WARNING, logger="angee.workflows.resources"):
+        _install(addon, entry_config={"profile": {"prompt": "v2"}})
 
     entry = Step.system_queryset().get(key="entry")
     assert entry.config == {"profile": {"prompt": "v2"}, "operator_policy": {"reviewers": ["r"]}}
+    warnings = [record for record in caplog.records if record.name == "angee.workflows.resources"]
+    assert [(record.levelno, record.getMessage()) for record in warnings] == [
+        (logging.WARNING, f"Dropping retired config key '{key}' from step 'entry' (xref={addon.name}.entry).")
+        for key in ("engine", "legacy_secret")
+    ]
+    assert "private" not in caplog.text
 
 
 def test_installer_emits_refs_for_edge_endpoint_change(

@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import logging
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
-from django.db import models
+from django.apps import apps
+from django.db import connection, connections, migrations, models
+from django.db.backends.sqlite3.base import DatabaseWrapper
+from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.loader import MigrationLoader
+from django.db.migrations.questioner import MigrationQuestioner
+from django.db.migrations.state import ModelState, ProjectState
+from django.db.migrations.writer import MigrationWriter
 
 from angee.compose.migrations import RuntimeMigrations
 from tests.conftest import make_addon, write_addon_manifest
@@ -811,3 +820,284 @@ def test_validated_plan_render_uses_the_hashed_source_snapshot(runtime_migration
     rendered = materializer._render(plan)
     assert rendered.startswith(expected)
     assert not rendered.startswith("changed after planning")
+
+
+def _upgrade_states(label):
+    """Minimal populated historical tables, including every affected constraint."""
+    from angee.base.impl import ImplClassField
+    from angee.storage.models import Folder
+    from angee.workflows.models import StepAttempt, StepRun, WorkflowRun
+    from angee.workflows_extraction.models import Extraction, ExtractionPage
+
+    if label == "workflows":
+        declarations = (
+            (WorkflowRun, ("parent_relation", "test_scope"), ("chk_wfr_test_scope",)),
+            (StepRun, ("waiting_kind",), ()),
+            (StepAttempt, ("lease_revocation_reason", "result_kind"), (
+                "chk_wsa_revocation_pair", "chk_wsa_result_pair", "chk_wsa_orchestration_error",
+            )),
+        )
+        extras = {
+            "workflowrun": {
+                "origin": models.CharField(max_length=32, default="manual"),
+                "test_step": models.IntegerField(null=True),
+                "test_source_step_id": models.IntegerField(null=True),
+            },
+            "stepattempt": {
+                "lease_revoked_at": models.DateTimeField(null=True),
+                "result_recorded_at": models.DateTimeField(null=True),
+                "orchestration_error": models.TextField(default=""),
+            },
+        }
+        legacy_constraints = {
+            "workflowrun": [models.CheckConstraint(
+                condition=(
+                    models.Q(origin="test", test_scope__in=("", "whole"),
+                             test_step__isnull=True, test_source_step_id__isnull=True)
+                    | models.Q(origin="test", test_scope="node",
+                               test_step__isnull=False, test_source_step_id__isnull=False)
+                    | (~models.Q(origin="test") & models.Q(
+                        test_scope="", test_step__isnull=True, test_source_step_id__isnull=True,
+                    ))
+                ), name="chk_wfr_test_scope",
+            )],
+            "stepattempt": [
+                models.CheckConstraint(
+                    condition=(models.Q(lease_revoked_at__isnull=True, lease_revocation_reason="")
+                               | (models.Q(lease_revoked_at__isnull=False) & ~models.Q(lease_revocation_reason=""))),
+                    name="chk_wsa_revocation_pair",
+                ),
+                models.CheckConstraint(
+                    condition=(models.Q(result_recorded_at__isnull=True, result_kind="")
+                               | (models.Q(result_recorded_at__isnull=False) & ~models.Q(result_kind=""))),
+                    name="chk_wsa_result_pair",
+                ),
+                models.CheckConstraint(
+                    condition=models.Q(orchestration_error="") | models.Q(result_kind="transient_error"),
+                    name="chk_wsa_orchestration_error",
+                ),
+            ],
+        }
+    elif label == "storage":
+        declarations = ((Folder, ("smart_kind",), ("uniq_storage_folder_owner_smart_kind",)),)
+        extras = {"folder": {"owner": models.IntegerField(null=True), "is_virtual": models.BooleanField(default=False)}}
+        legacy_constraints = {"folder": [models.UniqueConstraint(
+            fields=("owner", "smart_kind"), condition=models.Q(is_virtual=True) & ~models.Q(smart_kind=""),
+            name="uniq_storage_folder_owner_smart_kind",
+        )]}
+    else:
+        old = ProjectState()
+        current = ProjectState()
+        for model, renames in (
+            (Extraction, (("engine", "profile"), ("engine_config", "profile_config"))),
+            (ExtractionPage, (("engine_metadata", "provider_metadata"),)),
+        ):
+            fields = {"id": models.AutoField(primary_key=True)}
+            old_fields = {"id": models.AutoField(primary_key=True)}
+            for old_name, new_name in renames:
+                fields[new_name] = model._meta.get_field(new_name).clone()
+                old_fields[old_name] = (
+                    ImplClassField(registry_setting="ANGEE_EXTRACTION_ENGINE_CLASSES", editable=False)
+                    if old_name == "engine" else fields[new_name].clone()
+                )
+            old.add_model(ModelState(label, model.__name__, old_fields))
+            current.add_model(ModelState(label, model.__name__, fields))
+        return old, current
+
+    old = ProjectState()
+    current = ProjectState()
+    for model, names, constraints in declarations:
+        name = model._meta.model_name
+        fields = {"id": models.AutoField(primary_key=True), **extras.get(name, {})}
+        old_fields = {key: field.clone() for key, field in fields.items()}
+        for field_name in names:
+            field = model._meta.get_field(field_name)
+            fields[field_name] = field.clone()
+            # The floor used both CharField choices and blank non-null StateField;
+            # raw historical varchar fields retain '' without modern enum coercion.
+            old_fields[field_name] = models.CharField(
+                max_length=32, blank=True, default="", choices=field.choices,
+            )
+        old.add_model(ModelState(label, model.__name__, old_fields, options={
+            "constraints": legacy_constraints.get(name, []),
+        }))
+        current.add_model(ModelState(label, model.__name__, fields, options={
+            "constraints": [
+                constraint.clone() for constraint in model._meta.constraints if constraint.name in constraints
+            ],
+        }))
+    return old, current
+
+
+@pytest.fixture
+def isolated_upgrade_database():
+    """Replay real constraint names without colliding with the source test apps."""
+    original = connections["default"]
+    database = DatabaseWrapper({
+        **original.settings_dict,
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ":memory:",
+        "OPTIONS": {},
+        "TIME_ZONE": None,
+    }, alias="default")
+    connections["default"] = database
+    try:
+        yield
+    finally:
+        database.close()
+        connections["default"] = original
+
+
+@pytest.mark.parametrize("label,schema_nullable,domain_inference", [
+    ("workflows", False, False), ("storage", False, False), ("workflows_extraction", False, False),
+    ("workflows", True, False), ("storage", True, False), ("workflows_extraction", False, True),
+])
+@pytest.mark.django_db(transaction=True)
+def test_declared_upgrades_preserve_rows_reverse_and_leave_no_schema_prompts(
+    runtime_migration_probe, settings, monkeypatch, isolated_upgrade_database, label, schema_nullable, domain_inference,
+):
+    """Materialize real declarations, migrate test tables, and compare live owners."""
+    _, _, _, runtime_dir, _ = runtime_migration_probe
+    if domain_inference:
+        settings.ANGEE_EXTRACTION_PROFILE_CLASSES = {
+            **settings.ANGEE_EXTRACTION_PROFILE_CLASSES,
+            "inference": "example.domain.InferenceProfile",
+        }
+    legacy, current = _upgrade_states(label)
+    if schema_nullable:
+        for key, model in legacy.models.items():
+            for name, field in model.fields.items():
+                if current.models[key].fields[name].null:
+                    field.null = True
+    package = runtime_dir / label / "migrations"
+    _write_module(package.parent / "__init__.py")
+    _write_module(package / "__init__.py")
+    initial = migrations.Migration("0001_legacy", label)
+    initial.operations = [
+        migrations.CreateModel(model.name, list(model.fields.items()), options=model.options)
+        for model in legacy.models.values()
+    ]
+    _write_module(package / "0001_legacy.py", MigrationWriter(initial).as_string())
+    monkeypatch.setitem(settings.MIGRATION_MODULES, label, f"{runtime_dir.name}.{label}.migrations")
+    importlib.invalidate_caches()
+    materializer = RuntimeMigrations((apps.get_app_config(label),), runtime_dir=runtime_dir, labels=(label,))
+    (plan,) = materializer.plan()
+    source = importlib.import_module(f"angee.{label}.runtime_migrations.{plan.origin.split(':')[1]}")
+    assert not source.applies(ProjectState())
+    assert not source.applies(current)
+    assert materializer.materialize() == (plan.output_path,)
+    assert materializer.materialize() == ()
+
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    before = loader.project_state([(label, "0001_legacy")])
+    after = loader.project_state([(label, plan.name)])
+    expected = before.clone()
+    for key, model in current.models.items():
+        expected.models[key] = model.clone()
+        for name, field in model.fields.items():
+            assert after.models[key].fields[name].deconstruct()[1:] == field.deconstruct()[1:], (key, name)
+    questioner = Mock(spec=MigrationQuestioner)
+    questioner.ask_rename.side_effect = AssertionError("unexpected rename prompt")
+    questioner.ask_not_null_addition.side_effect = AssertionError("unexpected default prompt")
+    assert MigrationAutodetector(after, expected, questioner).changes(graph=loader.graph) == {}
+    assert not questioner.mock_calls
+
+    with connection.schema_editor() as editor:
+        for key in legacy.models:
+            editor.create_model(before.apps.get_model(*key))
+    try:
+        if label == "workflows":
+            before.apps.get_model(label, "WorkflowRun")._base_manager.create()
+            before.apps.get_model(label, "WorkflowRun")._base_manager.create(
+                origin="test", test_scope="node", test_step=4, test_source_step_id=4, parent_relation="owned_call",
+            )
+            before.apps.get_model(label, "StepRun")._base_manager.create()
+            before.apps.get_model(label, "StepRun")._base_manager.create(waiting_kind="approval")
+            before.apps.get_model(label, "StepAttempt")._base_manager.create()
+            before.apps.get_model(label, "StepAttempt")._base_manager.create(
+                lease_revocation_reason="canceled", lease_revoked_at=datetime(2026, 1, 1, tzinfo=UTC),
+                result_kind="transient_error", result_recorded_at=datetime(2026, 1, 1, tzinfo=UTC),
+                orchestration_error="retained error",
+            )
+        elif label == "storage":
+            folder = before.apps.get_model(label, "Folder")
+            folder._base_manager.create(owner=1, is_virtual=True)
+            folder._base_manager.create(owner=1, is_virtual=True)
+            folder._base_manager.create(owner=1, is_virtual=True, smart_kind="trash")
+        else:
+            extraction = before.apps.get_model(label, "Extraction")
+            # The retired registry is absent in new settings; seed stored legacy
+            # keys without asking its historical enum to decode INSERT RETURNING.
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    f"INSERT INTO {connection.ops.quote_name(extraction._meta.db_table)} "
+                    "(engine, engine_config) VALUES (%s, %s)",
+                    [(key, json.dumps({"retained": key})) for key in ("inference", "custom_domain")],
+                )
+            before.apps.get_model(label, "ExtractionPage")._base_manager.create(engine_metadata={"retained": [1, 2]})
+
+        def snapshot(state):
+            # Raw SQL verifies storage without modern StateField coercing '' to None.
+            with connection.cursor() as cursor:
+                result = {}
+                for key in legacy.models:
+                    table = state.apps.get_model(*key)._meta.db_table
+                    cursor.execute(f"SELECT * FROM {connection.ops.quote_name(table)} ORDER BY id")
+                    names = [column[0] for column in cursor.description]
+                    result[key] = [dict(zip(names, row)) for row in cursor.fetchall()]
+                return result
+
+        original = snapshot(before)
+        migration = loader.disk_migrations[label, plan.name]
+        with connection.schema_editor() as editor:
+            migration.apply(before, editor)
+            source.forwards(after.apps, editor)  # Data conversion is idempotent.
+        upgraded = snapshot(after)
+        if label == "workflows_extraction":
+            rows = upgraded[label, "extraction"]
+            assert [row["profile"] for row in rows] == ["inference" if domain_inference else "none", "custom_domain"]
+            assert [row["profile_config"] for row in rows] == [
+                row["engine_config"] for row in original[label, "extraction"]
+            ]
+            assert upgraded[label, "extractionpage"][0]["provider_metadata"] == (
+                original[label, "extractionpage"][0]["engine_metadata"]
+            )
+        else:
+            assert upgraded == {
+                key: [{name: None if value == "" and name in current.models[key].fields
+                       and current.models[key].fields[name].null else value for name, value in row.items()}
+                      for row in rows]
+                for key, rows in original.items()
+            }
+        with connection.schema_editor() as editor:
+            migration.unapply(
+                loader.project_state([(label, "0001_legacy")]), editor,
+            )
+        assert snapshot(before) == original
+    finally:
+        with connection.schema_editor() as editor:
+            for key in reversed(legacy.models):
+                editor.delete_model(before.apps.get_model(*key))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_extraction_profile_upgrade_rejects_reserved_key_collision_before_renaming(isolated_upgrade_database):
+    from angee.workflows_extraction.runtime_migrations.extraction_profiles import Migration
+
+    legacy, _ = _upgrade_states("workflows_extraction")
+    model = legacy.apps.get_model("workflows_extraction", "Extraction")
+    with connection.schema_editor() as editor:
+        editor.create_model(model)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"INSERT INTO {connection.ops.quote_name(model._meta.db_table)} "
+                "(engine, engine_config) VALUES (%s, %s)", ("none", "{}"),
+            )
+        with connection.schema_editor() as editor, pytest.raises(ValueError, match="consumer key migration"):
+            Migration("profile_upgrade", "workflows_extraction").apply(legacy, editor)
+        # The legacy column and exact key remain usable after the failed preflight.
+        assert model._base_manager.filter(engine=models.Value("none", output_field=models.CharField())).count() == 1
+    finally:
+        with connection.schema_editor() as editor:
+            editor.delete_model(model)

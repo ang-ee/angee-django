@@ -214,6 +214,13 @@ class StateField(TextChoicesField):
         if self._angee_blank_string:
             self.blank = True
 
+    def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
+        """Preserve index opt-outs despite Django's opposite constructor default."""
+
+        name, path, args, kwargs = super().deconstruct()
+        kwargs["db_index"] = self.db_index
+        return name, path, args, kwargs
+
     def to_python(self, value: Any) -> Any:
         """Accept stored values and GraphQL enum member names for this state."""
 

@@ -19,8 +19,7 @@ conservatively. Completion validates the exact JSON output again.
 [`engine`](engine.py) is the public function facade for workflow operations.
 Its domain owners enforce the operation contracts. Operations accepting a run,
 decision, or step take the retained model instance. The existing public
-`advance_dispatch`, `execute_dispatch`, `deliver_artifact_dispatch`,
-`cancel_run_dispatch`, and `settle_run_dispatch` signatures delegate to
+`advance_dispatch`, `execute_dispatch`, and `settle_run_dispatch` signatures delegate to
 `WorkflowDispatch.objects.deliver`, as do durable task transport and the
 synchronous test driver. Transport supplies a complete `WorkflowDispatchEnvelope`
 for validation under the delivery locks.
@@ -56,8 +55,11 @@ remaining children, incoming workflow references or publication history cannot b
 removed by omission. Empty facet files must still identify their target model.
 Omitted config on an unchanged step class preserves operator-authored config;
 a changed class uses its defaults, and explicit config is canonicalized by the
-Step owner. Explicit null remains distinct from omission and must satisfy the
-model field's contract.
+Step owner. A nonempty config patches declared keys while preserving omitted
+operator keys that the current contract still accepts. Retired keys produce a
+warning identifying the step, xref and key; values are never logged. An explicit
+empty config clears it. Explicit null remains distinct from omission and must
+satisfy the model field's contract.
 
 Xrefs can cross addons and earlier datasets. A Workflow may also reference an
 earlier new Workflow row in the same dataset; an unresolved forward reference

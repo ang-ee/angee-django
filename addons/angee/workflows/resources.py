@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import logging
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -22,6 +23,8 @@ from angee.resources.entries import resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import AngeeResource
 from angee.resources.widgets import XrefForeignKeyWidget, split_xref
+
+logger = logging.getLogger(__name__)
 
 
 class _DeclarationField(fields.Field):
@@ -266,6 +269,15 @@ class WorkflowDefinitionResource(AngeeResource):
                 # declaration updates only while the step's config contract still
                 # declares them; an explicit empty object still clears.
                 declared = instance.resolve_impl("step_class").declared_config_keys()
+                if declared is not None:
+                    for key in sorted(old_config.keys() - declared):
+                        logger.warning(
+                            "Dropping retired config key %r from step %r (xref=%s.%s).",
+                            key,
+                            instance.key,
+                            self.entry.addon.name,
+                            row["_xref"],
+                        )
                 kept_config = old_config if declared is None else {
                     key: value for key, value in old_config.items() if key in declared
                 }

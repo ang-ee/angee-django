@@ -15,7 +15,6 @@ from rebac import actor_context
 
 from angee.base.actors import actor_user_id
 from angee.base.db import get_write_alias, related_on
-from angee.base.impl import resolve_impl_class
 from angee.base.refs import canonical_record_target
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import (
@@ -37,7 +36,6 @@ from angee.workflows_extraction.inference import (
     RETAINED_CARRIER_UNAVAILABLE,
     recognize_page,
 )
-from angee.workflows_extraction.profiles import ExtractionProfile
 from angee.workflows_extraction.service import (
     SupersededInference,
     collect_carriers,
@@ -140,11 +138,10 @@ class PreparePagesStepImpl(StepImpl):
             raise PermissionDenied("Page preparation requires the workflow actor.")
         with actor_context(actor):
             files, parts, target = _resolve_sources(value, using=alias)
+            profile_field = apps.get_model("workflows_extraction", "Extraction").impl_field("profile")
             prepared = prepare_pages(
                 files=files, message_parts=parts, authorized_target=target, config=options,
-                profile=resolve_impl_class(
-                    "ANGEE_EXTRACTION_PROFILE_CLASSES", value.profile, base_class=ExtractionProfile,
-                )(),
+                profile=profile_field.resolve_class(value.profile)(),
                 using=alias,
             )
         model_id = value.recognition_model or ""
@@ -574,11 +571,7 @@ class InferEvidenceStepImpl(StepImpl):
                         using=using,
                     )
             else:
-                profile = resolve_impl_class(
-                    "ANGEE_EXTRACTION_PROFILE_CLASSES",
-                    str(base.profile),
-                    base_class=ExtractionProfile,
-                )()
+                profile = base.resolve_impl("profile")()
                 unchanged = (
                     base.status == "succeeded"
                     and (
@@ -772,12 +765,11 @@ def _restore_prepared(
         target_id=manifest.target_id,
     )
     files, parts, target = _resolve_sources(input_refs, using=using)
+    profile_field = apps.get_model("workflows_extraction", "Extraction").impl_field("profile")
     prepared = restore_prepared_pages(
         manifest.manifest, files=files, message_parts=parts,
         authorized_target=target, config=options,
-        profile=resolve_impl_class(
-            "ANGEE_EXTRACTION_PROFILE_CLASSES", manifest.profile, base_class=ExtractionProfile,
-        )(),
+        profile=profile_field.resolve_class(manifest.profile)(),
         using=using,
     )
     if [

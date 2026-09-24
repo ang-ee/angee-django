@@ -72,6 +72,30 @@ def test_gate_config_preserves_dynamic_payload_and_defaults_seat_priorities() ->
     assert normalized["max_attempts"] == 2
 
 
+@pytest.mark.parametrize("blank", ["", " ", "\t\n", "\u00a0"])
+@pytest.mark.parametrize("field", ["action", "assignee"])
+def test_gate_config_rejects_blank_strings_in_scalar_and_collection_fields(blank: str, field: str) -> None:
+    config = {
+        "action": blank if field == "action" else "approve-note",
+        "slots": [{"assignees": [blank if field == "assignee" else "auth/user:1"]}],
+    }
+
+    with pytest.raises(ValidationError, match="at least 1 character"):
+        GateStep.validate_config(config)
+
+
+def test_gate_config_strips_nonblank_strings_and_keeps_supported_form_constraints() -> None:
+    normalized = normalized_twice(
+        GateStep,
+        {"action": " approve-note\n", "slots": [{"assignees": ["\tauth/user:1 "]}]},
+    )
+
+    assert normalized["action"] == "approve-note"
+    assert normalized["slots"][0]["assignees"] == ["auth/user:1"]
+    form = GateStep.config_form_spec()
+    assert form is not None and form["properties"]["action"]["minLength"] == 1
+
+
 def test_static_gate_actions_are_stored_as_declarations_and_derived_on_admission() -> None:
     normalized = normalized_twice(
         GateStep,

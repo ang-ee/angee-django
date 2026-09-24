@@ -9,14 +9,23 @@ from typing import Annotated, Any, Literal, TypeAlias
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_slug
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from angee.workflows.attempts import DecisionRecordAccess
 from angee.workflows.bindings import BindingNode, is_binding, is_gate_binding_mapping, parse_binding
 from angee.workflows.data_contracts import JsonPath, JsonSchemaDict, schema_data_contract
 from angee.workflows.decision_actions import ReviewAction, build_decision_action
 
-NonBlankString = Annotated[str, Field(min_length=1)]
+NonBlankString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class RetryBackoffConfig(BaseModel):

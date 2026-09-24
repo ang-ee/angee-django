@@ -2322,7 +2322,9 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
                 kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
                 artifact_object_id=child.pk,
             )
-        assert engine.deliver_artifact_dispatch(delivery.pk)["woken"] == 1
+        assert WorkflowDispatch.objects.deliver(
+            delivery.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+        )["woken"] == 1
         with system_context(reason="native call wake dispatch"):
             advance = (
                 WorkflowDispatch.objects.filter(

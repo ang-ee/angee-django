@@ -9,6 +9,35 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — workflow and integration upgrades
+
+- Existing stacks must build and migrate on the previous release line first,
+  at least through source revision `0a55a6fb`. Framework runtime history is
+  carried forward, including materialized bodies from retired declarations and
+  the frozen `angee.base.historical_relationships` import module. Never empty
+  `runtime/*/migrations` on a stack whose database is carried forward. Stacks
+  depending on the retired `workflows_ocr` label must remain at that upgrade floor
+  until their migration graph has a supported transition.
+- Guarded addon runtime migrations convert the six optional workflow/storage
+  state columns from empty strings to NULL while preserving rows and replacing
+  affected constraints. Extraction migrations rename `engine` → `profile`,
+  `engine_config` → `profile_config`, and page `engine_metadata` →
+  `provider_metadata` before schema autodetection, avoiding rename/default prompts.
+- Replace `ANGEE_EXTRACTION_ENGINE_CLASSES` with
+  `ANGEE_EXTRACTION_PROFILE_CLASSES`. Consumer domain keys retain their spelling;
+  the transport-only built-in `inference` key maps to `none`. Retained JSON
+  evidence is preserved. Drain runs with old extraction input contracts before
+  upgrading; see the [migration guidance](docs/backend/guidelines.md#migrations-and-runtime).
+- Run `rebac sync` after migrate for the new dashboards `shared` relation and
+  shared-reader reconciliation. Regenerate GraphQL SDL and clients; optional
+  workflow states are nullable enums, including `WaitingKind`.
+- Messaging bridge extractors can continue importing `ArchiveExtractor` and
+  `ArchiveExecutionReporter` from the public `angee.workflows_integrate.steps`
+  path; implementation remains in `archive_steps`.
+- The integration ownership guard now belongs to its consumer addon. The
+  framework no longer supplies `angee.integrate.ownership`; consumers own their
+  ownership policy through the declared integration contract.
+
 ## Unreleased — theme addons and Appearance
 
 - The original blue palette is presented as Default while retaining its
