@@ -199,7 +199,8 @@ Use these owners instead of maintaining another contract in an addon:
     `File._authorize_push`, and `File.delete`) still call these unbound checks;
     their alias-aware persistence does not close authorization routing. They
     require entry guards or upstream alias support in the next storage sweep.
-    REBAC audit-event writes (`PermissionAuditEvent`) share this D34 fail-closed frontier: the upstream library has no alias contract.
+    REBAC audit-event writes (`PermissionAuditEvent`) share this fail-closed
+    frontier: the upstream library has no alias contract.
   - Django `Field.pre_save(instance, add)` receives no database alias, both from
     `Model.save` and the insert compiler used by `bulk_create`. An explicit
     `save(using=...)` can therefore disagree with the instance/write-router alias
@@ -785,18 +786,26 @@ and current contracts before applying a historical example to a new deployment.
   released/applied migration imports with a narrow compatibility alias where
   needed; [`angee.base.fields`](../../angee/base/fields.py) preserves the historical
   `ImplClassField` path this way. New migrations use the new canonical path.
+  [`angee.base.historical_relationships`](../../angee/base/historical_relationships.py)
+  is frozen compatibility code for materialized historical migrations only;
+  production callers must use current owners.
   Only unreleased, unapplied migrations whose consumers are known may be edited
   as part of the move. Rebuilding generated model sources does not authorize
   rewriting or deleting a deployment's migration history.
-- **Regenerating migration history can orphan an existing database.** Gitignored
-  migrations can still be the applied history of a live development database.
-  Recreating their names or numbering may cause Django to apply existing schema
-  again. Preserve the files and investigate the recorded graph first. A reset is
-  appropriate only for a deliberately disposable database with understood data
-  ownership and a recoverable backup; resolve its configured location rather
-  than assuming a `.angee/data/db.sqlite3` path. For durable deployments, retain
-  and version the migration history with the deployment artifacts. Do not use
-  blanket migration deletion or `--fake` to hide a graph mismatch.
+- **Framework runtime-migration history is carried forward.** Existing stacks
+  must first build and migrate on the previous release line before upgrading,
+  so retired addon declarations have already been materialized and applied.
+  Preserve those files and generate incremental migrations after the next build;
+  [the composer](../composer.md#addon-owned-runtime-migrations) preserves existing
+  materialized bodies when their declarations are removed.
+- **Never empty `runtime/*/migrations` on a stack whose database is carried forward.**
+  Gitignored migrations can still be applied history; recreating their names or
+  numbering can cause Django to apply existing schema again. Durable deployments
+  retain and version runtime migration history with their deployment artifacts.
+  Investigate the recorded graph before recovery; blanket migration deletion and
+  `--fake` must not hide a mismatch. Consumer repositories own their history
+  policy, including any reset of consumer labels on a rebuilt database; framework
+  upgrades do not authorize a reset.
 - **Data migrations access REBAC-scoped models through `_base_manager`, and
   backfills need a rows-present proof.** A manager with `use_in_migrations = True`
   (iam's `UserManager`, inherited from Django's) rides into the historical model,
@@ -816,10 +825,6 @@ and current contracts before applying a historical example to a new deployment.
   explicit historical-digest mechanism and verification of both old and new
   histories; they are not permission to rewrite copies. Keep formatter exclusions
   for `**/runtime_migrations` because formatting also changes the pinned digest.
-- **The `feature/arp-ap` branch-history reset was explicitly authorized on
-  2026-09-20.** Follow the [composer's disposable-history reset
-  procedure](../composer.md#addon-owned-runtime-migrations); this branch-specific
-  authorization is not a template for other resets.
 - **A restricted `makemigrations` invocation must cover every changed concrete
   app.** Derive labels from the composed model registry instead of copying an
   old example's label list. Missing a changed app's migrations can leave its

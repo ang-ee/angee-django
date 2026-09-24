@@ -6,6 +6,8 @@ import ast
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 BASE_SPEC = importlib.util.find_spec("angee.base")
 assert BASE_SPEC is not None and BASE_SPEC.origin is not None
@@ -14,7 +16,8 @@ BASE = ANGEE / "base"
 GRAPHQL = ROOT / "addons" / "angee" / "graphql"
 COMPOSE = ANGEE / "compose"
 RESOURCES = ROOT / "addons" / "angee" / "resources"  # resources is a base addon
-SOURCE_ROOTS = (ANGEE.parent, ROOT / "addons")
+# Resolve the nested addon import root before its enclosing repository root.
+SOURCE_ROOTS = (ROOT / "addons", ANGEE.parent)
 ADDON_ROOTS = (ROOT / "addons" / "angee",)
 
 # Derived from the source tree so a new base addon is guarded automatically.
@@ -37,9 +40,8 @@ def _module_imports(path: Path) -> set[str]:
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.level:
-                package = module.split(".") if path.name == "__init__.py" else module.split(".")[:-1]
-                prefix = package[: len(package) - node.level + 1]
-                imported = ".".join((*prefix, *(node.module or "").split(".")))
+                package = module if path.name == "__init__.py" else module.rpartition(".")[0]
+                imported = importlib.util.resolve_name("." * node.level + (node.module or ""), package)
             else:
                 imported = node.module or ""
             if imported:
@@ -70,6 +72,38 @@ def _tree_imports(root: Path) -> set[str]:
     for path in paths:
         names |= _module_imports(path)
     return names
+
+
+@pytest.mark.parametrize(
+    ("source_path", "source", "expected"),
+    [
+        (
+            "angee/base/models.py",
+            "from . import historical_relationships",
+            {"angee.base", "angee.base.historical_relationships"},
+        ),
+        (
+            "addons/angee/example/models.py",
+            "from ..base import historical_relationships as history",
+            {"angee.base", "angee.base.historical_relationships"},
+        ),
+        (
+            "addons/angee/example/__init__.py",
+            "from ..base.historical_relationships import ensure_historical_relationships",
+            {
+                "angee.base.historical_relationships",
+                "angee.base.historical_relationships.ensure_historical_relationships",
+            },
+        ),
+    ],
+)
+def test_relative_imports_resolve_against_the_source_import_root(
+    monkeypatch: pytest.MonkeyPatch, source_path: str, source: str, expected: set[str]
+) -> None:
+    """Core and addon relative imports cannot bypass dependency guards."""
+
+    monkeypatch.setattr(Path, "read_text", lambda self, **kwargs: source)
+    assert _module_imports(ROOT / source_path) == expected
 
 
 def test_base_is_the_model_layer_below_all_siblings() -> None:
