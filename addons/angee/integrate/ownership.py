@@ -762,10 +762,21 @@ def check_external_ownership_declarations(
             if invalid_relations:
                 raise ImproperlyConfigured(f"protected relation(s) must be foreign keys: {sorted(invalid_relations)}")
             declared = declaration.source_owned_fields | declaration.local_fields | _PROVENANCE_FIELDS
+            # A declaration classifies the fields of the concrete model that carries it. A
+            # multi-table child (Company below Party) inherits the parent's declaration for
+            # the parent's columns; its own columns are local unless the child declares them.
+            declaring = next(base for base in model.__mro__ if "external_ownership" in base.__dict__)
+            declared_model = next(
+                (parent for parent in (*model._meta.get_parent_list(), model) if issubclass(parent, declaring)),
+                model,
+            )
             undeclared = {
                 field.name
                 for field in (*model._meta.concrete_fields, *model._meta.many_to_many)
-                if not field.auto_created and field.name not in declared and field.name not in _BOOKKEEPING_FIELDS
+                if field.model is declared_model
+                and not field.auto_created
+                and field.name not in declared
+                and field.name not in _BOOKKEEPING_FIELDS
             }
             if undeclared:
                 raise ImproperlyConfigured(f"field(s) lack source/local ownership: {sorted(undeclared)}")
