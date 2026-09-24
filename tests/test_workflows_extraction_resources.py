@@ -70,10 +70,7 @@ def test_install_resources_publish_valid_generic_extraction_child() -> None:
         "path": ["engine_config"],
     }
     recognition_fields = steps["recognize_page"].input_binding["fields"]
-    assert recognition_fields["engine"] == {
-        "kind": "workflow_input",
-        "path": ["recognition_engine"],
-    }
+    assert "engine" not in recognition_fields
     assert recognition_fields["engine_config"] == {
         "kind": "workflow_input",
         "path": ["engine_config", "recognition_config"],
@@ -84,7 +81,6 @@ def test_install_resources_publish_valid_generic_extraction_child() -> None:
         "schema",
         "engine",
         "engine_config",
-        "recognition_engine",
         "recognition_timeout",
         "model",
         "recognition_model",

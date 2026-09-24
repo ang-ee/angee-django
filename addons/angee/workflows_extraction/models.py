@@ -17,19 +17,21 @@ from angee.base.refs import RecordRefMixin
 from angee.workflows_extraction.contracts import (
     CorrectionRef,
     DocumentRef,
+    ExtractionPartKind,
     ExtractionRef,
     FactAuthority,
     LineRef,
     PageRef,
     SourceRef,
 )
-from angee.workflows_extraction.engines import ExtractionEngine, ExtractionPartKind, ExtractionStatus
+from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionStatus
 from angee.workflows_extraction.managers import (
     EvidenceManager,
     ExtractionManager,
     ExtractionSystemManager,
 )
 from angee.workflows_extraction.pointers import json_pointer_value
+from angee.workflows_extraction.profiles import ExtractionProfile
 
 
 class DecisionReadableFile(models.Model):
@@ -91,9 +93,10 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
     schema = models.JSONField(editable=False)
+    # This retained key selects domain interpretation, never provider transport.
     engine = ImplClassField(
-        base_class=ExtractionEngine,
-        registry_setting="ANGEE_EXTRACTION_ENGINE_CLASSES",
+        base_class=ExtractionProfile,
+        registry_setting="ANGEE_EXTRACTION_PROFILE_CLASSES",
         editable=False,
     )
     model = models.ForeignKey(
@@ -226,6 +229,15 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     @property
     def stage_provenance(self) -> Mapping[str, Any]:
         return self.provenance.get("document", {})
+
+    @property
+    def awaiting_correspondence(self) -> bool:
+        """Whether this revision holds a candidate awaiting reviewed identity mapping."""
+
+        return (
+            self.status == ExtractionStatus.FAILED
+            and self.error_code == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
+        )
 
     @property
     def failed_at_inference(self) -> bool:

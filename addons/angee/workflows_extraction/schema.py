@@ -14,7 +14,7 @@ from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id, require_public_id
 from angee.graphql.node import AngeeNode
 from angee.iam.permissions import read_resource_queryset
-from angee.workflows_extraction.engines import ExtractionPartKind
+from angee.workflows_extraction.contracts import ExtractionPartKind
 from angee.workflows_extraction.managers import RetiredIdentityKind
 
 strawberry.enum(cast(Any, ExtractionPartKind))

@@ -10,10 +10,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Any, ClassVar, cast
 
 from asgiref.sync import async_to_sync
+from httpx import NetworkError, Timeout, TimeoutException
 from pydantic_ai.direct import model_request
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
@@ -83,6 +86,7 @@ class InferenceBackend(ImplBase):
     # Whether callers must attach an inference credential. This belongs to the
     # contract because every backend consumer must make the same typed decision.
     requires_credential: ClassVar[bool] = True
+    default_base_url: ClassVar[str] = ""
     defaults = {
         "name": "Manual",
         "status": "draft",
@@ -92,7 +96,19 @@ class InferenceBackend(ImplBase):
         """Bind this backend to its provider row."""
 
         self.provider = provider
-        self.using: str | None = None
+
+    @property
+    def endpoint(self) -> str:
+        """Return the canonical configured endpoint; blank delegates to the SDK."""
+
+        return str(self.provider.base_url or self.default_base_url).strip().rstrip("/")
+
+    def is_transient_error(self, error: Exception) -> bool:
+        """Classify native provider failures; vendor adapters extend transport types."""
+
+        if isinstance(error, ModelHTTPError):
+            return error.status_code == 429 or 500 <= error.status_code < 600
+        return isinstance(error, TimeoutError | ConnectionError | TimeoutException | NetworkError)
 
     def connect_oauth_client(self, owner_label: str, *, using: str | None = None) -> Any:
         """Return the enabled OAuth client this backend connects its provider through.
@@ -112,12 +128,14 @@ class InferenceBackend(ImplBase):
             using=using,
         )
 
-    def list_models(self) -> Sequence[InferenceModelSpec]:
+    def list_models(self, *, using: str | None = None) -> Sequence[InferenceModelSpec]:
         """Return the provider's advertised models for catalogue upsert."""
 
         raise NotImplementedError("InferenceBackend subclasses must implement list_models().")
 
-    def model(self, handle: str, *, credential: Any | None = None) -> AbstractAsyncContextManager[Model]:
+    def model(
+        self, handle: str, *, credential: Any | None = None, using: str | None = None
+    ) -> AbstractAsyncContextManager[Model]:
         """Bind a native model for one invocation, closing owned clients on exit.
 
         Resolve credentials synchronously before entering the returned context;
@@ -138,7 +156,22 @@ class InferenceBackend(ImplBase):
         if forbidden:
             names = ", ".join(sorted(forbidden))
             raise ValueError(f"Inference request settings cannot override provider transport: {names}.")
+        unknown = result.keys() - (ModelSettings.__required_keys__ | ModelSettings.__optional_keys__)
+        if unknown:
+            raise ValueError(f"Unknown inference request settings: {', '.join(sorted(unknown))}.")
+        self._validate_timeout(result.get("timeout"))
         return cast(ModelSettings, result)
+
+    @staticmethod
+    def _validate_timeout(timeout: Any) -> None:
+        """Reject invalid timeout configuration before it reaches network transport."""
+
+        values = timeout.as_dict().values() if isinstance(timeout, Timeout) else (timeout,)
+        if any(
+            value is not None and (not isinstance(value, int | float) or not isfinite(value) or value <= 0)
+            for value in values
+        ):
+            raise ValueError("Inference timeout must be positive and finite, or None.")
 
     def chat(
         self,
@@ -148,11 +181,12 @@ class InferenceBackend(ImplBase):
         model_settings: ModelSettings | None = None,
         model_request_parameters: ModelRequestParameters | None = None,
         credential: Any | None = None,
+        using: str | None = None,
     ) -> ModelResponse:
         """Make one native request; tools are declared but never executed here."""
 
         request_settings = self.request_settings(model_settings)
-        binding = self.model(handle, credential=credential)
+        binding = self.model(handle, credential=credential, using=using)
 
         async def request() -> ModelResponse:
             async with binding as model:
@@ -177,29 +211,7 @@ class ManualInferenceBackend(InferenceBackend):
     key = "manual"
     label = "Manual inference"
 
-    def list_models(self) -> Sequence[InferenceModelSpec]:
+    def list_models(self, *, using: str | None = None) -> Sequence[InferenceModelSpec]:
         """Return no models; the catalogue is maintained by hand on this backend."""
 
         return ()
-
-
-def is_retryable_provider_error(error: Exception) -> bool:
-    """Return whether an SDK/provider exception represents a transient failure."""
-
-    status = getattr(error, "status_code", None)
-    if status in {408, 409, 425, 429, 500, 502, 503, 504, 529}:
-        return True
-    error_type = type(error).__name__.lower()
-    message = str(error).lower()
-    retryable_terms = (
-        "ratelimit",
-        "rate_limit",
-        "rate limit",
-        "overload",
-        "overloaded",
-        "temporarily unavailable",
-        "timeout",
-        "timed out",
-        "try again",
-    )
-    return any(term in error_type or term in message for term in retryable_terms)

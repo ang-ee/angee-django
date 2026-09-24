@@ -184,8 +184,8 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "infer_evidence": "angee.workflows_extraction.steps.InferEvidenceStepImpl",
 }
 ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
-ANGEE_EXTRACTION_ENGINE_CLASSES = {
-    "inference": "angee.workflows_extraction.engines.InferenceMappingEngine",
+ANGEE_EXTRACTION_PROFILE_CLASSES = {
+    "none": "angee.workflows_extraction.profiles.UnconfiguredExtractionProfile",
     "fake_document": "tests.extraction_engines.FakeDocumentEngine",
 }
 ANGEE_EXTRACTION_MAX_BYTES = 25 * 1024 * 1024

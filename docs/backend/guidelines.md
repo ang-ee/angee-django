@@ -223,12 +223,14 @@ Use these owners instead of maintaining another contract in an addon:
     creation to that store and saves the model on its own selected alias. Native
     post-save signals carry the model alias into snapshots. Separate databases
     have separate transactions; this is not a cross-database atomicity guarantee.
-  - The agent inference/provider and session owners still lack complete alias
-    propagation. Their [`workflow step entries`](../../addons/angee/workflows_agents/steps.py)
-    reject non-default execution until those owners complete that migration.
-    The direct [`session entries`](../../addons/angee/workflows_agents/sessions.py)
-    remain open debt: they need alias propagation and their own entry guards;
-    the workflow-step guard does not protect direct callers.
+  - Inference providers accept an explicit operation alias through model binding,
+    credential refresh and SDK requests. Authorized inference still requires the
+    default database: `InferenceModel.require_usable` uses REBAC's model read
+    check, and workflow admission actor resolution has the same upstream alias
+    limitation. The shared workflow inference helper applies this boundary to
+    one-shot inference and extraction alike. Agent sessions retain their separate
+    default-only workflow entry guard; direct session entries still need alias
+    propagation and their own entry guard.
   - [`Platform permission-schema cleanup`](../../addons/angee/platform/permissions.py)
     still uses unbound schema queries and `PackageManagedRecord.target` generic
     relations. It needs an upstream alias contract or a default-only entry guard
@@ -1365,12 +1367,11 @@ from the composition addon to both owners; integrate never imports workflows.
   baked into the opencode image (the `OPENCODE_ANTHROPIC_AUTH_PLUGIN` build arg) and using a
   Pro/Max token there violates Anthropic's ToS — enabling it without the plugin silently drops
   Anthropic from OpenCode's model list.
-- **One-shot inference steps contain no inference policy.** Do not add prompt
-  rendering, provider branching, usage normalization, or a second response
-  protocol to a step; compose the owning
-  [`InferenceModel.infer`](../../addons/angee/agents/models.py),
-  [backend request/error policy](../../addons/angee/agents/backends.py), and
-  [deployment approval policy](../../addons/angee/agents/deployments.py).
+- **One-shot inference steps compose the shared workflow inference owner.**
+  [`call_inference`](../../addons/angee/workflows_agents/inference.py) combines
+  model-owned access, approval and capability checks with backend request/error
+  policy and workflow budget accounting. Prompt construction belongs to the
+  invoking domain; agents owns native requests, structured decoding and usage.
 - **Task locks are advisory, row locks are authoritative.** Celery task bodies may
   use `angee.jobs.locks.task_lock()` to prevent duplicate workers from doing the
   same external work, but persisted state transitions still use model/queryset row
@@ -1405,12 +1406,6 @@ from the composition addon to both owners; integrate never imports workflows.
   the credential (or changing placement) invalidates every provisioned agent's bearer
   until reprovision. The verifier logs each decline with its reason; FastMCP's 401 text
   about "expired" tokens is boilerplate.
-- **One-shot inference steps contain no inference policy.** Do not add prompt
-  rendering, provider branching, usage normalization, or a second response
-  protocol to a step; compose the owning
-  [`InferenceModel.infer`](../../addons/angee/agents/models.py),
-  [backend request/error policy](../../addons/angee/agents/backends.py), and
-  [deployment approval policy](../../addons/angee/agents/deployments.py).
 
 ### Workflow execution
 

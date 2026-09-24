@@ -186,3 +186,12 @@ class DocumentPipelineError(RuntimeError):
         self.code = code
         self.metadata = dict(metadata or {})
         self.usage_delta = dict(usage_delta or {})
+
+
+@dataclass(frozen=True, slots=True)
+class PageResult:
+    """One page's validated engine response and non-sensitive metrics."""
+
+    value: dict[str, Any]
+    duration_ms: int = 0
+    engine_metadata: dict[str, Any] | None = None

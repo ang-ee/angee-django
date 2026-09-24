@@ -1,17 +1,17 @@
-"""Deterministic engines registered only by test settings."""
+"""Deterministic domain profiles registered only by test settings."""
 
 from typing import Any, Sequence
 
-from angee.workflows_extraction.engines import (
+from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,
     DocumentResult,
     DocumentSource,
-    ExtractionEngine,
 )
+from angee.workflows_extraction.profiles import ExtractionProfile
 
 
-class FakeDocumentEngine(ExtractionEngine):
+class FakeDocumentEngine(ExtractionProfile):
     """Deterministic document-level engine for evidence integration tests."""
 
     key = "fake_document"

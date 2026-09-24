@@ -8,7 +8,6 @@ multi-turn session runner with tools and approvals.
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Annotated, Any, cast
@@ -17,15 +16,11 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, transaction
 from django.utils import timezone
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from pydantic_ai.messages import BinaryContent, ModelMessage, ModelMessagesTypeAdapter, ModelResponse
-from pydantic_ai.settings import ModelSettings
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelResponse
 from rebac import actor_context, system_context
 
-from angee.agents.backends import is_retryable_provider_error
-from angee.agents.deployments import validate_approved_deployment
 from angee.agents.models import (
-    InferenceOutputSchema,
     SessionStatus,
     TurnStatus,
 )
@@ -42,6 +37,7 @@ from angee.workflows.steps import (
     TransientStepError,
     retry_policy_from_config,
 )
+from angee.workflows_agents.inference import InferenceCallError, InferRequest, call_inference
 from angee.workflows_agents.sessions import close_session
 
 SESSION_PARKED_UNTIL = datetime.max.replace(tzinfo=UTC)
@@ -49,38 +45,6 @@ SESSION_PARKED_UNTIL = datetime.max.replace(tzinfo=UTC)
 
 SESSION_UPDATE_FLUSH_SECONDS = 0.25
 """Minimum interval between streamed turn-row saves."""
-
-
-class InferRequest(BaseModel):
-    """Native pydantic-ai request arguments accepted by ``InferenceModel.infer``."""
-
-    model_config = ConfigDict(extra="forbid")
-    messages: list[ModelMessage]
-    images: list[BinaryContent] = Field(default_factory=list)
-    output_schema: InferenceOutputSchema | None = None
-    # ``ModelSettings`` cannot build a pydantic schema (``httpx.Timeout``); the
-    # validator below enforces its key set instead.
-    settings: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"widget": "json"})
-
-    @model_validator(mode="before")
-    @classmethod
-    def validate_settings(cls, value: Any) -> Any:
-        """Reject unknown settings and the step-owned timeout before invocation."""
-
-        if not isinstance(value, Mapping):
-            return value
-        settings = value.get("settings", {})
-        if not isinstance(settings, Mapping):
-            return value
-        unknown = set(settings) - ModelSettings.__optional_keys__ - ModelSettings.__required_keys__
-        if unknown:
-            raise ValueError(f"Unknown inference request settings: {', '.join(sorted(unknown))}.")
-        if "timeout" in settings:
-            raise ValueError("Inference request timeout belongs to the infer step input.")
-        transport = {"extra_body", "extra_headers", "extra_query"} & set(settings)
-        if transport:
-            raise ValueError(f"Transport overrides are not request settings: {', '.join(sorted(transport))}.")
-        return value
 
 
 class InferInput(BaseModel):
@@ -102,6 +66,7 @@ class InferOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     response: ModelResponse | None = None
+    output: dict[str, Any] | None = None
     usage: dict[str, int] = Field(default_factory=dict)
     error: dict[str, str] | None = None
 
@@ -125,59 +90,39 @@ class InferStepImpl(StepImpl):
     deterministic = False
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Execute inference on default until provider owners support alias binding."""
+        """Invoke the shared authorization, provider and accounting boundary."""
 
-        alias = get_write_alias(type(step_run), instance=step_run)
-        if alias != DEFAULT_DB_ALIAS:
-            raise ValidationError(
-                {
-                    "using": "Workflow inference requires the default database until agents provider owners "
-                    "support the operation's database alias."
-                }
-            )
         del now
         value = self.validate_input(step_run.input)
-        with system_context(reason="workflows_agents.infer_step.resolve"):
-            model = _resolve_inference_model(value, using=alias)
-        settings = cast(ModelSettings, {**value.request.settings, "timeout": value.timeout})
-        usage: dict[str, int] = {}
+        request = value.request.model_copy(update={"settings": {**value.request.settings, "timeout": value.timeout}})
         try:
-            response, usage = model.infer(
-                value.request.messages,
-                output_schema=value.request.output_schema,
-                images=value.request.images,
-                settings=settings,
-            )
-            return StepResult.done(
-                output={"response": _response_projection(response), "usage": usage, "error": None},
-                outcome="completed",
-            )
-        except Exception as error:  # noqa: BLE001 - backend/config failure is a workflow outcome.
-            if isinstance(error, TransientStepError):
-                raise
-            if is_retryable_provider_error(error):
-                raise TransientStepError(str(error)) from error
+            result = call_inference(step_run, value.model, request, role=value.role)
+        except InferenceCallError as error:
             return StepResult.done(
                 output={
                     "response": None,
-                    "usage": usage,
+                    "output": None,
+                    "usage": error.usage,
+                    "error": {"type": type(error.error).__name__, "message": str(error.error)},
+                },
+                outcome="failed",
+            )
+        try:
+            response = _response_projection(result.response)
+        except (TypeError, ValueError) as error:
+            return StepResult.done(
+                output={
+                    "response": None,
+                    "output": None,
+                    "usage": result.usage,
                     "error": {"type": type(error).__name__, "message": str(error)},
                 },
                 outcome="failed",
             )
-        finally:
-            # A debit failure aborts this fenced attempt, so the external call is
-            # never re-invoked from a result whose accounting did not persist.
-            step_run.run.debit_budget(usage)
-
-
-def _resolve_inference_model(value: InferInput, *, using: str) -> Any:
-    """Resolve one public model id and enforce the configured role policy."""
-
-    model_class = apps.get_model("agents", "InferenceModel")
-    model = model_class.objects.db_manager(using).select_related("provider").get(sqid=value.model)
-    validate_approved_deployment(model, role=value.role)
-    return model
+        return StepResult.done(
+            output={"response": response, "output": result.output, "usage": result.usage, "error": None},
+            outcome="completed",
+        )
 
 
 def _response_projection(response: ModelResponse) -> dict[str, Any]:
@@ -259,7 +204,7 @@ class AgentSessionStepImpl(StepImpl):
                 replay_state=session.replay_state,
             )
         except Exception as error:  # noqa: BLE001 - provider/runtime failures become turn outcomes.
-            if is_retryable_provider_error(error) and _attempts_remaining(step_run):
+            if session.agent.model.provider.backend.is_transient_error(error) and _attempts_remaining(step_run):
                 raise TransientStepError(str(error)) from error
             outcome = TurnOutcome(
                 kind="failed",

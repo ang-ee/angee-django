@@ -17,7 +17,6 @@ rows:
           - schema
           - engine
           - engine_config
-          - recognition_engine
           - recognition_timeout
           - model
           - recognition_model
@@ -38,7 +37,6 @@ rows:
             properties:
               recognition_config: {type: object}
             additionalProperties: true
-          recognition_engine: {type: string, minLength: 1, default: inference}
           recognition_timeout: {type: integer, minimum: 1, default: 60}
           model: {type: [string, "null"]}
           recognition_model: {type: [string, "null"]}

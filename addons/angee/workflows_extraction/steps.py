@@ -32,33 +32,32 @@ from angee.workflows.steps import (
     StepOutcome,
     StepResult,
 )
+from angee.workflows_extraction.contracts import DocumentPipelineError, PageImage
 from angee.workflows_extraction.engines import (
     RETAINED_CARRIER_UNAVAILABLE,
-    DocumentPipelineError,
-    ExtractionEngine,
-    PageImage,
+    recognize_page,
 )
+from angee.workflows_extraction.profiles import ExtractionProfile
 from angee.workflows_extraction.service import (
     SupersededInference,
     collect_carriers,
     infer,
     prepare_pages,
     process,
-    require_approved_model_deployment,
     restore_prepared_pages,
 )
 
 EngineConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
 
 
-class ExtractionEngineConfigInput(BaseModel):
-    """Per-invocation extraction-engine configuration."""
+class ExtractionConfigInput(BaseModel):
+    """Per-invocation document profile and inference configuration."""
 
     model_config = ConfigDict(extra="forbid")
     engine_config: EngineConfig = Field(default_factory=dict)
 
 
-class ExtractionPolicyInput(ExtractionEngineConfigInput):
+class ExtractionPolicyInput(ExtractionConfigInput):
     """Per-invocation schema and profile policy for evidence processing."""
 
     schema_: dict[str, Any] = Field(alias="schema", json_schema_extra={"widget": "json"})
@@ -83,7 +82,7 @@ class ExtractionOutput(BaseModel):
     revision: int
 
 
-class PreparePagesInput(ExtractionEngineConfigInput, ExtractionSourceInput):
+class PreparePagesInput(ExtractionConfigInput, ExtractionSourceInput):
     """The original source/target refs; provider work happens later."""
 
     model: str | None = None
@@ -134,7 +133,7 @@ class PreparePagesStepImpl(StepImpl):
         del now
         value = self.validate_input(step_run.input)
         options = value.engine_config
-        actor = run.admission_actor()
+        actor = run.admission_actor(using=alias)
         if actor is None:
             raise PermissionDenied("Page preparation requires the workflow actor.")
         with actor_context(actor):
@@ -162,7 +161,6 @@ class PreparePagesStepImpl(StepImpl):
 
 
 class RecognizePageInput(RecognitionPageInput):
-    engine: str = Field(default="inference", min_length=1)
     engine_config: EngineConfig = Field(default_factory=dict)
     timeout: int = Field(default=60, gt=0, description="Provider timeout in whole seconds.")
 
@@ -229,7 +227,7 @@ class RecognizePageStepImpl(StepImpl):
         value = self.validate_input(request.input)
         if value.config_digest != canonical_json_sha256(value.engine_config):
             raise ValidationError({"recognition": "The page item names a different admitted recognizer config."})
-        actor = run.admission_actor()
+        actor = run.admission_actor(using=using)
         if actor is None:
             raise PermissionDenied("Page recognition requires the workflow actor.")
         actor_subject = run.admission_actor_subject()
@@ -244,28 +242,26 @@ class RecognizePageStepImpl(StepImpl):
             if str(image_file.content_hash) != value.image_digest:
                 raise ValidationError({"recognition": "The page carrier digest changed."})
             model = model_model.objects.db_manager(using).get(sqid=value.model_id)
-            if not model.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Read access to the recognition model is required.")
-            require_approved_model_deployment(model, role="recognition")
             with image_file.open_stream() as stream:
                 image_bytes = stream.read()
             if hashlib.sha256(image_bytes).hexdigest() != value.image_digest:
                 raise ValidationError({"recognition": "The stored page image bytes changed."})
-            engine_class = resolve_impl_class(
-                "ANGEE_EXTRACTION_ENGINE_CLASSES", value.engine, base_class=ExtractionEngine,
+            response = recognize_page(
+                PageImage(
+                    value.source_position,
+                    value.page_position,
+                    "image/jpeg",
+                    image_bytes,
+                    value.width,
+                    value.height,
+                    value.dpi,
+                ),
+                step_run=step_run,
+                model=model,
+                config=value.engine_config,
+                timeout=value.timeout,
+                using=using,
             )
-            engine = engine_class()
-            engine.validate_model(model, role="recognition")
-            try:
-                response = engine.recognize_page(
-                    PageImage(value.source_position, value.page_position, "image/jpeg", image_bytes,
-                              value.width, value.height, value.dpi),
-                    model=model, config=value.engine_config, timeout=value.timeout,
-                )
-            except DocumentPipelineError as error:
-                run.debit_budget(error.usage_delta, using=using)
-                raise
-            run.debit_budget(response.usage_delta, using=using)
             if not isinstance(response.text, str) or "\x00" in response.text:
                 raise ValidationError({"recognition": "The recognizer did not return valid text."})
             text = response.text.encode("utf-8")
@@ -282,16 +278,24 @@ class RecognizePageStepImpl(StepImpl):
                 drive_id=str(image_file.drive.sqid),
                 metadata={"workflows_extraction": {"recognitions": {request.request_key: facts}}},
             )
-        return StepResult.done(output={
-            "source_position": value.source_position, "page_position": value.page_position,
-            "image_file_id": value.image_file_id, "text_file_id": str(text_file.sqid),
-            "model_id": value.model_id, "config_digest": value.config_digest,
-            "request_key": request.request_key,
-            "method": f"{value.engine}:text_recognition", "duration_ms": max(response.duration_ms, 0),
-        }, outcome="recognized", artifacts=(ArtifactSpec(text_file, "Recognized page text"),))
+        return StepResult.done(
+            output={
+                "source_position": value.source_position,
+                "page_position": value.page_position,
+                "image_file_id": value.image_file_id,
+                "text_file_id": str(text_file.sqid),
+                "model_id": value.model_id,
+                "config_digest": value.config_digest,
+                "request_key": request.request_key,
+                "method": "inference:text_recognition",
+                "duration_ms": max(response.duration_ms, 0),
+            },
+            outcome="recognized",
+            artifacts=(ArtifactSpec(text_file, "Recognized page text"),),
+        )
 
 
-class CollectCarriersInput(ExtractionEngineConfigInput):
+class CollectCarriersInput(ExtractionConfigInput):
     model_config = ConfigDict(extra="forbid")
     prepared: dict[str, Any]
     recognition: dict[str, Any]
@@ -322,7 +326,7 @@ class CollectCarriersStepImpl(StepImpl):
         del now
         value = self.validate_input(step_run.input)
         options = value.engine_config
-        actor = run.admission_actor()
+        actor = run.admission_actor(using=alias)
         if actor is None:
             raise PermissionDenied("Carrier collection requires the workflow actor.")
         with actor_context(actor):
@@ -387,7 +391,7 @@ class ProcessEvidenceStepImpl(StepImpl):
         run: Any = related_on(step_run, "run", using=alias)
         del now
         value = self.validate_input(step_run.input)
-        actor = run.admission_actor()
+        actor = run.admission_actor(using=alias)
         if actor is None:
             raise PermissionDenied("Evidence processing requires the workflow actor.")
         with actor_context(actor):
@@ -499,7 +503,7 @@ class InferEvidenceStepImpl(StepImpl):
         run: Any = related_on(step_run, "run", using=using)
         request = external_operation_request(step_run, using=using)
         value = self.validate_input(request.input)
-        actor = run.admission_actor()
+        actor = run.admission_actor(using=using)
         if actor is None:
             raise PermissionDenied("Bound inference requires the workflow actor.")
         with actor_context(actor):
@@ -525,12 +529,14 @@ class InferEvidenceStepImpl(StepImpl):
                 current = type(base).objects.db_manager(using).inference_current_head(base, actor=actor)
                 if current.pk != base.pk:
                     if (
-                        current.status == "failed"
-                        and current.error_code
-                        == "source_hold:identity_correspondence_required"
-                        and type(base).objects.db_manager(using).inference_authority_base(
-                            current, actor=actor,
-                        ).pk
+                        current.awaiting_correspondence
+                        and type(base)
+                        .objects.db_manager(using)
+                        .inference_authority_base(
+                            current,
+                            actor=actor,
+                        )
+                        .pk
                         == base.pk
                     ):
                         return _retained_inference_result(
@@ -551,11 +557,7 @@ class InferEvidenceStepImpl(StepImpl):
                 )
             current = type(base).objects.db_manager(using).inference_current_head(base, actor=actor)
             if current.pk != base.pk:
-                if (
-                    current.status == "failed"
-                    and current.error_code
-                    == "source_hold:identity_correspondence_required"
-                ):
+                if current.awaiting_correspondence:
                     return _retained_inference_result(
                         current,
                         actor=actor,
@@ -565,9 +567,9 @@ class InferEvidenceStepImpl(StepImpl):
                     )
             else:
                 profile = resolve_impl_class(
-                    "ANGEE_EXTRACTION_ENGINE_CLASSES",
+                    "ANGEE_EXTRACTION_PROFILE_CLASSES",
                     str(base.engine),
-                    base_class=ExtractionEngine,
+                    base_class=ExtractionProfile,
                 )()
                 unchanged = (
                     base.status == "succeeded"
@@ -598,7 +600,6 @@ class InferEvidenceStepImpl(StepImpl):
                     using=using,
                 )
             except DocumentPipelineError as error:
-                run.debit_budget(error.usage_delta, using=using)
                 if (
                     error.code == RETAINED_CARRIER_UNAVAILABLE
                     and error.stage == "correspondence"
@@ -626,7 +627,6 @@ class InferEvidenceStepImpl(StepImpl):
                     outcome="inference_failed",
                     artifacts=(ArtifactSpec(base, "Source evidence requiring manual review"),),
                 )
-        run.debit_budget(outcome.usage_delta, using=using)
         if isinstance(outcome, SupersededInference):
             with actor_context(actor):
                 current = apps.get_model("workflows_extraction", "Extraction").objects.db_manager(using).get(
@@ -709,9 +709,7 @@ def _retained_inference_result(
 ) -> StepResult:
     """Route one exact retained result without inventing correspondence choices."""
 
-    if extraction.status == "failed" and extraction.error_code != (
-        "source_hold:identity_correspondence_required"
-    ):
+    if extraction.status == "failed" and not extraction.awaiting_correspondence:
         return StepResult.done(
             output={
                 **_inference_output(extraction),
@@ -720,11 +718,7 @@ def _retained_inference_result(
             outcome="inference_failed",
             artifacts=(ArtifactSpec(extraction, "Failed inferred extraction evidence"),),
         )
-    if not (
-        extraction.status == "failed"
-        and extraction.error_code
-        == "source_hold:identity_correspondence_required"
-    ):
+    if not extraction.awaiting_correspondence:
         return StepResult.done(
             output=_inference_output(extraction),
             outcome=success_outcome,

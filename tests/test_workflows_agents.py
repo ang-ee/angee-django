@@ -11,11 +11,12 @@ import pytest
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import connection, transaction
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from pydantic import ValidationError as PydanticValidationError
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     BinaryContent,
     ModelRequest,
@@ -60,6 +61,7 @@ from tests.workflows import (
     execute_started,
     start_run,
     step_run_for,
+    workflow_actor,
     workflow_table_setup,
     workflow_with_steps,
 )
@@ -169,9 +171,9 @@ def test_infer_step_passes_native_request_envelope_and_projects_response(
 
     bindings = _stub_model_backend(monkeypatch, respond)
 
-    def debit_budget(run: WorkflowRun, delta: dict[str, int]) -> None:
+    def debit_budget(run: WorkflowRun, delta: dict[str, int], *, using: str | None = None) -> None:
         debits.append(dict(delta))
-        original_debit(run, delta)
+        original_debit(run, delta, using=using)
 
     monkeypatch.setattr(WorkflowRun, "debit_budget", debit_budget)
     workflow = _infer_workflow()
@@ -216,6 +218,7 @@ def test_infer_step_passes_native_request_envelope_and_projects_response(
     assert row.output["response"]["kind"] == "response"
     assert row.output["response"]["parts"][0]["part_kind"] == "tool-call"
     assert row.output["response"]["parts"][0]["args"] == {"classification": "invoice"}
+    assert row.output["output"] == {"classification": "invoice"}
     assert row.output["usage"] == {"input_tokens": 7, "output_tokens": 3, "tokens": 10, "requests": 1}
     assert debits == [{"input_tokens": 7, "output_tokens": 3, "tokens": 10, "requests": 1}]
     assert run.budget_spent == {"input_tokens": 7, "output_tokens": 3, "tokens": 10, "requests": 1}
@@ -271,6 +274,7 @@ def test_infer_step_unresolved_model_id_is_an_invocation_error(
 @pytest.mark.parametrize("rejection", ["role", "endpoint"])
 def test_infer_step_rejects_unapproved_role_or_deployment_before_provider_call(
     workflows_agents_tables: None,
+    no_workflow_queue: None,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
     rejection: str,
@@ -292,58 +296,106 @@ def test_infer_step_rejects_unapproved_role_or_deployment_before_provider_call(
         monkeypatch,
         lambda messages, info: ModelResponse(parts=[TextPart("must not run")]),
     )
-    debits: list[dict[str, int]] = []
-    step_run = SimpleNamespace(
-        input=_infer_input(model),
-        run=SimpleNamespace(debit_budget=lambda delta: debits.append(dict(delta))),
-        _state=SimpleNamespace(adding=False, db="default"),
-    )
+    run = _start_infer_run(_infer_workflow(), _infer_input(model))
+    step_run = advance_once(run)[0]
+    step_run.input = _infer_input(model)
 
     with pytest.raises(ValueError, match="policy is invalid|is not approved"):
         InferStepImpl().run(step_run, now=timezone.now())
     assert bindings == []
-    assert debits == []
+    run.refresh_from_db()
+    assert run.budget_spent == {}
 
 
-def test_infer_step_rejects_request_timeout_before_provider_error_routing(
+@pytest.mark.parametrize("timeout", [0, -1])
+def test_infer_step_rejects_invalid_timeout_before_provider_error_routing(timeout: float) -> None:
+    """An invalid invocation timeout never becomes a transient provider error."""
+
+    from angee.workflows_agents.steps import InferStepImpl
+
+    value = {**_infer_input(), "timeout": timeout}
+    with pytest.raises(PydanticValidationError, match="timeout"):
+        InferStepImpl.validate_input(value)
+
+
+def test_infer_request_settings_are_validated_by_the_backend(
     workflows_agents_tables: None,
+    no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A validation message containing timeout never becomes a transient error."""
+    """Transport settings fail through the selected backend before any provider call."""
 
-    del workflows_agents_tables
-    from angee.workflows_agents.steps import InferStepImpl
-
-    model = _inference_model("invalid-timeout")
-    bindings = _stub_model_backend(
-        monkeypatch,
-        lambda messages, info: ModelResponse(parts=[TextPart("must not run")]),
-    )
+    del workflows_agents_tables, no_workflow_queue
+    model = _inference_model("bad-settings")
+    bindings = _stub_model_backend(monkeypatch, lambda messages, info: ModelResponse(parts=[TextPart("must not run")]))
     value = _infer_input(model)
-    value["request"]["settings"] = {"timeout": 2}
-    debits: list[dict[str, int]] = []
-    step_run = SimpleNamespace(
-        input=value,
-        run=SimpleNamespace(debit_budget=lambda delta: debits.append(dict(delta))),
-        _state=SimpleNamespace(adding=False, db="default"),
-    )
+    value["request"]["settings"] = {"extra_query": {"model": "unchecked"}}
+    run = _start_infer_run(_infer_workflow(), value)
+    advance_once(run)
+    execute_started(run)
 
-    with pytest.raises(PydanticValidationError, match="timeout belongs to the infer step input"):
-        InferStepImpl().run(step_run, now=timezone.now())
+    row = step_run_for(run, "infer")
+    assert row.outcome == "failed"
+    assert row.output["error"]["type"] == "ValueError"
+    assert "settings" in row.output["error"]["message"]
     assert bindings == []
-    assert debits == []
 
 
-def test_infer_request_rejects_unknown_model_settings() -> None:
-    """The native settings type does not admit undeclared transport knobs."""
+def test_infer_step_denies_actor_without_read_before_provider_call(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deployment approval cannot grant the admitted actor access to a private model."""
 
+    del workflows_agents_tables, no_workflow_queue
     from angee.workflows_agents.steps import InferStepImpl
 
-    value = _infer_input()
-    value["request"]["settings"] = {"extra_query": {"model": "unchecked"}}
+    model = _inference_model("private-inference")
+    with system_context(reason="test private inference owner"):
+        private_owner = User.objects.create_user(username="private-model-owner")
+        provider = model.provider
+        provider.owner = private_owner
+        provider.save(update_fields=["owner"])
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"classification": [model.deployment_identity()]}
+    bindings = _stub_model_backend(monkeypatch, lambda messages, info: ModelResponse(parts=[TextPart("must not run")]))
+    run = _start_infer_run(_infer_workflow(), _infer_input(model))
+    row = advance_once(run)[0]
+    row.input = _infer_input(model)
+    with pytest.raises(PermissionDenied, match="read"):
+        InferStepImpl().run(row, now=timezone.now())
+    assert bindings == []
+    run.refresh_from_db()
+    assert run.budget_spent == {}
 
-    with pytest.raises(PydanticValidationError, match="Unknown inference request settings: extra_query"):
-        InferStepImpl.validate_input(value)
+
+def test_infer_step_approved_readable_model_passes_once(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The model owner authorizes one admitted provider invocation exactly once."""
+
+    del workflows_agents_tables, no_workflow_queue
+    model = _inference_model("approved-readable")
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"classification": [model.deployment_identity()]}
+    original = InferenceModel.require_usable
+    calls: list[tuple[Any, str, str | None]] = []
+
+    def require_usable(instance: Any, actor: Any, role: str, *, using: str | None = None) -> None:
+        calls.append((actor.pk, role, using))
+        original(instance, actor, role, using=using)
+
+    monkeypatch.setattr(InferenceModel, "require_usable", require_usable)
+    bindings = _stub_model_backend(monkeypatch, lambda messages, info: ModelResponse(parts=[TextPart("allowed")]))
+    run = _start_infer_run(_infer_workflow(), _infer_input(model))
+    advance_once(run)
+    execute_started(run)
+    assert calls == [(workflow_actor().pk, "classification", "default")]
+    assert bindings == [(model.provider_model_name, None)]
+    assert step_run_for(run, "infer").outcome == "completed"
 
 
 def test_infer_request_usage_is_a_workflow_budget_axis(
@@ -427,7 +479,7 @@ def test_infer_terminal_provider_error_routes_failed_and_debits_once(
         raise RuntimeError("backend unavailable")
 
     _stub_model_backend(monkeypatch, respond)
-    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta, *, using=None: debits.append(dict(delta)))
     workflow = workflow_with_steps(
         name="Inference terminal error",
         steps=(
@@ -453,6 +505,7 @@ def test_infer_terminal_provider_error_routes_failed_and_debits_once(
     assert infer_row.outcome == "failed"
     assert infer_row.output == {
         "response": None,
+        "output": None,
         "usage": {},
         "error": {"type": "RuntimeError", "message": "backend unavailable"},
     }
@@ -486,7 +539,7 @@ def test_infer_error_after_response_debits_returned_usage_once(
         ),
     )
     monkeypatch.setattr(steps, "_response_projection", fail_projection)
-    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta, *, using=None: debits.append(dict(delta)))
     run = _start_infer_run(_infer_workflow(), _infer_input(model))
 
     advance_once(run)
@@ -496,6 +549,7 @@ def test_infer_error_after_response_debits_returned_usage_once(
     assert row.outcome == "failed"
     assert row.output == {
         "response": None,
+        "output": None,
         "usage": usage,
         "error": {"type": "TypeError", "message": "response projection failed"},
     }
@@ -511,18 +565,15 @@ def test_infer_retryable_provider_error_allocates_retry_and_debits_once(
 
     del workflows_agents_tables, no_workflow_queue
 
-    class RateLimitedError(Exception):
-        status_code = 429
-
     model = _inference_model("infer-retryable")
     debits: list[dict[str, int]] = []
 
     def respond(messages: list[Any], info: AgentInfo) -> ModelResponse:
         del messages, info
-        raise RateLimitedError("provider throttled")
+        raise ModelHTTPError(429, "stub", {"message": "provider throttled"})
 
     _stub_model_backend(monkeypatch, respond)
-    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta: debits.append(dict(delta)))
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta, *, using=None: debits.append(dict(delta)))
     run = _start_infer_run(_infer_workflow(retry={"max_attempts": 2}), _infer_input(model))
     step_run = advance_once(run)[0]
 
@@ -534,10 +585,72 @@ def test_infer_retryable_provider_error_allocates_retry_and_debits_once(
     assert step_run.status == workflow_models.StepRunStatus.STARTED
     assert len(attempts) == 2
     assert attempts[0].result_kind == str(AttemptResultKind.TRANSIENT_ERROR)
-    assert attempts[0].error == "provider throttled"
+    assert "provider throttled" in attempts[0].error
     assert attempts[1].retry_of_id == attempts[0].pk
     assert attempts[1].started_at is None
     assert debits == [{}]
+
+
+def test_infer_invalid_structured_response_retains_usage_and_debits_once(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid schema object remains a charged terminal provider outcome."""
+
+    del workflows_agents_tables, no_workflow_queue
+    model = _inference_model("invalid-structured-output")
+    usage = {"input_tokens": 4, "output_tokens": 2, "tokens": 6, "requests": 1}
+    debits: list[dict[str, int]] = []
+    _stub_model_backend(
+        monkeypatch,
+        lambda messages, info: ModelResponse(
+            parts=[TextPart("[]")],
+            usage=RequestUsage(input_tokens=4, output_tokens=2),
+        ),
+    )
+    monkeypatch.setattr(WorkflowRun, "debit_budget", lambda run, delta, *, using=None: debits.append(dict(delta)))
+    value = _infer_input(model)
+    value["request"]["output_schema"] = {"type": "object"}
+    run = _start_infer_run(_infer_workflow(), value)
+    advance_once(run)
+    execute_started(run)
+
+    row = step_run_for(run, "infer")
+    assert row.outcome == "failed"
+    assert row.output["output"] is None
+    assert row.output["error"]["type"] == "InferenceOutputError"
+    assert row.output["usage"] == usage
+    assert debits == [usage]
+
+
+def test_infer_debit_failure_aborts_instead_of_becoming_provider_output(
+    workflows_agents_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accounting failure cannot leave a completed, uncharged provider result."""
+
+    del workflows_agents_tables, no_workflow_queue
+    from angee.workflows_agents.steps import InferStepImpl
+
+    model = _inference_model("debit-failure")
+    bindings = _stub_model_backend(monkeypatch, lambda messages, info: ModelResponse(parts=[TextPart("done")]))
+    debits: list[dict[str, int]] = []
+
+    def fail_debit(run: WorkflowRun, delta: dict[str, int], *, using: str | None = None) -> None:
+        del run
+        assert using == "default"
+        debits.append(dict(delta))
+        raise RuntimeError("budget write failed")
+
+    monkeypatch.setattr(WorkflowRun, "debit_budget", fail_debit)
+    run = _start_infer_run(_infer_workflow(), _infer_input(model))
+    row = advance_once(run)[0]
+    row.input = _infer_input(model)
+    with pytest.raises(RuntimeError, match="budget write failed"):
+        InferStepImpl().run(row, now=timezone.now())
+    assert len(bindings) == len(debits) == 1
 
 
 def test_session_and_turn_reads_and_turn_subscription_are_owner_gated(
@@ -934,7 +1047,7 @@ def _start_infer_run(workflow: Any, value: dict[str, Any]) -> Any:
 def _inference_model(slug: str) -> InferenceModel:
     """Create one stub-backed inference model for workflow-agent tests."""
 
-    provider = _provider(slug, backend_class="stub_inference", name="Stub provider")
+    provider = _provider(slug, backend_class="stub_inference", name="Stub provider", owner=workflow_actor())
     with system_context(reason="test workflows agent model setup"):
         return InferenceModel.objects.create(provider=provider, name=f"{slug}-model")
 
@@ -952,8 +1065,9 @@ def _stub_model_backend(
         handle: str,
         *,
         credential: Any | None = None,
+        using: str | None = None,
     ) -> FunctionModel:
-        del backend
+        del backend, using
         bindings.append((handle, credential))
         return FunctionModel(
             respond,

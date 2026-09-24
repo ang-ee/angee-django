@@ -47,7 +47,6 @@ rows:
           dpi: {kind: map_item, path: [dpi]}
           model_id: {kind: map_item, path: [model_id]}
           config_digest: {kind: map_item, path: [config_digest]}
-          engine: {kind: workflow_input, path: [recognition_engine]}
           engine_config: {kind: workflow_input, path: [engine_config, recognition_config]}
           timeout: {kind: workflow_input, path: [recognition_timeout]}
   - xref: document_extraction_collect_carriers

@@ -16,27 +16,30 @@ from django.db.models import Prefetch, prefetch_related_objects
 from jsonschema import Draft202012Validator
 from rebac import current_actor, system_context
 
-from angee.agents.deployments import validate_approved_deployment
 from angee.base.actors import actor_user_id
 from angee.base.db import get_write_alias, related_on
 from angee.base.impl import resolve_impl_class
+from angee.base.permissions import require_authorization_database
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import json_values_equal
 from angee.workflows.engine import external_operation_request
-from angee.workflows_extraction.engines import (
-    RETAINED_AUTHORITY_COMPLETION_REVIEW,
-    RETAINED_CARRIER_UNAVAILABLE,
+from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,
     DocumentResult,
     DocumentSource,
-    ExtractionEngine,
     ExtractionPartKind,
     PageImage,
     PageResult,
 )
+from angee.workflows_extraction.engines import (
+    RETAINED_AUTHORITY_COMPLETION_REVIEW,
+    RETAINED_CARRIER_UNAVAILABLE,
+    map_text_parts,
+)
+from angee.workflows_extraction.enums import ExtractionErrorCode
 from angee.workflows_extraction.pointers import (
     JSON_POINTER_MISSING,
     implicit_identity_correspondence,
@@ -44,6 +47,7 @@ from angee.workflows_extraction.pointers import (
     materialize_missing_json_pointer_path,
     set_json_pointer,
 )
+from angee.workflows_extraction.profiles import ExtractionProfile
 from angee.workflows_extraction.routing import acquire_native_parts
 
 if TYPE_CHECKING:
@@ -432,9 +436,13 @@ def process(
     alias = get_write_alias(
         apps.get_model("workflows_extraction", "Extraction"), using=using, instance=authorized_target
     )
+    require_authorization_database(alias, operation="Document processing authorization")
     actor = current_actor()
     if actor is None:
         raise PermissionDenied("Authentication required.")
+    for candidate, role in ((model, "mapping"), (recognition_model, "recognition")):
+        if candidate is not None:
+            candidate.require_usable(actor, role, using=alias)
     requested_mapping = dict(identity_mapping or {})
     requested_retirement = dict(retired_identities or {})
     if any(not isinstance(key, str) or not isinstance(value, str) for key, value in requested_mapping.items()):
@@ -447,15 +455,10 @@ def process(
     files = tuple(source.file for source in prepared.sources if source.file is not None)
     message_parts = tuple(source.message_part for source in prepared.sources if source.message_part is not None)
     _authorize(files, message_parts, authorized_target, actor=actor)
-    for candidate in (model, recognition_model):
-        if candidate is not None and not candidate.with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to every inference model is required.")
-    require_approved_model_deployment(model, role="mapping")
-    require_approved_model_deployment(recognition_model, role="recognition")
     normalized_schema = _validated_schema(schema)
     normalized_config = _json_object(config or {}, field="config")
-    engine_class = _engine_class(engine)
-    profile_layout = _json_object(engine_class.evidence_layout, field="evidence_layout")
+    profile_class = resolve_impl_class("ANGEE_EXTRACTION_PROFILE_CLASSES", engine, base_class=ExtractionProfile)
+    profile_layout = _json_object(profile_class.evidence_layout, field="evidence_layout")
     if "evidence_layout" in normalized_config and normalized_config["evidence_layout"] != profile_layout:
         raise ValidationError({"config": "The published profile owns its evidence layout."})
     normalized_config["evidence_layout"] = profile_layout
@@ -491,7 +494,7 @@ def process(
             "source_facts": source_facts,
             "schema": normalized_schema,
             "engine": engine,
-            "pipeline_version": str(engine_class.pipeline_version),
+            "pipeline_version": str(profile_class.pipeline_version),
             "model": _model_fingerprint(model, using=alias),
             "recognition_model": _model_fingerprint(recognition_model, using=alias),
             "config": normalized_config,
@@ -534,12 +537,7 @@ def process(
         current_base = (
             extraction_model._base_manager.using(alias).filter(lineage_key=lineage_key).order_by("-revision").first()
         )
-        if (
-            existing is not None
-            and existing.status == "failed"
-            and existing.error_code
-            == "source_hold:identity_correspondence_required"
-        ):
+        if existing is not None and existing.awaiting_correspondence:
             try:
                 extraction_model.objects.db_manager(alias).inference_authority_base(existing, actor=actor)
             except ValidationError:
@@ -579,12 +577,10 @@ def process(
             expected_head_id = current_base.pk if current_base is not None else None
             correspondence_base = (
                 extraction_model.objects.db_manager(alias).latest_succeeded_identity_authority(
-                    current_base, actor=actor,
+                    current_base,
+                    actor=actor,
                 )
-                if current_base is not None
-                and current_base.status == "failed"
-                and current_base.error_code
-                == "source_hold:identity_correspondence_required"
+                if current_base is not None and current_base.awaiting_correspondence
                 else current_base
             )
             expected_base_id = correspondence_base.pk if correspondence_base is not None else None
@@ -607,12 +603,12 @@ def process(
         error_code = (
             "source_hold:incomplete_recognition"
             if collected.hold_reasons
-            else "source_hold:identity_correspondence_required"
+            else ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
         )
         metadata = {"source_hold_reasons": hold_reasons}
     else:
         try:
-            document_result = engine_class().process_parts(
+            document_result = profile_class().process_parts(
                 prepared.sources,
                 collected.parts,
                 normalized_schema,
@@ -645,7 +641,7 @@ def process(
                     is None
                 ):
                     status = "failed"
-                    error_code = "source_hold:identity_correspondence_required"
+                    error_code = ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
                     hold_reasons.append("identity_correspondence_required")
                     metadata = {
                         **metadata,
@@ -719,15 +715,12 @@ def infer(
     """Retain inferred facts and expose only this call's provider usage."""
 
     alias = get_write_alias(type(base), using=using, instance=base)
+    require_authorization_database(alias, operation="Document inference authorization")
     actor = current_actor()
     if actor is None:
         raise PermissionDenied("Authentication required.")
     extraction_model = apps.get_model("workflows_extraction", "Extraction")
-    correspondence_hold = (
-        isinstance(base, extraction_model)
-        and base.status == "failed"
-        and base.error_code == "source_hold:identity_correspondence_required"
-    )
+    correspondence_hold = isinstance(base, extraction_model) and base.awaiting_correspondence
     if (
         not isinstance(base, extraction_model)
         or base.pk is None
@@ -758,15 +751,14 @@ def infer(
         raise PermissionDenied("Read access to the base extraction is required.")
     if not authorized_target.with_actor(actor).has_access("read"):
         raise PermissionDenied("Read access to the extraction target is required.")
-    if not model.with_actor(actor).has_access("read"):
-        raise PermissionDenied("Read access to the mapping model is required.")
-    require_approved_model_deployment(model, role="mapping")
     if base.model_id is not None and base.model_id != model.pk:
         raise ValidationError({"inference": "The inferred model differs from the frozen base policy."})
     config = _json_object(base.engine_config, field="config")
     if config.get("inference_mode") != "permitted":
         raise ValidationError({"inference": "This publication permits deterministic processing only."})
-    profile = _engine_class(str(base.engine))()
+    profile = resolve_impl_class(
+        "ANGEE_EXTRACTION_PROFILE_CLASSES", str(base.engine), base_class=ExtractionProfile,
+    )()
     inference_required = profile.inference_required(base.result, base.unresolved_reasons)
     if not correspondence_hold and not inference_required:
         raise ValidationError({"inference": "The retained base has no unresolved source facts."})
@@ -829,10 +821,7 @@ def infer(
         inference_facts = existing.stage_provenance.get("inference", {})
         expected_identity_base_id = (
             preliminary_authority.pk
-            if preliminary_authority is not None
-            and existing.status == "failed"
-            and existing.error_code
-            == "source_hold:identity_correspondence_required"
+            if preliminary_authority is not None and existing.awaiting_correspondence
             else base.pk
         )
         if (
@@ -898,15 +887,14 @@ def infer(
             engine_metadata=request_metadata,
         )
     else:
-        mapping_key = str(config.get("mapping_engine") or "inference")
-        mapping_engine = _engine_class(mapping_key)()
-        mapping_engine.validate_model(model, role="mapping")
         timeout = float(
             config.get("timeout") or settings.ANGEE_EXTRACTION_TIMEOUT_SECONDS
         )
-        mapping_result = mapping_engine.map_text_parts(
+        mapping_result = map_text_parts(
             parts,
             _validated_schema(base.schema),
+            step_run=operation_step_run,
+            using=alias,
             model=model,
             config=dict(config.get("mapping_config") or config),
             timeout=timeout,
@@ -1118,20 +1106,12 @@ def infer(
             base,
             lineage_key=base.lineage_key,
             reuse_key=reuse_key,
-            expected_base_id=(
-                authority_base.pk
-                if preliminary_correspondence and correspondence_required
-                else base.pk
-            ),
+            expected_base_id=(authority_base.pk if preliminary_correspondence and correspondence_required else base.pk),
             expected_head_id=base.pk,
             identity_mapping=effective_mapping,
             retired_identities=requested_retirement,
             status="failed" if correspondence_required else "succeeded",
-            error_code=(
-                "source_hold:identity_correspondence_required"
-                if correspondence_required
-                else ""
-            ),
+            error_code=(ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED if correspondence_required else ""),
             schema_id=base.schema_id,
             schema=base.schema,
             schema_digest=base.schema_digest,
@@ -1875,21 +1855,10 @@ def _model_fingerprint(model: Any | None, *, using: str) -> dict[str, Any] | Non
     provider: Any = related_on(model, "provider", using=using)
     return {
         "id": str(model.sqid),
-        "name": str(model.name),
-        "provider": str(model.provider_id),
-        "provider_url": str(provider.base_url),
+        "deployment": model.deployment_identity(using=using),
         "provider_config": provider.config,
         "model_config": model.config,
     }
-
-
-def require_approved_model_deployment(model: Any | None, *, role: str) -> None:
-    """Enforce the agents-owned role policy at extraction's permission boundary."""
-
-    try:
-        validate_approved_deployment(model, role=role)
-    except ValueError as error:
-        raise PermissionDenied(str(error)) from error
 
 
 def _validate_document_result(
@@ -1970,7 +1939,3 @@ def _reject_json_nul(value: Any, *, field: str) -> None:
     elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
         for item in value:
             _reject_json_nul(item, field=field)
-
-
-def _engine_class(key: str) -> type[Any]:
-    return resolve_impl_class("ANGEE_EXTRACTION_ENGINE_CLASSES", key, base_class=ExtractionEngine)

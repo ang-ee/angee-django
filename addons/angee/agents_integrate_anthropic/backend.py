@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import anthropic
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
@@ -84,29 +85,35 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     async_client_class_path = "anthropic.AsyncAnthropic"
     sdk_package_name = "anthropic"
 
-    def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
+    def is_transient_error(self, error: Exception) -> bool:
+        """Include Anthropic connection failures wrapped by the native model adapter."""
+
+        cause = error.__cause__ if isinstance(error, ModelAPIError) else error
+        return isinstance(cause, anthropic.APIConnectionError) or super().is_transient_error(error)
+
+    def _client_kwargs(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, Any]:
         """Return Anthropic SDK kwargs, including the OAuth beta when needed."""
 
-        kwargs = super()._client_kwargs(credential=credential)
+        kwargs = super()._client_kwargs(credential=credential, using=using)
         if "auth_token" in kwargs:
             kwargs["default_headers"] = dict(ANTHROPIC_OAUTH_CLIENT_HEADERS)
         return kwargs
 
-    def _async_client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
+    def _async_client_kwargs(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, Any]:
         """Add the OAuth block-rewrite transport to async OAuth clients."""
 
-        kwargs = super()._async_client_kwargs(credential=credential)
+        kwargs = super()._async_client_kwargs(credential=credential, using=using)
         if "auth_token" in kwargs:
             kwargs["http_client"] = anthropic.DefaultAsyncHttpxClient(
                 event_hooks={"request": [_rewrite_oauth_messages_request]}
             )
         return kwargs
 
-    def list_models(self) -> Sequence[InferenceModelSpec]:
+    def list_models(self, *, using: str | None = None) -> Sequence[InferenceModelSpec]:
         """List Anthropic models and their broker-prefixed aliases."""
 
         specs: list[InferenceModelSpec] = []
-        for model in self.client().models.list(limit=self._model_limit()):
+        for model in self.client(using=using).models.list(limit=self._model_limit()):
             model_id = str(getattr(model, "id", "") or "").strip()
             if not model_id:
                 continue

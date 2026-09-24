@@ -19,8 +19,15 @@ from angee.base.refs import record_ref_for
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import json_values_equal
-from angee.workflows_extraction.contracts import CorrectionBinding, DocumentRef
-from angee.workflows_extraction.engines import DocumentPart, DocumentSource, PageImage, PageResult
+from angee.workflows_extraction.contracts import (
+    CorrectionBinding,
+    DocumentPart,
+    DocumentRef,
+    DocumentSource,
+    PageImage,
+    PageResult,
+)
+from angee.workflows_extraction.enums import ExtractionErrorCode
 from angee.workflows_extraction.pointers import (
     implicit_identity_correspondence,
     result_selectors,
@@ -174,10 +181,7 @@ class ExtractionManager(EvidenceManager):
 
         if base.status == "succeeded":
             return base
-        if (
-            base.status != "failed"
-            or base.error_code != "source_hold:identity_correspondence_required"
-        ):
+        if not base.awaiting_correspondence:
             raise ValidationError({"inference": "The extraction is not a correspondence hold."})
         correspondence = base.provenance.get("identity_correspondence", {})
         revision = correspondence.get("last_known_revision")
@@ -802,17 +806,13 @@ class ExtractionManager(EvidenceManager):
             )
         return original, decision
 
-    def inference_candidate_selectors(
-        self, base: Any
-    ) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    def inference_candidate_selectors(self, base: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:
         """Expose selectors only for an exact retained correspondence candidate."""
 
         if (
             not isinstance(base, self.model)
             or base.pk is None
-            or base.status != "failed"
-            or base.error_code
-            != "source_hold:identity_correspondence_required"
+            or not base.awaiting_correspondence
             or not isinstance(base.result, dict)
             or not base.result
         ):
@@ -895,7 +895,8 @@ class ExtractionManager(EvidenceManager):
             Sequence[PageImage],
             Sequence[PageResult],
             Sequence[DocumentPart],
-        ] | None = None,
+        ]
+        | None = None,
         original: Any | None = None,
         revision_parent: Any | None = None,
         using: str | None,
@@ -938,17 +939,16 @@ class ExtractionManager(EvidenceManager):
                             values.get("status") == "failed"
                             and (
                                 values.get("result") == {}
-                                or values.get("error_code")
-                                == "source_hold:identity_correspondence_required"
+                                or values.get("error_code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
                             )
                             and (
-                                previous is not None if existing is None else
-                                "last_known_revision" in existing.provenance.get("identity_correspondence", {})
+                                previous is not None
+                                if existing is None
+                                else "last_known_revision" in existing.provenance.get("identity_correspondence", {})
                             )
                         )
                         correspondence_failure = (
-                            values.get("error_code")
-                            == "source_hold:identity_correspondence_required"
+                            values.get("error_code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
                         )
                         if unresolved_failure:
                             if identity_mapping or retired_identities:
