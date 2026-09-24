@@ -21,6 +21,13 @@ from angee.workflows.configs import WorkflowStepConfig
 from angee.workflows.decision_actions import ReviewAction, ReviewRecordReference, build_decision_action
 from angee.workflows.steps import GateStep, StepEffect, StepExecutionMode, StepImpl, StepResult, TransientStepError
 
+# Public archive paths consumed by messaging bridge addons.
+from angee.workflows_integrate.archive_steps import ArchiveExecuteStepImpl as ArchiveExecuteStepImpl
+from angee.workflows_integrate.archive_steps import ArchiveExecutionReporter as ArchiveExecutionReporter
+from angee.workflows_integrate.archive_steps import ArchiveExtractor as ArchiveExtractor
+from angee.workflows_integrate.archive_steps import ArchiveGateStepImpl as ArchiveGateStepImpl
+from angee.workflows_integrate.archive_steps import ArchiveProbeStepImpl as ArchiveProbeStepImpl
+
 
 class BridgeReference(BaseModel):
     """Exact concrete Bridge public identity, bound to the admitted run subject."""

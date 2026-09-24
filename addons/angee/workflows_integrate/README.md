@@ -1,12 +1,15 @@
-# Bridge cycles as workflow runs
+# Archive imports and bridge cycles as workflow runs
 
-This addon composes `angee.workflows` and `angee.integrate`; its manifest depends
-on both. Neither foundational addon imports the other. There are no new models
+This addon composes `angee.workflows`, `angee.integrate` and `angee.storage`.
+The foundational addons do not import workflows. There are no new models
 or shipped resources. Consumers own their published workflow definitions and
 backend stream declarations.
 
 | Fact | Owner |
 |---|---|
+| Bounded archive inspection and safe subtree staging | `archives.py` |
+| Extractor registry, archive probe, mapping review and execution | `archive_steps.py`, publicly exposed through `steps.py` |
+| Vendor recognition and target-domain ingest | Backup/takeout extractors in messaging bridge addons |
 | Cadence and occurrence token | `Bridge.mark_sync_queued`, `sync_progress.queued_at` |
 | Publication, frozen input, deduplication, actor admission | `WorkflowRunManager.start` |
 | One active cycle and run pointer | `admit_bridge_cycle`, `BridgeProgressReporter` |
@@ -15,6 +18,38 @@ backend stream declarations.
 | Conflict review | `CoverageGate` composing the native `GateStep`/Decision contract |
 | Durable terminal delivery | `WorkflowDispatchKind.RUN_SETTLE`, subject settlement |
 | Final bridge telemetry and cadence | `settle_bridge_run` composing Bridge terminal methods |
+
+## Archive imports
+
+Backup/takeout extractors in messaging bridge addons contribute classes through
+`ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES`. They import `ArchiveExtractor` and
+`ArchiveExecutionReporter` from `angee.workflows_integrate.steps`, and compose
+the shared `archives` utilities for bounded reads, safe ZIP member names and
+temporary subtree staging. Extractors own vendor parsing and call their target
+domain's idempotent ingest owner; the workflow addon owns orchestration.
+
+The registered `archive_probe` operation inspects a `storage.File` or
+`storage.Drive` subject with matching extractors and emits stable proposals.
+Bind its output into `archive_gate`, which composes the native `GateStep` and
+Decision action owner to review fixed extractor-to-target rows. Optional gate
+config selects `action`, `assignee` and `max_attempts`; by default the admitted
+run actor reviews the mapping, with no requester exclusion. All proposals must
+share one target resource; mixed targets take the gate's `failed` outcome.
+
+`archive_execute` with `mode: prepare` validates the retained predecessor
+Decision through `DecisionManager.locked_resolution`, checks the frozen rows,
+and emits a plain mapping list. The native `map` operation consumes that list
+and invokes `archive_execute` with `mode: unit` for each extractor. Blob and
+import I/O runs outside the workflow finalization transaction. The native lease
+keepalive covers recognition, staging and execution; extractors can also pulse
+the reporter's heartbeat during ingest, and native Map results retain partial
+failures. Repeated imports converge through the target domain's ingest identity.
+
+Archive execution currently requires the default database because Decision
+authorization and external backup ingest owners do not yet carry a complete
+database-alias contract. Entry checks reject other aliases before reading an
+archive or calling an importer. Framework relation reads and reporter heartbeats
+use the selected write alias; the reporter exposes it as `using`.
 
 ## Admission
 
