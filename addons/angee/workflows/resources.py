@@ -263,8 +263,13 @@ class WorkflowDefinitionResource(AngeeResource):
             ):
                 # A nonempty resource config is a top-level patch, matching the
                 # row's omitted-field contract. Operator-authored keys survive
-                # declaration updates; an explicit empty object still clears.
-                instance.config = {**old_config, **instance.config}
+                # declaration updates only while the step's config contract still
+                # declares them; an explicit empty object still clears.
+                declared = instance.resolve_impl("step_class").declared_config_keys()
+                retained = old_config if declared is None else {
+                    key: value for key, value in old_config.items() if key in declared
+                }
+                instance.config = {**retained, **instance.config}
             if instance._state.adding or "config" in row or changed_class:
                 instance.validate_impl_configs()
 

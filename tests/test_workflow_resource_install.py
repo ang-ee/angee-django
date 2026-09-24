@@ -14,6 +14,7 @@ from django.contrib.auth import get_user_model
 from django.db import models, router, transaction
 from django.db.models.fields import NOT_PROVIDED
 from import_export.results import RowResult
+from pydantic import BaseModel, ConfigDict, Field
 from rebac import system_context
 from rebac.models import active_relationship_model
 from rebac.resources import to_object_ref
@@ -33,7 +34,7 @@ from angee.workflows.definitions import (
 from angee.workflows.resources import WorkflowDefinitionResource
 from tests.test_workflows_resources import WorkflowResourceLedger
 from tests.test_workflows_resources import workflow_resource_tables as _workflow_resource_tables  # noqa: F401
-from tests.workflows import Edge, Step, Workflow
+from tests.workflows import Edge, FixtureStep, Step, Workflow
 
 _OMITTED = object()
 pytestmark = pytest.mark.usefixtures("_workflow_resource_tables")
@@ -262,6 +263,28 @@ def test_installer_patches_declared_config_without_erasing_operator_keys(
     entry.refresh_from_db()
     assert edits == [DefinitionEdit(node_patches=(NodePatch(entry.pk, {"config": expected}),))]
     assert entry.config == expected
+
+
+def test_installer_drops_retained_keys_the_config_contract_retired(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retained key survives a patch only while the step's config model declares it."""
+
+    class FixtureConfig(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        profile: dict[str, Any] = Field(default_factory=dict)
+        operator_policy: dict[str, Any] = Field(default_factory=dict)
+
+    addon = _addon(tmp_path)
+    _install(addon, entry_config={"engine": {"prompt": "v1"}, "operator_policy": {"reviewers": ["r"]}})
+    monkeypatch.setattr(FixtureStep, "config_model", FixtureConfig)
+
+    _install(addon, entry_config={"profile": {"prompt": "v2"}})
+
+    entry = Step.system_queryset().get(key="entry")
+    assert entry.config == {"profile": {"prompt": "v2"}, "operator_policy": {"reviewers": ["r"]}}
 
 
 def test_installer_emits_refs_for_edge_endpoint_change(

@@ -443,6 +443,18 @@ class ImplBase:
         return validated.model_dump(mode="json", by_alias=True)
 
     @classmethod
+    def declared_config_keys(cls) -> frozenset[str] | None:
+        """Return the top-level config wire names this impl accepts.
+
+        ``None`` means the config is untyped or open (``extra="allow"``), so every
+        key is accepted.
+        """
+
+        if cls.config_model is None or cls.config_model.model_config.get("extra") == "allow":
+            return None
+        return frozenset(field.alias or name for name, field in cls.config_model.model_fields.items())
+
+    @classmethod
     def config_form_spec(cls) -> dict[str, Any] | None:
         """Translate Pydantic's supported JSON Schema subset into FormSpec."""
 
