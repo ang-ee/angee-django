@@ -8,7 +8,7 @@ backend stream declarations.
 | Fact | Owner |
 |---|---|
 | Bounded archive inspection and safe subtree staging | `archives.py` |
-| Extractor registry, archive probe, mapping review and execution | `archive_steps.py`, publicly exposed through `steps.py` |
+| Extractor registry, archive probe, mapping review and execution | `archive_steps.py` |
 | Vendor recognition and target-domain ingest | Backup/takeout extractors in messaging bridge addons |
 | Cadence and occurrence token | `Bridge.mark_sync_queued`, `sync_progress.queued_at` |
 | Publication, frozen input, deduplication, actor admission | `WorkflowRunManager.start` |
@@ -23,7 +23,7 @@ backend stream declarations.
 
 Backup/takeout extractors in messaging bridge addons contribute classes through
 `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES`. They import `ArchiveExtractor` and
-`ArchiveExecutionReporter` from `angee.workflows_integrate.steps`, and compose
+`ArchiveExecutionReporter` from `angee.workflows_integrate.archive_steps`, and compose
 the shared `archives` utilities for bounded reads, safe ZIP member names and
 temporary subtree staging. Extractors own vendor parsing and call their target
 domain's idempotent ingest owner; the workflow addon owns orchestration.

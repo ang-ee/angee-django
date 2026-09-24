@@ -24,7 +24,8 @@ from rebac import system_context
 from angee.base.db import get_write_alias, related_on
 from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
 from angee.base.permissions import require_authorization_database
-from angee.workflows.attempts import DecisionGateOutput
+from angee.workflows import engine
+from angee.workflows.attempts import DecisionGateOutput, validate_json_value
 from angee.workflows.configs import WorkflowStepConfig
 from angee.workflows.decision_actions import ReviewAction
 from angee.workflows.steps import (
@@ -55,12 +56,22 @@ class ArchiveExecuteConfig(WorkflowStepConfig):
     mode: Literal["prepare", "unit"]
 
 
+class ArchiveProposal(BaseModel):
+    """One registered extractor and its review metadata."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    extractor: str
+    label: str
+    target_resource: str
+
+
 class ArchiveProbeOutput(BaseModel):
     """Registered extractor proposals retained for review."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    proposals: list[dict[str, str]]
+    proposals: list[ArchiveProposal]
 
 
 class ArchiveMappingUnit(BaseModel):
@@ -68,8 +79,32 @@ class ArchiveMappingUnit(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    extractor: str
-    target: str
+    extractor: str = Field(min_length=1, pattern=r"\S")
+    target: str = Field(min_length=1, pattern=r"\S")
+
+
+class ArchiveMappingRow(BaseModel):
+    """A review row, whose target is blank until the reviewer supplies it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    extractor: str = Field(json_schema_extra={"label": "Extractor key", "readOnly": True})
+    label: str = Field(json_schema_extra={"label": "Archive type", "readOnly": True})
+    target: str = Field(json_schema_extra={"label": "Target"})
+
+
+class ArchiveMappings(BaseModel):
+    """Read-only projection of mapping rows retained in a Decision payload."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mappings: list[ArchiveMappingRow]
+
+
+class ArchiveMappingResolution(ArchiveMappings):
+    """The reviewer's mapping action retained by the Decision owner."""
+
+    action: Literal["apply_mappings"]
 
 
 class ArchiveUnsupportedOutput(BaseModel):
@@ -77,7 +112,7 @@ class ArchiveUnsupportedOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    proposals: list[dict[str, str]]
+    proposals: list[ArchiveProposal]
     target_resources: list[str]
     unsupported: str
 
@@ -86,8 +121,8 @@ class ArchiveGateOutput(RootModel[DecisionGateOutput | ArchiveUnsupportedOutput]
     """Typed review evidence or the unsupported heterogeneous proposal result."""
 
 
-class ArchiveExecuteInput(RootModel[DecisionGateOutput | ArchiveUnsupportedOutput | ArchiveMappingUnit]):
-    """Typed prepare-gate, routed failure, or stock-map unit input."""
+class ArchiveExecuteInput(RootModel[DecisionGateOutput | ArchiveMappingUnit]):
+    """Typed prepare-gate or stock-map unit input."""
 
 
 class ArchiveExecutionOutput(BaseModel):
@@ -222,7 +257,7 @@ class ArchiveProbeStepImpl(StepImpl):
         alias = _archive_alias(step_run, using=using)
         subject = _subject_container(step_run, using=alias)
         subject_resource = subject._meta.label
-        proposals: list[dict[str, str]] = []
+        proposals: list[ArchiveProposal] = []
         with self.heartbeat_during(step_run, using=alias):
             for extractor_class in archive_extractor_classes():
                 if extractor_class.subject_resource != subject_resource:
@@ -235,7 +270,7 @@ class ArchiveProbeStepImpl(StepImpl):
                 if recognized:
                     proposals.append(_proposal(extractor_class))
         return StepResult.done(
-            output={"proposals": proposals},
+            output=ArchiveProbeOutput(proposals=proposals).model_dump(mode="json"),
             outcome="recognized" if proposals else "failed",
         )
 
@@ -252,45 +287,56 @@ class ArchiveGateStepImpl(GateStep):
     label = "Map archive targets"
     category = "Control"
     config_model = ArchiveGateConfig
+    input_model = ArchiveProbeOutput
     output_model = ArchiveGateOutput
     outcomes = (*GateStep.outcomes, StepOutcome("failed", "Unsupported archive"))
 
     def run(self, step_run: Any, *, now: datetime, using: str | None = None) -> StepResult:
         """Route unsupported mixed-resource proposals before using the built-in gate."""
 
+        del now
         alias = _archive_alias(step_run, using=using)
         with system_context(reason="workflows_integrate.archive_gate"):
             step_run.step = related_on(step_run, "step", using=alias)
             step_run.run = related_on(step_run, "run", using=alias)
-        proposals = _input_proposals(step_run.input)
-        target_resources = sorted({proposal["target_resource"] for proposal in proposals})
+        value = self.validate_input(step_run.input)
+        proposals = value.proposals
+        _validate_proposals(proposals)
+        target_resources = sorted({proposal.target_resource for proposal in proposals})
         if len(target_resources) != 1:
             return StepResult.done(
-                output={
-                    "proposals": proposals,
-                    "target_resources": target_resources,
-                    "unsupported": "Archive mapping rows require one shared target resource.",
-                },
+                output=ArchiveUnsupportedOutput(
+                    proposals=proposals,
+                    target_resources=target_resources,
+                    unsupported="Archive mapping rows require one shared target resource.",
+                ).model_dump(mode="json"),
                 outcome="failed",
             )
-        return super().run(step_run, now=now)
+        resumed = self.resumption(step_run)
+        if resumed is not None:
+            return StepResult.done(output=resumed.resolutions, outcome=resumed.outcome)
+        return self.gate_result(
+            step_run,
+            config=self._archive_gate_config(step_run, proposals=proposals, target_resource=target_resources[0]),
+        )
 
     @classmethod
-    def gate_config(cls, step_run: Any) -> Mapping[str, Any]:
+    def _archive_gate_config(
+        cls,
+        step_run: Any,
+        *,
+        proposals: list[ArchiveProposal],
+        target_resource: str,
+    ) -> Mapping[str, Any]:
         """Author one built-in gate config from the admitted probe output."""
 
-        proposals = _input_proposals(step_run.input)
-        target_resources = sorted({proposal["target_resource"] for proposal in proposals})
-        target_resource = target_resources[0]
         alias = get_write_alias(type(step_run), instance=step_run)
         config = cls.normalize_config(step_run.step.config)
-        from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
-
         assignee = str(engine.resolve_workflow_actor(config["assignee"] or step_run.run, using=alias).subject)
         mappings = [
             {
-                "extractor": proposal["extractor"],
-                "label": proposal["label"],
+                "extractor": proposal.extractor,
+                "label": proposal.label,
                 "target": "",
             }
             for proposal in proposals
@@ -347,13 +393,18 @@ class ArchiveExecuteStepImpl(DecisionApplyStep):
         alias = _archive_alias(step_run, using=using)
         with system_context(reason="workflows_integrate.archive_execute"):
             step_run.step = related_on(step_run, "step", using=alias)
-        self.validate_config(step_run.step.config)
-        mode = str(step_run.step.config.get("mode") or "")
+        config = self.normalize_config(step_run.step.config)
+        value = self.validate_input(step_run.input).root
+        mode = config["mode"]
         if mode == "prepare":
+            if not isinstance(value, DecisionGateOutput):
+                raise ValidationError({"input": "Archive preparation requires a completed mapping gate."})
             return super().run(step_run, now=now)
 
+        if not isinstance(value, ArchiveMappingUnit):
+            raise ValidationError({"input": "Archive execute unit requires extractor and target."})
         subject = _subject_container(step_run, using=alias)
-        extractor_key, target_pk = _mapping_unit(step_run.input)
+        extractor_key, target_pk = value.extractor, value.target
         extractor_class = archive_extractor_class(extractor_key)
         if extractor_class.subject_resource != subject._meta.label:
             raise ValidationError({"subject": "Archive extractor does not accept this storage container."})
@@ -385,15 +436,17 @@ class ArchiveExecuteStepImpl(DecisionApplyStep):
         ):
             mappings: list[dict[str, str]] = []
             seen: set[str] = set()
-            expected_rows = _mapping_rows(decision.payload, owner="payload")
-            resolved_rows = _mapping_rows(decision.resolution, owner="resolution")
+            expected_rows = validate_json_value(ArchiveMappings.model_validate_json, decision.payload).mappings
+            resolved_rows = validate_json_value(
+                ArchiveMappingResolution.model_validate_json, decision.resolution
+            ).mappings
             if len(expected_rows) != len(resolved_rows):
                 raise ValidationError({"input": "Archive mapping resolution must preserve every proposed row."})
             for expected, resolved in zip(expected_rows, resolved_rows, strict=True):
-                extractor_key = str(resolved.get("extractor") or "")
-                label = str(resolved.get("label") or "")
-                target_pk = str(resolved.get("target") or "")
-                if extractor_key != str(expected.get("extractor") or "") or label != str(expected.get("label") or ""):
+                extractor_key = resolved.extractor
+                label = resolved.label
+                target_pk = resolved.target
+                if extractor_key != expected.extractor or label != expected.label:
                     raise ValidationError({"input": "Archive mapping resolution changed a proposed extractor."})
                 extractor = _registered_extractor(extractor_key, owner="input")
                 if label != extractor.display_label():
@@ -432,14 +485,14 @@ def _validate_resource_label(key: str, attr: str, value: str) -> None:
         raise ImproperlyConfigured(f"Archive extractor {key!r} {attr} must use canonical label {model._meta.label!r}.")
 
 
-def _proposal(extractor: type[ArchiveExtractor]) -> dict[str, str]:
-    """Return one JSON-safe probe proposal owned by ``extractor``."""
+def _proposal(extractor: type[ArchiveExtractor]) -> ArchiveProposal:
+    """Return one typed probe proposal owned by ``extractor``."""
 
-    return {
-        "extractor": extractor.key,
-        "label": extractor.display_label(),
-        "target_resource": extractor.target_resource,
-    }
+    return ArchiveProposal(
+        extractor=extractor.key,
+        label=extractor.display_label(),
+        target_resource=extractor.target_resource,
+    )
 
 
 def _archive_alias(step_run: Any, *, using: str | None) -> str:
@@ -470,31 +523,19 @@ def _subject_container(step_run: Any, *, using: str) -> Any:
         return content_type.get_object_for_this_type(using=using, pk=run.subject_object_id)
 
 
-def _input_proposals(value: Any) -> list[dict[str, str]]:
-    """Return validated probe proposals from a gate step's input."""
+def _validate_proposals(proposals: list[ArchiveProposal]) -> None:
+    """Check admitted proposals against the current extractor registry."""
 
-    if not isinstance(value, Mapping) or not isinstance(value.get("proposals"), list):
-        raise ValidationError({"input": "Archive gate input must contain probe proposals."})
-    proposals: list[dict[str, str]] = []
     seen: set[str] = set()
-    for index, value_proposal in enumerate(value["proposals"]):
-        if not isinstance(value_proposal, Mapping):
-            raise ValidationError({"input": f"Archive proposal {index + 1} must be an object."})
-        proposal = {
-            "extractor": str(value_proposal.get("extractor") or ""),
-            "label": str(value_proposal.get("label") or ""),
-            "target_resource": str(value_proposal.get("target_resource") or ""),
-        }
-        extractor = _registered_extractor(proposal["extractor"], owner="input")
+    for proposal in proposals:
+        extractor = _registered_extractor(proposal.extractor, owner="input")
         if proposal != _proposal(extractor):
             raise ValidationError({"input": "Archive proposal has stale extractor metadata."})
-        if proposal["extractor"] in seen:
-            raise ValidationError({"input": f"Archive extractor {proposal['extractor']!r} is proposed twice."})
-        seen.add(proposal["extractor"])
-        proposals.append(proposal)
+        if proposal.extractor in seen:
+            raise ValidationError({"input": f"Archive extractor {proposal.extractor!r} is proposed twice."})
+        seen.add(proposal.extractor)
     if not proposals:
         raise ValidationError({"input": "Archive gate requires at least one recognized extractor."})
-    return proposals
 
 
 def _registered_extractor(key: str, *, owner: str) -> type[ArchiveExtractor]:
@@ -509,47 +550,14 @@ def _registered_extractor(key: str, *, owner: str) -> type[ArchiveExtractor]:
 def _mapping_rows_schema(target_resource: str) -> dict[str, Any]:
     """Return the editable fixed-row mapping property for ``target_resource``."""
 
+    row_schema = ArchiveMappingRow.model_json_schema()
+    row_schema["properties"]["target"]["relation"] = {
+        "resource": target_resource,
+        "create": {"resource": target_resource},
+    }
     return {
         "type": "array",
         "widget": "rows",
         "label": "Archive mappings",
-        "items": {
-            "type": "object",
-            "required": ["extractor", "label", "target"],
-            "properties": {
-                "extractor": {"type": "string", "label": "Extractor key", "readOnly": True},
-                "label": {"type": "string", "label": "Archive type", "readOnly": True},
-                "target": {
-                    "type": "string",
-                    "label": "Target",
-                    "relation": {
-                        "resource": target_resource,
-                        "create": {"resource": target_resource},
-                    },
-                },
-            },
-        },
+        "items": row_schema,
     }
-
-
-def _mapping_rows(value: Any, *, owner: str) -> list[Mapping[str, Any]]:
-    """Return mapping rows from a decision payload or resolution."""
-
-    if not isinstance(value, Mapping) or not isinstance(value.get("mappings"), list):
-        raise ValidationError({"input": f"Archive mapping decision {owner} is invalid."})
-    rows = value["mappings"]
-    if any(not isinstance(row, Mapping) for row in rows):
-        raise ValidationError({"input": f"Archive mapping decision {owner} rows must be objects."})
-    return cast(list[Mapping[str, Any]], rows)
-
-
-def _mapping_unit(value: Any) -> tuple[str, str]:
-    """Return one extractor/target pair from a stock map child input."""
-
-    if not isinstance(value, Mapping):
-        raise ValidationError({"input": "Archive execute unit input must be an object."})
-    extractor_key = str(value.get("extractor") or "")
-    target_pk = str(value.get("target") or "")
-    if not extractor_key or not target_pk:
-        raise ValidationError({"input": "Archive execute unit requires extractor and target."})
-    return extractor_key, target_pk

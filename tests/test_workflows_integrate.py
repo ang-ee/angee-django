@@ -21,14 +21,14 @@ from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import StepImpl
 from angee.workflows_integrate import archives
-from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
-from angee.workflows_integrate.steps import (
+from angee.workflows_integrate.archive_steps import (
     ArchiveExecuteStepImpl,
     ArchiveExecutionReporter,
     ArchiveExtractor,
     ArchiveGateStepImpl,
     ArchiveProbeStepImpl,
 )
+from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
 from tests.conftest import STORAGE_TEST_MODELS, Backend, Drive, File
 from tests.workflows import (
     WORKFLOW_RUNTIME_MODELS,
@@ -702,9 +702,11 @@ def test_autoconfig_contributes_archive_registry_and_workflow_steps() -> None:
         if key == "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES" or key.startswith("ANGEE_WORKFLOW_STEP_CLASSES.archive_")
     } == {
         "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES": {},
-        "ANGEE_WORKFLOW_STEP_CLASSES.archive_probe": ("angee.workflows_integrate.steps.ArchiveProbeStepImpl"),
-        "ANGEE_WORKFLOW_STEP_CLASSES.archive_gate": ("angee.workflows_integrate.steps.ArchiveGateStepImpl"),
-        "ANGEE_WORKFLOW_STEP_CLASSES.archive_execute": ("angee.workflows_integrate.steps.ArchiveExecuteStepImpl"),
+        "ANGEE_WORKFLOW_STEP_CLASSES.archive_probe": ("angee.workflows_integrate.archive_steps.ArchiveProbeStepImpl"),
+        "ANGEE_WORKFLOW_STEP_CLASSES.archive_gate": ("angee.workflows_integrate.archive_steps.ArchiveGateStepImpl"),
+        "ANGEE_WORKFLOW_STEP_CLASSES.archive_execute": (
+            "angee.workflows_integrate.archive_steps.ArchiveExecuteStepImpl"
+        ),
     }
 
 
@@ -740,6 +742,50 @@ def test_archive_gate_rejects_invalid_declarations(config: dict[str, Any]) -> No
 
     with pytest.raises(ValidationError):
         ArchiveGateStepImpl.validate_config(config)
+
+
+@pytest.mark.parametrize(
+    ("step_class", "config", "value"),
+    (
+        ("archive_gate", {}, {"proposals": [{"extractor": "fixture_archive", "label": "Fixture archive"}]}),
+        ("archive_execute", {"mode": "unit"}, {"extractor": "fixture_archive", "target": 123}),
+        ("archive_execute", {"mode": "unit"}, {"extractor": "fixture_archive", "target": ""}),
+        (
+            "archive_execute",
+            {"mode": "prepare"},
+            {"proposals": [], "target_resources": [], "unsupported": "No shared target resource."},
+        ),
+    ),
+)
+def test_archive_execution_rejects_invalid_bound_input(
+    workflows_integrate_tables: None,
+    no_workflow_queue: None,
+    step_class: str,
+    config: dict[str, Any],
+    value: Any,
+) -> None:
+    """Malformed proposals, map units and failure outputs cannot create reviews or ingest."""
+
+    del workflows_integrate_tables, no_workflow_queue
+    workflow = workflow_with_steps(
+        steps=(
+            {
+                "key": "archive",
+                "step_class": step_class,
+                "config": config,
+                "input_binding": {"kind": "constant", "value": value},
+            },
+        ),
+        edges=(),
+    )
+    run = start_run(workflow)
+    run_to_terminal(run, allow_failed={run.pk})
+    step_run = step_run_for(run, "archive")
+    assert step_run.status == workflow_models.StepRunStatus.FAILED
+    assert step_run.error == "Workflow step input is invalid."
+    with system_context(reason="test invalid archive input"):
+        assert not Decision.objects.exists()
+    assert FixtureArchiveIngest.landed == {}
 
 
 @pytest.mark.parametrize(

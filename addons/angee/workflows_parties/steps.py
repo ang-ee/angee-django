@@ -24,6 +24,7 @@ from rebac import system_context
 from angee.base.db import get_write_alias, related_on
 from angee.base.identity import canonical_subject_ref
 from angee.base.serialization import canonical_json_sha256
+from angee.workflows import engine
 from angee.workflows.attempts import (
     DecisionGateOutput,
     RecoveryCapability,
@@ -201,8 +202,6 @@ class DedupeGateStepImpl(GateStep):
             properties={"pairs": _dedupe_pairs_schema()},
             payload={"pairs": pairs},
         )
-        from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
-
         assignee = str(engine.resolve_workflow_actor(config.get("assignee") or step_run.run).subject)
         return {
             "policy": "one_done",
@@ -324,8 +323,6 @@ class IdentityReviewStepImpl(GateStep):
         run: Any = related_on(step_run, "run", using=alias)
         del now
         proposal = _identity_input(step_run.input)
-        from angee.workflows import engine  # Runtime edge after operation registry loading.
-
         actor = engine.resolve_workflow_actor(run, using=alias).subject
         party, current = apps.get_model("parties", "Party").objects.db_manager(alias).identity_snapshot(
             proposal["party_id"],
@@ -431,8 +428,6 @@ class IdentityApplyStepImpl(DecisionApplyStep):
         value = _identity_apply_input(step_run.input)
         passthrough = _unchanged_identity_input(value)
         if passthrough is not None:
-            from angee.workflows import engine  # Runtime edge; safe after the operation registry imports this module.
-
             _, current = apps.get_model("parties", "Party").objects.db_manager(alias).identity_snapshot(
                 passthrough["party_id"],
                 actor=engine.resolve_workflow_actor(run, using=alias).subject,
