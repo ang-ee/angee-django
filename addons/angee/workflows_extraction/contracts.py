@@ -94,7 +94,7 @@ class ExtractionPartKind(TextChoices, StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class PageImage:
-    """One bounded raster page supplied to an OCR engine."""
+    """One bounded raster page supplied for text recognition."""
 
     source_position: int
     page_position: int
@@ -111,7 +111,7 @@ class RecognitionResult:
 
     text: str
     duration_ms: int = 0
-    engine_metadata: dict[str, Any] | None = None
+    provider_metadata: dict[str, Any] | None = None
     usage_delta: dict[str, int] = field(default_factory=dict)
 
 
@@ -121,7 +121,7 @@ class MappingResult:
 
     value: dict[str, Any]
     claims: dict[str, list[dict[str, Any]]]
-    engine_metadata: dict[str, Any]
+    provider_metadata: dict[str, Any]
     usage_delta: dict[str, int] = field(default_factory=dict)
 
 
@@ -157,14 +157,18 @@ class DocumentPart:
 
 @dataclass(frozen=True, slots=True)
 class DocumentResult:
-    """A final schema candidate plus its retained raw evidence and claims."""
+    """A final schema candidate plus its retained raw evidence and claims.
+
+    ``provider_metadata`` also carries routing facts from deterministic profiles
+    that do not invoke a provider.
+    """
 
     value: dict[str, Any]
     parts: tuple[DocumentPart, ...]
     claims: dict[str, list[dict[str, Any]]]
     used_model_roles: tuple[Literal["mapping", "recognition"], ...] = ()
     duration_ms: int = 0
-    engine_metadata: dict[str, Any] | None = None
+    provider_metadata: dict[str, Any] | None = None
 
 
 class DocumentPipelineError(RuntimeError):
@@ -186,3 +190,12 @@ class DocumentPipelineError(RuntimeError):
         self.code = code
         self.metadata = dict(metadata or {})
         self.usage_delta = dict(usage_delta or {})
+
+
+@dataclass(frozen=True, slots=True)
+class PageResult:
+    """One page's validated provider response and non-sensitive metrics."""
+
+    value: dict[str, Any]
+    duration_ms: int = 0
+    provider_metadata: dict[str, Any] | None = None

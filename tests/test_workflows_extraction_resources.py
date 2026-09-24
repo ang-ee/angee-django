@@ -57,34 +57,30 @@ def test_install_resources_publish_valid_generic_extraction_child() -> None:
     }
     preparation_fields = steps["prepare_pages"].input_binding["fields"]
     assert "schema" not in preparation_fields
-    assert "engine" not in preparation_fields
-    assert preparation_fields["engine_config"] == {
+    assert "profile" not in preparation_fields
+    assert preparation_fields["profile_config"] == {
         "kind": "workflow_input",
-        "path": ["engine_config"],
+        "path": ["profile_config"],
     }
     collection_fields = steps["collect_carriers"].input_binding["fields"]
     assert "schema" not in collection_fields
-    assert "engine" not in collection_fields
-    assert collection_fields["engine_config"] == {
+    assert "profile" not in collection_fields
+    assert collection_fields["profile_config"] == {
         "kind": "workflow_input",
-        "path": ["engine_config"],
+        "path": ["profile_config"],
     }
     recognition_fields = steps["recognize_page"].input_binding["fields"]
-    assert recognition_fields["engine"] == {
+    assert "profile" not in recognition_fields
+    assert recognition_fields["profile_config"] == {
         "kind": "workflow_input",
-        "path": ["recognition_engine"],
-    }
-    assert recognition_fields["engine_config"] == {
-        "kind": "workflow_input",
-        "path": ["engine_config", "recognition_config"],
+        "path": ["profile_config", "recognition_config"],
     }
     assert draft.input_schema["required"] == [
         "files",
         "message_parts",
         "schema",
-        "engine",
-        "engine_config",
-        "recognition_engine",
+        "profile",
+        "profile_config",
         "recognition_timeout",
         "model",
         "recognition_model",

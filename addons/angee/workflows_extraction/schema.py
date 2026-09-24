@@ -14,7 +14,7 @@ from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id, require_public_id
 from angee.graphql.node import AngeeNode
 from angee.iam.permissions import read_resource_queryset
-from angee.workflows_extraction.engines import ExtractionPartKind
+from angee.workflows_extraction.contracts import ExtractionPartKind
 from angee.workflows_extraction.managers import RetiredIdentityKind
 
 strawberry.enum(cast(Any, ExtractionPartKind))
@@ -39,7 +39,7 @@ class ExtractionType(AngeeNode):
     error_code: auto
     schema_id: auto
     schema_digest: auto
-    engine: auto
+    profile: auto
     created_at: auto
 
     @strawberry_django.field(only=["model_id"])
@@ -214,10 +214,10 @@ _EXTRACTION_RESOURCE = hasura_model_resource(
     ExtractionType,
     model=Extraction,
     name="workflow_extraction_extractions",
-    filterable=["id", "status", "schema_id", "engine", "model", "recognition_model", "created_at"],
+    filterable=["id", "status", "schema_id", "profile", "model", "recognition_model", "created_at"],
     sortable=["revision", "status", "schema_id", "created_at"],
     aggregatable=["id", "revision"],
-    groupable=["status", "schema_id", "engine", "model"],
+    groupable=["status", "schema_id", "profile", "model"],
     insert=False,
     update=False,
     delete=False,

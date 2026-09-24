@@ -15,9 +15,8 @@ rows:
           - files
           - message_parts
           - schema
-          - engine
-          - engine_config
-          - recognition_engine
+          - profile
+          - profile_config
           - recognition_timeout
           - model
           - recognition_model
@@ -31,14 +30,13 @@ rows:
             type: array
             items: {type: string, minLength: 1}
           schema: {type: object}
-          engine: {type: string, minLength: 1}
-          engine_config:
+          profile: {type: string, minLength: 1}
+          profile_config:
             type: object
             required: [recognition_config]
             properties:
               recognition_config: {type: object}
             additionalProperties: true
-          recognition_engine: {type: string, minLength: 1, default: inference}
           recognition_timeout: {type: integer, minimum: 1, default: 60}
           model: {type: [string, "null"]}
           recognition_model: {type: [string, "null"]}

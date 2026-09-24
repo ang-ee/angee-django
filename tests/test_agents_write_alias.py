@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import router, transaction
+from pydantic_ai.messages import ModelRequest, UserPromptPart
 from rebac import system_context
 
 from angee.agents.models import AgentLifecycle
@@ -17,6 +18,7 @@ from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from angee.base.db import get_write_alias
 from angee.graphql.ids import PublicID
 from tests.test_agents import SKILL_BLOBS, SKILL_TREE, InferenceModel, Skill, _FakeAnthropicClient, _provider
+from tests.test_agents import inference_http as inference_http
 from tests.test_agents_graphql import (
     Agent,
     _provisionable_agent,
@@ -80,7 +82,8 @@ def test_inference_sync_routes_initial_and_existing_model_writes(
             assert row.display_name == "Updated"
             assert row._state.db == agent_write_alias
     assert aliases and set(aliases) == {agent_write_alias}
-    assert routing.writes == ([provider] if entry == "router" else [])
+    # Each separate sync operation resolves its alias; the provider is not mutated.
+    assert routing.writes == ([provider, provider] if entry == "router" else [])
 
 
 @pytest.mark.parametrize("entry", ["instance", "using"])
@@ -174,21 +177,26 @@ def test_skill_sync_keeps_alias_through_upsert_prune_and_source_timestamp(
     assert routing.writes == []
 
 
-@pytest.mark.parametrize("operation", ["catalogue", "model_bind", "agent_bind"])
+@pytest.mark.parametrize("operation", ["catalogue", "model_bind", "agent_bind", "infer", "provider_chat"])
+@pytest.mark.parametrize("deferred", [False, True])
 def test_inference_binding_reaches_sdk_credential_mutation(
-    agent_write_alias: str, monkeypatch: pytest.MonkeyPatch, operation: str
+    agent_write_alias: str, monkeypatch: pytest.MonkeyPatch, operation: str, inference_http: Any, deferred: bool
 ) -> None:
     """Catalogue and invocation bindings retain the alias through credential writes."""
 
     provider = _provider("routed-sdk", backend_class="anthropic", material={"api_key": "before"})
     credential_class = type(provider.credential)
+    credential_id = provider.credential_id
     with system_context(reason="test.agents.alias.sdk.seed"):
         model = InferenceModel.objects.create(provider=provider, name="claude-sonnet-4-6")
         agent = Agent.objects.create(name="SDK binding", owner=provider.owner, model=model, runtime_class="pydantic")
+        if deferred:
+            model = InferenceModel.objects.using("default").only("pk").get(pk=model.pk)
+            provider = type(provider).objects.using("default").only("pk").get(pk=provider.pk)
     refreshed: list[str] = []
 
-    def refresh(credential: Any) -> None:
-        using = get_write_alias(type(credential), instance=credential)
+    def refresh(credential: Any, *, using: str | None = None) -> None:
+        using = get_write_alias(type(credential), using=using, instance=credential)
         assert using == agent_write_alias
         credential.update_material(api_key="after", using=using)
         refreshed.append(using)
@@ -204,12 +212,56 @@ def test_inference_binding_reaches_sdk_credential_mutation(
             assert _FakeAnthropicClient.instances[-1].kwargs == {"api_key": "after"}
         elif operation == "model_bind":
             assert model.bind(using=agent_write_alias) is not None
-        else:
+        elif operation == "agent_bind":
             assert agent.inference_model(using=agent_write_alias) is not None
-        stored = credential_class._base_manager.using(agent_write_alias).get(pk=provider.credential_id)
+        elif operation == "infer":
+            result = model.infer([ModelRequest(parts=[UserPromptPart("Ping")])], using=agent_write_alias)
+            assert result.response.text == "pong"
+            assert result.usage["requests"] == 1
+        else:
+            response = provider.chat(
+                model="claude-sonnet-4-6",
+                messages=[ModelRequest(parts=[UserPromptPart("Ping")])],
+                using=agent_write_alias,
+            )
+            assert response.text == "pong"
+        stored = credential_class._base_manager.using(agent_write_alias).get(pk=credential_id)
         assert stored.reveal()["api_key"] == "after"
     assert refreshed == [agent_write_alias]
     assert routing.writes == []
+
+
+def test_deployment_identity_refreshes_deferred_handle_on_selected_alias(agent_write_alias, monkeypatch):
+    provider = _provider("identity-alias", backend_class="ollama")
+    with system_context(reason="test.agents.alias.identity"):
+        model = InferenceModel.objects.create(provider=provider, name="catalogue", config={"provider_model": "native"})
+        model = InferenceModel.objects.using("default").only("pk").get(pk=model.pk)
+    monkeypatch.setattr(router, "routers", [TransitionRouter("other_writer")])
+    with system_context(reason="test.agents.alias.identity.read"):
+        identity = model.deployment_identity(using=agent_write_alias)
+    assert identity["native_model"] == "native"
+    assert identity["endpoint"] == "http://localhost:11434/v1"
+
+
+@pytest.mark.parametrize("has_model", [False, True])
+def test_agent_error_classifier_binds_nullable_model_and_provider_to_alias(agent_write_alias, monkeypatch, has_model):
+    """Deferred relations ignore another read router while missing models are terminal."""
+
+    provider = _provider("error-alias", backend_class="anthropic")
+    with system_context(reason="test.agents.alias.error.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="claude") if has_model else None
+        agent = Agent.objects.create(name="Error classifier", owner=provider.owner, model=model)
+        agent = Agent.objects.using("default").only("pk").get(pk=agent.pk)
+    seen: list[str] = []
+
+    def classify(backend, error):
+        seen.append(backend.provider._state.db)
+        return isinstance(error, TimeoutError)
+
+    monkeypatch.setattr(AnthropicInferenceBackend, "is_transient_error", classify)
+    monkeypatch.setattr(router, "routers", [TransitionRouter("other_writer")])
+    assert agent.is_transient_inference_error(TimeoutError(), using=agent_write_alias) is has_model
+    assert seen == ([agent_write_alias] if has_model else [])
 
 
 @pytest.mark.parametrize("has_credential", [False, True])

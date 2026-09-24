@@ -135,8 +135,8 @@ def test_extraction_retention_reuse_and_successor_stay_on_bound_alias(
         values: dict[str, Any] = {
             "lineage_key": "routing-lineage", "reuse_key": "routing-first", "status": "succeeded",
             "error_code": "", "schema_id": schema["$id"], "schema": schema,
-            "schema_digest": canonical_json_sha256(schema), "engine": "inference", "result": {},
-            "engine_config": {}, "provenance": {"claims": {}},
+            "schema_digest": canonical_json_sha256(schema), "profile": "fake_document", "result": {},
+            "profile_config": {}, "provenance": {"claims": {}},
             "content_type_id": target.content_type.pk, "object_id": str(target.object_id),
         }
         routing = TransitionRouter("wrong-writer")

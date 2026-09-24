@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, ClassVar
 
+from openai import APIConnectionError
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -23,6 +24,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     label = "OpenAI"
     icon = "openai"
     api_key_env: ClassVar[tuple[str, ...]] = ("OPENAI_API_KEY",)
+    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = (APIConnectionError,)
     defaults = {
         "vendor": "openai",
         "name": "OpenAI",
@@ -48,11 +50,11 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     oauth_auth_kwarg = ""
     sdk_package_name = "openai"
 
-    def list_models(self) -> Sequence[InferenceModelSpec]:
+    def list_models(self, *, using: str | None = None) -> Sequence[InferenceModelSpec]:
         """List OpenAI models and their broker-prefixed aliases."""
 
         specs: list[InferenceModelSpec] = []
-        client = self.client()
+        client = self.client(using=using)
         for model in client.models.list():
             model_id = str(getattr(model, "id", "") or "").strip()
             if not model_id:

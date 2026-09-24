@@ -17,19 +17,21 @@ from angee.base.refs import RecordRefMixin
 from angee.workflows_extraction.contracts import (
     CorrectionRef,
     DocumentRef,
+    ExtractionPartKind,
     ExtractionRef,
     FactAuthority,
     LineRef,
     PageRef,
     SourceRef,
 )
-from angee.workflows_extraction.engines import ExtractionEngine, ExtractionPartKind, ExtractionStatus
+from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionStatus
 from angee.workflows_extraction.managers import (
     EvidenceManager,
     ExtractionManager,
     ExtractionSystemManager,
 )
 from angee.workflows_extraction.pointers import json_pointer_value
+from angee.workflows_extraction.profiles import ExtractionProfile
 
 
 class DecisionReadableFile(models.Model):
@@ -91,9 +93,9 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
     schema = models.JSONField(editable=False)
-    engine = ImplClassField(
-        base_class=ExtractionEngine,
-        registry_setting="ANGEE_EXTRACTION_ENGINE_CLASSES",
+    profile = ImplClassField(
+        base_class=ExtractionProfile,
+        registry_setting="ANGEE_EXTRACTION_PROFILE_CLASSES",
         editable=False,
     )
     model = models.ForeignKey(
@@ -106,7 +108,7 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         on_delete=models.PROTECT,
         related_name="recognition_extraction_evidence",
     )
-    engine_config = models.JSONField(default=dict, blank=True, editable=False)
+    profile_config = models.JSONField(default=dict, blank=True, editable=False)
     result = models.JSONField(editable=False)
     provenance = models.JSONField(default=dict, editable=False)
     document_map = models.JSONField(default=list, editable=False)
@@ -228,6 +230,15 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         return self.provenance.get("document", {})
 
     @property
+    def awaiting_correspondence(self) -> bool:
+        """Whether this revision holds a candidate awaiting reviewed identity mapping."""
+
+        return (
+            self.status == ExtractionStatus.FAILED
+            and self.error_code == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
+        )
+
+    @property
     def failed_at_inference(self) -> bool:
         """Return whether this failed revision retains an inference-stage failure.
 
@@ -316,7 +327,7 @@ class ExtractionPage(SqidMixin, AngeeModel):
     dpi = models.PositiveIntegerField(editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
     result = models.JSONField(editable=False)
-    engine_metadata = models.JSONField(default=dict, blank=True, editable=False)
+    provider_metadata = models.JSONField(default=dict, blank=True, editable=False)
     objects = EvidenceManager()
 
     class Meta:
@@ -337,7 +348,7 @@ class ExtractionPage(SqidMixin, AngeeModel):
 
     @property
     def reference(self) -> PageRef:
-        carriers = self.engine_metadata.get("carrier_files", ())
+        carriers = self.provider_metadata.get("carrier_files", ())
         return PageRef(self.source.reference, int(self.source_page), tuple(str(item) for item in carriers))
 
 

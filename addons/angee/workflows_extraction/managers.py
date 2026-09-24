@@ -19,8 +19,15 @@ from angee.base.refs import record_ref_for
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import json_values_equal
-from angee.workflows_extraction.contracts import CorrectionBinding, DocumentRef
-from angee.workflows_extraction.engines import DocumentPart, DocumentSource, PageImage, PageResult
+from angee.workflows_extraction.contracts import (
+    CorrectionBinding,
+    DocumentPart,
+    DocumentRef,
+    DocumentSource,
+    PageImage,
+    PageResult,
+)
+from angee.workflows_extraction.enums import ExtractionErrorCode
 from angee.workflows_extraction.pointers import (
     implicit_identity_correspondence,
     result_selectors,
@@ -113,7 +120,7 @@ class ExtractionManager(EvidenceManager):
             })
         mapping = implicit_identity_correspondence(
             result,
-            layout=base.engine_config.get("evidence_layout", {}),
+            layout=base.profile_config.get("evidence_layout", {}),
             original=base,
         )
         if mapping is None:
@@ -130,7 +137,7 @@ class ExtractionManager(EvidenceManager):
 
         if identity_mapping is None:
             implicit = implicit_identity_correspondence(
-                result, layout=original.engine_config.get("evidence_layout", {}),
+                result, layout=original.profile_config.get("evidence_layout", {}),
                 original=original,
             )
             if implicit is None:
@@ -141,7 +148,7 @@ class ExtractionManager(EvidenceManager):
         mapping = dict(identity_mapping)
         if not mapping and not retired_identities:
             mapping = implicit_identity_correspondence(
-                result, layout=original.engine_config.get("evidence_layout", {}),
+                result, layout=original.profile_config.get("evidence_layout", {}),
                 original=original,
             ) or {}
         return mapping
@@ -174,10 +181,7 @@ class ExtractionManager(EvidenceManager):
 
         if base.status == "succeeded":
             return base
-        if (
-            base.status != "failed"
-            or base.error_code != "source_hold:identity_correspondence_required"
-        ):
+        if not base.awaiting_correspondence:
             raise ValidationError({"inference": "The extraction is not a correspondence hold."})
         correspondence = base.provenance.get("identity_correspondence", {})
         revision = correspondence.get("last_known_revision")
@@ -731,10 +735,10 @@ class ExtractionManager(EvidenceManager):
                 schema_id=schema_id,
                 schema=normalized_schema,
                 schema_digest=str(original.schema_digest),
-                engine=str(original.engine),
+                profile=str(original.profile),
                 model_id=original.model_id,
                 recognition_model_id=original.recognition_model_id,
-                engine_config=original.engine_config,
+                profile_config=original.profile_config,
                 result=normalized_result,
                 provenance=provenance,
                 content_type_id=original.content_type_id,
@@ -802,17 +806,13 @@ class ExtractionManager(EvidenceManager):
             )
         return original, decision
 
-    def inference_candidate_selectors(
-        self, base: Any
-    ) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    def inference_candidate_selectors(self, base: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:
         """Expose selectors only for an exact retained correspondence candidate."""
 
         if (
             not isinstance(base, self.model)
             or base.pk is None
-            or base.status != "failed"
-            or base.error_code
-            != "source_hold:identity_correspondence_required"
+            or not base.awaiting_correspondence
             or not isinstance(base.result, dict)
             or not base.result
         ):
@@ -821,7 +821,7 @@ class ExtractionManager(EvidenceManager):
             )
         return result_selectors(
             base.result,
-            base.engine_config.get("evidence_layout", {}),
+            base.profile_config.get("evidence_layout", {}),
         )
 
     def create_revision(
@@ -833,7 +833,7 @@ class ExtractionManager(EvidenceManager):
         parts: Sequence[DocumentPart],
         **values: Any,
     ) -> Any:
-        """Reuse exact requests or allocate the next revision with fresh engine evidence."""
+        """Reuse exact requests or allocate the next revision with fresh profile evidence."""
 
         anchor = next(
             (
@@ -895,7 +895,8 @@ class ExtractionManager(EvidenceManager):
             Sequence[PageImage],
             Sequence[PageResult],
             Sequence[DocumentPart],
-        ] | None = None,
+        ]
+        | None = None,
         original: Any | None = None,
         revision_parent: Any | None = None,
         using: str | None,
@@ -938,17 +939,16 @@ class ExtractionManager(EvidenceManager):
                             values.get("status") == "failed"
                             and (
                                 values.get("result") == {}
-                                or values.get("error_code")
-                                == "source_hold:identity_correspondence_required"
+                                or values.get("error_code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
                             )
                             and (
-                                previous is not None if existing is None else
-                                "last_known_revision" in existing.provenance.get("identity_correspondence", {})
+                                previous is not None
+                                if existing is None
+                                else "last_known_revision" in existing.provenance.get("identity_correspondence", {})
                             )
                         )
                         correspondence_failure = (
-                            values.get("error_code")
-                            == "source_hold:identity_correspondence_required"
+                            values.get("error_code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
                         )
                         if unresolved_failure:
                             if identity_mapping or retired_identities:
@@ -1003,7 +1003,7 @@ class ExtractionManager(EvidenceManager):
                         else:
                             document_map, retired = _document_mapping(
                                 values["result"],
-                                layout=values["engine_config"].get("evidence_layout", {}),
+                                layout=values["profile_config"].get("evidence_layout", {}),
                                 original=(original or previous),
                                 identity_mapping=identity_mapping,
                                 retired_identities=retired_identities,
@@ -1089,7 +1089,7 @@ class ExtractionManager(EvidenceManager):
             or row.position != position or row.width != page.width or row.height != page.height
             or row.dpi != page.dpi or row.duration_ms != max(result.duration_ms, 0)
             or not json_values_equal(row.result, result.value)
-            or not json_values_equal(row.engine_metadata, result.engine_metadata or {})
+            or not json_values_equal(row.provider_metadata, result.provider_metadata or {})
             for position, (row, page, result) in enumerate(zip(retained_pages, pages, page_results))
         ):
             return False
@@ -1150,7 +1150,7 @@ class ExtractionManager(EvidenceManager):
                     dpi=page.dpi,
                     duration_ms=max(result.duration_ms, 0),
                     result=result.value,
-                    engine_metadata=result.engine_metadata or {},
+                    provider_metadata=result.provider_metadata or {},
                 )
                 for position, (page, result) in enumerate(zip(pages, page_results))
             ]
@@ -1219,7 +1219,7 @@ class ExtractionManager(EvidenceManager):
                     dpi=page.dpi,
                     duration_ms=page.duration_ms,
                     result=page.result,
-                    engine_metadata=page.engine_metadata,
+                    provider_metadata=page.provider_metadata,
                 )
                 for page in original_pages
             ]

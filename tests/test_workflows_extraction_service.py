@@ -39,16 +39,18 @@ from rebac import (
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.workflows import engine as workflow_engine
 from angee.workflows.states import Verdict
-from angee.workflows_extraction.engines import (
-    RETAINED_AUTHORITY_COMPLETION_REVIEW,
-    RETAINED_CARRIER_UNAVAILABLE,
+from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,
     DocumentResult,
     DocumentSource,
-    InferenceMappingEngine,
     MappingResult,
     PageImage,
+)
+from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionRole
+from angee.workflows_extraction.inference import (
+    RETAINED_AUTHORITY_COMPLETION_REVIEW,
+    RETAINED_CARRIER_UNAVAILABLE,
     derive_text_claims,
 )
 from angee.workflows_extraction.managers import _document_mapping
@@ -63,9 +65,9 @@ from angee.workflows_extraction.routing import (
     _html_text,
 )
 from angee.workflows_extraction.service import (
-    InferenceResult,
     PreparedDocument,
     PreparedPage,
+    RetainedInference,
     SupersededInference,
     _document_sources,
     _preserve_retained_authority,
@@ -76,7 +78,6 @@ from angee.workflows_extraction.service import (
     infer,
     prepare_pages,
     process,
-    require_approved_model_deployment,
 )
 from angee.workflows_extraction.steps import InferEvidenceStepImpl, PreparePagesStepImpl, _restore_prepared
 from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
@@ -99,7 +100,10 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
     actor = object()
     target = SimpleNamespace(pk=11)
     base_manager = SimpleNamespace()
-    extraction_fixture = type("ExtractionFixture", (), {"objects": base_manager})
+    extraction_fixture = type(
+        "ExtractionFixture", (),
+        {"objects": base_manager, "awaiting_correspondence": Extraction.awaiting_correspondence},
+    )
     base = extraction_fixture()
     for name, value in {
         "pk": 7,
@@ -111,7 +115,7 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
         "result": {"invoice_count": 1, "routing_review_reasons": ["missing_supplier_identity"]},
         "corrections": (),
         "provenance": {"used_model_roles": []},
-        "engine": "invoice_document",
+        "profile": "invoice_document",
         "content_type_id": 5,
         "object_id": target.pk,
     }.items():
@@ -128,7 +132,7 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
         ("agents", "InferenceModel"): inference_model,
     }
     step_run = SimpleNamespace(
-        run=SimpleNamespace(admission_actor=lambda: actor, debit_budget=MagicMock()),
+        run=SimpleNamespace(admission_actor=lambda **kwargs: actor, debit_budget=MagicMock()),
     )
     request = SimpleNamespace(input={
         "base_extraction_id": "ext_base",
@@ -178,7 +182,7 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
         result = InferEvidenceStepImpl().run(step_run, now=None)
 
     related_run.assert_called_once_with(step_run, "run", using="default")
-    step_run.run.debit_budget.assert_called_once_with({}, using="default")
+    step_run.run.debit_budget.assert_not_called()
     assert result.kind == "done"
     assert result.outcome == "inference_failed"
     assert result.output["extraction_id"] == "ext_base"
@@ -194,13 +198,16 @@ def test_inference_provider_failure_routes_retained_base_to_manual_review(messag
     }
 
 
-@pytest.mark.parametrize("metadata_source", [
-    "sibling_metadata",
-    "nested_metadata",
-    "empty_nested_metadata",
-    "missing_metadata",
-    "legacy_failure_details",
-])
+@pytest.mark.parametrize(
+    "metadata_source",
+    [
+        "sibling_metadata",
+        "nested_metadata",
+        "empty_nested_metadata",
+        "missing_metadata",
+        "legacy_failure_details",
+    ],
+)
 def test_inference_step_routes_superseded_successor_by_retained_status(metadata_source: str) -> None:
     metadata = {
         "provider_response_id": "response-invalid",
@@ -256,7 +263,10 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
     actor = object()
     target = SimpleNamespace(pk=11)
     base_manager = SimpleNamespace()
-    extraction_fixture = type("ExtractionFixture", (), {"objects": base_manager})
+    extraction_fixture = type(
+        "ExtractionFixture", (),
+        {"objects": base_manager, "awaiting_correspondence": Extraction.awaiting_correspondence},
+    )
     base = extraction_fixture()
     failed = extraction_fixture()
     succeeded = extraction_fixture()
@@ -270,7 +280,7 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
         "result": {"invoice_count": 1},
         "corrections": (),
         "provenance": {"used_model_roles": []},
-        "engine": "invoice_document",
+        "profile": "invoice_document",
         "content_type_id": 5,
         "object_id": target.pk,
     }.items():
@@ -321,7 +331,7 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
     debits: list[dict[str, int]] = []
     step_run = SimpleNamespace(
         run=SimpleNamespace(
-            admission_actor=lambda: actor,
+            admission_actor=lambda **kwargs: actor,
             debit_budget=lambda values, *, using: debits.append(values),
         )
     )
@@ -354,9 +364,9 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
             "angee.workflows_extraction.steps.infer",
             side_effect=(
                 live_error,
-                InferenceResult(failed, {"tokens": 7}),
-                SupersededInference("ext_base", "ext_failed", {}),
-                SupersededInference("ext_base", "ext_succeeded", {}),
+                RetainedInference(failed),
+                SupersededInference("ext_base", "ext_failed"),
+                SupersededInference("ext_base", "ext_succeeded"),
             ),
         ),
     ):
@@ -377,7 +387,7 @@ def test_inference_step_routes_superseded_successor_by_retained_status(metadata_
     assert superseded.outcome == "superseded"
     assert superseded.output["extraction_id"] == "ext_succeeded"
     assert superseded.output["superseded_by"] == "ext_succeeded"
-    assert debits == [{}, {"tokens": 7}, {}, {}]
+    assert debits == []
 
 
 def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relabeling() -> None:
@@ -396,7 +406,10 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
     )
     current_parts = tuple([*authority_parts])
     base_manager = SimpleNamespace()
-    extraction_fixture = type("ExtractionFixture", (), {"objects": base_manager})
+    extraction_fixture = type(
+        "ExtractionFixture", (),
+        {"objects": base_manager, "awaiting_correspondence": Extraction.awaiting_correspondence},
+    )
     authority = extraction_fixture()
     for name, value in {
         "pk": 7,
@@ -410,7 +423,7 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         "result": {"invoice_count": 1},
         "corrections": (),
         "provenance": {"used_model_roles": []},
-        "engine": "invoice_document",
+        "profile": "invoice_document",
         "content_type_id": 5,
         "object_id": target.pk,
     }.items():
@@ -434,12 +447,12 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         "sqid": "ext_hold",
         "revision": 4,
         "status": "failed",
-        "error_code": "source_hold:identity_correspondence_required",
+        "error_code": ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
         "unresolved_reasons": ["identity_correspondence_required"],
         "result": {"invoice_count": 1},
         "corrections": (),
         "provenance": {"used_model_roles": []},
-        "engine": "invoice_document",
+        "profile": "invoice_document",
         "content_type_id": 5,
         "object_id": target.pk,
     }.items():
@@ -467,7 +480,7 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         "retired_identities": {},
     })
 
-    step_run = SimpleNamespace(run=SimpleNamespace(admission_actor=lambda: actor, debit_budget=MagicMock()))
+    step_run = SimpleNamespace(run=SimpleNamespace(admission_actor=lambda **kwargs: actor, debit_budget=MagicMock()))
 
     class Profile:
         def inference_required(self, _result, _reasons):
@@ -499,7 +512,7 @@ def test_retained_carrier_mismatch_routes_exact_hold_and_authority_without_relab
         )
 
     related_run.assert_called_once_with(step_run, "run", using="default")
-    step_run.run.debit_budget.assert_called_once_with({}, using="default")
+    step_run.run.debit_budget.assert_not_called()
     assert result.outcome == "source_unavailable"
     assert result.output["extraction_id"] == "ext_hold"
     assert result.output["inference_failure"]["code"] == RETAINED_CARRIER_UNAVAILABLE
@@ -543,7 +556,10 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
     actor = object()
     target = SimpleNamespace(pk=11)
     base_manager = SimpleNamespace()
-    extraction_fixture = type("ExtractionFixture", (), {"objects": base_manager})
+    extraction_fixture = type(
+        "ExtractionFixture", (),
+        {"objects": base_manager, "awaiting_correspondence": Extraction.awaiting_correspondence},
+    )
     base = extraction_fixture()
     successor = extraction_fixture()
     for name, value in {
@@ -561,14 +577,14 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
     successor.sqid = "ext_successor"
     successor.revision = 4
     successor.status = "failed"
-    successor.error_code = "source_hold:identity_correspondence_required"
+    successor.error_code = ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
     successor.unresolved_reasons = ["identity_correspondence_required"]
     empty_successor = extraction_fixture()
     empty_successor.pk = 9
     empty_successor.sqid = "ext_empty_successor"
     empty_successor.revision = 4
     empty_successor.status = "failed"
-    empty_successor.error_code = "source_hold:identity_correspondence_required"
+    empty_successor.error_code = ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
     empty_successor.unresolved_reasons = ["identity_correspondence_required"]
     base_manager.get = lambda **_kwargs: base
     current = base
@@ -583,7 +599,7 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
             objects=SimpleNamespace(get=lambda **_kwargs: target)
         ),
     }
-    step_run = SimpleNamespace(run=SimpleNamespace(admission_actor=lambda: actor))
+    step_run = SimpleNamespace(run=SimpleNamespace(admission_actor=lambda **kwargs: actor))
     request = SimpleNamespace(
         input={
             "base_extraction_id": "ext_base",
@@ -659,7 +675,7 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
         "extraction_id": "ext_successor",
         "revision": 4,
         "status": "failed",
-        "error_code": "source_hold:identity_correspondence_required",
+        "error_code": ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
         "unresolved_reasons": ["identity_correspondence_required"],
     }
     assert correspondence.kind == "done"
@@ -668,7 +684,7 @@ def test_inference_retains_disabled_base_and_routes_current_correspondence() -> 
         "extraction_id": "ext_successor",
         "revision": 4,
         "status": "failed",
-        "error_code": "source_hold:identity_correspondence_required",
+        "error_code": ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
         "unresolved_reasons": ["identity_correspondence_required"],
     }
     assert empty_correspondence.kind == "done"
@@ -974,12 +990,6 @@ class PageAggregationTests(SimpleTestCase):
             },
         )
 
-    def test_missing_mapping_model_retains_acquired_evidence(self) -> None:
-        part = DocumentPart(0, 0, "text/plain", "native_text", "Invoice 22121", "test", "a" * 64)
-        with self.assertRaises(DocumentPipelineError) as mapping_error:
-            InferenceMappingEngine().map_text_parts((part,), SCHEMA, model=None, config={}, timeout=1)
-        self.assertEqual(mapping_error.exception.parts, (part,))
-
     def test_declared_text_decode_is_bounded_to_utf8_and_html_is_inert(self) -> None:
         self.assertEqual(_decode_declared_text(b"\xef\xbb\xbfInvoice 22121"), "Invoice 22121")
         with self.assertRaises(ValueError):
@@ -1086,6 +1096,7 @@ class ExtractionServiceTests(TestCase):
                 provider=provider,
                 name="synthetic-extraction",
                 display_name="Synthetic extraction",
+                model_use="multimodal",
                 config={},
                 created_by=self.owner,
             )
@@ -1135,7 +1146,7 @@ class ExtractionServiceTests(TestCase):
         )
         with patch(
             "angee.workflows_extraction.steps.related_on",
-            return_value=SimpleNamespace(admission_actor=lambda: self.owner),
+            return_value=SimpleNamespace(admission_actor=lambda **kwargs: self.owner),
         ):
             result = PreparePagesStepImpl().run(step_run, now=timezone.now())
 
@@ -1172,7 +1183,7 @@ class ExtractionServiceTests(TestCase):
                 schema=SCHEMA,
                 model=self.model,
                 authorized_target=self.drive,
-                engine="fake_document",
+                profile="fake_document",
                 config=config,
             )
 
@@ -1208,7 +1219,7 @@ class ExtractionServiceTests(TestCase):
                 schema=schema,
                 model=self.model,
                 authorized_target=self.drive,
-                engine="fake_document",
+                profile="fake_document",
                 config=config,
             )
 
@@ -1235,7 +1246,7 @@ class ExtractionServiceTests(TestCase):
             model=model,
             recognition_model=recognition_model,
             authorized_target=authorized_target,
-            engine="fake_document",
+            profile="fake_document",
             config=config,
         )
 
@@ -1363,9 +1374,13 @@ class ExtractionServiceTests(TestCase):
             )
         with actor_context(self.owner), override_settings(ANGEE_INFERENCE_APPROVED_DEPLOYMENTS=policy):
             with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
-                require_approved_model_deployment(unapproved, role="mapping")
+                unapproved.require_usable(
+                    self.owner, "mapping", uses=ExtractionRole.MAPPING.accepted_model_uses,
+                )
             with self.assertRaisesRegex(DjangoPermissionDenied, "recognition model deployment is not approved"):
-                require_approved_model_deployment(self.model, role="recognition")
+                self.model.require_usable(
+                    self.owner, "recognition", uses=ExtractionRole.RECOGNITION.accepted_model_uses,
+                )
 
         provider = self.model.provider
         with system_context(reason="test repointed extraction deployment"):
@@ -1373,7 +1388,7 @@ class ExtractionServiceTests(TestCase):
             provider.save(update_fields=("base_url", "updated_at"))
         with override_settings(ANGEE_INFERENCE_APPROVED_DEPLOYMENTS=policy):
             with self.assertRaisesRegex(DjangoPermissionDenied, "mapping model deployment is not approved"):
-                require_approved_model_deployment(self.model, role="mapping")
+                self._extract(config={"result": {"number": "LOCAL", "rows": []}})
 
     def test_persists_ordered_evidence_reuses_exact_scope_and_revises_changed_config(self) -> None:
         config = {
@@ -1436,18 +1451,18 @@ class ExtractionServiceTests(TestCase):
                 {"number": "DIFFERENT", "rows": []},
                 tuple(parts),
                 {"/number": [{"part_position": 0}]},
-                engine_metadata={"route": "fake"},
+                provider_metadata={"route": "fake"},
             )
 
         with (
-            patch("tests.extraction_engines.FakeDocumentEngine.process_parts", side_effect=changed_result),
+            patch("tests.extraction_profiles.FakeDocumentProfile.process_parts", side_effect=changed_result),
             self.assertRaisesRegex(ValidationError, "request identity already owns different retained facts"),
         ):
             self._extract(config=config)
 
         held_config = {**config, "prompt": "retain a correspondence hold"}
         held = self._extract(config=held_config)
-        self.assertEqual(held.error_code, "source_hold:identity_correspondence_required")
+        self.assertEqual(held.error_code, ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED)
         advanced = self._extract(
             config={
                 **config,
@@ -1474,9 +1489,7 @@ class ExtractionServiceTests(TestCase):
             "result": {"number": "REPROCESSED", "rows": ["first", "second"]},
             "prompt": "repeat structural hold without inference",
         }
-        with patch(
-            "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts"
-        ) as provider_call:
+        with patch("angee.workflows_extraction.service.map_text_parts") as provider_call:
             repeated_hold = self._extract(config=repeated_config)
 
             legacy_provenance = deepcopy(repeated_hold.provenance)
@@ -1493,9 +1506,9 @@ class ExtractionServiceTests(TestCase):
             repaired = self._extract(config=repeated_config)
             exact_retry = self._extract(config=repeated_config)
 
-        self.assertEqual(first_hold.error_code, "source_hold:identity_correspondence_required")
-        self.assertEqual(repeated_hold.error_code, "source_hold:identity_correspondence_required")
-        self.assertEqual(repaired.error_code, "source_hold:identity_correspondence_required")
+        self.assertEqual(first_hold.error_code, ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED)
+        self.assertEqual(repeated_hold.error_code, ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED)
+        self.assertEqual(repaired.error_code, ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED)
         self.assertEqual(
             (original.revision, first_hold.revision, repeated_hold.revision, repaired.revision),
             (1, 2, 3, 4),
@@ -1521,9 +1534,9 @@ class ExtractionServiceTests(TestCase):
         original = self._extract(
             config={"result": {"number": "SOURCE", "rows": []}, "source_text": "SOURCE"}
         )
-        correspondence_hold = SimpleNamespace(
+        correspondence_hold = Extraction(
             status="failed",
-            error_code="source_hold:identity_correspondence_required",
+            error_code=ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
             provenance={
                 "identity_correspondence": {
                     "last_known_revision": original.revision,
@@ -1646,7 +1659,7 @@ class ExtractionServiceTests(TestCase):
             },
         }
         with patch(
-            "tests.extraction_engines.FakeDocumentEngine.evidence_layout",
+            "tests.extraction_profiles.FakeDocumentProfile.evidence_layout",
             config["evidence_layout"],
         ), actor_context(self.owner):
             prepared = prepare_pages(
@@ -1661,7 +1674,7 @@ class ExtractionServiceTests(TestCase):
                 schema=schema,
                 model=self.model,
                 authorized_target=self.drive,
-                engine="fake_document",
+                profile="fake_document",
                 config=config,
             )
         manager = type(original).objects
@@ -1672,14 +1685,14 @@ class ExtractionServiceTests(TestCase):
                 reuse_key=hashlib.sha256(b"empty correspondence parent").hexdigest(),
                 expected_base_id=original.pk,
                 status="failed",
-                error_code="source_hold:identity_correspondence_required",
+                error_code=ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
                 schema_id=original.schema_id,
                 schema=original.schema,
                 schema_digest=original.schema_digest,
-                engine=str(original.engine),
+                profile=str(original.profile),
                 model=original.model,
                 recognition_model=original.recognition_model,
-                engine_config=original.engine_config,
+                profile_config=original.profile_config,
                 result={"documents": []},
                 provenance={
                     **original.provenance,
@@ -1932,10 +1945,10 @@ class ExtractionServiceTests(TestCase):
                 "schema_id": original.schema_id,
                 "schema": original.schema,
                 "schema_digest": original.schema_digest,
-                "engine": str(original.engine),
+                "profile": str(original.profile),
                 "model": original.model,
                 "recognition_model": original.recognition_model,
-                "engine_config": original.engine_config,
+                "profile_config": original.profile_config,
                 "result": result,
                 "provenance": {**original.provenance, "claims": first.claims},
                 "content_type_id": original.content_type_id,
@@ -1997,7 +2010,7 @@ class ExtractionServiceTests(TestCase):
                 schema=schema,
                 model=self.model,
                 authorized_target=self.files[0],
-                engine="fake_document",
+                profile="fake_document",
                 config=config,
             )
         document = base.document_refs[0]
@@ -2016,7 +2029,7 @@ class ExtractionServiceTests(TestCase):
             actor_context(self.owner),
             patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                "angee.workflows_extraction.service.map_text_parts",
                 return_value=MappingResult(
                     {
                         "number": "INFERRED",
@@ -2037,11 +2050,7 @@ class ExtractionServiceTests(TestCase):
             )
             inferred = invocation.extraction
 
-        self.assertIsInstance(invocation, InferenceResult)
-        self.assertEqual(
-            invocation.usage_delta,
-            {"input_tokens": 5, "output_tokens": 3, "tokens": 8, "requests": 1},
-        )
+        self.assertIsInstance(invocation, RetainedInference)
         inferred_document = inferred.document_refs[0]
         self.assertEqual(inferred_document.identity, document.identity)
         self.assertEqual(
@@ -2061,7 +2070,7 @@ class ExtractionServiceTests(TestCase):
                     result={"number": "INFERRED", "rows": changed_lines},
                 )
 
-    def test_inference_schema_failure_exposes_provider_usage_delta(self) -> None:
+    def test_inference_schema_failure_retains_provider_usage(self) -> None:
         base = self._inference_base()
         admitted = SimpleNamespace(
             request_key="schema-failure-usage",
@@ -2082,7 +2091,7 @@ class ExtractionServiceTests(TestCase):
                 return_value=admitted,
             ),
             patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                "angee.workflows_extraction.service.map_text_parts",
                 return_value=MappingResult(
                     {
                         "number": "INVALID",
@@ -2108,9 +2117,7 @@ class ExtractionServiceTests(TestCase):
                 operation_step_run=SimpleNamespace(),
             )
 
-        self.assertIsInstance(invocation, InferenceResult)
-        self.assertEqual(invocation.usage_delta, usage)
-        self.assertEqual(retry.usage_delta, {})
+        self.assertIsInstance(invocation, RetainedInference)
         self.assertEqual(retry.extraction.pk, invocation.extraction.pk)
         failed = invocation.extraction
         self.assertEqual(failed.status, "failed")
@@ -2134,7 +2141,7 @@ class ExtractionServiceTests(TestCase):
         self.assertEqual(binding.authority, base.reference)
         self.assertEqual(binding.revision_parent, failed.reference)
 
-    def test_inference_superseded_race_exposes_provider_usage_delta(self) -> None:
+    def test_inference_superseded_race_returns_winning_revision(self) -> None:
         base = self._inference_base()
         admitted = SimpleNamespace(
             request_key="superseded-race-usage",
@@ -2157,7 +2164,7 @@ class ExtractionServiceTests(TestCase):
                 return_value=admitted,
             ),
             patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                "angee.workflows_extraction.service.map_text_parts",
                 return_value=MappingResult(
                     {
                         "number": "INFERRED",
@@ -2189,7 +2196,6 @@ class ExtractionServiceTests(TestCase):
 
         self.assertIsInstance(result, SupersededInference)
         self.assertEqual(result.current_extraction_id, "ext_race_winner")
-        self.assertEqual(result.usage_delta, usage)
 
     def test_structural_inference_retains_candidate_and_reviewed_mapping_without_reparse(
         self,
@@ -2227,7 +2233,7 @@ class ExtractionServiceTests(TestCase):
                 schema=schema,
                 model=self.model,
                 authorized_target=target,
-                engine="fake_document",
+                profile="fake_document",
                 config=config,
             )
         candidate = {
@@ -2252,7 +2258,7 @@ class ExtractionServiceTests(TestCase):
                 return_value=admitted,
             ),
             patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                "angee.workflows_extraction.service.map_text_parts",
                 return_value=MappingResult(
                     candidate,
                     {},
@@ -2269,11 +2275,8 @@ class ExtractionServiceTests(TestCase):
             )
             held = held_invocation.extraction
 
-        self.assertEqual(held_invocation.usage_delta, {"tokens": 13, "requests": 1})
         self.assertEqual(held.status, "failed")
-        self.assertEqual(
-            held.error_code, "source_hold:identity_correspondence_required"
-        )
+        self.assertEqual(held.error_code, ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED)
         self.assertEqual(held.result, candidate)
         self.assertEqual(held.document_refs, base.document_refs)
         document = base.document_refs[0]
@@ -2299,7 +2302,7 @@ class ExtractionServiceTests(TestCase):
                 return_value=continuation,
             ),
             patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                "angee.workflows_extraction.service.map_text_parts",
                 side_effect=AssertionError("reviewed correspondence must not reparse"),
             ),
         ):
@@ -2312,7 +2315,6 @@ class ExtractionServiceTests(TestCase):
             )
             resolved = resolved_invocation.extraction
 
-        self.assertEqual(resolved_invocation.usage_delta, {})
         self.assertEqual(resolved.status, "succeeded")
         self.assertEqual(
             resolved.result,
@@ -2358,7 +2360,7 @@ class ExtractionServiceTests(TestCase):
                 )
                 authority = process(
                     prepared, (), schema=schema, model=self.model,
-                    authorized_target=target, engine="fake_document",
+                    authorized_target=target, profile="fake_document",
                     config=authority_config,
                 )
                 prepared = prepare_pages(
@@ -2367,12 +2369,12 @@ class ExtractionServiceTests(TestCase):
                 )
                 preliminary = process(
                     prepared, (), schema=schema, model=self.model,
-                    authorized_target=target, engine="fake_document",
+                    authorized_target=target, profile="fake_document",
                     config=preliminary_config,
                 )
             self.assertEqual(
                 preliminary.error_code,
-                "source_hold:identity_correspondence_required",
+                ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
             )
             self.assertEqual(preliminary.document_refs, authority.document_refs)
             self.assertNotIn("inference", preliminary.stage_provenance)
@@ -2393,7 +2395,7 @@ class ExtractionServiceTests(TestCase):
             actor_context(self.owner),
             patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                "angee.workflows_extraction.service.map_text_parts",
                 return_value=MappingResult(
                     authority.result,
                     {},
@@ -2413,8 +2415,6 @@ class ExtractionServiceTests(TestCase):
             inferred = inferred_invocation.extraction
             exact_retry = retry_invocation.extraction
 
-        self.assertEqual(inferred_invocation.usage_delta, {"tokens": 21, "requests": 1})
-        self.assertEqual(retry_invocation.usage_delta, {})
         self.assertEqual(inferred.status, "succeeded")
         self.assertEqual(exact_retry.pk, inferred.pk)
         self.assertEqual(inferred.document_refs, authority.document_refs)
@@ -2449,7 +2449,7 @@ class ExtractionServiceTests(TestCase):
             actor_context(self.owner),
             patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                "angee.workflows_extraction.service.map_text_parts",
                 return_value=MappingResult(
                     changed_candidate,
                     {},
@@ -2464,10 +2464,10 @@ class ExtractionServiceTests(TestCase):
             )
             populated = populated_invocation.extraction
 
-        self.assertEqual(populated_invocation.usage_delta, {"tokens": 34, "requests": 1})
         self.assertEqual(populated.status, "failed")
         self.assertEqual(
-            populated.error_code, "source_hold:identity_correspondence_required",
+            populated.error_code,
+            ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
         )
         self.assertEqual(populated.result, changed_candidate)
         self.assertEqual(populated.document_refs, authority.document_refs)
@@ -2496,9 +2496,7 @@ class ExtractionServiceTests(TestCase):
                 "angee.workflows_extraction.service.external_operation_request",
                 return_value=populated_admitted,
             ),
-            patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts"
-            ) as second_provider,
+            patch("angee.workflows_extraction.service.map_text_parts") as second_provider,
             self.assertRaisesRegex(ValidationError, "explicit reviewed mapping"),
         ):
             infer(
@@ -2550,7 +2548,7 @@ class ExtractionServiceTests(TestCase):
             )
             return process(
                 prepared, (), schema=schema, model=self.model,
-                authorized_target=target, engine="fake_document", config=config,
+                authorized_target=target, profile="fake_document", config=config,
             )
 
         with actor_context(self.owner):
@@ -2561,12 +2559,12 @@ class ExtractionServiceTests(TestCase):
 
         self.assertEqual(
             preliminary.error_code,
-            "source_hold:identity_correspondence_required",
+            ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
         )
         self.assertEqual(preliminary.document_refs, authority.document_refs)
         self.assertEqual(
             upgraded_hold.error_code,
-            "source_hold:identity_correspondence_required",
+            ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED,
         )
         self.assertEqual(upgraded_hold.document_refs, authority.document_refs)
         self.assertNotEqual(upgraded_hold.schema_digest, authority.schema_digest)
@@ -2601,7 +2599,7 @@ class ExtractionServiceTests(TestCase):
             actor_context(self.owner),
             patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                "angee.workflows_extraction.service.map_text_parts",
                 return_value=MappingResult(
                     authority.result,
                     {},
@@ -2616,7 +2614,6 @@ class ExtractionServiceTests(TestCase):
             )
             inferred = invocation.extraction
 
-        self.assertEqual(invocation.usage_delta, {"tokens": 55, "requests": 1})
         self.assertEqual(inferred.status, "succeeded")
         self.assertEqual(inferred.document_refs, authority.document_refs)
         self.assertEqual(
@@ -2656,7 +2653,7 @@ class ExtractionServiceTests(TestCase):
                 config=held_config,
                 model=self.model,
             )
-        self.assertEqual(held.error_code, "source_hold:identity_correspondence_required")
+        self.assertEqual(held.error_code, ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED)
         self.assertEqual(
             held.parts.with_actor(self.owner).select_related("source").get(position=0).source.file_id,
             authoritative.parts.with_actor(self.owner).select_related("source").get(position=1).source.file_id,
@@ -2689,7 +2686,7 @@ class ExtractionServiceTests(TestCase):
             actor_context(self.owner),
             patch("angee.workflows_extraction.service.external_operation_request", return_value=admitted),
             patch(
-                "angee.workflows_extraction.engines.InferenceMappingEngine.map_text_parts",
+                "angee.workflows_extraction.service.map_text_parts",
             ) as provider,
         ):
             invocation = infer(
@@ -2701,7 +2698,6 @@ class ExtractionServiceTests(TestCase):
             )
             inferred = invocation.extraction
         provider.assert_not_called()
-        self.assertEqual(invocation.usage_delta, {})
         self.assertEqual(inferred.status, "succeeded")
         self.assertEqual(inferred.result, {"number": "HUMAN", "rows": ["source row", "second"]})
         inferred_document = inferred.document_refs[0]
@@ -2807,7 +2803,7 @@ class ExtractionServiceTests(TestCase):
             visible = extraction_model.objects.get(pk=failed.pk)
             self.assertEqual(visible.parts.get(position=0).value, "FIRST retained source evidence")
 
-    def test_document_engine_persists_model_free_raw_parts_and_fingerprints_recognizer(self) -> None:
+    def test_document_profile_persists_model_free_raw_parts_and_fingerprints_recognizer(self) -> None:
         config = {
             "result": {"number": "SYN-2", "rows": ["native"]},
             "source_text": "Synthetic invoice attachment",
@@ -2940,7 +2936,7 @@ class ExtractionServiceTests(TestCase):
             self.assertEqual(ExtractionSource._base_manager.count(), original.sources.count())
             self.assertEqual(ExtractionPage._base_manager.count(), original.pages.count())
 
-    def test_human_correction_clones_parts_retains_unchanged_claims_and_reuses_without_engine(self) -> None:
+    def test_human_correction_clones_parts_retains_unchanged_claims_and_reuses_without_profile(self) -> None:
         with actor_context(self.owner):
             original = self._retain(
                 files=self.files,
@@ -2956,7 +2952,7 @@ class ExtractionServiceTests(TestCase):
 
         with (
             actor_context(self.owner),
-            patch("angee.workflows_extraction.service._engine_class") as engine_class,
+            patch("angee.workflows_extraction.service.resolve_impl_class") as profile_class,
             patch("angee.workflows_extraction.service._document_sources") as acquire_sources,
         ):
             corrected = self._retain_correction(
@@ -2969,7 +2965,7 @@ class ExtractionServiceTests(TestCase):
                 result={"number": "NEW", "rows": ["same"]},
                 decision=decision,
             )
-        engine_class.assert_not_called()
+        profile_class.assert_not_called()
         acquire_sources.assert_not_called()
         self.assertEqual(original.fact_authority("/number").kind, "source")
         self.assertEqual(original.fact_authority("/rows/0").kind, "source")
@@ -3084,7 +3080,7 @@ class ExtractionServiceTests(TestCase):
                 "dpi",
                 "duration_ms",
                 "result",
-                "engine_metadata",
+                "provider_metadata",
             )
             self.assertEqual(
                 list(original.pages.values_list(*page_fields)),
@@ -3128,11 +3124,11 @@ class ExtractionServiceTests(TestCase):
                 config["result"],
                 tuple(parts),
                 {},
-                engine_metadata={"route": "focused-confirmation-fixture"},
+                provider_metadata={"route": "focused-confirmation-fixture"},
             )
 
         with (
-            patch("tests.extraction_engines.FakeDocumentEngine.process_parts", side_effect=ungrounded_result),
+            patch("tests.extraction_profiles.FakeDocumentProfile.process_parts", side_effect=ungrounded_result),
             actor_context(self.owner),
         ):
             original = self._retain(
@@ -3351,12 +3347,12 @@ class ExtractionServiceTests(TestCase):
                 {"number": "OLD", "rows": ["ungrounded"]},
                 tuple(parts),
                 {"/number": [{"part_position": 0}]},
-                engine_metadata={"route": "focused-ungrounded-fixture"},
+                provider_metadata={"route": "focused-ungrounded-fixture"},
             )
 
         with (
             patch(
-                "tests.extraction_engines.FakeDocumentEngine.process_parts",
+                "tests.extraction_profiles.FakeDocumentProfile.process_parts",
                 side_effect=ungrounded_result,
             ),
             actor_context(self.owner),

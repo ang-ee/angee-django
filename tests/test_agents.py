@@ -20,26 +20,38 @@ import httpx
 import httpx2
 import pytest
 from anthropic.types import Message, TextBlock, Usage
+from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.db import connection
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import (
     BinaryContent,
     ModelRequest,
+    ModelResponse,
     SystemPromptPart,
     TextPart,
+    ToolCallPart,
     UserPromptPart,
 )
-from pydantic_ai.usage import RunUsage
+from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import system_context
 
 from angee.agents.backends import InferenceBackend
+from angee.agents.models import (
+    INFERENCE_OUTPUT_TOOL,
+    InferenceModelStatus,
+    InferenceModelUse,
+    InferenceOutputError,
+    decode_inference_output,
+    normalize_inference_usage,
+)
 from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
-from angee.agents.models import normalize_inference_usage
 from angee.agents.sdk_backends import SDKInferenceBackend
 from angee.agents.skills import parse_skill_meta
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
@@ -291,7 +303,7 @@ def test_sdk_backend_client_class_override_skips_dotted_import() -> None:
         client_class_path = "missing_provider_sdk.Client"
         sdk_package_name = "missing-provider-sdk"
 
-        def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
+        def _client_kwargs(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, Any]:
             del credential
             return {}
 
@@ -717,7 +729,7 @@ def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: An
     monkeypatch.setattr(
         backend,
         "_client_kwargs",
-        lambda: {
+        lambda **kwargs: {
             "api_key": "not-required",
             "base_url": "http://localhost:11434/v1",
             "http_client": http_client,
@@ -956,6 +968,8 @@ def inference_http(monkeypatch, request):
             if request.url.path.endswith("/messages")
             else _FakeOpenAICompletions(None).create()
         )
+        if scenario == "structured":
+            response.choices[0].message.content = '{"text":"pong"}'
         return transport_http.Response(200, json=response.model_dump(mode="json"), request=request)
 
     def client_class(path):
@@ -987,7 +1001,7 @@ def test_direct_native_request_returns_tool_calls_without_executing_a_loop(agent
     provider = _provider("openai-tools", backend_class="openai", material={"api_key": "api-key"})
     with system_context(reason="test direct inference tools"):
         model = InferenceModel.objects.create(provider=provider, name="gpt-4.1")
-    response, usage = model.infer(
+    result = model.infer(
         messages=[ModelRequest(parts=[UserPromptPart("Look up a value")])],
         output_schema=[
             ToolDefinition(
@@ -1003,15 +1017,17 @@ def test_direct_native_request_returns_tool_calls_without_executing_a_loop(agent
     requests, clients = inference_http
     assert len(requests) == 1
     assert json.loads(requests[0].content)["tools"][0]["function"]["name"] == "lookup"
-    assert isinstance(response.parts[0], ToolCallPart)
-    assert response.parts[0].args_as_dict() == {"key": "value"}
-    assert response.usage.total_tokens == 5
-    assert usage == {"input_tokens": 3, "output_tokens": 2, "tokens": 5, "requests": 1}
+    assert isinstance(result.response.parts[0], ToolCallPart)
+    assert result.response.parts[0].args_as_dict() == {"key": "value"}
+    assert result.response.usage.total_tokens == 5
+    assert result.usage == {"input_tokens": 3, "output_tokens": 2, "tokens": 5, "requests": 1}
+    assert result.output is None
     assert all(client.is_closed() for client in clients)
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("backend_class", ["openai", "ollama"])
+@pytest.mark.parametrize("inference_http", ["structured"], indirect=True)
 def test_direct_inference_builds_one_structured_multimodal_envelope(
     agents_tables,
     inference_http,
@@ -1031,7 +1047,7 @@ def test_direct_inference_builds_one_structured_multimodal_envelope(
         "required": ["text"],
         "additionalProperties": False,
     }
-    response, usage = model.infer(
+    result = model.infer(
         [ModelRequest(parts=[UserPromptPart("Read the image")])],
         output_schema=output_schema,
         images=(BinaryContent(b"image", media_type="image/jpeg"),),
@@ -1050,8 +1066,8 @@ def test_direct_inference_builds_one_structured_multimodal_envelope(
         assert payload["tools"][0]["function"]["parameters"] == output_schema
         assert payload["tool_choice"] == "required"
     assert "data:image/jpeg;base64,aW1hZ2U=" in json.dumps(payload["messages"])
-    assert response.text == "pong"
-    assert usage == {"input_tokens": 3, "output_tokens": 1, "tokens": 4, "requests": 1}
+    assert result.output == {"text": "pong"}
+    assert result.usage == {"input_tokens": 3, "output_tokens": 1, "tokens": 4, "requests": 1}
     assert all(client.is_closed() for client in clients)
 
 
@@ -1062,12 +1078,182 @@ def test_native_provider_errors_preserve_retry_classification_and_close_clients(
 ):
     from pydantic_ai.exceptions import ModelHTTPError
 
-    from angee.agents.backends import is_retryable_provider_error
-
     provider = _provider("openai-errors", backend_class="openai", material={"api_key": "api-key"})
     with pytest.raises(ModelHTTPError) as error:
         provider.chat(model="gpt-4.1", messages=[ModelRequest(parts=[UserPromptPart("Fail")])])
     requests, clients = inference_http
     assert len(requests) == 1
-    assert is_retryable_provider_error(error.value) is retryable
+    assert provider.backend.is_transient_error(error.value) is retryable
     assert all(client.is_closed() for client in clients)
+
+
+@pytest.mark.parametrize("status", [429, 500, 501, 502, 503, 504, 529, 599])
+def test_inference_backend_classifies_transient_http_status(status):
+    """Native HTTP status owns retry policy, including every server-error code."""
+
+    assert InferenceBackend(SimpleNamespace()).is_transient_error(ModelHTTPError(status, "test-model"))
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 408, 409, 425, 600])
+def test_inference_backend_does_not_retry_nontransient_http_status(status):
+    assert not InferenceBackend(SimpleNamespace()).is_transient_error(ModelHTTPError(status, "test-model"))
+
+
+@pytest.mark.parametrize(
+    "error", [TimeoutError(), ConnectionError(), httpx.ReadTimeout("timeout"), httpx.ConnectError("connection")]
+)
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_inference_backend_classifies_transport_exception_types(error, wrapped):
+    if wrapped:
+        wrapper = ModelAPIError("test-model", "transport failure")
+        wrapper.__cause__ = error
+        error = wrapper
+    assert InferenceBackend(SimpleNamespace()).is_transient_error(error)
+
+
+@pytest.mark.parametrize("message", ["timeout", "rate limit", "temporarily unavailable", "try again"])
+def test_inference_backend_never_guesses_transient_from_message(message):
+    assert not InferenceBackend(SimpleNamespace()).is_transient_error(ValueError(message))
+
+
+@pytest.mark.parametrize("backend_class", [OpenAIInferenceBackend, AnthropicInferenceBackend])
+def test_native_connection_error_wrapping_remains_transient(backend_class):
+    import anthropic
+    import openai
+
+    connection_error = (
+        anthropic.APIConnectionError if backend_class is AnthropicInferenceBackend else openai.APIConnectionError
+    )
+    error = ModelAPIError("test-model", "Connection error")
+    error.__cause__ = connection_error(request=httpx2.Request("POST", "https://provider.invalid"))
+    assert backend_class(SimpleNamespace()).is_transient_error(error)
+
+
+@pytest.mark.parametrize(
+    "timeout", [0, -1, float("nan"), float("inf"), "invalid", httpx.Timeout(-1), httpx.Timeout(5, read=0)]
+)
+def test_invalid_timeout_is_configuration_error_before_binding(timeout, monkeypatch):
+    backend = InferenceBackend(SimpleNamespace())
+    monkeypatch.setattr(backend, "model", lambda *args, **kwargs: pytest.fail("provider was bound"))
+    with pytest.raises(ValueError, match="timeout") as error:
+        backend.chat("model", [], model_settings={"timeout": timeout})
+    assert not backend.is_transient_error(error.value)
+
+
+def test_unknown_inference_settings_are_rejected_before_binding(monkeypatch):
+    backend = InferenceBackend(SimpleNamespace())
+    monkeypatch.setattr(backend, "model", lambda *args, **kwargs: pytest.fail("provider was bound"))
+    with pytest.raises(ValueError, match="Unknown inference request settings: mystery_knob"):
+        backend.chat("model", [], model_settings={"mystery_knob": True})
+
+
+@pytest.mark.parametrize("timeout", [-1, float("nan"), float("inf"), "invalid"])
+def test_invalid_provider_timeout_is_configuration_error_before_sdk_client(timeout, monkeypatch):
+    backend = OllamaInferenceBackend(SimpleNamespace(credential=None, base_url="", config={"timeout_seconds": timeout}))
+    monkeypatch.setattr(backend, "_credential_auth", lambda **kwargs: pytest.fail("credential was refreshed"))
+    monkeypatch.setattr(
+        "angee.agents_integrate_ollama.backend.DefaultHttpxClient",
+        lambda **kwargs: pytest.fail("provider client constructed"),
+    )
+    with pytest.raises(ValueError, match="timeout") as error:
+        backend._client_kwargs()
+    assert not backend.is_transient_error(error.value)
+
+
+@pytest.mark.parametrize("timeout", [None, 5, httpx.Timeout(5, read=None)])
+def test_native_valid_timeout_settings_are_preserved(timeout):
+    assert InferenceBackend(SimpleNamespace()).request_settings({"timeout": timeout}) == {"timeout": timeout}
+
+
+@pytest.mark.parametrize("text", ['{"value":3}', '```json\n{"value":3}\n```', '```\n{"value":3}\n```'])
+def test_structured_decoder_accepts_json_and_fenced_objects(text):
+    assert decode_inference_output(ModelResponse(parts=[TextPart(text)])) == {"value": 3}
+
+
+def test_structured_decoder_uses_native_output_tool():
+    response = ModelResponse(parts=[ToolCallPart(INFERENCE_OUTPUT_TOOL, {"value": 3})])
+    assert decode_inference_output(response) == {"value": 3}
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        [],
+        [TextPart("[]")],
+        [TextPart("```json")],
+        [ToolCallPart(INFERENCE_OUTPUT_TOOL, "[]")],
+        [ToolCallPart(INFERENCE_OUTPUT_TOOL, {}), ToolCallPart(INFERENCE_OUTPUT_TOOL, {})],
+    ],
+)
+def test_structured_decoder_rejects_missing_ambiguous_or_nonobject_output(parts):
+    with pytest.raises(ValueError):
+        decode_inference_output(ModelResponse(parts=parts))
+
+
+def test_infer_decoding_error_retains_usage_and_explicit_alias(monkeypatch):
+    model = InferenceModel(name="structured")
+    response = ModelResponse(parts=[TextPart("[]")], usage=RequestUsage(input_tokens=3, output_tokens=2))
+
+    def chat(messages, *, using, **kwargs):
+        assert using == "inference_writer"
+        return response
+
+    monkeypatch.setattr(model, "chat", chat)
+    with pytest.raises(InferenceOutputError) as error:
+        model.infer([], output_schema={"type": "object"}, using="inference_writer")
+    assert error.value.response is response
+    assert error.value.usage == {"input_tokens": 3, "output_tokens": 2, "tokens": 5, "requests": 1}
+    assert model._state.db is None
+
+
+@pytest.mark.parametrize(
+    "status,model_use,uses",
+    [
+        (InferenceModelStatus.RETIRED, InferenceModelUse.CHAT, {InferenceModelUse.CHAT}),
+        (InferenceModelStatus.DEPRECATED, InferenceModelUse.MULTIMODAL, {InferenceModelUse.MULTIMODAL}),
+        (InferenceModelStatus.AVAILABLE, InferenceModelUse.CHAT, {InferenceModelUse.IMAGE}),
+        (InferenceModelStatus.AVAILABLE, InferenceModelUse.EMBEDDING, {InferenceModelUse.CHAT}),
+    ],
+)
+def test_model_capability_rejects_unusable_lifecycle_and_modality(status, model_use, uses):
+    model = InferenceModel(status=status, model_use=model_use)
+    with pytest.raises(ValueError):
+        model.require_capability(uses)
+
+
+@pytest.mark.parametrize("model_use", list(InferenceModelUse))
+def test_model_capability_accepts_each_explicit_model_use(model_use):
+    """Consumers declare capabilities independently from their approval role names."""
+
+    InferenceModel(model_use=model_use).require_capability({model_use})
+
+
+@pytest.mark.parametrize("policy", [[], {"mapping": None}, {"mapping": {}}, {"mapping": ["bad-entry"]}])
+def test_model_approval_distinguishes_malformed_policy_from_denial(settings, policy):
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = policy
+    with pytest.raises(ValueError, match="policy is invalid"):
+        InferenceModel().require_approved("mapping")
+
+
+def test_model_authorization_rejects_nondefault_database_before_rebac(monkeypatch):
+    model = InferenceModel()
+    monkeypatch.setattr(model, "with_actor", lambda actor: pytest.fail("unbound REBAC lookup"))
+    with pytest.raises(ValidationError, match="default authorization database"):
+        model.require_usable(object(), "inference", uses={InferenceModelUse.CHAT}, using="other")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_model_requires_read_and_exact_approved_deployment(agents_tables, settings):
+    provider = _provider("approved-ollama", backend_class="ollama")
+    with system_context(reason="test.agents.authorization.seed"):
+        model = InferenceModel.objects.create(provider=provider, name="llama")
+        denied_actor = get_user_model().objects.create_user(username="no-model-read")
+    identity = model.deployment_identity()
+    assert identity["endpoint"] == provider.backend.endpoint == "http://localhost:11434/v1"
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"mapping": [identity]}
+    with pytest.raises(PermissionDenied, match="cannot read"):
+        model.require_usable(denied_actor, "mapping", uses={InferenceModelUse.CHAT})
+    model.require_usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT})
+    settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"mapping": [{**identity, "endpoint": "http://localhost:9999/v1"}]}
+    with pytest.raises(PermissionDenied, match="not approved"):
+        model.require_usable(provider.owner, "mapping", uses={InferenceModelUse.CHAT})

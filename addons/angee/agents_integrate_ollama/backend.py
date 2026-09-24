@@ -42,23 +42,24 @@ class OllamaInferenceBackend(OpenAIInferenceBackend):
     model_deny_prefixes: ClassVar[tuple[str, ...]] = ()
     api_key_env: ClassVar[tuple[str, ...]] = ()
 
-    def _client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
+    def _client_kwargs(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, Any]:
         """Build the sync SDK client with proxy inheritance disabled."""
 
-        return self._ollama_client_kwargs(credential=credential, asynchronous=False)
+        return self._ollama_client_kwargs(credential=credential, asynchronous=False, using=using)
 
-    def _async_client_kwargs(self, *, credential: Any | None = None) -> dict[str, Any]:
+    def _async_client_kwargs(self, *, credential: Any | None = None, using: str | None = None) -> dict[str, Any]:
         """Build the async SDK client with the identical endpoint policy."""
 
-        return self._ollama_client_kwargs(credential=credential, asynchronous=True)
+        return self._ollama_client_kwargs(credential=credential, asynchronous=True, using=using)
 
     def _ollama_client_kwargs(
         self,
         *,
         credential: Any | None,
         asynchronous: bool,
+        using: str | None,
     ) -> dict[str, Any]:
-        kwargs = super()._client_kwargs(credential=credential)
+        kwargs = super()._client_kwargs(credential=credential, using=using)
         self._validate_loopback_url(str(kwargs.get("base_url") or ""))
         client_class = DefaultAsyncHttpxClient if asynchronous else DefaultHttpxClient
         kwargs["http_client"] = client_class(trust_env=False, follow_redirects=False)

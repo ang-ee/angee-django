@@ -6,7 +6,7 @@ description = "AI agents — the inference provider/model catalogue and the runt
 keywords = ["agents", "ai", "inference"]
 category = "Agents"
 depends_on = ["angee.integrate", "angee.integrate_vcs", "angee.operator", "angee.mcp", "angee.iam"]
-dependencies = ["pydantic-ai-slim>=2.13"]
+dependencies = ["pydantic-ai-slim>=2.13", "httpx>=0.28.1,<0.29"]
 
 [resources]
 demo = [
