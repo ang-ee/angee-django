@@ -1,5 +1,4 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import type { ConflictKeep, DiscrepancyKind, StreamKind } from "@angee/gql/console/graphql";
 import type { Row } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
@@ -35,12 +34,12 @@ export const RECORD_LINK_MODEL = "integrate.RecordLink";
 interface StreamRow extends StringIdRow {
   key?: string;
   partition?: string;
-  kind?: StreamKind;
+  kind?: string;
   resync_required?: boolean;
 }
 
 interface DiscrepancyRow extends StringIdRow {
-  kind?: DiscrepancyKind;
+  kind?: string;
   is_open?: boolean;
 }
 
@@ -169,7 +168,7 @@ export function IntegrationStreamsPane(): ReactElement {
       visible: (row) => row.is_open === true && row.kind !== "CONFLICT",
       onSelect: (row) => resolve(row.id),
     }),
-    ...(["REMOTE", "LOCAL"] as const satisfies readonly ConflictKeep[]).map((keep) => defineRowAction<DiscrepancyRow>({
+    ...(["REMOTE", "LOCAL"] as const).map((keep) => defineRowAction<DiscrepancyRow>({
       kind: "page",
       id: `keep-${keep.toLowerCase()}`,
       label: t(keep === "REMOTE" ? "streams.keepRemote" : "streams.keepLocal"),

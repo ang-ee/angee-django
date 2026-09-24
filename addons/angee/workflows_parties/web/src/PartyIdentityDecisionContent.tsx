@@ -5,11 +5,11 @@ import {
   DetailSection,
   MetaGrid,
   type MetaGridRow,
+  textValue,
 } from "@angee/ui";
 import {
   decisionReviewFact,
   WorkflowDecisionScaffold,
-  textValue,
   type WorkflowDecisionContentProps,
 } from "@angee/workflows";
 import type * as React from "react";
