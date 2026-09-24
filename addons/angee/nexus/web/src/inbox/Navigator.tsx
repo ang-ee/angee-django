@@ -17,6 +17,7 @@ import { NAVIGATOR_LENSES, navigatorAxes } from "./contract";
 import {
   InboxOrder,
   InboxClearFilters,
+  InboxCoverageKind,
   useNavigatorControls,
 } from "./Controls";
 import { navigatorSource } from "./sources";
@@ -26,10 +27,12 @@ import { useNexusT } from "../i18n";
 
 export function InboxNavigatorPane({
   coverage,
+  onCoverage,
   timezone,
   navigation,
 }: {
   coverage: ResourceViewFilter;
+  onCoverage: (next: ResourceViewFilter) => void;
   timezone: string;
   navigation: InboxNavigation;
 }) {
@@ -91,9 +94,16 @@ export function InboxNavigatorPane({
           />
         }
         actions={
-          <Button size="sm" variant="ghost" onClick={() => navigation.select()}>
-            {t("inbox.everyone")}
-          </Button>
+          <>
+            <InboxCoverageKind coverage={coverage} onCoverage={onCoverage} />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => navigation.select()}
+            >
+              {t("inbox.everyone")}
+            </Button>
+          </>
         }
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">

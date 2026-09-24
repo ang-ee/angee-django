@@ -9,11 +9,14 @@ import {
   useEnumOptions,
   type ResourceToolbarFilterField,
   type ResourceToolbarFilterOption,
+  type ResourceViewFilter,
 } from "@angee/ui";
 import { InboxAccounts } from "./documents";
 import { INBOX_MODELS } from "./state";
 import {
   COVERAGE_FIELDS,
+  COVERAGE_KINDS,
+  DIRECT_MAIL_PRESET,
   InboxFilter,
   resultLenses,
   type NavigatorLens,
@@ -58,6 +61,73 @@ export function InboxOrder({ navigator = false }: { navigator?: boolean }) {
   );
 }
 
+/**
+ * Single-select editor for the shared conversation-kind coverage. Each choice
+ * replaces the `kind` field as a unit — Direct narrows to one-to-one threads,
+ * "Direct & mail" keeps those plus email while still excluding group chats — so a
+ * pick never unions with a stale selection. It edits the same coverage fact the
+ * results toolbar owns, so both panes narrow together.
+ */
+export function InboxCoverageKind({
+  coverage,
+  onCoverage,
+}: {
+  coverage: ResourceViewFilter;
+  onCoverage: (next: ResourceViewFilter) => void;
+}) {
+  const t = useNexusT();
+  let kinds: readonly string[] = [];
+  try {
+    kinds = new InboxFilter(coverage).values("kind");
+  } catch {
+    kinds = [];
+  }
+  const only = kinds.length === 1 ? kinds[0] : undefined;
+  const value =
+    kinds.length === 0
+      ? "any"
+      : Filter.from(coverage).hasPreset(DIRECT_MAIL_PRESET)
+        ? "direct-mail"
+        : only && (COVERAGE_KINDS as readonly string[]).includes(only)
+          ? only
+          : "custom";
+  return (
+    <Select
+      size="sm"
+      aria-label={t("inbox.kind")}
+      className="w-44"
+      options={[
+        { value: "any", label: t("inbox.anyKind") },
+        ...COVERAGE_KINDS.flatMap((kind) =>
+          kind === "direct"
+            ? [
+                { value: "direct", label: t("inbox.direct") },
+                { value: "direct-mail", label: t("inbox.directMail") },
+              ]
+            : [{ value: kind, label: t(`inbox.${kind}`) }],
+        ),
+        // A non-representable multi-kind coverage (only the results toolbar can
+        // build one) surfaces honestly instead of masquerading as "All".
+        ...(value === "custom"
+          ? [{ value: "custom", label: t("inbox.customKinds") }]
+          : []),
+      ]}
+      value={value}
+      onValueChange={(next) => {
+        if (next === "custom") return;
+        const base = Filter.from(coverage).withoutFields(["kind"]);
+        onCoverage(
+          next === "any"
+            ? base
+            : next === "direct-mail"
+              ? Filter.from(base).and(DIRECT_MAIL_PRESET)
+              : Filter.from(base).and({ kind: { exact: next } }),
+        );
+      }}
+    />
+  );
+}
+
 export function useResultControls(lens: ResultLens) {
   const t = useNexusT();
   const view = useResourceView();
@@ -91,7 +161,7 @@ export function useResultControls(lens: ResultLens) {
       chipLabel: `${t("inbox.account")}: ${row.display_name}`,
       filter: { account: { exact: row.id } },
     })),
-    ...["mail", "direct", "group", "other"].map((value) => ({
+    ...COVERAGE_KINDS.map((value) => ({
       id: `kind:${value}`,
       group: coverage,
       label: t(`inbox.${value}`),
@@ -102,7 +172,7 @@ export function useResultControls(lens: ResultLens) {
       preset: true,
       group: coverage,
       label: t("inbox.directMail"),
-      filter: { kind: { inList: ["direct", "mail"] } },
+      filter: DIRECT_MAIL_PRESET,
     },
     ...["quoted", "starred"].map((field) => ({
       id: field,
