@@ -10,7 +10,7 @@ import pytest
 import tablib
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection, models, transaction
+from django.db import models, transaction
 from django.db.models.fields import NOT_PROVIDED
 from rebac.models import active_relationship_model
 
@@ -19,6 +19,7 @@ from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
 from angee.resources.tests.test_resources import addon, entry
+from tests.tables import model_tables
 
 
 @pytest.mark.parametrize(("suffix", "separator"), [("csv", ","), ("tsv", "\t")])
@@ -142,24 +143,20 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
             "demo": (),
         },
     )
-    models_to_create = (PipelineTag, PipelineItem, PipelineLedger)
-    with connection.schema_editor() as editor:
-        for model in models_to_create:
-            editor.create_model(model)
-    call_command("rebac", "sync", verbosity=0)
-    relationships = active_relationship_model()._default_manager
-    relationship_count = relationships.count()
+    with model_tables((PipelineTag, PipelineItem, PipelineLedger)):
+        call_command("rebac", "sync", verbosity=0)
+        relationships = active_relationship_model()._default_manager
+        relationship_count = relationships.count()
 
-    def assert_rolled_back() -> None:
-        assert PipelineTag._base_manager.count() == 0
-        assert PipelineItem._base_manager.count() == 0
-        assert PipelineItem.tags.through.objects.count() == 0
-        assert PipelineLedger.objects.count() == 0
-        assert not user_model._base_manager.filter(username="pipeline-user").exists()
-        assert relationships.count() == relationship_count
-        assert "committed" not in events
+        def assert_rolled_back() -> None:
+            assert PipelineTag._base_manager.count() == 0
+            assert PipelineItem._base_manager.count() == 0
+            assert PipelineItem.tags.through.objects.count() == 0
+            assert PipelineLedger.objects.count() == 0
+            assert not user_model._base_manager.filter(username="pipeline-user").exists()
+            assert relationships.count() == relationship_count
+            assert "committed" not in events
 
-    try:
         validated = PipelineLedger.objects.validate_addons((owner,), tiers=["master"])
         assert validated.checked_files == 2
         assert validated.checked_rows == 4
@@ -220,8 +217,3 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
         unchanged = PipelineLedger.objects.load_addons((owner,), tiers=["master"])
         assert unchanged.loaded == 0
         assert unchanged.skipped == 4
-
-    finally:
-        with connection.schema_editor() as editor:
-            for model in reversed(models_to_create):
-                editor.delete_model(model)

@@ -15,13 +15,13 @@ from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
 
+from angee.testing.models import Step, StepArtifact, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import ArtifactSpec, InvocationAdmission, LeaseRevocationReason
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepEffect, StepExecutionMode, StepResult
 from angee.workflows_extraction.steps import ProcessEvidenceStepImpl
-from tests.workflows import Step, StepArtifact, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 User = get_user_model()
 
@@ -178,11 +178,11 @@ def _scheduled_run_cancel_command(
 
 @pytest.mark.django_db(transaction=True)
 def test_revoked_after_invocation_admission_is_fenced_before_domain_write(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before = _retained_facts(attempt, step_run.run)
     manager_type = type(StepAttempt.objects)
@@ -213,11 +213,11 @@ def test_revoked_after_invocation_admission_is_fenced_before_domain_write(
 
 @pytest.mark.django_db(transaction=True)
 def test_finalization_failure_rolls_back_domain_command_and_result(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before = _retained_facts(attempt, step_run.run)
 
@@ -238,11 +238,11 @@ def test_finalization_failure_rolls_back_domain_command_and_result(
 
 @pytest.mark.django_db(transaction=True)
 def test_process_evidence_has_no_implicit_replay_and_rolls_back_with_finalization(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     capability = ProcessEvidenceStepImpl.recovery_capability(attempt=object())
     assert capability.mode is None
 
@@ -269,11 +269,11 @@ def test_process_evidence_has_no_implicit_replay_and_rolls_back_with_finalizatio
 
 @pytest.mark.django_db(transaction=True)
 def test_continuation_failure_rolls_back_command_result_and_artifact_before_failure_audit(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before_artifacts, before_advances = _retained_facts(attempt, step_run.run)
     manager_type = type(WorkflowDispatch.objects)
@@ -304,11 +304,11 @@ def test_continuation_failure_rolls_back_command_result_and_artifact_before_fail
 
 @pytest.mark.django_db(transaction=True)
 def test_committed_success_replay_does_not_repeat_domain_command(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before_artifacts, before_advances = _retained_facts(attempt, step_run.run)
     assert engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)["executed"] == 1
@@ -335,12 +335,12 @@ def test_committed_success_replay_does_not_repeat_domain_command(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("parent_relation", (None, "owned_call", "continuation"))
 def test_run_cancel_waits_for_committed_cancellation_before_continuing(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     parent_relation: str | None,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="run-cancel-owner")
     with system_context(reason="run cancellation target setup"):
         target_workflow = Workflow.objects.create(name="Retired target")
@@ -443,11 +443,11 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL unique-intent race")
 def test_concurrent_database_commands_share_one_run_cancel_intent(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="run-cancel-race-owner")
     with system_context(reason="run cancellation race target setup"):
         target_workflow = Workflow.objects.create(name="Concurrent retired target")
@@ -512,11 +512,11 @@ def test_concurrent_database_commands_share_one_run_cancel_intent(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL row-lock contract")
 def test_revoke_waits_for_fenced_command_and_observes_committed_result(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before_artifacts, before_advances = _retained_facts(attempt, step_run.run)
     entered, release = Event(), Event()

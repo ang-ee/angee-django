@@ -5,8 +5,8 @@ a real project), so these concrete twins register them under the ``money`` app
 label for tests: ``Currency``/``CurrencyRate`` back the runtime behavior tests
 (``tests/test_money.py``), and the ``MoneyField``-composing documents pin the
 field contract (``tests/test_money_field.py``) in both currency-path shapes — a
-sibling FK and a one-hop related path. Tables are created on demand by
-``_create_missing_tables``; the field-contract documents never need one.
+sibling FK and a one-hop related path. Django creates their registered managed
+tables during native test database setup.
 """
 
 from __future__ import annotations
@@ -40,10 +40,6 @@ class CurrencyRate(AbstractCurrencyRate):
         app_label = "money"
         db_table = "test_money_rate"
         rebac_resource_type = "money/rate"
-
-
-MONEY_TEST_MODELS = (Currency, CurrencyRate)
-"""Concrete money models created on demand by money test fixtures."""
 
 
 class MoneyOrder(models.Model):

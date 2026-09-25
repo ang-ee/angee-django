@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from django.db import connection, transaction
+from django.db import transaction
 from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
@@ -24,10 +24,7 @@ from angee.integrate.registry import models_with
 from angee.integrate.scheduler import enqueue_due_bridges
 from angee.integrate.sync import BridgeProgressReporter, current_bridge_progress
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
     Integration,
-    _create_missing_tables,
     make_integration,
 )
 
@@ -127,7 +124,7 @@ def _scan_only_the_fixture_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scope the scheduler's model scan to this module's fixture bridge.
 
     The shared test registry accumulates concrete bridge models from other
-    modules (posts' Feed, messaging's Channel) whose on-demand tables may not
+    modules (posts' Feed, messaging's Channel) whose managed tables may not
     exist in this session, so an unscoped scan fails on table/relation state
     these tests don't own. Cross-model discovery itself is covered by
     ``test_integrate_registry_discovers_bridges_in_deterministic_order``,
@@ -137,35 +134,11 @@ def _scan_only_the_fixture_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(integrate_scheduler, "models_with", lambda *, base: (SchedulerBridge,))
 
 
-@pytest.fixture()
-def scheduler_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the IAM and bridge tables required by scheduler tests."""
-
-    del transactional_db
-    created_iam_models = _create_missing_tables(IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS)
-    bridge_created = False
-    if SchedulerBridge._meta.db_table not in connection.introspection.table_names():
-        with connection.schema_editor() as schema_editor:
-            schema_editor.create_model(SchedulerBridge)
-        bridge_created = True
-
-    try:
-        yield
-    finally:
-        if bridge_created:
-            with connection.schema_editor() as schema_editor:
-                schema_editor.delete_model(SchedulerBridge)
-        if created_iam_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_iam_models):
-                    schema_editor.delete_model(model)
-
-
 @pytest.mark.django_db(transaction=True)
-def test_enqueued_due_bridges_run_only_due_rows(scheduler_tables: None) -> None:
+def test_enqueued_due_bridges_run_only_due_rows(transactional_db: None) -> None:
     """The scheduler runs due rows and skips future or unscheduled rows."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         due = make_integration(
@@ -199,10 +172,10 @@ def test_enqueued_due_bridges_run_only_due_rows(scheduler_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_enqueued_due_bridge_persists_success_telemetry(scheduler_tables: None) -> None:
+def test_enqueued_due_bridge_persists_success_telemetry(transactional_db: None) -> None:
     """Successful syncs persist scheduler telemetry, cursor, count, and next run."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
@@ -238,11 +211,11 @@ def test_enqueued_due_bridge_persists_success_telemetry(scheduler_tables: None) 
 
 @pytest.mark.django_db(transaction=True)
 def test_paused_manual_sync_stays_one_shot_and_out_of_periodic_due_scan(
-    scheduler_tables: None,
+    transactional_db: None,
 ) -> None:
     """A paused bridge may sync explicitly without rearming periodic polling."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test paused one-shot bridge setup"):
         bridge = make_integration(
@@ -274,10 +247,10 @@ def test_paused_manual_sync_stays_one_shot_and_out_of_periodic_due_scan(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_integration_error_reaches_sync_telemetry_verbatim(scheduler_tables: None) -> None:
+def test_integration_error_reaches_sync_telemetry_verbatim(transactional_db: None) -> None:
     """An IntegrationError's operator-safe message is persisted; other failures stay generic."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
@@ -298,10 +271,10 @@ def test_integration_error_reaches_sync_telemetry_verbatim(scheduler_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_a_recovered_sync_drops_the_previous_runs_error_marker(scheduler_tables: None) -> None:
+def test_a_recovered_sync_drops_the_previous_runs_error_marker(transactional_db: None) -> None:
     """A failed run's ``error`` never rides into the next run's completed marker."""
 
-    del scheduler_tables
+    del transactional_db
     first = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("recovered", model=SchedulerBridge, config={"mode": "refused"}, next_sync_at=first)
@@ -323,10 +296,10 @@ def test_a_recovered_sync_drops_the_previous_runs_error_marker(scheduler_tables:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_enqueued_due_bridge_records_errors_on_integration_runtime_status(scheduler_tables: None) -> None:
+def test_enqueued_due_bridge_records_errors_on_integration_runtime_status(transactional_db: None) -> None:
     """Failing syncs record bridge errors, reschedule, and push integration runtime status."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
@@ -360,10 +333,10 @@ def test_enqueued_due_bridge_records_errors_on_integration_runtime_status(schedu
 
 
 @pytest.mark.django_db(transaction=True)
-def test_enqueued_due_bridge_success_recovers_bridge_and_integration_runtime_status(scheduler_tables: None) -> None:
+def test_enqueued_due_bridge_success_recovers_bridge_and_integration_runtime_status(transactional_db: None) -> None:
     """A healthy sync after an error clears the integration runtime status."""
 
-    del scheduler_tables
+    del transactional_db
     first_now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
@@ -405,10 +378,10 @@ def test_enqueued_due_bridge_success_recovers_bridge_and_integration_runtime_sta
 
 
 @pytest.mark.django_db(transaction=True)
-def test_bridge_progress_reporter_persists_progress_payload(scheduler_tables: None) -> None:
+def test_bridge_progress_reporter_persists_progress_payload(transactional_db: None) -> None:
     """Bridge.sync can publish generic progress without knowing the storage fields."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
@@ -430,12 +403,12 @@ def test_bridge_progress_reporter_persists_progress_payload(scheduler_tables: No
 
 @pytest.mark.django_db(transaction=True)
 def test_sync_completion_uses_finish_time_and_keeps_detached_progress(
-    scheduler_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A terminal marker keeps partition progress and records the actual finish."""
 
-    del scheduler_tables
+    del transactional_db
     queued_at = timezone.now()
     finished_at = queued_at + timedelta(seconds=17)
     monkeypatch.setattr("angee.integrate.models.timezone.now", lambda: finished_at)
@@ -466,7 +439,7 @@ def test_sync_completion_uses_finish_time_and_keeps_detached_progress(
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(ANGEE_TASK_LOCK_BACKEND="angee.jobs.locks.LocalLockBackend")
-def test_declined_sync_run_releases_its_queue_claim(scheduler_tables: None) -> None:
+def test_declined_sync_run_releases_its_queue_claim(transactional_db: None) -> None:
     """A run that cannot take the lock clears its own claim, so recovery stops.
 
     The stale-queue sweep exists to repair a *lost* enqueue and cannot tell one from
@@ -474,7 +447,7 @@ def test_declined_sync_run_releases_its_queue_claim(scheduler_tables: None) -> N
     forever — which is what a live session's permanently-held lock produced.
     """
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("declined-run", model=SchedulerBridge)
@@ -491,10 +464,10 @@ def test_declined_sync_run_releases_its_queue_claim(scheduler_tables: None) -> N
 
 
 @pytest.mark.django_db(transaction=True)
-def test_declined_sync_run_never_clears_the_holder_stage(scheduler_tables: None) -> None:
+def test_declined_sync_run_never_clears_the_holder_stage(transactional_db: None) -> None:
     """The decliner releases only its own token — never a holder's live stage."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("declined-stale", model=SchedulerBridge)
@@ -510,7 +483,7 @@ def test_declined_sync_run_never_clears_the_holder_stage(scheduler_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_sync_markers_keep_a_reporters_details(scheduler_tables: None) -> None:
+def test_sync_markers_keep_a_reporters_details(transactional_db: None) -> None:
     """Queueing a sync must not drop a live session's pairing report.
 
     ``sync_progress`` has disjoint owners: the scheduler owns the lifecycle marker,
@@ -518,7 +491,7 @@ def test_sync_markers_keep_a_reporters_details(scheduler_tables: None) -> None:
     looking at when Sync was pressed mid-pairing.
     """
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("marker-merge", model=SchedulerBridge)
@@ -537,7 +510,7 @@ def test_sync_markers_keep_a_reporters_details(scheduler_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_progress_report_during_queued_stage_keeps_the_queue_marker(scheduler_tables: None) -> None:
+def test_progress_report_during_queued_stage_keeps_the_queue_marker(transactional_db: None) -> None:
     """A report firing while the row is QUEUED must not clobber the queue claim.
 
     The scheduler owns the ``QUEUED`` stage/marker; a reporter owns ``details``.
@@ -548,7 +521,7 @@ def test_progress_report_during_queued_stage_keeps_the_queue_marker(scheduler_ta
     forever. This pins the locked-merge guard in ``BridgeProgressReporter``.
     """
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-report", model=SchedulerBridge)
@@ -576,10 +549,10 @@ def test_progress_report_during_queued_stage_keeps_the_queue_marker(scheduler_ta
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(ANGEE_TASK_LOCK_BACKEND="angee.jobs.locks.LocalLockBackend")
-def test_bridge_is_syncing_uses_live_lock_state(scheduler_tables: None) -> None:
+def test_bridge_is_syncing_uses_live_lock_state(transactional_db: None) -> None:
     """The live lock is separate from durable stage telemetry."""
 
-    del scheduler_tables
+    del transactional_db
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("live-lock", model=SchedulerBridge)
 
@@ -615,7 +588,7 @@ def _cross_process_locks() -> Iterator[None]:
 
 @pytest.mark.django_db(transaction=True)
 @override_settings(ANGEE_TASK_LOCK_BACKEND="angee.jobs.locks.LocalLockBackend")
-def test_effective_sync_stage_reconciles_stale_records_against_the_lock(scheduler_tables: None) -> None:
+def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transactional_db: None) -> None:
     """A live-ish persisted stage without the live lock reads as FAILED.
 
     The persisted ``sync_stage`` is a progress report a crashed worker leaves
@@ -627,7 +600,7 @@ def test_effective_sync_stage_reconciles_stale_records_against_the_lock(schedule
     column is trusted as-is there.
     """
 
-    del scheduler_tables
+    del transactional_db
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("stale-stage", model=SchedulerBridge)
 
@@ -654,10 +627,10 @@ def test_effective_sync_stage_reconciles_stale_records_against_the_lock(schedule
 
 
 @pytest.mark.django_db(transaction=True)
-def test_run_bridge_sync_job_holds_the_live_lock(scheduler_tables: None) -> None:
+def test_run_bridge_sync_job_holds_the_live_lock(transactional_db: None) -> None:
     """The queued task runner owns the live lock while a bridge sync runs."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
@@ -676,12 +649,12 @@ def test_run_bridge_sync_job_holds_the_live_lock(scheduler_tables: None) -> None
 
 @pytest.mark.django_db(transaction=True)
 def test_queue_bridge_sync_marks_queued_and_defers_task(
-    scheduler_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Queueing persists visible state before the worker picks up the task."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     enqueued: list[tuple[str, dict[str, Any]]] = []
 
@@ -713,12 +686,12 @@ def test_queue_bridge_sync_marks_queued_and_defers_task(
 
 @pytest.mark.django_db(transaction=True)
 def test_queue_bridge_sync_can_enqueue_duplicate_requests(
-    scheduler_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Task-level locks, not the broker, own duplicate execution exclusion."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     enqueued: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -740,12 +713,12 @@ def test_queue_bridge_sync_can_enqueue_duplicate_requests(
 
 @pytest.mark.django_db(transaction=True)
 def test_stale_bridge_sync_task_payload_is_skipped(
-    scheduler_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A duplicate task that no longer matches queued state cannot sync again later."""
 
-    del scheduler_tables
+    del transactional_db
     first = timezone.now()
     second = first + timedelta(seconds=5)
     monkeypatch.setattr(
@@ -770,12 +743,12 @@ def test_stale_bridge_sync_task_payload_is_skipped(
 
 @pytest.mark.django_db(transaction=True)
 def test_queue_bridge_sync_inside_outer_transaction_preserves_caller(
-    scheduler_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Queueing a bridge sync does not poison the caller's outer transaction."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     enqueued: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -797,10 +770,10 @@ def test_queue_bridge_sync_inside_outer_transaction_preserves_caller(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_integrate_registry_discovers_bridges_in_deterministic_order(scheduler_tables: None) -> None:
+def test_integrate_registry_discovers_bridges_in_deterministic_order(transactional_db: None) -> None:
     """Registry helpers include the concrete fixture and sort by model label."""
 
-    del scheduler_tables
+    del transactional_db
 
     discovered_models = models_with(base=Bridge)
     bridge_labels = tuple(model._meta.label_lower for model in discovered_models)
@@ -822,12 +795,12 @@ def test_periodic_task_drives_the_due_scan(monkeypatch: pytest.MonkeyPatch) -> N
 
 @pytest.mark.django_db(transaction=True)
 def test_enqueue_due_bridges_claims_and_queues_rows(
-    scheduler_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The periodic scan claims due rows and enqueues bridge work."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     enqueued: list[tuple[int, datetime | None]] = []
 
@@ -866,12 +839,12 @@ def test_enqueue_due_bridges_claims_and_queues_rows(
 
 @pytest.mark.django_db(transaction=True)
 def test_enqueue_due_bridges_resets_claim_when_dispatch_fails(
-    scheduler_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A broker failure after DB claim makes the bridge due again."""
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
 
     def fail_queue_bridge_sync(*_args: Any, **_kwargs: Any) -> None:
@@ -897,7 +870,7 @@ def test_enqueue_due_bridges_resets_claim_when_dispatch_fails(
 
 @pytest.mark.django_db(transaction=True)
 def test_scheduler_claims_a_row_before_running_it(
-    scheduler_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An in-flight bridge's next poll is already pushed out before its sync runs.
@@ -907,7 +880,7 @@ def test_scheduler_claims_a_row_before_running_it(
     has to move out *before* the run rather than only when it records.
     """
 
-    del scheduler_tables
+    del transactional_db
     now = timezone.now()
     observed: list[Any] = []
     original_sync = SchedulerBridge.sync

@@ -9,10 +9,11 @@ from django.db import models
 from django.utils import timezone
 from rebac import system_context
 
+from angee.testing.models import StepAttempt, StepRun, Workflow
 from angee.workflows import engine
 from angee.workflows.attempts import AttemptInput
 from angee.workflows.models import RunStatus, StepRunStatus
-from tests.workflows import StepAttempt, StepRun, Workflow, start_run, workflow_with_steps
+from tests.workflows import start_run, workflow_with_steps
 
 
 def _map_workflow(*, max_steps: int, items: Any = None, two_maps: bool = False) -> Any:
@@ -56,13 +57,13 @@ def _map_workflow(*, max_steps: int, items: Any = None, two_maps: bool = False) 
 
 @pytest.mark.parametrize("items", [["one", "two"], "input.items"])
 def test_map_overflow_fails_before_allocating_any_children(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     items: Any,
 ) -> None:
     """Literal and runtime-resolved collections cannot over-allocate the journal."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     run = start_run(_map_workflow(max_steps=2, items=items))
     if isinstance(items, str):
         with system_context(reason="test dynamic Map input"):
@@ -85,12 +86,12 @@ def test_map_overflow_fails_before_allocating_any_children(
 
 
 def test_malformed_maps_cannot_bypass_the_parent_capacity_boundary(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Config failure outcomes still consume bounded Map executions."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = _map_workflow(max_steps=1, items="input.missing", two_maps=True)
     run = start_run(workflow)
     with system_context(reason="test malformed Map capacity"):
@@ -110,12 +111,12 @@ def test_malformed_maps_cannot_bypass_the_parent_capacity_boundary(
 
 
 def test_map_exact_capacity_includes_parent_and_preexisting_scheduled_work(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """The boundary admits the Map, its child, and another scheduled row exactly once."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = _map_workflow(max_steps=3, items=["one"])
     run = start_run(workflow)
     with system_context(reason="test admitted workflow work"):
@@ -134,12 +135,12 @@ def test_map_exact_capacity_includes_parent_and_preexisting_scheduled_work(
 
 
 def test_two_maps_cannot_spend_the_same_remaining_capacity(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """A later Map observes children admitted by an earlier Map in the same advance."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = _map_workflow(max_steps=3, items=["one"], two_maps=True)
     run = start_run(workflow)
     with system_context(reason="test simultaneous Maps"):
@@ -162,12 +163,12 @@ def test_two_maps_cannot_spend_the_same_remaining_capacity(
 
 
 def test_waiting_map_recovery_counts_existing_children_once(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Recovery may fill a missing child when the parent and existing journal already spent capacity."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = _map_workflow(max_steps=3)
     run = start_run(workflow)
     with system_context(reason="test partial Map journal"):

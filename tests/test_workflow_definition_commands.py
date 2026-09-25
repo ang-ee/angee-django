@@ -9,6 +9,7 @@ from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
+from angee.testing.models import Edge, Step, Workflow
 from angee.workflows.definitions import (
     DefinitionEdit,
     DefinitionEditError,
@@ -22,7 +23,6 @@ from angee.workflows.definitions import (
     StaleDefinitionError,
 )
 from tests.conftest import create_platform_admin
-from tests.workflows import Edge, Step, Workflow
 
 User = get_user_model()
 
@@ -49,9 +49,9 @@ def _draft() -> tuple[Workflow, Step, Step, Edge]:
 
 
 def test_command_creates_correlated_rows_and_returns_committed_revision_and_readiness(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     workflow, _entry, tail, _edge = _draft()
     revision = workflow.draft_revision
     edit = DefinitionEdit(
@@ -83,8 +83,8 @@ def test_command_creates_correlated_rows_and_returns_committed_revision_and_read
     assert any(diagnostic.location.field == "config.until" for diagnostic in result.readiness)
 
 
-def test_command_preserves_ids_and_deletes_incident_edges_once(workflow_tables: None) -> None:
-    del workflow_tables
+def test_command_preserves_ids_and_deletes_incident_edges_once(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, tail, edge = _draft()
 
     with system_context(reason="test definition patch"):
@@ -110,9 +110,9 @@ def test_command_preserves_ids_and_deletes_incident_edges_once(workflow_tables: 
 
 
 def test_stale_or_structurally_invalid_command_rolls_back_without_revision_change(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     workflow, entry, _tail, _edge = _draft()
     revision = workflow.draft_revision
 
@@ -147,8 +147,8 @@ def test_stale_or_structurally_invalid_command_rolls_back_without_revision_chang
         assert not Step.objects.filter(workflow=workflow, name="Duplicate").exists()
 
 
-def test_invalid_client_references_and_conflicting_edits_are_non_oracular(workflow_tables: None) -> None:
-    del workflow_tables
+def test_invalid_client_references_and_conflicting_edits_are_non_oracular(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, tail, edge = _draft()
     edit = DefinitionEdit(
         node_patches=(NodePatch(entry.pk, {"name": "One"}), NodePatch(entry.pk, {"name": "Two"})),
@@ -173,8 +173,8 @@ def test_invalid_client_references_and_conflicting_edits_are_non_oracular(workfl
         assert Edge.objects.filter(pk=edge.pk).exists()
 
 
-def test_noop_and_snapshot_share_one_revision_owner(workflow_tables: None) -> None:
-    del workflow_tables
+def test_noop_and_snapshot_share_one_revision_owner(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, tail, edge = _draft()
 
     with system_context(reason="test definition snapshot"):
@@ -191,11 +191,11 @@ def test_noop_and_snapshot_share_one_revision_owner(workflow_tables: None) -> No
 
 
 def test_graph_diagnostics_authorizes_owner_once_and_retains_foreign_endpoint_diagnostics(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
     """Owned definition rows avoid per-row REBAC while malformed endpoints remain visible."""
 
-    del workflow_tables
+    del composed_tables
     workflow, _entry, tail, _edge = _draft()
     with system_context(reason="test graph snapshot setup"):
         for index in range(20):
@@ -226,8 +226,8 @@ def test_graph_diagnostics_authorizes_owner_once_and_retains_foreign_endpoint_di
     assert any(item.code == "edge_source_missing" for item in diagnostics)
 
 
-def test_source_preview_rejects_an_ambiguous_target_reference(workflow_tables: None) -> None:
-    del workflow_tables
+def test_source_preview_rejects_an_ambiguous_target_reference(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, _tail, _edge = _draft()
 
     with system_context(reason="test ambiguous preview target"):
@@ -254,10 +254,10 @@ def test_source_preview_rejects_an_ambiguous_target_reference(workflow_tables: N
     ],
 )
 def test_manager_saves_malformed_binding_discriminators_as_readiness_issues(
-    workflow_tables: None,
+    composed_tables: None,
     binding: dict[str, object],
 ) -> None:
-    del workflow_tables
+    del composed_tables
     workflow, entry, _tail, _edge = _draft()
 
     with system_context(reason="test malformed binding draft"):
@@ -279,8 +279,8 @@ def test_manager_saves_malformed_binding_discriminators_as_readiness_issues(
         assert diagnostic.location.detail_path == ("fields", "a.b[]/kind", "items", 1)
 
 
-def test_key_swap_is_explicit_and_map_config_is_never_rewritten(workflow_tables: None) -> None:
-    del workflow_tables
+def test_key_swap_is_explicit_and_map_config_is_never_rewritten(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, tail, _edge = _draft()
     opaque_config = {"target_step": "entry", "items": "input.rows", "extension": {"kept": True}}
     with system_context(reason="test opaque Map setup"):
@@ -324,8 +324,8 @@ def test_key_swap_is_explicit_and_map_config_is_never_rewritten(workflow_tables:
     assert not any(item.code == "map_target_missing" for item in result.readiness)
 
 
-def test_command_honors_actor_scoping_and_snapshot_reads_immutable_versions(workflow_tables: None) -> None:
-    del workflow_tables
+def test_command_honors_actor_scoping_and_snapshot_reads_immutable_versions(composed_tables: None) -> None:
+    del composed_tables
     admin = create_platform_admin(username="definition-admin", email="definition@example.com")
     outsider = User.objects.create_user(username="definition-outsider")
     workflow, entry, _tail, _edge = _draft()
@@ -363,8 +363,8 @@ def test_command_honors_actor_scoping_and_snapshot_reads_immutable_versions(work
     assert (created_edge.created_by_id, created_edge.updated_by_id) == (admin.pk, admin.pk)
 
 
-def test_publish_command_uses_exact_revision_readiness_and_idempotent_snapshot(workflow_tables: None) -> None:
-    del workflow_tables
+def test_publish_command_uses_exact_revision_readiness_and_idempotent_snapshot(composed_tables: None) -> None:
+    del composed_tables
     workflow, _entry, _tail, _edge = _draft()
     with system_context(reason="test exact definition publication"):
         with pytest.raises(StaleDefinitionError):
@@ -384,8 +384,8 @@ def test_publish_command_uses_exact_revision_readiness_and_idempotent_snapshot(w
 
 
 @pytest.mark.parametrize("revision", [-1, True, 2_147_483_648])
-def test_command_rejects_invalid_revision_tokens(workflow_tables: None, revision: object) -> None:
-    del workflow_tables
+def test_command_rejects_invalid_revision_tokens(composed_tables: None, revision: object) -> None:
+    del composed_tables
     workflow, _entry, _tail, _edge = _draft()
     with system_context(reason="test invalid revision"), pytest.raises(DefinitionEditError) as caught:
         Workflow.objects.apply_definition(workflow, expected_revision=revision, edit=DefinitionEdit())  # type: ignore[arg-type]
@@ -395,8 +395,8 @@ def test_command_rejects_invalid_revision_tokens(workflow_tables: None, revision
     assert {item.code for item in publish.value.diagnostics} == {"revision_invalid"}
 
 
-def test_explicit_null_model_fields_are_structural_and_atomic(workflow_tables: None) -> None:
-    del workflow_tables
+def test_explicit_null_model_fields_are_structural_and_atomic(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, _tail, edge = _draft()
     with system_context(reason="test definition null fields"), pytest.raises(DefinitionEditError) as caught:
         Workflow.objects.apply_definition(
@@ -420,8 +420,8 @@ def test_explicit_null_model_fields_are_structural_and_atomic(workflow_tables: N
     assert (workflow.description, entry.name, edge.condition) == ("", "Entry", "")
 
 
-def test_snapshot_orders_multiple_disconnected_persisted_nodes(workflow_tables: None) -> None:
-    del workflow_tables
+def test_snapshot_orders_multiple_disconnected_persisted_nodes(composed_tables: None) -> None:
+    del composed_tables
     workflow, _entry, _tail, _edge = _draft()
     with system_context(reason="test disconnected definition snapshot"):
         first = Step.objects.create(workflow=workflow, key="zeta", name="Zeta", step_class="agent_session")
@@ -432,8 +432,8 @@ def test_snapshot_orders_multiple_disconnected_persisted_nodes(workflow_tables: 
     assert [item.location.key.existing_id for item in unreachable] == sorted([first.pk, second.pk])
 
 
-def test_existing_edge_signature_swap_is_rejected_before_persistence(workflow_tables: None) -> None:
-    del workflow_tables
+def test_existing_edge_signature_swap_is_rejected_before_persistence(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, tail, first = _draft()
     with system_context(reason="test edge signature swap setup"):
         second = Edge.objects.create(workflow=workflow, source=entry, target=tail, condition="other")
@@ -456,9 +456,9 @@ def test_existing_edge_signature_swap_is_rejected_before_persistence(workflow_ta
 
 
 def test_command_rolls_back_after_a_late_persistence_failure(
-    workflow_tables: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    del workflow_tables
+    del composed_tables
     workflow, entry, _tail, _edge = _draft()
     revision = workflow.draft_revision
     original_save = Edge.save
@@ -490,8 +490,8 @@ def test_command_rolls_back_after_a_late_persistence_failure(
         assert not Step.objects.filter(workflow=workflow, key="created").exists()
 
 
-def test_command_tags_client_identity_separately_and_reports_malformed_key(workflow_tables: None) -> None:
-    del workflow_tables
+def test_command_tags_client_identity_separately_and_reports_malformed_key(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, _tail, _edge = _draft()
     with system_context(reason="test command identity tags"):
         result = Workflow.objects.apply_definition(

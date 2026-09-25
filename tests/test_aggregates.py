@@ -13,7 +13,7 @@ import pytest
 import strawberry
 import strawberry_django
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db import connection, models
+from django.db import models
 from rebac import system_context
 from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
@@ -47,11 +47,10 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import (
     SchemaAddon,
-    _clear_model_tables,
-    _create_missing_tables,
     execute_schema,
     result_data,
 )
+from tests.tables import model_tables
 
 
 class ResourceThing(AngeeDataModel):
@@ -1118,8 +1117,7 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
             )
         ]
     ).build("public")
-    created = _create_missing_tables((HasuraJsonResourceThing,))
-    try:
+    with model_tables((HasuraJsonResourceThing,)):
         with system_context(reason="test.aggregate.json_path_group.seed"):
             HasuraJsonResourceThing.objects.create(name="one", metadata={"mailbox": "INBOX"})
             HasuraJsonResourceThing.objects.create(name="two", metadata={"mailbox": "Sent Messages"})
@@ -1145,21 +1143,15 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
                     {"groupBy": [{"field": "METADATA__MAILBOX"}]},
                 )
             )
-    finally:
-        _clear_model_tables((HasuraJsonResourceThing,))
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
 
-    assert result["json_value_things_groups_count"] == 2
-    assert sorted(
-        result["json_value_things_groups"],
-        key=lambda row: row["key"]["metadata__mailbox"] or "",
-    ) == [
-        {"key": {"metadata__mailbox": "INBOX"}, "aggregate": {"count": 2}},
-        {"key": {"metadata__mailbox": "Sent Messages"}, "aggregate": {"count": 1}},
-    ]
+        assert result["json_value_things_groups_count"] == 2
+        assert sorted(
+            result["json_value_things_groups"],
+            key=lambda row: row["key"]["metadata__mailbox"] or "",
+        ) == [
+            {"key": {"metadata__mailbox": "INBOX"}, "aggregate": {"count": 2}},
+            {"key": {"metadata__mailbox": "Sent Messages"}, "aggregate": {"count": 1}},
+        ]
 
 
 def test_measure_ops_pin_the_curated_subset_per_field_family() -> None:
@@ -1530,15 +1522,8 @@ def relation_filter_tables(transactional_db: Any) -> Iterator[None]:
 
     del transactional_db
     models_under_test = (ResourceParent, ResourceChild, ResourceGrandchild)
-    created = _create_missing_tables(models_under_test)
-    try:
+    with model_tables(models_under_test):
         yield
-    finally:
-        _clear_model_tables(models_under_test)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
 
 
 def test_relation_filter_decoders_covers_public_id_relations_only() -> None:

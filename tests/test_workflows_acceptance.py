@@ -8,33 +8,23 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import system_context, to_subject_ref
 
+from angee.testing.models import Decision, Edge, Step, StepRun, Workflow
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import DecisionSpec, StepResult
-from tests.workflows import (
-    Decision,
-    Edge,
-    FixtureStep,
-    Step,
-    StepRun,
-    Workflow,
-    advance_once,
-    execute_started,
-    start_run,
-    step_run_for,
-)
+from tests.workflows import FixtureStep, advance_once, execute_started, start_run, step_run_for
 
 User = get_user_model()
 
 
 def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A run resumes from decisions, records the journal DAG, and succeeds."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="workflow-decision-assignee")
     assignee_ref = str(to_subject_ref(assignee))
 

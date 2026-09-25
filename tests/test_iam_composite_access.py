@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 from django.apps import apps
-from django.db import connection
 from django.test import override_settings
 from rebac import (
     ObjectRef,
@@ -22,11 +21,10 @@ from rebac.relationships import write_relationships
 from angee.base.identity import public_subject_ref
 from angee.iam.roles import principal_access
 from angee.projects.access import bind
-from tests.conftest import Backend, Drive, Folder, Vendor, _clear_model_tables, _create_missing_tables
+from tests.conftest import Backend, Drive, Folder, Vendor
 from tests.iam_models import Group
-from tests.integrate_models import Integration
-from tests.messaging_models import Channel, Fragment, Message, Thread
-from tests.projects_models import PROJECT_TEST_MODELS, Project
+from tests.messaging_models import Channel, Message, Thread
+from tests.projects_models import Project
 from tests.test_project_access import project_access_schema as project_access_schema
 
 
@@ -53,133 +51,117 @@ def test_group_membership_reaches_and_revokes_project_resource_cascade(
 
     del composite_schema
     user_model = apps.get_model("iam", "User")
-    models = (
-        Group,
-        Vendor,
-        Integration,
-        Channel,
-        Backend,
-        Drive,
-        Folder,
-        *PROJECT_TEST_MODELS,
-        Fragment,
-        Thread,
-        Message,
-    )
-    created = _create_missing_tables(models)
-    try:
-        owner = user_model.objects.create_user(username="composite-owner")
-        person = user_model.objects.create_user(username="composite-person", kind="person")
-        service = user_model.objects.create_user(username="composite-service", kind="service")
-        with system_context(reason="test composite resources"):
-            group = Group.objects.create(name="Composite editors")
-            group.add_member(str(SubjectRef(to_object_ref(person))))
-            group.add_member(str(SubjectRef(to_object_ref(service))))
-            vendor = Vendor.objects.create(slug="composite", display_name="Composite")
-            channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
-            storage_backend = Backend.objects.create(
-                slug="composite",
-                label="Composite",
-                backend_class="local",
-            )
-            drive = Drive.objects.create(
-                backend=storage_backend,
-                slug="composite",
-                name="Composite",
-            )
-            folder = Folder.objects.create(drive=drive, name="Composite files", owner=owner)
-        with actor_context(owner):
-            project = Project.objects.create(title="Composite access")
-            thread = Thread.objects.create(channel=channel)
-            message = Message.objects.create(thread=thread)
-            bind(project=project, target=folder)
-            bind(project=project, target=channel)
-            group_members = SubjectRef.of("auth/group", str(group.pk), "member")
-            write_relationships(
-                [
-                    RelationshipTuple(to_object_ref(project), "editor", group_members),
-                    RelationshipTuple(
-                        ObjectRef("knowledge/role", "vault_viewer"),
-                        "member",
-                        group_members,
-                    ),
-                ]
-            )
+    owner = user_model.objects.create_user(username="composite-owner")
+    person = user_model.objects.create_user(username="composite-person", kind="person")
+    service = user_model.objects.create_user(username="composite-service", kind="service")
+    with system_context(reason="test composite resources"):
+        group = Group.objects.create(name="Composite editors")
+        group.add_member(str(SubjectRef(to_object_ref(person))))
+        group.add_member(str(SubjectRef(to_object_ref(service))))
+        vendor = Vendor.objects.create(slug="composite", display_name="Composite")
+        channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
+        storage_backend = Backend.objects.create(
+            slug="composite",
+            label="Composite",
+            backend_class="local",
+        )
+        drive = Drive.objects.create(
+            backend=storage_backend,
+            slug="composite",
+            name="Composite",
+        )
+        folder = Folder.objects.create(drive=drive, name="Composite files", owner=owner)
+    with actor_context(owner):
+        project = Project.objects.create(title="Composite access")
+        thread = Thread.objects.create(channel=channel)
+        message = Message.objects.create(thread=thread)
+        bind(project=project, target=folder)
+        bind(project=project, target=channel)
+        group_members = SubjectRef.of("auth/group", str(group.pk), "member")
+        write_relationships(
+            [
+                RelationshipTuple(to_object_ref(project), "editor", group_members),
+                RelationshipTuple(
+                    ObjectRef("knowledge/role", "vault_viewer"),
+                    "member",
+                    group_members,
+                ),
+            ]
+        )
 
-        for member in (person, service):
-            assert project.with_actor(member).has_access("write")
-            assert folder.with_actor(member).has_access("write")
-            assert channel.with_actor(member).has_access("write")
-            assert thread.with_actor(member).has_access("write")
-            assert message.with_actor(member).has_access("read")
-            assert message.with_actor(member).has_access("write")
-            assert backend().check_access(
+    for member in (person, service):
+        assert project.with_actor(member).has_access("write")
+        assert folder.with_actor(member).has_access("write")
+        assert channel.with_actor(member).has_access("write")
+        assert thread.with_actor(member).has_access("write")
+        assert message.with_actor(member).has_access("read")
+        assert message.with_actor(member).has_access("write")
+        assert (
+            backend()
+            .check_access(
                 subject=SubjectRef(to_object_ref(member)),
                 action="member",
                 resource=ObjectRef("knowledge/role", "vault_viewer"),
-            ).allowed
-            access = principal_access(SubjectRef(to_object_ref(member)))
-            public_group = str(public_subject_ref(group_members))
-            assert any(
-                row.role == "knowledge/role:vault_viewer"
-                and row.source == public_group
-                and not row.direct
-                for row in access.roles
             )
-            assert any(
-                row.resource_type == "projects/project"
-                and row.relation == "editor"
-                and row.source == public_group
-                and not row.direct
-                for row in access.grants
-            )
-            assert any(
-                row.resource_type == "projects/project"
-                and row.permission == "write"
-                and row.source.endswith("#editor")
-                and not row.direct
-                for row in access.permissions
-            )
-
-        group_access = principal_access(group_members)
+            .allowed
+        )
+        access = principal_access(SubjectRef(to_object_ref(member)))
+        public_group = str(public_subject_ref(group_members))
         assert any(
-            row.role == "knowledge/role:vault_viewer" and row.direct
-            for row in group_access.roles
+            row.role == "knowledge/role:vault_viewer" and row.source == public_group and not row.direct
+            for row in access.roles
         )
         assert any(
             row.resource_type == "projects/project"
             and row.relation == "editor"
-            and row.direct
-            for row in group_access.grants
+            and row.source == public_group
+            and not row.direct
+            for row in access.grants
+        )
+        assert any(
+            row.resource_type == "projects/project"
+            and row.permission == "write"
+            and row.source.endswith("#editor")
+            and not row.direct
+            for row in access.permissions
         )
 
-        with system_context(reason="test composite revoke"):
-            assert group.remove_member(str(SubjectRef(to_object_ref(person))))
-            assert group.remove_member(str(SubjectRef(to_object_ref(service))))
+    group_access = principal_access(group_members)
+    assert any(row.role == "knowledge/role:vault_viewer" and row.direct for row in group_access.roles)
+    assert any(
+        row.resource_type == "projects/project" and row.relation == "editor" and row.direct
+        for row in group_access.grants
+    )
 
-        for former_member in (person, service):
-            assert not backend().check_access(
+    with system_context(reason="test composite revoke"):
+        assert group.remove_member(str(SubjectRef(to_object_ref(person))))
+        assert group.remove_member(str(SubjectRef(to_object_ref(service))))
+
+    for former_member in (person, service):
+        assert (
+            not backend()
+            .check_access(
                 subject=SubjectRef(to_object_ref(former_member)),
                 action="member",
                 resource=to_object_ref(group),
-            ).allowed
-            access = principal_access(SubjectRef(to_object_ref(former_member)))
-            assert all(row.role != "knowledge/role:vault_viewer" for row in access.roles)
-            assert all(row.resource_type != "projects/project" for row in access.grants)
-            assert not project.with_actor(former_member).has_access("write")
-            assert not folder.with_actor(former_member).has_access("write")
-            assert not channel.with_actor(former_member).has_access("write")
-            assert not thread.with_actor(former_member).has_access("write")
-            assert not message.with_actor(former_member).has_access("read")
-            assert not message.with_actor(former_member).has_access("write")
-            assert not backend().check_access(
+            )
+            .allowed
+        )
+        access = principal_access(SubjectRef(to_object_ref(former_member)))
+        assert all(row.role != "knowledge/role:vault_viewer" for row in access.roles)
+        assert all(row.resource_type != "projects/project" for row in access.grants)
+        assert not project.with_actor(former_member).has_access("write")
+        assert not folder.with_actor(former_member).has_access("write")
+        assert not channel.with_actor(former_member).has_access("write")
+        assert not thread.with_actor(former_member).has_access("write")
+        assert not message.with_actor(former_member).has_access("read")
+        assert not message.with_actor(former_member).has_access("write")
+        assert (
+            not backend()
+            .check_access(
                 subject=SubjectRef(to_object_ref(former_member)),
                 action="member",
                 resource=ObjectRef("knowledge/role", "vault_viewer"),
-            ).allowed
-    finally:
-        _clear_model_tables(models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
+            )
+            .allowed
+        )

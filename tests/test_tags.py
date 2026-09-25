@@ -8,14 +8,12 @@ The vocabulary is an admin-curated surface, so rows are created under
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import IntegrityError, connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import (
@@ -28,7 +26,7 @@ from angee.base.identity import public_id_for
 from angee.tags.models import Tag as AbstractTag
 from angee.tags.models import TagAssignment as AbstractTagAssignment
 from angee.tags.models import TagRole as AbstractTagRole
-from tests.conftest import _clear_model_tables, _create_missing_tables, create_user
+from tests.conftest import create_user
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_messaging import Party
 
@@ -97,33 +95,6 @@ class TagRole(AbstractTagRole):
         rebac_resource_type = "tags/role"
 
 
-TAGS_TEST_MODELS = (Tag, ScopeFlagTag, TagAssignment, Party)
-"""Concrete tags models (plus the party target) created on demand by tags fixtures."""
-
-
-@pytest.fixture()
-def tags_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the concrete tags tables and sync the REBAC schema.
-
-    ``Tag.save`` writes a ``shared`` relationship tuple that ``write_relationships``
-    validates against the loaded schema, so any test creating a tag must first sync
-    it (a per-row tuple needs its resource type registered). The production loop
-    syncs before load, so only unit tests carry this setup.
-    """
-
-    del transactional_db
-    created_models = _create_missing_tables(TAGS_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(TAGS_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
-
 def _shared_reader_exists(tag: Any) -> bool:
     """Return whether ``tag`` carries the ``shared@auth/user:*`` wildcard reader."""
 
@@ -137,10 +108,10 @@ def _shared_reader_exists(tag: Any) -> bool:
     ).exists()
 
 
-def test_tag_a_party_through_a_generic_assignment(tags_tables: None) -> None:
+def test_tag_a_party_through_a_generic_assignment(composed_tables: None) -> None:
     """The polymorphic edge resolves back to the exact party and tag."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags test setup"):
         party = Party.objects.create(display_name="Acme Corp")
         tag = Tag.objects.create(name="VIP")
@@ -154,10 +125,10 @@ def test_tag_a_party_through_a_generic_assignment(tags_tables: None) -> None:
     assert assignment.tag == tag
 
 
-def test_a_partys_tags_resolve_by_content_type_and_object_id(tags_tables: None) -> None:
+def test_a_partys_tags_resolve_by_content_type_and_object_id(composed_tables: None) -> None:
     """The reverse query (content_type, object_id) returns the party's tags."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags test setup"):
         party = Party.objects.create(display_name="Beta LLC")
         tag_one = Tag.objects.create(name="Prospect")
@@ -175,10 +146,10 @@ def test_a_partys_tags_resolve_by_content_type_and_object_id(tags_tables: None) 
     assert tagged == {tag_one.pk, tag_two.pk}
 
 
-def test_the_same_tag_attaches_once_per_target(tags_tables: None) -> None:
+def test_the_same_tag_attaches_once_per_target(composed_tables: None) -> None:
     """``unique(tag, content_type, object_id)`` rejects a duplicate edge."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags test setup"):
         party = Party.objects.create(display_name="Gamma Inc")
         tag = Tag.objects.create(name="Partner")
@@ -188,10 +159,10 @@ def test_the_same_tag_attaches_once_per_target(tags_tables: None) -> None:
             TagAssignment.objects.create(tag=tag, content_type=content_type, object_id=party.pk)
 
 
-def test_base_tag_is_always_shared_and_declares_no_policy_fields(tags_tables: None) -> None:
+def test_base_tag_is_always_shared_and_declares_no_policy_fields(composed_tables: None) -> None:
     """The framework tag is shared vocabulary; consumers may extend scope later."""
 
-    del tags_tables
+    del composed_tables
 
     tag_relation_fields = {
         field.name
@@ -203,10 +174,10 @@ def test_base_tag_is_always_shared_and_declares_no_policy_fields(tags_tables: No
     assert Tag(name="Framework").shared_reader_eligible is True
 
 
-def test_shared_scope_fact_controls_the_wildcard_reader(tags_tables: None) -> None:
+def test_shared_scope_fact_controls_the_wildcard_reader(composed_tables: None) -> None:
     """The wildcard reader reconciles from declared eligibility, not a hardcoded FK."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags test scope fact"):
         shared = ScopeFlagTag.objects.create(name="Everyone", shared_marker=True)
         scoped = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
@@ -215,10 +186,10 @@ def test_shared_scope_fact_controls_the_wildcard_reader(tags_tables: None) -> No
     assert not _shared_reader_exists(scoped)
 
 
-def test_deleting_a_shared_tag_removes_its_wildcard_tuple(tags_tables: None) -> None:
+def test_deleting_a_shared_tag_removes_its_wildcard_tuple(composed_tables: None) -> None:
     """The base REBAC delete seam removes a deleted tag's resource relationships."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags delete relationship cleanup"):
         tag = ScopeFlagTag.objects.create(name="Temporary")
         resource_id = str(tag.pk)
@@ -231,10 +202,10 @@ def test_deleting_a_shared_tag_removes_its_wildcard_tuple(tags_tables: None) -> 
     ).exists()
 
 
-def test_flipping_shared_scope_reconciles_the_wildcard_reader(tags_tables: None) -> None:
+def test_flipping_shared_scope_reconciles_the_wildcard_reader(composed_tables: None) -> None:
     """A same-instance double flip grants and revokes the wildcard every time."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags test rescope"):
         created = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
         tag = ScopeFlagTag.objects.get(pk=created.pk)
@@ -255,10 +226,10 @@ def test_flipping_shared_scope_reconciles_the_wildcard_reader(tags_tables: None)
         assert not _shared_reader_exists(tag)
 
 
-def test_shared_scope_fact_controls_actor_scoped_reads(tags_tables: None) -> None:
+def test_shared_scope_fact_controls_actor_scoped_reads(composed_tables: None) -> None:
     """Actor-scoped reads allow shared rows and deny marker-off rows."""
 
-    del tags_tables
+    del composed_tables
     reader = create_user("tags-scope-reader")
     with system_context(reason="tags test actor scope setup"):
         shared = ScopeFlagTag.objects.create(name="Everyone", shared_marker=True)
@@ -269,10 +240,10 @@ def test_shared_scope_fact_controls_actor_scoped_reads(tags_tables: None) -> Non
         assert not ScopeFlagTag.objects.filter(pk=scoped.pk).exists()
 
 
-def test_deferred_scope_source_field_stays_deferred_on_load(tags_tables: None) -> None:
+def test_deferred_scope_source_field_stays_deferred_on_load(composed_tables: None) -> None:
     """Loading a tag does not evaluate its conditional-reader policy eagerly."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags test deferred scope setup"):
         tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=False)
         with CaptureQueriesContext(connection) as ctx:
@@ -283,10 +254,10 @@ def test_deferred_scope_source_field_stays_deferred_on_load(tags_tables: None) -
     assert loaded.get_deferred_fields() == {"shared_marker"}
 
 
-def test_deferred_scope_source_field_save_resyncs_idempotently(tags_tables: None) -> None:
+def test_deferred_scope_source_field_save_resyncs_idempotently(composed_tables: None) -> None:
     """A row loaded without its scope source falls back to an idempotent resync."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags test deferred scope save"):
         tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=True)
         loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
@@ -296,10 +267,10 @@ def test_deferred_scope_source_field_save_resyncs_idempotently(tags_tables: None
     assert _shared_reader_exists(tag)
 
 
-def test_unrelated_save_repairs_wildcard_from_persisted_policy(tags_tables: None) -> None:
+def test_unrelated_save_repairs_wildcard_from_persisted_policy(composed_tables: None) -> None:
     """A full save reconciles canonical persisted facts and repairs missing grants."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags test complete scope snapshot"):
         tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
         active_relationship_model().objects.filter(
@@ -316,10 +287,10 @@ def test_unrelated_save_repairs_wildcard_from_persisted_policy(tags_tables: None
     assert _shared_reader_exists(tag)
 
 
-def test_targeted_content_save_skips_shared_reader_reconciliation(tags_tables: None) -> None:
+def test_targeted_content_save_skips_shared_reader_reconciliation(composed_tables: None) -> None:
     """A targeted save outside policy fields avoids tuple reads and writes."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags test targeted content save"):
         tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
         active_relationship_model().objects.filter(
@@ -342,10 +313,10 @@ def test_targeted_content_save_skips_shared_reader_reconciliation(tags_tables: N
     ]
 
 
-def test_policy_bulk_writes_cannot_bypass_reader_reconciliation(tags_tables: None) -> None:
+def test_policy_bulk_writes_cannot_bypass_reader_reconciliation(composed_tables: None) -> None:
     """Queryset overrides reject policy writes and allow unrelated content edits."""
 
-    del tags_tables
+    del composed_tables
     with system_context(reason="tags bulk policy writes"):
         tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
         with pytest.raises(ValidationError, match="native owner"):
@@ -367,10 +338,10 @@ def test_policy_bulk_writes_cannot_bypass_reader_reconciliation(tags_tables: Non
 
 
 @pytest.fixture()
-def party_edge(tags_tables: None) -> SimpleNamespace:
+def party_edge(composed_tables: None) -> SimpleNamespace:
     """Seed a shared tag, an owner user (with a party), and an outsider."""
 
-    del tags_tables
+    del composed_tables
     owner = create_user("tags-party-owner")
     outsider = create_user("tags-outsider")
     with system_context(reason="tags test setup"):
@@ -451,7 +422,7 @@ def test_for_target_returns_the_targets_edges(party_edge: SimpleNamespace) -> No
         assert objects.for_target("nope/nope", "whatever").count() == 0
 
 
-def test_attaching_across_mti_levels_shares_one_edge(tags_tables: None) -> None:
+def test_attaching_across_mti_levels_shares_one_edge(composed_tables: None) -> None:
     """A tag addressed at an MTI child and at its parent resolve to one canonical edge.
 
     ``mtidemo``'s gated MTI pair stands in for the ``parties.Person`` IS-A
@@ -460,7 +431,7 @@ def test_attaching_across_mti_levels_shares_one_edge(tags_tables: None) -> None:
     set and a query at either level finds the one edge.
     """
 
-    del tags_tables
+    del composed_tables
     objects = TagAssignment.objects
     with system_context(reason="tags mti test"):
         child = MtiChild.objects.create(title="Acme", detail="org")

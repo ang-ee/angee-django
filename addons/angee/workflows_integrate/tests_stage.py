@@ -15,26 +15,18 @@ from angee.base.identity import public_id_of
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
 from angee.integrate.streams import RecordChange, StreamPage
+from angee.testing.fixtures import composed_tables as composed_tables
+from angee.testing.models import Decision, RecordLink, StepAttempt, SyncDiscrepancy, SyncStream, WorkflowDispatch
 from angee.workflows.attempts import AttemptResultKind, GateResumeState
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepExecutionMode, StepResult, TransientStepError
 from angee.workflows_integrate import steps as integrate_steps
 from angee.workflows_integrate.steps import BoundedStreamStage, CoverageGate
-from tests.integrate_models import RecordLink, SyncDiscrepancy, SyncStream
 from tests.messaging_models import Channel
 from tests.test_integrate_streams import AppliedRecord, MemoryAdapter, ReadKeysAdapter
 from tests.test_integrate_streams import stream_bridge as stream_bridge
-from tests.workflows import (
-    Decision,
-    StepAttempt,
-    WorkflowDispatch,
-    advance_once,
-    execute_started,
-    start_run,
-    workflow_with_steps,
-)
+from tests.workflows import advance_once, execute_started, start_run, workflow_with_steps
 from tests.workflows import no_workflow_queue as no_workflow_queue
-from tests.workflows import workflow_engine_tables as workflow_engine_tables
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -70,7 +62,7 @@ def test_stage_retains_cycle_total_through_wait_and_retry(
     final_records: tuple[str, ...],
     retry_between_pages: bool,
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -116,7 +108,7 @@ def test_stage_retains_cycle_total_through_wait_and_retry(
 
 def test_semantic_failure_quarantines_and_continues_later_records(
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,7 +151,7 @@ def test_infrastructure_failure_raises_and_engine_retains_declared_retry(
     coverage: bool,
     transport_error: Exception,
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -226,7 +218,7 @@ def test_adapter_contract_failure_does_not_retain_a_retry(
     coverage: bool,
     missing_implementation: bool,
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -275,7 +267,7 @@ def test_adapter_contract_failure_does_not_retain_a_retry(
 def test_invalid_adapter_page_fails_without_retry_or_commit(
     page: Any,
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -298,7 +290,7 @@ def test_invalid_adapter_page_fails_without_retry_or_commit(
 
 def test_crash_after_commit_replays_from_stream_cursor(
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -348,7 +340,7 @@ def test_crash_after_commit_replays_from_stream_cursor(
 
 def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -397,7 +389,7 @@ def test_retry_prepares_cycle_when_first_attempt_never_reached_first_page(
 
 def test_stage_rejects_a_bridge_other_than_the_admitted_subject(
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     _, step_run = _start_stage(stream_bridge)
@@ -414,7 +406,7 @@ def test_stage_rejects_a_bridge_other_than_the_admitted_subject(
 def test_coverage_waits_for_unresolved_semantic_and_dependency_rows(
     kind: DiscrepancyKind,
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     stream = SyncStream.objects.current(stream_bridge, "records")
@@ -436,7 +428,7 @@ def test_coverage_waits_for_unresolved_semantic_and_dependency_rows(
 
 def test_waiting_coverage_redrives_due_identities_with_one_bounded_page(
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -484,7 +476,7 @@ def test_waiting_coverage_redrives_due_identities_with_one_bounded_page(
 
 def test_waiting_coverage_finishes_bounded_baseline_fallback_before_accepting(
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -520,7 +512,7 @@ def test_waiting_coverage_finishes_bounded_baseline_fallback_before_accepting(
 
 def test_coverage_raises_one_native_decision_per_conflict(
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     stream = SyncStream.objects.current(stream_bridge, "records")
@@ -552,7 +544,7 @@ def test_coverage_raises_one_native_decision_per_conflict(
 
 def test_coverage_includes_conflicts_retained_through_epoch_reset(
     stream_bridge: Channel,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     stream = SyncStream.objects.current(stream_bridge, "records")

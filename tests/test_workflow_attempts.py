@@ -19,6 +19,7 @@ from django.utils import timezone
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.testing.models import Decision, StepArtifact, StepAttempt, StepRun, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import (
     ArtifactSpec,
@@ -40,15 +41,7 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import GateStep, StepImpl, StepResult
-from tests.workflows import (
-    Decision,
-    StepArtifact,
-    StepAttempt,
-    StepRun,
-    WorkflowDispatch,
-    WorkflowRun,
-    workflow_with_steps,
-)
+from tests.workflows import workflow_with_steps
 
 User = get_user_model()
 
@@ -389,8 +382,8 @@ def test_decision_declaration_rejects_unknown_constructor_fields() -> None:
 
 
 @pytest.fixture()
-def scheduled_step_run(workflow_engine_tables: None) -> StepRun:
-    del workflow_engine_tables
+def scheduled_step_run(composed_tables: None) -> StepRun:
+    del composed_tables
     workflow = workflow_with_steps(steps=({"key": "start", "step_class": "agent_session"},), edges=())
     actor = User.objects.create_user(username=f"attempt-run-actor-{uuid.uuid4().hex}")
     with system_context(reason="test retained attempt setup"):

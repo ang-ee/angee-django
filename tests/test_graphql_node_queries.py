@@ -8,7 +8,7 @@ from angee.knowledge import schema as knowledge_schema
 from tests.conftest import Page, addon_schema, create_user, execute_schema, result_data, vault_for
 
 
-def test_page_display_name_fetches_its_title_with_the_rows(knowledge_tables: None) -> None:
+def test_page_display_name_fetches_its_title_with_the_rows(composed_tables: None) -> None:
     """Selecting only a label must not defer and then refetch each page title."""
 
     owner = create_user("label-owner")

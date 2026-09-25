@@ -30,6 +30,7 @@ from angee.resources.widgets import (
     resolve_xref,
 )
 from tests.conftest import make_addon
+from tests.tables import model_tables
 
 
 def addon(
@@ -403,14 +404,7 @@ def test_resolve_xref_accepts_addon_label_alias() -> None:
 
             app_label = "base"
 
-    models_to_create: tuple[type[models.Model], ...] = (
-        ResolveExactTarget,
-        ResolveExactLedger,
-    )
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((ResolveExactTarget, ResolveExactLedger)):
         target = ResolveExactTarget.objects.create(name="target")
         ResolveExactLedger.objects.create(
             tier=Resource.Tier.MASTER,
@@ -430,10 +424,6 @@ def test_resolve_xref_accepts_addon_label_alias() -> None:
         )
 
         assert resolved == target
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -473,15 +463,7 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
 
             app_label = "base"
 
-    models_to_create: tuple[type[models.Model], ...] = (
-        ResolveAmbiguousTargetA,
-        ResolveAmbiguousTargetB,
-        ResolveAmbiguousLedger,
-    )
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((ResolveAmbiguousTargetA, ResolveAmbiguousTargetB, ResolveAmbiguousLedger)):
         first = ResolveAmbiguousTargetA.objects.create(name="first")
         second = ResolveAmbiguousTargetB.objects.create(name="second")
         ResolveAmbiguousLedger.objects.create(
@@ -505,10 +487,6 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
                 ResolveAmbiguousLedger,
                 {"tests.resource_addon": "tests.resource_addon"},
             )
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -544,24 +522,20 @@ def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(monkeypatch) 
 
             app_label = "base"
 
-    models_to_create: tuple[type[models.Model], ...] = (LedgerXrefTarget, LedgerXrefLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    # No concrete ``resources.Resource`` exists under bare test settings (the composer
-    # is not run), so stand the ledger model in for the helper's own ledger lookup only;
-    # every other ``get_model`` (the target-model resolution inside ``resolve_xref``)
-    # delegates to the real registry, and the addon-alias map is built from the real
-    # installed apps.
-    real_get_model = apps.get_model
+    with model_tables((LedgerXrefTarget, LedgerXrefLedger)):
+        # No concrete ``resources.Resource`` exists under bare test settings (the composer
+        # is not run), so stand the ledger model in for the helper's own ledger lookup only;
+        # every other ``get_model`` (the target-model resolution inside ``resolve_xref``)
+        # delegates to the real registry, and the addon-alias map is built from the real
+        # installed apps.
+        real_get_model = apps.get_model
 
-    def fake_get_model(app_label: str, model_name: str, *args: Any, **kwargs: Any) -> Any:
-        if (app_label, model_name) == ("resources", "Resource"):
-            return LedgerXrefLedger
-        return real_get_model(app_label, model_name, *args, **kwargs)
+        def fake_get_model(app_label: str, model_name: str, *args: Any, **kwargs: Any) -> Any:
+            if (app_label, model_name) == ("resources", "Resource"):
+                return LedgerXrefLedger
+            return real_get_model(app_label, model_name, *args, **kwargs)
 
-    monkeypatch.setattr(apps, "get_model", fake_get_model)
-    try:
+        monkeypatch.setattr(apps, "get_model", fake_get_model)
         target = LedgerXrefTarget.objects.create(name="alice")
         LedgerXrefLedger.objects.create(
             tier=Resource.Tier.MASTER,
@@ -577,10 +551,6 @@ def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(monkeypatch) 
         # An unresolved handle is a graceful ``None``, never a raise.
         assert resolve_ledger_xref("resources.user_missing") is None
         assert resolve_ledger_xref("no_such_addon.user_alice") is None
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -637,12 +607,6 @@ def test_xref_widgets_resolve_mti_descendant_to_parent_fk() -> None:
 
             app_label = "base"
 
-    models_to_create: tuple[type[models.Model], ...] = (
-        XrefMtiParent,
-        XrefMtiChild,
-        XrefMtiPeer,
-        XrefMtiLedger,
-    )
     aliases = {"tests.resource_addon": "tests.resource_addon"}
 
     def _bind(widget: Any) -> Any:
@@ -650,10 +614,7 @@ def test_xref_widgets_resolve_mti_descendant_to_parent_fk() -> None:
         widget.addon_aliases = aliases
         return widget
 
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((XrefMtiParent, XrefMtiChild, XrefMtiPeer, XrefMtiLedger)):
         child = XrefMtiChild.objects.create(name="Acme", detail="org")
         peer = XrefMtiPeer.objects.create(name="Nope")
         parent_row = XrefMtiParent.objects.create(name="Bare")
@@ -685,10 +646,6 @@ def test_xref_widgets_resolve_mti_descendant_to_parent_fk() -> None:
         child_fk = _bind(XrefForeignKeyWidget(model=XrefMtiChild))
         with pytest.raises(ValueError, match="not base.XrefMtiChild"):
             child_fk.clean("tests.resource_addon.bare")
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -732,11 +689,7 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
             abstract = False
 
     owner = _write_resource_files(tmp_path)
-    models_to_create = (ImportUser, ImportNote, ResourceLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((ImportUser, ImportNote, ResourceLedger)):
         result = ResourceLedger.objects.load_addons(
             (owner,),
             tiers=[Resource.Tier.MASTER],
@@ -761,10 +714,6 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
         assert second.created == 0
         assert second.updated == 0
         assert second.skipped == 2
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -846,11 +795,7 @@ def test_resource_manager_keeps_same_path_groups_addon_scoped(
         },
     )
 
-    models_to_create = (SharedUser, SharedNote, SharedLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((SharedUser, SharedNote, SharedLedger)):
         SharedLedger.objects.load_addons(
             (alpha, beta),
             tiers=[Resource.Tier.MASTER],
@@ -868,10 +813,6 @@ def test_resource_manager_keeps_same_path_groups_addon_scoped(
         assert ledgers[("tests.alpha", "alpha_user")] == "base.SharedUser"
         assert ledgers[("tests.beta", "beta_user")] == "base.SharedUser"
         assert ledgers[("tests.beta", "beta_note")] == "base.SharedNote"
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -928,11 +869,7 @@ def test_resource_load_rejects_existing_xref_for_another_model(
         },
     )
 
-    models_to_create = (CollisionUser, CollisionNote, CollisionLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((CollisionUser, CollisionNote, CollisionLedger)):
         CollisionLedger.objects.load_addons(
             (owner,),
             tiers=[Resource.Tier.MASTER],
@@ -943,10 +880,6 @@ def test_resource_load_rejects_existing_xref_for_another_model(
                 (owner,),
                 tiers=[Resource.Tier.INSTALL],
             )
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1003,20 +936,12 @@ def test_resource_validate_cleans_rows_and_resolves_xrefs(
         },
     )
 
-    models_to_create = (ValidateUser, ValidateNote, ValidateLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((ValidateUser, ValidateNote, ValidateLedger)):
         with pytest.raises(ResourceLoadError, match="unresolved xref"):
             ValidateLedger.objects.validate_addons(
                 (owner,),
                 tiers=[Resource.Tier.MASTER],
             )
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1067,11 +992,7 @@ def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
         },
     )
 
-    models_to_create = (AdoptUser, AdoptLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((AdoptUser, AdoptLedger)):
         with system_context(reason="resource adoption fixture"):
             AdoptUser.objects.create(username="alice")
         with pytest.raises(MissingActorError):
@@ -1095,10 +1016,6 @@ def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
         assert AdoptLedger.objects.get(xref="existing").target_id
         with pytest.raises(MissingActorError):
             AdoptUser.objects.count()
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1147,11 +1064,7 @@ def test_resource_adoption_uses_explicit_unique_field(
         },
     )
 
-    models_to_create = (ExplicitAdoptUser, ExplicitAdoptLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((ExplicitAdoptUser, ExplicitAdoptLedger)):
         with system_context(reason="explicit adoption fixture"):
             ExplicitAdoptUser.objects.create(
                 username="alice",
@@ -1168,10 +1081,6 @@ def test_resource_adoption_uses_explicit_unique_field(
         with system_context(reason="explicit adoption assertions"):
             assert ExplicitAdoptUser.objects.count() == 1
         assert ExplicitAdoptLedger.objects.get(xref="existing").target_id
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1218,11 +1127,7 @@ def test_resource_adoption_repairs_stale_ledger_target(tmp_path: Path) -> None:
         },
     )
 
-    models_to_create = (StaleLedgerUser, StaleLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((StaleLedgerUser, StaleLedger)):
         with system_context(reason="stale-ledger adoption fixture"):
             existing = StaleLedgerUser.objects.create(username="admin", label="Existing")
         StaleLedger.objects.create(
@@ -1256,10 +1161,6 @@ def test_resource_adoption_repairs_stale_ledger_target(tmp_path: Path) -> None:
         assert second.created == 0
         assert second.updated == 0
         assert second.skipped == 1
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1313,11 +1214,7 @@ def test_stale_ledger_pointer_to_wrong_live_row_is_repaired(tmp_path: Path) -> N
         },
     )
 
-    models_to_create = (StalePointerUser, StalePointerLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((StalePointerUser, StalePointerLedger)):
         first = StalePointerLedger.objects.load_addons(
             (owner,),
             tiers=[Resource.Tier.INSTALL],
@@ -1351,10 +1248,6 @@ def test_stale_ledger_pointer_to_wrong_live_row_is_repaired(tmp_path: Path) -> N
         assert steady.created == 0
         assert steady.updated == 0
         assert steady.skipped == 1
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1408,11 +1301,7 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
         },
     )
 
-    models_to_create = (CompositeClient, CompositeLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((CompositeClient, CompositeLedger)):
         with system_context(reason="composite adoption fixture"):
             existing = CompositeClient.objects.create(slug="anthropic", environment="prod", label="Existing")
 
@@ -1449,10 +1338,6 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
         assert third.skipped == 0
         existing.refresh_from_db()
         assert existing.label == "Changed"
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1513,11 +1398,7 @@ def test_resource_adoption_accepts_a_single_conditional_unique_field(tmp_path: P
         },
     )
 
-    models_to_create = (ConditionalKeyRow, ConditionalKeyLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((ConditionalKeyRow, ConditionalKeyLedger)):
         with system_context(reason="conditional-key adoption fixture"):
             head = ConditionalKeyRow.objects.create(key="stable-key", label="Existing head")
             version = ConditionalKeyRow.objects.create(
@@ -1538,10 +1419,6 @@ def test_resource_adoption_accepts_a_single_conditional_unique_field(tmp_path: P
         assert head.label == "Seeded"
         assert version.label == "Published version"
         assert ConditionalKeyLedger.objects.get(xref="seeded").target_id == head.public_id
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1595,12 +1472,8 @@ def test_resource_adoption_rejects_ambiguous_conditional_key_matches(tmp_path: P
         },
     )
 
-    models_to_create = (AmbiguousConditionalKeyRow, AmbiguousConditionalKeyLedger)
     constraint = AmbiguousConditionalKeyRow._meta.constraints[0]
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((AmbiguousConditionalKeyRow, AmbiguousConditionalKeyLedger)):
         with connection.schema_editor() as schema_editor:
             schema_editor.remove_constraint(AmbiguousConditionalKeyRow, constraint)
         with system_context(reason="ambiguous conditional-key adoption fixture"):
@@ -1616,10 +1489,6 @@ def test_resource_adoption_rejects_ambiguous_conditional_key_matches(tmp_path: P
                 (owner,),
                 tiers=[Resource.Tier.INSTALL],
             )
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1665,20 +1534,12 @@ def test_resource_adoption_rejects_an_uncovered_string_field(tmp_path: Path) -> 
         },
     )
 
-    models_to_create = (UncoveredAdoptRow, UncoveredAdoptLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((UncoveredAdoptRow, UncoveredAdoptLedger)):
         with pytest.raises(ResourceLoadError, match="adopt field 'key' must be a unique model field"):
             UncoveredAdoptLedger.objects.load_addons(
                 (owner,),
                 tiers=[Resource.Tier.INSTALL],
             )
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1762,11 +1623,7 @@ def test_resource_adoption_accepts_conditional_composite_unique_fields(tmp_path:
         },
     )
 
-    models_to_create = (ConditionalOwner, ConditionalCredential, ConditionalLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((ConditionalOwner, ConditionalCredential, ConditionalLedger)):
         with system_context(reason="conditional adoption fixture"):
             user = ConditionalOwner.objects.create(username="admin")
             existing = ConditionalCredential.objects.create(user=user, name="api-key", label="Existing")
@@ -1796,10 +1653,6 @@ def test_resource_adoption_accepts_conditional_composite_unique_fields(tmp_path:
         assert second.created == 0
         assert second.updated == 0
         assert second.skipped == 3
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1848,11 +1701,7 @@ def test_resource_adoption_rejects_ambiguous_unique_fields(
         },
     )
 
-    models_to_create = (AmbiguousAdoptUser, AmbiguousAdoptLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((AmbiguousAdoptUser, AmbiguousAdoptLedger)):
         with system_context(reason="ambiguous adoption fixture"):
             AmbiguousAdoptUser.objects.create(
                 username="alice",
@@ -1864,10 +1713,6 @@ def test_resource_adoption_rejects_ambiguous_unique_fields(
                 (owner,),
                 tiers=[Resource.Tier.INSTALL],
             )
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 def test_resource_entry_normalizes_and_validates_grant_kind(tmp_path: Path) -> None:
@@ -1946,12 +1791,8 @@ def test_grant_tuple_resolves_xref_const_role_and_wildcard(tmp_path: Path) -> No
             app_label = "base"
             abstract = False
 
-    models_to_create = (GrantDoc, GrantResolverLedger)
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
-    try:
+    with model_tables((GrantDoc, GrantResolverLedger)):
+        aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
         with system_context(reason="grant resolver setup"):
             doc = GrantDoc.objects.create(title="Doc")
         GrantResolverLedger.objects.create(
@@ -1983,10 +1824,6 @@ def test_grant_tuple_resolves_xref_const_role_and_wildcard(tmp_path: Path) -> No
             )
             assert literal.resource == ObjectRef("angee/role", "admin")
             assert literal.subject == SubjectRef(ObjectRef("products/role", "mgr"), "member")
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2025,11 +1862,9 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
             abstract = False
 
     user_model = get_user_model()
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(GrantLoadLedger)
-    # Grants are validated against the composed REBAC schema on write.
-    call_command("rebac", "sync", verbosity=0)
-    try:
+    with model_tables((GrantLoadLedger,)):
+        # Grants are validated against the composed REBAC schema on write.
+        call_command("rebac", "sync", verbosity=0)
         with system_context(reason="grant load setup"):
             alice = user_model.objects.create(username="grant-alice")
         GrantLoadLedger.objects.create(
@@ -2090,9 +1925,6 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
         assert second.skipped == 2
         # The unchanged re-load wrote nothing new — a true no-op, no churn.
         assert written == [2]
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(GrantLoadLedger)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2147,12 +1979,8 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
         {"path": rows_path.name, "depends_on": "grants.yaml"},
         {"path": "grants.yaml", "kind": "grants"},
     )})
-    models_to_create = (GrantDependentRow, OrderedGrantLedger)
-    with connection.schema_editor() as editor:
-        for model in models_to_create:
-            editor.create_model(model)
-    call_command("rebac", "sync", verbosity=0)
-    try:
+    with model_tables((GrantDependentRow, OrderedGrantLedger)):
+        call_command("rebac", "sync", verbosity=0)
         def load(*, dry_run=False):
             return OrderedGrantLedger.objects.load_addons(
                 (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True, dry_run=dry_run,
@@ -2178,10 +2006,6 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
         assert second.created == 0
         assert second.skipped == 2
         assert hooks == [True, True]
-    finally:
-        with connection.schema_editor() as editor:
-            for model in reversed(models_to_create):
-                editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2215,11 +2039,9 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
 
     aliases = {"tests.resource_addon": "tests.resource_addon", "resource_addon": "tests.resource_addon"}
     user_model = get_user_model()
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(MtiGrantLedger)
-    # Grants are checked against the composed REBAC schema on read; sync loads it.
-    call_command("rebac", "sync", verbosity=0)
-    try:
+    with model_tables((MtiGrantLedger,)):
+        # Grants are checked against the composed REBAC schema on read; sync loads it.
+        call_command("rebac", "sync", verbosity=0)
         with system_context(reason="mti grant setup"):
             child = MtiChild.objects.create(title="Acme", detail="org")
             plain = MtiParent.objects.create(title="Plain")
@@ -2293,9 +2115,6 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
             assert backend().has_access(subject=subject, action="read", resource=resource)
         # No grant, no parent-typed read — the materialized tuple is what opens the edge.
         assert not backend().has_access(subject=to_subject_ref(outsider), action="read", resource=child_as_parent)
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(MtiGrantLedger)
 
 
 @pytest.mark.parametrize(

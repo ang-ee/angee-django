@@ -10,18 +10,18 @@ from django.db.models import Prefetch
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
+import tests.test_messaging  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.publishing import mute_changes
 from tests.conftest import File
 from tests.messaging_models import Fragment, Message, Part
 from tests.test_messaging import _storage_drive
-from tests.test_messaging import messaging_tables as messaging_tables
 
 
 @pytest.fixture
-def part_tree(messaging_tables: None) -> tuple[Message, dict[str, Part]]:
+def part_tree(composed_tables: None) -> tuple[Message, dict[str, Part]]:
     """Persist mixed, alternative, related and forwarded MIME branches."""
 
-    del messaging_tables
+    del composed_tables
     with system_context(reason="messaging part tree setup"), mute_changes():
         message = Message.objects.create(platform="email")
         parts: dict[str, Part] = {}
@@ -161,11 +161,11 @@ def test_part_queries_never_follow_cross_message_parent_edges(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("prefetched", [False, True])
 def test_part_ties_cycles_and_orphan_components_have_deterministic_order(
-    messaging_tables: None, prefetched: bool
+    composed_tables: None, prefetched: bool
 ) -> None:
     """Sibling sqids break ties, and rootless cycles remain finite and visible."""
 
-    del messaging_tables
+    del composed_tables
     with system_context(reason="messaging cyclic part setup"), mute_changes():
         message = Message.objects.create(platform="email")
         root = Part.objects.create(message=message, position=9)
@@ -197,10 +197,10 @@ def test_part_ties_cycles_and_orphan_components_have_deterministic_order(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_empty_message_and_missing_parent_in_native_prefetch(messaging_tables: None) -> None:
+def test_empty_message_and_missing_parent_in_native_prefetch(composed_tables: None) -> None:
     """Empty forests and incomplete native prefetches do not invent ancestors."""
 
-    del messaging_tables
+    del composed_tables
     with system_context(reason="messaging incomplete part setup"), mute_changes():
         message = Message.objects.create(platform="email")
         assert Part.objects.reading_order_for_message(message) == []

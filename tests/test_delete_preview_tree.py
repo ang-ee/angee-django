@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import pytest
 import strawberry
-from django.db import connection, models
+from django.db import models
 
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
+from tests.tables import model_tables
 
 
 @pytest.mark.django_db(transaction=True)
@@ -62,10 +63,7 @@ def test_delete_note_dry_run_returns_tree_and_confirm_deletes() -> None:
 
     schema = strawberry.Schema(query=Query, mutation=Mutation)
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(Note)
-        schema_editor.create_model(NoteChild)
-    try:
+    with model_tables((Note, NoteChild)):
         note = Note.objects.create(title="Draft")
         NoteChild.objects.bulk_create(NoteChild(note=note, name=f"child-{index:02d}") for index in range(52))
 
@@ -135,7 +133,3 @@ def test_delete_note_dry_run_returns_tree_and_confirm_deletes() -> None:
 
         assert confirmed.errors is None
         assert not Note.objects.filter(pk=note.pk).exists()
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(NoteChild)
-            schema_editor.delete_model(Note)

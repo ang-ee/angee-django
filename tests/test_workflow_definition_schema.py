@@ -6,12 +6,12 @@ import pytest
 from pydantic import ValidationError
 from rebac import system_context
 
+from angee.testing.models import Step, Workflow
 from angee.workflows.bindings import parse_binding
 from angee.workflows.configs import GateConfig
 from angee.workflows.decision_actions import ReviewAction
 from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _platform_admin
-from tests.workflows import Step, Workflow
 
 
 def test_review_action_round_trips_json_arrays_with_strict_ordered_fields() -> None:
@@ -130,8 +130,8 @@ def _draft() -> tuple[Workflow, Step]:
     return workflow, entry
 
 
-def test_version_comparison_and_restore_keep_one_coherent_saved_revision(workflow_tables: None) -> None:
-    del workflow_tables
+def test_version_comparison_and_restore_keep_one_coherent_saved_revision(composed_tables: None) -> None:
+    del composed_tables
     admin = _platform_admin("definition-version-admin")
     workflow, entry = _draft()
     with system_context(reason="definition version GraphQL setup"):
@@ -162,9 +162,9 @@ def test_version_comparison_and_restore_keep_one_coherent_saved_revision(workflo
 
 
 def test_definition_mutation_preserves_omission_correlates_rows_and_reports_readiness(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("definition-schema-admin")
     workflow, entry = _draft()
@@ -213,11 +213,11 @@ def test_definition_mutation_preserves_omission_correlates_rows_and_reports_read
 
 
 def test_definition_mutation_rejects_null_max_steps_without_writes(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
     """An explicit null limit is a field diagnostic, never a transport failure."""
 
-    del workflow_tables
+    del composed_tables
     admin = _platform_admin("definition-null-max-steps")
     workflow, entry = _draft()
     original_revision = workflow.draft_revision
@@ -251,9 +251,9 @@ def test_definition_mutation_rejects_null_max_steps_without_writes(
 
 
 def test_source_preview_uses_unsaved_topology_and_keeps_stale_baseline_separate(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("definition-source-admin")
     workflow, entry = _draft()
@@ -311,8 +311,8 @@ def test_source_preview_uses_unsaved_topology_and_keeps_stale_baseline_separate(
     assert ambiguous["diagnostics"][0]["code"] == "reference_invalid"
 
 
-def test_map_body_preview_uses_prospective_graph_without_persisting_membership(workflow_tables: None) -> None:
-    del workflow_tables
+def test_map_body_preview_uses_prospective_graph_without_persisting_membership(composed_tables: None) -> None:
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("definition-map-body-admin")
     workflow, entry = _draft()
@@ -358,8 +358,8 @@ def test_map_body_preview_uses_prospective_graph_without_persisting_membership(w
         assert workflow.steps.count() == 1
 
 
-def test_definition_mutation_returns_structural_and_stale_without_losing_data(workflow_tables: None) -> None:
-    del workflow_tables
+def test_definition_mutation_returns_structural_and_stale_without_losing_data(composed_tables: None) -> None:
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("definition-errors-admin")
     workflow, _entry = _draft()
@@ -400,8 +400,8 @@ def test_definition_mutation_returns_structural_and_stale_without_losing_data(wo
     assert workflow.description == ""
 
 
-def test_definition_snapshot_and_publish_payloads_are_typed(workflow_tables: None) -> None:
-    del workflow_tables
+def test_definition_snapshot_and_publish_payloads_are_typed(composed_tables: None) -> None:
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("definition-publish-admin")
     workflow, entry = _draft()
@@ -462,10 +462,10 @@ def test_definition_snapshot_and_publish_payloads_are_typed(workflow_tables: Non
     assert second["publication"]["id"] == first["publication"]["id"]
 
 
-def test_native_workflow_create_returns_lineage_projection(workflow_tables: None) -> None:
+def test_native_workflow_create_returns_lineage_projection(composed_tables: None) -> None:
     """Generic inserts may return a model instance that was not read through the annotated query."""
 
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("definition-create-admin")
     created = result_data(
@@ -494,8 +494,8 @@ def test_native_workflow_create_returns_lineage_projection(workflow_tables: None
     }
 
 
-def test_definition_adapter_rejects_unavailable_relations_and_explicit_null_endpoint(workflow_tables: None) -> None:
-    del workflow_tables
+def test_definition_adapter_rejects_unavailable_relations_and_explicit_null_endpoint(composed_tables: None) -> None:
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("definition-reference-admin")
     workflow, _entry = _draft()
@@ -530,9 +530,9 @@ def test_definition_adapter_rejects_unavailable_relations_and_explicit_null_endp
 
 
 def test_definition_adapter_does_not_catch_unexpected_errors(
-    workflow_tables: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("definition-unexpected-admin")
     workflow, _entry = _draft()
@@ -554,9 +554,9 @@ def test_definition_adapter_does_not_catch_unexpected_errors(
 
 
 def test_legacy_publish_adapter_does_not_collapse_unexpected_errors(
-    workflow_tables: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("legacy-publish-unexpected-admin")
     workflow, _entry = _draft()

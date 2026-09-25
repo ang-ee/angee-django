@@ -6,13 +6,13 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import system_context
 
+import tests.test_agents_graphql  # noqa: F401 -- register the fixture model graph before database setup
 from angee.agents_integrate_anthropic.backend import AnthropicInferenceBackend
 from tests.test_agents import InferenceModel, _provider
 from tests.test_agents_graphql import Agent
-from tests.test_agents_graphql import agents_console_tables as agents_console_tables
 
 
-def test_deployment_identity_refreshes_deferred_handle(agents_console_tables: None, monkeypatch):
+def test_deployment_identity_refreshes_deferred_handle(composed_tables: None, monkeypatch):
     provider = _provider("deferred-identity", backend_class="ollama")
     with system_context(reason="test.agents.identity"):
         model = InferenceModel.objects.create(provider=provider, name="catalogue", config={"provider_model": "native"})
@@ -24,7 +24,7 @@ def test_deployment_identity_refreshes_deferred_handle(agents_console_tables: No
 
 
 @pytest.mark.parametrize("has_model", [False, True])
-def test_agent_error_classifier_loads_nullable_deferred_model(agents_console_tables: None, monkeypatch, has_model):
+def test_agent_error_classifier_loads_nullable_deferred_model(composed_tables: None, monkeypatch, has_model):
     """Agent error classifier loads nullable deferred model."""
     provider = _provider("deferred-error", backend_class="anthropic")
     with system_context(reason="test.agents.error.seed"):
@@ -44,7 +44,7 @@ def test_agent_error_classifier_loads_nullable_deferred_model(agents_console_tab
 
 @pytest.mark.parametrize("has_credential", [False, True])
 def test_provision_inputs_and_readiness_load_uncached_relations(
-    agents_console_tables: None, monkeypatch: pytest.MonkeyPatch, has_credential: bool
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, has_credential: bool
 ) -> None:
     """Provision inputs and readiness load uncached relations."""
     provider = _provider("routed-inputs", backend_class="ollama")

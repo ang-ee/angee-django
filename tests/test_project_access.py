@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.core.management import call_command
-from django.db import connection, transaction
+from django.db import transaction
 from django.test import override_settings
 from rebac import (
     PermissionDenied,
@@ -32,12 +32,9 @@ from tests.conftest import (
     File,
     Folder,
     Vendor,
-    _clear_model_tables,
-    _create_missing_tables,
 )
-from tests.integrate_models import Integration
-from tests.messaging_models import Channel, Fragment, Message, Thread
-from tests.projects_models import PROJECT_TEST_MODELS, Project, ProjectBinding
+from tests.messaging_models import Channel, Message, Thread
+from tests.projects_models import Project, ProjectBinding
 
 
 def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
@@ -84,91 +81,71 @@ def test_project_binding_grants_and_revokes_thread_message_access(
 
     del project_access_schema
     user_model = apps.get_model("iam", "User")
-    models = (
-        Vendor,
-        Integration,
-        Channel,
-        Backend,
-        Drive,
-        Folder,
-        *PROJECT_TEST_MODELS,
-        Fragment,
-        Thread,
-        Message,
-    )
-    created = _create_missing_tables(models)
-    try:
-        owner = user_model.objects.create_user(username="project-owner")
-        editor = user_model.objects.create_user(username="project-editor", kind="service")
-        with actor_context(owner):
-            project = Project.objects.create(title="Cascade")
-        with system_context(reason="tests.project_access.channel"):
-            vendor = Vendor.objects.create(slug="project-channel", display_name="Project Channel")
-            channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
-        with actor_context(owner):
-            thread = Thread.objects.create(channel=channel)
-            message = Message.objects.create(thread=thread)
-            binding = bind(project=project, target=channel)
-            assert bind(project=project, target=channel).pk == binding.pk
-            assert active_relationship_model().objects.filter(
-                resource_type="integrate/integration",
-                resource_id=str(channel.pk),
-                relation="project",
-                subject_type="projects/project",
-                subject_id=str(project.pk),
-            ).exists()
-            write_relationships(
-                [RelationshipTuple(to_object_ref(project), "editor", to_subject_ref(editor))]
-            )
-        with system_context(reason="tests.project_access.folder"):
-            storage_backend = Backend.objects.create(
-                slug="project-folder",
-                label="Project folder",
-                backend_class="local",
-            )
-            drive = Drive.objects.create(
-                backend=storage_backend,
-                slug="project-folder",
-                name="Project folder",
-            )
-            folder = Folder.objects.create(drive=drive, name="Project files", owner=owner)
-        with actor_context(owner):
-            project.folder = folder
-            project.save(update_fields=("folder", "updated_at"))
-            bind(project=project, target=folder)
-            project.folder = None
-            project.save(update_fields=("folder", "updated_at"))
-        assert folder.with_actor(editor).has_access("write")
-        unbind(project=project.with_actor(owner), target=folder.with_actor(owner))
-        assert not folder.with_actor(editor).has_access("write")
-        assert channel.with_actor(editor).has_access("write")
-        assert thread.with_actor(editor).has_access("write")
-        assert message.with_actor(editor).has_access("read")
-        assert message.with_actor(editor).has_access("write")
-        with actor_context(owner):
-            rolled_back = Thread.objects.create()
-            with pytest.raises(RuntimeError, match="rollback"):
-                with transaction.atomic():
-                    bind(project=project, target=rolled_back)
-                    raise RuntimeError("rollback")
-            write_relationships(
-                [RelationshipTuple(to_object_ref(rolled_back), "project", SubjectRef(to_object_ref(project)))]
-            )
-            resync_project_access()
-        assert not rolled_back.with_actor(editor).has_access("write")
-        assert channel.with_actor(editor).has_access("write")
-        unbind(project=project.with_actor(owner), target=channel.with_actor(owner))
-        assert not channel.with_actor(editor).has_access("write")
-        assert not thread.with_actor(editor).has_access("write")
-        assert not message.with_actor(editor).has_access("read")
-        assert not message.with_actor(editor).has_access("write")
-        assert binding.pk is not None
-    finally:
-        _clear_model_tables(models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
+    owner = user_model.objects.create_user(username="project-owner")
+    editor = user_model.objects.create_user(username="project-editor", kind="service")
+    with actor_context(owner):
+        project = Project.objects.create(title="Cascade")
+    with system_context(reason="tests.project_access.channel"):
+        vendor = Vendor.objects.create(slug="project-channel", display_name="Project Channel")
+        channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
+    with actor_context(owner):
+        thread = Thread.objects.create(channel=channel)
+        message = Message.objects.create(thread=thread)
+        binding = bind(project=project, target=channel)
+        assert bind(project=project, target=channel).pk == binding.pk
+        assert active_relationship_model().objects.filter(
+            resource_type="integrate/integration",
+            resource_id=str(channel.pk),
+            relation="project",
+            subject_type="projects/project",
+            subject_id=str(project.pk),
+        ).exists()
+        write_relationships(
+            [RelationshipTuple(to_object_ref(project), "editor", to_subject_ref(editor))]
+        )
+    with system_context(reason="tests.project_access.folder"):
+        storage_backend = Backend.objects.create(
+            slug="project-folder",
+            label="Project folder",
+            backend_class="local",
+        )
+        drive = Drive.objects.create(
+            backend=storage_backend,
+            slug="project-folder",
+            name="Project folder",
+        )
+        folder = Folder.objects.create(drive=drive, name="Project files", owner=owner)
+    with actor_context(owner):
+        project.folder = folder
+        project.save(update_fields=("folder", "updated_at"))
+        bind(project=project, target=folder)
+        project.folder = None
+        project.save(update_fields=("folder", "updated_at"))
+    assert folder.with_actor(editor).has_access("write")
+    unbind(project=project.with_actor(owner), target=folder.with_actor(owner))
+    assert not folder.with_actor(editor).has_access("write")
+    assert channel.with_actor(editor).has_access("write")
+    assert thread.with_actor(editor).has_access("write")
+    assert message.with_actor(editor).has_access("read")
+    assert message.with_actor(editor).has_access("write")
+    with actor_context(owner):
+        rolled_back = Thread.objects.create()
+        with pytest.raises(RuntimeError, match="rollback"):
+            with transaction.atomic():
+                bind(project=project, target=rolled_back)
+                raise RuntimeError("rollback")
+        write_relationships(
+            [RelationshipTuple(to_object_ref(rolled_back), "project", SubjectRef(to_object_ref(project)))]
+        )
+        resync_project_access()
+    assert not rolled_back.with_actor(editor).has_access("write")
+    assert channel.with_actor(editor).has_access("write")
+    unbind(project=project.with_actor(owner), target=channel.with_actor(owner))
+    assert not channel.with_actor(editor).has_access("write")
+    assert not thread.with_actor(editor).has_access("write")
+    assert not message.with_actor(editor).has_access("read")
+    assert not message.with_actor(editor).has_access("write")
+    assert binding.pk is not None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -178,43 +155,34 @@ def test_binding_edits_and_deletes_require_authority(project_access_schema: Any)
 
     del project_access_schema
     user_model = apps.get_model("iam", "User")
-    models = (Backend, Drive, Folder, *PROJECT_TEST_MODELS)
-    created = _create_missing_tables(models)
-    try:
-        owner = user_model.objects.create_user(username="binding-owner")
-        outsider = user_model.objects.create_user(username="binding-outsider")
-        with actor_context(owner):
-            project = Project.objects.create(title="Protected")
-        with system_context(reason="tests.project_access.targets"):
-            storage_backend = Backend.objects.create(
-                slug="binding-targets",
-                label="Binding targets",
-                backend_class="local",
-            )
-            drive = Drive.objects.create(
-                backend=storage_backend,
-                slug="binding-targets",
-                name="Binding targets",
-            )
-            first = Folder.objects.create(drive=drive, name="First", owner=owner)
-            second = Folder.objects.create(drive=drive, name="Second", owner=owner)
-        with actor_context(owner):
-            binding = bind(project=project, target=first)
-        with actor_context(outsider), pytest.raises(PermissionDenied):
-            unbind(project=project, target=first)
-        with actor_context(outsider), pytest.raises(PermissionDenied):
-            ProjectBinding.objects.filter(pk=binding.pk).delete()
-        with actor_context(outsider), pytest.raises(PermissionDenied):
-            binding.delete()
-        with actor_context(outsider), pytest.raises(PermissionDenied):
-            binding.target = second
-            binding.save()
-    finally:
-        _clear_model_tables(models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
+    owner = user_model.objects.create_user(username="binding-owner")
+    outsider = user_model.objects.create_user(username="binding-outsider")
+    with actor_context(owner):
+        project = Project.objects.create(title="Protected")
+    with system_context(reason="tests.project_access.targets"):
+        storage_backend = Backend.objects.create(
+            slug="binding-targets",
+            label="Binding targets",
+            backend_class="local",
+        )
+        drive = Drive.objects.create(
+            backend=storage_backend,
+            slug="binding-targets",
+            name="Binding targets",
+        )
+        first = Folder.objects.create(drive=drive, name="First", owner=owner)
+        second = Folder.objects.create(drive=drive, name="Second", owner=owner)
+    with actor_context(owner):
+        binding = bind(project=project, target=first)
+    with actor_context(outsider), pytest.raises(PermissionDenied):
+        unbind(project=project, target=first)
+    with actor_context(outsider), pytest.raises(PermissionDenied):
+        ProjectBinding.objects.filter(pk=binding.pk).delete()
+    with actor_context(outsider), pytest.raises(PermissionDenied):
+        binding.delete()
+    with actor_context(outsider), pytest.raises(PermissionDenied):
+        binding.target = second
+        binding.save()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -224,41 +192,32 @@ def test_project_drive_access_reaches_folders_and_files(project_access_schema: A
 
     del project_access_schema
     user_model = apps.get_model("iam", "User")
-    models = (Backend, Drive, Folder, File, *PROJECT_TEST_MODELS)
-    created = _create_missing_tables(models)
-    try:
-        owner = user_model.objects.create_user(username="drive-project-owner")
-        editor = user_model.objects.create_user(username="drive-project-editor")
-        with system_context(reason="tests.project_access.drive"):
-            backend = Backend.objects.create(slug="project", label="Project", backend_class="local")
-            drive = Drive.objects.create(backend=backend, slug="project", name="Project")
-            folder = Folder.objects.create(drive=drive, name="Files")
-            file = File.objects.create(
-                drive=drive,
-                folder=folder,
-                filename="notes.txt",
-                content_hash="0" * 64,
-                storage_path="notes.txt",
-            )
-            write_relationships(
-                [RelationshipTuple(to_object_ref(drive), "editor", to_subject_ref(owner))]
-            )
-        with actor_context(owner):
-            project = Project.objects.create(title="Drive cascade")
-            bind(project=project, target=drive)
-            write_relationships(
-                [RelationshipTuple(to_object_ref(project), "editor", to_subject_ref(editor))]
-            )
-        with actor_context(editor):
-            assert drive.has_access("write")
-            assert folder.has_access("write")
-            assert file.has_access("write")
-    finally:
-        _clear_model_tables(models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
+    owner = user_model.objects.create_user(username="drive-project-owner")
+    editor = user_model.objects.create_user(username="drive-project-editor")
+    with system_context(reason="tests.project_access.drive"):
+        backend = Backend.objects.create(slug="project", label="Project", backend_class="local")
+        drive = Drive.objects.create(backend=backend, slug="project", name="Project")
+        folder = Folder.objects.create(drive=drive, name="Files")
+        file = File.objects.create(
+            drive=drive,
+            folder=folder,
+            filename="notes.txt",
+            content_hash="0" * 64,
+            storage_path="notes.txt",
+        )
+        write_relationships(
+            [RelationshipTuple(to_object_ref(drive), "editor", to_subject_ref(owner))]
+        )
+    with actor_context(owner):
+        project = Project.objects.create(title="Drive cascade")
+        bind(project=project, target=drive)
+        write_relationships(
+            [RelationshipTuple(to_object_ref(project), "editor", to_subject_ref(editor))]
+        )
+    with actor_context(editor):
+        assert drive.has_access("write")
+        assert folder.has_access("write")
+        assert file.has_access("write")
 
 
 def test_projects_app_ready_does_not_require_composed_models(monkeypatch: pytest.MonkeyPatch) -> None:

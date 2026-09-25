@@ -10,13 +10,14 @@ import pytest
 import strawberry_django
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import models
 from django.utils import timezone
 from rebac import system_context
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
 from strawberry import auto
 
+import tests.test_messaging  # noqa: F401 -- register related models before native database setup
 from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel
@@ -31,18 +32,16 @@ from angee.projects.models import Task as AbstractTask
 from angee.work.models import Queue as AbstractQueue
 from angee.work.models import Stage as AbstractWorkStage
 from angee.work.models import TaskWork
+from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
 from tests.conftest import (
     SchemaAddon,
-    _clear_model_tables,
-    _create_missing_tables,
     create_platform_admin,
     execute_schema,
     result_data,
 )
 from tests.projects_models import Task
-from tests.spaces_models import Group, Membership
-from tests.test_messaging import Party, Person
-from tests.test_sequence import SEQUENCE_TEST_MODELS
+from tests.spaces_models import Group
+from tests.tables import model_tables
 
 
 class RoutingStageContainer(models.Model):
@@ -181,34 +180,14 @@ class CreateStageType(AngeeNode):
 def productivity_tables(transactional_db: None) -> Iterator[None]:
     """Create native stage and snooze rows for behavior regressions."""
     test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord, RoutingSnoozeRecord)
-    with connection.schema_editor() as editor:
-        for model in test_models:
-            editor.create_model(model)
-    try:
+    with model_tables(test_models):
         yield
-    finally:
-        with connection.schema_editor() as editor:
-            for model in reversed(test_models):
-                editor.delete_model(model)
 
 
 @pytest.fixture
 def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any, Queue]]:
     """Expose the production donors through real Hasura resources and local REBAC."""
     del transactional_db
-    model_types = (
-        Party,
-        Person,
-        Group,
-        Membership,
-        Queue,
-        Stage,
-        *SEQUENCE_TEST_MODELS,
-        CreateProject,
-        CreateTask,
-        CreateNeed,
-    )
-    created_models = _create_missing_tables(model_types)
     call_command("rebac", "sync", verbosity=0)
     active = backend()
     assert isinstance(active, LocalBackend)
@@ -280,11 +259,6 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
         ).build("public")
         yield (schema, admin, queue)
     finally:
-        _clear_model_tables(model_types)
-        if created_models:
-            with connection.schema_editor() as editor:
-                for model in reversed(created_models):
-                    editor.delete_model(model)
         reset_backend()
 
 

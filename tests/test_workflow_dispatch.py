@@ -17,6 +17,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.refs import canonical_record_target
+from angee.testing.models import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import AttemptResult, AttemptResultKind, LeaseRevocationReason
 from angee.workflows.dispatch import (
@@ -27,11 +28,10 @@ from angee.workflows.dispatch import (
     dispatch_constraints,
     publish_due,
 )
-from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 
 @pytest.fixture()
-def run(workflow_engine_tables: None) -> WorkflowRun:
+def run(composed_tables: None) -> WorkflowRun:
     with system_context(reason="dispatch test run"):
         workflow = Workflow.objects.create(name="Dispatch owner")
         Step.objects.create(workflow=workflow, key="start", name="Start", step_class="agent_session", is_entry=True)

@@ -11,11 +11,11 @@ from django.apps import apps
 from rebac import system_context
 from strawberry.schema.config import StrawberryConfig
 
+import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
 from angee.platform import composed
 from tests.conftest import addon_schema, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
-from tests.test_platform_install import platform_tables as platform_tables
 
 platform_schema = importlib.import_module("angee.platform.schema")
 
@@ -107,10 +107,10 @@ def test_denied_explorer_is_null_while_computed_collections_are_empty(monkeypatc
     }
 
 
-def test_explorer_reads_persisted_addons_and_shared_computed_rows(platform_tables: None, monkeypatch: Any) -> None:
+def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_tables: None, monkeypatch: Any) -> None:
     """Addon facts come from the catalogue while model and field bindings share rows."""
 
-    del platform_tables
+    del composed_tables
     admin = _platform_admin("explorer-admin")
     config = apps.get_app_config("linesdemo")
     line = apps.get_model("linesdemo", "DocumentLine")
@@ -211,10 +211,10 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(platform_table
     }
 
 
-def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(platform_tables: None) -> None:
+def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(composed_tables: None) -> None:
     """Unknown Django identities retain searchable names and non-empty display labels."""
 
-    del platform_tables
+    del composed_tables
     admin = _platform_admin("catalogue-search-admin")
     addon = apps.get_model("platform", "Addon")
     with system_context(reason="test.platform.catalogue.search"):

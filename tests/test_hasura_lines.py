@@ -17,7 +17,6 @@ import pytest
 import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
-from django.core.management import call_command
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import (
@@ -159,32 +158,6 @@ _RESOURCE_RICH = hasura_model_resource(
 _SCHEMA_RICH = _resource_schema(_RESOURCE_RICH)
 
 
-_TAGS_THROUGH = DocumentLine._meta.get_field("tags").remote_field.through
-
-
-@pytest.fixture()
-def linesdemo_tables(transactional_db: Any):
-    """Ensure the demo tables exist and the REBAC schema is synced."""
-
-    existing = set(connection.introspection.table_names())
-    # ``Tag`` precedes ``DocumentLine`` so the M2M through table (created with the
-    # line) can reference it; ``create_model(DocumentLine)`` creates the through table.
-    created = [m for m in (Document, Product, Tag, DocumentLine) if m._meta.db_table not in existing]
-    if created:
-        with connection.schema_editor() as editor:
-            for model in created:
-                editor.create_model(model)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        # The through table first (its rows are not cascade-deleted by a raw
-        # DELETE on the parent line), then children before parents.
-        with connection.cursor() as cursor:
-            for model in (_TAGS_THROUGH, DocumentLine, Tag, Product, Document):
-                cursor.execute(f"DELETE FROM {connection.ops.quote_name(model._meta.db_table)}")
-
-
 def _grant(document: Document, relation: str, user: Any) -> None:
     """Write one direct relationship tuple for ``user`` on ``document``."""
 
@@ -225,7 +198,7 @@ mutation($pk: ID!, $patch: documents_set_input, $lines: [documents_lines_insert_
 """
 
 
-def test_nested_insert_writes_parent_and_lines_atomically(linesdemo_tables):
+def test_nested_insert_writes_parent_and_lines_atomically(composed_tables):
     """One insert mutation persists the document and its child lines."""
 
     actor = create_user("author")
@@ -253,7 +226,7 @@ def test_nested_insert_writes_parent_and_lines_atomically(linesdemo_tables):
     assert rows == [("Widget", 2, 0), ("Gadget", 5, 1)]
 
 
-def test_nested_insert_rolls_back_parent_on_line_failure(linesdemo_tables):
+def test_nested_insert_rolls_back_parent_on_line_failure(composed_tables):
     """A child validation failure rolls the whole nested insert back."""
 
     actor = create_user("author")
@@ -279,7 +252,7 @@ def test_nested_insert_rolls_back_parent_on_line_failure(linesdemo_tables):
         assert not DocumentLine.objects.filter(label="ok").exists()
 
 
-def test_save_diffs_lines_create_update_delete_in_one_transaction(linesdemo_tables):
+def test_save_diffs_lines_create_update_delete_in_one_transaction(composed_tables):
     """``_save`` creates/updates/deletes children and patches the parent atomically."""
 
     owner = create_user("owner")
@@ -315,7 +288,7 @@ def test_save_diffs_lines_create_update_delete_in_one_transaction(linesdemo_tabl
         assert not DocumentLine.objects.filter(pk=drop.pk).exists()
 
 
-def test_save_without_lines_leaves_children_untouched(linesdemo_tables):
+def test_save_without_lines_leaves_children_untouched(composed_tables):
     """Omitting ``lines`` is a parent-only save; the children are left alone."""
 
     owner = create_user("owner")
@@ -337,7 +310,7 @@ def test_save_without_lines_leaves_children_untouched(linesdemo_tables):
         assert doc.lines.count() == 1
 
 
-def test_save_denies_actor_without_write_on_parent(linesdemo_tables):
+def test_save_denies_actor_without_write_on_parent(composed_tables):
     """An actor with no write on the parent is denied — the row is never found."""
 
     owner = create_user("owner")
@@ -365,7 +338,7 @@ def test_save_denies_actor_without_write_on_parent(linesdemo_tables):
     assert line.label == "Line" and line.quantity == 1
 
 
-def test_save_denies_reader_without_write_even_with_empty_patch(linesdemo_tables):
+def test_save_denies_reader_without_write_even_with_empty_patch(composed_tables):
     """A reader (read, no write) is denied a lines-only save — the write-gate hole.
 
     The ``reader`` grant makes ``read`` and ``write`` diverge, so the parent row
@@ -406,7 +379,7 @@ def test_save_denies_reader_without_write_even_with_empty_patch(linesdemo_tables
         assert doc.lines.count() == 1
 
 
-def test_save_rejects_line_ids_not_on_the_parent(linesdemo_tables):
+def test_save_rejects_line_ids_not_on_the_parent(composed_tables):
     """A line id absent from the parent's stored set is rejected wholesale.
 
     Enforces the completeness contract server-side: a stale/foreign/truncated
@@ -443,7 +416,7 @@ def test_save_rejects_line_ids_not_on_the_parent(linesdemo_tables):
     assert foreign.label == "Foreign"
 
 
-def test_save_fetches_kept_lines_without_per_row_growth(linesdemo_tables):
+def test_save_fetches_kept_lines_without_per_row_growth(composed_tables):
     """The kept-child fetch is batched: its query cost does not grow per row (no N+1)."""
 
     owner = create_user("owner")
@@ -475,7 +448,7 @@ def test_save_fetches_kept_lines_without_per_row_growth(linesdemo_tables):
     assert child_selects_for(2) == child_selects_for(5)
 
 
-def test_save_locks_the_parent_row_before_diffing_lines(linesdemo_tables, monkeypatch):
+def test_save_locks_the_parent_row_before_diffing_lines(composed_tables, monkeypatch):
     """The child diff runs under a parent-row lock (serializes concurrent saves).
 
     A true cross-delete race needs two Postgres connections; on the SQLite floor
@@ -511,7 +484,7 @@ def test_save_locks_the_parent_row_before_diffing_lines(linesdemo_tables, monkey
     assert Document in locked_models
 
 
-def test_save_decodes_line_relation_under_the_callers_actor(linesdemo_tables):
+def test_save_decodes_line_relation_under_the_callers_actor(composed_tables):
     """A line referencing a product the caller cannot read is rejected before elevation.
 
     The relation decode runs under the caller's actor (phase 1), so an invisible
@@ -689,7 +662,7 @@ def test_rich_lines_metadata_projects_enum_and_m2m_child_fields():
     assert tags.relation_model_label == "linesdemo.Tag"
 
 
-def test_rich_nested_insert_persists_enum_and_m2m(linesdemo_tables):
+def test_rich_nested_insert_persists_enum_and_m2m(composed_tables):
     """A nested insert writes the enum child (lowercase model value) and its M2M tags."""
 
     actor = create_user("author")
@@ -729,7 +702,7 @@ def test_rich_nested_insert_persists_enum_and_m2m(linesdemo_tables):
         assert set(row.tags.values_list("name", flat=True)) == {"Red", "Blue"}
 
 
-def test_rich_save_round_trips_enum_and_m2m_diff(linesdemo_tables):
+def test_rich_save_round_trips_enum_and_m2m_diff(composed_tables):
     """``_save`` diff-applies an enum change (lowercase) and an M2M set (sqids) atomically."""
 
     owner = create_user("owner")

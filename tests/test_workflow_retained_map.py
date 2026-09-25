@@ -11,6 +11,7 @@ from django.db.models.signals import post_save
 from django.utils import timezone
 from rebac import system_context
 
+from angee.testing.models import StepAttempt, StepRun
 from angee.workflows import engine
 from angee.workflows.attempts import (
     AttemptCause,
@@ -21,16 +22,7 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepResult
-from tests.workflows import (
-    FixtureStep,
-    StepAttempt,
-    StepRun,
-    advance_once,
-    execute_started,
-    run_to_terminal,
-    start_run,
-    workflow_with_steps,
-)
+from tests.workflows import FixtureStep, advance_once, execute_started, run_to_terminal, start_run, workflow_with_steps
 
 
 def _map_workflow(*, item: Any, explicit: bool) -> Any:
@@ -55,12 +47,12 @@ def _map_workflow(*, item: Any, explicit: bool) -> Any:
 @pytest.mark.parametrize("item", [None, "scalar", {"item": "mapping"}])
 @pytest.mark.django_db(transaction=True)
 def test_explicit_map_item_uses_exact_raw_json_and_retained_source(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     item: Any,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
 
     def echo(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
@@ -104,11 +96,11 @@ def test_explicit_map_item_uses_exact_raw_json_and_retained_source(
 
 @pytest.mark.django_db(transaction=True)
 def test_automatic_map_body_keeps_wrapped_input_and_captures_raw_source(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
 
     def echo(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
@@ -131,12 +123,12 @@ def test_automatic_map_body_keeps_wrapped_input_and_captures_raw_source(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_expansion_uses_declared_bound_input_instead_of_routing_predecessor(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     django_assert_num_queries: Any,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     prepare_input = engine._prepare_attempt_input
     prepared_maps: list[int] = []
 
@@ -211,11 +203,11 @@ def test_map_expansion_uses_declared_bound_input_instead_of_routing_predecessor(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_capacity_failure_rolls_back_expansion_and_children(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -255,11 +247,11 @@ def test_map_capacity_failure_rolls_back_expansion_and_children(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_reexpansion_reserves_reused_terminal_body_execution(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -288,11 +280,11 @@ def test_map_reexpansion_reserves_reused_terminal_body_execution(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_override_shrinks_current_membership_without_rebinding_history(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -352,11 +344,11 @@ def test_map_override_shrinks_current_membership_without_rebinding_history(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_aggregate_rejects_nonexpansion_attempt_without_projection(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -385,11 +377,11 @@ def test_map_aggregate_rejects_nonexpansion_attempt_without_projection(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_membership_rejects_wrong_declared_target_without_rebinding(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -417,11 +409,11 @@ def test_map_membership_rejects_wrong_declared_target_without_rebinding(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_aggregate_waits_for_complete_current_membership(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -447,11 +439,11 @@ def test_map_aggregate_waits_for_complete_current_membership(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_expansion_owner_rejects_non_map_step_without_writes(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -477,11 +469,11 @@ def test_map_expansion_owner_rejects_non_map_step_without_writes(
 
 @pytest.mark.django_db(transaction=True)
 def test_invalid_map_definition_retains_failed_wait_and_aggregate(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -512,11 +504,11 @@ def test_invalid_map_definition_retains_failed_wait_and_aggregate(
 
 @pytest.mark.django_db(transaction=True)
 def test_retained_map_advance_ignores_system_journal_rows(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -540,11 +532,11 @@ def test_retained_map_advance_ignores_system_journal_rows(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_membership_identity_rejects_public_instance_and_bulk_initializers(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -577,11 +569,11 @@ def test_map_membership_identity_rejects_public_instance_and_bulk_initializers(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_claim_rejects_forged_sibling_step_membership(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",
@@ -616,11 +608,11 @@ def test_map_claim_rejects_forged_sibling_step_membership(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_expansion_signal_cannot_forge_membership_inside_owner_session(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
         FixtureStep,
         "run",

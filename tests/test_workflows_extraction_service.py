@@ -36,7 +36,10 @@ from rebac import (
     write_relationships,
 )
 
+import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
+import tests.test_messaging  # noqa: F401 -- register related models before native database setup
 from angee.messaging.backends import ParsedMessage, ParsedPart
+from angee.testing.models import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowRun
 from angee.workflows import engine as workflow_engine
 from angee.workflows.states import Verdict
 from angee.workflows_extraction.contracts import (
@@ -86,13 +89,10 @@ from angee.workflows_extraction.steps import (
     ProcessEvidenceStepImpl,
     _restore_prepared,
 )
-from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
-from tests.extraction_models import EXTRACTION_MODELS, Extraction, ExtractionPage, ExtractionSource
+from tests import test_agents_graphql  # noqa: F401 -- register Extraction's inference targets before database setup
+from tests.conftest import make_integration
+from tests.extraction_models import Extraction, ExtractionPage, ExtractionSource
 from tests.extraction_profiles import FakeDocumentProfile, RecordCarrierProfile
-from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
-from tests.test_integrate_vcs import VCS_TEST_MODELS
-from tests.test_messaging import MESSAGING_TEST_MODELS
-from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowRun
 
 
 def test_json_pointer_value_resolves_rfc6901_tokens_and_rejects_missing() -> None:
@@ -771,20 +771,6 @@ def test_retained_authority_materializes_only_missing_claimed_containers() -> No
     }
 
 
-@pytest.fixture()
-def extraction_tables(transactional_db):
-    """Use the same concrete model graph as messaging, agents, and stored files."""
-
-    models = tuple(
-        dict.fromkeys((*MESSAGING_TEST_MODELS, *VCS_TEST_MODELS, *AGENTS_GRAPHQL_MODELS, *EXTRACTION_MODELS))
-    )
-    _create_missing_tables(models)
-    try:
-        yield
-    finally:
-        _clear_model_tables(models)
-
-
 SCHEMA = {
     "$id": "test.synthetic.document.v1",
     "type": "object",
@@ -1034,7 +1020,7 @@ class PageAggregationTests(SimpleTestCase):
         self.assertEqual(source.mime_type, "")
 
 
-@pytest.mark.usefixtures("extraction_tables", "workflow_engine_tables")
+@pytest.mark.usefixtures("transactional_db", "composed_tables")
 class ExtractionServiceTests(TestCase):
     """Exercise the service against the concrete composed runtime models."""
 

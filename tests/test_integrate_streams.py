@@ -52,8 +52,8 @@ from angee.integrate.streams import (
     sync_bridge,
 )
 from angee.messaging.backends import ParsedMessage
-from tests.conftest import _create_missing_tables, make_integration
-from tests.integrate_models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
+from angee.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
+from tests.conftest import make_integration
 from tests.messaging_models import Channel
 
 
@@ -69,17 +69,11 @@ class AppliedRecord(models.Model):
 
 
 @pytest.fixture
-def stream_bridge(record_sync_tables: None) -> Iterator[Channel]:
+def stream_bridge(composed_tables: None) -> Iterator[Channel]:
     """Run transport tests outside any enclosing Django transaction."""
 
-    created = _create_missing_tables((AppliedRecord,))
-    try:
-        with system_context(reason="test stream protocol"):
-            yield make_integration("stream-protocol", model=Channel)
-    finally:
-        with connection.schema_editor() as editor:
-            for model in reversed(created):
-                editor.delete_model(model)
+    with system_context(reason="test stream protocol"):
+        yield make_integration("stream-protocol", model=Channel)
 
 
 @dataclass

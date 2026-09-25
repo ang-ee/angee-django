@@ -627,6 +627,15 @@ and current contracts before applying a historical example to a new deployment.
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.
+- **Django owns static test-table lifecycle.** Register concrete models before
+  database setup in installed, unmigrated apps, and use pytest-django's native
+  setup and transactional flush. Share addon source compositions through
+  [`angee.testing`](../../angee/testing/__init__.py); see
+  [test setup](../checks.md#source-addon-test-models). Framework probes declared
+  after setup, in isolated registries, unmanaged, or under uninstalled or migrated
+  labels use the single [`model_tables`](../../tests/tables.py) helper. It drops only
+  tables it created; it never clears existing tables. Keep production code
+  independent of test support.
 - **Patch inherited Django manager methods on the manager class.** Pytest's
   `monkeypatch` can restore an instance patch as a bound instance attribute;
   Django's `db_manager()` copies then retain the original manager and lose their

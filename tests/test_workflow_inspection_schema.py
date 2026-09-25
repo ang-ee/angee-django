@@ -16,13 +16,14 @@ from graphql import GraphQLEnumType, GraphQLObjectType, get_named_type, parse, v
 from rebac import system_context
 from strawberry.schema.config import StrawberryConfig
 
+from angee.testing.models import StepAttempt, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import AttemptResult, AttemptResultKind, LeaseRevocationReason
 from angee.workflows.models import RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import StepResult
 from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _published_workflow
-from tests.workflows import FixtureStep, StepAttempt, Workflow, WorkflowDispatch, WorkflowRun, advance_once
+from tests.workflows import FixtureStep, advance_once
 
 User = get_user_model()
 # Schema resolves concrete workflow models registered by the fixture imports above.
@@ -74,13 +75,13 @@ def fixture_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 @pytest.mark.django_db(transaction=True)
 def test_attempt_resource_lists_bounded_summary_and_reads_selected_payload(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     fixture_calls: list[dict[str, Any]],
 ) -> None:
     """The list can stay payload-free while the selected detail reads retained evidence."""
 
-    del workflow_engine_tables, no_workflow_queue, fixture_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     schema = _console_schema()
     owner = User.objects.create_user(username="workflow-inspection-reader")
     subject, workflow = _published_workflow(
@@ -192,13 +193,13 @@ def test_attempt_resource_lists_bounded_summary_and_reads_selected_payload(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("kind", list(WaitingKind))
 def test_run_and_step_waiting_kind_share_native_enum(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     kind: WaitingKind,
 ) -> None:
     """Stored and annotation-backed wait reasons share one nullable enum."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     schema = _console_schema()
     owner = User.objects.create_user(username="workflow-waiting-reader")
     subject, workflow = _published_workflow(
@@ -234,13 +235,13 @@ def test_run_and_step_waiting_kind_share_native_enum(
 
 @pytest.mark.django_db(transaction=True)
 def test_attempt_resource_denies_list_and_guessed_detail_without_step_run_read(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     fixture_calls: list[dict[str, Any]],
 ) -> None:
     """An attempt identifier grants no visibility beyond its owning logical execution."""
 
-    del workflow_engine_tables, no_workflow_queue, fixture_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     schema = _console_schema()
     owner = User.objects.create_user(username="workflow-inspection-owner")
     plain = User.objects.create_user(username="workflow-inspection-plain")
@@ -288,7 +289,7 @@ def test_attempt_resource_denies_list_and_guessed_detail_without_step_run_read(
 
 @pytest.mark.django_db(transaction=True)
 def test_decision_target_projection_reuses_one_authorized_lookup_per_viewer_request(
-    workflow_engine_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner = User.objects.create_user(username="target-reader")
     stranger = User.objects.create_user(username="target-stranger")

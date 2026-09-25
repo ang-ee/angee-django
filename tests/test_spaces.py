@@ -11,7 +11,7 @@ import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, transaction
 from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
@@ -29,8 +29,6 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests import test_messaging_graphql
 from tests.conftest import (
     SchemaAddon,
-    _clear_model_tables,
-    _create_missing_tables,
     assert_private_hasura_insert_access,
     create_user,
     execute_schema,
@@ -44,12 +42,11 @@ from tests.test_messaging import Party, Person, Thread
 # cached ``related_model`` while the source models were inspected during setup.
 Membership._meta.get_field("party").__dict__.pop("related_model", None)
 spaces_schema = importlib.import_module("angee.spaces.schema")
-SPACES_TEST_MODELS = (Party, Person, Group, Membership, Thread)
 
 
 @pytest.fixture()
 def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
-    """Create concrete tables and load the composed spaces/messaging REBAC schema."""
+    """Load the composed spaces/messaging REBAC schema for native test tables."""
 
     del transactional_db
     app_configs = list(apps.get_app_configs())
@@ -63,16 +60,10 @@ def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
     original_schema = getattr(messaging, "rebac_schema", sentinel)
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)
 
-    created_models = _create_missing_tables(SPACES_TEST_MODELS)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
-        _clear_model_tables(SPACES_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
         if original_schema is sentinel:
             if hasattr(messaging, "rebac_schema"):
                 delattr(messaging, "rebac_schema")

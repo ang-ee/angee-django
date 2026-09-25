@@ -9,8 +9,6 @@ import pytest
 from django.contrib.auth.models import AnonymousUser, Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
-from django.core.management import call_command
-from django.db import connection
 from django.test import RequestFactory
 from graphql import GraphQLError
 from rebac import (
@@ -287,22 +285,6 @@ def test_action_target_wraps_lookup_and_body_in_system_context(
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
-def document_table(transactional_db: Any):
-    """Ensure the demo document table exists and the REBAC schema is synced."""
-
-    existing = set(connection.introspection.table_names())
-    if Document._meta.db_table not in existing:
-        with connection.schema_editor() as editor:
-            editor.create_model(Document)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        with connection.cursor() as cursor:
-            cursor.execute(f"DELETE FROM {connection.ops.quote_name(Document._meta.db_table)}")
-
-
 def _grant(document: Document, relation: str, user: Any) -> None:
     """Write one direct relationship tuple for ``user`` on ``document``."""
 
@@ -334,7 +316,7 @@ def _owned_document(owner: Any, *, title: str = "Document") -> Document:
     return document
 
 
-def test_authorized_action_target_returns_the_actor_reachable_row(document_table) -> None:
+def test_authorized_action_target_returns_the_actor_reachable_row(composed_tables) -> None:
     """An actor with the per-row permission gets the actor-bound row back."""
 
     owner = create_user("owner")
@@ -346,14 +328,14 @@ def test_authorized_action_target_returns_the_actor_reachable_row(document_table
     assert target == document
 
 
-def test_authorized_action_target_denies_anonymous_sessions(document_table) -> None:
+def test_authorized_action_target_denies_anonymous_sessions(composed_tables) -> None:
     """An unauthenticated session raises the GraphQL-error denial, not an in-band shape."""
 
     with pytest.raises(PermissionDenied, match="Authentication required."):
         authorized_action_target(_info_for(AnonymousUser()), Document, "sd_missing", "write")
 
 
-def test_authorized_action_target_hides_unreachable_rows_as_not_found(document_table) -> None:
+def test_authorized_action_target_hides_unreachable_rows_as_not_found(composed_tables) -> None:
     """A row outside the actor's write scope reads as plain not-found (no existence oracle)."""
 
     owner = create_user("owner")
@@ -368,7 +350,7 @@ def test_authorized_action_target_hides_unreachable_rows_as_not_found(document_t
     }
 
 
-def test_authorized_action_target_denies_readable_row_without_permission(document_table) -> None:
+def test_authorized_action_target_denies_readable_row_without_permission(composed_tables) -> None:
     """A reader (read without write) resolves the row but fails the per-row permission."""
 
     owner = create_user("owner")
@@ -388,7 +370,7 @@ def test_authorized_action_target_denies_readable_row_without_permission(documen
     }
 
 
-def test_action_guard_maps_authorized_action_target_failures_in_band(document_table) -> None:
+def test_action_guard_maps_authorized_action_target_failures_in_band(composed_tables) -> None:
     """The preflight raise and the guard compose into the in-band ``ActionResult``."""
 
     intruder = create_user("intruder")

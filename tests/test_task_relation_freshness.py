@@ -6,14 +6,13 @@ from collections.abc import Iterator
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.db import models
 from rebac import system_context
 
 from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Task as AbstractTask
 from angee.work.models import Stage as AbstractStage
 from angee.work.models import TaskWork
-from tests.conftest import _clear_model_tables, _create_missing_tables
 from tests.scopedemo.models import Scope
 
 
@@ -26,7 +25,6 @@ def _local_constraints(constraints: tuple[models.BaseConstraint, ...]) -> tuple[
         kwargs["name"] = f"freshness_{kwargs['name']}"
         copies.append(type(constraint)(*args, **kwargs))
     return tuple(copies)
-
 
 
 class FreshnessStage(AbstractStage):
@@ -70,18 +68,9 @@ class FreshnessTask(TaskWork, AbstractTask):
 @pytest.fixture
 def task_relations(transactional_db: None) -> Iterator[Scope]:
     del transactional_db
-    test_models = (FreshnessStage, FreshnessMilestone, FreshnessTask, FreshnessTask.history.model)
-    created = _create_missing_tables(test_models)
-    try:
-        with system_context(reason="tests.task_relation_freshness.setup"):
-            scope = Scope.objects.create(name="Task scope")
-        yield scope
-    finally:
-        _clear_model_tables(test_models)
-        if created:
-            with connection.schema_editor() as editor:
-                for model in reversed(created):
-                    editor.delete_model(model)
+    with system_context(reason="tests.task_relation_freshness.setup"):
+        scope = Scope.objects.create(name="Task scope")
+    yield scope
 
 
 def test_unsaved_stage_category_edit_cannot_allow_system_stage_entry(task_relations: Scope) -> None:

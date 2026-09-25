@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 import pytest
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.db import connection, models
+from django.db import models
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer
@@ -24,6 +24,7 @@ from angee.base.impl import (
 )
 from angee.workflows.configs import EmitConfig, JoinContinuationConfig
 from tests.conftest import Integration, OAuthClient, VcsBridge
+from tests.tables import model_tables
 
 
 class _BaseImpl(ImplBase):
@@ -192,9 +193,7 @@ def test_base_validation_refreshes_and_normalizes_deferred_config() -> None:
         class Meta:
             app_label = "tests"
 
-    with connection.schema_editor() as editor:
-        editor.create_model(DeferredConfigRecord)
-    try:
+    with model_tables((DeferredConfigRecord,)):
         record = DeferredConfigRecord.objects.create(adapter="typed", config={"retries": 1})
         DeferredConfigRecord.objects.filter(pk=record.pk).update(config={"retries": "3"})
         deferred = DeferredConfigRecord.objects.only("pk").get(pk=record.pk)
@@ -205,9 +204,6 @@ def test_base_validation_refreshes_and_normalizes_deferred_config() -> None:
         stored = DeferredConfigRecord.objects.get(pk=record.pk)
 
         assert stored.config == {"endpoint": "https://example.test", "retries": 3}
-    finally:
-        with connection.schema_editor() as editor:
-            editor.delete_model(DeferredConfigRecord)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -224,9 +220,7 @@ def test_impl_save_leaves_untouched_config_and_selector_deferred(django_assert_n
         class Meta:
             app_label = "tests"
 
-    with connection.schema_editor() as editor:
-        editor.create_model(DeferredConfigRecord)
-    try:
+    with model_tables((DeferredConfigRecord,)):
         record = DeferredConfigRecord.objects.create(adapter="typed", config={"retries": 1}, label="before")
         deferred = DeferredConfigRecord.objects.only("label").get(pk=record.pk)
         DeferredConfigRecord.objects.filter(pk=record.pk).update(config={"retries": 7})
@@ -241,9 +235,6 @@ def test_impl_save_leaves_untouched_config_and_selector_deferred(django_assert_n
         assert stored.label == "after"
         assert stored.config == {"retries": 7}
         assert stored.adapter == "typed"
-    finally:
-        with connection.schema_editor() as editor:
-            editor.delete_model(DeferredConfigRecord)
 
 
 def test_effective_defaults_merges_along_mro() -> None:

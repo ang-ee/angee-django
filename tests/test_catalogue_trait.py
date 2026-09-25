@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from django.apps import AppConfig
-from django.db import connection, models
+from django.db import models
 from django.test.utils import isolate_apps
 
 from angee.addons import addon_manifest
@@ -15,6 +15,7 @@ from angee.base.models import AngeeModel
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
 from tests.conftest import make_addon
+from tests.tables import model_tables
 
 
 def _addon(
@@ -214,20 +215,9 @@ def test_resource_loader_rejects_catalogue_tier_mismatch(tmp_path: Path) -> None
         },
     )
 
-    models_to_create: tuple[type[models.Model], ...] = (
-        CatalogueLoadThing,
-        CatalogueLoadLedger,
-    )
-    with connection.schema_editor() as schema_editor:
-        for model in models_to_create:
-            schema_editor.create_model(model)
-    try:
+    with model_tables((CatalogueLoadThing, CatalogueLoadLedger)):
         with pytest.raises(ResourceLoadError, match="catalogue tier mismatch"):
             CatalogueLoadLedger.objects.load_addons(
                 (owner,),
                 tiers=[Resource.Tier.MASTER],
             )
-    finally:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(models_to_create):
-                schema_editor.delete_model(model)

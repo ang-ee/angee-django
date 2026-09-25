@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 from django.contrib.auth.models import Group
-from django.db import connection, models, transaction
+from django.db import models, transaction
 from django.db.models.deletion import Collector
 from django.test import override_settings
 from django.test.utils import isolate_apps
@@ -20,6 +20,7 @@ from angee.graphql.deletion import (
     DeletePreviewNode,
     delete_by_public_id,
 )
+from tests.tables import model_tables
 
 
 @pytest.mark.django_db(transaction=True)
@@ -36,9 +37,7 @@ def test_deletion_preview_counts_deleted_rows() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PreviewItem)
-    try:
+    with model_tables((PreviewItem,)):
         item = PreviewItem.objects.create(name="draft")
 
         preview = DeletePreview.from_instance(item)
@@ -46,9 +45,6 @@ def test_deletion_preview_counts_deleted_rows() -> None:
         assert preview.total_deleted_count == 1
         assert preview.deleted[0].count == 1
         assert not preview.has_blockers
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PreviewItem)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -75,10 +71,7 @@ def test_deletion_preview_reports_protected_blockers() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PreviewParent)
-        schema_editor.create_model(PreviewChild)
-    try:
+    with model_tables((PreviewParent, PreviewChild)):
         parent = PreviewParent.objects.create(name="parent")
         PreviewChild.objects.create(parent=parent)
 
@@ -86,10 +79,6 @@ def test_deletion_preview_reports_protected_blockers() -> None:
 
         assert preview.has_blockers
         assert preview.blocked[0].count == 1
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PreviewChild)
-            schema_editor.delete_model(PreviewParent)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -120,10 +109,7 @@ def test_deletion_preview_counts_set_null_updates() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PreviewNullableParent)
-        schema_editor.create_model(PreviewNullableChild)
-    try:
+    with model_tables((PreviewNullableParent, PreviewNullableChild)):
         parent = PreviewNullableParent.objects.create(name="parent")
         PreviewNullableChild.objects.create(parent=parent)
         PreviewNullableChild.objects.create(parent=parent)
@@ -132,10 +118,6 @@ def test_deletion_preview_counts_set_null_updates() -> None:
 
         assert preview.updated[0].count == 2
         assert not preview.has_blockers
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PreviewNullableChild)
-            schema_editor.delete_model(PreviewNullableParent)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -165,10 +147,7 @@ def test_deletion_preview_reports_restricted_blockers() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PreviewRestrictedParent)
-        schema_editor.create_model(PreviewRestrictedChild)
-    try:
+    with model_tables((PreviewRestrictedParent, PreviewRestrictedChild)):
         parent = PreviewRestrictedParent.objects.create(name="parent")
         PreviewRestrictedChild.objects.create(parent=parent)
 
@@ -176,10 +155,6 @@ def test_deletion_preview_reports_restricted_blockers() -> None:
 
         assert preview.has_blockers
         assert preview.blocked[0].count == 1
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PreviewRestrictedChild)
-            schema_editor.delete_model(PreviewRestrictedParent)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -209,10 +184,7 @@ def test_deletion_preview_counts_fast_deletes(monkeypatch: pytest.MonkeyPatch) -
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PreviewCascadeParent)
-        schema_editor.create_model(PreviewCascadeChild)
-    try:
+    with model_tables((PreviewCascadeParent, PreviewCascadeChild)):
         parent = PreviewCascadeParent.objects.create(name="parent")
         PreviewCascadeChild.objects.create(parent=parent)
 
@@ -233,10 +205,6 @@ def test_deletion_preview_counts_fast_deletes(monkeypatch: pytest.MonkeyPatch) -
         child_label = str(PreviewCascadeChild._meta.verbose_name_plural)
         assert deleted[parent_label] == 1
         assert deleted[child_label] == 1
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PreviewCascadeChild)
-            schema_editor.delete_model(PreviewCascadeParent)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -274,10 +242,7 @@ def test_deletion_preview_hides_rebac_child_leaves_without_read_access() -> None
 
             return self.name
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PreviewScopedParent)
-        schema_editor.create_model(PreviewScopedChild)
-    try:
+    with model_tables((PreviewScopedParent, PreviewScopedChild)):
         with system_context(reason="test-setup"):
             parent = PreviewScopedParent.objects.create(name="parent")
             child = PreviewScopedChild.objects.create(parent=parent, name="Hidden child")
@@ -292,10 +257,6 @@ def test_deletion_preview_hides_rebac_child_leaves_without_read_access() -> None
 
         assert "Hidden child" not in _tree_object_labels(preview.root)
         assert str(child.pk) not in _tree_object_ids(child_group)
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PreviewScopedChild)
-            schema_editor.delete_model(PreviewScopedParent)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -314,9 +275,7 @@ def test_delete_user_removes_denormalized_subject_relationships() -> None:
             app_label = "auth"
             rebac_resource_type = "auth/user"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(DeletedUserSubject)
-    try:
+    with model_tables((DeletedUserSubject,)):
         with override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized"):
             with system_context(reason="test.subject-relationship-gc.setup"):
                 user = DeletedUserSubject.objects.create(label="subject")
@@ -337,9 +296,6 @@ def test_delete_user_removes_denormalized_subject_relationships() -> None:
                 subject_type=subject.resource_type,
                 subject_id=subject.resource_id,
             ).exists()
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(DeletedUserSubject)
 
 
 def _tree_object_labels(node: DeletePreviewNode) -> tuple[str, ...]:
@@ -584,10 +540,7 @@ def test_delete_by_public_id_returns_blocked_preview_for_late_protected_relation
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(DeleteRaceParent)
-        schema_editor.create_model(DeleteRaceChild)
-    try:
+    with model_tables((DeleteRaceParent, DeleteRaceChild)):
         parent = DeleteRaceParent.objects.create(name="race")
 
         preview = delete_by_public_id(
@@ -600,7 +553,3 @@ def test_delete_by_public_id_returns_blocked_preview_for_late_protected_relation
         assert preview.has_blockers
         assert preview.blocked[0].count == 1
         assert DeleteRaceParent.objects.filter(pk=parent.pk).exists()
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(DeleteRaceChild)
-            schema_editor.delete_model(DeleteRaceParent)

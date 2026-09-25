@@ -9,7 +9,7 @@ import pytest
 import reversion
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, models
+from django.db import models
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.operations import CreateModel
 from django.db.migrations.state import ModelState, ProjectState
@@ -18,6 +18,7 @@ from django.test.utils import isolate_apps
 from angee.base.mixins import HistoryMixin, RevisionMixin, SqidMixin
 from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
+from tests.tables import model_tables
 
 
 @pytest.fixture
@@ -458,10 +459,7 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
     assert not hasattr(generated, "HistoricalChild")
     assert generated.Child.history.model is history
     assert "sqid" not in {field.name for field in history._meta.local_fields}
-    with connection.schema_editor() as editor:
-        editor.create_model(Tracked)
-        editor.create_model(history)
-    try:
+    with model_tables((Tracked, history)):
         record = Tracked.objects.create(title="first")
         record.title = "second"
         record.save()
@@ -469,10 +467,6 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
         assert record.history.latest().instance.title == "second"
         record.delete()
         assert history.objects.count() == 3
-    finally:
-        with connection.schema_editor() as editor:
-            editor.delete_model(history)
-            editor.delete_model(Tracked)
 
 
 @isolate_apps()

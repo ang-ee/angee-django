@@ -49,15 +49,15 @@ from angee.parties.backends import (
 )
 from angee.parties_integrate_carddav.backend import CardDavDirectoryBackend, CardDavError, _parse_vcard, _xml
 from angee.storage.models import UploadState
-from tests.conftest import Backend, Drive, File, MimeType, _clear_model_tables, _create_missing_tables, make_integration
-from tests.integrate_models import RECORD_SYNC_TEST_MODELS, RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
-from tests.test_messaging import MESSAGING_TEST_MODELS, Directory, Folder, Party, Person, RelationshipKind
+from angee.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
+from tests.conftest import Backend, Drive, File, MimeType, make_integration
+from tests.messaging_models import Directory, Folder
+from tests.test_messaging import Party, Person, RelationshipKind
 
 _BASE = "https://dav.example/"
 _BOOK = f"{_BASE}books/contacts/"
 _HREF = f"{_BOOK}ada.vcf"
 _NAMESPACES = {"d": "DAV:", "card": "urn:ietf:params:xml:ns:carddav"}
-_MODELS = (*MESSAGING_TEST_MODELS, *RECORD_SYNC_TEST_MODELS)
 _DECLARED_FIELDS = {
     "display_name",
     "name_prefix",
@@ -256,43 +256,35 @@ def replica(transactional_db: Any) -> Iterator[Replica]:
     """Create the complete existing model graph, preserving real ingest/cascades."""
 
     del transactional_db
-    created = _create_missing_tables(_MODELS)
-    try:
-        with system_context(reason="test CardDAV replica"):
-            directory = make_integration(
-                "carddav-replica",
-                model=Directory,
-                backend_class="carddav",
-                config={"server_url": _BASE},
-            )
-            RelationshipKind.objects.create(
-                slug="employee",
-                name="Employee",
-                inverse_name="Employer",
-                category="professional",
-                other_party_kind="organization",
-            )
-            server = FakeDav()
-            backend = CardDavDirectoryBackend(directory)
-            backend.__dict__["http"] = server
-            definitions = tuple(backend.streams())
-            assert len(definitions) == 1
-            definition = definitions[0]
-            assert (definition.key, definition.partition, definition.kind, definition.direction) == (
-                "contacts",
-                _BOOK,
-                StreamKind.RECORD_REPLICA,
-                StreamDirection.BIDIRECTIONAL,
-            )
-            stream = SyncStream.objects.current(directory, **asdict(definition))
-            yield Replica(directory, backend, server, stream)
-            backend.close()
-    finally:
-        _clear_model_tables(_MODELS)
-        if created:
-            with connection.schema_editor() as editor:
-                for model in reversed(created):
-                    editor.delete_model(model)
+    with system_context(reason="test CardDAV replica"):
+        directory = make_integration(
+            "carddav-replica",
+            model=Directory,
+            backend_class="carddav",
+            config={"server_url": _BASE},
+        )
+        RelationshipKind.objects.create(
+            slug="employee",
+            name="Employee",
+            inverse_name="Employer",
+            category="professional",
+            other_party_kind="organization",
+        )
+        server = FakeDav()
+        backend = CardDavDirectoryBackend(directory)
+        backend.__dict__["http"] = server
+        definitions = tuple(backend.streams())
+        assert len(definitions) == 1
+        definition = definitions[0]
+        assert (definition.key, definition.partition, definition.kind, definition.direction) == (
+            "contacts",
+            _BOOK,
+            StreamKind.RECORD_REPLICA,
+            StreamDirection.BIDIRECTIONAL,
+        )
+        stream = SyncStream.objects.current(directory, **asdict(definition))
+        yield Replica(directory, backend, server, stream)
+        backend.close()
 
 
 def test_new_remote_contact_uses_ingest_identity_and_both_bases(replica: Replica) -> None:

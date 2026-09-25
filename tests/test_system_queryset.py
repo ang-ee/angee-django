@@ -15,9 +15,10 @@ from rebac import RebacMixin
 
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.scoping import system_queryset
+from angee.testing.models import StepAttempt, StepRun
 from angee.workflows.managers import StepAttemptQuerySet
 from tests.conftest import Drive, File, Integration
-from tests.workflows import StepAttempt, StepRun
+from tests.tables import model_tables
 
 POSTGRESQL_ONLY = pytest.mark.skipif(
     connection.vendor != "postgresql",
@@ -146,17 +147,8 @@ def test_lock_capability_check_precedes_native_select_for_update(
 def system_query_tables() -> Iterator[None]:
     """Create the concrete system-query test tables."""
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(SystemQueryThing)
-        schema_editor.create_model(GuardedSystemQueryThing)
-        schema_editor.create_model(ThirdPartySystemQueryThing)
-    try:
+    with model_tables((SystemQueryThing, GuardedSystemQueryThing, ThirdPartySystemQueryThing)):
         yield
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(ThirdPartySystemQueryThing)
-            schema_editor.delete_model(GuardedSystemQueryThing)
-            schema_editor.delete_model(SystemQueryThing)
 
 
 @POSTGRESQL_ONLY

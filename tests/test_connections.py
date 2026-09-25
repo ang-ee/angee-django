@@ -29,7 +29,6 @@ from tests.conftest import (
     OAuthClient,
     VcsBridge,
     Vendor,
-    _create_missing_tables,
 )
 
 
@@ -214,141 +213,126 @@ def test_oauth_client_claim_accessors_support_dotted_paths() -> None:
 def test_connection_managers_are_idempotent_and_delegate_static_token_material() -> None:
     """External account linking and credential upsert are idempotent."""
 
-    created_models = _create_missing_tables()
+    user = get_user_model().objects.create_user(
+        username="connection-alice",
+        email="alice@example.com",
+    )
+    other_user = get_user_model().objects.create_user(
+        username="connection-bob",
+        email="bob@example.com",
+    )
+    call_command("rebac", "sync", verbosity=0)
 
-    try:
-        user = get_user_model().objects.create_user(
-            username="connection-alice",
+    with system_context(reason="test connections"):
+        oauth_client = OAuthClient.objects.create(
+            slug="example",
+            display_name="Example prod",
+            client_id="example-client",
+            client_secret="secret",
+        )
+
+        first_account = ExternalAccount.objects.link(
+            oauth_client,
+            "ext-123",
             email="alice@example.com",
+            display_name="Alice",
+            status=AccountStatus.REVOKED,
+            identity_claims={"sub": "ext-123"},
+            last_error="needs review",
+            owner=user,
         )
-        other_user = get_user_model().objects.create_user(
-            username="connection-bob",
-            email="bob@example.com",
+        second_account = ExternalAccount.objects.link(
+            oauth_client,
+            "ext-123",
         )
-        call_command("rebac", "sync", verbosity=0)
 
-        with system_context(reason="test connections"):
-            oauth_client = OAuthClient.objects.create(
-                slug="example",
-                display_name="Example prod",
-                client_id="example-client",
-                client_secret="secret",
-            )
+        assert second_account.pk == first_account.pk
+        assert ExternalAccount.objects.count() == 1
+        second_account.refresh_from_db()
+        assert second_account.identity_claims == {"sub": "ext-123"}
+        assert second_account.status == AccountStatus.REVOKED
+        assert second_account.last_error == "needs review"
+        assert _owner_tuple_exists(user, second_account)
 
-            first_account = ExternalAccount.objects.link(
-                oauth_client,
-                "ext-123",
-                email="alice@example.com",
-                display_name="Alice",
-                status=AccountStatus.REVOKED,
-                identity_claims={"sub": "ext-123"},
-                last_error="needs review",
-                owner=user,
-            )
-            second_account = ExternalAccount.objects.link(
-                oauth_client,
-                "ext-123",
-            )
+        expires_at = timezone.now() + timedelta(hours=1)
+        first_credential = Credential.objects.upsert_for_user(
+            user,
+            oauth_client,
+            CredentialKind.STATIC_TOKEN,
+            {"api_key": "first-key"},
+            external_account=second_account,
+            expires_at=expires_at,
+        )
+        second_credential = Credential.objects.upsert_for_user(
+            user,
+            oauth_client,
+            CredentialKind.STATIC_TOKEN,
+            {"api_key": "second-key"},
+        )
 
-            assert second_account.pk == first_account.pk
-            assert ExternalAccount.objects.count() == 1
-            second_account.refresh_from_db()
-            assert second_account.identity_claims == {"sub": "ext-123"}
-            assert second_account.status == AccountStatus.REVOKED
-            assert second_account.last_error == "needs review"
-            assert _owner_tuple_exists(user, second_account)
+        assert second_credential.pk == first_credential.pk
+        assert Credential.objects.count() == 1
+        assert not _owner_tuple_exists(user, second_credential)
+        assert Credential.objects.with_actor(user).filter(pk=second_credential.pk).exists()
+        assert not Credential.objects.with_actor(other_user).filter(pk=second_credential.pk).exists()
 
-            expires_at = timezone.now() + timedelta(hours=1)
-            first_credential = Credential.objects.upsert_for_user(
+        second_credential.refresh_from_db()
+        assert second_credential.external_account_id == second_account.pk
+        assert second_credential.expires_at == expires_at
+        assert second_credential.reveal() == {"api_key": "second-key"}
+        assert isinstance(second_credential.handler, StaticTokenCredentialHandler)
+        assert second_credential.auth_headers() == {"Authorization": "Bearer second-key"}
+
+        with pytest.raises(ValueError, match="owned by the manager: kind"):
+            Credential.objects.upsert_for_user(
                 user,
                 oauth_client,
                 CredentialKind.STATIC_TOKEN,
-                {"api_key": "first-key"},
-                external_account=second_account,
-                expires_at=expires_at,
+                {"api_key": "third-key"},
+                **{"kind": CredentialKind.OAUTH},
             )
-            second_credential = Credential.objects.upsert_for_user(
+        with pytest.raises(ValueError, match="owned by the manager: material"):
+            Credential.objects.upsert_for_user(
                 user,
                 oauth_client,
                 CredentialKind.STATIC_TOKEN,
-                {"api_key": "second-key"},
+                {"api_key": "third-key"},
+                **{"material": {"api_key": "override"}},
             )
-
-            assert second_credential.pk == first_credential.pk
-            assert Credential.objects.count() == 1
-            assert not _owner_tuple_exists(user, second_credential)
-            assert Credential.objects.with_actor(user).filter(pk=second_credential.pk).exists()
-            assert not Credential.objects.with_actor(other_user).filter(pk=second_credential.pk).exists()
-
-            second_credential.refresh_from_db()
-            assert second_credential.external_account_id == second_account.pk
-            assert second_credential.expires_at == expires_at
-            assert second_credential.reveal() == {"api_key": "second-key"}
-            assert isinstance(second_credential.handler, StaticTokenCredentialHandler)
-            assert second_credential.auth_headers() == {"Authorization": "Bearer second-key"}
-
-            with pytest.raises(ValueError, match="owned by the manager: kind"):
-                Credential.objects.upsert_for_user(
-                    user,
-                    oauth_client,
-                    CredentialKind.STATIC_TOKEN,
-                    {"api_key": "third-key"},
-                    **{"kind": CredentialKind.OAUTH},
-                )
-            with pytest.raises(ValueError, match="owned by the manager: material"):
-                Credential.objects.upsert_for_user(
-                    user,
-                    oauth_client,
-                    CredentialKind.STATIC_TOKEN,
-                    {"api_key": "third-key"},
-                    **{"material": {"api_key": "override"}},
-                )
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
 def test_connection_managers_authorize_their_own_writes() -> None:
     """link()/upsert_for_user() succeed without an ambient system_context."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(
-            username="connection-bob",
-            email="bob@example.com",
-        )
-        call_command("rebac", "sync", verbosity=0)
-        with system_context(reason="test setup"):
-            oauth_client = OAuthClient.objects.create(
-                slug="selfsuff",
-                display_name="SelfSuff prod",
-                client_id="selfsuff-client",
-                client_secret="secret",
-            )
-
-        # No ambient system_context here: the managers authorize their own writes.
-        account = ExternalAccount.objects.link(oauth_client, "ext-self", owner=user, email="bob@example.com")
-        credential = Credential.objects.upsert_for_user(
-            user,
-            oauth_client,
-            CredentialKind.STATIC_TOKEN,
-            {"api_key": "k"},
-            external_account=account,
+    user = get_user_model().objects.create_user(
+        username="connection-bob",
+        email="bob@example.com",
+    )
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test setup"):
+        oauth_client = OAuthClient.objects.create(
+            slug="selfsuff",
+            display_name="SelfSuff prod",
+            client_id="selfsuff-client",
+            client_secret="secret",
         )
 
-        assert account.pk is not None
-        assert credential.pk is not None
-        assert _owner_tuple_exists(user, account)
-        assert not _owner_tuple_exists(user, credential)
-        assert Credential.objects.with_actor(user).filter(pk=credential.pk).exists()
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+    # No ambient system_context here: the managers authorize their own writes.
+    account = ExternalAccount.objects.link(oauth_client, "ext-self", owner=user, email="bob@example.com")
+    credential = Credential.objects.upsert_for_user(
+        user,
+        oauth_client,
+        CredentialKind.STATIC_TOKEN,
+        {"api_key": "k"},
+        external_account=account,
+    )
+
+    assert account.pk is not None
+    assert credential.pk is not None
+    assert _owner_tuple_exists(user, account)
+    assert not _owner_tuple_exists(user, credential)
+    assert Credential.objects.with_actor(user).filter(pk=credential.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -359,106 +343,92 @@ def test_upsert_for_user_labels_the_credential_from_provider_and_subject() -> No
     carries no name of its own) needs one to be pickable.
     """
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="namer", email="namer@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        with system_context(reason="test name"):
-            oauth_client = OAuthClient.objects.create(
-                slug="example",
-                display_name="Example prod",
-                icon="example.svg",
-                client_id="example-client",
-            )
-            account = ExternalAccount.objects.link(oauth_client, "ext-name", owner=user, email="picker@example.com")
-            credential = Credential.objects.upsert_for_user(
-                user,
-                oauth_client,
-                CredentialKind.STATIC_TOKEN,
-                {"api_key": "k"},
-                external_account=account,
-            )
-            assert account.provider_slug == "example"
-            assert account.provider_environment == "prod"
-            assert account.provider_label == "Example prod"
-            assert account.provider_icon == "example.svg"
-            assert credential.name == "Example prod (picker@example.com)"
-            assert credential.display_name == "Example prod (picker@example.com)"
+    user = get_user_model().objects.create_user(username="namer", email="namer@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test name"):
+        oauth_client = OAuthClient.objects.create(
+            slug="example",
+            display_name="Example prod",
+            icon="example.svg",
+            client_id="example-client",
+        )
+        account = ExternalAccount.objects.link(oauth_client, "ext-name", owner=user, email="picker@example.com")
+        credential = Credential.objects.upsert_for_user(
+            user,
+            oauth_client,
+            CredentialKind.STATIC_TOKEN,
+            {"api_key": "k"},
+            external_account=account,
+        )
+        assert account.provider_slug == "example"
+        assert account.provider_environment == "prod"
+        assert account.provider_label == "Example prod"
+        assert account.provider_icon == "example.svg"
+        assert credential.name == "Example prod (picker@example.com)"
+        assert credential.display_name == "Example prod (picker@example.com)"
 
-            legacy = Credential(
-                oauth_client=oauth_client,
-                external_account=account,
-                kind=CredentialKind.OAUTH,
-                material="{}",
-            )
-            assert legacy.display_name == "example: ext-name"
+        legacy = Credential(
+            oauth_client=oauth_client,
+            external_account=account,
+            kind=CredentialKind.OAUTH,
+            material="{}",
+        )
+        assert legacy.display_name == "example: ext-name"
 
-            # Create-only: a rename survives a later upsert (token refresh / reconnect).
-            credential.name = "Renamed"
-            credential.save(update_fields=["name", "updated_at"])
-            again = Credential.objects.upsert_for_user(
-                user,
-                oauth_client,
-                CredentialKind.STATIC_TOKEN,
-                {"api_key": "k2"},
-                external_account=account,
-            )
-            assert again.pk == credential.pk
-            assert again.name == "Renamed"
-            assert again.display_name == "Renamed"
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+        # Create-only: a rename survives a later upsert (token refresh / reconnect).
+        credential.name = "Renamed"
+        credential.save(update_fields=["name", "updated_at"])
+        again = Credential.objects.upsert_for_user(
+            user,
+            oauth_client,
+            CredentialKind.STATIC_TOKEN,
+            {"api_key": "k2"},
+            external_account=account,
+        )
+        assert again.pk == credential.pk
+        assert again.name == "Renamed"
+        assert again.display_name == "Renamed"
 
 
 @pytest.mark.django_db(transaction=True)
 def test_create_local_credential_needs_no_provider_and_keys_by_name() -> None:
     """A static-token credential is minted with no provider, identified by ``name``."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="local-alice", email="a@example.com")
-        call_command("rebac", "sync", verbosity=0)
+    user = get_user_model().objects.create_user(username="local-alice", email="a@example.com")
+    call_command("rebac", "sync", verbosity=0)
 
-        # `create_local_credential` self-authorizes its own write (no ambient context).
-        credential = Credential.objects.create_local_credential(
+    # `create_local_credential` self-authorizes its own write (no ambient context).
+    credential = Credential.objects.create_local_credential(
+        user,
+        kind=CredentialKind.STATIC_TOKEN,
+        name="github-pat",
+        material={"api_key": "ghp_one"},
+    )
+    assert credential.oauth_client_id is None
+    assert credential.name == "github-pat"
+    assert isinstance(credential.handler, StaticTokenCredentialHandler)
+    assert credential.auth_headers() == {"Authorization": "Bearer ghp_one"}
+
+    # Idempotent by (user, name): a second mint updates the row in place.
+    again = Credential.objects.create_local_credential(
+        user,
+        kind=CredentialKind.STATIC_TOKEN,
+        name="github-pat",
+        material={"api_key": "ghp_two"},
+    )
+    assert again.pk == credential.pk
+    assert again.auth_headers() == {"Authorization": "Bearer ghp_two"}
+    with system_context(reason="test local credential read"):
+        assert Credential.objects.filter(user=user).count() == 1
+
+    # OAuth credentials are minted by the login flow, not here.
+    with pytest.raises(ValueError, match="login flow"):
+        Credential.objects.create_local_credential(
             user,
-            kind=CredentialKind.STATIC_TOKEN,
-            name="github-pat",
-            material={"api_key": "ghp_one"},
+            kind=CredentialKind.OAUTH,
+            name="oauth-x",
+            material={"access_token": "tok"},
         )
-        assert credential.oauth_client_id is None
-        assert credential.name == "github-pat"
-        assert isinstance(credential.handler, StaticTokenCredentialHandler)
-        assert credential.auth_headers() == {"Authorization": "Bearer ghp_one"}
-
-        # Idempotent by (user, name): a second mint updates the row in place.
-        again = Credential.objects.create_local_credential(
-            user,
-            kind=CredentialKind.STATIC_TOKEN,
-            name="github-pat",
-            material={"api_key": "ghp_two"},
-        )
-        assert again.pk == credential.pk
-        assert again.auth_headers() == {"Authorization": "Bearer ghp_two"}
-        with system_context(reason="test local credential read"):
-            assert Credential.objects.filter(user=user).count() == 1
-
-        # OAuth credentials are minted by the login flow, not here.
-        with pytest.raises(ValueError, match="login flow"):
-            Credential.objects.create_local_credential(
-                user,
-                kind=CredentialKind.OAUTH,
-                name="oauth-x",
-                material={"access_token": "tok"},
-            )
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -470,48 +440,34 @@ def test_static_token_credential_allows_an_empty_api_key() -> None:
     on a usable secret (e.g. agent provisioning refuses an empty inference credential).
     """
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="empty-bob", email="b@example.com")
-        call_command("rebac", "sync", verbosity=0)
+    user = get_user_model().objects.create_user(username="empty-bob", email="b@example.com")
+    call_command("rebac", "sync", verbosity=0)
 
-        credential = Credential.objects.create_local_credential(
-            user,
-            kind=CredentialKind.STATIC_TOKEN,
-            name="anthropic-placeholder",
-            material={"api_key": ""},
-        )
-        assert credential.secret_value() == ""
-        with system_context(reason="test empty credential read"):
-            assert credential.reveal() == {"api_key": ""}
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+    credential = Credential.objects.create_local_credential(
+        user,
+        kind=CredentialKind.STATIC_TOKEN,
+        name="anthropic-placeholder",
+        material={"api_key": ""},
+    )
+    assert credential.secret_value() == ""
+    with system_context(reason="test empty credential read"):
+        assert credential.reveal() == {"api_key": ""}
 
 
 @pytest.mark.django_db(transaction=True)
 def test_oauth_credential_requires_a_provider_at_the_database() -> None:
     """The check constraint rejects an ``oauth`` credential with no provider."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="inv-alice", email="i@example.com")
-        with system_context(reason="test invariant"), pytest.raises(IntegrityError):
-            with transaction.atomic():
-                Credential.objects.create(
-                    user=user,
-                    oauth_client=None,
-                    kind=CredentialKind.OAUTH,
-                    material="{}",
-                    name="",
-                )
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+    user = get_user_model().objects.create_user(username="inv-alice", email="i@example.com")
+    with system_context(reason="test invariant"), pytest.raises(IntegrityError):
+        with transaction.atomic():
+            Credential.objects.create(
+                user=user,
+                oauth_client=None,
+                kind=CredentialKind.OAUTH,
+                material="{}",
+                name="",
+            )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -519,153 +475,128 @@ def test_oauth_credential_requires_a_provider_at_the_database() -> None:
 def test_external_account_owner_lookup_uses_active_relationship_storage() -> None:
     """owner_for() works with REBAC's registry-backed relationship model."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(
-            username="registry-owner",
-            email="registry@example.com",
-        )
-        call_command("rebac", "sync", verbosity=0)
-        with system_context(reason="test setup"):
-            oauth_client = OAuthClient.objects.create(
-                slug="registry",
-                display_name="Registry prod",
-                client_id="registry-client",
-                client_secret="secret",
-            )
-
-        account = ExternalAccount.objects.link(
-            oauth_client,
-            "registry-sub",
-            owner=user,
-            email="registry@example.com",
+    user = get_user_model().objects.create_user(
+        username="registry-owner",
+        email="registry@example.com",
+    )
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test setup"):
+        oauth_client = OAuthClient.objects.create(
+            slug="registry",
+            display_name="Registry prod",
+            client_id="registry-client",
+            client_secret="secret",
         )
 
-        assert _owner_tuple_exists(user, account)
-        assert ExternalAccount.objects.owner_for(account) == user
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+    account = ExternalAccount.objects.link(
+        oauth_client,
+        "registry-sub",
+        owner=user,
+        email="registry@example.com",
+    )
+
+    assert _owner_tuple_exists(user, account)
+    assert ExternalAccount.objects.owner_for(account) == user
 
 
 @pytest.mark.django_db(transaction=True)
 def test_oauth_client_manager_syncs_shape_and_secret_from_settings(settings: Any) -> None:
     """OAuthClient seeds are settings-authored and keep secrets out of resource files."""
 
-    created_models = _create_missing_tables()
-    try:
-        settings.ANGEE_INTEGRATE_OAUTH_CLIENTS = (
-            {
-                "slug": "google",
-                "environment": "prod",
-                "display_name": "Google Login",
-                "client_id": "google-client",
-                "client_secret": "from-settings",
-                "authorize_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
-                "token_endpoint": "https://oauth2.googleapis.com/token",
-                "token_request_format": "json",
-                "default_scopes": ["openid", "email"],
-            },
-        )
+    settings.ANGEE_INTEGRATE_OAUTH_CLIENTS = (
+        {
+            "slug": "google",
+            "environment": "prod",
+            "display_name": "Google Login",
+            "client_id": "google-client",
+            "client_secret": "from-settings",
+            "authorize_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_endpoint": "https://oauth2.googleapis.com/token",
+            "token_request_format": "json",
+            "default_scopes": ["openid", "email"],
+        },
+    )
 
-        synced = OAuthClient.objects.sync_from_settings()
+    synced = OAuthClient.objects.sync_from_settings()
 
-        assert len(synced) == 1
-        with system_context(reason="test assertions"):
-            oauth_client = OAuthClient.objects.get(slug="google", environment="prod")
-        assert oauth_client.display_name == "Google Login"
-        assert oauth_client.client_secret == "from-settings"
-        assert oauth_client.default_scopes == ["openid", "email"]
-        assert oauth_client.token_request_format == "json"
-        # Integrate's settings sync is OAuth-only; the OIDC refinement that marks a
-        # login provider is seeded by the iam_integrate_oidc addon, not from here.
+    assert len(synced) == 1
+    with system_context(reason="test assertions"):
+        oauth_client = OAuthClient.objects.get(slug="google", environment="prod")
+    assert oauth_client.display_name == "Google Login"
+    assert oauth_client.client_secret == "from-settings"
+    assert oauth_client.default_scopes == ["openid", "email"]
+    assert oauth_client.token_request_format == "json"
+    # Integrate's settings sync is OAuth-only; the OIDC refinement that marks a
+    # login provider is seeded by the iam_integrate_oidc addon, not from here.
 
-        settings.ANGEE_INTEGRATE_OAUTH_CLIENTS = (
-            {
-                "slug": "google",
-                "environment": "prod",
-                "display_name": "Google Login Updated",
-                "client_id": "google-client-updated",
-                "is_enabled": False,
-            },
-        )
+    settings.ANGEE_INTEGRATE_OAUTH_CLIENTS = (
+        {
+            "slug": "google",
+            "environment": "prod",
+            "display_name": "Google Login Updated",
+            "client_id": "google-client-updated",
+            "is_enabled": False,
+        },
+    )
 
-        OAuthClient.objects.sync_from_settings()
+    OAuthClient.objects.sync_from_settings()
 
-        oauth_client.refresh_from_db()
-        assert oauth_client.display_name == "Google Login Updated"
-        assert oauth_client.client_id == "google-client-updated"
-        assert oauth_client.client_secret == "from-settings"
-        assert oauth_client.is_enabled is False
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+    oauth_client.refresh_from_db()
+    assert oauth_client.display_name == "Google Login Updated"
+    assert oauth_client.client_id == "google-client-updated"
+    assert oauth_client.client_secret == "from-settings"
+    assert oauth_client.is_enabled is False
 
 
 @pytest.mark.django_db(transaction=True)
 def test_oauth_clients_command_runs_the_settings_sync(settings: Any) -> None:
     """The ``oauth_clients`` command is a thin trigger for ``sync_from_settings``."""
 
-    created_models = _create_missing_tables()
-    try:
-        settings.ANGEE_INTEGRATE_OAUTH_CLIENTS = (
-            {
-                "slug": "github",
-                "display_name": "GitHub Login",
-                "client_id": "gh-client",
-                "client_secret": "gh-secret",
-            },
-        )
+    settings.ANGEE_INTEGRATE_OAUTH_CLIENTS = (
+        {
+            "slug": "github",
+            "display_name": "GitHub Login",
+            "client_id": "gh-client",
+            "client_secret": "gh-secret",
+        },
+    )
 
-        call_command("oauth_clients", verbosity=0)
+    call_command("oauth_clients", verbosity=0)
 
-        with system_context(reason="test assertions"):
-            oauth_client = OAuthClient.objects.get(slug="github", environment="prod")
-        assert oauth_client.display_name == "GitHub Login"
-        assert oauth_client.client_id == "gh-client"
-        assert oauth_client.client_secret == "gh-secret"
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+    with system_context(reason="test assertions"):
+        oauth_client = OAuthClient.objects.get(slug="github", environment="prod")
+    assert oauth_client.display_name == "GitHub Login"
+    assert oauth_client.client_id == "gh-client"
+    assert oauth_client.client_secret == "gh-secret"
 
 
 @pytest.mark.django_db(transaction=True)
 def test_ensure_fresh_renews_an_expiring_oauth_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     """`ensure_fresh` renews an expiring OAuth token through the provider refresh grant."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="refresh-alice", email="ra@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        credential = _expiring_oauth_credential(
-            user,
-            slug="refreshprov",
-            material={"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 3600},
-        )
+    user = get_user_model().objects.create_user(username="refresh-alice", email="ra@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    credential = _expiring_oauth_credential(
+        user,
+        slug="refreshprov",
+        material={"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 3600},
+    )
 
-        def fake_refresh(self: Any, *, refresh_token: str) -> dict[str, Any]:
-            assert refresh_token == "old-refresh"
-            return {"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 7200}
+    def fake_refresh(self: Any, *, refresh_token: str) -> dict[str, Any]:
+        assert refresh_token == "old-refresh"
+        return {"access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 7200}
 
-        monkeypatch.setattr(OAuthClientProtocol, "refresh_token", fake_refresh)
+    monkeypatch.setattr(OAuthClientProtocol, "refresh_token", fake_refresh)
 
-        with system_context(reason="test refresh run"):
-            credential.ensure_fresh()
+    with system_context(reason="test refresh run"):
+        credential.ensure_fresh()
 
-        assert credential.secret_value() == "new-access"
-        assert credential.reveal()["refresh_token"] == "new-refresh"
-        assert credential.last_refresh_status == "ok"
-        assert credential.expires_at is not None and credential.expires_at > timezone.now()
-        reloaded = Credential.objects.sudo(reason="test reload").get(pk=credential.pk)
-        assert reloaded.reveal()["access_token"] == "new-access"  # persisted, not just in-memory
-    finally:
-        _drop_models(created_models)
+    assert credential.secret_value() == "new-access"
+    assert credential.reveal()["refresh_token"] == "new-refresh"
+    assert credential.last_refresh_status == "ok"
+    assert credential.expires_at is not None and credential.expires_at > timezone.now()
+    reloaded = Credential.objects.sudo(reason="test reload").get(pk=credential.pk)
+    assert reloaded.reveal()["access_token"] == "new-access"  # persisted, not just in-memory
 
 
 @pytest.mark.django_db(transaction=True)
@@ -674,7 +605,6 @@ def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
 
     if connection.vendor != "postgresql":
         pytest.skip("PostgreSQL row-lock behavior")
-    created_models = _create_missing_tables()
     processes: list[multiprocessing.Process] = []
     results: Any | None = None
     try:
@@ -717,7 +647,6 @@ def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
         if results is not None:
             results.close()
             results.join_thread()
-        _drop_models(created_models)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -725,116 +654,104 @@ def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
 def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
     """SQLite is the documented floor; refresh locking degrades to a plain read there."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="refresh-sqlite", email="sqlite@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        credential = _expiring_oauth_credential(
-            user,
-            slug="refreshsqlite",
-            material={"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 3600},
+    user = get_user_model().objects.create_user(username="refresh-sqlite", email="sqlite@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    credential = _expiring_oauth_credential(
+        user,
+        slug="refreshsqlite",
+        material={"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 3600},
+    )
+
+    def forbidden_select_for_update(self: Any, *args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("SQLite refresh must not call select_for_update()")
+
+    def fake_handler_refresh(self: Any, locked: Any) -> None:
+        locked.material = json.dumps(
+            {"access_token": "sqlite-access", "refresh_token": "sqlite-refresh"},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        locked.expires_at = timezone.now() + timedelta(hours=2)
+        locked.last_refresh_at = timezone.now()
+        locked.last_refresh_status = "ok"
+        locked.save(
+            using=locked._state.db,
+            update_fields=["material", "expires_at", "last_refresh_at", "last_refresh_status"],
         )
 
-        def forbidden_select_for_update(self: Any, *args: Any, **kwargs: Any) -> Any:
-            raise AssertionError("SQLite refresh must not call select_for_update()")
+    monkeypatch.setattr(type(Credential.objects.all()), "select_for_update", forbidden_select_for_update)
+    monkeypatch.setattr(OAuthCredentialHandler, "refresh", fake_handler_refresh)
 
-        def fake_handler_refresh(self: Any, locked: Any) -> None:
-            locked.material = json.dumps(
-                {"access_token": "sqlite-access", "refresh_token": "sqlite-refresh"},
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            locked.expires_at = timezone.now() + timedelta(hours=2)
-            locked.last_refresh_at = timezone.now()
-            locked.last_refresh_status = "ok"
-            locked.save(
-                using=locked._state.db,
-                update_fields=["material", "expires_at", "last_refresh_at", "last_refresh_status"],
-            )
+    with system_context(reason="test sqlite refresh run"):
+        credential.ensure_fresh()
 
-        monkeypatch.setattr(type(Credential.objects.all()), "select_for_update", forbidden_select_for_update)
-        monkeypatch.setattr(OAuthCredentialHandler, "refresh", fake_handler_refresh)
-
-        with system_context(reason="test sqlite refresh run"):
-            credential.ensure_fresh()
-
-        assert credential.secret_value() == "sqlite-access"
-    finally:
-        _drop_models(created_models)
+    assert credential.secret_value() == "sqlite-access"
 
 
 @pytest.mark.django_db(transaction=True)
 def test_attach_credential_preserves_paused_lifecycle_while_resetting_health() -> None:
     """Credential replacement does not silently resume an operator-paused row."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="attach-paused", email="paused@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        with system_context(reason="test paused attach setup"):
-            vendor = Vendor.objects.create(slug="attach-paused", display_name="Attach Paused")
-            first = Credential.objects.create_local_credential(
-                user, kind=CredentialKind.STATIC_TOKEN, name="paused-first", material={"api_key": "first"}
-            )
-            second = Credential.objects.create_local_credential(
-                user, kind=CredentialKind.STATIC_TOKEN, name="paused-second", material={"api_key": "second"}
-            )
-        with system_context(reason="test paused attach integration setup"):
-            integration = VcsBridge.objects.create(
-                owner=user,
-                vendor=vendor,
-                credential=first,
-                backend_class="local",
-                lifecycle="connected",
-            )
-        with system_context(reason="test paused attach state"):
-            integration.pause()
-            integration.report_status("error", "expired token")
-            integration.attach_credential(second)
+    user = get_user_model().objects.create_user(username="attach-paused", email="paused@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test paused attach setup"):
+        vendor = Vendor.objects.create(slug="attach-paused", display_name="Attach Paused")
+        first = Credential.objects.create_local_credential(
+            user, kind=CredentialKind.STATIC_TOKEN, name="paused-first", material={"api_key": "first"}
+        )
+        second = Credential.objects.create_local_credential(
+            user, kind=CredentialKind.STATIC_TOKEN, name="paused-second", material={"api_key": "second"}
+        )
+    with system_context(reason="test paused attach integration setup"):
+        integration = VcsBridge.objects.create(
+            owner=user,
+            vendor=vendor,
+            credential=first,
+            backend_class="local",
+            lifecycle="connected",
+        )
+    with system_context(reason="test paused attach state"):
+        integration.pause()
+        integration.report_status("error", "expired token")
+        integration.attach_credential(second)
 
-        integration.refresh_from_db()
-        assert str(integration.lifecycle) == "paused"
-        assert str(integration.runtime_status) == "ok"
-        assert integration.credential_id == second.pk
-        assert integration.last_error == ""
-    finally:
-        _drop_models(created_models)
+    integration.refresh_from_db()
+    assert str(integration.lifecycle) == "paused"
+    assert str(integration.runtime_status) == "ok"
+    assert integration.credential_id == second.pk
+    assert integration.last_error == ""
 
 
 @pytest.mark.django_db(transaction=True)
 def test_ensure_fresh_is_a_noop_for_a_valid_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """`ensure_fresh` does not call the provider when the token is comfortably in date."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="refresh-val", email="rv@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        with system_context(reason="test valid setup"):
-            oauth_client = OAuthClient.objects.create(
-                slug="validprov",
-                display_name="Valid prod",
-                client_id="validprov-client",
-                token_endpoint="https://idp.example/token",
-                supports_refresh=True,
-            )
-            credential = Credential.objects.upsert_for_user(
-                user,
-                oauth_client,
-                CredentialKind.OAUTH,
-                {"access_token": "valid-access", "refresh_token": "r", "expires_in": 3600},
-            )
-
-        monkeypatch.setattr(
-            OAuthClientProtocol,
-            "refresh_token",
-            lambda *args, **kwargs: pytest.fail("must not refresh a still-valid token"),
+    user = get_user_model().objects.create_user(username="refresh-val", email="rv@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test valid setup"):
+        oauth_client = OAuthClient.objects.create(
+            slug="validprov",
+            display_name="Valid prod",
+            client_id="validprov-client",
+            token_endpoint="https://idp.example/token",
+            supports_refresh=True,
         )
-        with system_context(reason="test valid run"):
-            credential.ensure_fresh()
+        credential = Credential.objects.upsert_for_user(
+            user,
+            oauth_client,
+            CredentialKind.OAUTH,
+            {"access_token": "valid-access", "refresh_token": "r", "expires_in": 3600},
+        )
 
-        assert credential.secret_value() == "valid-access"
-    finally:
-        _drop_models(created_models)
+    monkeypatch.setattr(
+        OAuthClientProtocol,
+        "refresh_token",
+        lambda *args, **kwargs: pytest.fail("must not refresh a still-valid token"),
+    )
+    with system_context(reason="test valid run"):
+        credential.ensure_fresh()
+
+    assert credential.secret_value() == "valid-access"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -844,159 +761,139 @@ def test_ensure_fresh_records_failure_without_raising(
 ) -> None:
     """A provider rejecting the refresh is recorded (``last_refresh_status``), not raised."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="refresh-fail", email="rf@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        credential = _expiring_oauth_credential(
-            user,
-            slug="failprov",
-            material={"access_token": "stale-access", "refresh_token": "revoked", "expires_in": 3600},
-        )
+    user = get_user_model().objects.create_user(username="refresh-fail", email="rf@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    credential = _expiring_oauth_credential(
+        user,
+        slug="failprov",
+        material={"access_token": "stale-access", "refresh_token": "revoked", "expires_in": 3600},
+    )
 
-        def boom(self: Any, *, refresh_token: str) -> dict[str, Any]:
-            raise ValueError("provider body https://idp.example/token?code=canary-secret")
+    def boom(self: Any, *, refresh_token: str) -> dict[str, Any]:
+        raise ValueError("provider body https://idp.example/token?code=canary-secret")
 
-        monkeypatch.setattr(OAuthClientProtocol, "refresh_token", boom)
+    monkeypatch.setattr(OAuthClientProtocol, "refresh_token", boom)
 
-        with system_context(reason="test fail run"):
-            credential.ensure_fresh()  # must not raise
+    with system_context(reason="test fail run"):
+        credential.ensure_fresh()  # must not raise
 
-        assert credential.last_refresh_status == "failed"
-        assert credential.secret_value() == "stale-access"  # the old token is retained
-        assert "ValueError" in caplog.text
-        assert "canary-secret" not in caplog.text
-        reloaded = Credential.objects.sudo(reason="test reload").get(pk=credential.pk)
-        assert reloaded.last_refresh_status == "failed"
-        assert reloaded.reveal()["access_token"] == "stale-access"
-    finally:
-        _drop_models(created_models)
+    assert credential.last_refresh_status == "failed"
+    assert credential.secret_value() == "stale-access"  # the old token is retained
+    assert "ValueError" in caplog.text
+    assert "canary-secret" not in caplog.text
+    reloaded = Credential.objects.sudo(reason="test reload").get(pk=credential.pk)
+    assert reloaded.last_refresh_status == "failed"
+    assert reloaded.reveal()["access_token"] == "stale-access"
 
 
 @pytest.mark.django_db(transaction=True)
 def test_oauth_refresh_without_expires_in_clears_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
     """A refresh response with no ``expires_in`` clears ``expires_at`` (no permanent-expired loop)."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="refresh-noexp", email="rn@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        credential = _expiring_oauth_credential(
-            user,
-            slug="noexpprov",
-            material={"access_token": "old", "refresh_token": "old-refresh", "expires_in": 3600},
-        )
-        monkeypatch.setattr(
-            OAuthClientProtocol,
-            "refresh_token",
-            lambda *args, **kwargs: {"access_token": "fresh-access", "refresh_token": "fresh-refresh"},
-        )
-        with system_context(reason="test noexp run"):
-            credential.ensure_fresh()
+    user = get_user_model().objects.create_user(username="refresh-noexp", email="rn@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    credential = _expiring_oauth_credential(
+        user,
+        slug="noexpprov",
+        material={"access_token": "old", "refresh_token": "old-refresh", "expires_in": 3600},
+    )
+    monkeypatch.setattr(
+        OAuthClientProtocol,
+        "refresh_token",
+        lambda *args, **kwargs: {"access_token": "fresh-access", "refresh_token": "fresh-refresh"},
+    )
+    with system_context(reason="test noexp run"):
+        credential.ensure_fresh()
 
-        assert credential.secret_value() == "fresh-access"
-        assert credential.expires_at is None
-    finally:
-        _drop_models(created_models)
+    assert credential.secret_value() == "fresh-access"
+    assert credential.expires_at is None
 
 
 @pytest.mark.django_db(transaction=True)
 def test_refresh_now_forces_renewal_of_a_valid_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """`refresh_now` renews even a still-valid token (the explicit, force path)."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="force-val", email="fv@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        with system_context(reason="test force-valid setup"):
-            oauth_client = OAuthClient.objects.create(
-                slug="forcevalid",
-                display_name="Force valid",
-                client_id="forcevalid-client",
-                token_endpoint="https://idp.example/token",
-                supports_refresh=True,
-            )
-            credential = Credential.objects.upsert_for_user(
-                user,
-                oauth_client,
-                CredentialKind.OAUTH,
-                {"access_token": "valid-access", "refresh_token": "valid-refresh", "expires_in": 3600},
-            )
+    user = get_user_model().objects.create_user(username="force-val", email="fv@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test force-valid setup"):
+        oauth_client = OAuthClient.objects.create(
+            slug="forcevalid",
+            display_name="Force valid",
+            client_id="forcevalid-client",
+            token_endpoint="https://idp.example/token",
+            supports_refresh=True,
+        )
+        credential = Credential.objects.upsert_for_user(
+            user,
+            oauth_client,
+            CredentialKind.OAUTH,
+            {"access_token": "valid-access", "refresh_token": "valid-refresh", "expires_in": 3600},
+        )
 
-        def fake_refresh(self: Any, *, refresh_token: str) -> dict[str, Any]:
-            assert refresh_token == "valid-refresh"
-            return {"access_token": "forced-access", "refresh_token": "forced-refresh", "expires_in": 3600}
+    def fake_refresh(self: Any, *, refresh_token: str) -> dict[str, Any]:
+        assert refresh_token == "valid-refresh"
+        return {"access_token": "forced-access", "refresh_token": "forced-refresh", "expires_in": 3600}
 
-        monkeypatch.setattr(OAuthClientProtocol, "refresh_token", fake_refresh)
-        with system_context(reason="test force-valid run"):
-            credential.refresh_now()
+    monkeypatch.setattr(OAuthClientProtocol, "refresh_token", fake_refresh)
+    with system_context(reason="test force-valid run"):
+        credential.refresh_now()
 
-        assert credential.secret_value() == "forced-access"
-        assert credential.last_refresh_status == "ok"
-    finally:
-        _drop_models(created_models)
+    assert credential.secret_value() == "forced-access"
+    assert credential.last_refresh_status == "ok"
 
 
 @pytest.mark.django_db(transaction=True)
 def test_refresh_now_records_and_raises_on_provider_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
     """`refresh_now` re-raises a rejected grant (unlike the swallowing `ensure_fresh`)."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="force-fail", email="ff@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        credential = _expiring_oauth_credential(
-            user,
-            slug="forcefail",
-            material={"access_token": "stale-access", "refresh_token": "revoked", "expires_in": 3600},
-        )
+    user = get_user_model().objects.create_user(username="force-fail", email="ff@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    credential = _expiring_oauth_credential(
+        user,
+        slug="forcefail",
+        material={"access_token": "stale-access", "refresh_token": "revoked", "expires_in": 3600},
+    )
 
-        def boom(self: Any, *, refresh_token: str) -> dict[str, Any]:
-            raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
+    def boom(self: Any, *, refresh_token: str) -> dict[str, Any]:
+        raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400)
 
-        monkeypatch.setattr(OAuthClientProtocol, "refresh_token", boom)
-        with system_context(reason="test force-fail run"), pytest.raises(OAuthFlowError):
-            credential.refresh_now()
+    monkeypatch.setattr(OAuthClientProtocol, "refresh_token", boom)
+    with system_context(reason="test force-fail run"), pytest.raises(OAuthFlowError):
+        credential.refresh_now()
 
-        credential.refresh_from_db()
-        assert credential.last_refresh_status == "failed"
-        assert credential.secret_value() == "stale-access"  # the old token is retained
-    finally:
-        _drop_models(created_models)
+    credential.refresh_from_db()
+    assert credential.last_refresh_status == "failed"
+    assert credential.secret_value() == "stale-access"  # the old token is retained
 
 
 @pytest.mark.django_db(transaction=True)
 def test_refresh_now_raises_when_not_refreshable(monkeypatch: pytest.MonkeyPatch) -> None:
     """`refresh_now` refuses (without calling the provider) when no refresh is possible."""
 
-    created_models = _create_missing_tables()
-    try:
-        user = get_user_model().objects.create_user(username="force-none", email="fn@example.com")
-        call_command("rebac", "sync", verbosity=0)
-        with system_context(reason="test force-none setup"):
-            oauth_client = OAuthClient.objects.create(
-                slug="forcenone",
-                display_name="Force none",
-                client_id="forcenone-client",
-                token_endpoint="https://idp.example/token",
-                supports_refresh=False,
-            )
-            credential = Credential.objects.upsert_for_user(
-                user,
-                oauth_client,
-                CredentialKind.OAUTH,
-                {"access_token": "static-access", "refresh_token": "unused", "expires_in": 3600},
-            )
-
-        monkeypatch.setattr(
-            OAuthClientProtocol,
-            "refresh_token",
-            lambda *args, **kwargs: pytest.fail("must not call the provider when refresh is unsupported"),
+    user = get_user_model().objects.create_user(username="force-none", email="fn@example.com")
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test force-none setup"):
+        oauth_client = OAuthClient.objects.create(
+            slug="forcenone",
+            display_name="Force none",
+            client_id="forcenone-client",
+            token_endpoint="https://idp.example/token",
+            supports_refresh=False,
         )
-        with system_context(reason="test force-none run"), pytest.raises(ValueError):
-            credential.refresh_now()
-    finally:
-        _drop_models(created_models)
+        credential = Credential.objects.upsert_for_user(
+            user,
+            oauth_client,
+            CredentialKind.OAUTH,
+            {"access_token": "static-access", "refresh_token": "unused", "expires_in": 3600},
+        )
+
+    monkeypatch.setattr(
+        OAuthClientProtocol,
+        "refresh_token",
+        lambda *args, **kwargs: pytest.fail("must not call the provider when refresh is unsupported"),
+    )
+    with system_context(reason="test force-none run"), pytest.raises(ValueError):
+        credential.refresh_now()
 
 
 def _expiring_oauth_credential(user: Any, *, slug: str, material: dict[str, Any]) -> Any:
@@ -1016,15 +913,6 @@ def _expiring_oauth_credential(user: Any, *, slug: str, material: dict[str, Any]
         )
         credential.refresh_from_db()
     return credential
-
-
-def _drop_models(created_models: list[Any]) -> None:
-    """Drop the per-test concrete tables created by ``_create_missing_tables``."""
-
-    if created_models:
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(created_models):
-                schema_editor.delete_model(model)
 
 
 def _owner_tuple_exists(owner: Any, resource: Any) -> bool:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +13,7 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.management import call_command
 from django.db import connection
 from django.db.models.deletion import ProtectedError
 from django.test import RequestFactory
@@ -32,6 +33,7 @@ from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.dashboards.models import validate_dashboard_queries
 from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.testing.models import Decision, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import decision_actions, engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import (
@@ -68,20 +70,13 @@ from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.messaging_models import Party
 from tests.workflows import (
-    WORKFLOW_RUNTIME_MODELS,
-    Decision,
     FixtureStep,
-    StepRun,
-    Workflow,
-    WorkflowDispatch,
-    WorkflowRun,
     admit_workflow_actor,
     advance_once,
     execute_started,
     run_to_terminal,
     start_run,
     step_for,
-    workflow_table_setup,
     workflow_with_steps,
 )
 
@@ -659,14 +654,14 @@ def test_decision_apply_validates_strict_output_through_json_transport(
 
 @pytest.mark.parametrize("through_prepare", (False, True))
 def test_predecessor_lookup_loads_the_declared_settled_gate_decision(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     through_prepare: bool,
 ) -> None:
     """The apply dispatcher selects and validates direct and prepared gate routes."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="predecessor-gate-assignee")
     applied: list[int] = []
 
@@ -729,13 +724,13 @@ def test_predecessor_lookup_loads_the_declared_settled_gate_decision(
 
 @pytest.mark.parametrize("first_route", ("farther", "same_depth", "unselected"))
 def test_predecessor_lookup_uses_nearest_gate_on_retained_routes(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     first_route: str,
 ) -> None:
     """Distance and ambiguity use retained engine routes, not definition edges."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="predecessor-nearest-assignee")
     workflow = workflow_with_steps(
         name="Nearest retained predecessor",
@@ -790,12 +785,12 @@ def test_predecessor_lookup_uses_nearest_gate_on_retained_routes(
 
 
 def test_predecessor_lookup_ignores_skipped_gate_retained_by_unconditional_join(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """An all_done join retains skipped rows without making them gate candidates."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="predecessor-skipped-assignee")
     workflow = workflow_with_steps(
         name="Skipped gate in retained join ancestry",
@@ -837,12 +832,12 @@ def test_predecessor_lookup_ignores_skipped_gate_retained_by_unconditional_join(
 
 
 def test_predecessor_lookup_rejects_route_without_a_gate(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Exhausted retained ancestry preserves the missing-gate validation error."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = workflow_with_steps(
         name="No retained gate",
         steps=({"key": "prepare", "config": {}}, {"key": "apply", "config": {}}),
@@ -856,12 +851,12 @@ def test_predecessor_lookup_rejects_route_without_a_gate(
 
 
 def test_predecessor_lookup_does_not_fall_back_past_a_clean_nearest_gate(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """A nearer clean gate cannot borrow an older gate's settled approval."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="predecessor-clean-assignee")
     workflow = workflow_with_steps(
         name="Nearest gate requires its own settlement",
@@ -895,14 +890,14 @@ def test_predecessor_lookup_does_not_fall_back_past_a_clean_nearest_gate(
 
 @pytest.mark.parametrize("ancestry", ("map", "child"))
 def test_predecessor_lookup_crosses_map_and_child_ancestry(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     ancestry: str,
 ) -> None:
     """Engine-created Map members and owned children share retained gate authority."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="predecessor-nested-assignee")
     if ancestry == "child":
         child_workflow = workflow_with_steps(
@@ -956,13 +951,13 @@ def test_predecessor_lookup_crosses_map_and_child_ancestry(
 
 
 def test_locked_resolution_allows_active_child_after_parent_run_succeeds(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A completed asynchronous starter remains valid retained child ancestry."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="completed-parent-child-assignee")
     parent_workflow = workflow_with_steps(
         name="Completed child starter",
@@ -1022,14 +1017,14 @@ def test_locked_resolution_allows_active_child_after_parent_run_succeeds(
 
 @pytest.mark.parametrize("recovery_source", ("apply", "map", "prepare"))
 def test_predecessor_lookup_recovers_the_exact_transitive_gate_source(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     recovery_source: str,
 ) -> None:
     """A FRESH redirect retains prepared and mapped source ancestry for application."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = _platform_admin("predecessor-recovery-assignee")
     mapped = recovery_source == "map"
     failed_key = "prepare" if recovery_source == "prepare" else "apply"
@@ -1088,7 +1083,7 @@ def test_predecessor_lookup_recovers_the_exact_transitive_gate_source(
 def workflow_gate_record_access_tables(
     transactional_db: Any,
     tmp_path: Path,
-) -> Iterator[None]:
+) -> None:
     """Compose the native pending-Decision Party owner before the fixture's sole sync."""
 
     del transactional_db
@@ -1098,8 +1093,7 @@ def workflow_gate_record_access_tables(
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)
-    with workflow_table_setup((*WORKFLOW_RUNTIME_MODELS, Party)):
-        yield
+    call_command("rebac", "sync", verbosity=0)
 
 
 def _action_schema(
@@ -1232,13 +1226,13 @@ def executable_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_suspend_result_creates_decision_rows_and_relationship_tuples(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The engine-owned suspend API persists slots and writes explicit REBAC tuples."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     requester = User.objects.create_user(username="wdc-requester")
     assignee = User.objects.create_user(username="wdc-assignee")
     escalated = User.objects.create_user(username="wdc-escalated")
@@ -1290,13 +1284,13 @@ def test_suspend_result_creates_decision_rows_and_relationship_tuples(
 
 
 def test_decision_target_is_actor_validated_retained_and_immutable(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Related-record identity survives attempt replay without granting target access."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     admin = _platform_admin("wdc-target-admin")
     assignee = User.objects.create_user(username="wdc-target-assignee")
     stranger = User.objects.create_user(username="wdc-target-stranger")
@@ -1349,12 +1343,12 @@ def test_decision_target_is_actor_validated_retained_and_immutable(
 
 
 def test_decision_act_blocks_requester_and_non_assignee_but_allows_non_requester_admin(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Separation of duty is parenthesized: requester is blocked, admin still wins."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     requester = User.objects.create_user(username="wdc-sod-requester")
     stranger = User.objects.create_user(username="wdc-sod-stranger")
     admin = _platform_admin("wdc-sod-admin")
@@ -1380,7 +1374,7 @@ def test_decision_act_blocks_requester_and_non_assignee_but_allows_non_requester
     ],
 )
 def test_gate_policy_aggregates_resolutions_and_routes(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     policy: str,
     verdicts: tuple[str, ...],
@@ -1388,7 +1382,7 @@ def test_gate_policy_aggregates_resolutions_and_routes(
 ) -> None:
     """Gate policies aggregate pending decision slots into a step outcome."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignees = [User.objects.create_user(username=f"wdc-{policy}-{index}") for index in range(3)]
     workflow = _workflow_with_gate_routes(policy=policy, assignees=assignees)
     run = _open_gate_run(workflow)
@@ -1411,12 +1405,12 @@ def test_gate_policy_aggregates_resolutions_and_routes(
 
 
 def test_legacy_gate_decision_still_marks_the_suspended_step_succeeded(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Decision scoping preserves the legacy gate's terminal journal behavior."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-legacy-assignee")
     run = _open_gate_run(_workflow_with_gate_routes(policy="one_done", assignees=[assignee]))
     gate = _step_run(run, "gate")
@@ -1431,13 +1425,13 @@ def test_legacy_gate_decision_still_marks_the_suspended_step_succeeded(
 
 
 def test_settled_retained_decision_output_feeds_downstream_binding(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One winning slot retains the original gate value after sibling expiry."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-bound-decision")
     pending_assignee = User.objects.create_user(username="wdc-bound-decision-pending")
     requester = User.objects.create_user(username="wdc-bound-decision-requester")
@@ -1517,11 +1511,11 @@ def test_retained_decision_record_access_rejects_duplicate_refs() -> None:
 
 
 def test_force_expiry_wakes_retained_decision_continuation(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-force-expire")
 
     def suspend(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
@@ -1563,7 +1557,7 @@ def test_force_expiry_wakes_retained_decision_continuation(
     (("one_done", "expired", 1, False), ("one_done", "expired", 2, True), ("all_done", "completed", 2, False)),
 )
 def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     policy: str,
@@ -1573,7 +1567,7 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
 ) -> None:
     """Bulk expiry preserves all rows and the exact policy-owned settlement."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     requester = User.objects.create_user(username="wdc-expiry-requester")
     assignee = User.objects.create_user(username="wdc-expiry-verifier")
 
@@ -1639,13 +1633,13 @@ def test_force_expiry_retains_the_policy_owned_predecessor_evidence(
 
 
 def test_delivery_expires_departed_suspension_before_failed_rerun(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A broad event cannot leave the prior approval actionable after rerunning its step."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-delivery-retirement")
 
     def suspend_then_fail(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
@@ -1685,13 +1679,13 @@ def test_delivery_expires_departed_suspension_before_failed_rerun(
 
 
 def test_orphan_repair_refuses_current_approval_and_expires_terminal_orphan(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The repair owner leaves an active approval alone and retires it after terminal failure."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-orphan-retirement")
 
     def suspend(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
@@ -1728,13 +1722,13 @@ def test_orphan_repair_refuses_current_approval_and_expires_terminal_orphan(
 
 
 def test_resume_after_decisions_scopes_each_single_and_multi_suspension(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A resumed step considers only the decisions created by its current suspension."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     first = User.objects.create_user(username="wdc-resume-first")
     second = User.objects.create_user(username="wdc-resume-second")
     third = User.objects.create_user(username="wdc-resume-third")
@@ -1796,12 +1790,12 @@ def test_resume_after_decisions_scopes_each_single_and_multi_suspension(
 
 
 def test_sequential_policy_requires_priority_order(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Sequential gates resolve seats in ascending priority order."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     first = User.objects.create_user(username="wdc-seq-first")
     second = User.objects.create_user(username="wdc-seq-second")
     workflow = _workflow_with_gate_routes(
@@ -1834,12 +1828,12 @@ def test_sequential_policy_requires_priority_order(
 
 
 def test_invalid_resolution_reopens_then_fails_at_max_attempts(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Decision schema validation increments attempts and fails terminally at max."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-password-assignee")
     workflow = workflow_with_steps(
         name="Gate workflow",
@@ -1893,12 +1887,12 @@ def test_invalid_resolution_reopens_then_fails_at_max_attempts(
 
 
 def test_nested_decision_schema_validates_objects_and_array_rows_before_round_trip(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Nested object and row schemas validate recursively before resolution persists."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-nested-schema-assignee")
     decision_schema = _action_schema(
         required=("review", "rows"),
@@ -1961,12 +1955,12 @@ def test_nested_decision_schema_validates_objects_and_array_rows_before_round_tr
 
 
 def test_decision_schema_enforces_resolution_conditional_requirements(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """The native Decision owner gates inputs selected by the submitted action."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-conditional-schema-assignee")
     schema = _action_schema(
         actions=("approve", "reject"),
@@ -2149,12 +2143,12 @@ def test_decision_relation_permission_defaults_to_write_and_allows_declared_read
 
 
 def test_escalation_timeout_writes_tuple_and_routes_escalated(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Escalation timers are stale-attempt guarded resolutions."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-escalate-assignee")
     manager = User.objects.create_user(username="wdc-escalate-manager")
     now = timezone.now()
@@ -2197,12 +2191,12 @@ def test_escalation_timeout_writes_tuple_and_routes_escalated(
 
 
 def test_expiry_timeout_routes_expired(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Expiry timers resolve pending slots as expired."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-expire-assignee")
     now = timezone.now()
     workflow = _workflow_with_gate_routes(
@@ -2233,12 +2227,12 @@ def test_expiry_timeout_routes_expired(
 
 
 def test_decision_sweep_resolves_due_durable_timers(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """The periodic DB sweep resolves decision timers even if ETA tasks are lost."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-sweep-assignee")
     manager = User.objects.create_user(username="wdc-sweep-manager")
     now = timezone.now()
@@ -2274,12 +2268,12 @@ def test_decision_sweep_resolves_due_durable_timers(
 
 
 def test_override_run_cancels_active_steps_and_injects_synthetic_step_run(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Manual override records the actor-finished journal row and chosen next steps."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     admin = _platform_admin("wdc-override-admin")
     workflow = workflow_with_steps(
         name="Gate workflow",
@@ -2327,12 +2321,12 @@ def test_override_run_cancels_active_steps_and_injects_synthetic_step_run(
 
 
 def test_public_schema_exposes_decision_resource_decide_mutation_and_subscription(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Decisions are public REBAC-scoped resources with a public decide mutation."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     schema = _schema("public")
     sdl = schema.as_str()
 
@@ -2352,7 +2346,7 @@ def test_public_schema_exposes_decision_resource_decide_mutation_and_subscriptio
 
 
 def test_console_dashboard_resources_expose_lineage_and_pending_filters(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Keep workflow keys filterable and names as the relation label axis.
@@ -2362,7 +2356,7 @@ def test_console_dashboard_resources_expose_lineage_and_pending_filters(
     relation has one label axis. Pending Decisions retain their native filter.
     """
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflows_schema = importlib.import_module("angee.workflows.schema")
     parts = {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}
     metadata = GraphQLSchemas([SchemaAddon({"console": parts})]).render_metadata()["console"]["angee"]
@@ -2388,14 +2382,14 @@ def test_console_dashboard_resources_expose_lineage_and_pending_filters(
     ),
 )
 def test_dashboard_decision_columns_validate_against_selected_context(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     columns: list[dict[str, str]],
 ) -> None:
     """Installed rows widgets may declare ordered labels over flat Decision context."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflows_schema = importlib.import_module("angee.workflows.schema")
     parts = {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}
     schemas = GraphQLSchemas([SchemaAddon({"console": parts})])
@@ -2452,14 +2446,14 @@ def test_dashboard_decision_columns_validate_against_selected_context(
     ),
 )
 def test_dashboard_decision_columns_reject_unselected_or_malformed_columns(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     columns: Any,
 ) -> None:
     """A declared column must be a unique selected path with an optional string label."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflows_schema = importlib.import_module("angee.workflows.schema")
     parts = {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}
     schemas = GraphQLSchemas([SchemaAddon({"console": parts})])
@@ -2481,7 +2475,7 @@ def test_dashboard_decision_columns_reject_unselected_or_malformed_columns(
 @pytest.mark.parametrize("shape", ("value", "series", "none"))
 @pytest.mark.parametrize("archived", (False, True))
 def test_dashboard_columns_require_active_rows_widgets(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     shape: str,
@@ -2489,7 +2483,7 @@ def test_dashboard_columns_require_active_rows_widgets(
 ) -> None:
     """Column declarations fail on active non-row widgets, including source-less actions."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflows_schema = importlib.import_module("angee.workflows.schema")
     parts = {key: tuple(workflows_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}
     schemas = GraphQLSchemas([SchemaAddon({"console": parts})])
@@ -2506,12 +2500,12 @@ def test_dashboard_columns_require_active_rows_widgets(
 
 
 def test_public_schema_decision_projection_excludes_step_run_journal(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Public decisions expose denormalized labels, not the console StepRun graph."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     sdl = _schema("public").as_str()
 
     assert "type DecisionType" in sdl
@@ -2531,10 +2525,10 @@ def test_public_schema_decision_projection_excludes_step_run_journal(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_decision_subject_egress_uses_public_ids(workflow_gate_tables: None) -> None:
+def test_decision_subject_egress_uses_public_ids(composed_tables: None) -> None:
     """Decision actor fields hide canonical PKs while retaining audit sentinels."""
 
-    del workflow_gate_tables
+    del composed_tables
     workflows_schema = importlib.import_module("angee.workflows.schema")
     assignee = User.objects.create_user(username="wdc-subject-egress")
     canonical = to_subject_ref(assignee)
@@ -2547,12 +2541,12 @@ def test_decision_subject_egress_uses_public_ids(workflow_gate_tables: None) -> 
 
 
 def test_decision_schema_is_exposed_narrowly_on_public_and_console_decisions(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Both projections expose the enforced JSON form schema, or null."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-schema-reader")
     admin = _platform_admin("wdc-schema-admin")
     decision_schema = _action_schema(
@@ -2617,10 +2611,10 @@ def test_decision_schema_is_exposed_narrowly_on_public_and_console_decisions(
 
 @pytest.mark.django_db(transaction=True)
 def test_retained_decision_transition_requires_complete_owner(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-owner-guard")
     workflow = workflow_with_steps(
         name="Decision owner guard",
@@ -2653,13 +2647,13 @@ def test_retained_decision_transition_requires_complete_owner(
 
 @pytest.mark.parametrize("system_kind", ("override", ""))
 def test_system_decision_context_uses_only_the_system_kind_for_its_step_label(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     system_kind: str,
 ) -> None:
     """System events have no step key and never substitute a journal primary key."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     with system_context(reason="test system Decision context projection"):
         workflow = Workflow.objects.create(name="System decision context")
         run = WorkflowRun.objects.create(workflow=workflow)
@@ -2674,14 +2668,14 @@ def test_system_decision_context_uses_only_the_system_kind_for_its_step_label(
 
 @pytest.mark.parametrize("surface, journal_reader", (("public", False), ("console", False), ("console", True)))
 def test_decision_context_and_schema_query_count_stays_flat_for_three_rows(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     surface: str,
     journal_reader: bool,
 ) -> None:
     """Narrow context projections and independently readable journals batch without row fanout."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-schema-query-reader")
     viewer = _platform_admin("wdc-schema-query-admin") if journal_reader else assignee
     decision_schema = _action_schema(
@@ -2747,13 +2741,13 @@ def test_decision_context_and_schema_query_count_stays_flat_for_three_rows(
 
 
 def test_workflow_subject_history_batches_context_and_guarded_journals(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One and three history groups use the same query count for selected related rows."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     viewer = _platform_admin("wdc-history-batch-admin")
     with system_context(reason="test history subject"):
         subject = Workflow.objects.create(name="History subject")
@@ -2846,13 +2840,13 @@ def test_workflow_subject_history_batches_context_and_guarded_journals(
 
 @pytest.mark.parametrize("related_history", ("child", "failure"))
 def test_workflow_subject_history_guards_independent_definition_reads(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     related_history: str,
 ) -> None:
     """Reading a run does not authorize joined workflow or step definitions."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     viewer = User.objects.create_user(username="wdc-history-run-reader")
     private_workflow = workflow_with_steps(name="Private definition", steps=({"key": "private"},), edges=())
     with system_context(reason="test independently scoped history definitions"):
@@ -2890,12 +2884,12 @@ def test_workflow_subject_history_guards_independent_definition_reads(
 
 
 def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Console decisions use act seats while public reads retain their broader scope."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-resource-assignee")
     requester = User.objects.create_user(username="wdc-resource-requester")
     stranger = User.objects.create_user(username="wdc-resource-stranger")
@@ -3015,13 +3009,13 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
 
 @pytest.mark.parametrize("surface", ("public", "console"))
 def test_decide_mutation_uses_actor_scoped_act_permission_and_projects_context(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     surface: str,
 ) -> None:
     """Authorized mutation results expose context without relying on queryset optimization."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-gql-assignee")
     stranger = User.objects.create_user(username="wdc-gql-stranger")
     decision = _opened_decision([assignee], None)
@@ -3067,12 +3061,12 @@ def test_decide_mutation_uses_actor_scoped_act_permission_and_projects_context(
 
 
 def test_public_decide_returns_dotted_field_errors_and_reopens_the_decision(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Invalid input returns field-keyed validation errors and preserves retry state."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-gql-validation-assignee")
     decision_schema = _action_schema(
         required=("review", "rows"),
@@ -3140,12 +3134,12 @@ def test_public_decide_returns_dotted_field_errors_and_reopens_the_decision(
 
 
 def test_public_decide_checks_act_permission_before_resolution_shape(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """A denied actor cannot exercise schema validation or consume an attempt."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-gql-order-assignee")
     stranger = User.objects.create_user(username="wdc-gql-order-stranger")
     decision_schema = _action_schema(
@@ -3186,13 +3180,13 @@ def test_public_decide_checks_act_permission_before_resolution_shape(
 
 @pytest.mark.parametrize("surface", ("public", "console"))
 def test_decide_hides_unreachable_and_missing_decisions_alike(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     surface: str,
 ) -> None:
     """An actor outside a decision's read scope cannot learn whether it exists."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-gql-hidden-assignee")
     stranger = User.objects.create_user(username="wdc-gql-hidden-stranger")
     workflow = workflow_with_steps(
@@ -3237,12 +3231,12 @@ def test_decide_hides_unreachable_and_missing_decisions_alike(
 
 
 def test_raw_delete_rejects_actor_hidden_retained_decision(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Raw SQL cannot evade retention through an actor scope that hides the row."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="raw-delete-assignee")
     stranger = User.objects.create_user(username="raw-delete-hidden-stranger")
     workflow = workflow_with_steps(
@@ -3264,12 +3258,12 @@ def test_raw_delete_rejects_actor_hidden_retained_decision(
 
 
 def test_retained_decision_rejects_every_public_and_collector_delete(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Suspension Decisions remain retained through instance, queryset, raw, and parent collectors."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-delete-retained")
     workflow = workflow_with_steps(
         name="Retained decision deletion",
@@ -3294,12 +3288,12 @@ def test_retained_decision_rejects_every_public_and_collector_delete(
 
 
 def test_public_decide_accepts_escalate_end_to_end(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """The public enum, resolver, engine, and model accept an escalate verdict."""
 
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="wdc-gql-escalate-assignee")
     workflow = _workflow_with_gate_routes(policy="one_done", assignees=[assignee])
     run = _open_gate_run(workflow)

@@ -16,6 +16,7 @@ from django.core.exceptions import ValidationError
 from django.test import override_settings
 from rebac import system_context
 
+from angee.testing.models import Decision, Step, StepRun
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import StepImpl
@@ -25,18 +26,13 @@ from angee.workflows_integrate.archive_steps import (
 )
 from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
 from angee.workflows_integrate.steps import ArchiveExecutionReporter, ArchiveExtractor
-from tests.conftest import STORAGE_TEST_MODELS, Backend, Drive, File
+from tests.conftest import Backend, Drive, File
 from tests.workflows import (
-    WORKFLOW_RUNTIME_MODELS,
-    Decision,
-    Step,
-    StepRun,
     advance_once,
     execute_started,
     run_to_terminal,
     start_run,
     step_run_for,
-    workflow_table_setup,
     workflow_with_steps,
 )
 
@@ -304,14 +300,12 @@ class HeteroArchiveExtractor(FixtureArchiveExtractor):
 
 
 @pytest.fixture()
-def workflows_integrate_tables(transactional_db: Any) -> Iterator[None]:
-    """Create workflow and storage tables with one local archive file."""
+def workflows_integrate_tables(composed_tables: None) -> Iterator[None]:
+    """Reset archive ingest state around tests using the shared composition."""
 
-    del transactional_db
+    del composed_tables
     FixtureArchiveIngest.landed.clear()
-    models = STORAGE_TEST_MODELS + WORKFLOW_RUNTIME_MODELS
-    with workflow_table_setup(models):
-        yield
+    yield
     FixtureArchiveIngest.landed.clear()
 
 
@@ -780,8 +774,6 @@ def test_archive_execution_rejects_invalid_bound_input(
     with system_context(reason="test invalid archive input"):
         assert not Decision.objects.exists()
     assert FixtureArchiveIngest.landed == {}
-
-
 
 
 class _HeartbeatStub:

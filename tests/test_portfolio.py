@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection, models, transaction
+from django.db import models, transaction
 from rebac import SubjectRef, actor_context, system_context
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.models import active_relationship_model
@@ -12,7 +12,6 @@ from rebac.schema import parse_zed
 
 from angee.base.models import AngeeDataModel
 from angee.portfolio.models import Initiative, InitiativeProject, Product, Release, Update, WorkspaceVisibleMixin
-from tests.conftest import _clear_model_tables, _create_missing_tables
 from tests.hierdemo.models import HierNode
 
 
@@ -41,30 +40,21 @@ class InitiativePlacementRow(AngeeDataModel):
 def test_placement_validates_current_ancestry_after_cached_initiative_moves(lock: bool) -> None:
     """A cached old path cannot admit a placement beneath the same project's ancestor."""
 
-    test_models = (HierNode, InitiativePlacementRow)
-    created = _create_missing_tables(test_models)
-    try:
-        with system_context(reason="test.portfolio.ancestry"), transaction.atomic():
-            ancestor = HierNode.objects.create(name="Ancestor")
-            retained = HierNode.objects.create(name="Retained")
-            project = HierNode.objects.create(name="Project")
-            InitiativePlacementRow.objects.create(initiative=ancestor, project=project)
-            candidate = InitiativePlacementRow(initiative=retained, project=project)
-            moved = HierNode.objects.get(pk=retained.pk)
-            moved.parent = ancestor
-            moved.save()
+    with system_context(reason="test.portfolio.ancestry"), transaction.atomic():
+        ancestor = HierNode.objects.create(name="Ancestor")
+        retained = HierNode.objects.create(name="Retained")
+        project = HierNode.objects.create(name="Project")
+        InitiativePlacementRow.objects.create(initiative=ancestor, project=project)
+        candidate = InitiativePlacementRow(initiative=retained, project=project)
+        moved = HierNode.objects.get(pk=retained.pk)
+        moved.parent = ancestor
+        moved.save()
 
-            assert candidate.initiative.path == retained.path
-            assert not retained.path.startswith(ancestor.path)
-            assert moved.path.startswith(ancestor.path)
-            with pytest.raises(ValidationError, match="ancestry path"):
-                InitiativeProject._validate_ancestry(candidate, lock=lock)
-    finally:
-        _clear_model_tables(test_models)
-        if created:
-            with connection.schema_editor() as editor:
-                for model in reversed(created):
-                    editor.delete_model(model)
+        assert candidate.initiative.path == retained.path
+        assert not retained.path.startswith(ancestor.path)
+        assert moved.path.startswith(ancestor.path)
+        with pytest.raises(ValidationError, match="ancestry path"):
+            InitiativeProject._validate_ancestry(candidate, lock=lock)
 
 
 @pytest.mark.parametrize("model", [Product, Initiative, InitiativeProject, Update, Release])
@@ -93,7 +83,6 @@ def test_workspace_reader_is_proposed_and_reconciled_without_granting_write() ->
             "}\n"
         )
     )
-    created = _create_missing_tables((WorkspaceRow,))
     try:
         reader = SubjectRef.of("auth/user", "workspace-reader")
         with system_context(reason="test.portfolio.workspace"):
@@ -111,9 +100,4 @@ def test_workspace_reader_is_proposed_and_reconciled_without_granting_write() ->
             assert readable.name == "Shared"
             assert not readable.has_access("write")
     finally:
-        _clear_model_tables((WorkspaceRow,))
-        if created:
-            with connection.schema_editor() as editor:
-                for model in reversed(created):
-                    editor.delete_model(model)
         reset_backend()

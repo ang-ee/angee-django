@@ -13,7 +13,6 @@ from typing import Any, ClassVar
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
-from django.db import connection
 from django.utils import timezone
 from rebac import system_context
 
@@ -23,11 +22,9 @@ from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
 from angee.jobs.locks import task_lock_is_held
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
-from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
-from tests.test_messaging import MESSAGING_TEST_MODELS, Message
+from tests.conftest import make_integration
+from tests.test_messaging import Message
 from tests.test_messaging_graphql import Channel
-
-LIVE_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel)
 
 
 @pytest.mark.django_db
@@ -167,8 +164,8 @@ class _QueuedLiveMessage:
 
 
 @pytest.fixture
-def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Create concrete messaging tables and register the fake live backend."""
+def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register the fake live backend and sync its policy."""
 
     settings.ANGEE_DATA_DIR = str(tmp_path / "data")
     settings.ANGEE_CHANNEL_BACKEND_CLASSES = {
@@ -176,16 +173,7 @@ def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         "fake_live": "tests.test_integrate_live.FakeLiveChannelBackend",
     }
     monkeypatch.setattr("angee.integrate.tasks.models_with", lambda *, base: (Channel,))
-    created_models = _create_missing_tables(LIVE_TEST_MODELS)
     call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(LIVE_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
 
 
 def _live_channel(slug: str = "fake-live") -> Any:

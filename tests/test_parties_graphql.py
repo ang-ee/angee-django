@@ -3,22 +3,16 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.management import call_command
-from django.db import connection
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests import test_messaging as messaging_models
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
     SchemaAddon,
-    _create_missing_tables,
     assert_private_hasura_insert_access,
     execute_schema,
 )
@@ -37,17 +31,6 @@ Handle = messaging_models.Handle
 # the composer-emitted runtime models through Django's app registry.
 parties_schema = importlib.import_module("angee.parties.schema")
 User = get_user_model()
-PARTIES_TEST_MODELS = (
-    messaging_models.Directory,
-    messaging_models.Folder,
-    messaging_models.Party,
-    Organization,
-    messaging_models.MergeVeto,
-    messaging_models.Handle,
-    PartyHandle,
-    Address,
-    Circle,
-)
 
 
 def test_public_resource_metadata_declares_people_surface() -> None:
@@ -250,7 +233,7 @@ def test_public_resource_metadata_converts_related_parties_surfaces() -> None:
     assert folder.capabilities == ("list", "detail", "aggregate")
 
 
-def test_person_hasura_insert_and_update(parties_tables: None) -> None:
+def test_person_hasura_insert_and_update(composed_tables: None) -> None:
     """Person writes use generated Hasura mutation roots and model-owned fields."""
 
     admin = _platform_admin("party-hasura-admin")
@@ -302,7 +285,7 @@ def test_person_hasura_insert_and_update(parties_tables: None) -> None:
     assert person.family_name == "Lovelace"
 
 
-def test_handle_aggregate_includes_unresolved_rows(parties_tables: None) -> None:
+def test_handle_aggregate_includes_unresolved_rows(composed_tables: None) -> None:
     """Handle aggregate filters operate over the same visible row domain as lists."""
 
     admin = _platform_admin("party-handle-aggregate-admin")
@@ -357,11 +340,11 @@ def test_handle_aggregate_includes_unresolved_rows(parties_tables: None) -> None
 
 
 def test_circle_console_insert_establishes_private_creator_access(
-    parties_tables: None,
+    composed_tables: None,
 ) -> None:
     """A non-admin creator can create/read/write its private circle; an outsider cannot read it."""
 
-    del parties_tables
+    del composed_tables
     creator = User.objects.create_user(username="circle-creator")
     outsider = User.objects.create_user(username="circle-outsider")
     schema = _schema("console")
@@ -400,23 +383,7 @@ def test_circle_console_insert_establishes_private_creator_access(
     assert updated == {"id": created["id"], "description": "Creator write"}
 
 
-@pytest.fixture()
-def parties_tables(transactional_db: Any) -> Iterator[None]:
-    """Create concrete parties tables and sync REBAC."""
-
-    del transactional_db
-    created_models = _create_missing_tables(IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + PARTIES_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
-
-def test_party_handle_display_name_projects_only_readable_components(parties_tables: None) -> None:
+def test_party_handle_display_name_projects_only_readable_components(composed_tables: None) -> None:
     """Association labels stay human-readable without leaking protected Handle values."""
 
     admin = _platform_admin("party-handle-label-admin")
@@ -483,10 +450,8 @@ def _grant_reader(resource: Any, user: Any) -> None:
     )
 
 
-
-
 def test_contact_resources_accept_declared_consumer_fields(
-    parties_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A model donor keeps read/query capabilities separate and relation writes scoped."""

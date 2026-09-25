@@ -22,8 +22,6 @@ import pytest
 from anthropic.types import Message, TextBlock, Usage
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
-from django.core.management import call_command
-from django.db import connection
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
@@ -59,15 +57,11 @@ from angee.agents_integrate_ollama.backend import OllamaInferenceBackend
 from angee.agents_integrate_openai.backend import OpenAIInferenceBackend
 from angee.integrate.credentials import CredentialKind
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
     Integration,
-    _create_missing_tables,
     make_integration,
 )
 from tests.test_integrate_vcs import (
     REPOS,
-    VCS_TEST_MODELS,
     Repository,
     Source,
     _vcs_bridge,
@@ -110,9 +104,6 @@ class InferenceModel(AbstractInferenceModel):
         rebac_resource_type = "agents/inference_model"
 
 
-AGENTS_TEST_MODELS = (Skill, InferenceProvider, InferenceModel)
-
-
 def _provider(
     slug: str,
     *,
@@ -146,24 +137,6 @@ SKILL_BLOBS = {
 }
 
 
-@pytest.fixture()
-def agents_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the iam/integrate/VCS/agents test tables and sync the REBAC schema."""
-
-    del transactional_db
-    created = _create_missing_tables(
-        IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + VCS_TEST_MODELS + AGENTS_TEST_MODELS
-    )
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
 # --- parse_skill_meta (pure) --------------------------------------------------
 
 
@@ -195,10 +168,10 @@ def test_parse_skill_meta_tolerates_missing_or_malformed_frontmatter() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_skill_source_refresh_materializes_and_prunes(agents_tables: None) -> None:
+def test_skill_source_refresh_materializes_and_prunes(composed_tables: None) -> None:
     """A skill source refresh walks the tree for ``SKILL.md`` and upserts/prunes rows."""
 
-    del agents_tables
+    del composed_tables
     vcs = _vcs_bridge("skills", config={"stub_repos": REPOS, "stub_tree": SKILL_TREE, "stub_blobs": SKILL_BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test"):
@@ -227,10 +200,10 @@ def test_skill_source_refresh_materializes_and_prunes(agents_tables: None) -> No
 
 
 @pytest.mark.django_db(transaction=True)
-def test_inference_provider_refresh_upserts_models(agents_tables: None) -> None:
+def test_inference_provider_refresh_upserts_models(composed_tables: None) -> None:
     """Refreshing a provider upserts one ``InferenceModel`` per advertised spec."""
 
-    del agents_tables
+    del composed_tables
     provider = _provider(
         "anthropic",
         backend_class="stub_inference",
@@ -259,10 +232,10 @@ def test_inference_provider_refresh_upserts_models(agents_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_inference_provider_materializes_backend_defaults(agents_tables: None) -> None:
+def test_inference_provider_materializes_backend_defaults(composed_tables: None) -> None:
     """Provider backend defaults land on direct child-row creates."""
 
-    del agents_tables
+    del composed_tables
     provider = make_integration(
         "provider-defaults",
         model=InferenceProvider,
@@ -273,10 +246,10 @@ def test_inference_provider_materializes_backend_defaults(agents_tables: None) -
 
 
 @pytest.mark.django_db(transaction=True)
-def test_manual_backend_advertises_no_models(agents_tables: None) -> None:
+def test_manual_backend_advertises_no_models(composed_tables: None) -> None:
     """The built-in ``manual`` backend lists nothing — its catalogue is hand-curated."""
 
-    del agents_tables
+    del composed_tables
     provider = _provider("manual-vendor", backend_class="manual", name="Manual")
     assert provider.refresh_models() == 0
     with system_context(reason="test read"):
@@ -563,12 +536,12 @@ class _FakeOpenAIClient:
 
 @pytest.mark.django_db(transaction=True)
 def test_anthropic_backend_refresh_syncs_native_and_broker_models(
-    agents_tables: None,
+    composed_tables: None,
     monkeypatch: Any,
 ) -> None:
     """Anthropic model sync emits native and broker-prefixed handles from the SDK."""
 
-    del agents_tables
+    del composed_tables
     _FakeAnthropicClient.instances.clear()
     monkeypatch.setattr(AnthropicInferenceBackend, "client_class", _FakeAnthropicClient)
     provider = _provider(
@@ -600,7 +573,7 @@ def test_anthropic_backend_refresh_syncs_native_and_broker_models(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_anthropic_model_chat_uses_native_messages_and_strips_broker_prefix(agents_tables, inference_http):
+def test_anthropic_model_chat_uses_native_messages_and_strips_broker_prefix(composed_tables, inference_http):
     provider = _provider("anthropic-chat", backend_class="anthropic", name="Anthropic", material={"api_key": "api-key"})
     with system_context(reason="test anthropic chat"):
         model = InferenceModel.objects.create(provider=provider, name="anthropic/claude-sonnet-4-6")
@@ -625,7 +598,7 @@ def test_anthropic_model_chat_uses_native_messages_and_strips_broker_prefix(agen
 
 
 @pytest.mark.django_db(transaction=True)
-def test_anthropic_backend_uses_auth_token_for_oauth_credentials(agents_tables, inference_http):
+def test_anthropic_backend_uses_auth_token_for_oauth_credentials(composed_tables, inference_http):
     from angee.agents.runtimes import ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 
     provider = _provider(
@@ -647,12 +620,12 @@ def test_anthropic_backend_uses_auth_token_for_oauth_credentials(agents_tables, 
 
 @pytest.mark.django_db(transaction=True)
 def test_openai_backend_refresh_syncs_native_and_broker_models(
-    agents_tables: None,
+    composed_tables: None,
     monkeypatch: Any,
 ) -> None:
     """OpenAI model sync emits native and broker-prefixed handles from the SDK."""
 
-    del agents_tables
+    del composed_tables
     _FakeOpenAIClient.instances.clear()
     monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
     provider = _provider(
@@ -772,12 +745,12 @@ def test_ollama_backend_lists_tagged_models_without_a_credential(monkeypatch: An
 
 @pytest.mark.django_db(transaction=True)
 def test_openai_backend_rejects_oauth_credentials(
-    agents_tables: None,
+    composed_tables: None,
     monkeypatch: Any,
 ) -> None:
     """The OpenAI SDK backend is explicit about accepting static API keys only."""
 
-    del agents_tables
+    del composed_tables
     _FakeOpenAIClient.instances.clear()
     monkeypatch.setattr(OpenAIInferenceBackend, "client_class", _FakeOpenAIClient)
     provider = _provider(
@@ -796,7 +769,7 @@ def test_openai_backend_rejects_oauth_credentials(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_openai_model_chat_uses_native_messages_and_strips_broker_prefix(agents_tables, inference_http):
+def test_openai_model_chat_uses_native_messages_and_strips_broker_prefix(composed_tables, inference_http):
     provider = _provider("openai-chat", backend_class="openai", name="OpenAI", material={"api_key": "api-key"})
     with system_context(reason="test openai chat"):
         model = InferenceModel.objects.create(provider=provider, name="openai/gpt-4.1")
@@ -818,7 +791,7 @@ def test_openai_model_chat_uses_native_messages_and_strips_broker_prefix(agents_
 
 
 @pytest.mark.django_db(transaction=True)
-def test_openai_backend_can_configure_max_completion_tokens(agents_tables, inference_http):
+def test_openai_backend_can_configure_max_completion_tokens(composed_tables, inference_http):
     provider = _provider(
         "openai-max-completion",
         backend_class="openai",
@@ -836,7 +809,7 @@ def test_openai_backend_can_configure_max_completion_tokens(agents_tables, infer
 
 
 @pytest.mark.django_db(transaction=True)
-def test_ollama_backend_translates_native_thinking_setting(agents_tables, inference_http):
+def test_ollama_backend_translates_native_thinking_setting(composed_tables, inference_http):
     """Ollama maps deployment and analytical defaults onto its SDK request."""
 
     provider = _provider(
@@ -994,7 +967,7 @@ def inference_http(monkeypatch, request):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("inference_http", ["tool"], indirect=True)
-def test_direct_native_request_returns_tool_calls_without_executing_a_loop(agents_tables, inference_http):
+def test_direct_native_request_returns_tool_calls_without_executing_a_loop(composed_tables, inference_http):
     from pydantic_ai.messages import ToolCallPart
     from pydantic_ai.tools import ToolDefinition
 
@@ -1029,7 +1002,7 @@ def test_direct_native_request_returns_tool_calls_without_executing_a_loop(agent
 @pytest.mark.parametrize("backend_class", ["openai", "ollama"])
 @pytest.mark.parametrize("inference_http", ["structured"], indirect=True)
 def test_direct_inference_builds_one_structured_multimodal_envelope(
-    agents_tables,
+    composed_tables,
     inference_http,
     backend_class,
 ):
@@ -1074,7 +1047,7 @@ def test_direct_inference_builds_one_structured_multimodal_envelope(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("inference_http,retryable", [(429, True), (400, False)], indirect=["inference_http"])
 def test_native_provider_errors_preserve_retry_classification_and_close_clients(
-    agents_tables, inference_http, retryable
+    composed_tables, inference_http, retryable
 ):
     from pydantic_ai.exceptions import ModelHTTPError
 
@@ -1235,7 +1208,7 @@ def test_model_approval_distinguishes_malformed_policy_from_denial(settings, pol
 
 
 @pytest.mark.django_db(transaction=True)
-def test_model_requires_read_and_exact_approved_deployment(agents_tables, settings):
+def test_model_requires_read_and_exact_approved_deployment(composed_tables, settings):
     provider = _provider("approved-ollama", backend_class="ollama")
     with system_context(reason="test.agents.authorization.seed"):
         model = InferenceModel.objects.create(provider=provider, name="llama")

@@ -75,7 +75,7 @@ def _author_pages(vault: Any, authors: list[Any], count: int, *, start: int = 0)
         ("created_by updated_by", 0),
     ],
 )
-def test_audited_list_labels_batch_distinct_authors(knowledge_tables: None, selection: str, label_queries: int) -> None:
+def test_audited_list_labels_batch_distinct_authors(composed_tables: None, selection: str, label_queries: int) -> None:
     """One or 25 distinct authors cost one query per selected label relation."""
 
     alice = create_user("alice")
@@ -114,7 +114,7 @@ def test_audited_list_labels_batch_distinct_authors(knowledge_tables: None, sele
         assert not get_user_model().objects.filter(pk__in=[author.pk for author in authors]).exists()
 
 
-def test_audited_label_prefetch_preserves_missing_authors(knowledge_tables: None) -> None:
+def test_audited_label_prefetch_preserves_missing_authors(composed_tables: None) -> None:
     """Nullable audit references resolve without spurious User reads."""
 
     alice = create_user("alice")
@@ -134,7 +134,7 @@ def test_audited_label_prefetch_preserves_missing_authors(knowledge_tables: None
     assert _label_reads(captured) == []
 
 
-def test_vault_owner_labels_batch_distinct_owners(knowledge_tables: None) -> None:
+def test_vault_owner_labels_batch_distinct_owners(composed_tables: None) -> None:
     """Visible vaults expose owner labels with one query, without exposing users."""
 
     reader = create_user("vault-reader")

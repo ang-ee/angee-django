@@ -13,6 +13,7 @@ from django.db import close_old_connections, connection, connections, transactio
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
 
+from angee.testing.models import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import (
     AttemptResult,
@@ -23,7 +24,6 @@ from angee.workflows.attempts import (
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus, Verdict
 from angee.workflows.steps import StepImpl, StepResult
-from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -70,7 +70,7 @@ def _claimed_execution(monkeypatch: pytest.MonkeyPatch, impl: type[Any]) -> tupl
 
 
 def test_cancel_fences_result_after_physical_invocation(
-    workflow_engine_tables: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     invoked = Event()
     release = Event()
@@ -116,7 +116,7 @@ def test_cancel_fences_result_after_physical_invocation(
 
 
 def test_override_fences_old_result_and_advances_generation(
-    workflow_engine_tables: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     invoked = Event()
     release = Event()
@@ -163,7 +163,7 @@ def test_override_fences_old_result_and_advances_generation(
 
 
 def test_reap_records_revocation_without_fabricating_physical_result(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     now = timezone.now()
     stale_at = now - timedelta(days=1)
@@ -202,7 +202,7 @@ def test_reap_records_revocation_without_fabricating_physical_result(
 
 
 def test_decision_timer_waits_on_run_before_locking_decision(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     now = timezone.now()
     actor = get_user_model().objects.create_user(username="decision-lock-order-owner")
@@ -265,7 +265,7 @@ def test_decision_timer_waits_on_run_before_locking_decision(
 
 
 def test_due_decision_timers_serialize_to_one_policy_projection(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     now = timezone.now()
     actor = get_user_model().objects.create_user(username="decision-timer-race-owner")

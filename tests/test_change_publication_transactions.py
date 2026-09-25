@@ -9,10 +9,10 @@ from django.db import transaction
 from rebac import system_context
 
 from angee.graphql import publishing
+from angee.testing.models import StepRun, Trigger, WorkflowDispatch, WorkflowRun
 from tests.test_workflows_triggers import TriggerSubject, _event_trigger
 from tests.test_workflows_triggers import executable_fixture as executable_fixture
 from tests.test_workflows_triggers import workflow_trigger_tables as workflow_trigger_tables
-from tests.workflows import StepRun, Trigger, WorkflowDispatch, WorkflowRun
 
 
 @pytest.mark.django_db(transaction=True)

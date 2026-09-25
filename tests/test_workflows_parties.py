@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -13,6 +12,7 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.db import close_old_connections, connection
 from django.utils import timezone
 from rebac import PermissionDenied, system_context
@@ -21,6 +21,7 @@ from angee.base.refs import canonical_record_target
 from angee.base.serialization import canonical_json_sha256
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
+from angee.testing.models import Decision, StepAttempt, StepRun, WorkflowDispatch
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import (
@@ -34,7 +35,6 @@ from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows_parties.autoconfig import SETTINGS as WORKFLOWS_PARTIES_SETTINGS
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, IdentityApplyStepImpl, IdentityReviewStepImpl
 from tests.test_messaging import (
-    MESSAGING_TEST_MODELS,
     Address,
     Handle,
     MergeVeto,
@@ -42,17 +42,11 @@ from tests.test_messaging import (
     PartyHandle,
 )
 from tests.workflows import (
-    WORKFLOW_RUNTIME_MODELS,
-    Decision,
-    StepAttempt,
-    StepRun,
-    WorkflowDispatch,
     admit_workflow_actor,
     advance_once,
     execute_started,
     run_to_terminal,
     step_run_for,
-    workflow_table_setup,
     workflow_with_steps,
 )
 
@@ -66,8 +60,8 @@ User = get_user_model()
 
 
 @pytest.fixture
-def workflows_parties_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
-    """Create workflow and parties tables for dedupe-flow tests."""
+def workflows_parties_tables(transactional_db: Any, tmp_path: Path) -> None:
+    """Sync workflow and parties permissions from the composed schema sources."""
 
     del transactional_db
     app_configs = list(apps.get_app_configs())
@@ -76,9 +70,7 @@ def workflows_parties_tables(transactional_db: Any, tmp_path: Path) -> Iterator[
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)
-    models = MESSAGING_TEST_MODELS + WORKFLOW_RUNTIME_MODELS
-    with workflow_table_setup(models):
-        yield
+    call_command("rebac", "sync", verbosity=0)
 
 
 def _dedupe_workflow() -> Any:
@@ -722,8 +714,6 @@ def test_identity_owner_checks_basis_and_rolls_back_all_changes(
     with system_context(reason="identity rollback assertion"):
         party.refresh_from_db()
     assert party.display_name == "Original"
-
-
 
 
 @POSTGRES_IDENTITY

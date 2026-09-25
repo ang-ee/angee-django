@@ -7,16 +7,16 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, system_context
 
+from angee.testing.models import Edge, Step, Workflow
 from angee.workflows.models import WorkflowStatus
 from tests.conftest import create_platform_admin
-from tests.workflows import Edge, Step, Workflow
 
 User = get_user_model()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_step_config_hook_reads_deferred_fields(workflow_tables: None) -> None:
-    del workflow_tables
+def test_step_config_hook_reads_deferred_fields(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="step deferred config setup"):
         workflow = Workflow.objects.create(name="Deferred config")
         step = Step.objects.create(
@@ -32,10 +32,10 @@ def test_step_config_hook_reads_deferred_fields(workflow_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_edge_save_rejects_stale_cached_endpoint_ancestry(workflow_tables: None) -> None:
+def test_edge_save_rejects_stale_cached_endpoint_ancestry(composed_tables: None) -> None:
     """Moving a cached endpoint cannot bypass its persisted workflow ownership."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="definition stale endpoint validation"):
         original = Workflow.objects.create(name="Original")
         replacement = Workflow.objects.create(name="Replacement")
@@ -50,8 +50,8 @@ def test_edge_save_rejects_stale_cached_endpoint_ancestry(workflow_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_input_binding_is_versioned_and_copied_with_the_definition(workflow_tables: None) -> None:
-    del workflow_tables
+def test_input_binding_is_versioned_and_copied_with_the_definition(composed_tables: None) -> None:
+    del composed_tables
     binding = {"kind": "workflow_input", "path": []}
     with system_context(reason="test versioned input binding"):
         workflow = Workflow.objects.create(name="Bound definition")
@@ -81,10 +81,10 @@ def test_input_binding_is_versioned_and_copied_with_the_definition(workflow_tabl
 
 
 @pytest.mark.django_db(transaction=True)
-def test_definition_rows_advance_revision_once_per_locked_batch(workflow_tables: None) -> None:
+def test_definition_rows_advance_revision_once_per_locked_batch(composed_tables: None) -> None:
     """Nested row saves explicitly share one lineage revision owner."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test definition revision batch"):
         workflow = Workflow.objects.create(name="Batch")
         with Workflow.objects._definition_write((workflow.pk,)) as session:
@@ -105,10 +105,10 @@ def test_definition_rows_advance_revision_once_per_locked_batch(workflow_tables:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_noop_and_update_fields_compare_only_persisted_content(workflow_tables: None) -> None:
+def test_noop_and_update_fields_compare_only_persisted_content(composed_tables: None) -> None:
     """Incidental saves and unsaved attributes do not fabricate revisions."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test definition no-op revisions"):
         workflow = Workflow.objects.create(name="No-op")
         step = Step.objects.create(workflow=workflow, key="start", name="Start", step_class="fixture", is_entry=True)
@@ -128,10 +128,10 @@ def test_noop_and_update_fields_compare_only_persisted_content(workflow_tables: 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_workflow_definition_fields_join_the_revision_owner(workflow_tables: None) -> None:
+def test_workflow_definition_fields_join_the_revision_owner(composed_tables: None) -> None:
     """Head settings revise only when a persisted definition field changes."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test workflow-owned definition fields"):
         workflow = Workflow.objects.create(name="Settings")
         workflow.description = "Draft description"
@@ -149,11 +149,11 @@ def test_workflow_definition_fields_join_the_revision_owner(workflow_tables: Non
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("field_name", ["error_workflow", "error_workflow_id"])
 def test_foreign_key_declaration_changes_honor_native_update_fields(
-    workflow_tables: None, field_name: str
+    composed_tables: None, field_name: str
 ) -> None:
     """A saved relation advances the revision through its name or storage name."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test declaration foreign key revision"):
         workflow = Workflow.objects.create(name="Settings")
         handler = Workflow.objects.create(name="Error handler")
@@ -169,10 +169,10 @@ def test_foreign_key_declaration_changes_honor_native_update_fields(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_lineage_heads_remains_chainable_and_excludes_publications(workflow_tables: None) -> None:
+def test_lineage_heads_remains_chainable_and_excludes_publications(composed_tables: None) -> None:
     """Stable-key lookup selects the editable head from a shared-key lineage."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test lineage head lookup"):
         workflow = Workflow.objects.create(name="Lineage", key="lineage")
         Step.objects.create(workflow=workflow, key="entry", name="Entry", step_class="fixture", is_entry=True)
@@ -185,10 +185,10 @@ def test_lineage_heads_remains_chainable_and_excludes_publications(workflow_tabl
 
 
 @pytest.mark.django_db(transaction=True)
-def test_stale_workflow_instance_cannot_regress_database_revision(workflow_tables: None) -> None:
+def test_stale_workflow_instance_cannot_regress_database_revision(composed_tables: None) -> None:
     """The database revision remains authoritative across stale head saves."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test stale workflow revision"):
         workflow = Workflow.objects.create(name="Stale")
         stale = Workflow.objects.get(pk=workflow.pk)
@@ -205,10 +205,10 @@ def test_stale_workflow_instance_cannot_regress_database_revision(workflow_table
 
 
 @pytest.mark.django_db(transaction=True)
-def test_step_delete_owns_incident_edges_and_one_revision(workflow_tables: None) -> None:
+def test_step_delete_owns_incident_edges_and_one_revision(composed_tables: None) -> None:
     """Step deletion explicitly performs Collector-skipped edge cascades."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test definition child cascade"):
         workflow = Workflow.objects.create(name="Delete")
         source = Step.objects.create(
@@ -227,10 +227,10 @@ def test_step_delete_owns_incident_edges_and_one_revision(workflow_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_definition_bulk_writes_are_rejected(workflow_tables: None) -> None:
+def test_definition_bulk_writes_are_rejected(composed_tables: None) -> None:
     """Public collection APIs cannot bypass the locked instance owner."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test guarded definition collections"):
         workflow = Workflow.objects.create(name="Guarded")
         step = Step.objects.create(workflow=workflow, key="start", name="Start", step_class="fixture")
@@ -256,13 +256,13 @@ def test_definition_bulk_writes_are_rejected(workflow_tables: None) -> None:
     [("wait", {}), ("gate", {}), ("map", {})],
 )
 def test_incomplete_typed_step_configs_remain_storable_drafts(
-    workflow_tables: None,
+    composed_tables: None,
     step_class: str,
     config: dict[str, object],
 ) -> None:
     """Readiness gaps remain stored as object-shaped draft config."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test incomplete workflow drafts"):
         workflow = Workflow.objects.create(name=f"Incomplete {step_class}")
         step = Step.objects.create(
@@ -279,10 +279,10 @@ def test_incomplete_typed_step_configs_remain_storable_drafts(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_incomplete_retry_policy_remains_a_storable_draft(workflow_tables: None) -> None:
+def test_incomplete_retry_policy_remains_a_storable_draft(composed_tables: None) -> None:
     """Retry value constraints are reported by readiness rather than storage."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test incomplete retry draft"):
         workflow = Workflow.objects.create(name="Retry draft")
         step = Step.objects.create(
@@ -296,10 +296,10 @@ def test_incomplete_retry_policy_remains_a_storable_draft(workflow_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_failed_batch_rolls_back_rows_and_revision(workflow_tables: None) -> None:
+def test_failed_batch_rolls_back_rows_and_revision(composed_tables: None) -> None:
     """A nested failure leaves both definition rows and revision unchanged."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test definition rollback"):
         workflow = Workflow.objects.create(name="Rollback")
         other = Workflow.objects.create(name="Other")
@@ -317,10 +317,10 @@ def test_failed_batch_rolls_back_rows_and_revision(workflow_tables: None) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_moves_revise_both_parents_and_reject_connected_steps(workflow_tables: None) -> None:
+def test_moves_revise_both_parents_and_reject_connected_steps(composed_tables: None) -> None:
     """Moves own old and new lineages, while connected nodes cannot strand edges."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test definition moves"):
         first = Workflow.objects.create(name="First")
         second = Workflow.objects.create(name="Second")
@@ -343,10 +343,10 @@ def test_moves_revise_both_parents_and_reject_connected_steps(workflow_tables: N
 
 
 @pytest.mark.django_db(transaction=True)
-def test_fresh_non_draft_heads_and_identity_reassignment_are_rejected(workflow_tables: None) -> None:
+def test_fresh_non_draft_heads_and_identity_reassignment_are_rejected(composed_tables: None) -> None:
     """Publication identity fields remain manager-owned across every save path."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test workflow publication identity"):
         with pytest.raises(ValidationError, match="revision-zero drafts"):
             Workflow.objects.create(name="Forged", status=WorkflowStatus.PUBLISHED)
@@ -358,10 +358,10 @@ def test_fresh_non_draft_heads_and_identity_reassignment_are_rejected(workflow_t
 
 
 @pytest.mark.django_db(transaction=True)
-def test_published_parent_rejects_child_mutation_even_under_sudo(workflow_tables: None) -> None:
+def test_published_parent_rejects_child_mutation_even_under_sudo(composed_tables: None) -> None:
     """System authorization does not weaken immutable definition history."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test immutable definition"):
         draft = Workflow.objects.create(name="Historical")
         Step.objects.create(workflow=draft, key="entry", name="Entry", step_class="agent_session", is_entry=True)
@@ -372,10 +372,10 @@ def test_published_parent_rejects_child_mutation_even_under_sudo(workflow_tables
 
 
 @pytest.mark.django_db(transaction=True)
-def test_publication_records_revision_and_protects_lineage_history(workflow_tables: None) -> None:
+def test_publication_records_revision_and_protects_lineage_history(composed_tables: None) -> None:
     """A publication pins its source revision and prevents deletion of its head."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test protected workflow history"):
         workflow = Workflow.objects.create(name="History")
         Step.objects.create(
@@ -402,10 +402,10 @@ def test_publication_records_revision_and_protects_lineage_history(workflow_tabl
 
 
 @pytest.mark.django_db(transaction=True)
-def test_lineage_head_cannot_mark_itself_published(workflow_tables: None) -> None:
+def test_lineage_head_cannot_mark_itself_published(composed_tables: None) -> None:
     """The public transition accepts only the manager's new snapshot target."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test publication-only transition"):
         workflow = Workflow.objects.create(name="Incomplete head")
         with pytest.raises(ValidationError, match="Only a copied version"):
@@ -416,10 +416,10 @@ def test_lineage_head_cannot_mark_itself_published(workflow_tables: None) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_publication_inside_changed_batch_records_pending_revision(workflow_tables: None) -> None:
+def test_publication_inside_changed_batch_records_pending_revision(composed_tables: None) -> None:
     """A snapshot pins the revision committed by its surrounding write batch."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="test pending publication revision"):
         workflow = Workflow.objects.create(name="Pending publication")
         with Workflow.objects._definition_write((workflow.pk,)) as session:
@@ -440,10 +440,10 @@ def test_publication_inside_changed_batch_records_pending_revision(workflow_tabl
 
 
 @pytest.mark.django_db(transaction=True)
-def test_explicit_actor_bound_child_save_and_cascade_delete(workflow_tables: None) -> None:
+def test_explicit_actor_bound_child_save_and_cascade_delete(composed_tables: None) -> None:
     """Internal lock reads retain an explicitly bound caller's model policy chain."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="seed explicit definition actor"):
         admin = create_platform_admin(username="definition-admin", password="admin")
         workflow = Workflow.objects.create(name="Actor-bound")
@@ -460,10 +460,10 @@ def test_explicit_actor_bound_child_save_and_cascade_delete(workflow_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_explicit_actor_bound_publication_carries_policy_to_copies(workflow_tables: None) -> None:
+def test_explicit_actor_bound_publication_carries_policy_to_copies(composed_tables: None) -> None:
     """Publication retains the caller binding through manager fetches and copied rows."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="seed explicit publication actor"):
         admin = create_platform_admin(username="publication-admin", password="admin")
         workflow = Workflow.objects.create(name="Actor publication")
@@ -482,10 +482,10 @@ def test_explicit_actor_bound_publication_carries_policy_to_copies(workflow_tabl
 
 
 @pytest.mark.django_db(transaction=True)
-def test_denied_explicit_actor_cascade_rolls_back_children(workflow_tables: None) -> None:
+def test_denied_explicit_actor_cascade_rolls_back_children(composed_tables: None) -> None:
     """A denied parent delete cannot leak its internally collected edge deletion."""
 
-    del workflow_tables
+    del composed_tables
     with system_context(reason="seed denied definition actor"):
         stranger = User.objects.create_user(username="definition-stranger")
         workflow = Workflow.objects.create(name="Denied cascade")
@@ -503,8 +503,8 @@ def test_denied_explicit_actor_cascade_rolls_back_children(workflow_tables: None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_explicit_definition_session_cannot_expand_the_locked_lineage(workflow_tables: None) -> None:
-    del workflow_tables
+def test_explicit_definition_session_cannot_expand_the_locked_lineage(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="test explicit definition session scope"):
         first = Workflow.objects.create(name="Locked")
         second = Workflow.objects.create(name="Unrelated")
@@ -517,8 +517,8 @@ def test_explicit_definition_session_cannot_expand_the_locked_lineage(workflow_t
 
 
 @pytest.mark.django_db(transaction=True)
-def test_definition_session_does_not_reopen_an_immutable_parent(workflow_tables: None) -> None:
-    del workflow_tables
+def test_definition_session_does_not_reopen_an_immutable_parent(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="test explicit session retains immutable history"):
         draft = Workflow.objects.create(name="Immutable")
         Step.objects.create(workflow=draft, key="entry", name="Entry", step_class="agent_session", is_entry=True)
@@ -531,8 +531,8 @@ def test_definition_session_does_not_reopen_an_immutable_parent(workflow_tables:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_definition_session_requires_its_lexical_transaction(workflow_tables: None) -> None:
-    del workflow_tables
+def test_definition_session_requires_its_lexical_transaction(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="test explicit session transaction scope"):
         draft = Workflow.objects.create(name="Lexical")
         with Workflow.objects._definition_write((draft.pk,)) as session:

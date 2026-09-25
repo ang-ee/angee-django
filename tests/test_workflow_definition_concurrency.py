@@ -16,9 +16,9 @@ from django.db import close_old_connections, connection, connections
 from rebac import system_context
 
 from angee.resources.models import Resource
+from angee.testing.models import Step, Workflow
 from angee.workflows.definitions import DefinitionEdit, StaleDefinitionError
 from tests.conftest import write_addon_manifest
-from tests.workflows import WORKFLOW_DEFINITION_MODELS, Step, Workflow, workflow_table_setup
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -31,13 +31,6 @@ class ConcurrencyResourceLedger(Resource):
         abstract = False
         app_label = "resources"
         db_table = "test_workflow_concurrency_resource"
-
-
-@pytest.fixture()
-def concurrency_resource_tables(transactional_db: Any) -> Any:
-    del transactional_db
-    with workflow_table_setup((*WORKFLOW_DEFINITION_MODELS, ConcurrencyResourceLedger)):
-        yield
 
 
 def _thread(call: Any) -> Any:
@@ -104,9 +97,9 @@ def _resource_addon(path: Path, *, suffix: str, reverse: bool = False) -> AppCon
 
 
 def test_publication_and_child_mutation_serialize_to_one_revision_snapshot(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     with system_context(reason="prepare publication race"):
         draft, step = _ready_draft("Publication race")
         source_revision = draft.draft_revision
@@ -140,8 +133,8 @@ def test_publication_and_child_mutation_serialize_to_one_revision_snapshot(
         assert draft.draft_revision == source_revision + 1
 
 
-def test_duplicate_publish_if_changed_serializes_to_one_snapshot(workflow_tables: None) -> None:
-    del workflow_tables
+def test_duplicate_publish_if_changed_serializes_to_one_snapshot(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="prepare duplicate publication"):
         draft, _step = _ready_draft("Duplicate publication")
     start = Barrier(2)
@@ -161,8 +154,8 @@ def test_duplicate_publish_if_changed_serializes_to_one_snapshot(workflow_tables
         assert Workflow.objects.filter(published_from_id=draft.pk).count() == 1
 
 
-def test_definition_cas_loses_cleanly_to_a_locked_legacy_write(workflow_tables: None) -> None:
-    del workflow_tables
+def test_definition_cas_loses_cleanly_to_a_locked_legacy_write(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="prepare definition CAS race"):
         draft, step = _ready_draft("CAS race")
         revision = draft.draft_revision
@@ -202,9 +195,9 @@ def test_definition_cas_loses_cleanly_to_a_locked_legacy_write(workflow_tables: 
 
 
 def test_step_move_to_immutable_parent_is_rejected_without_touching_old_parent(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     with system_context(reason="prepare immutable move"):
         old, step = _ready_draft("Old parent")
         target, _target_step = _ready_draft("Target parent")
@@ -230,8 +223,8 @@ def test_step_move_to_immutable_parent_is_rejected_without_touching_old_parent(
         assert published.draft_revision == published_revision
 
 
-def test_old_parent_delete_serializes_against_a_concurrent_move(workflow_tables: None) -> None:
-    del workflow_tables
+def test_old_parent_delete_serializes_against_a_concurrent_move(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="prepare move delete race"):
         old, step = _ready_draft("Delete parent")
         new = Workflow.objects.create(name="Move parent")
@@ -269,10 +262,10 @@ def test_old_parent_delete_serializes_against_a_concurrent_move(workflow_tables:
 
 
 def test_native_resource_loaders_serialize_opposite_lineage_orders(
-    concurrency_resource_tables: None,
+    composed_tables: None,
     tmp_path: Path,
 ) -> None:
-    del concurrency_resource_tables
+    del composed_tables
     initial = _resource_addon(tmp_path / "initial", suffix="Initial")
     ConcurrencyResourceLedger.objects.load_addons((initial,), tiers=[Resource.Tier.INSTALL])
     left_first = _resource_addon(tmp_path / "left-first", suffix="Alpha")
@@ -296,10 +289,10 @@ def test_native_resource_loaders_serialize_opposite_lineage_orders(
 
 
 def test_delete_rechecks_parent_when_a_move_commits_after_its_initial_read(
-    workflow_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     with system_context(reason="prepare inverse move delete race"):
         old, step = _ready_draft("Observed old parent")
         new = Workflow.objects.create(name="Committed new parent")
@@ -350,11 +343,11 @@ def test_delete_rechecks_parent_when_a_move_commits_after_its_initial_read(
 
 @pytest.mark.parametrize("omit_left", (False, True))
 def test_native_resource_preflight_locks_across_separate_oppositely_ordered_facets(
-    concurrency_resource_tables: None, tmp_path: Path, omit_left: bool,
+    composed_tables: None, tmp_path: Path, omit_left: bool,
 ) -> None:
     """Per-dataset locking cannot serialize these opposite two-dataset loads."""
 
-    del concurrency_resource_tables
+    del composed_tables
 
     def addon(path: Path, suffix: str, *, reverse: bool = False, include_heads: bool = False) -> AppConfig:
         owner = _resource_addon(path, suffix=suffix)

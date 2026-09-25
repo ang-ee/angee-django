@@ -11,7 +11,7 @@ import pytest
 import tablib
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.db import models
 from django.test import override_settings
 from rebac import actor_context, system_context
 from rebac.backends import LocalBackend, backend, reset_backend
@@ -23,7 +23,7 @@ from angee.dashboards.models import DashboardWidget as AbstractDashboardWidget
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.entries import ResourceEntry, ResourceGroup
 from angee.resources.models import Resource
-from tests.conftest import _clear_model_tables, _create_missing_tables, create_user
+from tests.conftest import create_user
 
 
 class DashboardTarget(AbstractDashboard):
@@ -70,16 +70,9 @@ def dashboard_tables(transactional_db: Any) -> Iterator[None]:
             "definition angee/role { relation member: auth/user }\n" + policy.read_text()
         )
     )
-    test_models = (DashboardTarget, DashboardTargetWidget, DashboardResourceLedger)
-    created = _create_missing_tables(test_models)
     try:
         yield
     finally:
-        _clear_model_tables(test_models)
-        if created:
-            with connection.schema_editor() as editor:
-                for model in reversed(created):
-                    editor.delete_model(model)
         reset_backend()
 
 

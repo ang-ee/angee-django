@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, models, transaction
+from django.db import models, transaction
 from django.test import override_settings
 
 from angee.base import transitions
@@ -19,6 +19,7 @@ from angee.base.transitions import (
     save_state,
     transition,
 )
+from tests.tables import model_tables
 
 POLICY_SETTING = "ANGEE_TEST_TRANSITION_POLICY"
 
@@ -159,13 +160,8 @@ class TransitionTask(models.Model):
 def transition_task_table() -> Iterator[None]:
     """Create the throwaway table for one test."""
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(TransitionTask)
-    try:
+    with model_tables((TransitionTask,)):
         yield
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(TransitionTask)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -614,13 +610,8 @@ class PolicyTask(models.Model):
 def policy_task_table() -> Iterator[None]:
     """Create the throwaway policy table for one test."""
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PolicyTask)
-    try:
+    with model_tables((PolicyTask,)):
         yield
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PolicyTask)
 
 
 @pytest.mark.django_db(transaction=True)

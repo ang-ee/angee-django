@@ -11,6 +11,10 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Add opt-in `angee.testing` workflow and record-sync models for addon source
+  test suites. Its `composed_tables` fixture uses pytest-django's native table
+  setup and cleanup with REBAC synchronization, replacing duplicated test models
+  and table fixtures in the framework suite.
 - Remove write-alias threading and custom `using=` parameters, including the
   `using` payload on `change_published` and `file_finalized`; Django routers own
   database routing. Frozen migration helpers retain Django's connection alias.

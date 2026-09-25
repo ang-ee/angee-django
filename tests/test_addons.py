@@ -22,13 +22,13 @@ from hatch_angee import AddonManifest
 from rebac import system_context
 
 import angee.addons as addon_module
+import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
 from angee.addons import addon_manifest, available_addons, resolve_app_config, resolve_manifest_roots
 from angee.compose.appgraph import AppGraph
 from angee.compose.dependencies import AddonDependencyGroup
 from angee.platform import models as platform_models
 from angee.resources.models import Resource as AbstractResource
 from tests.conftest import make_addon
-from tests.test_platform_install import platform_tables as platform_tables
 
 
 @pytest.fixture
@@ -322,12 +322,12 @@ def test_manifest_root_resolution_uses_exact_app_config_aliases() -> None:
 
 
 def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
-    platform_tables, disabled_app, tmp_path, monkeypatch
+    composed_tables, disabled_app, tmp_path, monkeypatch
 ) -> None:
     """Direct dependencies survive every state; live counts and admission follow Django."""
 
     with monkeypatch.context() as patch:
-        del platform_tables
+        del composed_tables
         addon = apps.get_model("platform", "Addon")
         line = apps.get_model("linesdemo", "DocumentLine")
         loaded = make_addon(name="fakeaddon.loaded", path=tmp_path / "loaded", depends_on=("django.contrib.auth",))
@@ -435,12 +435,12 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
     [("fakeaddon.base", "fakeaddon"), ("fakeaddon.base.apps.SelectedConfig", "fakeaddon_selected")],
 )
 def test_disabled_config_selection_drives_catalogue_pending_and_install_preview(
-    platform_tables, disabled_app, tmp_path, settings, monkeypatch, declaration, label
+    composed_tables, disabled_app, tmp_path, settings, monkeypatch, declaration, label
 ) -> None:
     """Exact desired roots preserve native config selection without enabling the app."""
 
     with monkeypatch.context() as patch:
-        del platform_tables
+        del composed_tables
         addon = apps.get_model("platform", "Addon")
         manifest = addon_module.parse_manifest(disabled_app / "addon.toml")
         patch.setattr(
@@ -550,9 +550,9 @@ def test_resource_counts_propagate_database_failures(monkeypatch, resource_model
 
 
 @pytest.mark.parametrize("addon_count", [1, 3])
-def test_unknown_desired_reads_pending_flags_once(platform_tables, tmp_path, monkeypatch, addon_count) -> None:
+def test_unknown_desired_reads_pending_flags_once(composed_tables, tmp_path, monkeypatch, addon_count) -> None:
     with monkeypatch.context() as patch:
-        del platform_tables
+        del composed_tables
         addon = apps.get_model("platform", "Addon")
         pending = {f"pending_fixture.addon_{index}": bool(index % 2) for index in range(addon_count)}
         available = {name: (AddonManifest(name=name), tmp_path / name) for name in pending}
@@ -611,12 +611,12 @@ def test_pending_changes_compares_authored_roots_only(
 
 
 def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
-    platform_tables, tmp_path, settings, monkeypatch
+    composed_tables, tmp_path, settings, monkeypatch
 ) -> None:
     """Only roots queue a disable; stale persisted flags cannot override the live graph."""
 
     with monkeypatch.context() as patch:
-        del platform_tables
+        del composed_tables
         addon = apps.get_model("platform", "Addon")
         root = make_addon(name="example.root", path=tmp_path / "root", depends_on=("example.dep",))
         dependency = make_addon(name="example.dep", path=tmp_path / "dep")

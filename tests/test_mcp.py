@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from django.core.management import call_command
-from django.db import connection
 from rebac import system_context, to_object_ref
 from rebac.backends import backend
 
@@ -15,28 +12,9 @@ from angee.agents.grants import tool_grant_ref
 from angee.agents.mcp_verifier import resolve_actor
 from angee.agents.models import MCPPlacement
 from angee.integrate.credentials import CredentialKind
-from tests.conftest import IAM_CONNECTION_TEST_MODELS, INTEGRATE_TEST_MODELS, Credential, _clear_model_tables
-from tests.conftest import _create_missing_tables as _create_tables
-from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, MCPServer, MCPTool, User
-from tests.test_integrate_vcs import VCS_TEST_MODELS
-
-
-@pytest.fixture()
-def agents_console_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the concrete agents tables needed by the MCP verifier tests."""
-
-    del transactional_db
-    models = IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + VCS_TEST_MODELS + AGENTS_GRAPHQL_MODELS
-    created = _create_tables(models)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
+from tests import test_integrate_vcs  # noqa: F401 -- register the concrete relation graph
+from tests.conftest import Credential
+from tests.test_agents_graphql import Agent, MCPServer, MCPTool, User
 
 
 def _static_credential(owner: User, *, name: str, token: str) -> Any:
@@ -56,7 +34,7 @@ def _provisioned_agent(owner: User, *, name: str, workspace: str = "ws", service
     return agent
 
 
-def test_mcp_bearer_resolves_to_single_agent_principal(agents_console_tables: None) -> None:
+def test_mcp_bearer_resolves_to_single_agent_principal(composed_tables: None) -> None:
     """An agent presenting its own derived bearer for an internal server runs as that agent."""
 
     owner = User.objects.create_user(username="mcp-agent-owner", email="mcp-agent@example.com")
@@ -73,7 +51,7 @@ def test_mcp_bearer_resolves_to_single_agent_principal(agents_console_tables: No
     assert resolve_actor(bearer) == agent.principal_subject()
 
 
-def test_mcp_bearer_declines_agent_without_service_user(agents_console_tables: None) -> None:
+def test_mcp_bearer_declines_agent_without_service_user(composed_tables: None) -> None:
     """Legacy runnable rows without a service principal fail closed."""
 
     owner = User.objects.create_user(username="mcp-missing-user-owner")
@@ -94,7 +72,7 @@ def test_mcp_bearer_declines_agent_without_service_user(agents_console_tables: N
 
 
 def test_mcp_bearer_resolves_for_ready_in_process_agent_without_operator_names(
-    agents_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """A READY/RUNNING in-process agent authenticates despite rendering no workspace or service."""
 
@@ -112,7 +90,7 @@ def test_mcp_bearer_resolves_for_ready_in_process_agent_without_operator_names(
     assert resolve_actor(bearer) == agent.principal_subject()
 
 
-def test_mcp_bearer_distinguishes_agents_sharing_one_internal_server(agents_console_tables: None) -> None:
+def test_mcp_bearer_distinguishes_agents_sharing_one_internal_server(composed_tables: None) -> None:
     """Two agents on one internal server each resolve to their own subject; a spoof is declined."""
 
     owner = User.objects.create_user(username="mcp-shared-owner", email="mcp-shared@example.com")
@@ -137,7 +115,7 @@ def test_mcp_bearer_distinguishes_agents_sharing_one_internal_server(agents_cons
     assert resolve_actor(f"{second.sqid}.{first_digest}") is None
 
 
-def test_mcp_bearer_raw_credential_secret_does_not_authenticate(agents_console_tables: None) -> None:
+def test_mcp_bearer_raw_credential_secret_does_not_authenticate(composed_tables: None) -> None:
     """The raw server credential secret is no longer a valid bearer; the derived one is required."""
 
     owner = User.objects.create_user(username="mcp-raw-owner", email="mcp-raw@example.com")
@@ -154,7 +132,7 @@ def test_mcp_bearer_raw_credential_secret_does_not_authenticate(agents_console_t
     assert resolve_actor(bearer) == agent.principal_subject()
 
 
-def test_mcp_bearer_with_valid_agent_and_non_ascii_digest_is_declined(agents_console_tables: None) -> None:
+def test_mcp_bearer_with_valid_agent_and_non_ascii_digest_is_declined(composed_tables: None) -> None:
     """Malformed Unicode digest input declines instead of reaching compare_digest."""
 
     owner = User.objects.create_user(username="mcp-unicode-owner", email="mcp-unicode@example.com")
@@ -173,13 +151,13 @@ def test_mcp_bearer_with_valid_agent_and_non_ascii_digest_is_declined(agents_con
 
 
 @pytest.mark.parametrize("bearer", ["", "no-dot", ".", "agt_only.", ".digest-only"])
-def test_mcp_bearer_malformed_is_declined(agents_console_tables: None, bearer: str) -> None:
+def test_mcp_bearer_malformed_is_declined(composed_tables: None, bearer: str) -> None:
     """A bearer that is empty or missing a non-empty sqid/digest half resolves to no actor."""
 
     assert resolve_actor(bearer) is None
 
 
-def test_mcp_bearer_for_external_server_does_not_authenticate(agents_console_tables: None) -> None:
+def test_mcp_bearer_for_external_server_does_not_authenticate(composed_tables: None) -> None:
     """An external server verifies its own raw token, so its bearer never authenticates here."""
 
     owner = User.objects.create_user(username="mcp-external-owner", email="mcp-external@example.com")
@@ -198,7 +176,7 @@ def test_mcp_bearer_for_external_server_does_not_authenticate(agents_console_tab
     assert resolve_actor(bearer) is None
 
 
-def test_mcp_bearer_from_server_the_agent_lacks_is_declined(agents_console_tables: None) -> None:
+def test_mcp_bearer_from_server_the_agent_lacks_is_declined(composed_tables: None) -> None:
     """A valid agent presenting a bearer for an internal server it is not attached to is declined."""
 
     owner = User.objects.create_user(username="mcp-unattached-owner", email="mcp-unattached@example.com")
@@ -220,7 +198,7 @@ def test_mcp_bearer_from_server_the_agent_lacks_is_declined(agents_console_table
     assert resolve_actor(other_bearer) is None
 
 
-def test_mcp_bearer_for_agent_with_no_attached_servers_is_declined(agents_console_tables: None) -> None:
+def test_mcp_bearer_for_agent_with_no_attached_servers_is_declined(composed_tables: None) -> None:
     """A provisioned agent attached to no internal server resolves to no actor."""
 
     owner = User.objects.create_user(username="mcp-zero-owner", email="mcp-zero@example.com")
@@ -235,7 +213,7 @@ def test_mcp_bearer_for_agent_with_no_attached_servers_is_declined(agents_consol
     assert resolve_actor(bearer) is None
 
 
-def test_mcp_bearer_for_ready_agent_without_service_user_is_declined(agents_console_tables: None) -> None:
+def test_mcp_bearer_for_ready_agent_without_service_user_is_declined(composed_tables: None) -> None:
     """A valid bearer cannot act after its ready agent loses the service principal."""
 
     owner = User.objects.create_user(username="mcp-no-user-owner", email="mcp-no-user@example.com")
@@ -260,7 +238,7 @@ def test_mcp_bearer_for_ready_agent_without_service_user_is_declined(agents_cons
     ],
 )
 def test_mcp_bearer_ignores_template_and_unprovisioned_agents(
-    agents_console_tables: None,
+    composed_tables: None,
     agent_kwargs: dict[str, Any],
     mark_provisioned: bool,
 ) -> None:
@@ -293,7 +271,7 @@ def test_mcp_bearer_ignores_template_and_unprovisioned_agents(
     assert resolve_actor(bearer) is None
 
 
-def test_agent_mcp_m2m_reconciles_server_read_and_tool_use(agents_console_tables: None) -> None:
+def test_agent_mcp_m2m_reconciles_server_read_and_tool_use(composed_tables: None) -> None:
     """Server selection gates catalogue reads; tool selection gates invocation."""
 
     owner = User.objects.create_user(username="mcp-rebac-owner", email="mcp-rebac@example.com")

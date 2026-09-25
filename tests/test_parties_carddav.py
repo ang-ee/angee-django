@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from datetime import date
 from typing import Any
 
 import httpx
 import pytest
 import vobject
-from django.core.management import call_command
 from django.db import connection
 from rebac import system_context
 
@@ -23,27 +21,9 @@ from angee.parties_integrate_carddav.backend import (
     _parse_vcard,
 )
 from tests import test_parties_graphql as parties_graphql
-from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
-    Credential,
-    Integration,
-    Vendor,
-    _clear_model_tables,
-    _create_missing_tables,
-    execute_schema,
-)
-from tests.test_messaging import Directory, Handle, Party, PartyHandle, Person
-
-_CARDDAV_CONNECT_MODELS = (
-    *IAM_CONNECTION_TEST_MODELS,
-    *INTEGRATE_TEST_MODELS,
-    Directory,
-    Party,
-    Person,
-    Handle,
-    PartyHandle,
-)
+from tests.conftest import Credential, Integration, Vendor, execute_schema
+from tests.messaging_models import Directory
+from tests.test_messaging import Handle, Party, PartyHandle, Person
 
 _CONNECT_CARDDAV_MUTATION = """
 mutation ConnectCardDav(
@@ -135,30 +115,13 @@ def test_photo_download_is_capped_and_uses_the_collection_origin() -> None:
     assert resolved.photo == ParsedPhoto(data=b"photo", mime="image/jpeg")
 
 
-@pytest.fixture()
-def carddav_connect_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the concrete integration and parties rows the connect flow owns."""
-
-    del transactional_db
-    created_models = _create_missing_tables(_CARDDAV_CONNECT_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(_CARDDAV_CONNECT_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
-
 def test_connect_probe_failure_writes_no_rows(
-    carddav_connect_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A rejected external probe runs before atomic and leaves no partial rows."""
 
-    del carddav_connect_tables
+    del composed_tables
     probe_atomic_states: list[bool] = []
 
     def reject_probe(backend: CardDavDirectoryBackend) -> None:
@@ -181,12 +144,12 @@ def test_connect_probe_failure_writes_no_rows(
 
 
 def test_connect_probe_success_commits_every_owned_row_atomically(
-    carddav_connect_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A successful external probe precedes one complete atomic write phase."""
 
-    del carddav_connect_tables
+    del composed_tables
     probe_atomic_states: list[bool] = []
     write_atomic_states: list[bool] = []
 

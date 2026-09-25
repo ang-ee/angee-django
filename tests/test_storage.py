@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
@@ -33,15 +32,12 @@ from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
 from tests.conftest import (
-    STORAGE_TEST_MODELS,
     Backend,
     Drive,
     File,
     FileAttachment,
     Folder,
     MimeType,
-    _clear_model_tables,
-    _create_missing_tables,
     addon_schema,
     create_platform_admin,
     execute_schema,
@@ -183,25 +179,10 @@ def test_fallback_attachment_name_derives_extension_from_mime() -> None:
 
 
 @pytest.fixture
-def storage_tables() -> Iterator[None]:
-    """Provide the concrete storage tables for one test."""
-
-    created_models = _create_missing_tables(STORAGE_TEST_MODELS)
-    try:
-        yield
-    finally:
-        _clear_model_tables(STORAGE_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
-
-@pytest.fixture
-def drive(tmp_path: Path, storage_tables: None) -> Any:
+def drive(tmp_path: Path, transactional_db: None) -> Any:
     """Provide a local-backend drive owned by the ``alice`` test user."""
 
-    del storage_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
     alice = get_user_model().objects.create_user(username="storage-alice", email="alice@example.com")
     with system_context(reason="test storage setup"):
@@ -946,10 +927,10 @@ def _header_values(value: str) -> set[str]:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_users_get_a_trash_smart_folder(storage_tables: None) -> None:
+def test_users_get_a_trash_smart_folder(transactional_db: None) -> None:
     """Creating a user creates exactly one owned Trash smart folder."""
 
-    del storage_tables
+    del transactional_db
     user = get_user_model().objects.create_user(username="storage-carol", email="carol@example.com")
     folders = Folder._base_manager.filter(owner=user, is_virtual=True)
     assert [folder.smart_kind for folder in folders] == [Folder.SmartKind.TRASH]
@@ -978,11 +959,11 @@ def test_folder_kind_projects_native_null_and_enum(drive: Any, schema_name: str)
 def test_backend_storage_cache_tracks_resolved_env_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    storage_tables: None,
+    transactional_db: None,
 ) -> None:
     """Environment-backed backend config changes produce a new storage instance."""
 
-    del storage_tables
+    del transactional_db
     Backend._storage_cache.clear()
     monkeypatch.setenv("ANGEE_TEST_STORAGE_ROOT", str(tmp_path / "one"))
     with system_context(reason="test storage setup"):
@@ -1006,11 +987,11 @@ def test_backend_storage_cache_tracks_resolved_env_config(
 def test_backend_storage_cache_is_bounded(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    storage_tables: None,
+    transactional_db: None,
 ) -> None:
     """The process cache evicts old resolved backend instances."""
 
-    del storage_tables
+    del transactional_db
 
     monkeypatch.setattr(storage_models, "_STORAGE_CACHE_MAX_SIZE", 2)
     Backend._storage_cache.clear()

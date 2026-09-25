@@ -12,9 +12,9 @@ from rebac import actor_context, current_actor, system_context
 from angee.messaging.managers import MessageQuerySet
 from tests.conftest import Vendor, execute_schema, make_integration, result_data
 from tests.test_messaging import Fragment, Handle, Message, Part, Party, Thread
-from tests.test_messaging_graphql import _platform_admin, _schema, messaging_graphql_tables  # noqa: F401
+from tests.test_messaging_graphql import _platform_admin, _schema
 
-pytestmark = pytest.mark.usefixtures("messaging_graphql_tables")
+pytestmark = pytest.mark.usefixtures("composed_tables")
 
 
 def test_unused_sender_order_does_not_prepare_identity_scopes() -> None:

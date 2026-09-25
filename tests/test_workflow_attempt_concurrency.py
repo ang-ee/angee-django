@@ -11,6 +11,7 @@ from django.db import close_old_connections, connection, connections, models
 from django.utils import timezone
 from rebac import system_context
 
+from angee.testing.models import StepAttempt, StepRun, WorkflowRun
 from angee.workflows.attempts import (
     AttemptInput,
     AttemptResult,
@@ -19,7 +20,7 @@ from angee.workflows.attempts import (
     LeaseRevocationReason,
 )
 from angee.workflows.models import RunStatus
-from tests.workflows import StepAttempt, StepRun, WorkflowRun, workflow_with_steps
+from tests.workflows import workflow_with_steps
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -39,8 +40,8 @@ def _thread(call: Any) -> Any:
 
 
 @pytest.fixture()
-def scheduled_step_run(workflow_engine_tables: None) -> StepRun:
-    del workflow_engine_tables
+def scheduled_step_run(composed_tables: None) -> StepRun:
+    del composed_tables
     workflow = workflow_with_steps(steps=({"key": "start", "step_class": "agent_session"},), edges=())
     with system_context(reason="prepare attempt concurrency"):
         run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)

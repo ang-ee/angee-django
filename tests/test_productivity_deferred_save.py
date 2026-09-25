@@ -8,24 +8,24 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.db import models
 from django.db.models.signals import pre_save
 from django.utils import timezone
 from rebac import system_context
 
+import tests.scopedemo.models  # noqa: F401 -- register related models before native database setup
+import tests.spaces_models  # noqa: F401 -- register related models before native database setup
+import tests.test_sequence  # noqa: F401 -- register related models before native database setup
 from angee.portfolio.models import Initiative as AbstractInitiative
 from angee.portfolio.models import InitiativeProject as AbstractInitiativeProject
 from angee.portfolio.models import Update as AbstractUpdate
 from angee.projects.models import TaskRelation as AbstractTaskRelation
 from angee.work.models import Cycle as AbstractCycle
-from tests.conftest import Backend, Drive, _clear_model_tables, _create_missing_tables
-from tests.projects_models import PROJECT_TEST_MODELS, Project, ProjectBinding
-from tests.scopedemo.models import Scope
-from tests.spaces_models import Group
+from tests.conftest import Backend, Drive
+from tests.projects_models import Project, ProjectBinding
 from tests.test_productivity_write_behavior import Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema
-from tests.test_sequence import SEQUENCE_TEST_MODELS
-from tests.test_task_relation_freshness import FreshnessMilestone, FreshnessStage, FreshnessTask
+from tests.test_task_relation_freshness import FreshnessTask
 
 
 class Cycle(AbstractCycle):
@@ -69,59 +69,32 @@ class TaskRelation(AbstractTaskRelation):
 @pytest.fixture
 def deferred_save_rows(project_access_schema: Any) -> Iterator[dict[str, models.Model]]:
     del project_access_schema
-    test_models = (
-        Group,
-        Queue,
-        Stage,
-        Cycle,
-        *SEQUENCE_TEST_MODELS,
-        Scope,
-        FreshnessStage,
-        FreshnessMilestone,
-        FreshnessTask,
-        FreshnessTask.history.model,
-        TaskRelation,
-        Backend,
-        Drive,
-        *PROJECT_TEST_MODELS,
-        Initiative,
-        InitiativeProject,
-        Update,
-    )
-    created = _create_missing_tables(test_models)
-    try:
-        with system_context(reason="tests.productivity.deferred_save.setup"):
-            queue = Queue.objects.create(key="DEFERRED", name="Deferred", slug="deferred")
-            cycle = Cycle.objects.create(queue=queue, number=1, starts_on=date(2026, 1, 1), ends_on=date(2026, 1, 7))
-            task = FreshnessTask.objects.create(title="Original")
-            related = FreshnessTask.objects.create(title="Related")
-            relation = TaskRelation.objects.create(task=task, related_task=related, kind="blocks")
-            project = Project.objects.create(title="Original")
-            backend = Backend.objects.create(slug="deferred", label="Deferred", backend_class="local")
-            drive = Drive.objects.create(backend=backend, slug="deferred", name="Deferred")
-            binding = ProjectBinding.objects.create(project=project, target=drive)
-            initiative = Initiative.objects.create(name="Original")
-            placement = InitiativeProject.objects.create(initiative=initiative, project=project)
-            report = Update.objects.create(target=initiative, health="on_track", body="Original")
-            rows = {
-                "queue": queue,
-                "stage": Stage.objects.get(queue=queue, category="unstarted"),
-                "cycle": cycle,
-                "task": task,
-                "relation": relation,
-                "project": project,
-                "binding": binding,
-                "initiative": initiative,
-                "placement": placement,
-                "report": report,
-            }
-        yield rows
-    finally:
-        _clear_model_tables(test_models)
-        if created:
-            with connection.schema_editor() as editor:
-                for model in reversed(created):
-                    editor.delete_model(model)
+    with system_context(reason="tests.productivity.deferred_save.setup"):
+        queue = Queue.objects.create(key="DEFERRED", name="Deferred", slug="deferred")
+        cycle = Cycle.objects.create(queue=queue, number=1, starts_on=date(2026, 1, 1), ends_on=date(2026, 1, 7))
+        task = FreshnessTask.objects.create(title="Original")
+        related = FreshnessTask.objects.create(title="Related")
+        relation = TaskRelation.objects.create(task=task, related_task=related, kind="blocks")
+        project = Project.objects.create(title="Original")
+        backend = Backend.objects.create(slug="deferred", label="Deferred", backend_class="local")
+        drive = Drive.objects.create(backend=backend, slug="deferred", name="Deferred")
+        binding = ProjectBinding.objects.create(project=project, target=drive)
+        initiative = Initiative.objects.create(name="Original")
+        placement = InitiativeProject.objects.create(initiative=initiative, project=project)
+        report = Update.objects.create(target=initiative, health="on_track", body="Original")
+        rows = {
+            "queue": queue,
+            "stage": Stage.objects.get(queue=queue, category="unstarted"),
+            "cycle": cycle,
+            "task": task,
+            "relation": relation,
+            "project": project,
+            "binding": binding,
+            "initiative": initiative,
+            "placement": placement,
+            "report": report,
+        }
+    yield rows
 
 
 @pytest.mark.parametrize(

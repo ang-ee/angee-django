@@ -9,18 +9,18 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from rebac import system_context
 
+import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
+import tests.test_workflows_extraction_service  # noqa: F401 -- register the fixture model graph before database setup
 from angee.base.refs import canonical_record_target
 from angee.base.serialization import canonical_json_sha256
 from tests.extraction_models import Extraction, ExtractionLineage
 from tests.test_messaging import Address, Handle, Party, PartyHandle
-from tests.test_parties_circles import parties_tables as parties_tables
-from tests.test_workflows_extraction_service import extraction_tables as extraction_tables
 
 
 @pytest.mark.django_db(transaction=True)
-def test_handle_upsert_collision_refreshes_existing_row(parties_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_handle_upsert_collision_refreshes_existing_row(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Handle upsert collision refreshes existing row."""
-    del parties_tables
+    del composed_tables
     with system_context(reason="handle refresh fixture"):
         source = Handle.objects.upsert(platform="email", value="old@example.test", external_id="stable-account")
         existing = Handle.objects.upsert(platform="email", value="new@example.test", display_name="Before")
@@ -37,10 +37,10 @@ def test_handle_upsert_collision_refreshes_existing_row(parties_tables: None, mo
 
 @pytest.mark.django_db(transaction=True)
 def test_suggestion_sweep_resolves_and_recounts_idempotently(
-    parties_tables: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Suggestion sweep resolves and recounts idempotently."""
-    del parties_tables
+    del composed_tables
     owner = get_user_model().objects.create_user(username="routed-suggestion-owner")
     with system_context(reason="suggestion fixture"):
         party = Party._base_manager.create(display_name="Customer", created_by_id=owner.pk)
@@ -66,9 +66,9 @@ def test_suggestion_sweep_resolves_and_recounts_idempotently(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_primary_address_save_demotes_previous_primary(parties_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_primary_address_save_demotes_previous_primary(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Primary address save demotes previous primary."""
-    del parties_tables
+    del composed_tables
     with system_context(reason="primary address fixture"):
         party = Party._base_manager.create(display_name="Customer")
         previous = Address._base_manager.create(party=party, is_primary=True)
@@ -83,10 +83,10 @@ def test_primary_address_save_demotes_previous_primary(parties_tables: None, mon
 
 @pytest.mark.django_db(transaction=True)
 def test_extraction_retention_reuses_and_advances_lineage(
-    extraction_tables: None, monkeypatch: pytest.MonkeyPatch
+    transactional_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Extraction retention reuses and advances lineage."""
-    del extraction_tables
+    del transactional_db
     schema = {"$id": "tests.routing.v1", "type": "object"}
     with system_context(reason="retained evidence fixture"):
         party = Party._base_manager.create(display_name="Evidence target")
@@ -119,9 +119,9 @@ def test_extraction_retention_reuses_and_advances_lineage(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_party_link_delete_repairs_after_commit(parties_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_party_link_delete_repairs_after_commit(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Party link delete repairs after commit."""
-    del parties_tables
+    del composed_tables
     with system_context(reason="delete repair fixture"):
         party = Party._base_manager.create(display_name="Customer")
         handle = Handle.objects.upsert(platform="email", value="repair@example.test")

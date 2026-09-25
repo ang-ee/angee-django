@@ -12,18 +12,10 @@ from django.db import close_old_connections, connection, connections, transactio
 from django.utils import timezone
 from rebac import system_context
 
+from angee.testing.models import Step, StepRun, Trigger, Workflow, WorkflowRun
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from tests.workflows import (
-    Step,
-    StepRun,
-    Trigger,
-    Workflow,
-    WorkflowRun,
-    admit_workflow_actor,
-    start_run,
-    workflow_actor,
-)
+from tests.workflows import admit_workflow_actor, start_run, workflow_actor
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -41,7 +33,7 @@ def _thread(call: Any) -> Any:
         connections.close_all()
 
 
-def test_two_due_scans_claim_one_schedule_occurrence(workflow_engine_tables: None) -> None:
+def test_two_due_scans_claim_one_schedule_occurrence(composed_tables: None) -> None:
     now = timezone.now().replace(microsecond=0)
     with system_context(reason="scheduled start race setup"):
         workflow = Workflow.objects.create(name="Scheduled start race")
@@ -82,7 +74,7 @@ def test_two_due_scans_claim_one_schedule_occurrence(workflow_engine_tables: Non
 
 
 def test_failure_path_and_direct_start_share_parent_first_lock_order(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     wait_until = (timezone.now() + timedelta(hours=2)).isoformat()
     with system_context(reason="linked start race setup"):

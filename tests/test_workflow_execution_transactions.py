@@ -10,26 +10,18 @@ from django.db import connection, transaction
 from django.utils import timezone
 from rebac import system_context
 
+from angee.testing.models import StepAttempt, StepRun, WorkflowDispatch
 from angee.workflows import engine
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepExecutionMode, StepResult, TransientStepError
-from tests.workflows import (
-    FixtureStep,
-    StepAttempt,
-    StepRun,
-    WorkflowDispatch,
-    advance_once,
-    execute_started,
-    start_run,
-    workflow_with_steps,
-)
+from tests.workflows import FixtureStep, advance_once, execute_started, start_run, workflow_with_steps
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("completed_entry", [False, True])
 def test_advance_publishes_claim_only_after_commit(
-    workflow_engine_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch, completed_entry: bool
+    composed_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch, completed_entry: bool
 ) -> None:
     """Advance publishes claim only after commit."""
     del no_workflow_queue
@@ -68,7 +60,7 @@ def test_advance_publishes_claim_only_after_commit(
 @pytest.mark.parametrize("mode", [StepExecutionMode.STANDARD, StepExecutionMode.DATABASE_COMMAND])
 @pytest.mark.parametrize("result_kind", ["done", "wait", "retry"])
 def test_execute_preserves_invocation_transaction_and_schedules_result(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     mode: StepExecutionMode,

@@ -17,12 +17,9 @@ from angee.messaging.inbox_transcript import InboxTranscript
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
 from tests.conftest import execute_schema, make_integration, result_data
 from tests.test_messaging import Fragment, Handle, Message, Part, Participant, Party, Thread
-from tests.test_nexus import (
-    _schema,
-    nexus_tables,  # noqa: F401
-)
+from tests.test_nexus import _schema
 
-pytestmark = pytest.mark.usefixtures("nexus_tables")
+pytestmark = pytest.mark.usefixtures("composed_tables")
 User = get_user_model()
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 

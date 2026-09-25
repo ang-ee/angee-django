@@ -16,7 +16,6 @@ reflection table the way the composed console does:
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -25,8 +24,6 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.core.management import call_command
-from django.db import connection
 from django.test import RequestFactory
 from hatch_angee import AddonManifest
 from rebac import system_context, to_object_ref
@@ -34,8 +31,7 @@ from rebac import system_context, to_object_ref
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.platform import models as platform_models
 from angee.platform.models import _preview_revision
-from tests.conftest import PLATFORM_TEST_MODELS, SchemaAddon, execute_schema
-from tests.conftest import _create_missing_tables as _create_tables
+from tests.conftest import SchemaAddon, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
 
@@ -61,22 +57,6 @@ _DISABLE = "mutation($addon: String!){ disable(addon: $addon){ ok message } }"
 
 
 @pytest.fixture()
-def platform_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the ``platform.Addon`` reflection table and sync the REBAC schema."""
-
-    del transactional_db
-    created = _create_tables(PLATFORM_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
-@pytest.fixture()
 def project_settings_yaml(tmp_path: Path, settings: Any) -> Path:
     """Point the local installer at a temp ``settings.yaml`` and return its path."""
 
@@ -99,12 +79,12 @@ def test_change_impact_uses_addon_display_label(label: str | None, monkeypatch: 
 
 
 def test_install_appends_the_root_and_reflects_pending(
-    platform_tables: None,
+    composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
     """Install adds the root to ``settings.yaml`` and flips the reflected row to pending."""
 
-    del platform_tables
+    del composed_tables
     admin = _platform_admin("install-admin")
 
     result = _data(_execute(_schema(), _INSTALL, {"addon": _AVAILABLE_ADDON}, user=admin))["install"]
@@ -124,12 +104,12 @@ def test_install_appends_the_root_and_reflects_pending(
 
 
 def test_install_is_idempotent_for_an_already_listed_root(
-    platform_tables: None,
+    composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
     """Installing a root already in ``INSTALLED_APPS`` reports the no-op, file unchanged."""
 
-    del platform_tables
+    del composed_tables
     admin = _platform_admin("install-idempotent-admin")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
@@ -141,7 +121,7 @@ def test_install_is_idempotent_for_an_already_listed_root(
 
 
 def test_install_refuses_a_non_materialised_addon(
-    platform_tables: None,
+    composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
     """Install of a name no bundle/local addon provides is refused; the file is untouched.
@@ -151,7 +131,7 @@ def test_install_refuses_a_non_materialised_addon(
     available set and refuses before any edit.
     """
 
-    del platform_tables
+    del composed_tables
     admin = _platform_admin("install-unknown-admin")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
@@ -163,12 +143,12 @@ def test_install_refuses_a_non_materialised_addon(
 
 
 def test_disable_preview_refuses_an_unknown_addon(
-    platform_tables: None,
+    composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
     """A crafted Disable target is a refusal rather than a successful no-op."""
 
-    del platform_tables, project_settings_yaml
+    del composed_tables, project_settings_yaml
     with system_context(reason="test.platform.disable-preview.unknown"):
         preview = Addon.objects.change_preview("not.a.real.addon", "disable")
 
@@ -277,12 +257,12 @@ def test_data_inventory_lists_donor_fields_separately(monkeypatch: pytest.Monkey
 
 
 def test_disable_removes_the_root(
-    platform_tables: None,
+    composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
     """Disable drops the root from ``settings.yaml`` (it leaves on the next boot)."""
 
-    del platform_tables
+    del composed_tables
     # Seed an extra root so there is something to disable in the file.
     _data(_execute(_schema(), _INSTALL, {"addon": _AVAILABLE_ADDON}, user=_platform_admin("seed-admin")))
     admin = _platform_admin("disable-admin")
@@ -296,14 +276,14 @@ def test_disable_removes_the_root(
 
 @pytest.mark.parametrize("persisted_forced", [True, False, None])
 def test_disable_refuses_an_addon_required_by_the_loaded_graph(
-    platform_tables: None,
+    composed_tables: None,
     project_settings_yaml: Path,
     monkeypatch: pytest.MonkeyPatch,
     persisted_forced: bool | None,
 ) -> None:
     """The loaded dependency graph refuses disable even with a stale or absent row."""
 
-    del platform_tables
+    del composed_tables
     admin = _platform_admin("forced-admin")
     monkeypatch.setattr(apps.get_app_config("iam"), "angee_forced", True, raising=False)
     if persisted_forced is not None:
@@ -323,13 +303,13 @@ def test_disable_refuses_an_addon_required_by_the_loaded_graph(
 
 
 def test_disable_ignores_stale_catalogue_dependency_flags(
-    platform_tables: None,
+    composed_tables: None,
     project_settings_yaml: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A stale forced row and catalogue reverse edges cannot block a free loaded root."""
 
-    del platform_tables
+    del composed_tables
     admin = _platform_admin("stale-forced-admin")
     monkeypatch.setattr(apps.get_app_config("platform"), "angee_forced", False, raising=False)
     with system_context(reason="test.platform.stale-forced.seed"):
@@ -350,12 +330,12 @@ def test_disable_ignores_stale_catalogue_dependency_flags(
 
 
 def test_install_denies_a_non_admin(
-    platform_tables: None,
+    composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
     """The REBAC admin gate denies a non-admin actor (the file stays unedited)."""
 
-    del platform_tables
+    del composed_tables
     plain = User.objects.create_user(username="plain-user", password="plain-user")
     before = project_settings_yaml.read_text(encoding="utf-8")
 

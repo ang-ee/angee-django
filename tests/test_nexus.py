@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -10,8 +9,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.db import IntegrityError, connection
+from django.db import IntegrityError
 from rebac import (
     RelationshipTuple,
     actor_context,
@@ -27,14 +25,11 @@ from angee.nexus.models import Tie as AbstractTie
 from tests import test_messaging_graphql
 from tests.conftest import (
     SchemaAddon,
-    _clear_model_tables,
-    _create_missing_tables,
     assert_private_hasura_insert_access,
     execute_schema,
 )
 from tests.conftest import result_data as _data
 from tests.test_messaging import (
-    MESSAGING_TEST_MODELS,
     Handle,
     Message,
     MessageEdge,
@@ -72,26 +67,8 @@ class Cadence(AbstractCadence):
 
 
 nexus_schema = __import__("angee.nexus.schema", fromlist=["schemas"])
-NEXUS_TEST_MODELS = (*MESSAGING_TEST_MODELS, Tie, Cadence)
 User = get_user_model()
 _T0 = datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
-
-
-@pytest.fixture
-def nexus_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the concrete nexus and upstream test tables."""
-
-    del transactional_db
-    created_models = _create_missing_tables(NEXUS_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(NEXUS_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
 
 
 def _party(name: str) -> Any:
@@ -239,10 +216,10 @@ def test_fading_adapts_to_the_edge_rhythm() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_tie_save_canonicalizes_the_pair_and_the_database_rejects_duplicates(nexus_tables: None) -> None:
+def test_tie_save_canonicalizes_the_pair_and_the_database_rejects_duplicates(composed_tables: None) -> None:
     """Save orders both ends while the unique constraint closes alternate write paths."""
 
-    del nexus_tables
+    del composed_tables
     with system_context(reason="test nexus canonical pair"):
         first = _party("First")
         second = _party("Second")
@@ -254,10 +231,10 @@ def test_tie_save_canonicalizes_the_pair_and_the_database_rejects_duplicates(nex
 
 
 @pytest.mark.django_db(transaction=True)
-def test_recompute_derives_addressed_reply_and_mention_edges_once(nexus_tables: None) -> None:
+def test_recompute_derives_addressed_reply_and_mention_edges_once(composed_tables: None) -> None:
     """The three deliberate sources converge without double-counting one message/pair."""
 
-    del nexus_tables
+    del composed_tables
     with system_context(reason="test nexus deliberate interactions"):
         alice = _party("Alice")
         bob = _party("Bob")
@@ -298,10 +275,10 @@ def test_recompute_derives_addressed_reply_and_mention_edges_once(nexus_tables: 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_recompute_counts_to_and_cc_but_not_bcc_or_unresolved_handles(nexus_tables: None) -> None:
+def test_recompute_counts_to_and_cc_but_not_bcc_or_unresolved_handles(composed_tables: None) -> None:
     """Only resolved TO/CC envelope targets are deliberate addressed interactions."""
 
-    del nexus_tables
+    del composed_tables
     with system_context(reason="test nexus envelope roles"):
         alice = _party("Alice")
         bob = _party("Bob")
@@ -328,10 +305,10 @@ def test_recompute_counts_to_and_cc_but_not_bcc_or_unresolved_handles(nexus_tabl
 
 
 @pytest.mark.django_db(transaction=True)
-def test_thread_roster_only_group_with_ten_participants_produces_no_ties(nexus_tables: None) -> None:
+def test_thread_roster_only_group_with_ten_participants_produces_no_ties(composed_tables: None) -> None:
     """Thread roster co-membership never expands one group message into pair edges."""
 
-    del nexus_tables
+    del composed_tables
     with system_context(reason="test nexus roster guard"):
         parties = [_party(f"Person {index}") for index in range(10)]
         handles = [_handle(party, f"person{index}@example.com") for index, party in enumerate(parties)]
@@ -345,10 +322,10 @@ def test_thread_roster_only_group_with_ten_participants_produces_no_ties(nexus_t
 
 
 @pytest.mark.django_db(transaction=True)
-def test_recompute_excludes_record_chatter_and_public_threads(nexus_tables: None) -> None:
+def test_recompute_excludes_record_chatter_and_public_threads(composed_tables: None) -> None:
     """Chatter and public posts stay outside private relationship gravity."""
 
-    del nexus_tables
+    del composed_tables
     with system_context(reason="test nexus excluded thread kinds"):
         alice = _party("Alice")
         bob = _party("Bob")
@@ -380,10 +357,10 @@ def test_recompute_excludes_record_chatter_and_public_threads(nexus_tables: None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_recompute_deletes_stale_edges_and_refreshes_cadence(nexus_tables: None) -> None:
+def test_recompute_deletes_stale_edges_and_refreshes_cadence(composed_tables: None) -> None:
     """Derived rows disappear with their evidence while the human cadence survives."""
 
-    del nexus_tables
+    del composed_tables
     with system_context(reason="test nexus cadence refresh"):
         user = User.objects.create_user(username="viewer")
         viewer = Person._base_manager.create(display_name="Viewer", user=user, created_by=user)
@@ -409,10 +386,10 @@ def test_recompute_deletes_stale_edges_and_refreshes_cadence(nexus_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_cadence_stays_due_null_until_the_user_has_a_party_identity(nexus_tables: None) -> None:
+def test_cadence_stays_due_null_until_the_user_has_a_party_identity(composed_tables: None) -> None:
     """A cadence cannot infer a viewer edge before Person.user establishes identity."""
 
-    del nexus_tables
+    del composed_tables
     with system_context(reason="test nexus cadence without identity"):
         user = User.objects.create_user(username="unlinked")
         target = _party("Target")
@@ -422,10 +399,10 @@ def test_cadence_stays_due_null_until_the_user_has_a_party_identity(nexus_tables
 
 
 @pytest.mark.django_db(transaction=True)
-def test_tie_read_requires_access_to_both_parties(nexus_tables: None) -> None:
+def test_tie_read_requires_access_to_both_parties(composed_tables: None) -> None:
     """One readable endpoint cannot leak the other endpoint's network."""
 
-    del nexus_tables
+    del composed_tables
     reader = User.objects.create_user(username="one-sided-reader")
     owner = User.objects.create_user(username="pair-owner")
     with system_context(reason="test nexus intersection seed"):
@@ -442,10 +419,10 @@ def test_tie_read_requires_access_to_both_parties(nexus_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_cadence_read_requires_owner_and_party_access(nexus_tables: None) -> None:
+def test_cadence_read_requires_owner_and_party_access(composed_tables: None) -> None:
     """Cadence visibility intersects its owning user with party read."""
 
-    del nexus_tables
+    del composed_tables
     owner = User.objects.create_user(username="cadence-owner")
     other = User.objects.create_user(username="cadence-party-owner")
     with system_context(reason="test nexus cadence permission seed"):
@@ -491,10 +468,10 @@ def test_party_resource_metadata_projects_the_canonical_party_label() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_cadence_orm_create_defaults_the_queryset_actor(nexus_tables: None) -> None:
+def test_cadence_orm_create_defaults_the_queryset_actor(composed_tables: None) -> None:
     """The save owner supplies user defaults for bound ORM insertion too."""
 
-    del nexus_tables
+    del composed_tables
     viewer = User.objects.create_user(username="cadence-orm-viewer")
     with system_context(reason="test nexus cadence ORM seed"):
         party = Party._base_manager.create(display_name="Party", created_by=viewer)
@@ -506,7 +483,7 @@ def test_cadence_orm_create_defaults_the_queryset_actor(nexus_tables: None) -> N
 
 
 @pytest.mark.django_db(transaction=True)
-def test_cadence_clean_defaults_user_before_unique_validation(nexus_tables: None) -> None:
+def test_cadence_clean_defaults_user_before_unique_validation(composed_tables: None) -> None:
     """Native full_clean includes the actor-derived user in its uniqueness check."""
 
     viewer = User.objects.create_user(username="cadence-clean-viewer")
@@ -524,7 +501,7 @@ def test_cadence_clean_defaults_user_before_unique_validation(nexus_tables: None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_cadence_clean_requires_an_actor_for_default_user(nexus_tables: None) -> None:
+def test_cadence_clean_requires_an_actor_for_default_user(composed_tables: None) -> None:
     """A field allowed to defer its default still cannot validate without an actor."""
 
     with pytest.raises(ValidationError) as exc_info:
@@ -533,10 +510,10 @@ def test_cadence_clean_requires_an_actor_for_default_user(nexus_tables: None) ->
 
 
 @pytest.mark.django_db(transaction=True)
-def test_cadence_create_binds_the_authenticated_user(nexus_tables: None) -> None:
+def test_cadence_create_binds_the_authenticated_user(composed_tables: None) -> None:
     """The CRUD surface accepts intent fields and owns the viewer relation server-side."""
 
-    del nexus_tables
+    del composed_tables
     viewer = User.objects.create_user(username="cadence-create-viewer")
     with system_context(reason="test nexus cadence create seed"):
         party = Party._base_manager.create(display_name="Party", created_by=viewer)
@@ -565,11 +542,11 @@ def test_cadence_create_binds_the_authenticated_user(nexus_tables: None) -> None
 
 @pytest.mark.django_db(transaction=True)
 def test_cadence_console_insert_establishes_private_creator_access(
-    nexus_tables: None,
+    composed_tables: None,
 ) -> None:
     """A non-admin can create/read/write its cadence; an unrelated user cannot read it."""
 
-    del nexus_tables
+    del composed_tables
     creator = User.objects.create_user(username="cadence-private-creator")
     outsider = User.objects.create_user(username="cadence-private-outsider")
     with system_context(reason="test nexus private cadence seed"):
@@ -612,10 +589,10 @@ def test_cadence_console_insert_establishes_private_creator_access(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_party_fields_resolve_the_viewers_edge_and_cadence(nexus_tables: None) -> None:
+def test_party_fields_resolve_the_viewers_edge_and_cadence(composed_tables: None) -> None:
     """Party tie and cadence are selected through the signed-in Person identity."""
 
-    del nexus_tables
+    del composed_tables
     viewer_user = User.objects.create_user(username="viewer-fields")
     with system_context(reason="test nexus viewer fields seed"):
         viewer = Person._base_manager.create(display_name="Viewer", user=viewer_user, created_by=viewer_user)
@@ -653,10 +630,10 @@ def test_party_fields_resolve_the_viewers_edge_and_cadence(nexus_tables: None) -
 
 
 @pytest.mark.django_db(transaction=True)
-def test_party_tie_is_null_without_a_viewer_party_identity(nexus_tables: None) -> None:
+def test_party_tie_is_null_without_a_viewer_party_identity(composed_tables: None) -> None:
     """A signed-in user without Person.user has no viewer-relative edge."""
 
-    del nexus_tables
+    del composed_tables
     viewer = User.objects.create_user(username="viewer-without-person")
     with system_context(reason="test nexus missing viewer identity seed"):
         target = Party._base_manager.create(display_name="Target", created_by=viewer)
@@ -674,10 +651,10 @@ def test_party_tie_is_null_without_a_viewer_party_identity(nexus_tables: None) -
 
 
 @pytest.mark.django_db(transaction=True)
-def test_party_network_applies_pair_intersection_to_every_edge(nexus_tables: None) -> None:
+def test_party_network_applies_pair_intersection_to_every_edge(composed_tables: None) -> None:
     """The party network returns only edges whose two endpoints are readable."""
 
-    del nexus_tables
+    del composed_tables
     reader = User.objects.create_user(username="network-reader")
     owner = User.objects.create_user(username="network-owner")
     with system_context(reason="test nexus network seed"):

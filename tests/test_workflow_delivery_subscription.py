@@ -15,6 +15,16 @@ from django.utils import timezone
 from rebac import system_context, to_subject_ref
 
 from angee.base.identity import public_id_for
+from angee.testing.models import (
+    Edge,
+    Step,
+    StepAttempt,
+    StepExternalSubscription,
+    StepRun,
+    Workflow,
+    WorkflowDispatch,
+    WorkflowRun,
+)
 from angee.workflows import engine
 from angee.workflows.attempts import (
     ArtifactSpec,
@@ -34,20 +44,7 @@ from angee.workflows.steps import (
     StepOutcome,
     StepResult,
 )
-from tests.workflows import (
-    Edge,
-    Step,
-    StepAttempt,
-    StepExternalSubscription,
-    StepRun,
-    Workflow,
-    WorkflowDispatch,
-    WorkflowRun,
-    advance_once,
-    execute_started,
-    run_to_terminal,
-    start_run,
-)
+from tests.workflows import advance_once, execute_started, run_to_terminal, start_run
 
 User = get_user_model()
 
@@ -142,11 +139,11 @@ def test_terminal_failed_continuation_routes_child_failed(monkeypatch: pytest.Mo
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL continuation delivery ordering")
 def test_continuation_delivery_between_completion_read_and_wait_commit_is_retained(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="continuation-delivery-owner")
     with system_context(reason="continuation delivery child definition"):
         child_head = Workflow.objects.create(name="Continuation delivery child", created_by=actor)
@@ -299,10 +296,10 @@ def test_continuation_delivery_between_completion_read_and_wait_commit_is_retain
 
 @pytest.mark.django_db(transaction=True)
 def test_recovery_terminal_delivery_targets_the_lineage_root(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="recovery-delivery-owner")
     with system_context(reason="recovery delivery fixture"):
         workflow = Workflow.objects.create(name="Recovery delivery", created_by=actor)
@@ -434,11 +431,11 @@ def _confirm_and_retain_intent(user: Any) -> Any:
 
 @pytest.mark.django_db(transaction=True)
 def test_event_before_subscription_is_read_as_current_domain_state(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_subscription(monkeypatch)
     event = _confirm_and_retain_intent(user)
     assert event.kind == WorkflowDispatchKind.ARTIFACT_DELIVERY
@@ -459,11 +456,11 @@ def test_event_before_subscription_is_read_as_current_domain_state(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL subscription ordering")
 def test_event_after_predicate_read_before_wait_commit_is_retained(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_subscription(monkeypatch)
     read_done, release = Event(), Event()
     _SubscribedPredicate.read_done = read_done

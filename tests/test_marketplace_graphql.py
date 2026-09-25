@@ -16,31 +16,22 @@ same path the ``marketplace sync`` command and integrate's ``refresh_source`` us
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
 from typing import Any
 
-import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.core.management import call_command
-from django.db import connection
 from django.test import RequestFactory
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
-    PLATFORM_TEST_MODELS,
-    VCS_TEST_MODELS,
     Repository,
     SchemaAddon,
     Source,
     execute_schema,
     make_integration,
 )
-from tests.conftest import _create_missing_tables as _create_tables
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
 
@@ -76,24 +67,6 @@ mutation AddSource($data: AddonSourceInput!) {
 _SCAN = "mutation($id: ID!){ scan(source_id: $id){ ok message } }"
 
 
-@pytest.fixture()
-def marketplace_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the iam/integrate/VCS + ``platform.Addon`` tables and sync REBAC."""
-
-    del transactional_db
-    created = _create_tables(
-        IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + VCS_TEST_MODELS + PLATFORM_TEST_MODELS
-    )
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
 def _bridge() -> Any:
     """Create a stub-backed VCS bridge serving one repo + one discoverable addon."""
 
@@ -106,11 +79,11 @@ def _bridge() -> Any:
 
 
 def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
-    marketplace_tables: None,
+    composed_tables: None,
 ) -> None:
     """``addSource`` imports the repo and creates one ``Source(kind="addon")``."""
 
-    del marketplace_tables
+    del composed_tables
     bridge = _bridge()
     admin = _platform_admin("add-source-admin")
 
@@ -132,11 +105,11 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
 
 
 def test_scan_discovers_addon_toml_rows_into_the_registry(
-    marketplace_tables: None,
+    composed_tables: None,
 ) -> None:
     """``scan`` runs the discovery walk and writes a REMOTE ``platform.Addon`` row."""
 
-    del marketplace_tables
+    del composed_tables
     bridge = _bridge()
     admin = _platform_admin("scan-admin")
     _data(
@@ -161,11 +134,11 @@ def test_scan_discovers_addon_toml_rows_into_the_registry(
 
 
 def test_scan_refuses_a_non_addon_source(
-    marketplace_tables: None,
+    composed_tables: None,
 ) -> None:
     """``scan`` of a non-addon source kind is reported, never dispatched."""
 
-    del marketplace_tables
+    del composed_tables
     bridge = _bridge()
     admin = _platform_admin("scan-wrong-kind-admin")
     with system_context(reason="test.marketplace.scan.template_seed"):
@@ -179,11 +152,11 @@ def test_scan_refuses_a_non_addon_source(
 
 
 def test_add_source_denies_a_non_admin(
-    marketplace_tables: None,
+    composed_tables: None,
 ) -> None:
     """The REBAC admin gate denies a non-admin actor."""
 
-    del marketplace_tables
+    del composed_tables
     bridge = _bridge()
     plain = User.objects.create_user(username="mkt-plain", password="mkt-plain")
 
@@ -215,8 +188,6 @@ def _execute(schema: Any, query: str, variables: dict[str, Any] | None = None, *
     request = RequestFactory().post("/graphql/console/")
     request.user = user or AnonymousUser()
     return execute_schema(schema, query, variables, request=request)
-
-
 
 
 def _public_id(value: Any) -> str:

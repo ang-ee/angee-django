@@ -9,28 +9,20 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rebac import system_context
 
+from angee.testing.models import Step, StepAttempt, StepRun, Trigger, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows.attempts import AttemptInput, AttemptResult, AttemptResultKind, WorkflowScope
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.states import RunOrigin, StepRunStatus
 from tests.test_workflow_test_snapshots import _draft, _ReconcilingTestStep
 from tests.test_workflows_triggers import _schedule_trigger
-from tests.workflows import (
-    Step,
-    StepAttempt,
-    StepRun,
-    Trigger,
-    Workflow,
-    WorkflowDispatch,
-    WorkflowRun,
-    admit_workflow_actor,
-)
+from tests.workflows import admit_workflow_actor
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.mark.parametrize("node_scope", [False, True])
 def test_start_test_reuses_snapshot_and_duplicate_request(
-    workflow_engine_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch, node_scope: bool
+    composed_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch, node_scope: bool
 ) -> None:
     """Start test reuses snapshot and duplicate request."""
     actor = get_user_model().objects.create_user(username="start-test")
@@ -65,7 +57,7 @@ def test_start_test_reuses_snapshot_and_duplicate_request(
 
 
 def test_start_recovery_is_idempotent_and_persists_dispatch(
-    workflow_engine_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Start recovery is idempotent and persists dispatch."""
     actor = get_user_model().objects.create_user(username="start-recovery")
@@ -97,7 +89,7 @@ def test_start_recovery_is_idempotent_and_persists_dispatch(
 
 
 def test_schedule_maintenance_primes_claims_and_starts(
-    workflow_engine_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Schedule maintenance primes claims and starts."""
     now = timezone.now().replace(microsecond=0)

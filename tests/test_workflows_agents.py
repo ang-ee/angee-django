@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterator
+from collections.abc import Collection
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -12,7 +12,7 @@ from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import connection, transaction
+from django.db import transaction
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from pydantic import ValidationError as PydanticValidationError
@@ -38,30 +38,23 @@ from angee.agents.runners import TurnOutcome
 from angee.base.impl import resolve_impl_class
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.testing.models import WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import AttemptResultKind, GateResumeState, JsonPresence
 from angee.workflows.steps import GateStep, StepImpl, TransientStepError
 from angee.workflows_agents import sessions
-from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
-    StubInferenceBackend,
-    _create_missing_tables,
-)
+from tests.conftest import StubInferenceBackend
 from tests.test_agents import InferenceModel, _provider
-from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS, Agent, AgentSession, AgentTurn
+from tests.test_agents_graphql import Agent, AgentSession, AgentTurn
+from tests.test_workflows_resources import WorkflowResourceLedger  # noqa: F401 -- register before database setup
 from tests.workflows import (
-    WORKFLOW_RUNTIME_MODELS,
-    WorkflowDispatch,
-    WorkflowRun,
     admit_workflow_actor,
     advance_once,
     execute_started,
     start_run,
     step_run_for,
     workflow_actor,
-    workflow_table_setup,
     workflow_with_steps,
 )
 
@@ -105,31 +98,6 @@ def test_agent_approval_uses_dynamic_all_done_resumable_gate_slots() -> None:
     ]
 
 
-@pytest.fixture()
-def workflows_agents_tables(transactional_db: Any) -> Iterator[None]:
-    """Create workflow runtime plus agent catalogue test tables."""
-
-    del transactional_db
-    from tests.test_workflows_resources import WorkflowResourceLedger
-
-    models = (
-        IAM_CONNECTION_TEST_MODELS
-        + INTEGRATE_TEST_MODELS
-        + AGENTS_GRAPHQL_MODELS
-        + WORKFLOW_RUNTIME_MODELS
-        + (WorkflowResourceLedger,)
-    )
-    created = _create_missing_tables(models)
-    try:
-        with workflow_table_setup(models):
-            yield
-    finally:
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
 def test_infer_is_the_only_registered_one_shot_step_key() -> None:
     """The cutover has one key and deliberately provides no ``agent`` alias."""
 
@@ -141,14 +109,14 @@ def test_infer_is_the_only_registered_one_shot_step_key() -> None:
 
 
 def test_infer_step_passes_native_request_envelope_and_projects_response(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Messages, images, schema, settings and timeout reach ``InferenceModel.infer`` unchanged."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     model = _inference_model("infer-envelope")
     with system_context(reason="test image model capability"):
         model.model_use = InferenceModelUse.IMAGE
@@ -227,14 +195,14 @@ def test_infer_step_passes_native_request_envelope_and_projects_response(
 
 
 def test_infer_step_policy_absent_leaves_catalogue_unrestricted(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The policy owner's documented absent-setting behavior applies to the step."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     model = _inference_model("unrestricted-infer")
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
     bindings = _stub_model_backend(
@@ -250,11 +218,11 @@ def test_infer_step_policy_absent_leaves_catalogue_unrestricted(
 
 
 def test_infer_step_unresolved_model_id_is_an_invocation_error(
-    workflows_agents_tables: None,
+    composed_tables: None,
 ) -> None:
     """Catalogue resolution happens before provider outcome conversion or debit."""
 
-    del workflows_agents_tables
+    del composed_tables
     from angee.workflows_agents.steps import InferStepImpl
 
     model = _inference_model("missing-infer")
@@ -275,7 +243,7 @@ def test_infer_step_unresolved_model_id_is_an_invocation_error(
 
 @pytest.mark.parametrize("rejection", ["role", "endpoint"])
 def test_infer_step_rejects_unapproved_role_or_deployment_before_provider_call(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -283,7 +251,7 @@ def test_infer_step_rejects_unapproved_role_or_deployment_before_provider_call(
 ) -> None:
     """A configured policy fails closed on absent roles and identity mismatches."""
 
-    del workflows_agents_tables
+    del composed_tables
     from angee.workflows_agents.steps import InferStepImpl
 
     model = _inference_model(f"unapproved-{rejection}")
@@ -333,13 +301,13 @@ def test_infer_step_rejects_timeout_in_request_settings(timeout: float | None) -
 
 
 def test_infer_request_settings_are_validated_by_the_backend(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Transport settings fail through the selected backend before any provider call."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     model = _inference_model("bad-settings")
     bindings = _stub_model_backend(monkeypatch, lambda messages, info: ModelResponse(parts=[TextPart("must not run")]))
     value = _infer_input(model)
@@ -356,14 +324,14 @@ def test_infer_request_settings_are_validated_by_the_backend(
 
 
 def test_infer_step_denies_actor_without_read_before_provider_call(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Deployment approval cannot grant the admitted actor access to a private model."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     from angee.workflows_agents.steps import InferStepImpl
 
     model = _inference_model("private-inference")
@@ -385,14 +353,14 @@ def test_infer_step_denies_actor_without_read_before_provider_call(
 
 
 def test_infer_step_approved_readable_model_passes_once(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The model owner authorizes one admitted provider invocation exactly once."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     model = _inference_model("approved-readable")
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = {"classification": [model.deployment_identity()]}
     original = InferenceModel.require_usable
@@ -414,13 +382,13 @@ def test_infer_step_approved_readable_model_passes_once(
 
 
 def test_infer_request_usage_is_a_workflow_budget_axis(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The normalized ``requests`` count participates in the generic run budget."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     model = _inference_model("infer-request-budget")
     _stub_model_backend(
         monkeypatch,
@@ -448,13 +416,13 @@ def test_infer_request_usage_is_a_workflow_budget_axis(
 
 
 def test_replay_does_not_reinvoke_completed_infer_step(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Replaying a completed inference activity reuses its retained output."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     model = _inference_model("infer-replay")
     calls: list[None] = []
 
@@ -479,13 +447,13 @@ def test_replay_does_not_reinvoke_completed_infer_step(
 
 
 def test_infer_terminal_provider_error_routes_failed_and_debits_once(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A terminal provider error is retained and crosses the budget boundary once."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     model = _inference_model("infer-terminal")
     debits: list[dict[str, int]] = []
 
@@ -529,13 +497,13 @@ def test_infer_terminal_provider_error_routes_failed_and_debits_once(
 
 
 def test_infer_error_after_response_debits_returned_usage_once(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A terminal projection error still debits the usage already returned by the model."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     from angee.workflows_agents import steps
 
     model = _inference_model("infer-projection-error")
@@ -572,13 +540,13 @@ def test_infer_error_after_response_debits_returned_usage_once(
 
 
 def test_infer_retryable_provider_error_allocates_retry_and_debits_once(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The shared provider classifier routes a 429 into the workflow retry policy."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
 
     model = _inference_model("infer-retryable")
     debits: list[dict[str, int]] = []
@@ -607,13 +575,13 @@ def test_infer_retryable_provider_error_allocates_retry_and_debits_once(
 
 
 def test_infer_invalid_structured_output_retains_usage_and_debits_once(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An invalid schema object remains a charged terminal provider outcome."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     model = _inference_model("invalid-structured-output")
     usage = {"input_tokens": 4, "output_tokens": 2, "tokens": 6, "requests": 1}
     debits: list[dict[str, int]] = []
@@ -641,13 +609,13 @@ def test_infer_invalid_structured_output_retains_usage_and_debits_once(
 
 
 def test_infer_debit_failure_aborts_instead_of_becoming_provider_output(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Accounting failure cannot leave a completed, uncharged provider result."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     from angee.workflows_agents.steps import InferStepImpl
 
     model = _inference_model("debit-failure")
@@ -669,11 +637,11 @@ def test_infer_debit_failure_aborts_instead_of_becoming_provider_output(
 
 
 def test_session_and_turn_reads_and_turn_subscription_are_owner_gated(
-    workflows_agents_tables: None,
+    composed_tables: None,
 ) -> None:
     """A non-owner cannot query a session/turn or receive its change notification."""
 
-    del workflows_agents_tables
+    del composed_tables
     owner = User.objects.create_user(username="session-owner")
     stranger = User.objects.create_user(username="session-stranger")
     with system_context(reason="test workflows agents rebac seed"):
@@ -692,13 +660,13 @@ def test_session_and_turn_reads_and_turn_subscription_are_owner_gated(
 
 
 def test_delivery_generation_closes_the_post_between_park_and_waiting_race(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A post delivered after the park decision is immediately reclaimed, not stranded."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
     from angee.workflows_agents.steps import AgentSessionStepImpl
 
@@ -746,14 +714,14 @@ def test_delivery_generation_closes_the_post_between_park_and_waiting_race(
 
 
 def test_quiet_turn_heartbeat_cadence_survives_reaper_then_expires_without_pulses(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The runner pulses independently of emitted updates often enough for a 300s lease."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     from angee.agents_runtime_pydantic import runner as runner_module
     from angee.workflows_agents.steps import AgentSessionStepImpl
 
@@ -802,12 +770,12 @@ def test_quiet_turn_heartbeat_cadence_survives_reaper_then_expires_without_pulse
 
 
 def test_generic_toolset_turn_keeps_outer_actor_and_async_db_boundary(
-    workflows_agents_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A generic toolset observes the runner's outer actor across an async ORM boundary."""
 
-    del workflows_agents_tables
+    del composed_tables
     from angee.agents_runtime_pydantic import runner as runner_module
 
     owner, agent = _ready_session_agent("builtin-tool")
@@ -855,11 +823,11 @@ def test_generic_toolset_turn_keeps_outer_actor_and_async_db_boundary(
 
 
 def test_retrying_running_turn_discards_partial_updates(
-    workflows_agents_tables: None,
+    composed_tables: None,
 ) -> None:
     """Reclaiming a running turn starts a clean transcript for the retry attempt."""
 
-    del workflows_agents_tables
+    del composed_tables
     from angee.workflows_agents.steps import _claim_turn
 
     owner, agent = _ready_session_agent("retry-reset")
@@ -884,7 +852,7 @@ def test_retrying_running_turn_discards_partial_updates(
 
 
 def test_post_message_on_terminal_run_closes_session_and_refuses(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """A session whose run ended terminally self-heals to CLOSED on the next post.
@@ -893,7 +861,7 @@ def test_post_message_on_terminal_run_closes_session_and_refuses(
     pre-exhaustion-fix failure) would otherwise pin an unusable session forever.
     """
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
 
     owner, agent = _ready_session_agent("terminal-run")
     admit_workflow_actor(_session_workflow(), owner)
@@ -909,7 +877,7 @@ def test_post_message_on_terminal_run_closes_session_and_refuses(
 
 
 def test_transient_exhaustion_fails_turn_and_parks_session(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -921,7 +889,7 @@ def test_transient_exhaustion_fails_turn_and_parks_session(
     RUNNING and no error text anywhere.
     """
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
 
     owner, agent = _ready_session_agent("retry-exhaustion")
@@ -957,14 +925,14 @@ def test_transient_exhaustion_fails_turn_and_parks_session(
 
 @pytest.mark.parametrize("max_attempts", [1, 2])
 def test_model_less_agent_failure_is_retained_as_failed_turn(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     max_attempts: int,
 ) -> None:
     """A missing inference model cannot obscure the real error or end the session."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     owner, agent = _ready_session_agent("no-model")
     admit_workflow_actor(_session_workflow(retry={"max_attempts": max_attempts}), owner)
     session = sessions.start_session(agent, owner=owner, context={})
@@ -994,13 +962,13 @@ def test_model_less_agent_failure_is_retained_as_failed_turn(
 
 
 def test_in_process_provision_and_teardown_leave_no_orphaned_waiting_run(
-    workflows_agents_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """In-process provisioning skips the operator and teardown closes/wakes every session."""
 
-    del workflows_agents_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     from angee.agents import provisioning
 
     owner = User.objects.create_user(username="provision-in-process-owner")

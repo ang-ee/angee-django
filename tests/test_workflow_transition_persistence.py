@@ -10,17 +10,11 @@ from django.db import transaction
 from django.utils import timezone
 from rebac import system_context
 
+from angee.testing.models import StepAttempt, StepRun, WorkflowDispatch, WorkflowRun
 from angee.workflows.attempts import AttemptResult, AttemptResultKind
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus
-from tests.workflows import (
-    StepAttempt,
-    StepRun,
-    WorkflowDispatch,
-    WorkflowRun,
-    start_run,
-    workflow_with_steps,
-)
+from tests.workflows import start_run, workflow_with_steps
 
 
 @pytest.mark.django_db(transaction=True)
@@ -48,7 +42,7 @@ from tests.workflows import (
     ],
 )
 def test_terminal_transition_persists_and_publishes_once(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     transition_name: str,
@@ -86,9 +80,9 @@ def test_terminal_transition_persists_and_publishes_once(
 
 @pytest.mark.django_db(transaction=True)
 def test_partial_save_does_not_publish_unpersisted_terminal_status(
-    workflow_engine_tables: None, no_workflow_queue: None
+    composed_tables: None, no_workflow_queue: None
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())
     run = start_run(workflow)
     with system_context(reason="terminal partial save"):
@@ -105,7 +99,7 @@ def test_partial_save_does_not_publish_unpersisted_terminal_status(
 
 @pytest.mark.django_db(transaction=True)
 def test_deferred_wake_preserves_checkpoint(
-    workflow_engine_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, no_workflow_queue: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Deferred wake preserves checkpoint."""
     workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())

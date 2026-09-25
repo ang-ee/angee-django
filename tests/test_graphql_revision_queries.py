@@ -38,7 +38,7 @@ def _post(schema: Any, user: Any, query: str, variables: dict[str, Any]) -> dict
     return json.loads(response.content)
 
 
-def test_protected_graphql_post_loads_one_schema_for_one_or_many_rows(knowledge_tables: None) -> None:
+def test_protected_graphql_post_loads_one_schema_for_one_or_many_rows(composed_tables: None) -> None:
     """A read-only POST reuses its coherent permission schema inside the revision."""
 
     owner = create_user("query-owner")
@@ -77,7 +77,7 @@ def test_protected_graphql_post_loads_one_schema_for_one_or_many_rows(knowledge_
     assert query_counts[0] == query_counts[1], "Scalar row reads must not grow with page size"
 
 
-def test_graphql_post_preserves_revisions_and_rejects_reader_writes(knowledge_tables: None) -> None:
+def test_graphql_post_preserves_revisions_and_rejects_reader_writes(composed_tables: None) -> None:
     """The native request revision records accepted edits and excludes denied writes."""
 
     owner = create_user("revision-owner")

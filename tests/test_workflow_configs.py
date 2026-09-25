@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context
 
+from angee.testing.models import Step, Workflow
 from angee.workflows.attempts import RecoveryMode
 from angee.workflows.configs import EmitConfig, GateConfig, JoinContinuationConfig, MapConfig, WaitConfig
 from angee.workflows.models import check_database_command_replay_declarations
@@ -22,7 +23,6 @@ from angee.workflows.steps import (
     _decision_specs_from_config,
     retry_policy_from_config,
 )
-from tests.workflows import Step, Workflow
 
 
 def normalized_twice(step: type[StepImpl], config: dict[str, object]) -> dict[str, object]:
@@ -338,10 +338,10 @@ def test_gate_config_reserves_kind_only_for_closed_binding_discriminators() -> N
 
 
 @pytest.mark.django_db(transaction=True)
-def test_step_canonical_config_projects_legacy_gate_without_rewriting_row(workflow_tables: None) -> None:
+def test_step_canonical_config_projects_legacy_gate_without_rewriting_row(composed_tables: None) -> None:
     """The editor reads canonical slots while an existing definition stays untouched."""
 
-    del workflow_tables
+    del composed_tables
     legacy = {"action": "approve", "slots": [{"assignee": "auth/user:1"}]}
     with system_context(reason="test legacy gate read projection"):
         workflow = Workflow.objects.create(name="Legacy gate")
@@ -429,10 +429,10 @@ def test_builtin_operations_own_their_typed_models() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_reapplying_canonical_config_does_not_publish_a_new_version(workflow_tables: None) -> None:
+def test_reapplying_canonical_config_does_not_publish_a_new_version(composed_tables: None) -> None:
     """Stable normalization keeps a no-op resource-style reload from versioning again."""
 
-    del workflow_tables
+    del composed_tables
     config = {"until": "2030-01-02T03:04:05Z", "retry": {"max_attempts": 2, "backoff": {"wait": 3}}}
     with system_context(reason="test stable workflow config normalization"):
         workflow = Workflow.objects.create(name="Stable typed config")

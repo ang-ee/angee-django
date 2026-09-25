@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import ssl
 from collections import deque
-from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,8 +19,6 @@ from typing import Any, ClassVar
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.db import connection
 from imapclient.exceptions import LoginError
 from rebac import system_context
 
@@ -41,11 +38,10 @@ from angee.messaging_integrate_imap.parser import (
     split_plain_text,
     synthetic_external_id,
 )
-from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
-from tests.integrate_models import RECORD_SYNC_TEST_MODELS, RecordLink, SyncStream
+from angee.testing.models import RecordLink, SyncStream
+from tests.conftest import make_integration
 from tests.stream_adapters import AdapterPages
 from tests.test_messaging import (
-    MESSAGING_TEST_MODELS,
     Handle,
     Message,
     MessageEdge,
@@ -55,8 +51,6 @@ from tests.test_messaging import (
     _storage_drive,
 )
 from tests.test_messaging_graphql import Channel
-
-IMAP_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel, *RECORD_SYNC_TEST_MODELS)
 
 _INTERNAL_DATE = datetime(2026, 7, 2, 9, 30, tzinfo=UTC)
 
@@ -1564,22 +1558,6 @@ def test_ssl_context_is_the_stdlib_default(monkeypatch: pytest.MonkeyPatch) -> N
 # --- end to end: Channel.run_sync over real tables ---
 
 
-@pytest.fixture
-def imap_tables() -> Iterator[None]:
-    """Create the concrete messaging tables plus the Channel child."""
-
-    created_models = _create_missing_tables(IMAP_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(IMAP_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
-
 def _imap_channel(**config: Any) -> Any:
     """Create an IMAP Channel row with a basic-auth credential."""
 
@@ -1595,7 +1573,7 @@ def _imap_channel(**config: Any) -> Any:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("change", ["rotate", "repoint"])
-def test_extract_reloads_credential_between_pages(imap_tables: None, change: str) -> None:
+def test_extract_reloads_credential_between_pages(composed_tables: None, change: str) -> None:
     """A reused backend observes another worker's secret or credential-FK edit."""
 
     with system_context(reason="tests.imap.credential_freshness"):
@@ -1638,7 +1616,7 @@ def _wire_fake(monkeypatch: pytest.MonkeyPatch, account: FakeImapAccount) -> Non
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("existing_stream", [False, True])
 def test_legacy_imap_position_seeds_only_an_empty_stream(
-    imap_tables: None, monkeypatch: pytest.MonkeyPatch, existing_stream: bool
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, existing_stream: bool
 ) -> None:
     """Retained mailbox UIDs continue at cutover and never replace a stream cursor."""
 
@@ -1672,7 +1650,10 @@ def test_legacy_imap_position_seeds_only_an_empty_stream(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_legacy_future_only_policy_survives_a_stream_reset(imap_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_legacy_future_only_policy_survives_a_stream_reset(
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<legacy-old@example.com>"))})
     _wire_fake(monkeypatch, account)
     channel = _imap_channel()
@@ -1710,7 +1691,10 @@ def test_legacy_future_only_policy_survives_a_stream_reset(imap_tables: None, mo
 
 
 @pytest.mark.django_db(transaction=True)
-def test_new_mailbox_cannot_restore_removed_legacy_policy(imap_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_new_mailbox_cannot_restore_removed_legacy_policy(
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<retained-inbox@example.com>"))})
     _wire_fake(monkeypatch, account)
     channel = _imap_channel()
@@ -1776,7 +1760,7 @@ def test_legacy_imap_seed_hooks_only_translate_state() -> None:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("existing_policy", [{}, {"delivery_mode": "new_only", "source_identity": "configured"}])
-def test_legacy_imap_cutover_preserves_config(imap_tables: None, existing_policy: dict[str, Any]) -> None:
+def test_legacy_imap_cutover_preserves_config(composed_tables: None, existing_policy: dict[str, Any]) -> None:
     channel = _imap_channel(**existing_policy)
     original_config = dict(channel.config)
     with system_context(reason="test imap cutover setup"):
@@ -1807,7 +1791,7 @@ def test_legacy_imap_cutover_preserves_config(imap_tables: None, existing_policy
 
 
 @pytest.mark.django_db(transaction=True)
-def test_new_mail_boundary_preserves_legacy_exclusion(imap_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_new_mail_boundary_preserves_legacy_exclusion(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A repeated starting-point action must not exclude arrivals after cutover."""
 
     account = FakeImapAccount(
@@ -1840,12 +1824,12 @@ def test_new_mail_boundary_preserves_legacy_exclusion(imap_tables: None, monkeyp
 
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_partitions_mailboxes(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Independent mailbox streams retain their own cursors without replica links."""
 
-    del imap_tables
+    del composed_tables
     account = FakeImapAccount(
         {
             "INBOX": _folder(_eml(message_id="<in-1@x>", subject="One", body="Inbox body\n")),
@@ -1879,12 +1863,12 @@ def test_channel_sync_partitions_mailboxes(
 
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_preserves_overlong_message_id(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A long but valid Message-ID lands unchanged as the message/thread key."""
 
-    del imap_tables
+    del composed_tables
     long_message_id = f"outlook-{'x' * 700}@example.com"
     account = FakeImapAccount(
         {"INBOX": _folder(_eml(message_id=f"<{long_message_id}>", subject="", body="No subject.\n"))}
@@ -1904,12 +1888,12 @@ def test_channel_sync_preserves_overlong_message_id(
 
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_preserves_overlong_display_name_and_content_id(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Long RFC-5322 display names and Content-IDs land without truncation."""
 
-    del imap_tables
+    del composed_tables
     long_display_name = "Ada " + ("Lovelace " * 80).strip()
     long_cid = f"inline-{'x' * 700}@example.com"
     assert len(long_display_name) > 256
@@ -1950,13 +1934,13 @@ def test_channel_sync_preserves_overlong_display_name_and_content_id(
 
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_lands_threads_parts_and_attachments(
-    imap_tables: None,
+    composed_tables: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One run drains the mailbox through ingest: threading, roles, files, cursor."""
 
-    del imap_tables
+    del composed_tables
     reply_body = "Yes, confirmed!\n\n> Are we still on for Thursday?\n\n-- \nBob\n"
     long_attachment_name = f"{'x' * 588}.txt"
     account = FakeImapAccount(
@@ -2057,7 +2041,7 @@ def test_channel_sync_lands_threads_parts_and_attachments(
 
 @pytest.mark.django_db(transaction=True)
 def test_attributed_quote_reuses_the_original_body_fragment(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A fully library-segmented reply keeps the content-addressed quote link.
@@ -2067,7 +2051,7 @@ def test_attributed_quote_reuses_the_original_body_fragment(
     Fragment row as the root message's body after one channel sync.
     """
 
-    del imap_tables
+    del composed_tables
     reply_body = (
         "Yes, confirmed!\n\nOn Thu, Jul 2, 2026 Ada wrote:\n> Are we still on for Thursday?\n\nBest regards,\nBob\n"
     )
@@ -2114,7 +2098,7 @@ def test_attributed_quote_reuses_the_original_body_fragment(
 
 @pytest.mark.django_db(transaction=True)
 def test_channel_sync_dedups_retained_header_fragments(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A List-Id lands as a lowercased HEADER part; the shared value is ONE fragment.
@@ -2124,7 +2108,7 @@ def test_channel_sync_dedups_retained_header_fragments(
     row referenced by each message's HEADER part.
     """
 
-    del imap_tables
+    del composed_tables
     list_id = "Dev list <dev.example.com>"
     account = FakeImapAccount(
         {
@@ -2152,12 +2136,12 @@ def test_channel_sync_dedups_retained_header_fragments(
 
 @pytest.mark.django_db(transaction=True)
 def test_channel_resync_is_incremental_and_idempotent(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A second run fetches only new UIDs; a UIDVALIDITY reset converges without dupes."""
 
-    del imap_tables
+    del composed_tables
     account = FakeImapAccount(
         {
             "INBOX": _folder(
@@ -2199,12 +2183,12 @@ def test_channel_resync_is_incremental_and_idempotent(
 
 @pytest.mark.django_db(transaction=True)
 def test_failed_run_never_persists_the_cursor(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A run that dies after fetching keeps the old cursor, so nothing is skipped."""
 
-    del imap_tables
+    del composed_tables
     account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<a@x>"))})
     _wire_fake(monkeypatch, account)
     channel = _imap_channel()
@@ -2229,12 +2213,12 @@ def test_failed_run_never_persists_the_cursor(
 
 @pytest.mark.django_db(transaction=True)
 def test_failed_run_keeps_successfully_ingested_batch_cursor(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A later batch failure resumes after already-landed messages."""
 
-    del imap_tables
+    del composed_tables
     account = FakeImapAccount(
         {
             "INBOX": _folder(
@@ -2270,12 +2254,12 @@ def test_failed_run_keeps_successfully_ingested_batch_cursor(
 
 @pytest.mark.django_db(transaction=True)
 def test_failed_second_record_rolls_back_the_whole_page(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A later infrastructure failure in one page rolls back its messages and cursor."""
 
-    del imap_tables
+    del composed_tables
     account = FakeImapAccount({"INBOX": _folder(_eml(message_id="<a@x>"), _eml(message_id="<b@x>"))})
     _wire_fake(monkeypatch, account)
     channel = _imap_channel(batch_size=2)
@@ -2299,12 +2283,12 @@ def test_failed_second_record_rolls_back_the_whole_page(
 
 @pytest.mark.django_db(transaction=True)
 def test_page_closure_resolves_quotes_of_a_later_record(
-    imap_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The original and its later quoted-only sharer link after both page rows land."""
 
-    del imap_tables
+    del composed_tables
     paragraph = "Please retain this complete paragraph for our meeting tomorrow."
     account = FakeImapAccount(
         {

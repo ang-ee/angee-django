@@ -14,6 +14,7 @@ import strawberry
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -26,27 +27,21 @@ from angee.graphql.events import ChangePayload
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.integrate.models import Bridge
+from angee.testing.models import Edge, Step, StepRun, Trigger, Workflow, WorkflowRun
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import StepResult
 from tests.conftest import SchemaAddon, execute_schema, make_integration, result_data
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.iam_models import Group
 from tests.integrate_models import Integration
+from tests.tables import model_tables
 from tests.workflows import (
-    WORKFLOW_RUNTIME_MODELS,
-    Edge,
     FixtureStep,
-    Step,
-    StepRun,
-    Trigger,
-    Workflow,
-    WorkflowRun,
     advance_once,
     execute_started,
     run_to_terminal,
     start_run,
     step_run_for,
-    workflow_table_setup,
 )
 
 User = get_user_model()
@@ -116,9 +111,6 @@ class BackfillBridge(Bridge, Integration):
         """Match the Integration child API Bridge.record_sync calls."""
 
 
-TRIGGER_TEST_MODELS = (TriggerSubject, SecuredTriggerSubject, UnpublishedTriggerSubject, BackfillBridge)
-
-
 @strawberry.type
 class TriggerSchemaQuery:
     """Minimal query root for the change-feed-only workflow test schema."""
@@ -130,10 +122,9 @@ class TriggerSchemaQuery:
 def workflow_trigger_tables(
     transactional_db: Any, monkeypatch: pytest.MonkeyPatch, executable_fixture: None
 ) -> Iterator[None]:
-    """Create trigger-specific concrete tables and sync workflow REBAC."""
+    """Sync trigger permissions; only the two uninstalled probe models need tables."""
 
     del transactional_db, executable_fixture
-    models = (Group, *WORKFLOW_RUNTIME_MODELS, *TRIGGER_TEST_MODELS)
     workflow_triggers = importlib.import_module("angee.workflows.triggers")
     schemas = GraphQLSchemas(
         [
@@ -151,7 +142,8 @@ def workflow_trigger_tables(
         ]
     )
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
-    with workflow_table_setup(models):
+    with model_tables((TriggerSubject, UnpublishedTriggerSubject)):
+        call_command("rebac", "sync", verbosity=0)
         schemas.connect_change_publishers()
         workflow_triggers.connect_event_trigger_receiver()
         try:

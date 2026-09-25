@@ -12,17 +12,17 @@ import pytest
 from django.db import transaction
 from rebac import system_context
 
+import tests.test_messaging  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.publishing import mute_changes
 from angee.messaging import delivery
 from tests.messaging_models import Message, TrackingValue
 from tests.test_messaging import channel as channel
-from tests.test_messaging import messaging_tables as messaging_tables
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("tracked", [False, True])
 def test_content_edit_validation_reads_tracking(
-    messaging_tables: None, monkeypatch: pytest.MonkeyPatch, tracked: bool
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, tracked: bool
 ) -> None:
     """Content edit validation reads tracking."""
     with system_context(reason="messaging edit validation setup"), mute_changes():
@@ -36,7 +36,7 @@ def test_content_edit_validation_reads_tracking(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("prefetched", [False, True])
 def test_content_edit_validation_reuses_prefetched_tracking(
-    messaging_tables: None,
+    composed_tables: None,
     django_assert_num_queries: Callable[..., AbstractContextManager[Any]],
     prefetched: bool,
 ) -> None:
@@ -58,7 +58,7 @@ def test_content_edit_validation_reuses_prefetched_tracking(
 
 @pytest.mark.django_db(transaction=True)
 def test_queued_delivery_waits_for_commit_and_persists_status(
-    channel: Any, messaging_tables: None, monkeypatch: pytest.MonkeyPatch
+    channel: Any, composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Queued delivery waits for commit and persists status."""
     with system_context(reason="messaging delivery setup"), mute_changes():

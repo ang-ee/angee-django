@@ -19,7 +19,6 @@ from typing import Any
 
 import pytest
 from django.core.management import call_command
-from django.db import connection
 from rebac import (
     RelationshipTuple,
     actor_context,
@@ -34,19 +33,15 @@ from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
 from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
 from tests.conftest import (
-    POSTS_TEST_MODELS,
     Feed,
     FeedFollow,
     PostMetrics,
     Quota,
     StubFeedBackend,
-    _clear_model_tables,
-    _create_missing_tables,
     create_user,
     make_integration,
 )
 from tests.test_messaging import (
-    MESSAGING_TEST_MODELS,
     Handle,
     Message,
     MessageEdge,
@@ -59,20 +54,13 @@ _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 @pytest.fixture
 def posts_tables() -> Iterator[None]:
-    """Create the messaging + posts concrete tables and sync the REBAC schema."""
+    """Synchronize permissions and reset the feed backend after each test."""
 
-    table_models = MESSAGING_TEST_MODELS + POSTS_TEST_MODELS
-    created = _create_missing_tables(table_models)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
         StubFeedBackend.reset()
-        _clear_model_tables(table_models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
 
 
 def _handle(value: str = "chan-1") -> Any:

@@ -12,7 +12,7 @@ import reversion
 from asgiref.sync import async_to_sync, sync_to_async
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, models, transaction
+from django.db import models, transaction
 from fastmcp import Context, FastMCP
 from fastmcp.tools import Tool, ToolResult
 from mcp.types import ToolAnnotations
@@ -44,6 +44,7 @@ from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.relationships import write_relationships
 
+import tests.test_agents_graphql  # noqa: F401 -- register the fixture model graph before database setup
 from angee.agents import grants as grants_module
 from angee.agents import provisioning
 from angee.agents.grants import (
@@ -67,17 +68,12 @@ from angee.agents_runtime_pydantic.toolsets import (
 from angee.base.mixins import AuditMixin
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
-from tests.conftest import _clear_model_tables
-from tests.conftest import _create_missing_tables as _create_tables
 from tests.test_agents_graphql import (
     Agent,
     AgentSession,
     MCPServer,
     MCPTool,
     User,
-)
-from tests.test_agents_graphql import (
-    agents_console_tables as agents_console_tables,
 )
 
 
@@ -90,21 +86,6 @@ class AgentToolWriteProbe(AuditMixin, models.Model):
     class Meta:
         app_label = "agents"
         db_table = "test_agents_tool_write_probe"
-
-
-@pytest.fixture()
-def agent_tooling_tables(agents_console_tables: None) -> Any:
-    """Add the audit probe table to the concrete agents/REBAC fixture."""
-
-    del agents_console_tables
-    created = _create_tables((AgentToolWriteProbe,))
-    try:
-        yield
-    finally:
-        _clear_model_tables((AgentToolWriteProbe,))
-        if created:
-            with connection.schema_editor() as schema_editor:
-                schema_editor.delete_model(AgentToolWriteProbe)
 
 
 def _registered_server(*functions: tuple[Any, bool]) -> FastMCP:
@@ -150,12 +131,12 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
 
 @pytest.mark.django_db(transaction=True)
 def test_native_tool_grants_run_as_agent_service_user_and_regate(
-    agent_tooling_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """M2M grants advertise live tools and every call runs as the agent's user."""
 
-    del agent_tooling_tables
+    del composed_tables
     owner = User.objects.create_user(username="native-tool-owner")
     other = User.objects.create_user(username="native-tool-other")
     with system_context(reason="test native tool setup"):
@@ -239,11 +220,11 @@ def test_native_tool_grants_run_as_agent_service_user_and_regate(
 
 @pytest.mark.django_db(transaction=True)
 def test_toolrole_and_group_grantee_paths(
-    agent_tooling_tables: None,
+    composed_tables: None,
 ) -> None:
     """Advertisement resolves toolrole and group arms under the service user."""
 
-    del agent_tooling_tables
+    del composed_tables
     owner = User.objects.create_user(username="tool-bundle-owner")
     with system_context(reason="test tool bundle setup"):
         agent = Agent.objects.create(name="Tool Bundle Agent", owner=owner)
@@ -315,10 +296,10 @@ def test_toolrole_and_group_grantee_paths(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_server_qualified_grants_do_not_collide(agent_tooling_tables: None) -> None:
+def test_server_qualified_grants_do_not_collide(composed_tables: None) -> None:
     """Same-named tools on two servers grant and revoke independently."""
 
-    del agent_tooling_tables
+    del composed_tables
     owner = User.objects.create_user(username="qualified-grants-owner")
     with system_context(reason="test qualified grants setup"):
         agent = Agent.objects.create(name="Qualified Grants", owner=owner)
@@ -349,10 +330,10 @@ def test_server_qualified_grants_do_not_collide(agent_tooling_tables: None) -> N
 
 
 @pytest.mark.django_db(transaction=True)
-def test_tool_grant_identity_is_the_catalogue_primary_key(agent_tooling_tables: None) -> None:
+def test_tool_grant_identity_is_the_catalogue_primary_key(composed_tables: None) -> None:
     """Renaming catalogue metadata preserves the PK-backed authorization identity."""
 
-    del agent_tooling_tables
+    del composed_tables
     with system_context(reason="test tool identity"):
         server = MCPServer.objects.create(name="identity-server")
         tool = MCPTool.objects.create(server=server, name="search")
@@ -367,10 +348,10 @@ def test_tool_grant_identity_is_the_catalogue_primary_key(agent_tooling_tables: 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_m2m_grant_write_is_discarded_with_rolled_back_edit(agent_tooling_tables: None) -> None:
+def test_m2m_grant_write_is_discarded_with_rolled_back_edit(composed_tables: None) -> None:
     """The on-commit mirror cannot outlive a rolled-back Agent.mcp_tools edit."""
 
-    del agent_tooling_tables
+    del composed_tables
     owner = User.objects.create_user(username="rolled-back-grant-owner")
     with system_context(reason="test rolled back grant setup"):
         agent = Agent.objects.create(name="Rolled Back Grant", owner=owner)
@@ -390,12 +371,12 @@ def test_m2m_grant_write_is_discarded_with_rolled_back_edit(agent_tooling_tables
 
 @pytest.mark.django_db(transaction=True)
 def test_resync_preserves_independent_direct_grants(
-    agent_tooling_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The compatibility resync does not mistake explicit grants for old mirrors."""
 
-    del agent_tooling_tables
+    del composed_tables
     owner = User.objects.create_user(username="atomic-resync-owner")
     with system_context(reason="test atomic resync setup"):
         agent = Agent.objects.create(name="Atomic Resync", owner=owner)
@@ -424,12 +405,12 @@ def test_resync_preserves_independent_direct_grants(
 
 @pytest.mark.django_db(transaction=True)
 def test_resync_migrates_toolrole_and_group_memberships_to_service_user(
-    agent_tooling_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The one-shot resync preserves memberships while retiring agent subjects."""
 
-    del agent_tooling_tables
+    del composed_tables
     owner = User.objects.create_user(username="membership-resync-owner")
     with system_context(reason="test membership resync setup"):
         agent = Agent.objects.create(name="Membership Resync", owner=owner)
@@ -505,14 +486,14 @@ def test_tool_grants_enumerate_the_canonical_catalogue(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("storage", ("denormalized", "registry"))
 def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
-    agent_tooling_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
     settings: Any,
     storage: str,
 ) -> None:
     """Live code projects to MCPTool rows and one sync-owned reader role grant set."""
 
-    del agent_tooling_tables
+    del composed_tables
     settings.REBAC_LOCAL_BACKEND_STORAGE = storage
     owner = User.objects.create_user(username="catalogue-sync-owner")
     with system_context(reason="test builtin catalogue setup"):
@@ -581,12 +562,12 @@ def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
 
 @pytest.mark.django_db(transaction=True)
 def test_production_reader_grant_path_advertises_and_executes_generated_tool(
-    agent_tooling_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sync + successful in-process provision grants, advertises, and runs a reader."""
 
-    del agent_tooling_tables
+    del composed_tables
     owner = User.objects.create_user(username="generated-reader-owner")
     with system_context(reason="test generated reader setup"):
         agent = Agent.objects.create(
@@ -665,12 +646,12 @@ def test_tool_role_anchor_is_tableless() -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_native_tool_error_mapping_ceiling_and_context_constraint(
-    agent_tooling_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Direct Tool.run calls retry safely, bound output, and reject request-only context."""
 
-    del agent_tooling_tables
+    del composed_tables
     owner = User.objects.create_user(username="native-errors-owner")
     with system_context(reason="test native errors setup"):
         agent = Agent.objects.create(name="Native Errors Agent", owner=owner)
@@ -728,12 +709,12 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
 
 @pytest.mark.django_db(transaction=True)
 def test_graphql_read_hint_cannot_override_structural_mutation_posture(
-    agent_tooling_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A mutation mislabeled read-only is rejected before owner-attributed execution."""
 
-    del agent_tooling_tables
+    del composed_tables
     owner = User.objects.create_user(username="structural-posture-owner")
     with system_context(reason="test structural posture setup"):
         agent = Agent.objects.create(name="Structural Posture", owner=owner)

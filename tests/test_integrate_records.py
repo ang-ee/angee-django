@@ -25,16 +25,17 @@ from angee.integrate.states import (
     StreamKind,
     StreamPhase,
 )
+from angee.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from tests.conftest import make_integration
-from tests.integrate_models import Integration, RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
+from tests.integrate_models import Integration
 from tests.messaging_models import Channel
 
 
 @pytest.fixture
-def replica(record_sync_tables: None) -> Iterator[Any]:
+def replica(composed_tables: None) -> Iterator[Any]:
     """A replica partition with an explicit engine actor for assertions."""
 
-    del record_sync_tables
+    del composed_tables
     with system_context(reason="test record protocol"):
         bridge = make_integration("record-protocol", model=Channel)
         yield SyncStream.objects.current(bridge, "contacts", "book", kind=StreamKind.RECORD_REPLICA)
@@ -147,8 +148,8 @@ def test_baseline_completion_reads_deferred_identity(replica: Any) -> None:
     assert replica.has_completed_baseline()
 
 
-def test_baseline_completion_is_independent_of_actor_visibility(record_sync_tables: None) -> None:
-    del record_sync_tables
+def test_baseline_completion_is_independent_of_actor_visibility(composed_tables: None) -> None:
+    del composed_tables
     call_command("rebac", "sync", verbosity=0)
     with system_context(reason="test baseline completion authorization"):
         bridge = make_integration("baseline-completion-rebac", model=Channel)
@@ -484,8 +485,8 @@ def test_quarantine_survives_observation_and_absence_until_last_resolution(repli
     assert link.status == LinkStatus.OBSERVED
 
 
-def test_event_feeds_reject_record_links(record_sync_tables: None) -> None:
-    del record_sync_tables
+def test_event_feeds_reject_record_links(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="test event feed identity"):
         bridge = make_integration("event-protocol", model=Channel)
         stream = SyncStream.objects.current(bridge, "messages", "inbox")
@@ -494,8 +495,8 @@ def test_event_feeds_reject_record_links(record_sync_tables: None) -> None:
         assert not RecordLink.objects.exists()
 
 
-def test_current_partition_query_returns_latest_generation_only(record_sync_tables: None) -> None:
-    del record_sync_tables
+def test_current_partition_query_returns_latest_generation_only(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="test current stream selection"):
         bridge = make_integration("partition-protocol", model=Channel)
         old = SyncStream.objects.current(bridge, "messages", "inbox", cursor={"uid": 1})
@@ -508,8 +509,8 @@ def test_current_partition_query_returns_latest_generation_only(record_sync_tabl
         assert SyncStream.objects.current(bridge, "messages", "inbox", cursor={"uid": 999}).cursor == {}
 
 
-def test_stream_uses_a_protected_integration_foreign_key(record_sync_tables: None) -> None:
-    del record_sync_tables
+def test_stream_uses_a_protected_integration_foreign_key(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="test stream bridge identity"):
         bridge = make_integration("stream-identity", model=Channel)
         stream = SyncStream.objects.current(bridge, "messages")
@@ -527,8 +528,8 @@ def test_stream_uses_a_protected_integration_foreign_key(record_sync_tables: Non
             bridge.delete()
 
 
-def test_stream_rejects_an_integration_without_a_concrete_bridge(record_sync_tables: None) -> None:
-    del record_sync_tables
+def test_stream_rejects_an_integration_without_a_concrete_bridge(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="test stream requires a bridge"):
         integration = make_integration("stream-no-bridge")
         with pytest.raises(ValidationError, match="concrete Integration child"):
@@ -536,8 +537,8 @@ def test_stream_rejects_an_integration_without_a_concrete_bridge(record_sync_tab
         assert not SyncStream.objects.exists()
 
 
-def test_stream_and_links_follow_the_integration_foreign_key_owner(record_sync_tables: None) -> None:
-    del record_sync_tables
+def test_stream_and_links_follow_the_integration_foreign_key_owner(composed_tables: None) -> None:
+    del composed_tables
     call_command("rebac", "sync", verbosity=0)
     with system_context(reason="test derived stream authorization"):
         bridge = make_integration("stream-rebac", model=Channel)

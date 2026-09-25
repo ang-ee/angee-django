@@ -67,7 +67,3 @@ class ProposalsRole(AbstractProposalsRole):  # type: ignore[misc, valid-type]
         managed = False
         app_label = "proposals"
         rebac_resource_type = "proposals/role"
-
-
-PROPOSAL_TEST_MODELS = (Round, Topic, Proposal, Answer, Review)
-"""Concrete proposal tables created on demand by proposal tests."""

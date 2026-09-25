@@ -10,7 +10,7 @@ import pytest
 import strawberry
 import strawberry_django
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import models
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -26,8 +26,6 @@ from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_reso
 from angee.graphql.node import AngeeNode
 from angee.projects.models import Task as AbstractTask
 from tests.conftest import (
-    _clear_model_tables,
-    _create_missing_tables,
     create_platform_admin,
     create_user,
     execute_schema,
@@ -88,8 +86,6 @@ def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]
     """Keep broad row creation permission distinct from the project's write policy."""
 
     del transactional_db
-    test_models = (ProjectAccessTask, ProjectAccessTask.history.model)
-    created_models = _create_missing_tables(test_models)
     call_command("rebac", "sync", verbosity=0)
     active = backend()
     assert isinstance(active, LocalBackend)
@@ -112,11 +108,6 @@ def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]
         assert not scope.with_actor(reader).has_access("write")
         yield scope, reader, admin
     finally:
-        _clear_model_tables(test_models)
-        if created_models:
-            with connection.schema_editor() as editor:
-                for model in reversed(created_models):
-                    editor.delete_model(model)
         reset_backend()
 
 

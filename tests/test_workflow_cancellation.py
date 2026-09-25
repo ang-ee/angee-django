@@ -10,15 +10,15 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from rebac import system_context, to_subject_ref
 
+from angee.testing.models import Step, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus
-from tests.workflows import Step, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 
 @pytest.fixture
-def cancelable_run(workflow_engine_tables: None, no_workflow_queue: None) -> tuple[Any, Any]:
-    del workflow_engine_tables, no_workflow_queue
+def cancelable_run(composed_tables: None, no_workflow_queue: None) -> tuple[Any, Any]:
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="cancellation-owner")
     with system_context(reason="test cancellation admission setup"):
         workflow = Workflow.objects.create(name="Cancelable")

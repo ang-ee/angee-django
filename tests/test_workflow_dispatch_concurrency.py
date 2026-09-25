@@ -12,9 +12,9 @@ from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context
 
+from angee.testing.models import Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.dispatch import DispatchTarget, publish_due
-from tests.workflows import Workflow, WorkflowDispatch, WorkflowRun
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -32,7 +32,7 @@ def _thread(call: Any) -> Any:
         connections.close_all()
 
 
-def test_two_publishers_may_duplicate_send_without_losing_telemetry(workflow_engine_tables: None) -> None:
+def test_two_publishers_may_duplicate_send_without_losing_telemetry(composed_tables: None) -> None:
     with system_context(reason="dispatch concurrency setup"):
         workflow = Workflow.objects.create(name="Dispatch concurrency")
         run = WorkflowRun.objects.create(workflow=workflow)
@@ -62,7 +62,7 @@ def test_two_publishers_may_duplicate_send_without_losing_telemetry(workflow_eng
 
 
 def test_two_consumers_commit_one_domain_effect(
-    workflow_engine_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with system_context(reason="dispatch consumption race setup"):

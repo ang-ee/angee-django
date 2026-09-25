@@ -12,16 +12,17 @@ from rebac import system_context
 
 from angee.integrate.models import Bridge
 from angee.integrate.sync import SyncDispatch
+from angee.testing.models import WorkflowRun
 from angee.workflows import managers as workflow_managers
 from angee.workflows.attempts import JsonPresence
 from angee.workflows_integrate.admission import admit_bridge_cycle
 from tests.conftest import make_integration
 from tests.messaging_models import Channel
-from tests.workflows import WorkflowRun, admit_workflow_actor, workflow_with_steps
+from tests.workflows import admit_workflow_actor, workflow_with_steps
 
 
 @pytest.fixture
-def cycle(record_sync_tables: None, workflow_engine_tables: None, no_workflow_queue: None) -> tuple[Any, Any, Any, str]:
+def cycle(composed_tables: None, no_workflow_queue: None) -> tuple[Any, Any, Any, str]:
     with system_context(reason="test bridge admission"):
         bridge = make_integration("cycle-admission", model=Channel)
         bridge.mark_sync_queued(now=timezone.now())
@@ -173,8 +174,6 @@ def test_actor_is_active_integration_owner_never_workflow_author(cycle: tuple[An
         owner.save(update_fields=["is_active"])
     with pytest.raises(PermissionDenied, match="active Integration owner"):
         _admit(cycle)
-
-
 
 
 def test_declared_key_dispatches_without_early_settlement(cycle: tuple[Any, Any, Any, str], monkeypatch: Any) -> None:

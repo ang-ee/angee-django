@@ -10,11 +10,11 @@ from django.apps import AppConfig
 from rebac import system_context
 
 from angee.resources.models import Resource
+from angee.testing.models import Workflow
 from angee.workflows.graph import WorkflowGraph
 from angee.workflows.models import WorkflowStatus
 from tests.test_workflows_resources import WorkflowResourceLedger
 from tests.test_workflows_resources import workflow_resource_tables as _workflow_resource_tables  # noqa: F401
-from tests.workflows import Workflow
 
 pytestmark = pytest.mark.usefixtures("_workflow_resource_tables")
 

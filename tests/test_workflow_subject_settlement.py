@@ -13,23 +13,14 @@ from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 
+from angee.testing.models import StepAttempt, Workflow, WorkflowDispatch
 from angee.workflows import engine, settlement
 from angee.workflows.attempts import AttemptResultKind, LeaseRevocationReason
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.states import RunStatus
 from angee.workflows.steps import StepResult, TransientStepError
 from angee.workflows.tasks import consume_workflow_dispatch
-from tests.workflows import (
-    FixtureStep,
-    StepAttempt,
-    Workflow,
-    WorkflowDispatch,
-    advance_once,
-    execute_started,
-    start_run,
-    step_run_for,
-    workflow_with_steps,
-)
+from tests.workflows import FixtureStep, advance_once, execute_started, start_run, step_run_for, workflow_with_steps
 
 
 def settle_fixture(run: Any) -> None:
@@ -47,7 +38,7 @@ def settlement_calls(settings: Any, monkeypatch: pytest.MonkeyPatch) -> list[int
     calls: list[int] = []
     monkeypatch.setattr(f"{__name__}.settle_fixture", lambda run: calls.append(run.pk))
     settings.ANGEE_WORKFLOW_SUBJECT_SETTLERS = {
-        "tests.workflows.Workflow": f"{__name__}.settle_fixture",
+        "angee.testing.models.Workflow": f"{__name__}.settle_fixture",
     }
     return calls
 
@@ -56,7 +47,7 @@ def settlement_calls(settings: Any, monkeypatch: pytest.MonkeyPatch) -> list[int
 @pytest.mark.parametrize("subject_kind", ["subjectless", "unregistered", "registered"])
 def test_terminal_settlement_intent_requires_a_registered_subject(
     subject_kind: str,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settlement_calls: list[int],
 ) -> None:
@@ -78,7 +69,7 @@ def test_terminal_settlement_intent_requires_a_registered_subject(
 @pytest.mark.parametrize("outcome", ["success", "failure", "retry_exhaustion", "cancel"])
 def test_every_engine_terminal_path_retains_one_subject_settlement(
     outcome: str,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settlement_calls: list[int],
     monkeypatch: pytest.MonkeyPatch,
@@ -134,7 +125,7 @@ def test_every_engine_terminal_path_retains_one_subject_settlement(
 
 @pytest.mark.django_db(transaction=True)
 def test_transport_settles_registered_subject_once(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settlement_calls: list[int],
 ) -> None:
@@ -161,7 +152,7 @@ def test_transport_settles_registered_subject_once(
 
 @pytest.mark.django_db(transaction=True)
 def test_failed_subject_settlement_preserves_pending_delivery(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settlement_calls: list[int],
 ) -> None:
@@ -172,7 +163,7 @@ def test_failed_subject_settlement_preserves_pending_delivery(
         intent = WorkflowDispatch.objects.get(kind=WorkflowDispatchKind.RUN_SETTLE, run=run)
 
     with override_settings(
-        ANGEE_WORKFLOW_SUBJECT_SETTLERS={"tests.workflows.Workflow": f"{__name__}.settle_unavailable"},
+        ANGEE_WORKFLOW_SUBJECT_SETTLERS={"angee.testing.models.Workflow": f"{__name__}.settle_unavailable"},
     ):
         with pytest.raises(RuntimeError, match="writer unavailable"):
             engine.settle_run_dispatch(intent.pk, expected_run_id=run.pk)
@@ -186,7 +177,7 @@ def test_failed_subject_settlement_preserves_pending_delivery(
 
 @pytest.mark.django_db(transaction=True)
 def test_subject_settlement_requires_terminal_transaction_and_exact_envelope(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settlement_calls: list[int],
 ) -> None:
@@ -218,7 +209,7 @@ def test_settlement_registration_is_explicit_and_collisions_fail(
         pytest.raises(ImproperlyConfigured, match="Multiple subject settlement handlers"),
         override_settings(
             ANGEE_WORKFLOW_SUBJECT_SETTLERS={
-                "tests.workflows.Workflow": f"{__name__}.settle_fixture",
+                "angee.testing.models.Workflow": f"{__name__}.settle_fixture",
                 "angee.workflows.models.Workflow": f"{__name__}.settle_fixture",
             }
         ),
@@ -228,7 +219,7 @@ def test_settlement_registration_is_explicit_and_collisions_fail(
 
 @pytest.mark.django_db(transaction=True)
 def test_terminal_transition_and_subject_intent_roll_back_together(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settlement_calls: list[int],
 ) -> None:
@@ -248,7 +239,7 @@ def test_terminal_transition_and_subject_intent_roll_back_together(
 @pytest.mark.parametrize("body_fails", [False, True])
 def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
     body_fails: bool,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     settings: Any,
@@ -295,7 +286,7 @@ def test_bounded_io_heartbeats_the_captured_attempt_and_closes_its_worker(
 
 @pytest.mark.django_db(transaction=True)
 def test_bounded_io_lost_lease_retains_transient_unapplied_result(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     settings: Any,

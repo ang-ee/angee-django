@@ -16,6 +16,7 @@ from pydantic import Field as PydanticField
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.testing.models import Edge, Step, Trigger, Workflow, WorkflowRun
 from angee.workflows.attempts import JsonPresence
 from angee.workflows.autoconfig import SETTINGS as WORKFLOWS_SETTINGS
 from angee.workflows.models import (
@@ -26,17 +27,7 @@ from angee.workflows.models import (
 from angee.workflows.steps import StepImpl, StepOutcome
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.workflows import (
-    Edge,
-    Step,
-    Trigger,
-    Workflow,
-    WorkflowRun,
-    admit_workflow_actor,
-    start_run,
-    step_run_for,
-    workflow_with_steps,
-)
+from tests.workflows import admit_workflow_actor, start_run, step_run_for, workflow_with_steps
 
 User = get_user_model()
 
@@ -178,12 +169,12 @@ def _published_workflow(
 
 @pytest.mark.django_db(transaction=True)
 def test_run_start_validates_only_new_exact_admission(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Exact retries bypass mutable checks while changed identities remain rejected."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     owner = User.objects.create_user(username="workflow-admission-owner")
     other = User.objects.create_user(username="workflow-admission-other")
     subject, published = _published_workflow(
@@ -235,7 +226,7 @@ def test_run_start_validates_only_new_exact_admission(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_publish_requires_exactly_one_entry_step(workflow_tables: None) -> None:
+def test_publish_requires_exactly_one_entry_step(composed_tables: None) -> None:
     """Publishing validates that a definition has exactly one entry step."""
 
     with system_context(reason="test workflows publish validation"):
@@ -258,7 +249,7 @@ def test_publish_requires_exactly_one_entry_step(workflow_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_step_and_edge_definition_validation(workflow_tables: None) -> None:
+def test_step_and_edge_definition_validation(composed_tables: None) -> None:
     """Step classes and graph edges validate at the model boundary."""
 
     with system_context(reason="test workflows definition validation"):
@@ -295,7 +286,7 @@ def test_step_and_edge_definition_validation(workflow_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_publish_copies_draft_to_immutable_version(workflow_tables: None) -> None:
+def test_publish_copies_draft_to_immutable_version(composed_tables: None) -> None:
     """Publishing copies the draft graph and later draft edits do not alter versions."""
 
     with system_context(reason="test workflows publish copy"):
@@ -347,7 +338,7 @@ def test_publish_copies_draft_to_immutable_version(workflow_tables: None) -> Non
 
 @pytest.mark.django_db(transaction=True)
 def test_lineage_projection_is_current_for_heads_versions_and_retirement(
-    workflow_tables: None,
+    composed_tables: None,
     django_assert_num_queries: Any,
 ) -> None:
     """One query projects stable lineage identity and latest publication state."""
@@ -377,10 +368,10 @@ def test_lineage_projection_is_current_for_heads_versions_and_retirement(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_graphql_projects_lineage_context_for_head_and_version(workflow_tables: None) -> None:
+def test_graphql_projects_lineage_context_for_head_and_version(composed_tables: None) -> None:
     """The optimizer merges all lineage projection fields with public-id/null semantics."""
 
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("workflow-lineage-projection-admin")
     with system_context(reason="test graphql workflow lineage projection"):
@@ -423,12 +414,12 @@ def test_graphql_projects_lineage_context_for_head_and_version(workflow_tables: 
 
 @pytest.mark.django_db(transaction=True)
 def test_graphql_wait_fields_are_nullable_for_completed_and_legacy_rows(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Fresh completed and legacy blank journals serialize truthful nullable wait context."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     schema = _console_schema()
     admin = _platform_admin("workflow-wait-projection-admin")
     workflow = workflow_with_steps(
@@ -463,10 +454,10 @@ def test_graphql_wait_fields_are_nullable_for_completed_and_legacy_rows(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_graphql_filters_workflow_runs_by_workflow_purpose(workflow_tables: None) -> None:
+def test_graphql_filters_workflow_runs_by_workflow_purpose(composed_tables: None) -> None:
     """Run resource filters expose the workflow purpose owned by the related definition."""
 
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("workflow-run-purpose-filter-admin")
     with system_context(reason="test workflow run purpose resource filter"):
@@ -498,10 +489,10 @@ def test_graphql_filters_workflow_runs_by_workflow_purpose(workflow_tables: None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_graphql_filters_workflow_runs_across_a_public_workflow_lineage(workflow_tables: None) -> None:
+def test_graphql_filters_workflow_runs_across_a_public_workflow_lineage(composed_tables: None) -> None:
     """A public head ID matches runs pinned to the head and all of its published revisions."""
 
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("workflow-run-lineage-filter-admin")
     with system_context(reason="test workflow run lineage resource filter"):
@@ -543,7 +534,7 @@ def test_graphql_filters_workflow_runs_across_a_public_workflow_lineage(workflow
 
 @pytest.mark.django_db(transaction=True)
 def test_graphql_step_create_materializes_omitted_impl_defaults(
-    workflow_tables: None,
+    composed_tables: None,
     settings: Any,
 ) -> None:
     """The prepared step reaches its insert owner without reconstructing config."""
@@ -584,12 +575,12 @@ def test_graphql_step_create_materializes_omitted_impl_defaults(
 
 @pytest.mark.django_db(transaction=True)
 def test_workflow_step_operations_are_registry_derived_and_admin_only(
-    workflow_tables: None,
+    composed_tables: None,
     settings: Any,
 ) -> None:
     """The console projects generic choices plus workflow contracts from the impl field."""
 
-    del workflow_tables
+    del composed_tables
     settings.ANGEE_WORKFLOW_STEP_CLASSES = {
         **settings.ANGEE_WORKFLOW_STEP_CLASSES,
         "contract_probe": "tests.test_workflows.ContractProbeStep",
@@ -652,11 +643,11 @@ def test_workflow_step_operations_are_registry_derived_and_admin_only(
 
 @pytest.mark.django_db(transaction=True)
 def test_workflow_step_config_query_projects_legacy_and_preserves_invalid_raw_values(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
     """The console receives canonical legacy config or explicit repair diagnostics."""
 
-    del workflow_tables
+    del composed_tables
     admin = _platform_admin("workflow-config-projection-admin")
     with system_context(reason="test workflow config GraphQL projection"):
         workflow = Workflow.objects.create(name="Config projection")
@@ -696,7 +687,7 @@ def test_workflow_step_config_query_projects_legacy_and_preserves_invalid_raw_va
 
 
 @pytest.mark.django_db(transaction=True)
-def test_purpose_is_copied_as_immutable_version_content(workflow_tables: None) -> None:
+def test_purpose_is_copied_as_immutable_version_content(composed_tables: None) -> None:
     """Changing a head purpose affects a new publication, not history."""
 
     with system_context(reason="test workflow purpose versions"):
@@ -716,7 +707,7 @@ def test_purpose_is_copied_as_immutable_version_content(workflow_tables: None) -
 
 @pytest.mark.django_db(transaction=True)
 def test_workflow_key_is_unique_per_assigned_head_and_allows_legacy_backfill(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
     """Assigned stable keys are unique and a migration-era empty key initializes once."""
 
@@ -746,7 +737,7 @@ def test_workflow_key_is_unique_per_assigned_head_and_allows_legacy_backfill(
 
 @pytest.mark.django_db(transaction=True)
 def test_workflow_version_rejects_a_stable_key_different_from_its_head(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
     """A version cannot validate with a stable key outside its lineage."""
 
@@ -760,7 +751,7 @@ def test_workflow_version_rejects_a_stable_key_different_from_its_head(
 
 @pytest.mark.django_db(transaction=True)
 def test_workflow_stable_key_propagation_rejects_conflicting_versions_atomically(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
     """A conflicting historical version aborts assignment and rolls back the head."""
 
@@ -781,10 +772,10 @@ def test_workflow_stable_key_propagation_rejects_conflicting_versions_atomically
 
 
 @pytest.mark.django_db(transaction=True)
-def test_console_can_publish_workflow(workflow_tables: None) -> None:
+def test_console_can_publish_workflow(composed_tables: None) -> None:
     """The console exposes the workflow publish model method as an action."""
 
-    del workflow_tables
+    del composed_tables
     # Building the console schema resolves the whole runtime model family; the
     # concrete test classes live in test_workflows_engine (function-level import
     # because that module imports this one for the definition models).
@@ -815,11 +806,11 @@ def test_console_can_publish_workflow(workflow_tables: None) -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_console_rejects_reassigning_an_existing_workflow_stable_key(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
     """The update API delegates assignment-once enforcement to Workflow.save()."""
 
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     admin = _platform_admin("workflow-key-admin")
     with system_context(reason="test workflow stable key update API"):
@@ -844,10 +835,10 @@ def test_console_rejects_reassigning_an_existing_workflow_stable_key(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_tables: None) -> None:
+def test_workflows_for_subject_declaration_filters_resource_and_rebac(composed_tables: None) -> None:
     """The subject declaration resolver returns only current workflows the actor may start."""
 
-    del workflow_tables
+    del composed_tables
     schema = _console_schema()
     owner = User.objects.create_user(username="workflow-subject-owner")
     outsider = User.objects.create_user(username="workflow-subject-outsider")
@@ -940,7 +931,7 @@ def test_workflows_for_subject_declaration_filters_resource_and_rebac(workflow_t
 
 
 @pytest.mark.django_db(transaction=True)
-def test_for_subject_declaration_returns_only_current_versions(workflow_tables: None) -> None:
+def test_for_subject_declaration_returns_only_current_versions(composed_tables: None) -> None:
     """Version currency holds set-wide: newest published wins, a newer archive retires."""
 
     with system_context(reason="test workflows subject declaration currency"):
@@ -970,12 +961,12 @@ def test_for_subject_declaration_returns_only_current_versions(workflow_tables: 
 
 @pytest.mark.django_db(transaction=True)
 def test_start_workflow_run_starts_subject_and_enforces_rebac(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """The Run workflow mutation starts for an owner and refuses another actor."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     schema = _console_schema()
     owner = User.objects.create_user(username="workflow-start-owner")
     outsider = User.objects.create_user(username="workflow-start-outsider")
@@ -1020,12 +1011,12 @@ def test_start_workflow_run_starts_subject_and_enforces_rebac(
 
 @pytest.mark.django_db(transaction=True)
 def test_start_workflow_run_requires_access_to_the_subject(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """The subject gate refuses foreign records independently of the workflow gate."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     schema = _console_schema()
     owner = User.objects.create_user(username="workflow-subject-owner")
     outsider = User.objects.create_user(username="workflow-subject-outsider")
@@ -1071,7 +1062,7 @@ def test_start_workflow_run_requires_access_to_the_subject(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_current_published_resolution_uses_lineage_head(workflow_tables: None) -> None:
+def test_current_published_resolution_uses_lineage_head(composed_tables: None) -> None:
     """Scoped querysets resolve visible current versions and honor retirement."""
 
     with system_context(reason="test workflows current version"):
@@ -1099,7 +1090,7 @@ def test_current_published_resolution_uses_lineage_head(workflow_tables: None) -
 
 
 @pytest.mark.django_db(transaction=True)
-def test_triggers_attach_to_lineage_heads_and_default_disabled(workflow_tables: None) -> None:
+def test_triggers_attach_to_lineage_heads_and_default_disabled(composed_tables: None) -> None:
     """Triggers point at lineage heads and are disabled unless explicitly enabled."""
 
     with system_context(reason="test workflows trigger constraints"):

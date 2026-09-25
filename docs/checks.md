@@ -48,6 +48,38 @@ PostgreSQL concurrency behavior also needs the database-backed lane in
 [reusable checks](../.github/workflows/reusable-checks.yml). SQLite results do not
 substitute for that coverage; report database-dependent skips explicitly.
 
+### Source-addon Test Models
+
+Addon source test suites can share the concrete workflow and integration
+record-sync composition in [`angee.testing.models`](../angee/testing/models.py).
+Add `"angee.testing"` after the source addons in test `INSTALLED_APPS`, import
+the shared models instead of declaring copies, and register the fixture plugin
+in the suite's root `conftest.py`:
+
+```python
+pytest_plugins = ("angee.testing.fixtures",)
+```
+
+Keep `angee.integrate`, `angee.workflows`, and their declared dependencies
+installed, including `django.contrib.contenttypes`, REBAC, and the app supplying
+the concrete `AUTH_USER_MODEL`. The suite still supplies its concrete
+`integrate.Integration` and its related models; different addon suites may
+compose different Integration extensions. Register these models before database
+setup. Bare Django settings must also supply the implementation registries
+required at model import, including `ANGEE_WORKFLOW_STEP_CLASSES` and
+`ANGEE_OAUTH_PROVIDER_TYPES`; their defaults belong to the addons'
+[workflow](../addons/angee/workflows/autoconfig.py) and
+[integration](../addons/angee/integrate/autoconfig.py) settings declarations.
+
+Request [`composed_tables`](../angee/testing/fixtures.py) for tests using this
+composition. Pytest-django's `django_db_setup` delegates table creation to Django's
+migrate/syncdb setup, and `transactional_db` delegates per-test cleanup to Django's
+flush. The fixture then synchronizes REBAC permissions. Fixtures that alter
+permission schemas must request `transactional_db` and sync permissions after
+those changes. This support is opt-in for addon source tests; production settings
+and serving code must not depend on it. Verify adopting test modules individually
+as well as in the full suite so collection order cannot hide missing models.
+
 ## Agent Methodology And Documentation
 
 For changes limited to instructions, tool adapters, or their tests, run from the

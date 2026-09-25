@@ -13,6 +13,7 @@ from django.utils import timezone
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.testing.models import Decision, StepRun, WorkflowDispatch, WorkflowRun
 from angee.workflows import managers
 from angee.workflows.attempts import (
     DecisionRecordAccess,
@@ -33,18 +34,7 @@ from tests.test_workflows_gates import (
     _gate_config,
     _open_gate_run,
 )
-from tests.workflows import (
-    Decision,
-    FixtureStep,
-    StepRun,
-    WorkflowDispatch,
-    WorkflowRun,
-    advance_once,
-    execute_started,
-    run_to_terminal,
-    start_run,
-    workflow_with_steps,
-)
+from tests.workflows import FixtureStep, advance_once, execute_started, run_to_terminal, start_run, workflow_with_steps
 
 User = get_user_model()
 workflow_gate_record_access_tables = gate_tests.workflow_gate_record_access_tables
@@ -139,12 +129,12 @@ def test_decide_settlement_grants_and_dispatch_commit_together(
 
 @pytest.mark.parametrize("verdict,action", [(Verdict.COMPLETED, "complete"), (Verdict.REJECTED, "reject")])
 def test_manager_decide_accepts_positive_and_negative_collection_results(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     verdict: Verdict,
     action: str,
 ) -> None:
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actors = [User.objects.create_user(username=f"decision-{action}-{index}") for index in range(2)]
     workflow = workflow_with_steps(
         name="Collection decision",
@@ -173,10 +163,10 @@ def test_manager_decide_accepts_positive_and_negative_collection_results(
 
 
 def test_manager_decide_checks_actor_inside_system_scope(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     reviewer = User.objects.create_user(username="decision-pinned-reviewer")
     stranger = User.objects.create_user(username="decision-pinned-stranger")
     workflow = workflow_with_steps(
@@ -194,11 +184,11 @@ def test_manager_decide_checks_actor_inside_system_scope(
 
 
 def test_decision_conditional_update_requires_one_row_and_reentry_sees_terminal(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="decision-rowcount-reviewer")
     workflow = workflow_with_steps(
         name="Decision rowcount",
@@ -232,10 +222,10 @@ def test_decision_conditional_update_requires_one_row_and_reentry_sees_terminal(
 
 
 def test_invalid_decision_generation_rejects_a_stale_counter(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="decision-generation-reviewer")
     workflow = workflow_with_steps(
         name="Decision invalid generation",
@@ -262,11 +252,11 @@ def test_invalid_decision_generation_rejects_a_stale_counter(
 
 @pytest.mark.parametrize("verdict", [Verdict.EXPIRED, Verdict.ESCALATED])
 def test_timed_decision_uses_deadline_and_generation_without_human_actor(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     verdict: Verdict,
 ) -> None:
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="decision-expiry-reviewer")
     deadline = timezone.now() + timedelta(hours=1)
     workflow = workflow_with_steps(
@@ -294,11 +284,11 @@ def test_timed_decision_uses_deadline_and_generation_without_human_actor(
 
 
 def test_locked_resolution_rejects_wrong_resolver_and_unrelated_gate_for_map_consumer(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     reviewer = User.objects.create_user(username="decision-map-reviewer")
     stranger = User.objects.create_user(username="decision-map-stranger")
     workflow = workflow_with_steps(
@@ -355,11 +345,11 @@ def test_locked_resolution_rejects_wrong_resolver_and_unrelated_gate_for_map_con
 
 
 def test_locked_resolution_follows_fresh_recovery_evidence_to_original_gate(
-    workflow_gate_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_gate_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     reviewer = create_platform_admin("decision-recovery-reviewer")
     workflow = workflow_with_steps(
         name="Recover Decision application",

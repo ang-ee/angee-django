@@ -10,16 +10,16 @@ import pytest
 from hatch_angee import AddonManifest
 from rebac import system_context
 
+import tests.test_marketplace_graphql  # noqa: F401 -- register the fixture model graph before database setup
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
 from tests.conftest import Addon, Repository, Source, VcsBridge, make_integration
-from tests.test_marketplace_graphql import marketplace_tables as marketplace_tables
 
 
 @pytest.fixture()
-def catalog_source(marketplace_tables: None, tmp_path: Path) -> tuple[Source, Path]:
+def catalog_source(composed_tables: None, tmp_path: Path) -> tuple[Source, Path]:
     """Provide a real local VCS source with a remote-only addon declaration."""
 
-    del marketplace_tables
+    del composed_tables
     marker = tmp_path / "addons" / "base" / "addon.toml"
     marker.parent.mkdir(parents=True)
     marker.write_text(

@@ -13,9 +13,9 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import CursorInvalid, advance_stream
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
+from angee.testing.models import SyncStream
 from tests.conftest import SchemaAddon, Vendor, create_user, execute_schema
 from tests.conftest import result_data as _data
-from tests.integrate_models import SyncStream
 from tests.test_messaging_graphql import (
     Channel,
     _platform_admin,
@@ -30,7 +30,7 @@ from tests.test_messaging_imap import FakeImapAccount, FakeIMAPClient, _eml, _fo
 pytest_plugins = ("tests.test_messaging_graphql",)
 
 
-def test_connect_imap_channel_creates_basic_auth_channel(messaging_graphql_tables: None) -> None:
+def test_connect_imap_channel_creates_basic_auth_channel(composed_tables: None) -> None:
     """The IMAP addon creates the credential and channel together."""
 
     admin = _platform_admin("msg-imap-connect-admin")
@@ -80,7 +80,7 @@ def test_connect_imap_channel_creates_basic_auth_channel(messaging_graphql_table
         }
 
 
-def test_connect_imap_channel_reuses_no_credentials_by_label(messaging_graphql_tables: None) -> None:
+def test_connect_imap_channel_reuses_no_credentials_by_label(composed_tables: None) -> None:
     """Two channels with the same display name keep separate Basic-auth secrets."""
 
     admin = _platform_admin("msg-imap-repeat-admin")
@@ -127,7 +127,7 @@ def test_connect_imap_channel_reuses_no_credentials_by_label(messaging_graphql_t
         }
 
 
-def test_connect_imap_channel_requires_seeded_vendor(messaging_graphql_tables: None) -> None:
+def test_connect_imap_channel_requires_seeded_vendor(composed_tables: None) -> None:
     """The mutation reads the addon-owned vendor catalogue row; it never creates it."""
 
     admin = _platform_admin("msg-imap-missing-vendor-admin")
@@ -167,7 +167,7 @@ def _schema() -> Any:
 
 
 def test_update_imap_channel_credential_replaces_the_login_in_place(
-    messaging_graphql_tables: None,
+    composed_tables: None,
 ) -> None:
     """The record verb rotates the Basic-auth material; channel and credential rows stay."""
 
@@ -194,7 +194,7 @@ def test_update_imap_channel_credential_replaces_the_login_in_place(
         assert saved.credential.reveal() == {"username": "ada.lovelace@example.com", "password": "rotated"}
 
 
-def test_update_imap_channel_credential_refuses_blank_material(messaging_graphql_tables: None) -> None:
+def test_update_imap_channel_credential_refuses_blank_material(composed_tables: None) -> None:
     """The kind handler's validation follows the IMAP BAD_USER_INPUT contract."""
 
     admin = _platform_admin("msg-imap-rotate-blank-admin")
@@ -217,7 +217,7 @@ def test_update_imap_channel_credential_refuses_blank_material(messaging_graphql
 
 
 def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
-    messaging_graphql_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     admin, channel, account = _paused_sample_channel(monkeypatch)
     schema = _schema()
@@ -244,7 +244,7 @@ def test_sample_preview_is_a_paged_query_with_no_mutation_or_dead_output(
 
 
 def test_sample_preview_denies_non_admin_before_mailbox_probe(
-    messaging_graphql_tables: None, monkeypatch: pytest.MonkeyPatch,
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, channel, account = _paused_sample_channel(monkeypatch)
     reader = create_user("imap-sample-reader")
@@ -257,7 +257,7 @@ def test_sample_preview_denies_non_admin_before_mailbox_probe(
 
 @pytest.mark.parametrize("operation", ["preview", "import", "prepare"])
 def test_imap_resolvers_preserve_safe_transport_errors(
-    messaging_graphql_tables: None, monkeypatch: pytest.MonkeyPatch, operation: str,
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, operation: str,
 ) -> None:
     admin, channel, _ = _paused_sample_channel(monkeypatch)
 
@@ -299,7 +299,7 @@ def _paused_sample_channel(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[s
 
 
 def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
-    messaging_graphql_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The paused action skips the current UID set once and never backfills after an epoch change."""
@@ -374,7 +374,7 @@ def test_prepare_imap_new_mail_is_future_only_idempotent_and_epoch_safe(
 
 
 def test_test_connection_logs_in_through_the_imap_backend(
-    messaging_graphql_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The generic integration verb reaches the channel backend's real login."""
@@ -396,7 +396,7 @@ def test_test_connection_logs_in_through_the_imap_backend(
 
 
 def test_test_connection_reports_the_imap_refusal(
-    messaging_graphql_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A rejected login reaches the operator with the account and host named."""

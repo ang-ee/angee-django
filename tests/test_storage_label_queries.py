@@ -7,11 +7,11 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
+import tests.test_storage  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.storage import schema as storage_schema
 from tests.conftest import Drive, File, addon_schema, create_user, execute_schema, result_data
 from tests.test_storage import drive as drive
-from tests.test_storage import storage_tables as storage_tables
 
 
 @pytest.mark.django_db(transaction=True)

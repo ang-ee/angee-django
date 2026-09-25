@@ -11,6 +11,7 @@ from rebac import system_context
 
 from angee.base.identity import public_id_of
 from angee.integrate.sync import BridgeProgressReporter
+from angee.testing.models import StepAttempt, WorkflowDispatch
 from angee.workflows import engine
 from angee.workflows.attempts import JsonPresence
 from angee.workflows.configs import WorkflowStepConfig
@@ -22,14 +23,7 @@ from angee.workflows_integrate.settle import settle_bridge_run
 from angee.workflows_integrate.steps import BoundedStreamStage, StreamStageOutput
 from tests.conftest import make_integration
 from tests.messaging_models import Channel
-from tests.workflows import (
-    StepAttempt,
-    WorkflowDispatch,
-    admit_workflow_actor,
-    advance_once,
-    execute_started,
-    workflow_with_steps,
-)
+from tests.workflows import admit_workflow_actor, advance_once, execute_started, workflow_with_steps
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -62,14 +56,13 @@ class SettlementStream(BoundedStreamStage):
 
 @pytest.fixture
 def settlement_bridge(
-    record_sync_tables: None,
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
 ) -> Channel:
     """Compose existing record/workflow fixtures and the declared handler seam."""
 
-    del record_sync_tables, workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     settings.ANGEE_WORKFLOW_SUBJECT_SETTLERS = {
         "angee.integrate.models.Bridge": "angee.workflows_integrate.settle.settle_bridge_run",
     }

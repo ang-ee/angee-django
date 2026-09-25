@@ -23,9 +23,10 @@ from rebac import (
 )
 
 from angee.proposals.models import TaskProposalAccess
-from tests.conftest import _clear_model_tables, _create_missing_tables, create_platform_admin
-from tests.projects_models import PROJECT_TEST_MODELS, Project, Task
-from tests.proposals_models import PROPOSAL_TEST_MODELS, Answer, Proposal, Round, Topic
+from tests.conftest import create_platform_admin
+from tests.projects_models import Project, Task
+from tests.proposals_models import Answer, Proposal, Round, Topic
+from tests.tables import model_tables
 from tests.test_project_access import project_access_schema as project_access_schema
 
 
@@ -77,158 +78,149 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
 
     del proposal_schema
     user_model = apps.get_model("iam", "User")
-    models = (*PROJECT_TEST_MODELS, *PROPOSAL_TEST_MODELS)
-    created = _create_missing_tables(models)
-    try:
-        admin = create_platform_admin("proposal-admin")
-        alice = user_model.objects.create_user(username="proposal-alice", kind="person")
-        bob = user_model.objects.create_user(username="proposal-bob", kind="person")
-        carla = user_model.objects.create_user(username="proposal-carla", kind="person")
-        diego = user_model.objects.create_user(username="proposal-diego", kind="person")
-        service = user_model.objects.create_user(username="proposal-agent", kind="service")
-        project_editor = user_model.objects.create_user(
-            username="proposal-project-editor",
-            kind="person",
+    admin = create_platform_admin("proposal-admin")
+    alice = user_model.objects.create_user(username="proposal-alice", kind="person")
+    bob = user_model.objects.create_user(username="proposal-bob", kind="person")
+    carla = user_model.objects.create_user(username="proposal-carla", kind="person")
+    diego = user_model.objects.create_user(username="proposal-diego", kind="person")
+    service = user_model.objects.create_user(username="proposal-agent", kind="service")
+    project_editor = user_model.objects.create_user(
+        username="proposal-project-editor",
+        kind="person",
+    )
+    round_viewer = user_model.objects.create_user(
+        username="proposal-round-viewer",
+        kind="person",
+    )
+    task_viewer = user_model.objects.create_user(
+        username="proposal-task-viewer",
+        kind="person",
+    )
+
+    with actor_context(admin):
+        project = Project.objects.create(title="Example project")
+    with system_context(reason="tests.proposals.task"):
+        task = Task(project=project, created_by=admin, updated_by=admin)
+        Task._base_manager.bulk_create([task])
+    now = timezone.now()
+    with actor_context(admin):
+        round = Round(
+            facilitator=admin,
+            name="Reviewer response",
+            last_call_at=now,
+            submission_deadline=now + timedelta(days=7),
+            **{target_kind: task if target_kind == "task" else project},
         )
-        round_viewer = user_model.objects.create_user(
-            username="proposal-round-viewer",
-            kind="person",
+        round.sudo(reason="tests.proposals.round").save()
+    with system_context(reason="tests.proposals.topic"):
+        topic = Topic.objects.create(
+            round=round,
+            key="approach",
+            name="Approach",
+            sort_order=1024.0,
         )
-        task_viewer = user_model.objects.create_user(
-            username="proposal-task-viewer",
-            kind="person",
+
+    with system_context(reason="tests.proposals.invite"):
+        _grant(round, "responder", alice)
+        _grant(round, "responder", bob)
+
+    alice_proposal = _create_proposal(actor=alice, round=round, responder=alice)
+    bob_proposal = _create_proposal(actor=bob, round=round, responder=bob)
+    with system_context(reason="tests.proposals.answers"):
+        alice_answer = Answer.objects.create(
+            proposal=alice_proposal,
+            topic=topic,
+            body="Alice's complete response",
+        )
+        bob_answer = Answer.objects.create(
+            proposal=bob_proposal,
+            topic=topic,
+            body="Bob's complete response",
         )
 
-        with actor_context(admin):
-            project = Project.objects.create(title="Example project")
-        with system_context(reason="tests.proposals.task"):
-            task = Task(project=project, created_by=admin, updated_by=admin)
-            Task._base_manager.bulk_create([task])
-        now = timezone.now()
-        with actor_context(admin):
-            round = Round(
-                facilitator=admin,
-                name="Reviewer response",
-                last_call_at=now,
-                submission_deadline=now + timedelta(days=7),
-                **{target_kind: task if target_kind == "task" else project},
-            )
-            round.sudo(reason="tests.proposals.round").save()
-        with system_context(reason="tests.proposals.topic"):
-            topic = Topic.objects.create(
-                round=round,
-                key="approach",
-                name="Approach",
-                sort_order=1024.0,
-            )
+    with pytest.raises(PermissionDenied):
+        _create_proposal(actor=carla, round=round, responder=carla)
+    with pytest.raises(PermissionDenied):
+        _create_proposal(actor=bob, round=round, responder=alice)
 
-        with system_context(reason="tests.proposals.invite"):
-            _grant(round, "responder", alice)
-            _grant(round, "responder", bob)
+    assert set(Proposal.objects.as_user(alice).values_list("pk", flat=True)) == {
+        alice_proposal.pk
+    }
+    assert set(Proposal.objects.as_user(bob).values_list("pk", flat=True)) == {
+        bob_proposal.pk
+    }
+    assert set(Proposal.objects.as_user(admin).values_list("pk", flat=True)) == {
+        alice_proposal.pk,
+        bob_proposal.pk,
+    }
+    assert not Proposal.objects.as_user(diego).exists()
+    assert not Proposal.objects.as_user(service).exists()
+    assert set(Answer.objects.as_user(alice).values_list("pk", flat=True)) == {
+        alice_answer.pk
+    }
+    assert set(Answer.objects.as_user(bob).values_list("pk", flat=True)) == {
+        bob_answer.pk
+    }
+    assert not Answer.objects.as_user(diego).exists()
 
-        alice_proposal = _create_proposal(actor=alice, round=round, responder=alice)
-        bob_proposal = _create_proposal(actor=bob, round=round, responder=bob)
-        with system_context(reason="tests.proposals.answers"):
-            alice_answer = Answer.objects.create(
-                proposal=alice_proposal,
-                topic=topic,
-                body="Alice's complete response",
-            )
-            bob_answer = Answer.objects.create(
-                proposal=bob_proposal,
-                topic=topic,
-                body="Bob's complete response",
-            )
-
-        with pytest.raises(PermissionDenied):
-            _create_proposal(actor=carla, round=round, responder=carla)
-        with pytest.raises(PermissionDenied):
-            _create_proposal(actor=bob, round=round, responder=alice)
-
-        assert set(Proposal.objects.as_user(alice).values_list("pk", flat=True)) == {
-            alice_proposal.pk
-        }
-        assert set(Proposal.objects.as_user(bob).values_list("pk", flat=True)) == {
-            bob_proposal.pk
-        }
-        assert set(Proposal.objects.as_user(admin).values_list("pk", flat=True)) == {
-            alice_proposal.pk,
-            bob_proposal.pk,
-        }
-        assert not Proposal.objects.as_user(diego).exists()
-        assert not Proposal.objects.as_user(service).exists()
-        assert set(Answer.objects.as_user(alice).values_list("pk", flat=True)) == {
-            alice_answer.pk
-        }
-        assert set(Answer.objects.as_user(bob).values_list("pk", flat=True)) == {
-            bob_answer.pk
-        }
-        assert not Answer.objects.as_user(diego).exists()
-
-        with system_context(reason="tests.proposals.project_viewer"):
-            _grant(project, "editor", project_editor)
-            _grant(round, "proposal_viewer", round_viewer)
-            _grant(alice_proposal, "reader", carla)
-            if target_kind == "task":
-                _grant(task, "proposal_viewer", task_viewer)
-        with actor_context(project_editor):
-            project.with_actor(project_editor).grant_record_access("proposal_viewer", diego)
-            project.with_actor(project_editor).grant_record_access("proposal_viewer", service)
-        for viewer in (diego, service):
-            assert set(Proposal.objects.as_user(viewer).values_list("pk", flat=True)) == {
-                alice_proposal.pk,
-                bob_proposal.pk,
-            }
-            assert set(Answer.objects.as_user(viewer).values_list("pk", flat=True)) == {
-                alice_answer.pk,
-                bob_answer.pk,
-            }
-            assert not alice_proposal.with_actor(viewer).has_access("read__cost")
-        assert set(Proposal.objects.as_user(round_viewer).values_list("pk", flat=True)) == {
-            alice_proposal.pk,
-            bob_proposal.pk,
-        }
-        assert set(Proposal.objects.as_user(carla).values_list("pk", flat=True)) == {
-            alice_proposal.pk
-        }
-        assert set(Answer.objects.as_user(carla).values_list("pk", flat=True)) == {
-            alice_answer.pk
-        }
-        assert not alice_proposal.with_actor(carla).has_access("read__cost")
+    with system_context(reason="tests.proposals.project_viewer"):
+        _grant(project, "editor", project_editor)
+        _grant(round, "proposal_viewer", round_viewer)
+        _grant(alice_proposal, "reader", carla)
         if target_kind == "task":
-            assert set(Proposal.objects.as_user(task_viewer).values_list("pk", flat=True)) == {
-                alice_proposal.pk,
-                bob_proposal.pk,
-            }
-
-        global_viewer = user_model.objects.create_user(
-            username="proposal-global-viewer",
-            kind="person",
-        )
-        with system_context(reason="tests.proposals.global_viewer"):
-            write_relationships(
-                [
-                    RelationshipTuple(
-                        ObjectRef("proposals/role", "proposal_viewer"),
-                        "member",
-                        to_subject_ref(global_viewer),
-                    )
-                ]
-            )
-        assert set(Proposal.objects.as_user(global_viewer).values_list("pk", flat=True)) == {
+            _grant(task, "proposal_viewer", task_viewer)
+    with actor_context(project_editor):
+        project.with_actor(project_editor).grant_record_access("proposal_viewer", diego)
+        project.with_actor(project_editor).grant_record_access("proposal_viewer", service)
+    for viewer in (diego, service):
+        assert set(Proposal.objects.as_user(viewer).values_list("pk", flat=True)) == {
             alice_proposal.pk,
             bob_proposal.pk,
         }
-        assert set(Answer.objects.as_user(global_viewer).values_list("pk", flat=True)) == {
+        assert set(Answer.objects.as_user(viewer).values_list("pk", flat=True)) == {
             alice_answer.pk,
             bob_answer.pk,
         }
-    finally:
-        _clear_model_tables(models)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
+        assert not alice_proposal.with_actor(viewer).has_access("read__cost")
+    assert set(Proposal.objects.as_user(round_viewer).values_list("pk", flat=True)) == {
+        alice_proposal.pk,
+        bob_proposal.pk,
+    }
+    assert set(Proposal.objects.as_user(carla).values_list("pk", flat=True)) == {
+        alice_proposal.pk
+    }
+    assert set(Answer.objects.as_user(carla).values_list("pk", flat=True)) == {
+        alice_answer.pk
+    }
+    assert not alice_proposal.with_actor(carla).has_access("read__cost")
+    if target_kind == "task":
+        assert set(Proposal.objects.as_user(task_viewer).values_list("pk", flat=True)) == {
+            alice_proposal.pk,
+            bob_proposal.pk,
+        }
+
+    global_viewer = user_model.objects.create_user(
+        username="proposal-global-viewer",
+        kind="person",
+    )
+    with system_context(reason="tests.proposals.global_viewer"):
+        write_relationships(
+            [
+                RelationshipTuple(
+                    ObjectRef("proposals/role", "proposal_viewer"),
+                    "member",
+                    to_subject_ref(global_viewer),
+                )
+            ]
+        )
+    assert set(Proposal.objects.as_user(global_viewer).values_list("pk", flat=True)) == {
+        alice_proposal.pk,
+        bob_proposal.pk,
+    }
+    assert set(Answer.objects.as_user(global_viewer).values_list("pk", flat=True)) == {
+        alice_answer.pk,
+        bob_answer.pk,
+    }
 
 
 @pytest.mark.django_db(transaction=True)
@@ -240,48 +232,39 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
     """Invariant checks must preserve Django's loaded-fields-only UPDATE."""
 
     del proposal_schema
-    test_models = (*PROJECT_TEST_MODELS, *PROPOSAL_TEST_MODELS)
-    created = _create_missing_tables(test_models)
-    try:
-        with system_context(reason="tests.proposals.deferred_save"):
-            user = apps.get_model("iam", "User").objects.create_user(username="proposal-deferred-owner")
-            project = Project.objects.create(title="Deferred proposal target")
-            now = timezone.now()
-            round = Round.objects.create(
-                project=project,
-                facilitator=user,
-                name="Original round",
-                last_call_at=now,
-                submission_deadline=now + timedelta(days=7),
-            )
-            topic = Topic.objects.create(round=round, key="scope", name="Original topic", sort_order=1024.0)
-            proposal = Proposal.objects.create(round=round, responder=user)
-            row, field = {
-                "round": (round, "name"),
-                "topic": (topic, "name"),
-                "proposal": (proposal, "staffing"),
-            }[model_name]
-            deferred = type(row)._base_manager.defer("created_at").get(pk=row.pk)
-            original_created_at = row.created_at
-            assert "created_at" not in deferred.__dict__
-            setattr(deferred, field, "Changed value")
-            with CaptureQueriesContext(connection) as queries:
-                deferred.save()
-            updates = [
-                query["sql"] for query in queries
-                if query["sql"].startswith(f'UPDATE "{row._meta.db_table}"')
-            ]
-            assert len(updates) == 1
-            assert '"created_at" =' not in updates[0]
-            stored = type(row)._base_manager.get(pk=row.pk)
-            assert getattr(stored, field) == "Changed value"
-            assert stored.created_at == original_created_at
-    finally:
-        _clear_model_tables(test_models)
-        if created:
-            with connection.schema_editor() as editor:
-                for model in reversed(created):
-                    editor.delete_model(model)
+    with system_context(reason="tests.proposals.deferred_save"):
+        user = apps.get_model("iam", "User").objects.create_user(username="proposal-deferred-owner")
+        project = Project.objects.create(title="Deferred proposal target")
+        now = timezone.now()
+        round = Round.objects.create(
+            project=project,
+            facilitator=user,
+            name="Original round",
+            last_call_at=now,
+            submission_deadline=now + timedelta(days=7),
+        )
+        topic = Topic.objects.create(round=round, key="scope", name="Original topic", sort_order=1024.0)
+        proposal = Proposal.objects.create(round=round, responder=user)
+        row, field = {
+            "round": (round, "name"),
+            "topic": (topic, "name"),
+            "proposal": (proposal, "staffing"),
+        }[model_name]
+        deferred = type(row)._base_manager.defer("created_at").get(pk=row.pk)
+        original_created_at = row.created_at
+        assert "created_at" not in deferred.__dict__
+        setattr(deferred, field, "Changed value")
+        with CaptureQueriesContext(connection) as queries:
+            deferred.save()
+        updates = [
+            query["sql"] for query in queries
+            if query["sql"].startswith(f'UPDATE "{row._meta.db_table}"')
+        ]
+        assert len(updates) == 1
+        assert '"created_at" =' not in updates[0]
+        stored = type(row)._base_manager.get(pk=row.pk)
+        assert getattr(stored, field) == "Changed value"
+        assert stored.created_at == original_created_at
 
 
 @pytest.mark.django_db(transaction=True)
@@ -296,9 +279,7 @@ def test_task_proposal_donor_preserves_deferred_save() -> None:
         class Meta:
             app_label = "tests"
 
-    with connection.schema_editor() as editor:
-        editor.create_model(DeferredTask)
-    try:
+    with model_tables((DeferredTask,)):
         row = DeferredTask.objects.create(title="Original", body="Retained")
         deferred = DeferredTask.objects.only("pk", "title").get(pk=row.pk)
         deferred.title = "Changed"
@@ -310,6 +291,3 @@ def test_task_proposal_donor_preserves_deferred_save() -> None:
         stored = DeferredTask.objects.get(pk=row.pk)
         assert stored.title == "Changed"
         assert stored.body == "Retained"
-    finally:
-        with connection.schema_editor() as editor:
-            editor.delete_model(DeferredTask)
