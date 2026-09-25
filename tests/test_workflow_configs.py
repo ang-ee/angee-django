@@ -368,6 +368,21 @@ def test_gate_config_reserves_kind_only_for_closed_binding_discriminators() -> N
         )
 
 
+def test_resolved_gate_config_treats_producer_kind_as_payload_data() -> None:
+    """Resolved producer data is literal: its own ``kind`` key is never a binding."""
+
+    config = GateConfig.model_validate(
+        {
+            "action": "review_document",
+            "slots": [{"assignees": ["auth/user:1"]}],
+            "payload": {"kind": "document", "id": "document-1"},
+        },
+        context={"resolved_bindings": True},
+    )
+
+    assert config.payload == {"kind": "document", "id": "document-1"}
+
+
 @pytest.mark.django_db(transaction=True)
 def test_step_canonical_config_projects_legacy_gate_without_rewriting_row(composed_tables: None) -> None:
     """The editor reads canonical slots while an existing definition stays untouched."""

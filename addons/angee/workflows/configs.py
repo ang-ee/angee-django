@@ -161,6 +161,12 @@ _GateTargets: TypeAlias = list[GateTargetConfig]
 _GateRecordAccess: TypeAlias = list[DecisionRecordAccess]
 
 
+def _resolved_bindings(info: ValidationInfo) -> bool:
+    """Return whether this validation admits already-resolved gate producer data."""
+
+    return bool((info.context or {}).get("resolved_bindings"))
+
+
 class GateBinding(BaseModel):
     """Resolved producer output for the six dynamic fields of a native gate.
 
@@ -209,26 +215,33 @@ class GateConfig(WorkflowStepConfig):
 
     @model_validator(mode="before")
     @classmethod
-    def validate_literal_bindings(cls, value: Any) -> Any:
-        """Validate literal producer values at their declared field paths."""
+    def validate_literal_bindings(cls, value: Any, info: ValidationInfo) -> Any:
+        """Validate literal producer values at their declared field paths.
+
+        Resolved configs carry producer data only, so every dynamic field is a
+        literal there, including mappings whose own data has a ``kind`` key.
+        """
 
         if isinstance(value, Mapping):
+            resolved = _resolved_bindings(info)
             literals = {
                 name: item
                 for name, item in value.items()
                 if name in GateBinding.model_fields
-                and not is_binding(item)
-                and not (isinstance(item, Mapping) and "kind" in item)
+                and (
+                    resolved
+                    or (not is_binding(item) and not (isinstance(item, Mapping) and "kind" in item))
+                )
             }
             GateBinding.model_validate(literals)
         return value
 
     @field_validator(*GateBinding.model_fields, mode="before")
     @classmethod
-    def validate_binding(cls, value: Any) -> Any:
-        """Parse every binding-shaped value through the one workflow grammar."""
+    def validate_binding(cls, value: Any, info: ValidationInfo) -> Any:
+        """Parse every binding-shaped declared value through the one workflow grammar."""
 
-        if is_gate_binding_mapping(value):
+        if not _resolved_bindings(info) and is_gate_binding_mapping(value):
             return parse_binding(value)
         return value
 
@@ -239,7 +252,7 @@ class GateConfig(WorkflowStepConfig):
 
         if isinstance(value, list) and not value:
             raise ValueError("Gate slots must contain at least one slot.")
-        if not (info.context or {}).get("resolved_bindings") and isinstance(value, list):
+        if not _resolved_bindings(info) and isinstance(value, list):
             if any(slot.decision_schema is not None and "oneOf" in slot.decision_schema for slot in value):
                 raise ValueError("Static gate slots cannot declare hand-written oneOf schemas.")
         return value
@@ -249,7 +262,7 @@ class GateConfig(WorkflowStepConfig):
     def valid_static_schema(cls, value: BindingNode | _GateObject, info: ValidationInfo) -> BindingNode | _GateObject:
         """Admit action unions only from resolved producers, never static declarations."""
 
-        if not (info.context or {}).get("resolved_bindings") and isinstance(value, dict) and "oneOf" in value:
+        if not _resolved_bindings(info) and isinstance(value, dict) and "oneOf" in value:
             raise ValueError("Static gates declare actions, not hand-written oneOf.")
         return value
 
