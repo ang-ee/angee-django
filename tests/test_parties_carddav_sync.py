@@ -1,8 +1,8 @@
 """CardDAV replica contracts through the real adapter, driver and parties writers.
 
-The HTTP double implements DAV discovery, resource versions and opaque collection
-tokens. Tests exercise observable conflicts and persistence, without replacing the
-ingest owner or the three-way classifier.
+An in-memory DAV transport implements discovery, resource versions and opaque
+collection tokens. Tests exercise the real HTTP client, observable conflicts and
+persistence, without replacing the ingest owner or the three-way classifier.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.serialization import canonical_json_sha256
-from angee.integrate.http import HttpClient
+from angee.integrate.http import PinnedTransport
 from angee.integrate.states import (
     DiscrepancyKind,
     DiscrepancyStatus,
@@ -93,7 +93,7 @@ class FakeDav:
         self.invalid_tokens: set[str] = set()
         self.requests: list[tuple[str, str, dict[str, str], str]] = []
         self.photos: dict[str, bytes] = {}
-        self.downloads: list[tuple[str, dict[str, Any]]] = []
+        self.private_access: list[bool] = []
         self.include_collection_response = False
         self.store(_HREF, _card())
 
@@ -113,27 +113,15 @@ class FakeDav:
         self.cards.pop(href)
         self.events.append((self.version, href, True))
 
-    def close(self) -> None:
-        """Match the shared client's lifecycle without owning an external socket."""
-
-    def get(self, url: str, **kwargs: Any) -> httpx.Response:
-        return self.request("GET", url, **kwargs)
-
-    def download_capped(self, url: str, **kwargs: Any) -> bytes | None:
-        """Keep the transport double on the shared capped-download contract."""
-
-        assert not connection.in_atomic_block, "Photo download must precede the page transaction"
-        self.downloads.append((url, kwargs))
-        content = self.photos.get(url)
-        return content if content is not None and len(content) <= kwargs["cap"] else None
-
-    def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-        body = kwargs.get("body", b"")
-        text = body.decode() if isinstance(body, bytes) else str(body)
-        headers = {str(key).lower(): str(value) for key, value in kwargs.get("headers", {}).items()}
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        method, url = request.method, str(request.url)
+        text = request.content.decode()
+        headers = dict(request.headers)
         self.requests.append((method, url, headers, text))
         assert not connection.in_atomic_block, "DAV transport must remain outside database transactions"
         if method == "GET":
+            if url in self.photos:
+                return httpx.Response(200, content=self.photos[url])
             if url not in self.cards:
                 return httpx.Response(404)
             card, etag = self.cards[url]
@@ -252,7 +240,7 @@ class Replica:
 
 
 @pytest.fixture
-def replica(transactional_db: Any) -> Iterator[Replica]:
+def replica(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[Replica]:
     """Create the complete existing model graph, preserving real ingest/cascades."""
 
     del transactional_db
@@ -273,8 +261,13 @@ def replica(transactional_db: Any) -> Iterator[Replica]:
                 other_party_kind="organization",
             )
             server = FakeDav()
+
+            def transport(*, allow_private: bool) -> httpx.MockTransport:
+                server.private_access.append(allow_private)
+                return httpx.MockTransport(server.handle_request)
+
+            monkeypatch.setattr("angee.integrate.http.PinnedTransport", transport)
             backend = CardDavDirectoryBackend(directory)
-            backend.__dict__["http"] = server
             definitions = tuple(backend.streams())
             assert len(definitions) == 1
             definition = definitions[0]
@@ -359,7 +352,7 @@ def test_baseline_adopts_existing_contacts_across_pages_without_write_back(
 
 @pytest.mark.parametrize("bounded", [False, True])
 def test_local_only_contact_waits_until_first_baseline_completes(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch, bounded: bool
+    replica: Replica, bounded: bool
 ) -> None:
     folder = Folder.objects.get(directory=replica.directory, source_href=_BOOK)
     person = Person.objects.create(
@@ -370,7 +363,6 @@ def test_local_only_contact_waits_until_first_baseline_completes(
         folder=folder,
         created_by_id=replica.directory.owner_id,
     )
-    monkeypatch.setattr(CardDavDirectoryBackend, "http", property(lambda self: replica.server))
     replica.server.requests.clear()
 
     assert push_stream(replica.stream, replica.backend).count == 0
@@ -540,7 +532,7 @@ def test_put_etag_mismatch_records_conflict_without_local_overwrite(replica: Rep
 
 @pytest.mark.parametrize("keep", ["remote", "local"])
 def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
-    replica: Replica, monkeypatch: pytest.MonkeyPatch, keep: str
+    replica: Replica, keep: str
 ) -> None:
     person, link = replica.baseline()
     original_version = link.remote_version
@@ -551,7 +543,6 @@ def test_etag_conflict_resolution_re_reads_before_keeping_a_side(
     failed_put = [request for request in replica.server.requests if request[0] == "PUT"][-1]
     assert failed_put[2]["if-match"] == original_version
     discrepancy = SyncDiscrepancy.objects.get(link=link)
-    monkeypatch.setattr(CardDavDirectoryBackend, "http", property(lambda self: replica.server))
     replica.server.requests.clear()
 
     resolved = SyncDiscrepancy.objects.resolve_conflict(discrepancy, keep=keep)
@@ -884,7 +875,7 @@ def test_photo_uri_outside_collection_origin_is_refused(replica: Replica, uri: s
     replica.server.store(_HREF, _card().replace("END:VCARD", f"PHOTO;VALUE=URI:{uri}\r\nEND:VCARD"))
     with pytest.raises(CardDavError):
         replica.pull()
-    assert replica.server.downloads == []
+    assert not [request for request in replica.server.requests if request[0] == "GET"]
     assert not Person.objects.exists()
     replica.stream.refresh_from_db()
     assert replica.stream.cursor == {}
@@ -904,7 +895,7 @@ def test_same_origin_private_photo_is_refused_by_pinned_client(
     monkeypatch.setattr(
         "angee.integrate.http.resolved_addresses", lambda host, port: (ipaddress.ip_address("127.0.0.1"),)
     )
-    replica.backend.__dict__["http"] = HttpClient()
+    monkeypatch.setattr("angee.integrate.http.PinnedTransport", PinnedTransport)
     contact = ParsedContact(photo=ParsedPhoto(uri="http://private.example/avatar.png", mime="image/png"))
     with pytest.raises(CardDavError) as rejected:
         replica.backend._resolve_photo(contact, collection="http://private.example/book/")
@@ -918,14 +909,10 @@ def test_photo_download_uses_shared_cap_and_disallows_private_addresses(replica:
     resolved = replica.backend._resolve_photo(contact, collection=_BOOK)
     assert resolved.photo is not None
     assert resolved.photo.data == b"ABC"
-    assert len(replica.server.downloads) == 1
-    downloaded_url, options = replica.server.downloads[0]
-    assert downloaded_url == uri
-    assert options["cap"] == 5 * 1024 * 1024
-    assert options["allow_private"] is False
-    assert options.get("follow_redirects", False) is False
+    assert [request[1] for request in replica.server.requests if request[0] == "GET"] == [uri]
+    assert replica.server.private_access[-1] is False
 
-    replica.server.photos[uri] = b"x" * (options["cap"] + 1)
+    replica.server.photos[uri] = b"x" * (5 * 1024 * 1024 + 1)
     with pytest.raises(CardDavError):
         replica.backend._resolve_photo(contact, collection=_BOOK)
 
@@ -1249,7 +1236,6 @@ def test_enumeration_sweep_resumes_checkpoint_after_apply_crash(
     assert RecordRevision.objects.count() == 3
 
     replica.backend = CardDavDirectoryBackend(replica.directory)
-    replica.backend.__dict__["http"] = replica.server
     replica.stream = SyncStream.objects.get(pk=replica.stream.pk)
     replica.server.requests.clear()
     assert replica.reconcile(page_bound=1) == 0
@@ -1294,20 +1280,19 @@ def test_cross_origin_redirect_refuses_to_forward_basic_auth(
     replica: Replica,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sent: list[tuple[str, dict[str, Any]]] = []
+    sent: list[httpx.Request] = []
 
-    def redirect(method: str, url: str, **kwargs: Any) -> httpx.Response:
-        del method
-        sent.append((url, kwargs))
+    def redirect(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
         return httpx.Response(302, headers={"Location": "https://attacker.example/collect"})
 
-    monkeypatch.setattr(replica.server, "request", redirect)
+    monkeypatch.setattr(replica.server, "handle_request", redirect)
     monkeypatch.setattr(replica.backend, "_auth", lambda: {"Authorization": "Basic dXNlcjpwYXNz"})
     with pytest.raises(CardDavError):
         replica.backend._request("PROPFIND", _BOOK, "<propfind/>")
     assert len(sent) == 1
-    assert sent[0][0] == _BOOK
-    assert sent[0][1]["headers"]["Authorization"] == "Basic dXNlcjpwYXNz"
+    assert str(sent[0].url) == _BOOK
+    assert sent[0].headers["authorization"] == "Basic dXNlcjpwYXNz"
 
 
 def test_sync_report_skips_successful_collection_self_response(replica: Replica) -> None:

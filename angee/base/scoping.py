@@ -96,9 +96,8 @@ def system_queryset(
     system_context = getattr(queryset, "system_context", None)
     if callable(system_context):
         queryset = system_context(reason=f"{model._meta.label_lower}.system_queryset")
-    locker = getattr(queryset, "lock_if_supported", None)
-    if lock is not None and callable(locker):
-        queryset = locker(of=lock)
+    if lock is not None:
+        queryset = queryset.select_for_update(of=lock)
     return cast(models.QuerySet[_ModelT], queryset)
 
 

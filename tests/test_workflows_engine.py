@@ -401,6 +401,70 @@ def test_start_rejects_malformed_input_presence_before_writes(
         assert WorkflowDispatch.objects.count() == 0
 
 
+@pytest.mark.django_db(transaction=True)
+def test_start_asserts_input_schema_formats_before_writes(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    del workflow_engine_tables, no_workflow_queue
+    with system_context(reason="test workflow date input contract"):
+        draft = Workflow.objects.create(
+            created_by=workflow_actor(),
+            name="Date input",
+            input_schema={"type": "string", "format": "date"},
+        )
+        Step.objects.create(
+            workflow=draft,
+            key="wait",
+            name="Wait",
+            step_class="wait",
+            config={"until": "2099-01-01T00:00:00Z"},
+            is_entry=True,
+        )
+        workflow = draft.publish()
+    actor = admit_workflow_actor(workflow)
+
+    with pytest.raises(ValidationError, match="input does not satisfy"):
+        engine.start(workflow, subject=None, actor=actor, input=JsonPresence(True, "nope"))
+
+    with system_context(reason="verify rejected date input"):
+        assert WorkflowRun.objects.count() == 0
+        assert WorkflowDispatch.objects.count() == 0
+    run = engine.start(workflow, subject=None, actor=actor, input=JsonPresence(True, "2026-09-25"))
+    assert run.input == "2026-09-25"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("value", ["2026-09-25", "nope"])
+def test_emit_asserts_output_schema_formats(
+    workflow_engine_tables: None,
+    no_workflow_queue: None,
+    value: str,
+) -> None:
+    del workflow_engine_tables, no_workflow_queue
+    workflow = workflow_with_steps(
+        steps=({
+            "key": "emit",
+            "step_class": "emit",
+            "config": {"output_schema": {"type": "string", "format": "date"}},
+            "input_binding": {"kind": "constant", "value": value},
+        },),
+        edges=(),
+    )
+    run = start_run(workflow)
+    invalid = value == "nope"
+    run_to_terminal(run, allow_failed={run.pk} if invalid else ())
+
+    emitted = step_run_for(run, "emit")
+    if invalid:
+        assert run.status == workflow_models.RunStatus.FAILED
+        assert emitted.status == workflow_models.StepRunStatus.FAILED
+        assert "does not satisfy its declared projection contract" in emitted.error
+    else:
+        assert run.status == workflow_models.RunStatus.SUCCEEDED
+        assert emitted.output == value
+
+
 @pytest.fixture()
 def fixture_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """Journal calls made through the concrete test fixture operation."""

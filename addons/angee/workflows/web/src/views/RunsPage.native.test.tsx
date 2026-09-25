@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   payloadVariables: [] as unknown[],
   resources: [] as Array<Record<string, unknown>>,
   mutation: vi.fn(),
+  mutationState: { fetching: false, error: null as Error | null, reset: vi.fn() },
   routeAvailable: true,
   listeners: new Set<() => void>(),
 }));
@@ -113,7 +114,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
         error: null,
       };
     },
-    useAuthoredMutation: () => [mocks.mutation, { fetching: false, error: null }],
+    useAuthoredMutation: () => [mocks.mutation, mocks.mutationState],
   };
 });
 
@@ -181,6 +182,9 @@ beforeEach(() => {
   mocks.payloadVariables.length = 0;
   mocks.resources.length = 0;
   mocks.mutation.mockReset();
+  mocks.mutationState.fetching = false;
+  mocks.mutationState.error = null;
+  mocks.mutationState.reset.mockReset();
   mocks.routeAvailable = true;
   mocks.listeners.clear();
 });
@@ -290,6 +294,24 @@ test("a successful recovery without a route retains its acknowledged run and can
   expect((screen.getByRole("button", { name: "Recover from this attempt" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Recover from this attempt" }));
   expect(mocks.mutation).toHaveBeenCalledTimes(1);
+});
+
+test("recovery renders mutation state and resets it when the selected attempt changes", () => {
+  mocks.loading = false;
+  const { rerender } = render(<AttemptRecoveryPanel attemptId="attempt-1" />);
+  mocks.mutationState.reset.mockClear();
+
+  mocks.mutationState.fetching = true;
+  rerender(<AttemptRecoveryPanel attemptId="attempt-1" />);
+  expect((screen.getByRole("button", { name: "Starting recovery…" }) as HTMLButtonElement).disabled).toBe(true);
+
+  mocks.mutationState.fetching = false;
+  mocks.mutationState.error = new Error("Recovery request failed");
+  rerender(<AttemptRecoveryPanel attemptId="attempt-1" />);
+  expect(screen.getByText("Recovery request failed")).toBeTruthy();
+
+  rerender(<AttemptRecoveryPanel attemptId="attempt-2" />);
+  expect(mocks.mutationState.reset).toHaveBeenCalledOnce();
 });
 
 test("an uncertain recovery requires the shared labeled checkbox acknowledgement", async () => {

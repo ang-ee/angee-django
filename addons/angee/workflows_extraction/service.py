@@ -21,6 +21,7 @@ from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import json_values_equal
+from angee.workflows.data_contracts import json_schema_validator
 from angee.workflows.engine import external_operation_request
 from angee.workflows_extraction.contracts import (
     DocumentPart,
@@ -617,7 +618,7 @@ def process(
             result, claims = document_result.value, document_result.claims
             metadata, roles = dict(document_result.provider_metadata or {}), document_result.used_model_roles
             errors = sorted(
-                Draft202012Validator(normalized_schema).iter_errors(result), key=lambda error: list(error.path)
+                json_schema_validator(normalized_schema).iter_errors(result), key=lambda error: list(error.path)
             )
             if errors:
                 raise ValidationError({"result": "Processing output does not match the declared schema."})
@@ -1021,7 +1022,7 @@ def infer(
             error=failure,
         )
     errors = sorted(
-        Draft202012Validator(base.schema).iter_errors(document_result.value), key=lambda error: list(error.path)
+        json_schema_validator(base.schema).iter_errors(document_result.value), key=lambda error: list(error.path)
     )
     if errors:
         return _retain_failed_inference(

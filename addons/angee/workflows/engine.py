@@ -21,7 +21,6 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
-from jsonschema import Draft202012Validator
 from pydantic import JsonValue
 from pydantic import ValidationError as PydanticValidationError
 from rebac import SubjectRef, system_context
@@ -55,6 +54,7 @@ from angee.workflows.bindings import (
     evaluate_binding,
     parse_binding,
 )
+from angee.workflows.data_contracts import json_schema_validator
 from angee.workflows.dispatch import (
     DispatchTarget,
     WorkflowDispatchKind,
@@ -1876,7 +1876,7 @@ def _finish_run_result(run: Any) -> None:
         if evaluated.diagnostics or evaluated.value is None or not evaluated.value.present:
             raise ValidationError({"result": "Terminal binding did not produce a complete output."})
         output = evaluated.value.value
-        errors = list(Draft202012Validator(run.workflow.output_schema).iter_errors(output))
+        errors = list(json_schema_validator(run.workflow.output_schema).iter_errors(output))
         if errors:
             raise ValidationError({"result": "Terminal output does not satisfy the published workflow schema."})
     except (PydanticValidationError, ValidationError) as error:

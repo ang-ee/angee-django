@@ -26,21 +26,26 @@ pruned, which bounds the independent late-reply rescan.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import monotonic, sleep
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from slack_sdk.http_retry import (
+    HttpRequest,
+    HttpResponse,
+    RateLimitErrorRetryHandler,
+    RetryState,
+    default_retry_handlers,
+)
 
 from angee.integrate.streams import CursorInvalid, StreamDefinition, StreamPage
 from angee.messaging.backends import ChannelBackend, MediaItem, ParsedMessage
 from angee.messaging_integrate_slack.identity import parsed_message, response_data
-
-_T = TypeVar("_T")
 
 _CONVERSATION_TYPES = "public_channel,private_channel,mpim,im"
 _PAGE_LIMIT = 200
@@ -54,6 +59,56 @@ _MAX_RATE_LIMIT_SLEEP_SECONDS = 60.0
 
 class SlackRateLimitError(TimeoutError):
     """Slack kept this poll rate-limited beyond its bounded retry/time budget."""
+
+
+class _RateLimitRetryHandler(RateLimitErrorRetryHandler):
+    """Extend the SDK's rate-limit retries with this serial poll's time budget."""
+
+    deadline: float | None = None
+
+    def can_retry(
+        self,
+        *,
+        state: RetryState,
+        request: HttpRequest,
+        response: HttpResponse | None = None,
+        error: Exception | None = None,
+    ) -> bool:
+        """Keep exhausted rate limits on the poll's transient-error contract."""
+
+        retry = super().can_retry(state=state, request=request, response=response, error=error)
+        if not retry and self._can_retry(state=state, request=request, response=response, error=error):
+            raise SlackRateLimitError("Slack rate-limit retry budget exhausted; resume on the next poll.") from error
+        return retry
+
+    def prepare_for_next_attempt(
+        self,
+        *,
+        state: RetryState,
+        request: HttpRequest,
+        response: HttpResponse | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        """Respect Retry-After within the poll's sleep cap and deadline."""
+
+        if response is None:
+            raise ValueError("A rate-limit retry requires a Slack response.")
+        raw_delay = next((value for key, value in response.headers.items() if key.lower() == "retry-after"), ["1"])
+        try:
+            delay = min(_MAX_RATE_LIMIT_SLEEP_SECONDS, max(0.0, float(raw_delay[0])))
+        except TypeError, ValueError:
+            delay = 1.0
+        if self.deadline is not None and delay >= self.deadline - monotonic():
+            raise SlackRateLimitError(
+                "Slack sync time budget exhausted while rate limited; resume next poll."
+            ) from error
+        sleep(delay)
+        if self.deadline is not None and monotonic() >= self.deadline:
+            raise SlackRateLimitError(
+                "Slack sync time budget exhausted while rate limited; resume next poll."
+            ) from error
+        state.next_attempt_requested = True
+        state.increment_current_attempt()
 
 
 @dataclass
@@ -119,6 +174,7 @@ class SlackChannelBackend(ChannelBackend):
 
         super().__init__(integration)
         self._client: WebClient | None = None
+        self._rate_limit_retry = _RateLimitRetryHandler(max_retry_count=_MAX_RATE_LIMIT_RETRIES)
         self._work: deque[_ConversationWork] | None = None
         self._users: dict[str, dict[str, Any]] | None = None
         self._conversations: dict[str, dict[str, Any]] = {}
@@ -186,9 +242,7 @@ class SlackChannelBackend(ChannelBackend):
         conversations: dict[str, dict[str, Any]] = {}
         cursor = ""
         while True:
-            response = self._api_call(
-                self._client_or_create().users_conversations,
-                deadline=deadline,
+            response = self._client_or_create(deadline=deadline).users_conversations(
                 user=self._own_id(),
                 types=_CONVERSATION_TYPES,
                 exclude_archived=True,
@@ -286,9 +340,7 @@ class SlackChannelBackend(ChannelBackend):
     ) -> Mapping[str, Any]:
         """Call one bounded Slack history page."""
 
-        response = self._api_call(
-            self._client_or_create().conversations_history,
-            deadline=deadline,
+        response = self._client_or_create(deadline=deadline).conversations_history(
             channel=channel_id,
             oldest=oldest,
             inclusive=bool(latest),
@@ -321,9 +373,7 @@ class SlackChannelBackend(ChannelBackend):
         while conversation.replies:
             work = conversation.replies[0]
             if work.page is None:
-                response = self._api_call(
-                    self._client_or_create().conversations_replies,
-                    deadline=deadline,
+                response = self._client_or_create(deadline=deadline).conversations_replies(
                     channel=channel_id,
                     ts=work.parent_ts,
                     oldest=work.oldest,
@@ -442,9 +492,7 @@ class SlackChannelBackend(ChannelBackend):
         users: dict[str, dict[str, Any]] = {}
         cursor = ""
         while True:
-            response = self._api_call(
-                self._client_or_create().users_list,
-                deadline=deadline,
+            response = self._client_or_create(deadline=deadline).users_list(
                 limit=_PAGE_LIMIT,
                 cursor=cursor or None,
             )
@@ -566,11 +614,14 @@ class SlackChannelBackend(ChannelBackend):
         if self._client is not None:
             self._client.token = self._token()
 
-    def _client_or_create(self) -> WebClient:
-        """Return the token-authenticated official Slack client."""
+    def _client_or_create(self, *, deadline: float | None = None) -> WebClient:
+        """Set this request's retry deadline on the token-authenticated SDK client."""
 
+        self._rate_limit_retry.deadline = deadline
         if self._client is None:
-            self._client = self.client_class(token=self._token())
+            self._client = self.client_class(
+                token=self._token(), retry_handlers=[*default_retry_handlers(), self._rate_limit_retry]
+            )
         return self._client
 
     def _token(self) -> str:
@@ -601,38 +652,6 @@ class SlackChannelBackend(ChannelBackend):
     def _config(self) -> dict[str, Any]:
         config = self.bridge.config
         return config if isinstance(config, dict) else {}
-
-    def _api_call(self, operation: Callable[..., _T], *, deadline: float | None = None, **kwargs: Any) -> _T:
-        """Call Slack with bounded, deadline-aware HTTP-429 retries."""
-
-        retries = 0
-        while True:
-            try:
-                return operation(**kwargs)
-            except SlackApiError as error:
-                response = error.response
-                if int(getattr(response, "status_code", 0) or 0) != 429:
-                    raise
-                retries += 1
-                if retries > _MAX_RATE_LIMIT_RETRIES:
-                    raise SlackRateLimitError(
-                        "Slack rate-limit retry budget exhausted; resume on the next poll."
-                    ) from error
-                headers = getattr(response, "headers", {}) or {}
-                raw_delay = headers.get("Retry-After") or headers.get("retry-after") or "1"
-                try:
-                    delay = min(_MAX_RATE_LIMIT_SLEEP_SECONDS, max(0.0, float(raw_delay)))
-                except TypeError, ValueError:
-                    delay = 1.0
-                if deadline is not None and delay >= deadline - monotonic():
-                    raise SlackRateLimitError(
-                        "Slack sync time budget exhausted while rate limited; resume next poll."
-                    ) from error
-                sleep(delay)
-                if deadline is not None and monotonic() >= deadline:
-                    raise SlackRateLimitError(
-                        "Slack sync time budget exhausted while rate limited; resume next poll."
-                    ) from error
 
 
 def _next_cursor(data: Mapping[str, Any]) -> str:

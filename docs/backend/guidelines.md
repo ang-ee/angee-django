@@ -892,12 +892,12 @@ and current contracts before applying a historical example to a new deployment.
   re-declare the column. The field is NULL-safe by design, because a sqid can be
   selected through a nullable join where `django_sqids.SqidsField` crashes on a
   NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
-- **Row locks must keep the SQLite floor.** Wrap `select_for_update()` through the
-  owning queryset/manager's feature-gated helper (`AngeeQuerySet.lock_if_supported`);
-  SQLite is a supported backend and Django 6 silently drops plain `FOR UPDATE`
-  there, so the helper is the greppable contract that keeps lock intent explicit and
-  backend-gated. `HierarchyMixin` path maintenance and `save_state`'s transition
-  guard both route their lock through it.
+- **Row locks must keep the SQLite floor.** The owning queryset/manager's
+  `lock_if_supported()` names lock intent and delegates to native
+  `select_for_update(of=...)`. Django owns write routing and backend feature
+  checks: SQLite emits no lock SQL, including when `of` is requested. Backends
+  supporting row locks still enforce their supported lock options. Do not set
+  private queryset write state or duplicate Django's feature checks.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
   by column name.** A subtree that must stay inside a tenant or other scope
   declares `hierarchy_scope_fields = ("scope",)` (a `ClassVar` tuple; FKs compare

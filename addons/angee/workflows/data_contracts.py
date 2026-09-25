@@ -1,9 +1,9 @@
-"""Bounded static path discovery for Pydantic workflow data contracts.
+"""JSON Schema validation and bounded static workflow data contracts.
 
 JSON Schema's validators check concrete instances; workflow publication must
 also prove that a binding path exists for every value a producer can emit.
 This analyser supplies that conservative static check over supported shapes,
-while jsonschema owns declaration and runtime instance validation.
+while jsonschema owns declaration and format-aware runtime instance validation.
 """
 
 from __future__ import annotations
@@ -12,8 +12,10 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Mapping, Sequence, TypeAlias, cast
 
 from django.core.exceptions import ValidationError
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.protocols import Validator
 from pydantic import AfterValidator, BaseModel, Field
+from referencing.jsonschema import SchemaRegistry
 
 SchemaMode: TypeAlias = Literal["validation", "serialization"]
 ConcretePath: TypeAlias = Sequence[str | int]
@@ -38,6 +40,22 @@ JsonPath: TypeAlias = Annotated[
     Field(min_length=1, description="Object keys and array indices encoded as decimal strings, such as '0'."),
 ]
 JsonSchemaDict: TypeAlias = Annotated[dict[str, Any], AfterValidator(_check_json_schema)]
+
+
+def json_schema_validator(
+    schema: Mapping[str, Any] | bool,
+    *,
+    validator_class: type[Validator] = Draft202012Validator,
+    registry: SchemaRegistry | None = None,
+) -> Validator:
+    """Assert Draft 2020-12 instance constraints, including registered formats.
+
+    Decision relation checks can supply their native validator extension and
+    retained-reference registry without changing the shared validation policy.
+    """
+
+    options = {} if registry is None else {"registry": registry}
+    return validator_class(schema, format_checker=FormatChecker(), **options)
 
 
 def _array_index(segment: str | int) -> int | None:

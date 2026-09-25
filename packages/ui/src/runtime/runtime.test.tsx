@@ -27,6 +27,7 @@ import {
   type RuntimeI18n,
 } from "./runtime";
 import { createRouteHref } from "./route-href";
+import { createAngeeI18nInstance } from "./i18n";
 
 function wrapperFor(runtime: Partial<AppRuntime>) {
   return ({ children }: { children: ReactNode }) =>
@@ -285,7 +286,7 @@ describe("useDrawers", () => {
 describe("useT", () => {
   test("resolves a key in its namespace and interpolates vars", () => {
     const wrapper = wrapperFor({
-      i18n: testI18n({ notes: { greet: "Hi {name}" } }),
+      i18n: createAngeeI18nInstance({ notes: { greet: "Hi {name}" } }) as RuntimeI18n,
     });
     const { result } = renderHook(() => useT("notes"), { wrapper });
     expect(result.current("greet", { name: "Ada" })).toBe("Hi Ada");
@@ -309,18 +310,33 @@ describe("useNamespaceT", () => {
     expect(result.current("item", { count: 2 })).toBe("2 items");
     expect(result.current("item", { count: 0 })).toBe("0 items");
   });
-});
 
-function testI18n(
-  resources: Record<string, Record<string, string>>,
-): RuntimeI18n {
-  return {
-    getFixedT: (_lng, namespace) => (key, options = {}) => {
-      const template = resources[namespace]?.[key] ?? options.defaultValue ?? key;
-      return template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name: string) => {
-        const value = options[name];
-        return value === undefined ? match : String(value);
-      });
-    },
-  };
-}
+  test("uses native plural defaults for missing host keys and preserves host translations", () => {
+    const fallback = {
+      item_zero: "No items for {name}",
+      item_one: "{count} item for {name}",
+      item_other: "{count} items for {name}",
+      greeting: "Hello {name}",
+    };
+    const i18n = createAngeeI18nInstance({ fixture: { greeting: "Welcome {name}" } });
+    const { result } = renderHook(() => useNamespaceT("fixture", fallback), {
+      wrapper: wrapperFor({ i18n: i18n as RuntimeI18n }),
+    });
+
+    expect(result.current("item", { count: 0, name: "Ada" })).toBe("No items for Ada");
+    expect(result.current("item", { count: 1, name: "Ada" })).toBe("1 item for Ada");
+    expect(result.current("item", { count: 2, name: "Ada" })).toBe("2 items for Ada");
+    expect(result.current("greeting", { name: "Ada" })).toBe("Welcome Ada");
+    expect(result.current("missing")).toBe("missing");
+  });
+
+  test("uses the active locale's plural suffix for bundled defaults", () => {
+    const fallback = { item_one: "{count} item", item_few: "{count} few", item_other: "{count} items" };
+    const i18n = createAngeeI18nInstance({}, "cs");
+    const { result } = renderHook(() => useNamespaceT("fixture", fallback), {
+      wrapper: wrapperFor({ i18n: i18n as RuntimeI18n }),
+    });
+
+    expect(result.current("item", { count: 3 })).toBe("3 few");
+  });
+});

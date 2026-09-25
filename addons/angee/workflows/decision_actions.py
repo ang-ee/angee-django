@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from jsonschema import Draft202012Validator, FormatChecker, validators
+from jsonschema import Draft202012Validator, validators
 from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import BaseModel, ConfigDict, JsonValue, StrictInt, StrictStr, TypeAdapter, field_validator
 from pydantic import ValidationError as PydanticValidationError
@@ -22,6 +22,7 @@ from referencing.jsonschema import DRAFT202012
 from angee.base.identity import instance_from_public_id
 from angee.base.scoping import read_scoped_queryset
 from angee.workflows.attempts import validate_json_value
+from angee.workflows.data_contracts import json_schema_validator
 
 
 class ReviewRecordReference(BaseModel):
@@ -313,12 +314,7 @@ class DecisionActionContract:
                 "$defs": self.schema.get("$defs", {}),
                 "allOf": [field_schema],
             }
-            errors = list(
-                Draft202012Validator(
-                    scoped_schema,
-                    format_checker=FormatChecker(),
-                ).iter_errors(value)
-            )
+            errors = list(json_schema_validator(scoped_schema).iter_errors(value))
             if errors:
                 raise ValidationError({"payload": f"Decision context {name!r} does not satisfy its schema."})
             if not any(_valid_context(adapter, value) for adapter in _CONTEXT_ADAPTERS[widget]):
@@ -479,11 +475,7 @@ def validate_decision_resolution(decision: Any, payload: Any, *, actor: Any, ver
     errors: dict[str, list[str]] = {}
     try:
         failures = sorted(
-            Draft202012Validator(
-                resolution_schema,
-                format_checker=FormatChecker(),
-                registry=Registry(),
-            ).iter_errors(resolution),
+            json_schema_validator(resolution_schema, registry=Registry()).iter_errors(resolution),
             key=lambda item: (tuple(str(part) for part in item.path), item.message),
         )
     except Unresolvable as error:
@@ -579,9 +571,9 @@ def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any]
     errors: dict[str, list[str]] = {}
     try:
         failures = list(
-            relation_validator(
+            json_schema_validator(
                 _decision_validation_schema(schema),
-                format_checker=FormatChecker(),
+                validator_class=relation_validator,
                 registry=Registry(),
             ).iter_errors(resolution)
         )

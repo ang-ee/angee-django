@@ -954,32 +954,38 @@ class Edge(ResourceLoadMixin, AuditMixin, AngeeDataModel):
 
 def check_event_trigger_publishers(
     app_configs: list[object] | None = None,
+    *,
+    databases: Iterable[str] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
-    """Report persisted event triggers with invalid publisher declarations."""
+    """Check persisted event publishers only on explicitly requested databases."""
 
     del app_configs, kwargs
+    if not databases:
+        return []
     try:
         trigger_model = apps.get_model("workflows", "Trigger")
     except LookupError:
         return []
-    try:
-        errors = []
-        for trigger in trigger_model._base_manager.filter(kind=TriggerKind.EVENT).order_by("pk").iterator():
-            try:
-                trigger.validated_config(require_publisher=True)
-            except ValidationError as error:
-                errors.append(
-                    checks.Error(
-                        f"Workflow trigger {trigger.pk}: {'; '.join(error.messages)}",
-                        obj=trigger_model,
-                        id="angee.workflows.E001",
+    errors = []
+    for database in databases:
+        try:
+            triggers = trigger_model._base_manager.using(database).filter(kind=TriggerKind.EVENT).order_by("pk")
+            for trigger in triggers.iterator():
+                try:
+                    trigger.validated_config(require_publisher=True)
+                except ValidationError as error:
+                    errors.append(
+                        checks.Error(
+                            f"Workflow trigger {trigger.pk}: {'; '.join(error.messages)}",
+                            obj=trigger_model,
+                            id="angee.workflows.E001",
+                        )
                     )
-                )
-                if len(errors) == 20:
-                    break
-    except (OperationalError, ProgrammingError):
-        return []
+                    if len(errors) == 20:
+                        return errors
+        except (OperationalError, ProgrammingError):
+            continue
     return errors
 
 

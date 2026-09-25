@@ -8,7 +8,6 @@ from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
-from jsonschema import Draft202012Validator
 from rebac import system_context, to_subject_ref
 
 from angee.base.actors import actor_user_id
@@ -18,6 +17,7 @@ from angee.base.refs import record_ref_for
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import json_values_equal
+from angee.workflows.data_contracts import json_schema_validator
 from angee.workflows_extraction.contracts import (
     CorrectionBinding,
     DocumentPart,
@@ -621,7 +621,7 @@ class ExtractionManager(EvidenceManager):
                 raise ValidationError({"extraction": "The retained extraction schema identity is invalid."})
             normalized_result = _json_object(result, field="result")
             errors = sorted(
-                Draft202012Validator(normalized_schema).iter_errors(normalized_result),
+                json_schema_validator(normalized_schema).iter_errors(normalized_result),
                 key=lambda error: list(error.path),
             )
             if errors:

@@ -36,7 +36,6 @@ from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, Val
 from django.db import connection, models
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
@@ -80,6 +79,7 @@ from angee.workflows.configs import (
 )
 from angee.workflows.data_contracts import (
     DataContract,
+    json_schema_validator,
     json_value_at_path,
     model_data_contract,
     schema_data_contract,
@@ -858,7 +858,7 @@ class JoinContinuation(StepImpl):
             or "output" not in result
         ):
             raise ValidationError({"child": "Continuation completion does not satisfy the declared join result."})
-        errors = list(Draft202012Validator(config["expected_output_schema"]).iter_errors(result["output"]))
+        errors = list(json_schema_validator(config["expected_output_schema"]).iter_errors(result["output"]))
         if errors:
             raise ValidationError({"child": "Continuation output does not satisfy the declared join schema."})
         return StepResult.done(output=result["output"], outcome=result["outcome"])
@@ -893,7 +893,7 @@ class EmitStep(StepImpl):
 
         config = type(self).normalize_config(step_run.step.config)
         output = step_run.input
-        if list(Draft202012Validator(config["output_schema"]).iter_errors(output)):
+        if list(json_schema_validator(config["output_schema"]).iter_errors(output)):
             raise ValidationError({"output": "Emit input does not satisfy its declared projection contract."})
         actor = step_run.run.execution_admission_actor()
         artifacts: list[ArtifactSpec] = []
