@@ -9,10 +9,10 @@ from django.db import models
 from django.utils import timezone
 from rebac import system_context
 
-from angee.testing.models import StepAttempt, StepRun, Workflow
 from angee.workflows import engine
 from angee.workflows.attempts import AttemptInput
 from angee.workflows.models import RunStatus, StepRunStatus
+from angee.workflows.testing.models import StepAttempt, StepRun, Workflow
 from tests.workflows import start_run, workflow_with_steps
 
 

@@ -79,6 +79,8 @@ Before adding backend structure, pass the Django architecture gate:
 The framework wheel and the GraphQL folder addon have a one-way dependency rule
 that layering tests enforce:
 
+- Core modules under `angee/` never import folder addons, including test support.
+  Reusable addon test compositions live in the owning addon.
 - `angee.base` is the model foundation (models, fields, mixins, managers,
   querysets, and native tracking mixins). It must not import `angee.compose`,
   `angee.graphql`, or addon packages.
@@ -629,10 +631,11 @@ and current contracts before applying a historical example to a new deployment.
   registration; a broad run does not replace the direct module run.
 - **Django owns static test-table lifecycle.** Register concrete models before
   database setup in installed, unmigrated apps, and use pytest-django's native
-  setup and transactional flush. Share addon source compositions through
-  [`angee.testing`](../../angee/testing/__init__.py); see
-  [test setup](../checks.md#source-addon-test-models). Framework probes declared
-  after setup, in isolated registries, unmanaged, or under uninstalled or migrated
+  setup and transactional flush. Share source compositions through the owning
+  [`workflows`](../../addons/angee/workflows/testing/__init__.py) and
+  [`integrate`](../../addons/angee/integrate/testing/__init__.py) test apps.
+  Framework probes declared after setup, in isolated registries, unmanaged, or
+  under uninstalled or migrated
   labels use the single [`model_tables`](../../tests/tables.py) helper. It drops only
   tables it created; it never clears existing tables. Keep production code
   independent of test support.

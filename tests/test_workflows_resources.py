@@ -15,9 +15,9 @@ from rebac import system_context
 from angee.addons import addon_manifest
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.models import Resource
-from angee.testing.models import Trigger, Workflow
 from angee.workflows import models as workflow_models
 from angee.workflows.definitions import DefinitionEdit, NodePatch
+from angee.workflows.testing.models import Trigger, Workflow
 from tests.conftest import write_addon_manifest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]

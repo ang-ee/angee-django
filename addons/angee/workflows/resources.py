@@ -145,7 +145,6 @@ class WorkflowDefinitionResource(AngeeResource):
         return ids
 
     def before_import(self, dataset: Any, **kwargs: Any) -> None:
-        self._row_hashes.clear()
         self._seen_xrefs: set[str] = set()
         self._pending: dict[str, tuple[Mapping[str, Any], dict[str, Any]]] = {}
         super().before_import(dataset, **kwargs)

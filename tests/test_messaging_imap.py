@@ -24,6 +24,7 @@ from rebac import system_context
 
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import CursorInvalid, StreamDefinition, advance_stream, open_stream
+from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging_integrate_imap import parser as imap_parser
 from angee.messaging_integrate_imap.backend import (
     MAX_SAMPLE_MESSAGES,
@@ -38,7 +39,6 @@ from angee.messaging_integrate_imap.parser import (
     split_plain_text,
     synthetic_external_id,
 )
-from angee.testing.models import RecordLink, SyncStream
 from tests.conftest import make_integration
 from tests.stream_adapters import AdapterPages
 from tests.test_messaging import (

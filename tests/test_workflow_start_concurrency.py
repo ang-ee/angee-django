@@ -12,9 +12,9 @@ from django.db import close_old_connections, connection, connections, transactio
 from django.utils import timezone
 from rebac import system_context
 
-from angee.testing.models import Step, StepRun, Trigger, Workflow, WorkflowRun
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
+from angee.workflows.testing.models import Step, StepRun, Trigger, Workflow, WorkflowRun
 from tests.workflows import admit_workflow_actor, start_run, workflow_actor
 
 pytestmark = [

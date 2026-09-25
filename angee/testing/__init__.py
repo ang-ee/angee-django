@@ -1,8 +1,7 @@
-"""Opt-in Django test app for reusable concrete addon models.
+"""Framework-generic test support; requires pytest and pytest-django.
 
-Install ``angee.testing`` after the source addons in test ``INSTALLED_APPS``.
-Import models from ``angee.testing.models`` and register the pytest plugin
-``angee.testing.fixtures`` to use its ``composed_tables`` fixture. Django's test
-database setup creates these tables; the fixture synchronizes their permissions.
-Serving framework code must not import this test support package.
+Register ``angee.testing.fixtures`` in the test suite's root ``pytest_plugins``
+to use ``composed_tables`` for native test-database isolation and REBAC permission
+synchronization. This package is not a Django app and does not define models.
+Serving code must not import test support.
 """

@@ -25,7 +25,7 @@ from angee.integrate.states import (
     StreamKind,
     StreamPhase,
 )
-from angee.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
+from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from tests.conftest import make_integration
 from tests.integrate_models import Integration
 from tests.messaging_models import Channel

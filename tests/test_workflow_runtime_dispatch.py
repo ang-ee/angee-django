@@ -12,12 +12,12 @@ from django.utils import timezone
 from pydantic import BaseModel
 from rebac import system_context
 
-from angee.testing.models import Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import AttemptResultKind, DecisionGateOutput
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepImpl, StepResult
+from angee.workflows.testing.models import Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 
 class _DoneImpl(StepImpl):

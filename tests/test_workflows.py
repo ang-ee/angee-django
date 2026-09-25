@@ -16,7 +16,6 @@ from pydantic import Field as PydanticField
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.testing.models import Edge, Step, Trigger, Workflow, WorkflowRun
 from angee.workflows.attempts import JsonPresence
 from angee.workflows.autoconfig import SETTINGS as WORKFLOWS_SETTINGS
 from angee.workflows.models import (
@@ -25,9 +24,11 @@ from angee.workflows.models import (
     WorkflowStatus,
 )
 from angee.workflows.steps import StepImpl, StepOutcome
+from angee.workflows.testing.drivers import step_run_for
+from angee.workflows.testing.models import Edge, Step, Trigger, Workflow, WorkflowRun
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.conftest import create_platform_admin as _platform_admin
-from tests.workflows import admit_workflow_actor, start_run, step_run_for, workflow_with_steps
+from tests.workflows import admit_workflow_actor, start_run, workflow_with_steps
 
 User = get_user_model()
 

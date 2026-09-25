@@ -52,8 +52,9 @@ depend on addons or a composed project's generated schema.
 - Dialect data hooks live in `@angee/refine` as metadata-free hooks. Callers
   resolve `resourceOperationTarget` at the metadata edge and pass the root as
   `{ root }`.
-- Runtime i18n has one app-owned i18next instance. Addon bundles are
-  namespace-relative, and the rendered binding namespace is `ui`.
+- The app owns the composed, active i18next instance. `@angee/ui` keeps an empty
+  instance without resources only to resolve provider-less defaults. Addon
+  bundles are namespace-relative, and the rendered binding namespace is `ui`.
   The shared `createAngeeI18nInstance` initializer in `@angee/ui/runtime`
   configures that instance and the provider-less binding's English defaults;
   i18next owns plural selection and interpolation in both cases.

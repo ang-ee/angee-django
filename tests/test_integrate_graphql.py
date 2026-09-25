@@ -32,8 +32,8 @@ from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
 from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
+from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
-from angee.testing.models import RecordLink, SyncDiscrepancy, SyncStream
 from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
     test_messaging,  # noqa: F401 -- register the concrete relation graph

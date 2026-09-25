@@ -1,16 +1,12 @@
-"""Concrete workflow and record-sync models shared by addon test suites.
+"""Concrete workflow models for source-addon tests.
 
-The source addon labels preserve their string model references. The consuming
-suite supplies its concrete ``integrate.Integration`` and any other related
-models; Django's test database setup creates the registered model tables.
+Model labels and tables preserve source-addon references. Share declarations
+must be explicit because ``AngeeModel.get_rebac_grantable`` reads the concrete
+class declaration rather than inherited attributes.
 """
 
 from __future__ import annotations
 
-from angee.integrate.models import RecordLink as AbstractRecordLink
-from angee.integrate.models import RecordRevision as AbstractRecordRevision
-from angee.integrate.models import SyncDiscrepancy as AbstractSyncDiscrepancy
-from angee.integrate.models import SyncStream as AbstractSyncStream
 from angee.workflows import models as workflow_models
 from angee.workflows.models import Edge as AbstractEdge
 from angee.workflows.models import Step as AbstractStep
@@ -131,7 +127,7 @@ class WorkflowRecoveryEvidence(workflow_models.WorkflowRecoveryEvidence):
 class Decision(workflow_models.Decision):
     """Concrete decision model for source-addon runtime tests."""
 
-    rebac_grantable = {"reader": "share"}
+    rebac_grantable = workflow_models.Decision.rebac_grantable
 
     class Meta(workflow_models.Decision.Meta):
         abstract = False
@@ -147,43 +143,3 @@ class WorkflowDispatch(workflow_models.WorkflowDispatch):
         abstract = False
         app_label = "workflows"
         db_table = "test_workflows_dispatch"
-
-
-class SyncStream(AbstractSyncStream):
-    """Concrete stream shared by sync and adapter tests."""
-
-    class Meta(AbstractSyncStream.Meta):
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_integrate_sync_stream"
-        rebac_resource_type = "integrate/sync_stream"
-
-
-class RecordLink(AbstractRecordLink):
-    """Concrete replica identity shared by sync tests."""
-
-    class Meta(AbstractRecordLink.Meta):
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_integrate_record_link"
-        rebac_resource_type = "integrate/record_link"
-
-
-class RecordRevision(AbstractRecordRevision):
-    """Concrete immutable revision shared by sync tests."""
-
-    class Meta(AbstractRecordRevision.Meta):
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_integrate_record_revision"
-        rebac_resource_type = "integrate/record_revision"
-
-
-class SyncDiscrepancy(AbstractSyncDiscrepancy):
-    """Concrete quarantine shared by sync tests."""
-
-    class Meta(AbstractSyncDiscrepancy.Meta):
-        abstract = False
-        app_label = "integrate"
-        db_table = "test_integrate_sync_discrepancy"
-        rebac_resource_type = "integrate/sync_discrepancy"

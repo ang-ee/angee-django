@@ -21,7 +21,6 @@ from angee.base.refs import canonical_record_target
 from angee.base.serialization import canonical_json_sha256
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
-from angee.testing.models import Decision, StepAttempt, StepRun, WorkflowDispatch
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import (
@@ -32,6 +31,8 @@ from angee.workflows.attempts import (
     RecoveryMode,
 )
 from angee.workflows.dispatch import WorkflowDispatchKind
+from angee.workflows.testing.drivers import advance_once, execute_started, run_to_terminal, step_run_for
+from angee.workflows.testing.models import Decision, StepAttempt, StepRun, WorkflowDispatch
 from angee.workflows_parties.autoconfig import SETTINGS as WORKFLOWS_PARTIES_SETTINGS
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, IdentityApplyStepImpl, IdentityReviewStepImpl
 from tests.test_messaging import (
@@ -41,14 +42,7 @@ from tests.test_messaging import (
     Party,
     PartyHandle,
 )
-from tests.workflows import (
-    admit_workflow_actor,
-    advance_once,
-    execute_started,
-    run_to_terminal,
-    step_run_for,
-    workflow_with_steps,
-)
+from tests.workflows import admit_workflow_actor, workflow_with_steps
 
 POSTGRES_IDENTITY = pytest.mark.skipif(
     connection.vendor != "postgresql",

@@ -9,7 +9,6 @@ from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
-from angee.testing.models import Edge, Step, Workflow
 from angee.workflows.definitions import (
     DefinitionEdit,
     DefinitionEditError,
@@ -22,6 +21,7 @@ from angee.workflows.definitions import (
     NodePatch,
     StaleDefinitionError,
 )
+from angee.workflows.testing.models import Edge, Step, Workflow
 from tests.conftest import create_platform_admin
 
 User = get_user_model()

@@ -8,12 +8,16 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from django.db import models
+from django.db import connection, models
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
+from rebac import system_context
 
 from angee.base.fields import SqidField
-from angee.base.identity import SqidPublicIdentity
+from angee.base.identity import SqidPublicIdentity, instance_from_public_id, instances_from_public_ids
+from angee.base.models import AngeeModel
 from angee.graphql.node import AngeeNode
+from tests.tables import model_tables
 
 _model_counter = count()
 
@@ -100,6 +104,89 @@ def test_angee_node_id_uses_generic_public_id_boundary_for_plain_model() -> None
         assert AngeeNode.id(instance) == "plain-13"
 
     public_id_of.assert_called_once_with(instance)
+
+
+@pytest.mark.parametrize("identity_kind", ["plain", "adapter", "sqid", "sqid_pk", "unique", "sqid_unique"])
+def test_batch_identity_preserves_field_codec_input_keys_and_queryset_scope(
+    transactional_db: None, identity_kind: str,
+) -> None:
+    """Row and batch reads share decoding, ignore malformed ids, and retain scope."""
+
+    fields: dict[str, Any] = {"code": models.IntegerField(unique=True)}
+    is_sqid = identity_kind in {"sqid", "sqid_pk", "sqid_unique"}
+    if is_sqid:
+        fields["sqid"] = SqidField(
+            real_field_name="code" if identity_kind == "sqid_unique" else "pk" if identity_kind == "sqid_pk" else "id",
+            prefix="custom",
+            alphabet="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+            min_length=12,
+        )
+    lookup_field = "sqid" if is_sqid else "code" if identity_kind == "unique" else "pk"
+    fields["public_id_lookup"] = classmethod(lambda cls, value: {lookup_field: value})
+    model = type(
+        f"IdentityBatchThing{next(_model_counter)}",
+        (AngeeModel if is_sqid or identity_kind == "unique" else models.Model,),
+        {
+            "__module__": __name__,
+            "Meta": type("Meta", (), {"app_label": "tests", "managed": False}),
+            **fields,
+        },
+    )
+    adapter = SqidPublicIdentity(prefix="foreign", min_length=10) if identity_kind == "adapter" else None
+    with model_tables((model,)), system_context(reason="verify public identity batching"):
+        visible = model.objects.create(code=101)
+        hidden = model.objects.create(code=202)
+
+        def public_id(instance: models.Model) -> str:
+            if adapter is not None:
+                return adapter.public_id_from_pk(instance.pk)
+            if is_sqid:
+                return instance.sqid
+            return f"{instance.code if identity_kind == 'unique' else instance.pk:04}"
+
+        visible_id, hidden_id = public_id(visible), public_id(hidden)
+        values = (visible_id, "", "garbage", "wrong_prefix", hidden_id, visible_id)
+        scoped = model.objects.filter(pk=visible.pk)
+        with CaptureQueriesContext(connection) as queries:
+            resolved = instances_from_public_ids(model, values, queryset=scoped, public_identity=adapter)
+        assert resolved == {visible_id: visible}
+        assert len(queries) == 1
+        assert instances_from_public_ids(model, values, public_identity=adapter) == {
+            visible_id: visible, hidden_id: hidden,
+        }
+        for value in values:
+            assert instance_from_public_id(model, value, queryset=scoped, public_identity=adapter) == resolved.get(value)
+
+
+@pytest.mark.parametrize("lookup_kind", ["compound", "transform", "nonunique"])
+def test_batch_identity_preserves_native_custom_lookup_contract(
+    transactional_db: None, lookup_kind: str,
+) -> None:
+    """Lookup contracts outside a unique field retain Django's first-match rule."""
+
+    def lookup(cls: type[models.Model], value: str) -> dict[str, Any]:
+        if lookup_kind == "compound":
+            return {"code": value, "active": True}
+        if lookup_kind == "transform":
+            return {"code__iexact": value}
+        return {"code": value}
+
+    model = type(
+        f"IdentityCustomLookupThing{next(_model_counter)}",
+        (AngeeModel,),
+        {
+            "__module__": __name__,
+            "code": models.CharField(max_length=20),
+            "active": models.BooleanField(default=True),
+            "public_id_lookup": classmethod(lookup),
+            "Meta": type("Meta", (), {"app_label": "tests", "managed": False}),
+        },
+    )
+    with model_tables((model,)), system_context(reason="verify native public lookup contracts"):
+        first = model.objects.create(code="alpha")
+        model.objects.create(code="alpha")
+        assert instances_from_public_ids(model, ["alpha", "missing"]) == {"alpha": first}
+        assert instance_from_public_id(model, "alpha") == first
 
 
 def _bound_sqid_model(*, prefix: str) -> type[models.Model]:

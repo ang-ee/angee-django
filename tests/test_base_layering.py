@@ -114,6 +114,46 @@ def test_base_is_the_model_layer_below_all_siblings() -> None:
     assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
 
 
+def test_core_does_not_import_folder_addons() -> None:
+    """The core wheel remains importable without folder-addon sources."""
+
+    violations = {
+        str(path.relative_to(ROOT)): forbidden
+        for path in sorted(ANGEE.rglob("*.py"))
+        if (
+            forbidden := sorted(
+                name
+                for name in _module_imports(path)
+                if any(name == addon or name.startswith(f"{addon}.") for addon in _ADDON_PACKAGES)
+            )
+        )
+    }
+    assert not violations
+
+
+def test_production_sources_do_not_import_test_support() -> None:
+    """Addon test compositions and generic fixtures stay test-only."""
+
+    testing_packages = ("tests", "angee.testing", *(f"{addon}.testing" for addon in _ADDON_PACKAGES))
+    violations = {}
+    for root in (ANGEE, ROOT / "addons"):
+        for path in sorted(root.rglob("*.py")):
+            if (
+                {"testing", "tests"}.intersection(path.relative_to(ROOT).parts)
+                or path.name in {"conftest.py", "tests.py"}
+                or path.name.startswith(("test_", "tests_"))
+            ):
+                continue
+            forbidden = sorted(
+                name
+                for name in _module_imports(path)
+                if any(name == package or name.startswith(f"{package}.") for package in testing_packages)
+            )
+            if forbidden:
+                violations[str(path.relative_to(ROOT))] = forbidden
+    assert not violations
+
+
 def test_no_shared_addon_config_base_module() -> None:
     """Addons use plain Django AppConfig attributes, not an Angee subclass."""
 

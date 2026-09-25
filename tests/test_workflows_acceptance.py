@@ -8,11 +8,12 @@ import pytest
 from django.contrib.auth import get_user_model
 from rebac import system_context, to_subject_ref
 
-from angee.testing.models import Decision, Edge, Step, StepRun, Workflow
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import DecisionSpec, StepResult
-from tests.workflows import FixtureStep, advance_once, execute_started, start_run, step_run_for
+from angee.workflows.testing.drivers import advance_once, execute_started, step_run_for
+from angee.workflows.testing.models import Decision, Edge, Step, StepRun, Workflow
+from tests.workflows import FixtureStep, start_run
 
 User = get_user_model()
 

@@ -24,7 +24,6 @@ import {
   useT,
   useWidget,
   type AppRuntime,
-  type RuntimeI18n,
 } from "./runtime";
 import { createRouteHref } from "./route-href";
 import { createAngeeI18nInstance } from "./i18n";
@@ -286,7 +285,7 @@ describe("useDrawers", () => {
 describe("useT", () => {
   test("resolves a key in its namespace and interpolates vars", () => {
     const wrapper = wrapperFor({
-      i18n: createAngeeI18nInstance({ notes: { greet: "Hi {name}" } }) as RuntimeI18n,
+      i18n: createAngeeI18nInstance({ notes: { greet: "Hi {name}" } }),
     });
     const { result } = renderHook(() => useT("notes"), { wrapper });
     expect(result.current("greet", { name: "Ada" })).toBe("Hi Ada");
@@ -320,7 +319,7 @@ describe("useNamespaceT", () => {
     };
     const i18n = createAngeeI18nInstance({ fixture: { greeting: "Welcome {name}" } });
     const { result } = renderHook(() => useNamespaceT("fixture", fallback), {
-      wrapper: wrapperFor({ i18n: i18n as RuntimeI18n }),
+      wrapper: wrapperFor({ i18n }),
     });
 
     expect(result.current("item", { count: 0, name: "Ada" })).toBe("No items for Ada");
@@ -334,7 +333,7 @@ describe("useNamespaceT", () => {
     const fallback = { item_one: "{count} item", item_few: "{count} few", item_other: "{count} items" };
     const i18n = createAngeeI18nInstance({}, "cs");
     const { result } = renderHook(() => useNamespaceT("fixture", fallback), {
-      wrapper: wrapperFor({ i18n: i18n as RuntimeI18n }),
+      wrapper: wrapperFor({ i18n }),
     });
 
     expect(result.current("item", { count: 3 })).toBe("3 few");
@@ -344,7 +343,7 @@ describe("useNamespaceT", () => {
     const fallback = { item_one: "{count} item", item_other: "{count} items" };
     const i18n = createAngeeI18nInstance({}, "fr");
     const { result } = renderHook(() => useNamespaceT("fixture", fallback), {
-      wrapper: wrapperFor({ i18n: i18n as RuntimeI18n }),
+      wrapper: wrapperFor({ i18n }),
     });
 
     expect(result.current("item", { count: 0 })).toBe("0 item");
@@ -355,7 +354,7 @@ describe("useNamespaceT", () => {
     const fallback = { item_one: "{count} item", item_other: "{count} items" };
     const i18n = createAngeeI18nInstance({}, "cs");
     const { result } = renderHook(() => useNamespaceT("fixture", fallback), {
-      wrapper: wrapperFor({ i18n: i18n as RuntimeI18n }),
+      wrapper: wrapperFor({ i18n }),
     });
 
     expect(result.current("item", { count: 3 })).toBe("3 items");

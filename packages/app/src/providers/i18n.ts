@@ -18,7 +18,7 @@ export function createAngeeI18nRuntime(
 ): AngeeI18nRuntime {
   const instance = createAngeeI18nInstance(resources, options.locale ?? "en");
   return {
-    instance: instance as RuntimeI18n,
+    instance,
     provider: {
       translate(key, vars, defaultMessage) {
         const namespace = namespaceOption(vars);

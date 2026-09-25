@@ -9,10 +9,10 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rebac import system_context
 
-from angee.testing.models import Step, StepAttempt, StepRun, Trigger, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows.attempts import AttemptInput, AttemptResult, AttemptResultKind, WorkflowScope
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.states import RunOrigin, StepRunStatus
+from angee.workflows.testing.models import Step, StepAttempt, StepRun, Trigger, Workflow, WorkflowDispatch, WorkflowRun
 from tests.test_workflow_test_snapshots import _draft, _ReconcilingTestStep
 from tests.test_workflows_triggers import _schedule_trigger
 from tests.workflows import admit_workflow_actor

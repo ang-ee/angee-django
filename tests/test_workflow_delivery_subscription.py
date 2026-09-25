@@ -15,16 +15,6 @@ from django.utils import timezone
 from rebac import system_context, to_subject_ref
 
 from angee.base.identity import public_id_for
-from angee.testing.models import (
-    Edge,
-    Step,
-    StepAttempt,
-    StepExternalSubscription,
-    StepRun,
-    Workflow,
-    WorkflowDispatch,
-    WorkflowRun,
-)
 from angee.workflows import engine
 from angee.workflows.attempts import (
     ArtifactSpec,
@@ -44,7 +34,18 @@ from angee.workflows.steps import (
     StepOutcome,
     StepResult,
 )
-from tests.workflows import advance_once, execute_started, run_to_terminal, start_run
+from angee.workflows.testing.drivers import advance_once, execute_started, run_to_terminal
+from angee.workflows.testing.models import (
+    Edge,
+    Step,
+    StepAttempt,
+    StepExternalSubscription,
+    StepRun,
+    Workflow,
+    WorkflowDispatch,
+    WorkflowRun,
+)
+from tests.workflows import start_run
 
 User = get_user_model()
 

@@ -47,6 +47,7 @@ from angee.integrate.streams import (
     reconcile_stream,
     sync_bridge,
 )
+from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from angee.parties.backends import (
     CONTACT_FIELDS,
     ParsedAddress,
@@ -57,7 +58,6 @@ from angee.parties.backends import (
 )
 from angee.parties_integrate_carddav.backend import CardDavDirectoryBackend, CardDavError, _parse_vcard, _xml
 from angee.storage.models import UploadState
-from angee.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from tests.conftest import Backend, Drive, File, MimeType, make_integration
 from tests.messaging_models import Directory, Folder
 from tests.test_messaging import Party, Person, RelationshipKind

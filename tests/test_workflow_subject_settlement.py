@@ -13,14 +13,15 @@ from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
 
-from angee.testing.models import StepAttempt, Workflow, WorkflowDispatch
 from angee.workflows import engine, settlement
 from angee.workflows.attempts import AttemptResultKind, LeaseRevocationReason
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.states import RunStatus
 from angee.workflows.steps import StepResult, TransientStepError
 from angee.workflows.tasks import consume_workflow_dispatch
-from tests.workflows import FixtureStep, advance_once, execute_started, start_run, step_run_for, workflow_with_steps
+from angee.workflows.testing.drivers import advance_once, execute_started, step_run_for
+from angee.workflows.testing.models import StepAttempt, Workflow, WorkflowDispatch
+from tests.workflows import FixtureStep, start_run, workflow_with_steps
 
 
 def settle_fixture(run: Any) -> None:
@@ -38,7 +39,7 @@ def settlement_calls(settings: Any, monkeypatch: pytest.MonkeyPatch) -> list[int
     calls: list[int] = []
     monkeypatch.setattr(f"{__name__}.settle_fixture", lambda run: calls.append(run.pk))
     settings.ANGEE_WORKFLOW_SUBJECT_SETTLERS = {
-        "angee.testing.models.Workflow": f"{__name__}.settle_fixture",
+        "angee.workflows.testing.models.Workflow": f"{__name__}.settle_fixture",
     }
     return calls
 
@@ -163,7 +164,7 @@ def test_failed_subject_settlement_preserves_pending_delivery(
         intent = WorkflowDispatch.objects.get(kind=WorkflowDispatchKind.RUN_SETTLE, run=run)
 
     with override_settings(
-        ANGEE_WORKFLOW_SUBJECT_SETTLERS={"angee.testing.models.Workflow": f"{__name__}.settle_unavailable"},
+        ANGEE_WORKFLOW_SUBJECT_SETTLERS={"angee.workflows.testing.models.Workflow": f"{__name__}.settle_unavailable"},
     ):
         with pytest.raises(RuntimeError, match="writer unavailable"):
             engine.settle_run_dispatch(intent.pk, expected_run_id=run.pk)
@@ -209,7 +210,7 @@ def test_settlement_registration_is_explicit_and_collisions_fail(
         pytest.raises(ImproperlyConfigured, match="Multiple subject settlement handlers"),
         override_settings(
             ANGEE_WORKFLOW_SUBJECT_SETTLERS={
-                "angee.testing.models.Workflow": f"{__name__}.settle_fixture",
+                "angee.workflows.testing.models.Workflow": f"{__name__}.settle_fixture",
                 "angee.workflows.models.Workflow": f"{__name__}.settle_fixture",
             }
         ),

@@ -26,7 +26,6 @@ from angee.resources.entries import GrantGroup, GrantRow, LoadResult, ResourceEn
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import AngeeResource, build_resource
 from angee.resources.models import Resource
-from angee.testing.models import Edge, Step, Workflow
 from angee.workflows.definitions import (
     DefinitionEdit,
     DefinitionResult,
@@ -35,6 +34,7 @@ from angee.workflows.definitions import (
     NodePatch,
 )
 from angee.workflows.resources import WorkflowDefinitionResource
+from angee.workflows.testing.models import Edge, Step, Workflow
 from tests.test_workflows_resources import WorkflowResourceLedger
 from tests.test_workflows_resources import workflow_resource_tables as _workflow_resource_tables  # noqa: F401
 from tests.workflows import FixtureStep
@@ -785,7 +785,9 @@ def test_existing_resource_resolution_retains_omissions_and_uses_native_loader_w
         assert resolved[(resource, "alpha")].retained_instance == Step.system_queryset().get(key="alpha")
     assert sum(f'FROM "{Step._meta.db_table}"' in query["sql"] for query in queries) == 2
     assert rows == ["entry"]
-    assert resolved[(resource, "alpha")].ledger == WorkflowResourceLedger.objects.get(xref="alpha")
+    assert WorkflowResourceLedger.objects.get(xref="alpha").target_id == (
+        f"{resolved[(resource, 'alpha')].retained_instance.pk:04}"
+    )
     assert WorkflowResourceLedger.objects.count() == 9
 
 
@@ -815,7 +817,8 @@ def test_resource_source_move_keeps_each_retained_target_before_adoption(
         )
         assert resolved[(old_resource, "moved")].instance is None
         assert resolved[(new_resource, "moved")].instance == intended
-        assert all(row.ledger == ledger and row.retained_instance == retained for row in resolved.values())
+        assert all(row.retained_instance == retained for row in resolved.values())
+        assert WorkflowResourceLedger.objects.get(xref="moved") == ledger
         assert references[(addon.name, "moved")] == intended
         assert WorkflowDefinitionResource._lock_targets(groups) == {retained.pk, intended.pk}
 

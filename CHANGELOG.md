@@ -11,10 +11,12 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
-- Add opt-in `angee.testing` workflow and record-sync models for addon source
-  test suites. Its `composed_tables` fixture uses pytest-django's native table
-  setup and cleanup with REBAC synchronization, replacing duplicated test models
-  and table fixtures in the framework suite.
+- Add opt-in `angee.workflows.testing` and `angee.integrate.testing` apps for
+  addon source test models. Core retains only the generic
+  `angee.testing.fixtures.composed_tables` fixture, using pytest-django's native
+  table setup and cleanup with REBAC synchronization. Workflow drivers live in
+  `angee.workflows.testing.drivers`; duplicated test models, table fixtures and
+  suite-local driver forwarding imports are removed.
 - Runtime JSON Schema formats are now asserted everywhere, including workflow
   inputs and outputs, emitted values, Decision payloads, and extraction evidence.
 - Declare core `jsonschema[format-nongpl]` and `referencing` dependencies. The
@@ -28,9 +30,12 @@ live in code docstrings.
   transport factory for injected test transports.
 - Translation fallbacks use native i18next plurals and interpolation, including
   locale-specific zero-count selection unless the fallback declares a zero form.
+  Test fixtures use the shared initializer, and runtime translation types match
+  i18next's language contract without instance casts.
 - Workflow resource lock planning resolves existing targets and retained ledgers
   through `AngeeResource.resolve_existing` and the native import-export loader.
-  Decoded targets use Django's batched `in_bulk`; row adoption and hash-skip state
+  Row and batch target resolution share `angee.base.identity` and its field-owned
+  public-ID decoding with Django's `in_bulk`; row adoption and hash-skip state
   stay on the resource and are reset before import.
 - `angee.base.jsonschema.LocalSchemaReferences` owns root-local JSON Schema
   pointers and anchors through `referencing` for workflow structural proofs and

@@ -12,9 +12,9 @@ from rebac import system_context
 
 from angee.integrate.models import Bridge
 from angee.integrate.sync import SyncDispatch
-from angee.testing.models import WorkflowRun
 from angee.workflows import managers as workflow_managers
 from angee.workflows.attempts import JsonPresence
+from angee.workflows.testing.models import WorkflowRun
 from angee.workflows_integrate.admission import admit_bridge_cycle
 from tests.conftest import make_integration
 from tests.messaging_models import Channel

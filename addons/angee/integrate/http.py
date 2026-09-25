@@ -189,7 +189,11 @@ class HttpClient:
     """
 
     transport_factory: ClassVar[Callable[..., httpx.BaseTransport]] = PinnedTransport
-    """Build each transport with ``allow_private``; tests may inject a static factory."""
+    """Build each transport with ``allow_private``.
+
+    Overrides must be a transport class or a ``staticmethod`` so instance access
+    does not bind the factory to this client.
+    """
 
     def get(
         self,

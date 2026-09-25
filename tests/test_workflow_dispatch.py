@@ -17,7 +17,6 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.refs import canonical_record_target
-from angee.testing.models import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import AttemptResult, AttemptResultKind, LeaseRevocationReason
 from angee.workflows.dispatch import (
@@ -28,6 +27,7 @@ from angee.workflows.dispatch import (
     dispatch_constraints,
     publish_due,
 )
+from angee.workflows.testing.models import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 
 @pytest.fixture()

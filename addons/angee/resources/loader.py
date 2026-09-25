@@ -18,7 +18,7 @@ from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
 from import_export.utils import get_related_model
 
-from angee.base.identity import public_id_lookup, public_id_of
+from angee.base.identity import instances_from_public_ids, public_id_of
 from angee.base.impl import ImplDefaultsMixin
 from angee.base.models import AngeeModel
 from angee.base.serialization import json_safe
@@ -45,7 +45,6 @@ class ResourceResolution:
     """Existing row target and retained ledger target, which may differ after adoption."""
 
     instance: models.Model | None
-    ledger: Resource | None
     retained_instance: models.Model | None
 
 
@@ -182,7 +181,7 @@ class AngeeResource(resources.ModelResource):
 
         if xref not in self._instances:
             ledger = self._ledger_for_xref(xref)
-            self._instances[xref] = self._instance_from_ledger(ledger)
+            self._instances[xref] = ledger.target_instance() if ledger is not None else None
         return self._instances[xref]
 
     def instance_for_row(self, row: Mapping[str, Any]) -> models.Model | None:
@@ -190,7 +189,6 @@ class AngeeResource(resources.ModelResource):
 
         xref = self._row_xref(row.get("_xref"), row_number=0)
         ledger = self._ledger_for_xref(xref)
-        self._check_ledger_target(xref, ledger)
         identity = self._adopt_identity(row)
         instance = self.instance_for_xref(xref)
         if instance is not None and self._ledger_resolution_is_stale(identity, instance):
@@ -250,30 +248,21 @@ class AngeeResource(resources.ModelResource):
                 ((addon, ledger.xref), ledger)
                 for ledger in batches[0][1].ledger_model._default_manager.filter(source_addon=addon, xref__in=xrefs)
             )
-        lookups: dict[tuple[str, str], tuple[type[models.Model], str, Any]] = {}
-        values_by_field: dict[tuple[type[models.Model], str], set[Any]] = defaultdict(set)
+        lookups: dict[tuple[str, str], tuple[type[models.Model], str]] = {}
+        values_by_model: dict[type[models.Model], set[str]] = defaultdict(set)
         for key, ledger in ledgers.items():
             if ledger is None or not ledger.target_id:
                 continue
             try:
                 model = resolve_model(ledger.target_model)
-                (field_name, value), = public_id_lookup(model, ledger.target_id).items()
-                field = cast(
-                    "models.Field[Any, Any]",
-                    model._meta.pk if field_name == "pk" else model._meta.get_field(field_name),
-                )
-                # Virtual identities expose their concrete column through Django.
-                target_field = field.get_col(model._meta.db_table).target
-                field_name = target_field.name
-                value = target_field.to_python(field.get_prep_value(value))
-                lookups[key] = (model, field_name, value)
-                values_by_field[(model, field_name)].add(value)
-            except (ImproperlyConfigured, TypeError, ValueError, ValidationError):
+            except ImproperlyConfigured:
                 continue
+            lookups[key] = (model, ledger.target_id)
+            values_by_model[model].add(ledger.target_id)
         instances = {
-            (model, field_name, value): instance
-            for (model, field_name), values in values_by_field.items()
-            for value, instance in model._default_manager.in_bulk(values, field_name=field_name).items()
+            (model, value): instance
+            for model, values in values_by_model.items()
+            for value, instance in instances_from_public_ids(model, values).items()
         }
         targets = {key: instances.get(lookup) for key, lookup in lookups.items()}
         resolved: dict[tuple[AngeeResource, str], ResourceResolution] = {}
@@ -281,10 +270,13 @@ class AngeeResource(resources.ModelResource):
             addon = resource.entry.addon.name
             for xref, ledger in resource._existing_ledgers.items():
                 target = targets.get((addon, xref))
-                if ledger is not None and ledger.target_model != resource._meta.model._meta.label:
-                    target = None
+                try:
+                    resource._check_ledger_target(xref, ledger)
+                except ResourceLoadError:
+                    # Import reports collisions with the source-row context.
+                    continue
                 resource._instances[xref] = target
-                resolved[(resource, xref)] = ResourceResolution(None, ledger, target)
+                resolved[(resource, xref)] = ResourceResolution(None, target)
         for dataset, resource in batches:
             addon = resource.entry.addon.name
             loader = resource._meta.instance_loader_class(resource, dataset)
@@ -296,7 +288,7 @@ class AngeeResource(resources.ModelResource):
                 except (ResourceLoadError, ValueError, ValidationError, ImproperlyConfigured):
                     continue
                 retained = resolved[(resource, xref)]
-                resolved[(resource, xref)] = ResourceResolution(instance, retained.ledger, retained.retained_instance)
+                resolved[(resource, xref)] = ResourceResolution(instance, retained.retained_instance)
                 targets[(addon, xref)] = instance or retained.retained_instance
         return resolved, {key: targets.get(key) for key in references}
 
@@ -339,17 +331,17 @@ class AngeeResource(resources.ModelResource):
         """Return this entry's ledger row for ``xref`` if it exists."""
 
         if xref in self._existing_ledgers:
-            return self._existing_ledgers[xref]
-        ledger = (
-            self.ledger_model._default_manager.filter(
-                source_addon=self.entry.addon.name,
-                xref=xref,
+            ledger = self._existing_ledgers[xref]
+        else:
+            ledger = (
+                self.ledger_model._default_manager.filter(
+                    source_addon=self.entry.addon.name,
+                    xref=xref,
+                )
+                .order_by("pk")
+                .first()
             )
-            .order_by("pk")
-            .first()
-        )
-        self._existing_ledgers[xref] = cast("Resource | None", ledger)
-        ledger = self._existing_ledgers[xref]
+            self._existing_ledgers[xref] = cast("Resource | None", ledger)
         self._check_ledger_target(xref, ledger)
         return ledger
 
@@ -390,25 +382,6 @@ class AngeeResource(resources.ModelResource):
             },
         )
         self._existing_ledgers[xref] = ledger
-
-    def _instance_from_ledger(
-        self,
-        ledger: Resource | None,
-    ) -> models.Model | None:
-        """Resolve a ledger row to an instance of this resource's model."""
-
-        if ledger is None or not ledger.target_id:
-            return None
-        instance = ledger.target_instance()
-        if instance is None:
-            return None
-        expected = self._meta.model._meta.concrete_model
-        if instance._meta.concrete_model is not expected:
-            raise ResourceLoadError(
-                f"{self.entry.display}: {ledger.xref} targets "
-                f"{instance._meta.label}, not {self._meta.model._meta.label}"
-            )
-        return instance
 
     def _ledger_resolution_is_stale(
         self,

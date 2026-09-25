@@ -39,9 +39,9 @@ from rebac import (
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
 from angee.messaging.backends import ParsedMessage, ParsedPart
-from angee.testing.models import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowRun
 from angee.workflows import engine as workflow_engine
 from angee.workflows.states import Verdict
+from angee.workflows.testing.models import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowRun
 from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,

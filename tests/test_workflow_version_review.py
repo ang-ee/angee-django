@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from rebac import system_context
 
-from angee.testing.models import Step, Workflow
 from angee.workflows.definitions import DefinitionEdit, NodePatch, StaleDefinitionError
+from angee.workflows.testing.models import Step, Workflow
 from tests.test_workflow_definition_commands import _draft
 
 

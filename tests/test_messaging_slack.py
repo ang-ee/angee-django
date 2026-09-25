@@ -26,12 +26,12 @@ from angee.integrate.credentials import CredentialKind
 from angee.integrate.http import HttpClient
 from angee.integrate.live import PairingState
 from angee.integrate.streams import StreamPage, advance_stream
+from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ChannelBackend, ParsedMessage, body_part
 from angee.messaging.session import LiveChannelSession
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
 from angee.messaging_integrate_slack.backend import SlackChannelBackend, SlackRateLimitError
 from angee.messaging_integrate_slack.identity import parsed_message
-from angee.testing.models import RecordLink, SyncStream
 from tests.conftest import Credential, Vendor, make_integration
 from tests.stream_adapters import AdapterPages
 from tests.test_messaging import Message, Part, Thread

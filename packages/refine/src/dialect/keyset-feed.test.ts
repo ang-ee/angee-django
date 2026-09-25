@@ -48,6 +48,36 @@ test("feeds without revalidation retain empty continuations and use fresh native
   } finally { stop(); client.clear(); }
 });
 
+test("revalidation reuses the retained page when cursor object keys are reordered", async () => {
+  const client = new QueryClient();
+  const queryKey = ["cursor-order"];
+  const row = message(8);
+  const cachedCursor = { after: "opaque:7", scope: "fixture" };
+  const requestedCursor = { scope: "fixture", after: "opaque:7" };
+  const window = vi.fn(async () => ({
+    rows: [], count: 1, older_cursor: "opaque:8",
+    has_older: false, has_more_in_window: false, has_older_than_through: false,
+  }));
+  const revalidate = vi.fn(async () => ({ rows: [row], absent_ids: [] }));
+  const options = keysetFeedOptions(client, { queryKey, pageSize: 2, window, revalidate });
+  client.setQueryData(queryKey, {
+    pages: [{ rows: [row], through: "opaque:8", before: "opaque:9", hasOlder: false, count: 1 }],
+    pageParams: [cachedCursor],
+  });
+  try {
+    if (typeof options.queryFn !== "function") throw new Error("Expected a keyset query function.");
+    const context = {
+      client, queryKey, pageParam: requestedCursor, signal: new AbortController().signal,
+      direction: "forward" as const, meta: undefined,
+    };
+    const page = await options.queryFn(context);
+    expect(window).toHaveBeenCalledWith("opaque:9", "opaque:8", 2, context);
+    expect(revalidate).toHaveBeenCalledWith([row.id], context);
+    expect(page.rows).toEqual([row]);
+    expect(page.through).toBe("opaque:8");
+  } finally { client.clear(); }
+});
+
 test.each([false, true])("page metadata survives an empty window and refresh (revalidation=%s)", async (revalidate) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   let revision = 1;

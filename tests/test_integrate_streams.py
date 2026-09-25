@@ -51,8 +51,8 @@ from angee.integrate.streams import (
     reset_stream,
     sync_bridge,
 )
+from angee.integrate.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from angee.messaging.backends import ParsedMessage
-from angee.testing.models import RecordLink, RecordRevision, SyncDiscrepancy, SyncStream
 from tests.conftest import make_integration
 from tests.messaging_models import Channel
 

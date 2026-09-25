@@ -119,7 +119,7 @@ export interface AppRuntime {
 export interface RuntimeI18n {
   language?: string;
   getFixedT: (
-    lng: string | readonly string[] | null | undefined,
+    lng: string | readonly string[] | null,
     ns: string,
   ) => (key: string, options?: RuntimeTOptions) => unknown;
 }

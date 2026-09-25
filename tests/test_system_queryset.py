@@ -15,8 +15,8 @@ from rebac import RebacMixin
 
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.scoping import system_queryset
-from angee.testing.models import StepAttempt, StepRun
 from angee.workflows.managers import StepAttemptQuerySet
+from angee.workflows.testing.models import StepAttempt, StepRun
 from tests.conftest import Drive, File, Integration
 from tests.tables import model_tables
 

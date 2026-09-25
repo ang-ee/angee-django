@@ -15,12 +15,20 @@ from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
 
-from angee.testing.models import Step, StepArtifact, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import ArtifactSpec, InvocationAdmission, LeaseRevocationReason
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepEffect, StepExecutionMode, StepResult
+from angee.workflows.testing.models import (
+    Step,
+    StepArtifact,
+    StepAttempt,
+    StepRun,
+    Workflow,
+    WorkflowDispatch,
+    WorkflowRun,
+)
 from angee.workflows_extraction.steps import ProcessEvidenceStepImpl
 
 User = get_user_model()

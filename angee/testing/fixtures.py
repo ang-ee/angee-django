@@ -1,4 +1,4 @@
-"""Pytest fixtures for the opt-in ``angee.testing`` Django app."""
+"""Framework-generic fixtures requiring pytest and pytest-django."""
 
 import pytest
 from django.core.management import call_command

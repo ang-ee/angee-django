@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { AppRuntimeProvider, ToastProvider } from "@angee/ui";
+import { createAngeeI18nInstance } from "@angee/ui/runtime";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -47,12 +48,7 @@ const { Provider, clearClients, clients } = createUiTestProviders({
   dataProvider: { custom: mocks.custom },
   queryClientConfig: { defaultOptions: { queries: { retry: false }, mutations: { retry: false } } },
 });
-const i18n = {
-  getFixedT: (_language: unknown, namespace: string) => (key: string, options: Record<string, unknown> = {}) => {
-    const template = (namespace === "messaging" ? enMessagingImapMessages[key] : undefined) ?? options.defaultValue ?? key;
-    return String(template).replace(/\{(\w+)\}/g, (match, name: string) => String(options[name] ?? match));
-  },
-};
+const i18n = createAngeeI18nInstance({ messaging: enMessagingImapMessages });
 const message = (uid: number, subject = `Message ${uid}`) => ({
   uid, subject, sender: "sender@example.com", sent_at: "2026-09-23", size: 10, flags: [],
 });

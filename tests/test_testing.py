@@ -1,20 +1,18 @@
 """Contracts for the reusable Django test composition."""
 
-from pathlib import Path
-
 import pytest
 from django.apps import apps
 from django.db import connection
 from rebac import system_context
 
-from angee.testing import models as shared_models
-from angee.testing.models import Workflow
-from tests.test_base_layering import _module_imports
+from angee.integrate.testing import models as integrate_models
+from angee.workflows import models as workflow_sources
+from angee.workflows.testing import models as workflow_models
+from angee.workflows.testing.models import Decision, Workflow, WorkflowRun
 
-ROOT = Path(__file__).resolve().parents[1]
 
-
-def test_native_database_setup_creates_shared_model_tables(transactional_db: None) -> None:
+@pytest.mark.parametrize("shared_models", (integrate_models, workflow_models))
+def test_native_database_setup_creates_shared_model_tables(transactional_db: None, shared_models) -> None:
     """Shared tables exist without requesting the permission-sync fixture."""
 
     tables = {
@@ -37,25 +35,9 @@ def test_native_database_cleanup_isolates_shared_models(transactional_db: None, 
         assert Workflow.objects.get(pk=workflow.pk).name == f"Native isolation {case}"
 
 
-def test_production_sources_do_not_import_test_support() -> None:
-    """The opt-in testing composition never becomes a serving dependency."""
+@pytest.mark.parametrize("model", (Workflow, WorkflowRun, Decision))
+def test_shared_models_preserve_source_grant_contract(model) -> None:
+    """Reusable compositions preserve all source model share declarations."""
 
-    violations = {}
-    for root in (ROOT / "angee", ROOT / "addons"):
-        for path in sorted(root.rglob("*.py")):
-            if (
-                path.is_relative_to(ROOT / "angee" / "testing")
-                or "tests" in path.relative_to(ROOT).parts
-                or path.name in {"conftest.py", "tests.py"}
-                or path.name.startswith(("test_", "tests_"))
-            ):
-                continue
-            forbidden = sorted(
-                name
-                for name in _module_imports(path)
-                if name in {"tests", "angee.testing"} or name.startswith(("tests.", "angee.testing."))
-            )
-            if forbidden:
-                violations[str(path.relative_to(ROOT))] = forbidden
-
-    assert not violations
+    source = getattr(workflow_sources, model.__name__)
+    assert model.get_rebac_grantable() == source.get_rebac_grantable()

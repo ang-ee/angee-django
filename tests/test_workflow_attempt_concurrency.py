@@ -11,7 +11,6 @@ from django.db import close_old_connections, connection, connections, models
 from django.utils import timezone
 from rebac import system_context
 
-from angee.testing.models import StepAttempt, StepRun, WorkflowRun
 from angee.workflows.attempts import (
     AttemptInput,
     AttemptResult,
@@ -20,6 +19,7 @@ from angee.workflows.attempts import (
     LeaseRevocationReason,
 )
 from angee.workflows.models import RunStatus
+from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowRun
 from tests.workflows import workflow_with_steps
 
 pytestmark = [

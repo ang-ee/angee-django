@@ -11,7 +11,6 @@ from django.db.models.signals import post_save
 from django.utils import timezone
 from rebac import system_context
 
-from angee.testing.models import StepAttempt, StepRun
 from angee.workflows import engine
 from angee.workflows.attempts import (
     AttemptCause,
@@ -22,7 +21,9 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepResult
-from tests.workflows import FixtureStep, advance_once, execute_started, run_to_terminal, start_run, workflow_with_steps
+from angee.workflows.testing.drivers import advance_once, execute_started, run_to_terminal
+from angee.workflows.testing.models import StepAttempt, StepRun
+from tests.workflows import FixtureStep, start_run, workflow_with_steps
 
 
 def _map_workflow(*, item: Any, explicit: bool) -> Any:

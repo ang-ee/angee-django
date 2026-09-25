@@ -12,8 +12,8 @@ from rebac import system_context
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.streams import CursorInvalid, advance_stream
+from angee.integrate.testing.models import SyncStream
 from angee.messaging_integrate_imap.backend import ImapChannelBackend
-from angee.testing.models import SyncStream
 from tests.conftest import SchemaAddon, Vendor, create_user, execute_schema
 from tests.conftest import result_data as _data
 from tests.test_messaging_graphql import (

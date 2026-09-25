@@ -11,12 +11,13 @@ from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context
 
-from angee.testing.models import StepAttempt, StepRun
 from angee.workflows.attempts import AttemptResultKind
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepResult
+from angee.workflows.testing.drivers import advance_once, execute_started
+from angee.workflows.testing.models import StepAttempt, StepRun
 from tests.test_workflow_retained_map import _map_workflow
-from tests.workflows import FixtureStep, advance_once, execute_started, start_run
+from tests.workflows import FixtureStep, start_run
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),

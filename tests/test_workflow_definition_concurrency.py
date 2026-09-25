@@ -16,8 +16,8 @@ from django.db import close_old_connections, connection, connections
 from rebac import system_context
 
 from angee.resources.models import Resource
-from angee.testing.models import Step, Workflow
 from angee.workflows.definitions import DefinitionEdit, StaleDefinitionError
+from angee.workflows.testing.models import Step, Workflow
 from tests.conftest import write_addon_manifest
 
 pytestmark = [

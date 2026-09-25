@@ -6,10 +6,10 @@ import pytest
 from pydantic import ValidationError
 from rebac import system_context
 
-from angee.testing.models import Step, Workflow
 from angee.workflows.bindings import parse_binding
 from angee.workflows.configs import GateConfig
 from angee.workflows.decision_actions import ReviewAction
+from angee.workflows.testing.models import Step, Workflow
 from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _platform_admin
 

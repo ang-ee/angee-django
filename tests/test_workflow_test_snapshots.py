@@ -18,18 +18,6 @@ from django.utils import timezone
 from rebac import RelationshipTuple, system_context, to_subject_ref, write_relationships
 from rebac.resources import to_object_ref
 
-from angee.testing.models import (
-    Edge,
-    Step,
-    StepArtifact,
-    StepAttempt,
-    StepRun,
-    Workflow,
-    WorkflowDispatch,
-    WorkflowRecoveryEvidence,
-    WorkflowRun,
-    WorkflowTestFixture,
-)
 from angee.workflows import engine
 from angee.workflows.attempts import (
     ArtifactSpec,
@@ -49,7 +37,19 @@ from angee.workflows.definitions import StaleDefinitionError
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunOrigin, WorkflowStatus
 from angee.workflows.steps import StepImpl, StepResult
-from tests.workflows import advance_once, execute_started
+from angee.workflows.testing.drivers import advance_once, execute_started
+from angee.workflows.testing.models import (
+    Edge,
+    Step,
+    StepArtifact,
+    StepAttempt,
+    StepRun,
+    Workflow,
+    WorkflowDispatch,
+    WorkflowRecoveryEvidence,
+    WorkflowRun,
+    WorkflowTestFixture,
+)
 
 pytestmark = pytest.mark.django_db(transaction=True)
 

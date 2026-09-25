@@ -8,7 +8,7 @@ from django.core.management import call_command
 from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.testing.models import Edge, Step, Trigger, Workflow
+from angee.workflows.testing.models import Edge, Step, Trigger, Workflow
 
 User = get_user_model()
 

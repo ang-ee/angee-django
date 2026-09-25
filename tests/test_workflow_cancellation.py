@@ -10,10 +10,10 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from rebac import system_context, to_subject_ref
 
-from angee.testing.models import Step, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus
+from angee.workflows.testing.models import Step, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 
 @pytest.fixture

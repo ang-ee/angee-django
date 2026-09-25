@@ -8,7 +8,6 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context
 
-from angee.testing.models import Step, Workflow
 from angee.workflows.attempts import RecoveryMode
 from angee.workflows.configs import EmitConfig, GateConfig, JoinContinuationConfig, MapConfig, WaitConfig
 from angee.workflows.steps import (
@@ -23,6 +22,7 @@ from angee.workflows.steps import (
     _decision_specs_from_config,
     retry_policy_from_config,
 )
+from angee.workflows.testing.models import Step, Workflow
 
 
 def normalized_twice(step: type[StepImpl], config: dict[str, object]) -> dict[str, object]:

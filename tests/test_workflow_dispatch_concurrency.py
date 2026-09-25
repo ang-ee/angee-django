@@ -12,9 +12,9 @@ from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context
 
-from angee.testing.models import Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.dispatch import DispatchTarget, publish_due
+from angee.workflows.testing.models import Workflow, WorkflowDispatch, WorkflowRun
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),

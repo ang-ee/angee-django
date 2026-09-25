@@ -16,14 +16,15 @@ from graphql import GraphQLEnumType, GraphQLObjectType, get_named_type, parse, v
 from rebac import system_context
 from strawberry.schema.config import StrawberryConfig
 
-from angee.testing.models import StepAttempt, Workflow, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import AttemptResult, AttemptResultKind, LeaseRevocationReason
 from angee.workflows.models import RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import StepResult
+from angee.workflows.testing.drivers import advance_once
+from angee.workflows.testing.models import StepAttempt, Workflow, WorkflowDispatch, WorkflowRun
 from tests.conftest import execute_schema, result_data
 from tests.test_workflows import _console_schema, _published_workflow
-from tests.workflows import FixtureStep, advance_once
+from tests.workflows import FixtureStep
 
 User = get_user_model()
 # Schema resolves concrete workflow models registered by the fixture imports above.

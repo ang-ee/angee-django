@@ -19,7 +19,6 @@ from django.utils import timezone
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.testing.models import Decision, StepArtifact, StepAttempt, StepRun, WorkflowDispatch, WorkflowRun
 from angee.workflows import engine
 from angee.workflows.attempts import (
     ArtifactSpec,
@@ -41,6 +40,7 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import GateStep, StepImpl, StepResult
+from angee.workflows.testing.models import Decision, StepArtifact, StepAttempt, StepRun, WorkflowDispatch, WorkflowRun
 from tests.workflows import workflow_with_steps
 
 User = get_user_model()

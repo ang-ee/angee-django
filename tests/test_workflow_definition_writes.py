@@ -7,8 +7,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, system_context
 
-from angee.testing.models import Edge, Step, Workflow
 from angee.workflows.models import WorkflowStatus
+from angee.workflows.testing.models import Edge, Step, Workflow
 from tests.conftest import create_platform_admin
 
 User = get_user_model()
