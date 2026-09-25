@@ -101,7 +101,7 @@ export function keysetFeedOptions<TRow extends KeysetRow, TMetadata = undefined>
     placeholderData: undefined,
     async queryFn(context): Promise<Page> {
       const previous = reads.revalidate ? cached() : undefined;
-      const index = previous?.pageParams.findIndex(param => JSON.stringify(param ?? { start: true }) === JSON.stringify(context.pageParam ?? { start: true })) ?? -1;
+      const index = previous?.pageParams.findIndex(param => hashKey([param ?? { start: true }]) === hashKey([context.pageParam ?? { start: true }])) ?? -1;
       const oldPage = index < 0 ? undefined : previous?.pages[index];
       const owned = new Set(previous?.pages.flatMap((page) => page.rows.map((row) => row.id)));
       const newer = context.pageParam !== null && typeof context.pageParam === "object" && "after" in context.pageParam

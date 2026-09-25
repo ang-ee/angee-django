@@ -3,7 +3,7 @@
 # that only surface in real use — nonexistent registry images, dead git sources,
 # unconsumed copier inputs. Renders with the installed operator from REGISTRY.
 set -u
-REGISTRY="${1:-/Users/alexis/.angee/workspaces/src/angee}"
+REGISTRY="${1:-${ANGEE_TEMPLATE_REGISTRY:?Pass a registry path or set ANGEE_TEMPLATE_REGISTRY}}"
 OUT=$(mktemp -d /tmp/matrix-probe.XXXX)
 FAIL=0
 note() { echo "  $1"; }

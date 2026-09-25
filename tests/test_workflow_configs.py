@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from django.core import checks
 from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context
@@ -10,7 +11,6 @@ from rebac import system_context
 from angee.testing.models import Step, Workflow
 from angee.workflows.attempts import RecoveryMode
 from angee.workflows.configs import EmitConfig, GateConfig, JoinContinuationConfig, MapConfig, WaitConfig
-from angee.workflows.models import check_database_command_replay_declarations
 from angee.workflows.steps import (
     CallWorkflow,
     EmitStep,
@@ -277,10 +277,13 @@ def test_database_command_system_check_warns_only_for_an_implicit_recovery_polic
         lambda *args, **kwargs: (UndeclaredDatabaseCommand,),
     )
 
-    warnings = check_database_command_replay_declarations()
+    warnings = [warning for warning in checks.run_checks() if warning.id == "angee.workflows.W001"]
 
     assert [warning.id for warning in warnings] == ["angee.workflows.W001"]
     assert warnings[0].obj is UndeclaredDatabaseCommand
+    assert not any(
+        warning.id == "angee.workflows.W001" for warning in checks.run_checks(tags=[checks.Tags.database])
+    )
 
 
 def test_gate_slot_escalation_preserves_inherited_and_explicit_empty_meanings() -> None:

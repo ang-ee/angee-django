@@ -5,9 +5,10 @@ backend tests stub only ``socket.getaddrinfo`` (resolution) and httpcore's raw
 dial, so the address gate, the resolve-then-pin (DNS-rebind) protection, the
 dial-all fallback, and the ``OSError``-vs-``ValidationError`` distinction are
 asserted against the production path. End-to-end tests confirm those exceptions
-survive httpx, and a loopback server proves redirects are re-validated at each hop
-and that a caller cannot displace the URL's Host. No external network or database
-is used.
+survive httpx. Request and download tests inject httpx's MockTransport through
+HttpClient's transport factory to assert redirect handling, byte budgets, address
+policy forwarding and the URL's Host header. No external network or database is
+used.
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ import httpx
 import pytest
 from django.core.exceptions import ValidationError
 
-from angee.integrate import http as http_module
 from angee.integrate.http import HttpClient, PinnedTransport, _PinnedBackend, _without_host
 
 URL = "https://dav.example.test/path?x=1"
@@ -196,7 +196,7 @@ def test_download_capped_stops_streaming_after_the_byte_cap(
 
         return httpx.MockTransport(handler)
 
-    monkeypatch.setattr(http_module, "PinnedTransport", transport)
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
 
     assert (
         HttpClient().download_capped(
@@ -232,7 +232,7 @@ def test_download_capped_rejects_declared_oversize_before_reading(
             )
         )
 
-    monkeypatch.setattr(http_module, "PinnedTransport", transport)
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
 
     assert HttpClient().download_capped(URL, cap=5) is None
     assert reads == 0
@@ -254,7 +254,7 @@ def test_redirect_to_an_unsafe_host_is_rejected_at_the_hop(monkeypatch: pytest.M
 
         return httpx.MockTransport(handler)
 
-    monkeypatch.setattr(http_module, "PinnedTransport", transport)
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
 
     with pytest.raises(ValidationError):
         HttpClient().get("http://127.0.0.1:8123/", allow_private=True, follow_redirects=True)
@@ -277,7 +277,7 @@ def test_redirect_not_followed_by_default_and_host_is_the_url_host(monkeypatch: 
 
         return httpx.MockTransport(handler)
 
-    monkeypatch.setattr(http_module, "PinnedTransport", transport)
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
     response = HttpClient().get("http://127.0.0.1:8123/", headers={"Host": "evil.example.com"}, allow_private=True)
 
     assert response.status_code == 302

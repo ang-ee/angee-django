@@ -20,6 +20,7 @@ from angee.workflows.data_contracts import (
     DataContractNode,
     NumericRange,
     StringLengthRange,
+    json_schema_validator,
     model_data_contract,
     schema_data_contract,
 )
@@ -1125,7 +1126,7 @@ class WorkflowGraph:
                             )
                         )
                     elif reference.kind == "workflow_input" and (
-                        Draft202012Validator(self.input_schema).is_valid(None)
+                        json_schema_validator(self.input_schema).is_valid(None)
                         or not workflow_input_contract.guarantees_path(reference.path)
                     ):
                         result.append(
@@ -1298,7 +1299,7 @@ def _result_binding_compatible(
     kind = getattr(binding, "kind", None)
     if kind == "constant":
         try:
-            return Draft202012Validator(target_schema).is_valid(binding.value)
+            return json_schema_validator(target_schema).is_valid(binding.value)
         except Exception:  # noqa: BLE001 - unsupported local refs remain a publication diagnostic.
             return False
     variants = target_schema.get("oneOf", target_schema.get("anyOf"))
@@ -1504,7 +1505,7 @@ def _catalogue_node_compatible(
             return False
         if has_literal_constraint:
             return literal_values is not None and all(
-                Draft202012Validator(target_schema).is_valid(value) for value in literal_values
+                json_schema_validator(target_schema).is_valid(value) for value in literal_values
             )
         if has_numeric_constraint:
             return numeric_ranges is not None and all(

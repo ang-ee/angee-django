@@ -251,12 +251,19 @@ def test_event_trigger_check_rejects_persisted_non_published_model(
     )
     Trigger._base_manager.bulk_create([trigger])
 
-    errors = workflow_models.check_event_trigger_publishers()
+    errors = workflow_models.check_event_trigger_publishers(databases=["default"])
 
     assert any(error.id == "angee.workflows.E001" for error in errors)
     assert "declare changes() for the model to join the change feed" in "\n".join(
         error.msg for error in errors
     )
+
+
+@pytest.mark.parametrize("databases", [None, []])
+def test_event_trigger_check_without_databases_does_not_query(databases: list[str] | None) -> None:
+    """Django's ordinary system check must not open database connections."""
+
+    assert workflow_models.check_event_trigger_publishers(databases=databases) == []
 
 
 def test_event_trigger_subject_refetch_uses_system_context(

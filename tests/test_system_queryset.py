@@ -97,9 +97,8 @@ def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model:
     queryset = manager.db_manager("default").lock_if_supported(of=("self",))
     assert queryset.model is model
     assert queryset._db == "default"
-    assert queryset.query.select_for_update is connection.features.has_select_for_update
-    if connection.features.has_select_for_update and connection.features.has_select_for_update_of:
-        assert queryset.query.select_for_update_of == ("self",)
+    assert queryset.query.select_for_update is True
+    assert queryset.query.select_for_update_of == ("self",)
     if model is StepAttempt:
         assert manager is model.system_objects
         assert isinstance(queryset, StepAttemptQuerySet)
@@ -111,26 +110,11 @@ def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model:
 
 
 @pytest.mark.parametrize("queryset_class", [AngeeQuerySet, AngeeUnscopedQuerySet])
-@pytest.mark.parametrize("supports_lock, supports_of", [(False, False), (True, False), (True, True)])
-def test_lock_capability_check_precedes_native_select_for_update(
-    monkeypatch: pytest.MonkeyPatch, queryset_class: Any, supports_lock: bool, supports_of: bool
-) -> None:
-    """Unsupported backends never receive lock calls; the original queryset remains unchanged."""
+def test_lock_preserves_queryset_policy_and_declares_native_write_intent(queryset_class: Any) -> None:
+    """Lock intent preserves the queryset and hints without mutating the original."""
 
     instance = SystemQueryThing(name="pending")
     original = queryset_class(model=SystemQueryThing, hints={"instance": instance}).filter(name="pending")
-    monkeypatch.setattr(connection.features, "has_select_for_update", supports_lock)
-    monkeypatch.setattr(connection.features, "has_select_for_update_of", supports_of)
-    native_select_for_update = models.QuerySet.select_for_update
-    lock_calls = []
-
-    def select_for_update(queryset: Any, **kwargs: Any) -> Any:
-        assert supports_lock, "Unsupported backends must not call select_for_update."
-        lock_calls.append(kwargs)
-        return native_select_for_update(queryset, **kwargs)
-
-    monkeypatch.setattr(models.QuerySet, "select_for_update", select_for_update)
-
     locked = original.lock_if_supported(of=("self",))
 
     assert type(locked) is queryset_class
@@ -139,8 +123,9 @@ def test_lock_capability_check_precedes_native_select_for_update(
     assert locked._hints == original._hints
     assert original._for_write is False
     assert original.query.select_for_update is False
-    assert locked.query.select_for_update is supports_lock
-    assert lock_calls == ([{"of": ("self",)}] if supports_of else [{}] if supports_lock else [])
+    assert locked._for_write is True
+    assert locked.query.select_for_update is True
+    assert locked.query.select_for_update_of == ("self",)
 
 
 @pytest.fixture
@@ -153,13 +138,14 @@ def system_query_tables() -> Iterator[None]:
 
 @POSTGRESQL_ONLY
 @pytest.mark.django_db(transaction=True)
-def test_system_queryset_emits_for_update_on_postgresql(system_query_tables: None) -> None:
+@pytest.mark.parametrize("model", [SystemQueryThing, ThirdPartySystemQueryThing])
+def test_system_queryset_emits_for_update_on_postgresql(system_query_tables: None, model: type[models.Model]) -> None:
     """A requested system lock reaches PostgreSQL as ``FOR UPDATE`` SQL."""
 
-    instance = SystemQueryThing._base_manager.create(name="locked")
+    instance = system_queryset(model).create(name="locked")
 
     with transaction.atomic(), CaptureQueriesContext(connection) as captured:
-        rows = list(SystemQueryThing.system_queryset(lock=()).filter(pk=instance.pk))
+        rows = list(system_queryset(model, lock=("self",)).filter(pk=instance.pk))
 
     assert rows == [instance]
     assert any("FOR UPDATE" in query["sql"].upper() for query in captured.captured_queries)
@@ -242,13 +228,14 @@ def test_readable_scalar_subquery_keeps_denied_empty_string(system_query_tables:
 
 @SQLITE_ONLY
 @pytest.mark.django_db(transaction=True)
-def test_system_queryset_keeps_sqlite_unlocked(system_query_tables: None) -> None:
+@pytest.mark.parametrize("model", [SystemQueryThing, ThirdPartySystemQueryThing])
+def test_system_queryset_keeps_sqlite_unlocked(system_query_tables: None, model: type[models.Model]) -> None:
     """SQLite evaluates a requested system lock without emitting lock SQL."""
 
-    instance = SystemQueryThing._base_manager.create(name="unlocked")
+    instance = system_queryset(model).create(name="unlocked")
 
     with CaptureQueriesContext(connection) as captured:
-        rows = list(SystemQueryThing.system_queryset(lock=()).filter(pk=instance.pk))
+        rows = list(system_queryset(model, lock=("self",)).filter(pk=instance.pk))
 
     assert rows == [instance]
     assert all("FOR UPDATE" not in query["sql"].upper() for query in captured.captured_queries)

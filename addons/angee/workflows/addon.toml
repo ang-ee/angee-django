@@ -8,7 +8,7 @@ category = "Workflows"
 depends_on = ["angee.iam", "angee.jobs", "angee.resources"]
 dependencies = [
   "croniter>=6.0",
-  "jsonschema>=4.26",
+  "jsonschema[format-nongpl]>=4.26",
   "referencing>=0.37",
 ]
 

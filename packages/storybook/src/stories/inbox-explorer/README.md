@@ -11,10 +11,4 @@ the message reader keeps Related visible alongside it. `fixtures.ts`,
 `v2-model.ts`, `v3-model.ts`, and `Related.tsx` remain live because V4 consumes
 them.
 
-V1–V3, including their Storybook entries, component sources, CSS, fixtures,
-models, and the full study notes that accompanied them, are preserved in the
-[private study archive](../../../../../../.work/plans/specs/nexus-inbox-explorer/archive/2026-09-11-studies/).
-
-This remains a desktop fixture study. Production requirements and ownership
-notes live under the
-[Nexus Inbox Explorer specification](../../../../../../.work/plans/specs/nexus-inbox-explorer/).
+This remains a desktop fixture study.

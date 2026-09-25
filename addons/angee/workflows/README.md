@@ -14,7 +14,9 @@ the terminal transition. Publication checks terminal producer routing choices
 for co-applicability with a bounded path traversal; a graph whose uniqueness
 cannot be proved within that bound is rejected. Binding checks prove required
 source paths and simple JSON Schema shapes, and reject unsupported constraints
-conservatively. Completion validates the exact JSON output again.
+conservatively. Completion validates the exact JSON output again. Workflow and
+extraction instance validation share the format-asserting
+[`json_schema_validator`](data_contracts.py).
 
 [`engine`](engine.py) is the public function facade for workflow operations.
 Its domain owners enforce the operation contracts. Operations accepting a run,

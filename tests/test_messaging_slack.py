@@ -6,17 +6,24 @@ from collections import deque
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
+from email.message import Message as HttpHeaders
+from io import BytesIO
 from time import monotonic
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast
+from urllib.error import HTTPError
+from urllib.request import Request
 
 import httpx
 import pytest
 from django.db import connection
 from rebac import system_context
+from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from slack_sdk.http_retry import RetryHandler
 
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.http import HttpClient
 from angee.integrate.live import PairingState
 from angee.integrate.streams import StreamPage, advance_stream
 from angee.messaging.backends import ChannelBackend, ParsedMessage, body_part
@@ -55,7 +62,7 @@ class FakeWebClient:
 
     calls: ClassVar[list[tuple[str, dict[str, Any]]]] = []
 
-    def __init__(self, *, token: str) -> None:
+    def __init__(self, *, token: str, retry_handlers: list[RetryHandler] | None = None) -> None:
         assert token == "xoxp-user-token"
 
     def users_conversations(self, **kwargs: Any) -> dict[str, Any]:
@@ -249,7 +256,7 @@ def test_invalid_history_cursor_retains_watermarks_across_generation(
         def conversations_history(self, **kwargs: Any) -> dict[str, Any]:
             self.calls.append(("conversations.history", kwargs))
             if kwargs.get("cursor") == "expired-page":
-                response = SimpleNamespace(data={"ok": False, "error": "invalid_cursor"})
+                response = SimpleNamespace(status_code=200, data={"ok": False, "error": "invalid_cursor"})
                 raise SlackApiError("History page expired", response)
             return {"messages": []}
 
@@ -405,7 +412,7 @@ def test_media_download_uses_bearer_and_failed_files_get_markers(monkeypatch: py
     calls: list[str] = []
 
     class MediaWebClient:
-        def __init__(self, *, token: str) -> None:
+        def __init__(self, *, token: str, retry_handlers: list[RetryHandler] | None = None) -> None:
             assert token == "xoxp-user-token"
 
         def users_conversations(self, **_kwargs: Any) -> dict[str, Any]:
@@ -485,10 +492,11 @@ def test_download_file_stops_streaming_after_the_byte_cap(monkeypatch: pytest.Mo
         assert request.headers["authorization"] == "Bearer xoxp-user-token"
         return httpx.Response(200, stream=CountingStream())
 
-    monkeypatch.setattr(
-        "angee.integrate.http.PinnedTransport",
-        lambda *, allow_private: httpx.MockTransport(handler),
-    )
+    def transport(*, allow_private: bool) -> httpx.MockTransport:
+        assert allow_private is False
+        return httpx.MockTransport(handler)
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
     backend = SlackChannelBackend(_BridgeStub(config={"max_media_bytes": 5}))
     backend._credential = backend.bridge.credential
 
@@ -496,45 +504,68 @@ def test_download_file_stops_streaming_after_the_byte_cap(monkeypatch: pytest.Mo
     assert 0 < reads < 20
 
 
-def test_rate_limit_honors_retry_after_then_retries(monkeypatch: pytest.MonkeyPatch) -> None:
-    """HTTP 429 clamps an excessive Retry-After before retrying."""
+@pytest.fixture
+def slack_http(monkeypatch: pytest.MonkeyPatch) -> tuple[deque[Exception], list[Request]]:
+    """Serve raw HTTP responses through the real SDK's retry machinery."""
 
+    responses: deque[Exception] = deque()
+    requests: list[Request] = []
+
+    def urlopen(request: Request, **_kwargs: Any) -> HTTPError:
+        requests.append(request)
+        response = responses.popleft()
+        if not isinstance(response, HTTPError) or response.code >= 400:
+            raise response
+        return response
+
+    for variable in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setattr("slack_sdk.web.base_client.urlopen", urlopen)
+    return responses, requests
+
+
+def _slack_http_response(status: int, *, retry_after: str = "60") -> HTTPError:
+    headers = HttpHeaders()
+    headers["Content-Type"] = "application/json"
+    headers["Retry-After"] = retry_after
+    body = b'{"ok": true, "channels": []}' if status == 200 else b'{"ok": false, "error": "ratelimited"}'
+    return HTTPError("https://slack.com/api/users.conversations", status, "Slack response", headers, BytesIO(body))
+
+
+@pytest.mark.parametrize(("retry_after", "delay"), [("700", 60.0), ("invalid", 1.0), ("-1", 0.0)])
+def test_rate_limit_honors_retry_after_then_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    slack_http: tuple[deque[Exception], list[Request]],
+    retry_after: str,
+    delay: float,
+) -> None:
+    """The SDK retries 429 responses with the poll's bounded Retry-After delay."""
+
+    responses, requests = slack_http
+    responses.extend([_slack_http_response(429, retry_after=retry_after), _slack_http_response(200)])
     delays: list[float] = []
-
-    class RateLimitedWebClient:
-        attempts = 0
-
-        def __init__(self, *, token: str) -> None:
-            assert token == "xoxp-user-token"
-
-        def users_conversations(self, **_kwargs: Any) -> dict[str, Any]:
-            type(self).attempts += 1
-            if type(self).attempts == 1:
-                raise _slack_error(429, {"Retry-After": "700"})
-            return {"channels": []}
-
     monkeypatch.setattr("angee.messaging_integrate_slack.backend.sleep", delays.append)
-    backend = _backend(monkeypatch, RateLimitedWebClient)
+    backend = _backend(monkeypatch, WebClient)
 
     assert backend.test_pages.next_batch() == []
-    assert RateLimitedWebClient.attempts == 2
-    assert delays == [60.0]
+    assert len(requests) == 2
+    assert requests[0].get_header("Authorization") == "Bearer xoxp-user-token"
+    assert delays == [delay]
 
 
 @pytest.mark.parametrize("discovery", [True, False])
-def test_rate_limit_stops_before_the_sync_deadline(monkeypatch: pytest.MonkeyPatch, discovery: bool) -> None:
+def test_rate_limit_stops_before_the_sync_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    slack_http: tuple[deque[Exception], list[Request]],
+    discovery: bool,
+) -> None:
     """A retry that cannot fit before the drain deadline becomes a transient error."""
 
-    class RateLimitedWebClient:
-        def __init__(self, *, token: str) -> None:
-            assert token == "xoxp-user-token"
-
-        def users_conversations(self, **_kwargs: Any) -> dict[str, Any]:
-            raise _slack_error(429, {"Retry-After": "60"})
-
+    responses, requests = slack_http
+    responses.append(_slack_http_response(429))
     delays: list[float] = []
     monkeypatch.setattr("angee.messaging_integrate_slack.backend.sleep", delays.append)
-    backend = _backend(monkeypatch, RateLimitedWebClient)
+    backend = _backend(monkeypatch, WebClient)
     stream = SimpleNamespace(partition="C1", generation=1, cursor={})
 
     with pytest.raises(SlackRateLimitError, match="time budget exhausted"):
@@ -542,7 +573,79 @@ def test_rate_limit_stops_before_the_sync_deadline(monkeypatch: pytest.MonkeyPat
             backend.test_pages.next_batch(deadline=monotonic() + 1)
         else:
             backend.extract(stream, 200, deadline=monotonic() + 1)
+    assert len(requests) == 1
     assert delays == []
+
+
+def test_rate_limit_stops_after_retry_budget(
+    monkeypatch: pytest.MonkeyPatch, slack_http: tuple[deque[Exception], list[Request]]
+) -> None:
+    responses, requests = slack_http
+    responses.extend(_slack_http_response(429) for _ in range(6))
+    delays: list[float] = []
+    monkeypatch.setattr("angee.messaging_integrate_slack.backend.sleep", delays.append)
+    backend = _backend(monkeypatch, WebClient)
+
+    with pytest.raises(SlackRateLimitError, match="retry budget exhausted"):
+        backend.test_pages.next_batch()
+    assert len(requests) == 6
+    assert delays == [60.0] * 5
+
+
+@pytest.mark.parametrize("connection_first", [True, False])
+def test_rate_limit_and_connection_retries_share_the_sdk_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    slack_http: tuple[deque[Exception], list[Request]],
+    connection_first: bool,
+) -> None:
+    """Mixed failures consume one native attempt count, reset for each request."""
+
+    responses, requests = slack_http
+    connection_error = ConnectionResetError("Connection reset")
+    if connection_first:
+        responses.append(connection_error)
+        responses.extend(_slack_http_response(429) for _ in range(5))
+    else:
+        responses.extend([_slack_http_response(429), connection_error])
+    delays: list[float] = []
+    connection_delays: list[float] = []
+    monkeypatch.setattr("angee.messaging_integrate_slack.backend.sleep", delays.append)
+    monkeypatch.setattr("slack_sdk.http_retry.handler.time.sleep", connection_delays.append)
+    backend = _backend(monkeypatch, WebClient)
+
+    with pytest.raises(SlackRateLimitError if connection_first else ConnectionResetError):
+        backend.streams()
+    assert len(requests) == (6 if connection_first else 2)
+    assert delays == [60.0] * (4 if connection_first else 1)
+    assert len(connection_delays) == (1 if connection_first else 0)
+
+    responses.extend([_slack_http_response(429), _slack_http_response(200)])
+    assert backend.streams() == ()
+    assert delays[-1] == 60.0
+
+
+def test_retry_deadline_survives_client_access_and_is_restored(
+    monkeypatch: pytest.MonkeyPatch, slack_http: tuple[deque[Exception], list[Request]]
+) -> None:
+    """Reading the client preserves an explicit deadline, which ends with the scope."""
+
+    responses, requests = slack_http
+    responses.append(_slack_http_response(429))
+    delays: list[float] = []
+    monkeypatch.setattr("angee.messaging_integrate_slack.backend.sleep", delays.append)
+    backend = _backend(monkeypatch, WebClient)
+    backend._load_credentials()
+
+    with pytest.raises(SlackRateLimitError, match="time budget exhausted"):
+        with backend._rate_limit_retry.deadline(monotonic() + 1):
+            backend._client_or_create().users_conversations()
+    assert len(requests) == 1
+    assert delays == []
+
+    responses.extend([_slack_http_response(429), _slack_http_response(200)])
+    assert backend._client_or_create().users_conversations()["ok"] is True
+    assert len(requests) == 3
+    assert delays == [60.0]
 
 
 def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -634,7 +737,7 @@ class IncrementalWebClient:
         },
     ]
 
-    def __init__(self, *, token: str) -> None:
+    def __init__(self, *, token: str, retry_handlers: list[RetryHandler] | None = None) -> None:
         assert token == "xoxp-user-token"
 
     def users_conversations(self, **_kwargs: Any) -> dict[str, Any]:
@@ -827,7 +930,7 @@ def test_non_rate_limit_api_error_uses_generic_sync_telemetry(
     del composed_tables
 
     class FailingWebClient:
-        def __init__(self, *, token: str) -> None:
+        def __init__(self, *, token: str, retry_handlers: list[RetryHandler] | None = None) -> None:
             assert token == "xoxp-user-token"
 
         def users_conversations(self, **_kwargs: Any) -> dict[str, Any]:
@@ -861,7 +964,7 @@ def test_connect_probes_before_transaction_and_failed_auth_creates_nothing(
     before_credentials = Credential._base_manager.count()
 
     class FailingProbeClient:
-        def __init__(self, *, token: str) -> None:
+        def __init__(self, *, token: str, retry_handlers: list[RetryHandler] | None = None) -> None:
             assert token == "xoxp-invalid"
 
         def auth_test(self) -> dict[str, Any]:
@@ -892,7 +995,7 @@ def test_connect_persists_verified_workspace_in_one_write_phase(
         Vendor.objects.create(slug="slack", display_name="Slack")
 
     class ProbeClient:
-        def __init__(self, *, token: str) -> None:
+        def __init__(self, *, token: str, retry_handlers: list[RetryHandler] | None = None) -> None:
             assert token == "xoxp-valid"
 
         def auth_test(self) -> dict[str, Any]:

@@ -396,51 +396,41 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
     { sourceAttempt: attemptId },
     { models: [STEP_ATTEMPT_MODEL, RUN_MODEL, WORKFLOW_MODEL] },
   );
-  const [start] = useAuthoredMutation(StartWorkflowRecoveryDocument, {
+  const [start, { fetching, error, reset }] = useAuthoredMutation(StartWorkflowRecoveryDocument, {
     invalidateModels: [RUN_MODEL, STEP_RUN_MODEL, STEP_ATTEMPT_MODEL],
     errorFrom: (data) => data?.start_workflow_recovery.ok === false
       ? data.start_workflow_recovery.message : null,
   });
   const requestKey = React.useRef<string | null>(null);
   const currentAttempt = React.useRef(attemptId);
-  const [pending, setPending] = React.useState(false);
   const [uncertaintyAck, setUncertaintyAck] = React.useState(false);
   const [priorRecovery, setPriorRecovery] = React.useState("");
-  const [message, setMessage] = React.useState<string | null>(null);
   const [started, setStarted] = React.useState<{ id: string; href?: string } | null>(null);
   const recovery = plan.data?.workflow_recovery_plan;
   const repairContext = repair.data?.workflow_test_repair_context;
   React.useEffect(() => {
     currentAttempt.current = attemptId;
     requestKey.current = null;
-    setMessage(null);
+    reset();
     setStarted(null);
-    setPending(false);
     setUncertaintyAck(false);
     setPriorRecovery("");
-  }, [attemptId]);
+  }, [attemptId, reset]);
   const startRecovery = async () => {
     requestKey.current ??= crypto.randomUUID();
-    setPending(true);
-    setMessage(null);
-    try {
-      const data = await start({
-        sourceAttempt: attemptId,
-        requestKey: requestKey.current,
-        acknowledgeUncertainExternal: Boolean(recovery?.requires_uncertainty_ack && uncertaintyAck),
-        priorRecovery: priorRecovery.trim() || null,
-      });
-      if (currentAttempt.current !== attemptId) return;
-      const result = data?.start_workflow_recovery;
-      if (result?.ok && result.id) {
-        const href = recordHref(RUN_MODEL, result.id);
-        setStarted({ id: result.id, href });
-        if (href) void navigate({ to: href });
-      } else if (result?.message) setMessage(result.message);
-    } catch (error) {
-      if (currentAttempt.current === attemptId) setMessage(errorMessage(error, t("runs.unavailable")));
-    } finally {
-      if (currentAttempt.current === attemptId) setPending(false);
+    // The mutation state renders transport and domain errors.
+    const data = await start({
+      sourceAttempt: attemptId,
+      requestKey: requestKey.current,
+      acknowledgeUncertainExternal: Boolean(recovery?.requires_uncertainty_ack && uncertaintyAck),
+      priorRecovery: priorRecovery.trim() || null,
+    }).catch(() => undefined);
+    if (currentAttempt.current !== attemptId) return;
+    const result = data?.start_workflow_recovery;
+    if (result?.ok && result.id) {
+      const href = recordHref(RUN_MODEL, result.id);
+      setStarted({ id: result.id, href });
+      if (href) void navigate({ to: href });
     }
   };
   if ((plan.isFetching && !plan.data) || (repair.isFetching && !repair.data)) return <RunRecoverySkeleton label={t("runs.loading")} />;
@@ -474,19 +464,19 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
             searchFields={["display_name"]}
             value={priorRecovery || null}
             onChange={setPriorRecovery}
-            readOnly={pending || Boolean(started)}
+            readOnly={fetching || Boolean(started)}
             placeholder={t("runs.priorMapRecoveryPlaceholder")}
           />
         </div>
         <span className="mt-1 block text-fg-muted">{t("runs.priorMapRecoveryHelp")}</span>
       </div> : null}
-      {message ? <ErrorBanner description={message} /> : null}
+      {error ? <ErrorBanner description={errorMessage(error, t("runs.unavailable"))} /> : null}
       {started ? <p className="mt-2 text-13 text-fg-muted">
         {t("runs.recoveryStarted", { id: started.id })}
         {started.href ? <> · <TextLink href={started.href} onNavigate={(href) => { void navigate({ to: href }); }}>{t("runs.openRecovery")}</TextLink></> : null}
       </p> : null}
-      <Button type="button" className="mt-3" disabled={!recovery?.available || pending || Boolean(started) || Boolean(recovery?.requires_uncertainty_ack && !uncertaintyAck)} onClick={() => { void startRecovery(); }}>
-        {pending ? t("runs.recoveryStarting") : t("runs.startRecovery")}
+      <Button type="button" className="mt-3" disabled={!recovery?.available || fetching || Boolean(started) || Boolean(recovery?.requires_uncertainty_ack && !uncertaintyAck)} onClick={() => { void startRecovery(); }}>
+        {fetching ? t("runs.recoveryStarting") : t("runs.startRecovery")}
       </Button>
     </div>
     {repairContext?.current_source_step_id ? <div className="border-t border-border-subtle pt-4">

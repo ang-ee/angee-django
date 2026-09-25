@@ -9,13 +9,14 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, cast
 
 from croniter import CroniterBadCronError, croniter
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, field_validator, model_validator
 
 from angee.base.impl import model_config_form_spec
 
 TriggerKindName = Literal["manual", "event", "schedule"]
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
+ModelLabel = Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=1)]
 MAX_PREVIEW_OCCURRENCES = 10
 
 
@@ -63,7 +64,7 @@ class ManualTriggerConfig(TriggerConfig):
 class EventTriggerConfig(TriggerConfig):
     """An event publisher, its subject model, and a native Django lookup condition."""
 
-    model: str = Field(min_length=1, title="Model")
+    model: ModelLabel = Field(title="Model")
     source: str = Field(default=EventSource.CHANGE_PUBLISHED, min_length=1)
     condition: dict[str, Any] | None = Field(default_factory=dict, json_schema_extra={"widget": "json"})
     admission_policy: EventAdmissionPolicy = Field(
@@ -83,11 +84,6 @@ class EventTriggerConfig(TriggerConfig):
         alias = normalized.pop("model_label", None)
         normalized["model"] = model if isinstance(model, str) and model.strip() else alias
         return normalized
-
-    @field_validator("model", mode="before")
-    @classmethod
-    def normalize_model_label(cls, value: Any) -> Any:
-        return value.strip().lower() if isinstance(value, str) else value
 
     def summary(self) -> str:
         return self.summary_for(self.model)

@@ -27,10 +27,10 @@ from __future__ import annotations
 
 import ssl
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urljoin
 
 import httpcore
@@ -175,6 +175,9 @@ class HttpClient:
     ``follow_redirects=True`` (each hop re-validates).
     """
 
+    transport_factory: ClassVar[Callable[..., httpx.BaseTransport]] = PinnedTransport
+    """Build each transport with ``allow_private``; tests may inject a static factory."""
+
     def get(
         self,
         url: str,
@@ -253,7 +256,7 @@ class HttpClient:
                 return None
             state.requests += 1
             with httpx.Client(
-                transport=PinnedTransport(allow_private=allow_private),
+                transport=self.transport_factory(allow_private=allow_private),
                 timeout=min(float(HTTP_TIMEOUT_SECONDS), remaining),
             ) as client:
                 with client.stream(
@@ -341,7 +344,7 @@ class HttpClient:
         """
 
         parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
-        with httpx.Client(transport=PinnedTransport(allow_private=allow_private), timeout=timeout) as client:
+        with httpx.Client(transport=self.transport_factory(allow_private=allow_private), timeout=timeout) as client:
             response = client.request(
                 method, url, headers=_without_host(headers), content=body, follow_redirects=follow_redirects
             )

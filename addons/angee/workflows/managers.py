@@ -26,7 +26,6 @@ from django.db import (
     transaction,
 )
 from django.utils import timezone
-from jsonschema import Draft202012Validator
 from pydantic_core import PydanticSerializationError
 from rebac import (
     LocalBackend,
@@ -96,6 +95,7 @@ from angee.workflows.attempts import (
     validate_json_presence,
     workflow_result_terminal_match_error,
 )
+from angee.workflows.data_contracts import json_schema_validator
 from angee.workflows.decision_actions import (
     compile_decision_action_schema,
     retained_decision_form_schema,
@@ -2142,7 +2142,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     ) -> Any:
         """Create a Run and its first durable work for one explicit immutable definition."""
 
-        if list(Draft202012Validator(version.input_schema).iter_errors(input.value if input.present else None)):
+        if list(json_schema_validator(version.input_schema).iter_errors(input.value if input.present else None)):
             raise ValidationError({"input": "Invocation input does not satisfy the published workflow schema."})
         version.validate_subject_declaration(subject)
         content_type = None if subject is None else ContentType.objects.get_for_model(subject, for_concrete_model=False)

@@ -11,6 +11,13 @@ from rebac.actors import is_sudo
 from rebac.resources import model_resource_type
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+_QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
+
+
+def lock_if_supported(queryset: _QuerySetT, *, of: tuple[str, ...] = ("self",)) -> _QuerySetT:
+    """Declare row-lock intent; Django owns write routing and backend support."""
+
+    return queryset.select_for_update(of=of)
 
 
 def elevated(*, reason: str) -> AbstractContextManager[Any]:
@@ -96,9 +103,8 @@ def system_queryset(
     system_context = getattr(queryset, "system_context", None)
     if callable(system_context):
         queryset = system_context(reason=f"{model._meta.label_lower}.system_queryset")
-    locker = getattr(queryset, "lock_if_supported", None)
-    if lock is not None and callable(locker):
-        queryset = locker(of=lock)
+    if lock is not None:
+        queryset = lock_if_supported(queryset, of=lock)
     return cast(models.QuerySet[_ModelT], queryset)
 
 
