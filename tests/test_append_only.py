@@ -116,6 +116,6 @@ def test_owner_writes_preserve_downstream_queryset_guards(monkeypatch: pytest.Mo
     monkeypatch.setattr(AngeeQuerySet, "bulk_create", deny)
     queryset = RetainedEvidence.objects.filter(pk=1)
     with pytest.raises(PermissionDenied, match="downstream write guard"):
-        queryset._owner_update(name="changed")
+        queryset.owner_update(name="changed")
     with pytest.raises(PermissionDenied, match="downstream write guard"):
-        queryset._owner_bulk_create([RetainedEvidence(name="new")])
+        queryset.owner_bulk_create([RetainedEvidence(name="new")])

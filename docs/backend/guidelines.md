@@ -695,6 +695,10 @@ and current contracts before applying a historical example to a new deployment.
   `SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD` setting, so simple-history
   allocates a separate nullable text change-reason field for each historical
   model; inherited tracking must never share mutable field instances across models.
+  This is an intentional project-wide default, including consumer and third-party
+  `HistoricalRecords` declarations. Existing histories that used the default
+  `CharField(max_length=100)` need a schema migration to `TextField`; declarations
+  with an explicit `history_change_reason_field` retain their chosen field.
 - **Domain renames need an explicit upgrade path.** When persisted references or
   permission namespaces change, describe which old state needs data migration
   and which reconciliation follows it. Keep those operations out of startup.
@@ -880,10 +884,12 @@ and current contracts before applying a historical example to a new deployment.
   retained collections compose [`AppendOnlyQuerySet`](../../angee/base/mixins.py),
   which rejects generic updates and deletion with a model-labelled `ValidationError`.
   Its `validate_insert` seam narrows all generic insert entrypoints. Retention
-  commands insert validated batches through `_owner_bulk_create`; lease state
+  commands insert validated batches through `owner_bulk_create`; lease state
   machines expose exact conditional writes through domain queryset methods using
-  `_owner_update`. Those protected paths retain the downstream authorization and
-  queryset guards; each owner supplies its predicates and allowed fields. They do
+  `owner_update`. These public, framework-protected APIs skip only the declaring
+  owner's guard and retain downstream authorization and queryset guards. Each
+  owner supplies its validated predicates and allowed fields. `HierarchyQuerySet`
+  exposes the same `owner_update` contract for derived path maintenance. They do
   not reopen generic mutations or replace model/FK invariants. `AuditMixin` uses its serializable
   `audit_set_null` FK policy to materialize the collector selection and schedule
   Django's native `UpdateQuery.update_batch` path for actor deletion.

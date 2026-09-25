@@ -14,14 +14,16 @@ strict mode, exactly as the real ``Location`` reads do server-side.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import pytest
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection, models, transaction
 from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
+from angee.base.models import AngeeQuerySet
 from tests.hierdemo.models import HierNode, PlainManagerHierNode, ScopedHierNode
 from tests.scopedemo.models import Scope
 
@@ -88,6 +90,17 @@ def test_direct_path_update_cannot_bypass_the_saved_row_owner() -> None:
             queryset.bulk_update([node], ["path"])
         node.refresh_from_db()
     assert node.path != "/forged/"
+
+
+def test_hierarchy_path_writes_preserve_downstream_queryset_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Derived path maintenance still obeys the next owner's write policy."""
+
+    def deny(*args: Any, **kwargs: Any) -> int:
+        raise PermissionDenied("downstream write guard")
+
+    monkeypatch.setattr(AngeeQuerySet, "update", deny)
+    with pytest.raises(PermissionDenied, match="downstream write guard"):
+        HierNode()._write_hierarchy_path(HierNode.objects.filter(pk=1), "/000000000001/")
 
 
 @pytest.mark.django_db

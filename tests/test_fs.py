@@ -55,14 +55,41 @@ def test_generated_tree_reconcile_respects_ownership_and_prune_policy(tmp_path: 
     assert [(root / name).exists() for name in ("expected.txt", "orphan.txt", "notes.md")] == [True, False, True]
 
 
-def test_generated_tree_reconcile_leaves_directory_only_orphans(tmp_path: Path) -> None:
-    """Directory drift belongs to reset; reconciliation prunes files only."""
+@pytest.mark.parametrize("has_file", [False, True])
+def test_generated_tree_reconcile_converges_with_orphan_directories(tmp_path: Path, has_file: bool) -> None:
+    """Reconciliation removes reported directories after their owned children."""
 
-    (tmp_path / "retired").mkdir()
+    nested = Path("retired") / "nested"
+    (tmp_path / nested).mkdir(parents=True)
+    orphan = nested / "stale.txt"
+    if has_file:
+        (tmp_path / orphan).write_text("stale", encoding="utf-8")
     tree = GeneratedTree(tmp_path, {}, owns=lambda path: True)
 
+    assert tree.drift() == [Path("retired"), nested] + ([orphan] if has_file else [])
+    assert tree.reconcile(prune=True) is True
+    assert tree.drift() == []
     assert tree.reconcile(prune=True) is False
-    assert tree.drift() == [Path("retired")]
+    assert not (tmp_path / "retired").exists()
+
+
+@pytest.mark.parametrize("preserved", [Path("kept/notes.md"), Path("kept/migrations/0001.py")])
+def test_generated_tree_reconcile_preserves_unowned_and_migration_directories(
+    tmp_path: Path, preserved: Path,
+) -> None:
+    """A preserved descendant protects its parents during orphan pruning."""
+
+    retained = tmp_path / preserved
+    retained.parent.mkdir(parents=True)
+    retained.write_text("keep", encoding="utf-8")
+    orphan = Path("kept/orphan")
+    (tmp_path / orphan).mkdir()
+    tree = GeneratedTree(tmp_path, {}, owns=lambda path: path.suffix != ".md")
+
+    assert tree.drift() == [orphan]
+    assert tree.reconcile(prune=True) is True
+    assert retained.read_text(encoding="utf-8") == "keep"
+    assert tree.drift() == []
 
 
 def test_generated_tree_cleanup_guards_and_migration_preservation(tmp_path: Path) -> None:

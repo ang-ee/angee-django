@@ -155,7 +155,9 @@ def test_batch_identity_preserves_field_codec_input_keys_and_queryset_scope(
             visible_id: visible, hidden_id: hidden,
         }
         for value in values:
-            assert instance_from_public_id(model, value, queryset=scoped, public_identity=adapter) == resolved.get(value)
+            assert instance_from_public_id(
+                model, value, queryset=scoped, public_identity=adapter,
+            ) == resolved.get(value)
 
 
 @pytest.mark.parametrize("lookup_kind", ["compound", "transform", "nonunique"])

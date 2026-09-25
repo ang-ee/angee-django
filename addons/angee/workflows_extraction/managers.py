@@ -1072,7 +1072,7 @@ class ExtractionManager(EvidenceManager):
         page_results: Sequence[PageResult],
         parts: Sequence[DocumentPart]) -> None:
         source_model, page_model, part_model = self._evidence_models()
-        retained_sources = source_model._base_manager.all()._owner_bulk_create(
+        retained_sources = source_model._base_manager.all().owner_bulk_create(
             [
                 source_model(
                     extraction=extraction,
@@ -1085,7 +1085,7 @@ class ExtractionManager(EvidenceManager):
             ]
         )
         source_by_position = {source.position: source for source in retained_sources}
-        page_model._base_manager.all()._owner_bulk_create(
+        page_model._base_manager.all().owner_bulk_create(
             [
                 page_model(
                     extraction=extraction,
@@ -1103,7 +1103,7 @@ class ExtractionManager(EvidenceManager):
             ]
         )
         claims = extraction.provenance["claims"]
-        part_model._base_manager.all()._owner_bulk_create(
+        part_model._base_manager.all().owner_bulk_create(
             [
                 part_model(
                     extraction=extraction,
@@ -1133,7 +1133,7 @@ class ExtractionManager(EvidenceManager):
         )
         if [source.position for source in original_sources] != list(range(len(original_sources))):
             raise ValidationError({"extraction": "The retained source ordering is invalid."})
-        retained_sources = source_model._base_manager.all()._owner_bulk_create(
+        retained_sources = source_model._base_manager.all().owner_bulk_create(
             [
                 source_model(
                     extraction=extraction,
@@ -1154,7 +1154,7 @@ class ExtractionManager(EvidenceManager):
         )
         if [page.position for page in original_pages] != list(range(len(original_pages))):
             raise ValidationError({"extraction": "The retained page ordering is invalid."})
-        page_model._base_manager.all()._owner_bulk_create(
+        page_model._base_manager.all().owner_bulk_create(
             [
                 page_model(
                     extraction=extraction,
@@ -1177,7 +1177,7 @@ class ExtractionManager(EvidenceManager):
         if [part.position for part in original_parts] != list(range(len(original_parts))):
             raise ValidationError({"extraction": "The retained part ordering is invalid."})
         claims = extraction.provenance["claims"]
-        part_model._base_manager.all()._owner_bulk_create(
+        part_model._base_manager.all().owner_bulk_create(
             [
                 part_model(
                     extraction=extraction,

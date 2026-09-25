@@ -43,6 +43,7 @@ from angee.workflows.testing.models import (
     Step,
     StepArtifact,
     StepAttempt,
+    StepExternalSubscription,
     StepRun,
     Workflow,
     WorkflowDispatch,
@@ -1781,9 +1782,18 @@ def test_fixture_generic_writes_require_the_run_owner(
         WorkflowTestFixture.objects.bulk_create([row])
 
 
-@pytest.mark.parametrize("model", (WorkflowTestFixture, WorkflowRecoveryEvidence))
+@pytest.mark.parametrize(
+    ("model", "message"),
+    (
+        (WorkflowTestFixture, "Workflow test fixtures can only be created by WorkflowRunManager."),
+        (WorkflowRecoveryEvidence, "Recovery evidence can only be created by WorkflowRunManager."),
+        (StepExternalSubscription, "External subscriptions can only be recorded by StepAttemptManager."),
+        (StepAttempt, "Step attempts can only be created by StepAttemptManager."),
+        (WorkflowDispatch, "Workflow dispatches can only be created by WorkflowDispatchManager."),
+    ),
+)
 def test_admission_evidence_rejects_all_generic_insert_paths(
-    model: type[models.Model], monkeypatch: pytest.MonkeyPatch,
+    model: type[models.Model], message: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The queryset owns admission even when a model save hook is replaced."""
 
@@ -1791,12 +1801,15 @@ def test_admission_evidence_rejects_all_generic_insert_paths(
         pytest.fail("Generic insertion reached model persistence.")
 
     monkeypatch.setattr(model, "save", unexpected_save)
-    with pytest.raises(TypeError, match="WorkflowRunManager"):
+    with pytest.raises(TypeError) as error:
         model._default_manager.create()
-    with pytest.raises(TypeError, match="WorkflowRunManager"):
+    assert str(error.value) == message
+    with pytest.raises(TypeError) as error:
         model._default_manager.insert(model())
-    with pytest.raises(TypeError, match="WorkflowRunManager"):
+    assert str(error.value) == message
+    with pytest.raises(TypeError) as error:
         model._default_manager.bulk_create([model()])
+    assert str(error.value) == message
 
 
 def test_fixture_slot_uniqueness_rejects_signal_reentry(

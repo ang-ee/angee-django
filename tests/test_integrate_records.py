@@ -309,17 +309,20 @@ def test_revision_numbering_and_all_mutation_paths_refuse_edits(replica: Any) ->
     second = RecordRevision.objects.append(link, source_payload={"v": 2}, source_hash="two", mapping_version=1)
     assert (first.number, second.number, second.prior_id) == (1, 2, first.pk)
     first.source_hash = "edited"
-    mutations = (
-        lambda: first.save(),
-        lambda: first.delete(),
-        lambda: RecordRevision.objects.filter(pk=first.pk).update(source_hash="edited"),
-        lambda: RecordRevision.objects.bulk_update([first], ["source_hash"]),
-        lambda: RecordRevision.objects.filter(pk=first.pk).delete(),
-        lambda: RecordRevision._base_manager.filter(pk=first.pk).update(source_hash="edited"),
-    )
-    for mutate in mutations:
-        with pytest.raises(ValidationError, match="immutable|RecordRevision rows cannot be (edited|deleted)"):
+    for mutate in (first.save, first.delete):
+        with pytest.raises(ValidationError) as rejected:
             mutate()
+        assert rejected.value.messages == ["Record revisions are immutable."]
+    collection_mutations = (
+        (lambda: RecordRevision.objects.filter(pk=first.pk).update(source_hash="edited"), "edited"),
+        (lambda: RecordRevision.objects.bulk_update([first], ["source_hash"]), "edited"),
+        (lambda: RecordRevision.objects.filter(pk=first.pk).delete(), "deleted"),
+        (lambda: RecordRevision._base_manager.filter(pk=first.pk).update(source_hash="edited"), "edited"),
+    )
+    for mutate, action in collection_mutations:
+        with pytest.raises(ValidationError) as rejected:
+            mutate()
+        assert rejected.value.messages == [f"integrate.RecordRevision rows cannot be {action}."]
     first.refresh_from_db()
     assert first.source_hash == "one"
 

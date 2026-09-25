@@ -16,14 +16,25 @@ live in code docstrings.
   runtime wrappers and migration digest exceptions; materialization requires
   the composed app registry. Provision runs `makemigrations --noinput`, so
   missing required migration defaults fail promptly instead of prompting.
+  Generated-tree pruning removes reported empty owned directories after their
+  contents, so reconciliation converges while preserving migration history.
 - Retained collections use one model-labelled `ValidationError`. Lease updates
-  and validated retention batches use explicit owner write paths that preserve
-  authorization; fixture and recovery collections consistently reject generic
-  inserts. Implementation-field checks share registry resolution and reject
-  mismatched implementation keys.
+  and validated retention batches use the public, framework-protected
+  `owner_update` and `owner_bulk_create` paths that preserve downstream guards;
+  hierarchy path maintenance uses the same `owner_update` contract. Fixture,
+  recovery, attempt, external-subscription and dispatch collections consistently
+  reject generic inserts. Implementation-field checks share registry resolution
+  and reject mismatched implementation keys.
 - Base autoconfig enables simple-history's native text change-reason setting,
-  replacing the private field-factory override. System check `angee.E021`
+  replacing the private field-factory override. This intentionally applies
+  project-wide, including consumer and third-party `HistoricalRecords` using the
+  default change-reason field; existing default `CharField(100)` histories need
+  schema migrations to `TextField`. Explicit field declarations remain in force.
+  System check `angee.E021`
   rejects hierarchy queryset ordering that would bypass another write guard.
+- Storage resolves missing drive/backend relations within one system context,
+  reusing an active context; cached storage access performs no queries or audit
+  writes.
 - Currency projection metadata is owned by `angee.data.field_classification`;
   import `MONEY_CURRENCY_FIELD_METADATA_KEY` there.
 - Add opt-in `angee.workflows.testing` and `angee.integrate.testing` apps for

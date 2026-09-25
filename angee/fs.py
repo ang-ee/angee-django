@@ -67,8 +67,9 @@ def write_atomic(path: Path, text: str) -> None:
 class GeneratedTree:
     """Synchronize a rendered map of generated text artifacts with a directory.
 
-    ``owns`` scopes orphan detection. Cleanup can require a sentinel and root;
-    every ``migrations`` subtree is protected.
+    ``owns`` scopes orphan detection. Pruning removes owned files, symlinks,
+    and directories made empty by those removals. Cleanup can require a sentinel
+    and root; every ``migrations`` subtree is protected.
     """
 
     root: Path
@@ -84,7 +85,7 @@ class GeneratedTree:
         return sorted(changed | orphans)
 
     def reconcile(self, *, prune: bool) -> bool:
-        """Repair artifacts, optionally pruning owned orphan files.
+        """Repair artifacts, optionally pruning owned orphan files and directories.
 
         Validate a configured guard before writing, so boot repair cannot turn
         a foreign directory into generated output by writing its sentinel.
@@ -99,6 +100,9 @@ class GeneratedTree:
                 path = self.root / relative_path
                 if path.is_symlink() or path.is_file():
                     path.unlink()
+                    removed = True
+                elif path.is_dir():
+                    path.rmdir()
                     removed = True
         for relative_path in sorted(changed):
             write_atomic(self.root / relative_path, self.artifacts[relative_path])

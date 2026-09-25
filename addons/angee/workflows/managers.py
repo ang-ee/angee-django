@@ -3226,7 +3226,7 @@ class StepAttemptQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
             lease_revoked_at__isnull=True,
             result_recorded_at__isnull=True,
         )
-        return eligible._owner_update(started_at=at, heartbeat_at=at, updated_at=at)
+        return eligible.owner_update(started_at=at, heartbeat_at=at, updated_at=at)
 
     def _heartbeat(self, attempt: Any) -> int:
         eligible = self.filter(
@@ -3235,7 +3235,7 @@ class StepAttemptQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
             lease_revoked_at__isnull=True,
             result_recorded_at__isnull=True,
         ).filter(models.Q(heartbeat_at__lt=attempt.heartbeat_at) | models.Q(heartbeat_at__isnull=True))
-        return eligible._owner_update(heartbeat_at=attempt.heartbeat_at)
+        return eligible.owner_update(heartbeat_at=attempt.heartbeat_at)
 
     def _revoke_lease(self, attempt: Any) -> int:
         eligible = self.filter(
@@ -3244,7 +3244,7 @@ class StepAttemptQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
             lease_revoked_at__isnull=True,
             result_recorded_at__isnull=True,
         )
-        return eligible._owner_update(
+        return eligible.owner_update(
             lease_revoked_at=attempt.lease_revoked_at,
             lease_revocation_reason=attempt.lease_revocation_reason,
         )
@@ -3258,7 +3258,7 @@ class StepAttemptQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
             lease_revoked_at__isnull=True,
             result_recorded_at__isnull=True,
         )
-        return eligible._owner_update(
+        return eligible.owner_update(
             external_content_type_id=attempt.external_content_type_id,
             external_object_id=attempt.external_object_id,
         )
@@ -3267,7 +3267,7 @@ class StepAttemptQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
         """Persist only model-owned result fields on one resultless lease."""
 
         eligible = self.filter(pk=attempt.pk, lease_token=attempt.lease_token, result_recorded_at__isnull=True)
-        return eligible._owner_update(
+        return eligible.owner_update(
             **{name: getattr(attempt, name) for name in attempt.result_field_names}
         )
 
@@ -3280,13 +3280,15 @@ class StepAttemptQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
             applied_at__isnull=False,
             decision_settlement={},
         )
-        return eligible._owner_update(
+        return eligible.owner_update(
             decision_settlement=settlement,
             updated_at=timezone.now(),
         )
 
-    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
-        raise TypeError("Step attempts do not support bulk_create().")
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the attempt allocation owner."""
+
+        raise TypeError("Step attempts can only be created by StepAttemptManager.")
 
 
 class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # type: ignore[misc]
@@ -5281,7 +5283,9 @@ class StepAttemptSystemManager(StepAttemptManager):
 class StepExternalSubscriptionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Immutable attempt-owned targets registered before an external predicate read."""
 
-    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the external subscription owner."""
+
         raise TypeError("External subscriptions can only be recorded by StepAttemptManager.")
 
 
@@ -6310,10 +6314,12 @@ class WorkflowDispatchQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
         )
         if envelope.lease_token is not None:
             eligible = eligible.filter(**{f"{envelope.kind.spec.lease_field}__lease_token": envelope.lease_token})
-        return eligible._owner_update(consumed_at=at, updated_at=at)
+        return eligible.owner_update(consumed_at=at, updated_at=at)
 
-    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
-        raise TypeError("Workflow dispatches do not support bulk_create().")
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the dispatch scheduling owner."""
+
+        raise TypeError("Workflow dispatches can only be created by WorkflowDispatchManager.")
 
 
 class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySet)):  # type: ignore[misc]

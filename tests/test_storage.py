@@ -19,7 +19,7 @@ from django.db import close_old_connections, connection, connections, models, tr
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from rebac import actor_context, system_context
-from rebac.actors import to_subject_ref
+from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.roles import grant
 
@@ -206,21 +206,41 @@ def drive(tmp_path: Path, transactional_db: None) -> Any:
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("cached_drive", [False, True])
+@pytest.mark.parametrize("system", [False, True])
 def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
-    drive: Any, django_assert_num_queries: Any
+    drive: Any, django_assert_num_queries: Any, cached_drive: bool, system: bool
 ) -> None:
-    """Fetch both owners once; cached accesses retain native REBAC audit writes."""
+    """Fetch missing relations once and keep cached access free of audit writes."""
 
-    row = File(drive_id=drive.pk)
-    with actor_context(drive.alice):
-        # One joined fetch plus the file and drive system-context audit rows.
-        with django_assert_num_queries(3):
+    if cached_drive:
+        Drive._meta.get_field("backend").delete_cached_value(drive)
+    row = File(drive=drive) if cached_drive else File(drive_id=drive.pk)
+    with system_context(reason="test storage resolution") if system else actor_context(drive.alice):
+        # A new system context adds one native audit INSERT to the single fetch.
+        with django_assert_num_queries(1 if system else 2):
             backend = row.storage
             assert row.drive.backend.pk == drive.backend_id
-        # Cached owners issue only the three system-context audit writes.
-        with django_assert_num_queries(3):
+        with django_assert_num_queries(0):
             assert row.storage is backend
+            assert backend is row.drive.storage
+        assert current_sudo_reason() == ("test storage resolution" if system else None)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("system", [False, True])
+def test_drive_storage_fetches_only_an_uncached_backend(
+    drive: Any, django_assert_num_queries: Any, system: bool
+) -> None:
+    """Reuse cached backend rows and the caller's active system context."""
+
+    Drive._meta.get_field("backend").delete_cached_value(drive)
+    with system_context(reason="test storage resolution") if system else actor_context(drive.alice):
+        with django_assert_num_queries(1 if system else 2):
+            backend = drive.storage
+        with django_assert_num_queries(0):
             assert backend is drive.storage
+        assert current_sudo_reason() == ("test storage resolution" if system else None)
 
 
 def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:

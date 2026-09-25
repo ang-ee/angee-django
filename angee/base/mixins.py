@@ -305,7 +305,10 @@ class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
 
     Compose before the domain's base queryset to preserve authorization.
     Retained evidence uses insert admission; retained state machines expose
-    exact conditional writes through their own methods and ``_owner_update``.
+    exact conditional writes through their own methods and ``owner_update``.
+    ``owner_update`` and ``owner_bulk_create`` are public, framework-protected
+    APIs for domain owners that have already validated fields and predicates.
+    They skip this class's guard only, preserving every downstream guard.
     Instance invariants and collector retention remain model/FK concerns;
     ``AuditMixin`` clears audit FKs through its collector policy without
     calling this queryset.
@@ -340,15 +343,15 @@ class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
         if ignore_conflicts or update_conflicts:
             raise self.immutable_error("bulk_create")
         self.validate_insert()
-        return self._owner_bulk_create(objs, batch_size=batch_size)
+        return self.owner_bulk_create(objs, batch_size=batch_size)
 
-    def _owner_bulk_create(self, objs: Iterable[_ModelT], *, batch_size: int | None = None) -> list[_ModelT]:
-        """Insert a domain-validated batch through the remaining queryset guards."""
+    def owner_bulk_create(self, objs: Iterable[_ModelT], *, batch_size: int | None = None) -> list[_ModelT]:
+        """Protected API: insert an owner-validated batch through downstream guards."""
 
         return super().bulk_create(objs, batch_size=batch_size)
 
-    def _owner_update(self, **kwargs: Any) -> int:
-        """Apply a domain-owned conditional write through the remaining guards."""
+    def owner_update(self, **kwargs: Any) -> int:
+        """Protected API: apply an owner-validated write through downstream guards."""
 
         return super().update(**kwargs)
 
@@ -524,7 +527,7 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
     Compose alongside the model's base queryset (e.g.
     ``class LocationQuerySet(HierarchyQuerySet[Location], AngeeQuerySet[Location])``)
     and put it FIRST: the owner's path rewrite skips only this class's write
-    guard through ``super(HierarchyQuerySet, ...)``, so any write-guarding
+    guard through ``owner_update``, so any write-guarding
     queryset composed before it would be skipped too. The subtree vocabulary
     — :meth:`subtree_of` / :meth:`ancestors_of` — reads
     as chainable predicates over the maintained ``path`` column, served by the
@@ -554,6 +557,15 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
 
         if {"path", "parent", "parent_id"} & kwargs.keys():
             raise ValidationError("The hierarchy parent and path belong to the saved-row owner.")
+        return super().update(**kwargs)
+
+    def owner_update(self, **kwargs: Any) -> int:
+        """Protected API: apply an owner-validated write through downstream guards.
+
+        HierarchyMixin owns the selected rows and derived path value; bypass
+        only this class's external-write guard after validating the move.
+        """
+
         return super().update(**kwargs)
 
 
@@ -787,7 +799,7 @@ class HierarchyMixin(models.Model):
         """
 
         if isinstance(queryset, HierarchyQuerySet):
-            return super(HierarchyQuerySet, queryset).update(path=path_value)
+            return queryset.owner_update(path=path_value)
         return queryset.update(path=path_value)
 
     def _lock_moved_paths(self) -> str:

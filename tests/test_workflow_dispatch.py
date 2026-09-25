@@ -339,7 +339,7 @@ def test_direct_dispatch_mutations_and_invalid_targets_are_rejected(run: Workflo
         dispatch.save(update_fields=["send_count"])
     with pytest.raises(ValidationError, match="WorkflowDispatch rows cannot be edited"):
         WorkflowDispatch.objects.filter(pk=dispatch.pk).update(send_count=99)
-    with pytest.raises(TypeError, match="bulk_create"):
+    with pytest.raises(TypeError, match="WorkflowDispatchManager"):
         WorkflowDispatch.objects.bulk_create([dispatch])
     with pytest.raises(ValidationError, match="WorkflowDispatch rows cannot be edited"):
         WorkflowDispatch.objects.bulk_update([dispatch], ["send_count"])
