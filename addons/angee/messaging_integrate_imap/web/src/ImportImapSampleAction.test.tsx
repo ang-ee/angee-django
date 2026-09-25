@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
     previewDocument: document("query", "PreviewImapSample"),
     previewPages: [] as Array<Record<string, unknown>>,
     custom: vi.fn(),
+    actor: "user-1",
   };
 });
 
@@ -29,7 +30,7 @@ vi.mock("./documents", () => ({
 
 vi.mock("@angee/app", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/app")>(),
-  useAuth: () => ({ user: { id: "user-1" } }),
+  useAuth: () => ({ user: { id: mocks.actor } }),
 }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -61,12 +62,17 @@ const page = (uids: number[], nextBeforeUid: number | null = null, total = uids.
 });
 const previewCalls = () => mocks.custom.mock.calls.filter(([request]) => request.meta.gqlQuery);
 
-async function openDialog() {
-  render(<Provider><AppRuntimeProvider runtime={{ i18n }}><ToastProvider>
+function TestDialog() {
+  return <Provider><AppRuntimeProvider runtime={{ i18n }}><ToastProvider>
     <ImportImapSampleAction />
-  </ToastProvider></AppRuntimeProvider></Provider>);
+  </ToastProvider></AppRuntimeProvider></Provider>;
+}
+
+async function openDialog() {
+  const view = render(<TestDialog />);
   fireEvent.click(screen.getByRole("button", { name: "Import historical sample" }));
   await screen.findByRole("dialog", { name: "Import historical messages" });
+  return view;
 }
 
 async function preview() {
@@ -79,6 +85,7 @@ describe("ImportImapSampleAction snapshot selection", () => {
   afterEach(() => { cleanup(); clearClients(); });
 
   beforeEach(() => {
+    mocks.actor = "user-1";
     mocks.previewPages = [page([3, 2], 2, 3), page([1], null, 3), {
       ...page([3]), messages: [message(3, "Fresh observation of UID 3")],
     }];
@@ -242,6 +249,7 @@ describe("ImportImapSampleAction snapshot selection", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("Choose a whole number between 1 and 50 messages per page.");
     expect(input.value).toBe(value);
     expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(screen.getByRole("alert").id);
     expect(previewCalls()).toHaveLength(0);
     fireEvent.change(input, { target: { value: "1" } });
     await preview();
@@ -252,11 +260,17 @@ describe("ImportImapSampleAction snapshot selection", () => {
     await openDialog();
     fireEvent.change(screen.getByLabelText("Mailbox"), { target: { value: "   " } });
     fireEvent.click(screen.getByRole("button", { name: "Preview messages" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("Choose a mailbox and a valid date window.");
+    const error = await screen.findByRole("alert");
+    expect(error.textContent).toBe("Choose a mailbox and a valid date window.");
+    expect(screen.getByLabelText("Mailbox").getAttribute("aria-describedby")).toBe(error.id);
     expect(previewCalls()).toHaveLength(0);
     fireEvent.change(screen.getByLabelText("Mailbox"), { target: { value: " Archive " } });
     await preview();
     expect(previewCalls()[0]?.[0].meta.gqlVariables.mailbox).toBe("Archive");
+    fireEvent.click(within(screen.getByRole("row", { name: /Message 3/ })).getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Import 1 selected" }));
+    await screen.findByText(/Imported 1; 0 were no longer available/);
+    expect(mocks.custom.mock.calls.find(([request]) => request.meta.gqlMutation)?.[0].meta.gqlVariables.mailbox).toBe("Archive");
   });
 
   test("changing all dates invalidates the preview without querying", async () => {
@@ -277,11 +291,26 @@ describe("ImportImapSampleAction snapshot selection", () => {
     fireEvent.change(screen.getByLabelText("Since"), { target: { value: since } });
     fireEvent.change(screen.getByLabelText("Before"), { target: { value: before } });
     fireEvent.click(screen.getByRole("button", { name: "Preview messages" }));
-    expect((await screen.findByRole("alert")).textContent).toBe(error);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(error);
+    for (const label of ["Since", "Before"]) {
+      expect(screen.getByLabelText(label).getAttribute("aria-invalid")).toBe("true");
+      expect(screen.getByLabelText(label).getAttribute("aria-describedby")).toBe(alert.id);
+    }
     expect(previewCalls()).toHaveLength(0);
     fireEvent.click(screen.getByRole("checkbox", { name: "All dates in this mailbox" }));
     await preview();
     expect(previewCalls()[0]?.[0].meta.gqlVariables).toMatchObject({ since: null, before: null, allDates: true });
+  });
+
+  test("changing actors does not probe until another explicit preview", async () => {
+    const view = await openDialog();
+    await preview();
+    mocks.actor = "user-2";
+    await act(async () => { view.rerender(<TestDialog />); });
+    expect(previewCalls()).toHaveLength(1);
+    await preview();
+    expect(previewCalls()).toHaveLength(2);
   });
 
   test("focus, reconnect, invalidation and reopening do not implicitly probe a preview", async () => {

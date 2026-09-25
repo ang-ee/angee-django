@@ -107,13 +107,14 @@ class AngeeResource(resources.ModelResource):
         )
 
     def before_import(self, dataset: tablib.Dataset, **kwargs: Any) -> None:
-        """Validate incoming headers before import-export reads rows."""
+        """Validate headers and reset any batch-planning state before importing."""
 
         del kwargs
         self._validate_catalogue_tier()
         self._validate_headers(list(dataset.headers or []))
         self._hash_skips = set()
         self._instances.clear()
+        self._row_hashes.clear()
         self._prime_existing_ledgers(dataset)
 
     def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
@@ -184,9 +185,26 @@ class AngeeResource(resources.ModelResource):
             self._instances[xref] = self._instance_from_ledger(ledger)
         return self._instances[xref]
 
-    @classmethod
+    def instance_for_row(self, row: Mapping[str, Any]) -> models.Model | None:
+        """Resolve row identity and record native import hash skips."""
+
+        xref = self._row_xref(row.get("_xref"), row_number=0)
+        ledger = self._ledger_for_xref(xref)
+        self._check_ledger_target(xref, ledger)
+        identity = self._adopt_identity(row)
+        instance = self.instance_for_xref(xref)
+        if instance is not None and self._ledger_resolution_is_stale(identity, instance):
+            # A surviving ledger may point at a reused pk. Adoption repairs it.
+            instance = None
+        if instance is None:
+            instance = self._adopt_existing_target(row, identity)
+        elif ledger is not None and ledger.content_hash == self._row_hashes.get(xref):
+            self._hash_skips.add(xref)
+        self._instances[xref] = instance
+        return instance
+
+    @staticmethod
     def resolve_existing(
-        cls,
         batches: Sequence[tuple[tablib.Dataset, AngeeResource]],
         *,
         references: Sequence[tuple[str, str]] = (),
@@ -199,7 +217,8 @@ class AngeeResource(resources.ModelResource):
         to the native instance loader. Omitted rows retain their ledger target;
         stale ledger targets remain available alongside their adopted target.
         Invalid input is left to the native import's source-row diagnostics.
-        No import hooks, row writes, or ledger writes run here.
+        No import hooks, row writes, or ledger writes run here. Planning primes
+        per-import caches; ``before_import`` resets them before row processing.
         """
 
         if not batches:
@@ -231,25 +250,32 @@ class AngeeResource(resources.ModelResource):
                 ((addon, ledger.xref), ledger)
                 for ledger in batches[0][1].ledger_model._default_manager.filter(source_addon=addon, xref__in=xrefs)
             )
-        querysets: dict[type[models.Model], models.QuerySet[Any]] = {}
-        for ledger in ledgers.values():
+        lookups: dict[tuple[str, str], tuple[type[models.Model], str, Any]] = {}
+        values_by_field: dict[tuple[type[models.Model], str], set[Any]] = defaultdict(set)
+        for key, ledger in ledgers.items():
             if ledger is None or not ledger.target_id:
                 continue
             try:
                 model = resolve_model(ledger.target_model)
-                lookup = public_id_lookup(model, ledger.target_id)
-                queryset = model._default_manager.filter(**lookup)
-                querysets[model] = querysets.get(model, model._default_manager.none()) | queryset
+                (field_name, value), = public_id_lookup(model, ledger.target_id).items()
+                field = cast(
+                    "models.Field[Any, Any]",
+                    model._meta.pk if field_name == "pk" else model._meta.get_field(field_name),
+                )
+                # Virtual identities expose their concrete column through Django.
+                target_field = field.get_col(model._meta.db_table).target
+                field_name = target_field.name
+                value = target_field.to_python(field.get_prep_value(value))
+                lookups[key] = (model, field_name, value)
+                values_by_field[(model, field_name)].add(value)
             except (ImproperlyConfigured, TypeError, ValueError, ValidationError):
                 continue
         instances = {
-            (model._meta.label, public_id_of(instance)): instance
-            for model, queryset in querysets.items() for instance in queryset
+            (model, field_name, value): instance
+            for (model, field_name), values in values_by_field.items()
+            for value, instance in model._default_manager.in_bulk(values, field_name=field_name).items()
         }
-        targets = {
-            key: instances.get((ledger.target_model, ledger.target_id)) if ledger is not None else None
-            for key, ledger in ledgers.items()
-        }
+        targets = {key: instances.get(lookup) for key, lookup in lookups.items()}
         resolved: dict[tuple[AngeeResource, str], ResourceResolution] = {}
         for _dataset, resource in batches:
             addon = resource.entry.addon.name
@@ -723,21 +749,7 @@ class XrefInstanceLoader(BaseInstanceLoader):
     def get_instance(self, row: Mapping[str, Any]) -> models.Model | None:
         """Return the existing target for one dataset row."""
 
-        resource = self.resource
-        xref = resource._row_xref(row.get("_xref"), row_number=0)
-        ledger = resource._ledger_for_xref(xref)
-        resource._check_ledger_target(xref, ledger)
-        identity = resource._adopt_identity(row)
-        instance = resource.instance_for_xref(xref)
-        if instance is not None and resource._ledger_resolution_is_stale(identity, instance):
-            # A surviving ledger may point at a reused pk. Adoption repairs it.
-            instance = None
-        if instance is None:
-            instance = resource._adopt_existing_target(row, identity)
-        elif ledger is not None and ledger.content_hash == resource._row_hashes.get(xref):
-            resource._hash_skips.add(xref)
-        resource._instances[xref] = instance
-        return instance
+        return self.resource.instance_for_row(row)
 
 
 def build_resource(

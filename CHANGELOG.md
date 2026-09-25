@@ -13,16 +13,22 @@ live in code docstrings.
 
 - Workflow resource lock planning resolves existing targets and retained ledgers
   through `AngeeResource.resolve_existing` and the native import-export loader.
-- Root-local JSON Schema references use `referencing` in workflow structural proofs
-  and implementation forms; nested resource scopes remain outside these bounded
-  projections. Core declares its `jsonschema` and `referencing` dependencies.
+  Decoded targets use Django's batched `in_bulk`; row adoption and hash-skip state
+  stay on the resource and are reset before import.
+- `angee.base.jsonschema.LocalSchemaReferences` owns root-local JSON Schema
+  pointers and anchors through `referencing` for workflow structural proofs and
+  implementation forms; remote references and nested resource scopes remain
+  unsupported. Core declares its `jsonschema` and `referencing` dependencies.
 - IMAP sample preview fields and validation compose react-hook-form with
-  `DialogForm`; the backend remains the sample-limit authority.
+  `DialogForm`; previews start directly from validated submissions and validation
+  messages describe affected inputs. The backend remains the sample-limit authority.
 - CardDAV uses `HttpClient.request(same_origin_redirects=3)` for bounded redirects
   that retain the request method, body and credentials only on the same origin.
+  Photo downloads share that origin comparison; URL-gate validation errors retain
+  their original type, while origin-changing redirects become `CardDavError`.
 - Messaging adapters import `mapping`, `millis_to_utc`, `sequence` and `text` from
   the public owner `angee.messaging.identity`. `_wire` remains private compatibility
-  imports while bridge callers migrate.
+  imports while bridge callers migrate; delete `_wire` once that migration lands.
 
 - Remove write-alias threading and custom `using=` parameters, including the
   `using` payload on `change_published` and `file_finalized`; Django routers own

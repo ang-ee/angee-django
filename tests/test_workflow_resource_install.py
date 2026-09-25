@@ -12,8 +12,9 @@ import pytest
 import tablib
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
-from django.db import models, transaction
+from django.db import connection, models, transaction
 from django.db.models.fields import NOT_PROVIDED
+from django.test.utils import CaptureQueriesContext
 from import_export.results import RowResult
 from pydantic import BaseModel, ConfigDict, Field
 from rebac import system_context
@@ -332,13 +333,18 @@ def test_installer_emits_refs_for_edge_endpoint_change(
     ]
 
 
-def test_native_results_and_canonical_ledger_cover_create_update_skip_and_adoption(tmp_path: Path) -> None:
+@pytest.mark.parametrize("plan_first", [False, True])
+def test_native_results_and_canonical_ledger_cover_create_update_skip_and_adoption(
+    tmp_path: Path, plan_first: bool,
+) -> None:
     addon = _addon(tmp_path)
     source = "resources/install/100_workflows.workflow.yaml"
 
     def imported(name: str) -> tuple[Any, Any]:
         group, resource = _group(addon, Workflow, source, ({"_xref": "head", "key": "head", "name": name},))
         with system_context(reason="native workflow import results"), transaction.atomic():
+            if plan_first:
+                AngeeResource.resolve_existing(((group.dataset, resource),))
             result = resource.import_data(group.dataset, raise_errors=True, use_transactions=False)
         return resource, result
 
@@ -367,6 +373,8 @@ def test_native_results_and_canonical_ledger_cover_create_update_skip_and_adopti
     group, resource = _group(addon, Workflow, source, ({"_xref": "head", "key": "head", "name": "Adopted"},))
     group.entry.adopt = "key"
     with system_context(reason="native workflow adoption"), transaction.atomic():
+        if plan_first:
+            AngeeResource.resolve_existing(((group.dataset, resource),))
         adopted = resource.import_data(group.dataset, raise_errors=True, use_transactions=False)
     assert adopted.totals[RowResult.IMPORT_TYPE_UPDATE] == 1
     assert adopted.rows[0].object_id == first.object_id
@@ -750,9 +758,8 @@ def test_existing_resource_resolution_retains_omissions_and_uses_native_loader_w
         for step in Step.system_queryset():
             WorkflowResourceLedger.objects.filter(
                 target_model=Step._meta.label, target_id=public_id_of(step),
-            ).update(target_id=step.key)
-    monkeypatch.setattr(Step, "public_id_lookup", classmethod(lambda cls, value: {"key": value}))
-    monkeypatch.setattr(Step, "public_id_value", lambda self: self.key)
+            ).update(target_id=f"{step.pk:04}")
+    monkeypatch.setattr(Step, "public_id_lookup", classmethod(lambda cls, value: {"pk": value}))
     group, resource = groups[1]
     group.dataset = tablib.Dataset(*group.dataset[:1], headers=group.dataset.headers)
     native = resource.get_instance
@@ -768,11 +775,14 @@ def test_existing_resource_resolution_retains_omissions_and_uses_native_loader_w
     monkeypatch.setattr(resource, "get_instance", get_instance)
     monkeypatch.setattr(resource, "before_import_row", unexpected_import)
     monkeypatch.setattr(resource, "after_save_instance", unexpected_import)
+    monkeypatch.setattr(connection.ops, "bulk_batch_size", lambda fields, objects: 2)
     with system_context(reason="resolve retained workflow facet"):
-        resolved, _references = AngeeResource.resolve_existing(((group.dataset, resource),))
+        with CaptureQueriesContext(connection) as queries:
+            resolved, _references = AngeeResource.resolve_existing(((group.dataset, resource),))
         assert resolved[(resource, "entry")].instance == Step.system_queryset().get(key="entry")
         assert resolved[(resource, "alpha")].instance is None
         assert resolved[(resource, "alpha")].retained_instance == Step.system_queryset().get(key="alpha")
+    assert sum(f'FROM "{Step._meta.db_table}"' in query["sql"] for query in queries) == 2
     assert rows == ["entry"]
     assert resolved[(resource, "alpha")].ledger == WorkflowResourceLedger.objects.get(xref="alpha")
     assert WorkflowResourceLedger.objects.count() == 9

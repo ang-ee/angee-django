@@ -51,6 +51,17 @@ _SSL_CONTEXT = ssl.create_default_context()
 CA bundle is parsed once rather than on every outbound request."""
 
 
+class RedirectOriginError(ValidationError):
+    """A redirect would send the request to a different origin."""
+
+
+def same_origin(first: str | httpx.URL, second: str | httpx.URL) -> bool:
+    """Compare normalized URL origins, including effective ports and excluding credentials."""
+
+    left, right = httpx.URL(first), httpx.URL(second)
+    return (left.scheme, left.host, left.port) == (right.scheme, right.host, right.port)
+
+
 @dataclass(frozen=True, slots=True)
 class OutboundBudget:
     """Hard bounds for one redirecting, decoded outbound download."""
@@ -342,8 +353,8 @@ class HttpClient:
         Raises ``ValidationError`` when the URL or a resolved address is rejected by
         the SSRF gate, and ``OSError`` when every validated address is unreachable.
         ``same_origin_redirects`` follows at most that many 301/302/307/308 hops,
-        retaining the method, body and headers. A changed origin is rejected
-        before sending credentials. It is exclusive with native ``follow_redirects``;
+        retaining the method, body and headers. A changed origin raises
+        ``RedirectOriginError`` before sending credentials. It is exclusive with native ``follow_redirects``;
         a missing location or exhausted hop bound returns the redirect response.
         """
 
@@ -358,16 +369,13 @@ class HttpClient:
                 if (
                     hop == same_origin_redirects
                     or response.status_code not in {301, 302, 307, 308}
-                    or not response.headers.get("location")
+                    or not response.headers.get("location")  # httpx also creates next_request for an empty Location.
                     or response.next_request is None
                 ):
                     break
                 destination = response.next_request.url
-                origin = response.url
-                if (destination.scheme, destination.host, destination.port) != (
-                    origin.scheme, origin.host, origin.port,
-                ):
-                    raise ValidationError("Redirects must retain the request origin.")
+                if not same_origin(destination, response.url):
+                    raise RedirectOriginError("Redirects must retain the request origin.")
                 url = str(destination)
         return response
 

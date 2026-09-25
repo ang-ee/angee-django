@@ -1298,6 +1298,13 @@ def test_generation_bump_deepcopies_nested_config(replica: Replica, monkeypatch:
     assert replica.stream.config == {"policy": {"fields": ["notes"]}}
 
 
+@pytest.mark.parametrize("url", ["file:///tmp/addressbook", "http://169.254.169.254/addressbook/"])
+def test_request_preserves_url_gate_validation_error(replica: Replica, url: str) -> None:
+    replica.backend.__dict__["http"] = HttpClient()
+    with pytest.raises(ValidationError):
+        replica.backend._request("PROPFIND", url, "<propfind/>")
+
+
 def test_cross_origin_redirect_refuses_to_forward_basic_auth(
     replica: Replica,
     monkeypatch: pytest.MonkeyPatch,
@@ -1311,7 +1318,7 @@ def test_cross_origin_redirect_refuses_to_forward_basic_auth(
     monkeypatch.setattr("angee.integrate.http.PinnedTransport", lambda **_: httpx.MockTransport(redirect))
     replica.backend.__dict__["http"] = HttpClient()
     monkeypatch.setattr(replica.backend, "_auth", lambda: {"Authorization": "Basic dXNlcjpwYXNz"})
-    with pytest.raises(CardDavError):
+    with pytest.raises(CardDavError, match="request origin"):
         replica.backend._request("PROPFIND", _BOOK, "<propfind/>")
     assert len(sent) == 1
     assert str(sent[0].url) == _BOOK

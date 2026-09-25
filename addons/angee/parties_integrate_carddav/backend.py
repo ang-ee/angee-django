@@ -26,9 +26,9 @@ from xml.sax.saxutils import escape
 import vobject
 from defusedxml import ElementTree
 from django.apps import apps
-from django.core.exceptions import ValidationError
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.http import RedirectOriginError, same_origin
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import CursorInvalid, RecordChange, RemoteRejected, StreamPage, WriteBackResult
 from angee.parties.backends import (
@@ -268,7 +268,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         photo = contact.photo
         if photo is None or photo.data is not None or not photo.uri:
             return contact
-        if _origin(photo.uri) != _origin(collection):
+        if not same_origin(photo.uri, collection):
             raise CardDavError("The vCard photo must share the address book's origin.")
         try:
             data = self.http.download_capped(
@@ -312,8 +312,8 @@ class CardDavDirectoryBackend(DirectoryBackend):
                 allow_private=True,
                 same_origin_redirects=3,
             )
-        except ValidationError as error:
-            raise CardDavError("The CardDAV request URL or redirect was rejected.") from error
+        except RedirectOriginError as error:
+            raise CardDavError(error.message) from error
         if response.status_code == 412:
             raise RemoteRejected()
         if cursor_request:
@@ -481,14 +481,6 @@ def _well_known(base: str) -> str:
 
     parts = urlsplit(base)
     return urlunsplit((parts.scheme, parts.netloc, "/.well-known/carddav", "", ""))
-
-
-def _origin(url: str) -> tuple[str, str | None, int | None]:
-    """Compare URL origins including the effective port, never user information."""
-
-    parts = urlsplit(url)
-    port = parts.port if parts.port is not None else {"http": 80, "https": 443}.get(parts.scheme)
-    return parts.scheme, parts.hostname, port
 
 
 def _render_vcard(

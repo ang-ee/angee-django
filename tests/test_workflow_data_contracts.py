@@ -379,6 +379,38 @@ def test_local_references_preserve_catalogue_and_structural_proofs(reference: st
     assert contract.string_length_ranges_at_path(["label"]) == ((1, 8),)
 
 
+@pytest.mark.parametrize("base_constraint", [False, True])
+@pytest.mark.parametrize(("method", "variants", "expected"), [
+    ("literal_values_at_path", [{"const": "a"}, {"const": "b"}], ("a", "b")),
+    ("numeric_ranges_at_path", [
+        {"type": "integer", "minimum": 1}, {"type": "number", "exclusiveMaximum": 5},
+    ], ((1, False, None, False), (None, False, 5, True))),
+    ("string_length_ranges_at_path", [
+        {"type": "string", "minLength": 1}, {"type": "string", "maxLength": 5},
+    ], ((1, None), (0, 5))),
+])
+def test_scalar_proofs_share_array_union_traversal(method, variants, expected, base_constraint) -> None:
+    item = {"anyOf": variants, **(variants[0] if base_constraint else {})}
+    contract = schema_data_contract({
+        "type": "object", "properties": {"values": {"type": "array", "items": item}},
+    })
+    assert getattr(contract, method)(["values", 0]) == (expected[:1] if base_constraint else expected)
+
+
+def test_root_property_pointers_are_supported_beyond_defs() -> None:
+    contract = schema_data_contract({
+        "type": "object", "required": ["value"],
+        "properties": {
+            "source": {"type": "string", "const": "accepted", "minLength": 1, "maxLength": 8},
+            "value": {"$ref": "#/properties/source"},
+        },
+    })
+    assert contract.matches_path(["value"])
+    assert contract.guarantees_path(["value"])
+    assert contract.literal_values_at_path(["value"]) == ("accepted",)
+    assert contract.string_length_ranges_at_path(["value"]) == ((1, 8),)
+
+
 @pytest.mark.parametrize("location", ["nested", "reference", "pointer"])
 def test_scoped_references_never_prove_against_the_outer_document(location: str) -> None:
     scoped = {

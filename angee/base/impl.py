@@ -24,11 +24,9 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
-from referencing import Registry
-from referencing.exceptions import Unresolvable
-from referencing.jsonschema import DRAFT202012
 
 from angee.base.fields import enum_member_for
+from angee.base.jsonschema import LocalSchemaReferences
 
 __all__ = [
     "ImplBase",
@@ -115,7 +113,7 @@ class _ConfigFormSpecProjector:
         schema = model.model_json_schema(by_alias=True)
         if not isinstance(schema.get("$defs", {}), dict):
             self._unsupported("config", "$defs")
-        self.resolver = Registry().resolver_with_root(DRAFT202012.create_resource(schema))
+        self.references = LocalSchemaReferences(schema)
         self.schema = {key: value for key, value in schema.items() if key != "$defs"}
 
     def form_spec(self) -> dict[str, Any]:
@@ -138,17 +136,12 @@ class _ConfigFormSpecProjector:
         if "$ref" in schema:
             self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"$ref"}, path)
             reference = schema["$ref"]
-            if not isinstance(reference, str) or not reference.startswith("#"):
+            target = self.references.resolve(reference)
+            if target is None:
                 self._unsupported(path, f"reference {reference!r}")
             if reference in refs:
                 self._unsupported(path, f"recursive reference {reference!r}")
-            try:
-                resolved = self.resolver.lookup(reference)
-                if resolved.resolver.lookup("#").contents is not self.resolver.lookup("#").contents:
-                    self._unsupported(path, f"scoped reference {reference!r}")
-            except Unresolvable:
-                self._unsupported(path, f"reference {reference!r}")
-            projected = self._project(resolved.contents, path=path, refs=(*refs, reference))
+            projected = self._project(target, path=path, refs=(*refs, reference))
             projected.pop("label", None)
             return self._metadata(projected, schema)
 

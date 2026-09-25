@@ -28,7 +28,9 @@ GraphQL arguments through the model to the backend.
 The [web action](web/src/ImportImapSampleAction.tsx) composes `DialogForm` fields
 with React Hook Form for values, validation, and submission. Only a valid submitted
 request reaches `useAuthoredKeysetFeed`; incomplete drafts never become mailbox
-requests. Invalid page sizes show a validation error instead of being clamped.
+requests. Form values normalize mailbox names once; validation messages are linked
+to their invalid inputs, including both ends of an invalid date window. Invalid
+page sizes show a validation error instead of being clamped.
 The operations expose no sample-limit metadata, so the exported
 `IMAP_SAMPLE_LIMIT` is the frontend's one bound, checked against the backend owner.
 Native Query pages retain loaded headers, mailbox

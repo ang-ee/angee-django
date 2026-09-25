@@ -773,7 +773,7 @@ def test_config_form_spec_rejects_pointers_into_scoped_resources(monkeypatch: py
     schema["$defs"] = {"Scoped": {"$id": "child", "$defs": {"Value": {"type": "string"}}}}
     schema["properties"]["value"] = {"$ref": "#/$defs/Scoped/$defs/Value"}
     monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
-    with pytest.raises(ImproperlyConfigured, match=r"ReferencedConfig.*config\.value.*scoped reference"):
+    with pytest.raises(ImproperlyConfigured, match=r"ReferencedConfig.*config\.value.*reference"):
         model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
 
 

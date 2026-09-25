@@ -1,8 +1,9 @@
 import { useMessagingT } from "@angee/messaging";
 import { keysetFeedRows, useAuthoredMutation } from "@angee/refine";
-import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, FieldRow, Input, RecordActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
+import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, FieldRow, Input, RecordActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { ImportImapSample } from "./documents";
@@ -40,22 +41,21 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   const [previewValues, setPreviewValues] = React.useState<PreviewValues | null>(null);
   const [outcome, setOutcome] = React.useState<Outcome | null>(null);
   const { query: previewFeed, restart } = useSamplePreviewFeed({
-    id: recordId, mailbox: previewValues?.mailbox.trim() ?? "",
+    id: recordId, mailbox: previewValues?.mailbox ?? "",
     since: previewValues?.allDates ? null : previewValues?.since,
     before: previewValues?.allDates ? null : previewValues?.before,
     allDates: previewValues?.allDates ?? false, limit: previewValues?.limit ?? IMAP_SAMPLE_LIMIT,
   });
   const [runImport, importState] = useAuthoredMutation(ImportImapSample, { invalidateModels: ["messaging.Message"] });
 
-  // Only an explicit, validated submission starts the feed. Incomplete drafts
-  // must not become query parameters, including an invalid page size.
-  React.useEffect(() => {
-    if (previewValues) void restart().catch(() => { /* Native query state renders the server error. */ });
-  }, [previewValues, restart]);
+  const restartRef = useLatestRef(restart);
+  const formErrorId = React.useId();
 
   if (record === null) return null;
   const busy = previewFeed.isFetching || importState.fetching;
-  const formError = Object.values(form.formState.errors).find((error) => error?.message)?.message;
+  const errors = form.formState.errors;
+  const formError = Object.values(errors).map((error) => error?.message).filter(Boolean).join(" ");
+  const invalidLimit = t("channel.imap.sample.invalidLimit", { limit: IMAP_SAMPLE_LIMIT });
   const operationError = (previewValues ? previewFeed.error : null) ?? importState.error;
   const rows = keysetFeedRows(previewValues ? previewFeed.data : undefined, (left, right) => right.uid - left.uid);
   const page = previewValues ? previewFeed.data?.pages.at(-1) : undefined;
@@ -79,13 +79,16 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   const loadPreview = (values: PreviewValues): void => {
     setOutcome(null);
     importState.reset();
-    clearSelectedIds(); setPage(1); setPreviewValues(values);
+    clearSelectedIds(); setPage(1);
+    // Commit the validated query parameters before restarting their feed.
+    flushSync(() => setPreviewValues(values));
+    void restartRef.current().catch(() => { /* Native query state renders the server error. */ });
   };
 
   const importSelected = async (selectedIds: ReadonlySet<string>, clear: () => void): Promise<void> => {
     if (!preview || !previewValues) return;
     try {
-      const data = await runImport({ id: recordId, mailbox: previewValues.mailbox.trim(), uidvalidity: preview.uidvalidity, uids: [...selectedIds].map(Number) });
+      const data = await runImport({ id: recordId, mailbox: previewValues.mailbox, uidvalidity: preview.uidvalidity, uids: [...selectedIds].map(Number) });
       if (data?.import_imap_sample) { setOutcome(data.import_imap_sample); clear(); }
     } catch { /* Authored mutation state renders the server error. */ }
   };
@@ -103,16 +106,16 @@ function ImportImapSampleDialog(): React.ReactElement | null {
       </RecordActionTrigger>
     }
     footer={<Button type="submit" variant="primary" disabled={busy}>{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.preview")}</Button>}>
-      <FieldRow label={t("channel.imap.sample.mailbox")}><Input disabled={busy} invalid={Boolean(form.formState.errors.mailbox)} {...form.register("mailbox", {
-        validate: (value) => Boolean(value.trim()) || t("channel.imap.sample.invalidRange"), onChange: invalidatePreview,
+      <FieldRow label={t("channel.imap.sample.mailbox")}><Input disabled={busy} invalid={Boolean(errors.mailbox)} aria-describedby={errors.mailbox ? formErrorId : undefined} {...form.register("mailbox", {
+        setValueAs: (value: string) => value.trim(), required: t("channel.imap.sample.invalidRange"), onChange: invalidatePreview,
       })} /></FieldRow>
       <Controller name="allDates" control={form.control} render={({ field }) => <FieldRoot>
         <FieldRoot.Label>{t("channel.imap.sample.allDates")}</FieldRoot.Label>
         <Checkbox ref={field.ref} name={field.name} checked={field.value} disabled={busy} onBlur={field.onBlur}
           onCheckedChange={(checked) => { field.onChange(checked); invalidatePreview(); }} />
       </FieldRoot>} />
-      <FieldRow label={t("channel.imap.sample.since")}><Input type="date" disabled={busy || allDates} {...form.register("since", { onChange: invalidatePreview })} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.before")}><Input type="date" disabled={busy || allDates} invalid={Boolean(form.formState.errors.before)} {...form.register("before", {
+      <FieldRow label={t("channel.imap.sample.since")}><Input type="date" disabled={busy || allDates} invalid={Boolean(errors.before)} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("since", { onChange: invalidatePreview })} /></FieldRow>
+      <FieldRow label={t("channel.imap.sample.before")}><Input type="date" disabled={busy || allDates} invalid={Boolean(errors.before)} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("before", {
         validate: (value, values) => {
           if (values.allDates) return true;
           const span = Date.parse(`${value}T00:00:00Z`) - Date.parse(`${values.since}T00:00:00Z`);
@@ -120,14 +123,14 @@ function ImportImapSampleDialog(): React.ReactElement | null {
           return span / 86_400_000 <= 366 || t("channel.imap.sample.rangeTooLong");
         }, onChange: invalidatePreview,
       })} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.limit")}><Input type="number" min={1} max={IMAP_SAMPLE_LIMIT} disabled={busy} invalid={Boolean(form.formState.errors.limit)} {...form.register("limit", {
-        valueAsNumber: true, required: t("channel.imap.sample.invalidLimit", { limit: IMAP_SAMPLE_LIMIT }),
-        min: { value: 1, message: t("channel.imap.sample.invalidLimit", { limit: IMAP_SAMPLE_LIMIT }) },
-        max: { value: IMAP_SAMPLE_LIMIT, message: t("channel.imap.sample.invalidLimit", { limit: IMAP_SAMPLE_LIMIT }) },
-        validate: (value) => Number.isInteger(value) || t("channel.imap.sample.invalidLimit", { limit: IMAP_SAMPLE_LIMIT }),
+      <FieldRow label={t("channel.imap.sample.limit")}><Input type="number" min={1} max={IMAP_SAMPLE_LIMIT} disabled={busy} invalid={Boolean(errors.limit)} aria-describedby={errors.limit ? formErrorId : undefined} {...form.register("limit", {
+        valueAsNumber: true, required: invalidLimit,
+        min: { value: 1, message: invalidLimit },
+        max: { value: IMAP_SAMPLE_LIMIT, message: invalidLimit },
+        validate: (value) => Number.isInteger(value) || invalidLimit,
         onChange: invalidatePreview,
       })} /></FieldRow>
-      {formError || operationError ? <Alert className="col-span-full" tone="danger">{formError ?? errorMessage(operationError, t("channel.imap.sample.failed"))}</Alert> : null}
+      {formError || operationError ? <Alert id={formErrorId} className="col-span-full" tone="danger">{formError || errorMessage(operationError, t("channel.imap.sample.failed"))}</Alert> : null}
       {outcome ? <Alert
         className="col-span-full"
         tone={outcome.missing_uids.length || !outcome.flags_unchanged ? "warning" : "success"}

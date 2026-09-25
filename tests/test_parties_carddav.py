@@ -13,6 +13,7 @@ from django.core.management import call_command
 from django.db import connection
 from rebac import system_context
 
+from angee.integrate.http import HttpClient
 from angee.parties_integrate_carddav.backend import (
     CardDavDirectoryBackend,
     CardDavError,
@@ -95,20 +96,19 @@ def _backend_with_http(http: Any) -> CardDavDirectoryBackend:
     return backend
 
 
-def test_native_httpx_multistatus_and_case_insensitive_redirect() -> None:
-    """DAV accepts native 207 and resolves a mixed-case Location header."""
+def test_native_httpx_multistatus_and_case_insensitive_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DAV accepts native 207 after HttpClient follows a mixed-case Location header."""
 
     calls: list[str] = []
 
-    class FakeHttp:
-        def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-            del method, kwargs
-            calls.append(url)
-            if len(calls) == 1:
-                return httpx.Response(302, headers={"LoCaTiOn": "/addressbooks/"})
-            return httpx.Response(207, content=b"<d:multistatus xmlns:d='DAV:'/>")
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if len(calls) == 1:
+            return httpx.Response(302, headers={"LoCaTiOn": "/addressbooks/"})
+        return httpx.Response(207, content=b"<d:multistatus xmlns:d='DAV:'/>")
 
-    response = _backend_with_http(FakeHttp())._request("PROPFIND", "https://dav.example/root", "")
+    monkeypatch.setattr("angee.integrate.http.PinnedTransport", lambda **_: httpx.MockTransport(respond))
+    response = _backend_with_http(HttpClient())._request("PROPFIND", "https://dav.example/root", "")
 
     assert response.status_code == 207
     assert calls == ["https://dav.example/root", "https://dav.example/addressbooks/"]
