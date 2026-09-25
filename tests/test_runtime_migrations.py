@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import logging
@@ -453,6 +454,65 @@ def test_removed_declaration_preserves_materialized_body_and_graph(runtime_migra
     assert graph.nodes.keys() == previous_graph.nodes.keys()
     for node in graph.nodes:
         assert graph.forwards_plan(node) == previous_graph.forwards_plan(node)
+
+
+@pytest.fixture
+def released_baseline_migration(runtime_migration_probe):
+    materializer, addon, source_path, runtime_dir, _ = runtime_migration_probe
+    output = runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py"
+    # Literal output of the retired fresh-history writer, independent of the
+    # compatibility renderer used to validate it.
+    output.write_text(
+        '''\
+"""Fresh-history baseline for one released addon migration."""
+
+from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = [
+        ("resources", "0001_legacy")
+    ]
+    operations = []
+# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT
+Migration.angee_origin = "example.demo:rename_legacy"
+'''
+        f'Migration.angee_source_sha256 = "{hashlib.sha256(source_path.read_bytes()).hexdigest()}"\n'
+        "Migration.angee_fresh_baseline = True\n",
+        encoding="utf-8",
+    )
+    importlib.invalidate_caches()
+    return materializer, addon, source_path, output
+
+
+@pytest.mark.parametrize("retained_declaration", [True, False])
+def test_released_fresh_baseline_is_loaded_without_rewriting(released_baseline_migration, retained_declaration) -> None:
+    materializer, addon, source_path, output = released_baseline_migration
+    body = output.read_bytes()
+    if not retained_declaration:
+        write_addon_manifest(addon)
+        source_path.unlink()
+
+    assert materializer.materialize(apps=apps) == ()
+    materializer.check()
+
+    assert output.read_bytes() == body
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    migration = loader.disk_migrations["resources", "0002_rename_legacy"]
+    assert migration.dependencies == [("resources", "0001_legacy")]
+    assert migration.operations == []
+
+
+@pytest.mark.parametrize("alteration", [
+    "    operations = [migrations.RunPython(migrations.RunPython.noop)]\n",
+    "    operations = []  # edited\n",
+])
+def test_released_fresh_baseline_body_is_frozen(released_baseline_migration, alteration: str) -> None:
+    materializer, _, _, output = released_baseline_migration
+    output.write_text(output.read_text(encoding="utf-8").replace("    operations = []\n", alteration), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="materialized body digest changed"):
+        materializer.materialize(apps=apps)
 
 
 def test_check_reports_pending_without_writing(runtime_migration_probe) -> None:

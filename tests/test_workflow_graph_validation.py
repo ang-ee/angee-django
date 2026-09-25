@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -207,6 +208,29 @@ def graph(
 
 def codes(value: WorkflowGraph) -> set[str]:
     return {diagnostic.code for diagnostic in value.diagnostics()}
+
+
+@pytest.mark.parametrize("field", ["input_schema", "output_schema"])
+@pytest.mark.parametrize("reference", ["https://example.invalid/schema", "other.json"])
+def test_graph_rejects_nonlocal_schema_references(field: str, reference: str) -> None:
+    value = replace(graph([]), **{field: {"type": "object", "properties": {"value": {"$ref": reference}}}})
+    assert f"{field}_invalid" in codes(value)
+
+
+def test_graph_reports_unresolvable_input_references_for_root_bindings() -> None:
+    value = replace(
+        graph(
+            [node("producer", LegacyOutcomeStep, entry=True)],
+            result_rules=[{
+                "outcome": "completed",
+                "producer": "producer",
+                "when_outcome": "",
+                "binding": {"kind": "workflow_input", "path": []},
+            }],
+        ),
+        input_schema={"$ref": "#/$defs/missing"},
+    )
+    assert "input_schema_invalid" in codes(value)
 
 
 def test_result_exclusivity_proof_avoids_terminal_path_cartesian_product() -> None:

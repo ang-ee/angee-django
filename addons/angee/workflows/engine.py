@@ -25,6 +25,7 @@ from pydantic import JsonValue
 from pydantic import ValidationError as PydanticValidationError
 from rebac import SubjectRef, system_context
 from rebac.actors import to_subject_ref
+from referencing.exceptions import Unresolvable
 
 from angee.base.identity import canonical_subject_ref
 from angee.base.refs import CanonicalRecordTarget, canonical_record_target
@@ -1856,7 +1857,12 @@ def _finish_run_result(run: Any) -> None:
         if evaluated.diagnostics or evaluated.value is None or not evaluated.value.present:
             raise ValidationError({"result": "Terminal binding did not produce a complete output."})
         output = evaluated.value.value
-        errors = list(json_schema_validator(run.workflow.output_schema).iter_errors(output))
+        try:
+            errors = list(json_schema_validator(run.workflow.output_schema).iter_errors(output))
+        except Unresolvable as error:
+            raise ValidationError(
+                {"result": "Workflow output references must resolve inside the published schema."}
+            ) from error
         if errors:
             raise ValidationError({"result": "Terminal output does not satisfy the published workflow schema."})
     except (PydanticValidationError, ValidationError) as error:

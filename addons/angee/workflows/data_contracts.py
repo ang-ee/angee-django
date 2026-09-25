@@ -16,7 +16,7 @@ from django.core.exceptions import ValidationError
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.protocols import Validator
 from pydantic import AfterValidator, BaseModel, Field
-from referencing.jsonschema import SchemaRegistry
+from referencing.jsonschema import DRAFT202012, EMPTY_REGISTRY, SchemaRegistry
 
 from angee.base.jsonschema import LocalSchemaReferences
 
@@ -28,13 +28,22 @@ NumericRange: TypeAlias = tuple[JsonNumber | None, bool, JsonNumber | None, bool
 StringLengthRange: TypeAlias = tuple[int | None, int | None]
 
 
-def _check_json_schema(value: dict[str, Any]) -> dict[str, Any]:
-    """Validate one JSON Schema declaration through the installed draft owner."""
+def check_json_schema(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate a declaration whose references stay inside its own document."""
 
     try:
         Draft202012Validator.check_schema(value)
     except Exception as error:  # noqa: BLE001 - jsonschema reports several exception types.
         raise ValueError("Value is not valid JSON Schema.") from error
+    pending = [DRAFT202012.create_resource(value)]
+    while pending:
+        resource = pending.pop()
+        if isinstance(resource.contents, dict):
+            for keyword in ("$ref", "$dynamicRef"):
+                reference = resource.contents.get(keyword)
+                if reference is not None and not reference.startswith("#"):
+                    raise ValueError("JSON Schema references must be local to the declared document.")
+        pending.extend(resource.subresources())
     return value
 
 
@@ -42,7 +51,7 @@ JsonPath: TypeAlias = Annotated[
     tuple[Annotated[str, Field(min_length=1)], ...],
     Field(min_length=1, description="Object keys and array indices encoded as decimal strings, such as '0'."),
 ]
-JsonSchemaDict: TypeAlias = Annotated[dict[str, Any], AfterValidator(_check_json_schema)]
+JsonSchemaDict: TypeAlias = Annotated[dict[str, Any], AfterValidator(check_json_schema)]
 _FORMAT_CHECKER = FormatChecker()
 
 
@@ -50,18 +59,16 @@ def json_schema_validator(
     schema: Mapping[str, Any] | bool,
     *,
     validator_class: type[Validator] = Draft202012Validator,
-    registry: SchemaRegistry | None = None,
+    registry: SchemaRegistry = EMPTY_REGISTRY,
 ) -> Validator:
     """Assert Draft 2020-12 instance constraints, including registered formats.
 
+    Local references resolve against the root schema without remote retrieval.
     Decision relation checks can supply their native validator extension and
     retained-reference registry without changing the shared validation policy.
     """
 
-    # Preserve jsonschema's default warning-backed remote-reference registry;
-    # Decision validation explicitly supplies an empty registry to forbid retrieval.
-    options = {} if registry is None else {"registry": registry}
-    return validator_class(schema, format_checker=_FORMAT_CHECKER, **options)
+    return validator_class(schema, format_checker=_FORMAT_CHECKER, registry=registry)
 
 
 def _array_index(segment: str | int) -> int | None:

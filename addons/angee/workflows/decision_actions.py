@@ -21,7 +21,7 @@ from referencing.jsonschema import DRAFT202012, EMPTY_REGISTRY
 from angee.base.identity import instance_from_public_id
 from angee.base.scoping import read_scoped_queryset
 from angee.workflows.attempts import validate_json_value
-from angee.workflows.data_contracts import json_schema_validator
+from angee.workflows.data_contracts import check_json_schema, json_schema_validator
 
 
 class ReviewRecordReference(BaseModel):
@@ -313,7 +313,12 @@ class DecisionActionContract:
                 "$defs": self.schema.get("$defs", {}),
                 "allOf": [field_schema],
             }
-            errors = list(json_schema_validator(scoped_schema).iter_errors(value))
+            try:
+                errors = list(json_schema_validator(scoped_schema).iter_errors(value))
+            except Unresolvable as error:
+                raise ValidationError(
+                    {"decision_schema": "Decision references must resolve inside the retained schema."}
+                ) from error
             if errors:
                 raise ValidationError({"payload": f"Decision context {name!r} does not satisfy its schema."})
             if not any(_valid_context(adapter, value) for adapter in _CONTEXT_ADAPTERS[widget]):
@@ -336,7 +341,7 @@ def compile_decision_action_schema(schema: Any) -> DecisionActionContract | None
     if not isinstance(schema, dict) or schema.get("type") != "object":
         raise ValidationError({"decision_schema": "Decision action schema root must be an object."})
     try:
-        Draft202012Validator.check_schema(schema)
+        check_json_schema(schema)
     except Exception as error:  # jsonschema.SchemaError belongs at this public boundary.
         raise ValidationError({"decision_schema": f"Decision schema is invalid: {error}"}) from error
     properties = schema.get("properties")

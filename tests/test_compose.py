@@ -16,7 +16,6 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError, SystemCheckError
 from django.db import OperationalError, models
-from django.test.utils import isolate_apps
 
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
@@ -1774,28 +1773,23 @@ def test_configured_cleanup_removes_all_generated_packages(tmp_path: Path, setti
     assert outside.read_text(encoding="utf-8") == "# outside runtime\n"
 
 
-@pytest.mark.parametrize("swapped", [False, True])
-@isolate_apps("angee.resources")
+@pytest.mark.parametrize("runtime_module_name", ["runtime", "generated_runtime"])
 def test_configured_cleanup_requires_no_discovery_or_rendering(
     tmp_path: Path,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-    swapped: bool,
+    runtime_module_name: str,
 ) -> None:
     settings.ANGEE_RUNTIME_DIR = tmp_path / "runtime"
     runtime = runtime_for(tmp_path)
-    settings.ANGEE_RUNTIME_MODULE = runtime.runtime_module
+    runtime.runtime_module = runtime_module_name
+    settings.ANGEE_RUNTIME_MODULE = runtime_module_name
     settings.MIGRATION_MODULES = {"removed": f"{runtime.runtime_module}.removed.migrations"}
-    if swapped:
-        source = runtime.composition.ordered_models[0]
-        monkeypatch.setattr(source.Meta, "swappable", "CLEANUP_RESOURCE_MODEL", raising=False)
-        settings.CLEANUP_RESOURCE_MODEL = "resources.Replacement"
     runtime.emit_if_stale()
-    module = ModuleType(f"{runtime.runtime_module}.resources.models")
-    exec(compile(runtime.render_sources()[Path("resources/models.py")], module.__name__, "exec"), vars(module))
-    monkeypatch.setattr(runtime_module, "apps", module.Resource._meta.apps)
-    assert bool(module.Resource._meta.swapped) is swapped
+    module = ModuleType(runtime_module_name)
+    exec(compile(runtime.render_sources()[Path("__init__.py")], module.__name__, "exec"), vars(module))
+    monkeypatch.setitem(sys.modules, runtime_module_name, module)
     migration = runtime.runtime_dir / "resources" / "migrations" / "0001_saved.py"
     migration.write_text("# preserved migration\n")
     removed_migration = runtime.runtime_dir / "removed" / "migrations" / "0001_stale.py"
@@ -1808,6 +1802,7 @@ def test_configured_cleanup_requires_no_discovery_or_rendering(
 
     monkeypatch.setattr(ModelComposition, "discover", forbidden)
     monkeypatch.setattr(Runtime, "render_sources", forbidden)
+    monkeypatch.setattr(runtime_module.apps, "get_models", forbidden)
     with caplog.at_level(logging.WARNING, logger="angee.fs"):
         Runtime.clean_configured()
     assert migration.read_text() == "# preserved migration\n"

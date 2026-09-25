@@ -217,8 +217,8 @@ def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
         Drive._meta.get_field("backend").delete_cached_value(drive)
     row = File(drive=drive) if cached_drive else File(drive_id=drive.pk)
     with system_context(reason="test storage resolution") if system else actor_context(drive.alice):
-        # A new system context adds one native audit INSERT to the single fetch.
-        with django_assert_num_queries(1 if system else 2):
+        # Native contexts audit each entry, including nested system contexts.
+        with django_assert_num_queries(2):
             backend = row.storage
             assert row.drive.backend.pk == drive.backend_id
         with django_assert_num_queries(0):
@@ -232,11 +232,11 @@ def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
 def test_drive_storage_fetches_only_an_uncached_backend(
     drive: Any, django_assert_num_queries: Any, system: bool
 ) -> None:
-    """Reuse cached backend rows and the caller's active system context."""
+    """Reuse cached backend rows and restore the caller's system context."""
 
     Drive._meta.get_field("backend").delete_cached_value(drive)
     with system_context(reason="test storage resolution") if system else actor_context(drive.alice):
-        with django_assert_num_queries(1 if system else 2):
+        with django_assert_num_queries(2):
             backend = drive.storage
         with django_assert_num_queries(0):
             assert backend is drive.storage

@@ -70,17 +70,12 @@ def round_to_increment(value: Decimal, increment: Decimal, mode: str) -> Decimal
     denominator = scaled_coefficient(increment)
     units, remainder = divmod(abs(numerator), denominator)
     doubled = remainder * 2
-    if doubled > denominator or (
-        doubled == denominator
-        and (mode == ROUND_HALF_UP or units % 2 == 1)
-    ):
+    if doubled > denominator or (doubled == denominator and (mode == ROUND_HALF_UP or units % 2 == 1)):
         units += 1
     if numerator < 0:
         units = -units
 
-    increment_coefficient = int(
-        "".join(str(digit) for digit in increment_tuple.digits)
-    )
+    increment_coefficient = int("".join(str(digit) for digit in increment_tuple.digits))
     result_coefficient = abs(units) * increment_coefficient
     result_digits = tuple(int(character) for character in str(result_coefficient))
     return Decimal(

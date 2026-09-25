@@ -1,13 +1,58 @@
 from __future__ import annotations
 
 from typing import Annotated
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_serializer, model_serializer
+from referencing.exceptions import Unresolvable
 
-from angee.workflows.data_contracts import json_value_at_path, model_data_contract, schema_data_contract
+from angee.workflows.data_contracts import (
+    check_json_schema,
+    json_schema_validator,
+    json_value_at_path,
+    model_data_contract,
+    schema_data_contract,
+)
 from angee.workflows.decision_actions import ReviewAction, build_decision_action
+
+
+@pytest.mark.parametrize("reference", ["https://example.invalid/schema", "other.json", "//example.invalid/schema"])
+@pytest.mark.parametrize("keyword", ["$ref", "$dynamicRef"])
+def test_schema_declarations_reject_nonlocal_references(reference: str, keyword: str) -> None:
+    schema = {"type": "object", "properties": {"value": {"allOf": [{keyword: reference}]}}}
+    with patch("urllib.request.urlopen") as urlopen:
+        with pytest.raises(ValueError, match="references must be local"):
+            check_json_schema(schema)
+        urlopen.assert_not_called()
+
+
+def test_schema_annotations_are_not_reference_declarations() -> None:
+    schema = {"type": "object", "default": {"$ref": "ordinary data"}, "const": {"$ref": "ordinary data"}}
+    assert check_json_schema(schema) == schema
+
+
+def test_runtime_schema_validation_never_fetches_remote_references() -> None:
+    with patch("urllib.request.urlopen") as urlopen:
+        with pytest.raises(Unresolvable):
+            list(json_schema_validator({"$ref": "https://example.invalid/schema"}).iter_errors({}))
+        urlopen.assert_not_called()
+
+
+def test_runtime_schema_validation_resolves_root_local_definitions() -> None:
+    schema = {
+        "$id": "https://example.invalid/schema",
+        "$defs": {"value": {"type": "integer", "minimum": 1}},
+        "type": "object",
+        "properties": {"value": {"$ref": "#/$defs/value"}},
+    }
+    assert check_json_schema(schema) == schema
+    with patch("urllib.request.urlopen") as urlopen:
+        validator = json_schema_validator(schema)
+        assert not list(validator.iter_errors({"value": 1}))
+        assert list(validator.iter_errors({"value": 0}))
+        urlopen.assert_not_called()
 
 
 class Address(BaseModel):

@@ -10,7 +10,6 @@ from graphlib import CycleError, TopologicalSorter
 from typing import Any, Literal, TypeAlias, cast
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from jsonschema import Draft202012Validator
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.workflows.attempts import json_values_equal
@@ -20,6 +19,7 @@ from angee.workflows.data_contracts import (
     DataContractNode,
     NumericRange,
     StringLengthRange,
+    check_json_schema,
     json_schema_validator,
     model_data_contract,
     schema_data_contract,
@@ -978,7 +978,8 @@ class WorkflowGraph:
             )
             return result
         try:
-            Draft202012Validator.check_schema(self.input_schema)
+            check_json_schema(self.input_schema)
+            input_accepts_null = json_schema_validator(self.input_schema).is_valid(None)
         except Exception:  # noqa: BLE001 - preserve one authoring diagnostic for native schema errors.
             result.append(
                 self._workflow(
@@ -993,7 +994,7 @@ class WorkflowGraph:
                 self._workflow("output_schema_invalid", "Workflow output schema must be an object.", "output_schema")
             ]
         try:
-            Draft202012Validator.check_schema(schema)
+            check_json_schema(schema)
         except Exception:  # noqa: BLE001 - preserve one authoring diagnostic for native schema errors.
             result.append(
                 self._workflow(
@@ -1126,7 +1127,7 @@ class WorkflowGraph:
                             )
                         )
                     elif reference.kind == "workflow_input" and (
-                        json_schema_validator(self.input_schema).is_valid(None)
+                        input_accepts_null
                         or not workflow_input_contract.guarantees_path(reference.path)
                     ):
                         result.append(

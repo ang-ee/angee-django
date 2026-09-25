@@ -61,7 +61,6 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.actors import is_sudo
 from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
 
@@ -251,11 +250,11 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
 
         Backend rows are admin-gated infrastructure; the fetch runs elevated
         so any actor allowed to use the drive can perform storage IO without
-        read access to the backend row itself. Cached relations and an active
-        system context need no additional elevation or audit event.
+        read access to the backend row itself. Cached relations need no
+        additional elevation or audit event.
         """
 
-        if self._meta.get_field("backend").is_cached(self) or is_sudo():
+        if self._meta.get_field("backend").is_cached(self):
             return self.backend.storage
         with system_context(reason="storage.drive.storage"):
             return self.backend.storage
@@ -1235,7 +1234,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
     def storage(self) -> StorageBackend:
         """Return the resolved backend for this row's drive.
 
-        Resolve an uncached drive and its backend in one query, reusing an active
+        Resolve an uncached drive and its backend in one query under the native
         system context. Cached relations need no elevation; the backend instance
         comes from the per-``(row, config)`` cache.
         """
@@ -1243,7 +1242,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         drive_field = self._meta.get_field("drive")
         if drive_field.is_cached(self):
             return self.drive.storage
-        with contextlib.nullcontext() if is_sudo() else system_context(reason="storage.file.storage"):
+        with system_context(reason="storage.file.storage"):
             drive_field.set_cached_value(
                 self,
                 drive_field.related_model._base_manager.select_related("backend").get(pk=self.drive_id),

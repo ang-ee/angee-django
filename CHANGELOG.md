@@ -45,8 +45,9 @@ live in code docstrings.
   suite-local driver forwarding imports are removed.
 - Runtime JSON Schema formats are now asserted everywhere, including workflow
   inputs and outputs, emitted values, Decision payloads, and extraction evidence.
-- Declare core `jsonschema[format-nongpl]` and `referencing` dependencies. The
-  format extras assert `date-time`, `uri`, `hostname`, and `duration` as well.
+- Declare core `jsonschema` and `referencing` dependencies. Workflows and
+  extraction addon manifests retain `format-nongpl` extras to assert `date-time`,
+  `uri`, `hostname`, and `duration` as well.
 - Workflow publisher checks query only explicitly requested databases; replay
   declaration checks remain available without database access. Row-lock callers
   consistently use `lock_if_supported`, which delegates write routing and backend
@@ -95,7 +96,9 @@ live in code docstrings.
   `engine_config` → `profile_config`, and page `engine_metadata` →
   `provider_metadata` before schema autodetection, avoiding rename/default prompts.
 - Replace `ANGEE_EXTRACTION_ENGINE_CLASSES` with
-  `ANGEE_EXTRACTION_PROFILE_CLASSES`. Consumer domain keys retain their spelling;
+  `ANGEE_EXTRACTION_PROFILE_CLASSES`; system check
+  `angee.workflows_extraction.E001` rejects the retired setting even when empty.
+  Consumer domain keys retain their spelling;
   the disabled built-in `none` key carries forward unchanged, and the
   transport-only built-in `inference` key maps to `none` regardless of current
   settings. Reversing the migration preserves `none`; the original distinction
@@ -103,6 +106,16 @@ live in code docstrings.
   to retain `inference` must declare their own key migration. Retained JSON
   evidence is preserved. Drain runs with old extraction input contracts before
   upgrading; see the [migration guidance](docs/backend/guidelines.md#migrations-and-runtime).
+- Remove `angee.workflows_extraction_glm` from `INSTALLED_APPS`. Its adopted
+  `agents.InferenceModel` row and resource ledger remain in the database; removing
+  the addon neither deletes the row nor maintains its recognition capability.
+  Retain or retire that model through the inference catalogue owner, and keep
+  its provider addon installed if it is still used. Replace the old `glm` engine
+  with a consumer-owned `ExtractionProfile` registered in
+  `ANGEE_EXTRACTION_PROFILE_CLASSES`, then select it in publications; retained
+  `glm` profile values need that key registered or an explicit key migration.
+  Recognition and mapping now use the shared inference path with separately
+  selected models; the built-in `none` profile does not replace domain processing.
 - Run `rebac sync` after migrate for the new dashboards `shared` relation and
   shared-reader reconciliation. Regenerate GraphQL SDL and clients; optional
   workflow states are nullable enums, including `WaitingKind`.

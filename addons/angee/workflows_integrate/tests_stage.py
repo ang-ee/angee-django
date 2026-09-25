@@ -16,7 +16,6 @@ from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
 from angee.integrate.streams import RecordChange, StreamPage
 from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
-from angee.testing.fixtures import composed_tables as composed_tables
 from angee.workflows.attempts import AttemptResultKind, GateResumeState
 from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepExecutionMode, StepResult, TransientStepError

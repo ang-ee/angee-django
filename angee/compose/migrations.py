@@ -26,6 +26,7 @@ from angee.fs import write_atomic
 MATERIALIZED_FOOTER = "# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT"
 ORIGIN_ATTR = "angee_origin"
 SOURCE_SHA256_ATTR = "angee_source_sha256"
+BASELINE_ATTR = "angee_fresh_baseline"
 logger = logging.getLogger(__name__)
 
 
@@ -390,10 +391,30 @@ class RuntimeMigrations:
                 raise RuntimeError(f"{origin}: cannot read materialized migration {path}") from error
             if not marker:
                 raise RuntimeError(f"{origin}: materialized migration footer is missing")
-            if hashlib.sha256(body).hexdigest() != digest:
+            if getattr(migration, BASELINE_ATTR, False):
+                valid_body = body == self._baseline_body(tuple(migration.dependencies)).encode()
+            else:
+                valid_body = hashlib.sha256(body).hexdigest() == digest
+            if not valid_body:
                 raise RuntimeError(f"{origin}: materialized body digest changed")
             existing[origin] = (node, migration, path)
         return existing
+
+    @staticmethod
+    def _baseline_body(dependencies: tuple[tuple[str, str], ...]) -> str:
+        """Render the frozen retired format solely to validate existing history."""
+
+        rendered = ",\n".join(
+            f"        ({json.dumps(label)}, {json.dumps(name)})"
+            for label, name in dependencies
+        )
+        return (
+            '"""Fresh-history baseline for one released addon migration."""\n\n'
+            "from django.db import migrations\n\n\n"
+            "class Migration(migrations.Migration):\n"
+            f"    dependencies = [\n{rendered}\n    ]\n"
+            "    operations = []\n"
+        )
 
     @staticmethod
     def _dependency_node(raw: object, *, origin: str, kind: str) -> tuple[str, str]:

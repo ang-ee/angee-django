@@ -9,6 +9,7 @@ from uuid import uuid4
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from rebac import system_context, to_subject_ref
+from referencing.exceptions import Unresolvable
 
 from angee.base.actors import actor_user_id
 from angee.base.mixins import AppendOnlyQuerySet
@@ -602,10 +603,15 @@ class ExtractionManager(EvidenceManager):
             ):
                 raise ValidationError({"extraction": "The retained extraction schema identity is invalid."})
             normalized_result = _json_object(result, field="result")
-            errors = sorted(
-                json_schema_validator(normalized_schema).iter_errors(normalized_result),
-                key=lambda error: list(error.path),
-            )
+            try:
+                errors = sorted(
+                    json_schema_validator(normalized_schema).iter_errors(normalized_result),
+                    key=lambda error: list(error.path),
+                )
+            except Unresolvable as error:
+                raise ValidationError(
+                    {"schema": "Extraction references must resolve inside the retained schema."}
+                ) from error
             if errors:
                 raise ValidationError({"result": "Corrected output does not match the retained extraction schema."})
 

@@ -13,15 +13,15 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Prefetch, prefetch_related_objects
-from jsonschema import Draft202012Validator
 from rebac import current_actor, system_context
+from referencing.exceptions import Unresolvable
 
 from angee.base.actors import actor_user_id
 from angee.base.refs import RecordRef, canonical_record_target, record_ref_for
 from angee.base.scoping import read_scoped_queryset
 from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import json_values_equal
-from angee.workflows.data_contracts import json_schema_validator
+from angee.workflows.data_contracts import check_json_schema, json_schema_validator
 from angee.workflows.engine import external_operation_request
 from angee.workflows_extraction.contracts import (
     DocumentPart,
@@ -641,6 +641,10 @@ def process(
                         **metadata,
                         "source_hold_reasons": list(hold_reasons),
                     }
+        except Unresolvable as error:
+            raise ValidationError(
+                {"schema": "Extraction references must resolve inside the declared schema."}
+            ) from error
         except DocumentPipelineError as error:
             status = "failed"
             error_code = ":".join(value for value in (error.stage, error.code) if value) or type(error).__name__
@@ -1021,9 +1025,12 @@ def infer(
             mapping_result=mapping_result,
             error=failure,
         )
-    errors = sorted(
-        json_schema_validator(base.schema).iter_errors(document_result.value), key=lambda error: list(error.path)
-    )
+    try:
+        errors = sorted(
+            json_schema_validator(base.schema).iter_errors(document_result.value), key=lambda error: list(error.path)
+        )
+    except Unresolvable as error:
+        raise ValidationError({"schema": "Extraction references must resolve inside the retained schema."}) from error
     if errors:
         return _retain_failed_inference(
             base,
@@ -1889,7 +1896,7 @@ def _validate_parts(parts: Sequence[Any], *, source_count: int) -> None:
 def _validated_schema(schema: Any) -> dict[str, Any]:
     value = _json_object(schema, field="schema")
     try:
-        Draft202012Validator.check_schema(value)
+        check_json_schema(value)
     except Exception as error:
         raise ValidationError({"schema": "Extraction schema is not valid JSON Schema."}) from error
     if value.get("type") != "object":

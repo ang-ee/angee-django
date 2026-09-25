@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
@@ -122,10 +123,8 @@ class Runtime:
         """Clean all generated packages without discovery; retain and report history."""
 
         runtime_module = str(getattr(settings, "ANGEE_RUNTIME_MODULE", "runtime"))
-        _generated_tree(_runtime_directory(), {}).clean(current_roots=(
-            model._meta.app_label for model in apps.get_models(include_swapped=True)
-            if model.__module__.startswith(f"{runtime_module}.")
-        ))
+        runtime = sys.modules.get(runtime_module)
+        _generated_tree(_runtime_directory(), {}).clean(current_roots=getattr(runtime, "RUNTIME_APPS", ()))
 
     @property
     def labels(self) -> tuple[str, ...]:

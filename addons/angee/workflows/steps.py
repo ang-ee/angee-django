@@ -39,6 +39,7 @@ from django.utils.dateparse import parse_datetime
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
+from referencing.exceptions import Unresolvable
 
 from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.impl import ImplBase, ImplChoice
@@ -858,7 +859,12 @@ class JoinContinuation(StepImpl):
             or "output" not in result
         ):
             raise ValidationError({"child": "Continuation completion does not satisfy the declared join result."})
-        errors = list(json_schema_validator(config["expected_output_schema"]).iter_errors(result["output"]))
+        try:
+            errors = list(json_schema_validator(config["expected_output_schema"]).iter_errors(result["output"]))
+        except Unresolvable as error:
+            raise ValidationError(
+                {"child": "Continuation references must resolve inside the declared join schema."}
+            ) from error
         if errors:
             raise ValidationError({"child": "Continuation output does not satisfy the declared join schema."})
         return StepResult.done(output=result["output"], outcome=result["outcome"])
@@ -893,7 +899,13 @@ class EmitStep(StepImpl):
 
         config = type(self).normalize_config(step_run.step.config)
         output = step_run.input
-        if list(json_schema_validator(config["output_schema"]).iter_errors(output)):
+        try:
+            errors = list(json_schema_validator(config["output_schema"]).iter_errors(output))
+        except Unresolvable as error:
+            raise ValidationError(
+                {"output": "Emit references must resolve inside the declared projection schema."}
+            ) from error
+        if errors:
             raise ValidationError({"output": "Emit input does not satisfy its declared projection contract."})
         actor = step_run.run.execution_admission_actor()
         artifacts: list[ArtifactSpec] = []

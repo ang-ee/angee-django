@@ -1788,6 +1788,7 @@ def test_fixture_generic_writes_require_the_run_owner(
         (WorkflowTestFixture, "Workflow test fixtures can only be created by WorkflowRunManager."),
         (WorkflowRecoveryEvidence, "Recovery evidence can only be created by WorkflowRunManager."),
         (StepExternalSubscription, "External subscriptions can only be recorded by StepAttemptManager."),
+        (StepArtifact, "Workflow artifacts can only be recorded during attempt finalization."),
         (StepAttempt, "Step attempts can only be created by StepAttemptManager."),
         (WorkflowDispatch, "Workflow dispatches can only be created by WorkflowDispatchManager."),
     ),

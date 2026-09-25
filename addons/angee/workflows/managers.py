@@ -41,6 +41,7 @@ from rebac.actors import NoActorResolvedError, to_subject_ref
 from rebac.backends import backend as rebac_backend
 from rebac.relationships import delete_relationship
 from rebac.resources import to_object_ref
+from referencing.exceptions import Unresolvable
 
 from angee.base.actors import actor_user_id
 from angee.base.identity import (
@@ -2142,7 +2143,15 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     ) -> Any:
         """Create a Run and its first durable work for one explicit immutable definition."""
 
-        if list(json_schema_validator(version.input_schema).iter_errors(input.value if input.present else None)):
+        try:
+            errors = list(
+                json_schema_validator(version.input_schema).iter_errors(input.value if input.present else None)
+            )
+        except Unresolvable as error:
+            raise ValidationError(
+                {"input": "Workflow input references must resolve inside the published schema."}
+            ) from error
+        if errors:
             raise ValidationError({"input": "Invocation input does not satisfy the published workflow schema."})
         version.validate_subject_declaration(subject)
         content_type = None if subject is None else ContentType.objects.get_for_model(subject, for_concrete_model=False)
@@ -5348,7 +5357,9 @@ class StepArtifactQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
         )
         return cast(Self, page), len(candidate_ids) > bounded
 
-    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the attempt finalization owner."""
+
         raise TypeError("Workflow artifacts can only be recorded during attempt finalization.")
 
 

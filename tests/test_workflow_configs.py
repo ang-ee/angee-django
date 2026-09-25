@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import pytest
 from django.core import checks
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 from rebac import system_context
 
 from angee.workflows.attempts import RecoveryMode
@@ -22,7 +26,7 @@ from angee.workflows.steps import (
     _decision_specs_from_config,
     retry_policy_from_config,
 )
-from angee.workflows.testing.models import Step, Workflow
+from angee.workflows.testing.models import Step, Workflow, WorkflowRun
 
 
 def normalized_twice(step: type[StepImpl], config: dict[str, object]) -> dict[str, object]:
@@ -227,6 +231,30 @@ def test_emit_artifact_paths_must_be_guaranteed_public_id_strings() -> None:
     }
     with pytest.raises(ValidationError, match="guaranteed string"):
         EmitStep.validate_config(invalid)
+
+
+def test_emit_declaration_rejects_remote_schema_references() -> None:
+    with pytest.raises(ValidationError, match="references must be local"):
+        EmitStep.validate_config({"output_schema": {"$ref": "https://example.invalid/schema"}})
+
+
+def test_emit_maps_unresolvable_local_references_to_output_validation() -> None:
+    step_run = SimpleNamespace(step=SimpleNamespace(config={"output_schema": {"$ref": "#/$defs/missing"}}), input={})
+    with patch("urllib.request.urlopen") as urlopen:
+        with pytest.raises(ValidationError, match="inside the declared projection schema") as error:
+            EmitStep().run(step_run, now=timezone.now())
+        assert "output" in error.value.message_dict
+        urlopen.assert_not_called()
+
+
+@pytest.mark.parametrize("reference", ["https://example.invalid/schema", "#/$defs/missing"])
+def test_invocation_maps_unresolvable_references_without_network(reference: str) -> None:
+    version = SimpleNamespace(input_schema={"$ref": reference})
+    with patch("urllib.request.urlopen") as urlopen:
+        with pytest.raises(ValidationError, match="inside the published schema") as error:
+            WorkflowRun.objects._start_pinned_locked(version, None, None, available_at=timezone.now())
+        assert "input" in error.value.message_dict
+        urlopen.assert_not_called()
 
 
 def test_emit_artifact_decimal_indices_retain_schema_presence_checks() -> None:

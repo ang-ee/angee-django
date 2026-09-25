@@ -65,20 +65,15 @@ class Stage(models.Model):
         """Return the declared container relation, failing fast if misconfigured."""
 
         if not cls.container_field_name:
-            raise ImproperlyConfigured(
-                f"{cls._meta.label} must declare container_field_name."
-            )
+            raise ImproperlyConfigured(f"{cls._meta.label} must declare container_field_name.")
         try:
             field = cls._meta.get_field(cls.container_field_name)
         except FieldDoesNotExist as error:
             raise ImproperlyConfigured(
-                f"{cls._meta.label}.container_field_name names unknown field "
-                f"{cls.container_field_name!r}."
+                f"{cls._meta.label}.container_field_name names unknown field {cls.container_field_name!r}."
             ) from error
         if not field.is_relation:
-            raise ImproperlyConfigured(
-                f"{cls._meta.label}.{cls.container_field_name} must be a relation."
-            )
+            raise ImproperlyConfigured(f"{cls._meta.label}.{cls.container_field_name} must be a relation.")
         return cast(Any, field)
 
     @classmethod
@@ -90,9 +85,7 @@ class Stage(models.Model):
         sudo = getattr(queryset, "sudo", None)
         if callable(sudo):
             queryset = sudo(reason="base.stage.for_container")
-        return queryset.filter(**{cls.container_field_name: container}).order_by(
-            "position", "pk"
-        )
+        return queryset.filter(**{cls.container_field_name: container}).order_by("position", "pk")
 
     @classmethod
     def resolve_default(cls, container: models.Model) -> Any | None:
@@ -120,8 +113,7 @@ class Stage(models.Model):
             self._meta.get_field(self.category_field_name)
         except FieldDoesNotExist as error:
             raise ImproperlyConfigured(
-                f"{self._meta.label}.category_field_name names unknown field "
-                f"{self.category_field_name!r}."
+                f"{self._meta.label}.category_field_name names unknown field {self.category_field_name!r}."
             ) from error
         return getattr(self, self.category_field_name)
 
@@ -150,14 +142,11 @@ class StagedModelMixin(models.Model):
             field = cls._meta.get_field(cls.stage_field_name)
         except FieldDoesNotExist as error:
             raise ImproperlyConfigured(
-                f"{cls._meta.label}.stage_field_name names unknown field "
-                f"{cls.stage_field_name!r}."
+                f"{cls._meta.label}.stage_field_name names unknown field {cls.stage_field_name!r}."
             ) from error
         related_model = getattr(field, "related_model", None)
         if not isinstance(related_model, type) or not issubclass(related_model, Stage):
-            raise ImproperlyConfigured(
-                f"{cls._meta.label}.{cls.stage_field_name} must relate to a Stage subclass."
-            )
+            raise ImproperlyConfigured(f"{cls._meta.label}.{cls.stage_field_name} must relate to a Stage subclass.")
         return related_model
 
     def resolve_default_stage(self) -> Stage | None:
@@ -176,14 +165,10 @@ class StagedModelMixin(models.Model):
             return
         container = self._stage_container()
         if container is None:
-            raise ValidationError(
-                {self.stage_container_field_name: "A staged record requires its stage container."}
-            )
+            raise ValidationError({self.stage_container_field_name: "A staged record requires its stage container."})
         stage_model = self.stage_model()
         if not stage_model.for_container(container).filter(pk=stage_id).exists():
-            raise ValidationError(
-                {self.stage_field_name: "Stage must belong to the record's container."}
-            )
+            raise ValidationError({self.stage_field_name: "Stage must belong to the record's container."})
 
     def clean(self) -> None:
         """Run model cleaning, then enforce the stage/container invariant."""
@@ -195,9 +180,7 @@ class StagedModelMixin(models.Model):
         """Return the native (possibly cached) container, including unsaved field edits."""
 
         if not self.stage_container_field_name:
-            raise ImproperlyConfigured(
-                f"{self._meta.label} must declare stage_container_field_name."
-            )
+            raise ImproperlyConfigured(f"{self._meta.label} must declare stage_container_field_name.")
         try:
             self._meta.get_field(self.stage_container_field_name)
         except FieldDoesNotExist as error:
