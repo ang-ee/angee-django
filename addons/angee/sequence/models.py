@@ -24,9 +24,9 @@ rollback releases the row lock and never burns a number, and concurrent posts
 serialize on the lock.
 
 **Backend scope of the gapless guarantee.** Gaplessness is a PostgreSQL fact,
-resting on ``SELECT … FOR UPDATE``. ``lock_if_supported`` is a no-op on backends
-without row locks (the SQLite dev floor), so the same code runs there *without*
-the lock and the invariant is **not** guaranteed. The concurrency test is
+resting on ``SELECT … FOR UPDATE``. ``lock_if_supported`` declares write intent;
+Django omits row-lock SQL on backends without row locks (the SQLite dev floor),
+so the invariant is **not** guaranteed there. The concurrency test is
 PostgreSQL-marked accordingly.
 """
 

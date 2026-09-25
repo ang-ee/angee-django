@@ -696,6 +696,7 @@ dependencies = [
     { name = "hatch-angee" },
     { name = "jsonschema", extra = ["format-nongpl"] },
     { name = "pydantic" },
+    { name = "referencing" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -774,6 +775,7 @@ requires-dist = [
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.13" },
+    { name = "referencing", specifier = ">=0.37" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 provides-extras = ["postgres"]

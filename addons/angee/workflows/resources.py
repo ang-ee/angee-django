@@ -5,19 +5,15 @@ from __future__ import annotations
 import copy
 import functools
 import logging
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection
-from django.db.models.fields import NOT_PROVIDED
 from import_export import fields
 from import_export.results import RowResult
 
 from angee.base.scoping import system_queryset
-from angee.resources.entries import resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import AngeeResource
 from angee.resources.widgets import XrefForeignKeyWidget, split_xref
@@ -116,24 +112,10 @@ class WorkflowDefinitionResource(AngeeResource):
     @classmethod
     def _lock_targets(cls, facets: Sequence[tuple[Any, WorkflowDefinitionResource]]) -> set[int]:
         # Rebuild on each pass: the post-lock read must see concurrent parent moves.
-        ledgers: dict[tuple[str, str], Any] = {}
-        owned: list[tuple[Any, Any]] = []
-        references: list[tuple[tuple[str, str], type[Any]]] = []
-        missing: dict[str, set[str]] = defaultdict(set)
+        model = facets[0][1].workflow_model
+        ids: set[int] = set()
+        references: set[tuple[tuple[str, str], type[Any]]] = set()
         for group, resource in facets:
-            resource._instances.clear()
-            resource._prime_existing_ledgers(group.dataset)
-            ledgers.update(
-                ((group.entry.addon.name, xref), ledger) for xref, ledger in resource._existing_ledgers.items()
-            )
-            # Retained omitted targets are affected even without current xrefs.
-            for ledger in resource.ledger_model._default_manager.filter(
-                source_addon=group.entry.addon.name,
-                source_path=group.entry.source,
-                target_model=group.model._meta.label,
-            ):
-                ledgers[(ledger.source_addon, ledger.xref)] = ledger
-                owned.append((group.model, ledger))
             for row in group.dataset.dict:
                 for name in ("workflow", "error_workflow", "source", "target"):
                     value = row.get(name)
@@ -147,77 +129,22 @@ class WorkflowDefinitionResource(AngeeResource):
                         key = split_xref(value, resource.addon_aliases)
                     except ValueError:
                         continue
-                    references.append((key, field.widget.model))
-        for key, _model in references:
-            if key not in ledgers:
-                missing[key[0]].add(key[1])
-        ledger_model = facets[0][1].ledger_model
-        for addon, xrefs in missing.items():
-            for ledger in ledger_model._default_manager.filter(source_addon=addon, xref__in=xrefs):
-                ledgers[(addon, ledger.xref)] = ledger
-
-        model = facets[0][1].workflow_model
-        graph_models = (
-            model, model._meta.get_field("steps").related_model, model._meta.get_field("edges").related_model,
+                    references.add((key, field.widget.model))
+        resolved, targets = AngeeResource.resolve_existing(
+            [(group.dataset, resource) for group, resource in facets],
+            references=sorted({key for key, _model in references}),
         )
-        target_pks: dict[type[Any], dict[tuple[str, str], int | None]] = defaultdict(dict)
-        for key, ledger in ledgers.items():
-            if ledger is None or not ledger.target_id:
-                continue
-            try:
-                target_model = resolve_model(ledger.target_model)
-                if issubclass(target_model, graph_models):
-                    field = target_model._meta.get_field("sqid")
-                    target_pks[target_model][key] = field.public_id_to_value(ledger.target_id)
-            except (ImproperlyConfigured, TypeError, ValueError):
-                # Invalid ledger identities remain native row diagnostics.
-                continue
-        targets: dict[tuple[str, str], Any] = {}
-        for target_model, pks in target_pks.items():
-            rows = target_model._default_manager.in_bulk({pk for pk in pks.values() if pk is not None})
-            targets.update((key, rows.get(pk)) for key, pk in pks.items())
-
-        ids: set[int] = set()
-        declared_heads: dict[tuple[str, str], Any] = {}
-        # Any facet may adopt an existing target without a ledger yet. Keep
-        # declared heads available to references elsewhere in the batch too.
-        for group, resource in facets:
-            is_head = group.model is resource.workflow_model
-            for row in group.dataset.dict:
-                row = {name: value for name, value in row.items() if value is not NOT_PROVIDED}
-                try:
-                    resource._check_ledger_target(row["_xref"], resource._existing_ledgers.get(row["_xref"]))
-                except ResourceLoadError:
-                    # Ledger collisions belong to the native row diagnostic.
-                    continue
-                instance = targets.get((group.entry.addon.name, row["_xref"]))
-                resource._instances[row["_xref"]] = instance
-                if instance is not None:
-                    ids.add(instance.pk if is_head else instance.workflow_id)
-                try:
-                    identity = resource._adopt_identity(row)
-                    adopted = resource._adopt_existing_target(row, identity)
-                except (ValueError, ValidationError, ImproperlyConfigured):
-                    # The native row lifecycle reports malformed/unresolved input.
-                    adopted = None
-                if adopted is not None:
-                    ids.add(adopted.pk if is_head else adopted.workflow_id)
-                if is_head:
-                    declared_heads[(group.entry.addon.name, row["_xref"])] = adopted or instance
-        for target_model, ledger in owned:
-            target = targets.get((ledger.source_addon, ledger.xref))
-            if target is not None:
-                ids.add(target.pk if target_model is model else target.workflow_id)
+        for resolution in resolved.values():
+            for target in (resolution.instance, resolution.retained_instance):
+                if target is not None:
+                    ids.add(target.pk if isinstance(target, model) else target.workflow_id)
         for key, expected_model in references:
             target = targets.get(key)
-            if not isinstance(target, expected_model):
-                target = declared_heads.get(key)
-            if target is not None:
+            if isinstance(target, expected_model):
                 ids.add(target.pk if isinstance(target, model) else target.workflow_id)
         return ids
 
     def before_import(self, dataset: Any, **kwargs: Any) -> None:
-        self._instances.clear()
         self._row_hashes.clear()
         self._seen_xrefs: set[str] = set()
         self._pending: dict[str, tuple[Mapping[str, Any], dict[str, Any]]] = {}

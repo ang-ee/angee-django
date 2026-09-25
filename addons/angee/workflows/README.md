@@ -21,10 +21,10 @@ extraction instance validation share the format-asserting
 [`engine`](engine.py) is the public function facade for workflow operations.
 Its domain owners enforce the operation contracts. Operations accepting a run,
 decision, or step take the retained model instance. The existing public
-`advance_dispatch`, `execute_dispatch`, `deliver_artifact_dispatch`,
-`cancel_run_dispatch`, and `settle_run_dispatch` signatures delegate to
+`advance_dispatch`, `execute_dispatch`, and `settle_run_dispatch` signatures delegate to
 `WorkflowDispatch.objects.deliver`, as do durable task transport and the
-synchronous test driver. Transport supplies a complete `WorkflowDispatchEnvelope`
+synchronous test driver. Artifact delivery and run cancellation call the manager
+directly. Transport supplies a complete `WorkflowDispatchEnvelope`
 for validation under the delivery locks.
 
 Each member of the closed dispatch enum has one spec owning target selection,

@@ -52,6 +52,7 @@ dependencies = [
   "django-environ>=0.12",
   "jsonschema[format-nongpl]>=4.26",
   "pydantic>=2.13",
+  "referencing>=0.37",
   # ASGI server: serves the composed app and addon-contributed channels WebSocket
   # and HTTP mounts. uvicorn sends the ASGI lifespan that runs mount lifespans;
   # [standard] adds WebSocket and --reload support for dev.

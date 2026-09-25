@@ -28,6 +28,7 @@ from defusedxml import ElementTree
 from django.apps import apps
 
 from angee.base.serialization import canonical_json_sha256
+from angee.integrate.http import RedirectOriginError, same_origin
 from angee.integrate.states import LinkStatus
 from angee.integrate.streams import CursorInvalid, RecordChange, RemoteRejected, StreamPage, WriteBackResult
 from angee.parties.backends import (
@@ -46,7 +47,6 @@ _NS = {
 }
 _MULTIGET_CHUNK = 100
 _PHOTO_CAP = 5 * 1024 * 1024
-_REDIRECT_STATUSES = (301, 302, 307, 308)
 # vCard's reserved year for a birthday/anniversary whose year is omitted (``--MMDD``).
 _NO_YEAR_SENTINEL = 1604
 
@@ -268,7 +268,7 @@ class CardDavDirectoryBackend(DirectoryBackend):
         photo = contact.photo
         if photo is None or photo.data is not None or not photo.uri:
             return contact
-        if _origin(photo.uri) != _origin(collection):
+        if not same_origin(photo.uri, collection):
             raise CardDavError("The vCard photo must share the address book's origin.")
         try:
             data = self.http.download_capped(
@@ -294,7 +294,6 @@ class CardDavDirectoryBackend(DirectoryBackend):
         depth: str = "0",
         headers: dict[str, str] | None = None,
         cursor_request: bool = False,
-        _hops: int = 0,
     ) -> Any:
         """Send DAV through the pinned client and translate conditional failures."""
 
@@ -304,24 +303,17 @@ class CardDavDirectoryBackend(DirectoryBackend):
             **self._auth(),
             **(headers or {}),
         }
-        response = self.http.request(
-            method, url, headers=request_headers, body=body.encode("utf-8"), allow_private=True
-        )
-        if response.status_code in _REDIRECT_STATUSES and _hops < 3:
-            location = response.headers.get("location", "")
-            if location:
-                destination = urljoin(url, location)
-                if _origin(destination) != _origin(url):
-                    raise CardDavError("CardDAV redirects must retain the request origin.")
-                return self._request(
-                    method,
-                    destination,
-                    body,
-                    depth=depth,
-                    headers=headers,
-                    cursor_request=cursor_request,
-                    _hops=_hops + 1,
-                )
+        try:
+            response = self.http.request(
+                method,
+                url,
+                headers=request_headers,
+                body=body.encode("utf-8"),
+                allow_private=True,
+                same_origin_redirects=3,
+            )
+        except RedirectOriginError as error:
+            raise CardDavError(error.message) from error
         if response.status_code == 412:
             raise RemoteRejected()
         if cursor_request:
@@ -489,14 +481,6 @@ def _well_known(base: str) -> str:
 
     parts = urlsplit(base)
     return urlunsplit((parts.scheme, parts.netloc, "/.well-known/carddav", "", ""))
-
-
-def _origin(url: str) -> tuple[str, str | None, int | None]:
-    """Compare URL origins including the effective port, never user information."""
-
-    parts = urlsplit(url)
-    port = parts.port if parts.port is not None else {"http": 80, "https": 443}.get(parts.scheme)
-    return parts.scheme, parts.hostname, port
 
 
 def _render_vcard(

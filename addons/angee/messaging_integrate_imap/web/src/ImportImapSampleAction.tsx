@@ -1,16 +1,20 @@
 import { useMessagingT } from "@angee/messaging";
 import { keysetFeedRows, useAuthoredMutation } from "@angee/refine";
-import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, FieldRow, Input, RecordActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
+import { Alert, Button, Checkbox, ControlBandProvider, DialogForm, FieldRoot, FieldRow, Input, RecordActionTrigger, ResourceViewProvider, RowsListView, errorMessage, useLatestRef, useRecordChromeContext, useResourceView, type ListColumn } from "@angee/ui";
 import type { DocumentType } from "@angee/gql/console";
 import * as React from "react";
+import { flushSync } from "react-dom";
+import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { ImportImapSample } from "./documents";
 import { useSamplePreviewFeed, type SampleRow } from "./sample-preview-feed";
 
-// Mirrors backend.MAX_SAMPLE_MESSAGES; test_messaging_imap pins this UI guard to its owner.
-const IMAP_SAMPLE_LIMIT = 50;
+// The operations expose no limit metadata. The backend enforces this cap;
+// test_messaging_imap pins the one exported UI bound to MAX_SAMPLE_MESSAGES.
+export const IMAP_SAMPLE_LIMIT = 50;
 
 type Outcome = DocumentType<typeof ImportImapSample>["import_imap_sample"];
+type PreviewValues = { mailbox: string; since: string; before: string; allDates: boolean; limit: number };
 
 function isoDate(offsetDays = 0): string {
   const date = new Date();
@@ -30,25 +34,31 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   const { recordId, record } = useRecordChromeContext();
   const { clearSelectedIds, setPage } = useResourceView();
   const [open, setOpen] = React.useState(false);
-  const [mailbox, setMailbox] = React.useState("INBOX");
-  const [since, setSince] = React.useState(() => isoDate(-30));
-  const [before, setBefore] = React.useState(() => isoDate(1));
-  const [allDates, setAllDates] = React.useState(false);
-  const [limit, setLimit] = React.useState(20);
-  const [previewStarted, setPreviewStarted] = React.useState(false);
+  const form = useForm<PreviewValues>({
+    defaultValues: { mailbox: "INBOX", since: isoDate(-30), before: isoDate(1), allDates: false, limit: 20 },
+  });
+  const allDates = useWatch({ control: form.control, name: "allDates" });
+  const [previewValues, setPreviewValues] = React.useState<PreviewValues | null>(null);
   const [outcome, setOutcome] = React.useState<Outcome | null>(null);
-  const [localError, setLocalError] = React.useState<string | null>(null);
   const { query: previewFeed, restart } = useSamplePreviewFeed({
-    id: recordId, mailbox: mailbox.trim(), since: allDates ? null : since,
-    before: allDates ? null : before, allDates, limit,
+    id: recordId, mailbox: previewValues?.mailbox ?? "",
+    since: previewValues?.allDates ? null : previewValues?.since,
+    before: previewValues?.allDates ? null : previewValues?.before,
+    allDates: previewValues?.allDates ?? false, limit: previewValues?.limit ?? IMAP_SAMPLE_LIMIT,
   });
   const [runImport, importState] = useAuthoredMutation(ImportImapSample, { invalidateModels: ["messaging.Message"] });
 
+  const restartRef = useLatestRef(restart);
+  const formErrorId = React.useId();
+
   if (record === null) return null;
   const busy = previewFeed.isFetching || importState.fetching;
-  const operationError = (previewStarted ? previewFeed.error : null) ?? importState.error;
-  const rows = keysetFeedRows(previewStarted ? previewFeed.data : undefined, (left, right) => right.uid - left.uid);
-  const page = previewStarted ? previewFeed.data?.pages.at(-1) : undefined;
+  const errors = form.formState.errors;
+  const formError = Object.values(errors).map((error) => error?.message).filter(Boolean).join(" ");
+  const invalidLimit = t("channel.imap.sample.invalidLimit", { limit: IMAP_SAMPLE_LIMIT });
+  const operationError = (previewValues ? previewFeed.error : null) ?? importState.error;
+  const rows = keysetFeedRows(previewValues ? previewFeed.data : undefined, (left, right) => right.uid - left.uid);
+  const page = previewValues ? previewFeed.data?.pages.at(-1) : undefined;
   const preview = page?.metadata;
   const columns: readonly ListColumn<SampleRow>[] = [
     { field: "subject", header: t("channel.imap.sample.subject"), render: (row) => row.subject || t("channel.imap.sample.noSubject") },
@@ -59,34 +69,26 @@ function ImportImapSampleDialog(): React.ReactElement | null {
   ];
 
   const invalidatePreview = (): void => {
-    setPreviewStarted(false); setOutcome(null); setLocalError(null);
+    setPreviewValues(null); setOutcome(null); form.clearErrors();
     // Resetting a pending mutation detaches its observer without cancelling the
     // import. Keep its native busy state across dialog close/reopen.
     if (!importState.fetching) importState.reset();
     clearSelectedIds(); setPage(1);
   };
 
-  const loadPreview = async (): Promise<void> => {
-    setLocalError(null); setOutcome(null);
+  const loadPreview = (values: PreviewValues): void => {
+    setOutcome(null);
     importState.reset();
-    const from = Date.parse(`${since}T00:00:00Z`); const to = Date.parse(`${before}T00:00:00Z`);
-    if (!mailbox.trim() || (!allDates && (!Number.isFinite(from) || !Number.isFinite(to) || to <= from))) {
-      setLocalError(t("channel.imap.sample.invalidRange")); return;
-    }
-    if (!allDates && (to - from) / 86_400_000 > 366) {
-      setLocalError(t("channel.imap.sample.rangeTooLong")); return;
-    }
-    clearSelectedIds(); setPage(1); setPreviewStarted(true);
-    try {
-      await restart();
-    } catch { /* Native query state renders the server error. */ }
+    clearSelectedIds(); setPage(1);
+    // Commit the validated query parameters before restarting their feed.
+    flushSync(() => setPreviewValues(values));
+    void restartRef.current().catch(() => { /* Native query state renders the server error. */ });
   };
 
   const importSelected = async (selectedIds: ReadonlySet<string>, clear: () => void): Promise<void> => {
-    if (!preview) return;
-    setLocalError(null);
+    if (!preview || !previewValues) return;
     try {
-      const data = await runImport({ id: recordId, mailbox: mailbox.trim(), uidvalidity: preview.uidvalidity, uids: [...selectedIds].map(Number) });
+      const data = await runImport({ id: recordId, mailbox: previewValues.mailbox, uidvalidity: preview.uidvalidity, uids: [...selectedIds].map(Number) });
       if (data?.import_imap_sample) { setOutcome(data.import_imap_sample); clear(); }
     } catch { /* Authored mutation state renders the server error. */ }
   };
@@ -97,22 +99,38 @@ function ImportImapSampleDialog(): React.ReactElement | null {
     title={t("channel.imap.sample.title")}
     description={t("channel.imap.sample.description")}
     size="lg"
+    onSubmit={form.handleSubmit(loadPreview)}
     trigger={
       <RecordActionTrigger disabled={record.lifecycle !== "PAUSED"}>
         {t("channel.imap.sample.button")}
       </RecordActionTrigger>
     }
-    footer={<Button type="button" variant="primary" disabled={busy} onClick={() => void loadPreview()}>{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.preview")}</Button>}>
-      <FieldRow label={t("channel.imap.sample.mailbox")}><Input value={mailbox} disabled={busy} onChange={(event) => { setMailbox(event.target.value); invalidatePreview(); }} /></FieldRow>
-      <FieldRoot><FieldRoot.Label>{t("channel.imap.sample.allDates")}</FieldRoot.Label><Checkbox checked={allDates} disabled={busy} onCheckedChange={(checked) => { setAllDates(checked); invalidatePreview(); }} /></FieldRoot>
-      <FieldRow label={t("channel.imap.sample.since")}><Input type="date" value={since} disabled={busy || allDates} onChange={(event) => { setSince(event.target.value); invalidatePreview(); }} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.before")}><Input type="date" value={before} disabled={busy || allDates} onChange={(event) => { setBefore(event.target.value); invalidatePreview(); }} /></FieldRow>
-      <FieldRow label={t("channel.imap.sample.limit")}><Input type="number" min={1} max={IMAP_SAMPLE_LIMIT} value={limit} disabled={busy} onChange={(event) => {
-        const parsed = event.target.valueAsNumber;
-        setLimit(Number.isFinite(parsed) ? Math.max(1, Math.min(IMAP_SAMPLE_LIMIT, Math.trunc(parsed))) : 1);
-        invalidatePreview();
-      }} /></FieldRow>
-      {localError || operationError ? <Alert className="col-span-full" tone="danger">{localError ?? errorMessage(operationError, t("channel.imap.sample.failed"))}</Alert> : null}
+    footer={<Button type="submit" variant="primary" disabled={busy}>{previewFeed.isFetching ? t("channel.imap.sample.previewing") : t("channel.imap.sample.preview")}</Button>}>
+      <FieldRow label={t("channel.imap.sample.mailbox")}><Input disabled={busy} invalid={Boolean(errors.mailbox)} aria-describedby={errors.mailbox ? formErrorId : undefined} {...form.register("mailbox", {
+        setValueAs: (value: string) => value.trim(), required: t("channel.imap.sample.invalidRange"), onChange: invalidatePreview,
+      })} /></FieldRow>
+      <Controller name="allDates" control={form.control} render={({ field }) => <FieldRoot>
+        <FieldRoot.Label>{t("channel.imap.sample.allDates")}</FieldRoot.Label>
+        <Checkbox ref={field.ref} name={field.name} checked={field.value} disabled={busy} onBlur={field.onBlur}
+          onCheckedChange={(checked) => { field.onChange(checked); invalidatePreview(); }} />
+      </FieldRoot>} />
+      <FieldRow label={t("channel.imap.sample.since")}><Input type="date" disabled={busy || allDates} invalid={Boolean(errors.before)} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("since", { onChange: invalidatePreview })} /></FieldRow>
+      <FieldRow label={t("channel.imap.sample.before")}><Input type="date" disabled={busy || allDates} invalid={Boolean(errors.before)} aria-describedby={errors.before ? formErrorId : undefined} {...form.register("before", {
+        validate: (value, values) => {
+          if (values.allDates) return true;
+          const span = Date.parse(`${value}T00:00:00Z`) - Date.parse(`${values.since}T00:00:00Z`);
+          if (!Number.isFinite(span) || span <= 0) return t("channel.imap.sample.invalidRange");
+          return span / 86_400_000 <= 366 || t("channel.imap.sample.rangeTooLong");
+        }, onChange: invalidatePreview,
+      })} /></FieldRow>
+      <FieldRow label={t("channel.imap.sample.limit")}><Input type="number" min={1} max={IMAP_SAMPLE_LIMIT} disabled={busy} invalid={Boolean(errors.limit)} aria-describedby={errors.limit ? formErrorId : undefined} {...form.register("limit", {
+        valueAsNumber: true, required: invalidLimit,
+        min: { value: 1, message: invalidLimit },
+        max: { value: IMAP_SAMPLE_LIMIT, message: invalidLimit },
+        validate: (value) => Number.isInteger(value) || invalidLimit,
+        onChange: invalidatePreview,
+      })} /></FieldRow>
+      {formError || operationError ? <Alert id={formErrorId} className="col-span-full" tone="danger">{formError || errorMessage(operationError, t("channel.imap.sample.failed"))}</Alert> : null}
       {outcome ? <Alert
         className="col-span-full"
         tone={outcome.missing_uids.length || !outcome.flags_unchanged ? "warning" : "success"}

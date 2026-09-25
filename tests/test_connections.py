@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import multiprocessing
 import time
 from datetime import timedelta
@@ -14,12 +13,12 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import IntegrityError, connection, connections, transaction
-from django.test.utils import override_settings
+from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils import timezone
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.integrate.credentials import CredentialKind, OAuthCredentialHandler, StaticTokenCredentialHandler
+from angee.integrate.credentials import CredentialKind, StaticTokenCredentialHandler
 from angee.integrate.models import AccountStatus
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import TOKEN_EXCHANGE_FAILED, OAuthFlowError
@@ -651,8 +650,8 @@ def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "sqlite", reason="SQLite locking floor")
-def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SQLite is the documented floor; refresh locking degrades to a plain read there."""
+def test_ensure_fresh_uses_plain_select_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Django omits row-lock SQL on SQLite while refresh retains its transaction."""
 
     user = get_user_model().objects.create_user(username="refresh-sqlite", email="sqlite@example.com")
     call_command("rebac", "sync", verbosity=0)
@@ -662,30 +661,21 @@ def test_ensure_fresh_does_not_call_select_for_update_on_sqlite(monkeypatch: pyt
         material={"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 3600},
     )
 
-    def forbidden_select_for_update(self: Any, *args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("SQLite refresh must not call select_for_update()")
+    def fake_refresh(self: Any, *, refresh_token: str) -> dict[str, Any]:
+        assert connection.in_atomic_block
+        assert refresh_token == "old-refresh"
+        return {"access_token": "sqlite-access", "refresh_token": "sqlite-refresh", "expires_in": 7200}
 
-    def fake_handler_refresh(self: Any, locked: Any) -> None:
-        locked.material = json.dumps(
-            {"access_token": "sqlite-access", "refresh_token": "sqlite-refresh"},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        locked.expires_at = timezone.now() + timedelta(hours=2)
-        locked.last_refresh_at = timezone.now()
-        locked.last_refresh_status = "ok"
-        locked.save(
-            using=locked._state.db,
-            update_fields=["material", "expires_at", "last_refresh_at", "last_refresh_status"],
-        )
+    monkeypatch.setattr(OAuthClientProtocol, "refresh_token", fake_refresh)
 
-    monkeypatch.setattr(type(Credential.objects.all()), "select_for_update", forbidden_select_for_update)
-    monkeypatch.setattr(OAuthCredentialHandler, "refresh", fake_handler_refresh)
-
-    with system_context(reason="test sqlite refresh run"):
+    with system_context(reason="test sqlite refresh run"), CaptureQueriesContext(connection) as captured:
         credential.ensure_fresh()
 
+    assert any(query["sql"].upper().startswith("SELECT") for query in captured.captured_queries)
+    assert all("FOR UPDATE" not in query["sql"].upper() for query in captured.captured_queries)
     assert credential.secret_value() == "sqlite-access"
+    reloaded = Credential.objects.sudo(reason="test sqlite refresh persisted").get(pk=credential.pk)
+    assert reloaded.reveal()["refresh_token"] == "sqlite-refresh"
 
 
 @pytest.mark.django_db(transaction=True)

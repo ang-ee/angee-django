@@ -38,7 +38,15 @@ from angee.integrate.states import (
     StreamKind,
     StreamPhase,
 )
-from angee.integrate.streams import advance_stream, begin_stream_cycle, push_stream, reconcile_stream, sync_bridge
+from angee.integrate.streams import (
+    CursorInvalid,
+    RemoteRejected,
+    advance_stream,
+    begin_stream_cycle,
+    push_stream,
+    reconcile_stream,
+    sync_bridge,
+)
 from angee.parties.backends import (
     CONTACT_FIELDS,
     ParsedAddress,
@@ -1268,6 +1276,15 @@ def test_generation_bump_deepcopies_nested_config(replica: Replica, monkeypatch:
     assert replica.stream.config == {"policy": {"fields": ["notes"]}}
 
 
+@pytest.mark.parametrize("url", ["file:///tmp/addressbook", "http://169.254.169.254/addressbook/"])
+def test_request_preserves_url_gate_validation_error(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, url: str,
+) -> None:
+    monkeypatch.setattr(HttpClient, "transport_factory", PinnedTransport)
+    with pytest.raises(ValidationError):
+        replica.backend._request("PROPFIND", url, "<propfind/>")
+
+
 def test_cross_origin_redirect_refuses_to_forward_basic_auth(
     replica: Replica,
     monkeypatch: pytest.MonkeyPatch,
@@ -1280,11 +1297,34 @@ def test_cross_origin_redirect_refuses_to_forward_basic_auth(
 
     monkeypatch.setattr(replica.server, "handle_request", redirect)
     monkeypatch.setattr(replica.backend, "_auth", lambda: {"Authorization": "Basic dXNlcjpwYXNz"})
-    with pytest.raises(CardDavError):
+    with pytest.raises(CardDavError, match="request origin"):
         replica.backend._request("PROPFIND", _BOOK, "<propfind/>")
     assert len(sent) == 1
     assert str(sent[0].url) == _BOOK
     assert sent[0].headers["authorization"] == "Basic dXNlcjpwYXNz"
+
+
+@pytest.mark.parametrize("status", [207, 412, 404])
+def test_same_origin_redirect_retains_dav_request_and_failure_translation(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, status: int,
+) -> None:
+    sent: list[httpx.Request] = []
+
+    def redirect(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(302, headers={"Location": "/relocated/"}) if len(sent) == 1 else httpx.Response(status)
+
+    monkeypatch.setattr(replica.server, "handle_request", redirect)
+    headers = {"If-Match": '"version"'}
+    if status == 207:
+        response = replica.backend._request("REPORT", _BOOK, "<sync/>", depth="1", headers=headers, cursor_request=True)
+        assert response.status_code == 207
+    else:
+        with pytest.raises(RemoteRejected if status == 412 else CursorInvalid):
+            replica.backend._request("REPORT", _BOOK, "<sync/>", depth="1", headers=headers, cursor_request=True)
+    assert [str(request.url) for request in sent] == [_BOOK, f"{_BASE}relocated/"]
+    assert all(request.method == "REPORT" and request.content == b"<sync/>" for request in sent)
+    assert all(request.headers["Depth"] == "1" and request.headers["If-Match"] == '"version"' for request in sent)
 
 
 def test_sync_report_skips_successful_collection_self_response(replica: Replica) -> None:

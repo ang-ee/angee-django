@@ -51,7 +51,6 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
     discrepancy = SyncDiscrepancy.objects.record(
         replica, link=link, kind=DiscrepancyKind.SEMANTIC, code="lock-regression"
     )
-    features = connection.features
     with transaction.atomic():
         for row in (replica, link, revision, discrepancy):
             model = type(row)
@@ -64,7 +63,7 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
                     else AngeeQuerySet
                 )
                 assert isinstance(queryset, expected)
-                assert queryset.query.select_for_update is features.has_select_for_update
+                assert queryset.query.select_for_update is True
                 assert list(queryset) == [row]
         for manager, row in ((replica.links, link), (replica.discrepancies, discrepancy), (link.revisions, revision)):
             queryset = manager.filter(pk=row.pk).lock_if_supported()

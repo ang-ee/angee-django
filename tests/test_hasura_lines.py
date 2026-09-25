@@ -451,10 +451,9 @@ def test_save_fetches_kept_lines_without_per_row_growth(composed_tables):
 def test_save_locks_the_parent_row_before_diffing_lines(composed_tables, monkeypatch):
     """The child diff runs under a parent-row lock (serializes concurrent saves).
 
-    A true cross-delete race needs two Postgres connections; on the SQLite floor
-    ``lock_if_supported`` is a no-op, so this pins the seam: the diff acquires the
-    lock through the base helper, targeting the parent model, before touching the
-    child set.
+    A true cross-delete race needs two Postgres connections; Django emits no
+    row-lock SQL on SQLite. This pins the intent: the diff requests a lock through
+    the base helper, targeting the parent model, before touching the child set.
     """
 
     from angee.base.models import AngeeQuerySet

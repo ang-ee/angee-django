@@ -413,12 +413,12 @@ def test_start_rejects_malformed_input_presence_before_writes(
     ],
 )
 def test_start_asserts_input_schema_formats_before_writes(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     schema_format: str,
     valid_value: str,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     with system_context(reason="test workflow format input contract"):
         draft = Workflow.objects.create(
             created_by=workflow_actor(),
@@ -449,11 +449,11 @@ def test_start_asserts_input_schema_formats_before_writes(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("value", ["2026-09-25", "nope"])
 def test_emit_asserts_output_schema_formats(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     value: str,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = workflow_with_steps(
         steps=({
             "key": "emit",

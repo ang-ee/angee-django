@@ -17,8 +17,8 @@ live in code docstrings.
   and table fixtures in the framework suite.
 - Runtime JSON Schema formats are now asserted everywhere, including workflow
   inputs and outputs, emitted values, Decision payloads, and extraction evidence.
-- Declare `jsonschema[format-nongpl]` so dependency-backed formats including
-  `date-time`, `uri`, `hostname`, and `duration` are checked as well.
+- Declare core `jsonschema[format-nongpl]` and `referencing` dependencies. The
+  format extras assert `date-time`, `uri`, `hostname`, and `duration` as well.
 - Workflow publisher checks query only explicitly requested databases; replay
   declaration checks remain available without database access. Row-lock callers
   consistently use `lock_if_supported`, which delegates write routing and backend
@@ -28,6 +28,24 @@ live in code docstrings.
   transport factory for injected test transports.
 - Translation fallbacks use native i18next plurals and interpolation, including
   locale-specific zero-count selection unless the fallback declares a zero form.
+- Workflow resource lock planning resolves existing targets and retained ledgers
+  through `AngeeResource.resolve_existing` and the native import-export loader.
+  Decoded targets use Django's batched `in_bulk`; row adoption and hash-skip state
+  stay on the resource and are reset before import.
+- `angee.base.jsonschema.LocalSchemaReferences` owns root-local JSON Schema
+  pointers and anchors through `referencing` for workflow structural proofs and
+  implementation forms; remote references and nested resource scopes remain
+  unsupported.
+- IMAP sample preview fields and validation compose react-hook-form with
+  `DialogForm`; previews start directly from validated submissions and validation
+  messages describe affected inputs. The backend remains the sample-limit authority.
+- CardDAV uses `HttpClient.request(same_origin_redirects=3)` for bounded redirects
+  that retain the request method, body and credentials only on the same origin.
+  Photo downloads share that origin comparison; URL-gate validation errors retain
+  their original type, while origin-changing redirects become `CardDavError`.
+- Messaging adapters import `mapping`, `millis_to_utc`, `sequence` and `text` from
+  the public owner `angee.messaging.identity`. `_wire` remains private compatibility
+  imports while bridge callers migrate; delete `_wire` once that migration lands.
 
 - Remove write-alias threading and custom `using=` parameters, including the
   `using` payload on `change_published` and `file_finalized`; Django routers own
@@ -64,9 +82,9 @@ live in code docstrings.
   schema autodetection can remove indexes previously retained by incorrect
   field serialization. Optional states must declare `null=True, blank=True`;
   concrete models with blank non-null states fail Django's field checks.
-- The public `angee.workflows.engine.deliver_artifact_dispatch` and
-  `cancel_run_dispatch` entrypoints retain their signatures and delegate to
-  `WorkflowDispatch.objects.deliver(...)`.
+- Remove the test-only `angee.workflows.engine.deliver_artifact_dispatch` and
+  `cancel_run_dispatch` forwarders. Call `WorkflowDispatch.objects.deliver(...)`
+  with `expected_kind` and, for cancellation, `expected_target_id`.
 - The integration ownership guard now belongs to its consumer addon. The
   framework no longer supplies `angee.integrate.ownership`; consumers own their
   ownership policy through the declared integration contract.

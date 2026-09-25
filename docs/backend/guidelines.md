@@ -885,6 +885,8 @@ and current contracts before applying a historical example to a new deployment.
   ledger hook. Domain adapters may defer persistence to a manager without
   inventing another importer or ledger API. A batch preflight may acquire only
   the complete ordered domain lock set; it must not consume groups or write rows.
+  `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
+  through the same native instance loader; preflights compose this public owner.
   [`WorkflowDefinitionResource`](../../addons/angee/workflows/resources.py) is the
   facet-reconciliation example. Source omission and explicit null must remain
   distinguishable through dataset normalization.

@@ -66,6 +66,22 @@ def public_data_id_field(model: type[models.Model]) -> SqidField | None:
     return None
 
 
+def public_id_lookup(
+    model: type[models.Model],
+    value: str,
+    *,
+    public_identity: SqidPublicIdentity | None = None,
+) -> dict[str, Any]:
+    """Return the model-owned lookup for a generic or third-party public identity."""
+
+    if public_identity is not None:
+        return public_identity.public_id_lookup(model, value)
+    if issubclass(model, AngeeModel):
+        return model.public_id_lookup(value)
+    pk = model._meta.pk
+    return {pk.name: value} if pk is not None else {}
+
+
 def instance_from_public_id(
     model: type[_ModelT],
     value: str,
@@ -79,13 +95,7 @@ def instance_from_public_id(
     if value == "":
         return None
     try:
-        if public_identity is not None:
-            lookup = public_identity.public_id_lookup(model, value)
-        elif issubclass(model, AngeeModel):
-            lookup = model.public_id_lookup(value)
-        else:
-            pk = model._meta.pk
-            lookup = {pk.name: value} if pk is not None else {}
+        lookup = public_id_lookup(model, value, public_identity=public_identity)
         return cast(_ModelT | None, active_queryset.filter(**lookup).first())
     except (TypeError, ValueError):
         return None
