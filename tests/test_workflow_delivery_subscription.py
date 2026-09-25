@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections, transaction
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
@@ -286,7 +287,7 @@ def test_continuation_delivery_between_completion_read_and_wait_commit_is_retain
             join_attempt.refresh_from_db()
             subscription = StepExternalSubscription.objects.get(attempt=join_attempt)
             queryset = StepExternalSubscription.objects.filter(pk=subscription.pk)
-            with pytest.raises(TypeError, match="retained for their attempt lifecycle"):
+            with pytest.raises(ValidationError, match="StepExternalSubscription rows cannot be deleted"):
                 queryset._raw_delete(using=queryset.db)
         assert join_row.status == StepRunStatus.WAITING
         assert join_row.wait_until is not None and join_row.wait_until <= join_attempt.result_recorded_at

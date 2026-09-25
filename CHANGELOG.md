@@ -11,6 +11,21 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Generated-runtime rebuilds reset once, preserving migration history and
+  warning only for labels outside the current composition. Remove unused
+  runtime wrappers and migration digest exceptions; materialization requires
+  the composed app registry. Provision runs `makemigrations --noinput`, so
+  missing required migration defaults fail promptly instead of prompting.
+- Retained collections use one model-labelled `ValidationError`. Lease updates
+  and validated retention batches use explicit owner write paths that preserve
+  authorization; fixture and recovery collections consistently reject generic
+  inserts. Implementation-field checks share registry resolution and reject
+  mismatched implementation keys.
+- Base autoconfig enables simple-history's native text change-reason setting,
+  replacing the private field-factory override. System check `angee.E021`
+  rejects hierarchy queryset ordering that would bypass another write guard.
+- Currency projection metadata is owned by `angee.data.field_classification`;
+  import `MONEY_CURRENCY_FIELD_METADATA_KEY` there.
 - Add opt-in `angee.workflows.testing` and `angee.integrate.testing` apps for
   addon source test models. Core retains only the generic
   `angee.testing.fixtures.composed_tables` fixture, using pytest-django's native

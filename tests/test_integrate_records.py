@@ -318,7 +318,7 @@ def test_revision_numbering_and_all_mutation_paths_refuse_edits(replica: Any) ->
         lambda: RecordRevision._base_manager.filter(pk=first.pk).update(source_hash="edited"),
     )
     for mutate in mutations:
-        with pytest.raises(ValidationError, match="immutable"):
+        with pytest.raises(ValidationError, match="immutable|RecordRevision rows cannot be (edited|deleted)"):
             mutate()
     first.refresh_from_db()
     assert first.source_hash == "one"

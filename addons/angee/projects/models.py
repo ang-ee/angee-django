@@ -559,8 +559,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
         for field_name in ("sort_order", "sub_sort_order"):
             field = cast(FractionalRankField, self._meta.get_field(field_name))
-            if getattr(self, field.attname) is None:
-                setattr(self, field.attname, field.get_append_rank_for_instance(self))
+            field.pre_save(self, True)
 
     def clean(self) -> None:
         """Normalize insert lifecycle state and reject invalid task structure."""

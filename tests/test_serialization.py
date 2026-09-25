@@ -56,3 +56,10 @@ def test_json_safe_normalizes_nested_values() -> None:
     assert result["frozen"] == [1, 2]
     assert result["items"][0] == "1.25"
     assert isinstance(result["items"][1], str)
+
+
+def test_json_safe_preserves_escaped_unicode_set_order() -> None:
+    """Set order remains compatible with the established JSON-safe projection."""
+
+    assert json_safe({"z", "é"}) == ["é", "z"]
+    assert sorted({"z", "é"}, key=canonical_json) == ["z", "é"]

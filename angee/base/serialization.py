@@ -53,7 +53,11 @@ def json_safe(value: Any) -> Any:
 
 
 def _json_sort_key(value: Any) -> str:
-    """Return a deterministic ordering key for unordered JSON-safe values."""
+    """Preserve escaped-Unicode ordering for unordered JSON-safe values.
+
+    ``canonical_json`` emits Unicode directly, which would put ``"é"`` after
+    ``"z"`` instead of before it and change the resulting array order.
+    """
 
     return json.dumps(
         json_safe(value),

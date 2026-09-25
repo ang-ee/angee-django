@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import AbstractContextManager, nullcontext
 from typing import Any, TypeVar, cast
 
 from django.db import models
-from rebac import system_context
-from rebac.actors import is_sudo
 from rebac.resources import model_resource_type
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -18,12 +15,6 @@ def lock_if_supported(queryset: _QuerySetT, *, of: tuple[str, ...] = ("self",)) 
     """Declare row-lock intent; Django owns write routing and backend support."""
 
     return queryset.select_for_update(of=of)
-
-
-def elevated(*, reason: str) -> AbstractContextManager[Any]:
-    """Elevate once, preserving an existing system actor and its audit reason."""
-
-    return nullcontext() if is_sudo() else system_context(reason=reason)
 
 
 def bind_actor(instance: models.Model, actor: Any | None) -> None:
@@ -75,18 +66,17 @@ def read_scoped_queryset(
 
 
 def write_scoped_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
-    """Return a write target queryset with REBAC row scope and unredacted fields."""
+    """Return a write-target queryset with REBAC row scope and unredacted fields."""
 
     manager = model._default_manager
     if _is_angee_model(model):
         if requires_angee_rebac_contract(model):
-            queryset = cast(models.QuerySet[_ModelT], cast(Any, manager).for_write())
-        else:
-            queryset = manager.all()
-    else:
-        for_write = getattr(manager, "for_write", None)
-        queryset = cast(models.QuerySet[_ModelT], for_write()) if callable(for_write) else manager.all()
-    return queryset
+            return cast(models.QuerySet[_ModelT], cast(Any, manager).for_write())
+        return manager.all()
+    for_write = getattr(manager, "for_write", None)
+    if callable(for_write):
+        return cast(models.QuerySet[_ModelT], for_write())
+    return manager.all()
 
 
 def system_queryset(

@@ -47,6 +47,7 @@ from angee.agents.models import (
     decode_inference_output,
     normalize_inference_usage,
 )
+from angee.agents.models import Agent as AbstractAgent
 from angee.agents.models import InferenceModel as AbstractInferenceModel
 from angee.agents.models import InferenceProvider as AbstractInferenceProvider
 from angee.agents.models import Skill as AbstractSkill
@@ -135,6 +136,12 @@ SKILL_BLOBS = {
     "skills/calc/SKILL.md": "---\nname: Calculator\ndescription: arithmetic\n---\nbody",
     "skills/search/SKILL.md": "---\nname: Web Search\ndescription: search the web\n---\nbody",
 }
+
+
+def test_agent_runtime_registry_matches_implementation_keys() -> None:
+    """Every selectable runtime declares the same stable key as its registry entry."""
+
+    assert AbstractAgent.impl_field("runtime_class").check() == []
 
 
 # --- parse_skill_meta (pure) --------------------------------------------------

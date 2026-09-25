@@ -221,9 +221,7 @@ copied-body edits, duplicate origins, split leaves, and invalid graphs fail
 before migration execution. A guarded app-label adoption may deliberately
 write reviewed staging nodes and then stop at the physical-table-owner drop check.
 This gives downstream migrations a concrete new graph without allowing the
-following `makemigrations` command to delete retained tables. A source compatibility exception can declare
-specific accepted historical digests through `compatible_source_sha256`; it
-preserves existing copies rather than rewriting them. The exact validation
+following `makemigrations` command to delete retained tables. The exact validation
 contract belongs to [`RuntimeMigrations`](../angee/compose/migrations.py) and its
 [history tests](../tests/test_runtime_migrations.py). A dependency on
 `(<app_label>, "__latest__")` is resolved to a concrete current leaf when copied.
@@ -231,7 +229,7 @@ contract belongs to [`RuntimeMigrations`](../angee/compose/migrations.py) and it
 For new transitions, add a new declaration. Preserve old import paths needed by
 released history when code moves. See the [backend migration
 rules](backend/guidelines.md#migrations-and-runtime) before recovering a local
-database or changing historical source compatibility.
+database or changing historical source.
 
 Normal app boot and `emit_if_stale()` never materialize migrations.
 `angee build --check` validates existing history and reports applicable pending
@@ -250,7 +248,8 @@ process to load the emitted models and run the remaining commands together.
 Keep that post-build boundary; native command loaders and cache invalidation
 allow subsequent database preparation, checks and schema output to share the
 initialized registry. Each command retains its own transactions and failures
-stop later steps.
+stop later steps. Provision runs `makemigrations --noinput`; missing required
+migration defaults fail immediately so they can be authored before retrying.
 
 ### Composed addon dependencies
 
@@ -302,15 +301,15 @@ validated against those concrete classes.
   Django setup still precedes management-command dispatch, so normal boot repair
   also precedes `angee clean` and `angee build --check`.
 
-Both cleanup operations preserve and report every `migrations/` subtree, including
+Both cleanup operations preserve every `migrations/` subtree and report only
 history for labels no longer composed. Those labels may retain directories solely
 to hold their history. An absent addon does not establish that its migrations are
 disposable: the [migration policy](backend/guidelines.md#migrations-and-runtime)
 requires preserving files and investigating the recorded graph before recovery.
-[`Runtime`](../angee/compose/runtime.py) removes
-obsolete generated migration-module bindings while preserving project-owned
-bindings; Django loads migrations for installed apps, so retained histories for
-uninstalled labels are not imported during build.
+During app population, [`Runtime`](../angee/compose/runtime.py) binds migration
+modules for current composed labels and preserves project-owned bindings. Django
+loads migrations for installed apps, so retained histories for uninstalled labels
+are not imported during build.
 
 ## Addon Declarations
 

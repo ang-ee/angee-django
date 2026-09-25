@@ -16,6 +16,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError, SystemCheckError
 from django.db import OperationalError, models
+from django.test.utils import isolate_apps
 
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
@@ -365,7 +366,6 @@ def test_runtime_configures_migrations_for_runtime_labels(tmp_path: Path, settin
     settings.MIGRATION_MODULES = {
         "custom": "custom.migrations",
         "disabled": None,
-        "removed": "runtime.removed.migrations",
         "foreign": "other_runtime.foreign.migrations",
     }
 
@@ -693,11 +693,11 @@ def test_runtime_rejects_mismatched_extension_model_label(tmp_path: Path, monkey
         Runtime.discover((target_config, extension_config), runtime_dir=tmp_path / "runtime")
 
 
-def test_runtime_boot_repairs_drift_without_pruning_but_emit_prunes(tmp_path: Path) -> None:
-    """Checks see all drift, boot repairs files only, and explicit emit prunes."""
+def test_runtime_boot_repairs_drift_without_pruning_but_build_prunes(tmp_path: Path) -> None:
+    """Checks see all drift, boot repairs files only, and explicit build cleans."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit()
+    runtime.emit_if_stale()
     runtime.check()
     models_path = runtime.runtime_dir / "resources" / "models.py"
     models_path.write_text("# stale\n", encoding="utf-8")
@@ -710,7 +710,7 @@ def test_runtime_boot_repairs_drift_without_pruning_but_emit_prunes(tmp_path: Pa
     assert runtime.emit_if_stale() is True
     assert models_path.read_text(encoding="utf-8") == runtime.render_sources()[Path("resources/models.py")]
     assert orphan.exists()
-    runtime.emit()
+    runtime.build()
     assert not orphan.exists()
     runtime.check()
 
@@ -719,7 +719,7 @@ def test_runtime_check_ignores_schema_command_output(tmp_path: Path) -> None:
     """GraphQL SDL files are checked by the schema command, not build."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit()
+    runtime.emit_if_stale()
     schema_path = tmp_path / "runtime" / "schemas" / "public.graphql"
     schema_path.parent.mkdir()
     schema_path.write_text("type Query { ok: Boolean! }\n", encoding="utf-8")
@@ -731,7 +731,7 @@ def test_runtime_check_ignores_graphql_codegen_output(tmp_path: Path) -> None:
     """Generated GraphQL client code is checked by its frontend owner, not build."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit()
+    runtime.emit_if_stale()
     gql_path = tmp_path / "runtime" / "gql" / "public" / "graphql.ts"
     gql_path.parent.mkdir(parents=True)
     gql_path.write_text("export const ok = true;\n", encoding="utf-8")
@@ -743,7 +743,7 @@ def test_runtime_check_ignores_web_codegen_output(tmp_path: Path) -> None:
     """Generated web entry code is checked by the frontend CLI, not build."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit()
+    runtime.emit_if_stale()
     app_path = tmp_path / "runtime" / "web" / "app.ts"
     app_path.write_text("export const ok = true;\n", encoding="utf-8")
     routes_path = tmp_path / "runtime" / "web" / "routes.gen.ts"
@@ -821,7 +821,7 @@ def test_runtime_extensions_follow_app_graph_order_not_class_names(tmp_path: Pat
     assert "class TargetRuntime(TargetRuntimeExtension1, TargetRuntimeExtension2, AbstractTargetRuntime):" in source
 
 
-@pytest.mark.parametrize("operation", ["clean", "clean_configured", "build", "emit_if_stale"])
+@pytest.mark.parametrize("operation", ["clean_configured", "build", "emit_if_stale"])
 def test_runtime_writes_require_generated_sentinel(tmp_path: Path, settings: Any, operation: str) -> None:
     """Boot repair cannot authorize a foreign directory by writing its sentinel."""
 
@@ -840,12 +840,12 @@ def test_runtime_writes_require_generated_sentinel(tmp_path: Path, settings: Any
     assert not (runtime.runtime_dir / "__init__.py").exists()
 
 
-@pytest.mark.parametrize("operation", ["clean", "reset", "build", "emit_if_stale"])
+@pytest.mark.parametrize("operation", ["build", "emit_if_stale"])
 def test_runtime_writes_require_configured_directory(tmp_path: Path, settings: Any, operation: str) -> None:
     """A generated sentinel never authorizes writes outside the configured root."""
 
     runtime = runtime_for(tmp_path)
-    runtime.emit()
+    runtime.emit_if_stale()
     stale = runtime.runtime_dir / "stale.py"
     stale.write_text("# keep\n", encoding="utf-8")
     settings.ANGEE_RUNTIME_DIR = tmp_path / "other_runtime"
@@ -857,12 +857,12 @@ def test_runtime_writes_require_configured_directory(tmp_path: Path, settings: A
     assert (runtime.runtime_dir / "resources" / "models.py").exists()
 
 
-def test_clean_then_emit_is_idempotent(tmp_path: Path, settings: Any) -> None:
+def test_clean_then_boot_repair_is_idempotent(tmp_path: Path, settings: Any) -> None:
     """A cleaned runtime with preserved migrations keeps its cleanup sentinel."""
 
     runtime = runtime_for(tmp_path)
     settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
-    runtime.emit()
+    runtime.emit_if_stale()
     migration_paths = (
         runtime.runtime_dir / "resources" / "migrations" / "0001_initial.py",
         runtime.runtime_dir / "resources" / "migrations" / "archive" / "snapshot.txt",
@@ -872,28 +872,29 @@ def test_clean_then_emit_is_idempotent(tmp_path: Path, settings: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("migration\n", encoding="utf-8")
 
-    runtime.clean()
+    Runtime.clean_configured()
     assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
-    runtime.emit()
+    runtime.emit_if_stale()
 
     assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
     assert all(path.read_text(encoding="utf-8") == "migration\n" for path in migration_paths)
-    runtime.clean()
+    Runtime.clean_configured()
     assert all(path.read_text(encoding="utf-8") == "migration\n" for path in migration_paths)
     assert "ANGEE GENERATED RUNTIME" in (runtime.runtime_dir / "__init__.py").read_text(encoding="utf-8")
-    runtime.clean()
+    Runtime.clean_configured()
 
 
-def test_runtime_clean_refuses_migrations_without_sentinel(tmp_path: Path) -> None:
+def test_runtime_clean_refuses_migrations_without_sentinel(tmp_path: Path, settings: Any) -> None:
     """Migrations alone are not enough evidence that a directory is generated."""
 
     runtime = runtime_for(tmp_path)
+    settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
     migration_path = runtime.runtime_dir / "resources" / "migrations" / "0001_initial.py"
     migration_path.parent.mkdir(parents=True)
     migration_path.write_text("# migration\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="not an Angee runtime directory"):
-        runtime.clean()
+        Runtime.clean_configured()
 
 
 def _compose_config() -> ComposeConfig:
@@ -995,7 +996,7 @@ def test_runtime_build_emits_stale_sources_once_before_materializing(tmp_path: P
 def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: Path, monkeypatch, settings) -> None:
     runtime = runtime_for(tmp_path)
     settings.MIGRATION_MODULES = {}
-    runtime.emit()
+    runtime.emit_if_stale()
     path = runtime.runtime_dir / "resources" / "models.py"
     modified = path.stat().st_mtime_ns
     caches = (
@@ -1019,19 +1020,19 @@ def test_runtime_build_materializes_without_rewriting_current_sources(tmp_path: 
     assert calls == ["materialize"]
     assert path.stat().st_mtime_ns == modified
     assert all(cache.exists() for cache in caches)
-    assert runtime.is_current()
+    assert runtime.emit_if_stale() is False
 
 
 @pytest.mark.parametrize("contents", ["empty", "models", "bytecode"])
 def test_runtime_build_prunes_removed_labels_before_materializing(
-    tmp_path: Path, monkeypatch, settings, contents,
+    tmp_path: Path, monkeypatch, settings, contents, caplog,
 ) -> None:
     """Removed packages count as drift with sources, bytecode, or empty directories."""
 
     runtime = runtime_for(tmp_path)
     settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
     settings.MIGRATION_MODULES = {}
-    runtime.emit()
+    runtime.emit_if_stale()
     removed = runtime.runtime_dir / "removed"
     removed.mkdir()
     if contents == "models":
@@ -1052,56 +1053,13 @@ def test_runtime_build_prunes_removed_labels_before_materializing(
 
     assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
     assert not removed.exists()
-    assert runtime.is_current()
-
-
-def test_runtime_build_never_imports_preserved_migrations_for_uncomposed_label(
-    tmp_path: Path, monkeypatch, settings, caplog,
-) -> None:
-    """An installed addon without runtime models falls back to its native migrations."""
-
-    module_name = f"runtime_{tmp_path.name}"
-    runtime = Runtime.discover(
-        (apps.get_app_config("resources"), apps.get_app_config("compose")),
-        runtime_dir=tmp_path / module_name,
-        runtime_module=module_name,
-    )
-    settings.ANGEE_RUNTIME_DIR = runtime.runtime_dir
-    settings.MIGRATION_MODULES = {
-        config.label: None for config in apps.get_app_configs() if config.label != "resources"
-    }
-    settings.MIGRATION_MODULES["compose"] = f"{module_name}.compose.migrations"
-    monkeypatch.syspath_prepend(str(tmp_path))
-    runtime.emit()
-    removed = runtime.runtime_dir / "compose"
-    migrations = removed / "migrations"
-    migrations.mkdir(parents=True)
-    (removed / "__init__.py").write_text("", encoding="utf-8")
-    (removed / "models.py").write_text("# old runtime model\n", encoding="utf-8")
-    (migrations / "__init__.py").write_text("", encoding="utf-8")
-    migration = migrations / "0001_stale.py"
-    source = "import deleted_addon_from_previous_branch\n"
-    migration.write_text(source, encoding="utf-8")
-
-    try:
-        with caplog.at_level(logging.WARNING, logger="angee.fs"):
-            assert runtime.build() is AddonDependencyGroupResult.SKIPPED_NO_PROJECT_DIR
-
-        assert "compose" not in settings.MIGRATION_MODULES
-        assert migration.read_text(encoding="utf-8") == source
-        assert not (removed / "models.py").exists()
-        assert not any(name.startswith(f"{module_name}.compose") for name in sys.modules)
-        assert str(migrations) in caplog.text
-        assert runtime.is_current()
-    finally:
-        for imported in tuple(sys.modules):
-            if imported == module_name or imported.startswith(f"{module_name}."):
-                del sys.modules[imported]
+    assert runtime.emit_if_stale() is False
+    assert "Preserved migration directories" not in caplog.text
 
 
 def test_runtime_check_validates_migrations_after_source_drift_is_clean(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
-    runtime.emit()
+    runtime.emit_if_stale()
     calls: list[str] = []
 
     class FakeMigrations:
@@ -1117,7 +1075,7 @@ def test_runtime_check_validates_migrations_after_source_drift_is_clean(tmp_path
 
 def test_runtime_check_does_not_plan_migrations_while_sources_are_stale(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
-    runtime.emit()
+    runtime.emit_if_stale()
     (runtime.runtime_dir / "resources" / "models.py").write_text("# stale\n", encoding="utf-8")
     calls: list[str] = []
     monkeypatch.setattr(runtime, "runtime_migrations", lambda: calls.append("migration_check"))
@@ -1130,7 +1088,7 @@ def test_runtime_check_does_not_plan_migrations_while_sources_are_stale(tmp_path
 
 def test_emit_if_stale_never_constructs_runtime_migrations(tmp_path: Path, monkeypatch) -> None:
     runtime = runtime_for(tmp_path)
-    runtime.emit()
+    runtime.emit_if_stale()
     monkeypatch.setattr(
         runtime,
         "runtime_migrations",
@@ -1160,7 +1118,7 @@ def test_provision_plan_default_flags_covers_the_no_flag_lifecycle() -> None:
 
     assert Command._provision_plan(_provision_options()) == [
         ["angee", "build"],
-        ["makemigrations", "--skip-checks"],
+        ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes"],
@@ -1204,7 +1162,7 @@ def test_provision_plan_combines_every_flag() -> None:
 
     assert plan == [
         ["angee", "build"],
-        ["makemigrations", "--skip-checks"],
+        ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],
@@ -1223,7 +1181,7 @@ def test_provision_plan_builds_before_it_migrates() -> None:
         _provision_options(demo=True, force_rebac=True, bootstrap_admin=True),
     ):
         plan = Command._provision_plan(options)
-        makemigrations = plan.index(["makemigrations", "--skip-checks"])
+        makemigrations = plan.index(["makemigrations", "--noinput", "--skip-checks"])
         migrate = plan.index(["migrate", "--noinput", "--skip-checks"])
         assert plan.index(["angee", "build"]) < makemigrations < migrate
 
@@ -1234,7 +1192,7 @@ def test_provision_defers_checks_only_across_the_schema_identity_transition() ->
     plan = Command._provision_plan(_provision_options())
 
     assert [step for step in plan if "--skip-checks" in step] == [
-        ["makemigrations", "--skip-checks"],
+        ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["rebac", "--skip-checks", "sync", "--yes"],
     ]
@@ -1269,7 +1227,7 @@ def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
 
     plan = Command._provision_plan(_provision_options())
     assert plan[1:6] == [
-        ["makemigrations", "--skip-checks"],
+        ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes"],
@@ -1409,7 +1367,7 @@ def test_provision_post_build_aborts_on_the_first_failed_step(
         command._handle_provision(_provision_options(post_build=True))
 
     assert calls == [
-        ["makemigrations", "--skip-checks"],
+        ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
     ]
 
@@ -1671,7 +1629,7 @@ def test_appgraph_annotates_roots_and_dependencies() -> None:
 def test_appgraph_rejects_duplicate_roots() -> None:
     """A repeated explicit root app is a settings error, not hidden dedupe."""
 
-    with pytest.raises(ImproperlyConfigured, match="Duplicate root app 'angee.resources'"):
+    with pytest.raises(ImproperlyConfigured, match="Duplicate Django app 'angee.resources'"):
         AppGraph().resolve(["angee.resources", "angee.resources"])
 
 
@@ -1759,7 +1717,7 @@ def test_project_env_file_is_optional(tmp_path: Path) -> None:
     ProjectContract({})._read_project_env(tmp_path)
 
 
-def test_runtime_emit_renders_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_boot_repair_renders_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = runtime_for(tmp_path)
     original = runtime.render_sources
     calls = []
@@ -1769,7 +1727,7 @@ def test_runtime_emit_renders_once(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         return original()
 
     monkeypatch.setattr(runtime, "render_sources", render)
-    runtime.emit()
+    runtime.emit_if_stale()
     assert calls == ["render"]
     assert (runtime.runtime_dir / "resources" / "models.py").is_file()
 
@@ -1816,15 +1774,28 @@ def test_configured_cleanup_removes_all_generated_packages(tmp_path: Path, setti
     assert outside.read_text(encoding="utf-8") == "# outside runtime\n"
 
 
+@pytest.mark.parametrize("swapped", [False, True])
+@isolate_apps("angee.resources")
 def test_configured_cleanup_requires_no_discovery_or_rendering(
     tmp_path: Path,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    swapped: bool,
 ) -> None:
     settings.ANGEE_RUNTIME_DIR = tmp_path / "runtime"
     runtime = runtime_for(tmp_path)
-    runtime.emit()
+    settings.ANGEE_RUNTIME_MODULE = runtime.runtime_module
+    settings.MIGRATION_MODULES = {"removed": f"{runtime.runtime_module}.removed.migrations"}
+    if swapped:
+        source = runtime.composition.ordered_models[0]
+        monkeypatch.setattr(source.Meta, "swappable", "CLEANUP_RESOURCE_MODEL", raising=False)
+        settings.CLEANUP_RESOURCE_MODEL = "resources.Replacement"
+    runtime.emit_if_stale()
+    module = ModuleType(f"{runtime.runtime_module}.resources.models")
+    exec(compile(runtime.render_sources()[Path("resources/models.py")], module.__name__, "exec"), vars(module))
+    monkeypatch.setattr(runtime_module, "apps", module.Resource._meta.apps)
+    assert bool(module.Resource._meta.swapped) is swapped
     migration = runtime.runtime_dir / "resources" / "migrations" / "0001_saved.py"
     migration.write_text("# preserved migration\n")
     removed_migration = runtime.runtime_dir / "removed" / "migrations" / "0001_stale.py"
@@ -1842,11 +1813,10 @@ def test_configured_cleanup_requires_no_discovery_or_rendering(
     assert migration.read_text() == "# preserved migration\n"
     assert removed_migration.read_text(encoding="utf-8") == "import deleted_addon\n"
     assert str(removed_migration.parent) in caplog.text
-    assert str(migration.parent) in caplog.text
+    assert str(migration.parent) not in caplog.text
     assert not (runtime.runtime_dir / "resources" / "models.py").exists()
     assert not (removed_migration.parent.parent / "models.py").exists()
-    runtime.reset()
-    runtime.clean()
+    Runtime.clean_configured()
     assert migration.exists()
 
 

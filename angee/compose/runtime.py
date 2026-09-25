@@ -121,7 +121,11 @@ class Runtime:
     def clean_configured(cls) -> None:
         """Clean all generated packages without discovery; retain and report history."""
 
-        _generated_tree(_runtime_directory(), {}).clean()
+        runtime_module = str(getattr(settings, "ANGEE_RUNTIME_MODULE", "runtime"))
+        _generated_tree(_runtime_directory(), {}).clean(current_roots=(
+            model._meta.app_label for model in apps.get_models(include_swapped=True)
+            if model.__module__.startswith(f"{runtime_module}.")
+        ))
 
     @property
     def labels(self) -> tuple[str, ...]:
@@ -150,14 +154,9 @@ class Runtime:
         sources.update(extension_source_map(self.addons))
         return sources
 
-    def emit(self) -> None:
-        """Reset behind the cleanup gate, then write one rendered source map."""
-
-        self._emit(_generated_tree(self.runtime_dir, self.render_sources()))
-
     def _emit(self, tree: GeneratedTree) -> None:
         tree.reset()
-        tree.reconcile(prune=True)
+        tree.reconcile(prune=False)
         apply_schema_paths(self.addons, self.runtime_dir, sources=tree.artifacts)
 
     def runtime_migrations(self) -> RuntimeMigrations:
@@ -182,7 +181,6 @@ class Runtime:
         if tree.drift():
             self._emit(tree)
         dependency_result = self.addon_dependency_group.write()
-        self.configure_migration_modules()
         self.runtime_migrations().materialize(apps=apps)
         return dependency_result
 
@@ -210,30 +208,19 @@ class Runtime:
         return changed
 
     def configure_migration_modules(self) -> None:
-        """Bind current generated migrations during population and explicit build.
+        """Bind current generated migrations during population.
 
         Explicit None disables Django migrations and therefore conflicts with an
         emitted app's composer-owned migration module, just like another path.
-        Retired runtime labels lose only their composer-owned redirect, allowing
-        still-installed source apps to return to Django's native migration lookup.
         """
 
-        migration_modules = {
-            label: module
-            for label, module in getattr(settings, "MIGRATION_MODULES", {}).items()
-            if label in self.labels or module != f"{self.runtime_module}.{label}.migrations"
-        }
+        migration_modules = dict(getattr(settings, "MIGRATION_MODULES", {}))
         for label in self.labels:
             module = f"{self.runtime_module}.{label}.migrations"
             if label in migration_modules and migration_modules[label] != module:
                 raise ImproperlyConfigured(f"Project settings define Runtime-owned MIGRATION_MODULES[{label!r}]")
             migration_modules[label] = module
         settings.MIGRATION_MODULES = migration_modules
-
-    def is_current(self) -> bool:
-        """Compare disk with one freshly rendered source map."""
-
-        return not _generated_tree(self.runtime_dir, self.render_sources()).drift()
 
     def check(self) -> None:
         """Raise for source, dependency-group or migration drift."""
@@ -244,13 +231,3 @@ class Runtime:
             raise RuntimeError(f"generated runtime is stale: {rendered}")
         self.addon_dependency_group.check()
         self.runtime_migrations().check()
-
-    def reset(self) -> None:
-        """Clear generated output behind the guard, preserving migrations."""
-
-        _generated_tree(self.runtime_dir, {}).reset()
-
-    def clean(self) -> None:
-        """Delete generated output without rendering, preserving migrations."""
-
-        _generated_tree(self.runtime_dir, {}).clean()

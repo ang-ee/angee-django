@@ -32,7 +32,7 @@ def test_task_ordering_allocation_retains_explicit_ranks(monkeypatch: pytest.Mon
             allocations.append((field.name, instance))
             return 1024.0
 
-        monkeypatch.setattr(FractionalRankField, "get_append_rank_for_instance", allocate)
+        monkeypatch.setattr(FractionalRankField, "_get_append_rank_for_instance", allocate)
         task.allocate_ordering_ranks()
         assert allocations == [("sub_sort_order", task)]
         assert task.sort_order == 12.5

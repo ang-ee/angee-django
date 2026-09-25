@@ -999,7 +999,7 @@ def check_database_command_replay_declarations(
     implementations = resolve_all_impl_classes(
         "ANGEE_WORKFLOW_STEP_CLASSES",
         StepImpl,
-        on_error=lambda key, error: None,
+        on_error=lambda error: None,
     )
     warnings = []
     for implementation in implementations:

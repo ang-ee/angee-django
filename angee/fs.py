@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -68,7 +68,7 @@ class GeneratedTree:
     """Synchronize a rendered map of generated text artifacts with a directory.
 
     ``owns`` scopes orphan detection. Cleanup can require a sentinel and root;
-    every ``migrations`` subtree is protected unless explicitly opted out.
+    every ``migrations`` subtree is protected.
     """
 
     root: Path
@@ -76,7 +76,6 @@ class GeneratedTree:
     owns: Callable[[Path], bool]
     sentinel: tuple[Path, str] | None = None
     clean_root: Path | None = None
-    preserve_migrations: bool = True
 
     def drift(self) -> list[Path]:
         """Return missing, changed, and owned orphan artifact paths."""
@@ -85,7 +84,7 @@ class GeneratedTree:
         return sorted(changed | orphans)
 
     def reconcile(self, *, prune: bool) -> bool:
-        """Repair artifacts, optionally pruning owned orphans.
+        """Repair artifacts, optionally pruning owned orphan files.
 
         Validate a configured guard before writing, so boot repair cannot turn
         a foreign directory into generated output by writing its sentinel.
@@ -94,16 +93,16 @@ class GeneratedTree:
 
         self._validate_root()
         changed, orphans = self._changes()
+        removed = False
         if prune:
             for relative_path in sorted(orphans, reverse=True):
                 path = self.root / relative_path
-                if path.is_dir() and not path.is_symlink():
-                    path.rmdir()
-                else:
+                if path.is_symlink() or path.is_file():
                     path.unlink()
+                    removed = True
         for relative_path in sorted(changed):
             write_atomic(self.root / relative_path, self.artifacts[relative_path])
-        return bool(changed or (prune and orphans))
+        return bool(changed or removed)
 
     def reset(self) -> None:
         """Clean the generated root, then recreate it for emission."""
@@ -111,8 +110,11 @@ class GeneratedTree:
         self.clean()
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def clean(self) -> None:
-        """Scan the guarded root, independent of artifacts, and report kept history."""
+    def clean(self, *, current_roots: Iterable[str] = ()) -> None:
+        """Clean the guarded root; report history outside current artifact roots.
+
+        ``current_roots`` supplies known roots when cleanup has no source map.
+        """
 
         self._validate_root()
         paths = sorted(self.root.rglob("*"), reverse=True)
@@ -134,11 +136,13 @@ class GeneratedTree:
                     path.rmdir()
                 except OSError:
                     pass
-        if preserved:
+        roots = {path.parts[0] for path in self.artifacts} | set(current_roots)
+        retired = [path for path in preserved if path.parts[0] not in roots]
+        if retired:
             logger.warning(
                 "Preserved migration directories during cleanup: %s. "
                 "Review their database history before an explicitly authorized removal.",
-                ", ".join(str(self.root / path) for path in preserved),
+                ", ".join(str(self.root / path) for path in retired),
             )
 
     def _changes(self) -> tuple[set[Path], set[Path]]:
@@ -161,7 +165,7 @@ class GeneratedTree:
         return changed, orphans
 
     def _is_preserved(self, path: Path) -> bool:
-        return self.preserve_migrations and "migrations" in path.parts
+        return "migrations" in path.parts
 
     def _validate_root(self) -> None:
         """Verify the configured root and existing marker before any mutation."""

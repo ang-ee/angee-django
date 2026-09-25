@@ -546,34 +546,33 @@ def resolve_impl_class[T](registry_setting: str, key: str, base_class: type[T]) 
     return impl
 
 
-def resolve_all_impl_classes[T: ImplBase](
+def resolve_all_impl_classes[T](
     registry_setting: str,
     base_class: type[T],
     *,
-    on_error: Callable[[str, Exception], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> tuple[type[T], ...]:
     """Resolve and validate every configured impl in deterministic key order.
 
-    A class registry is a declaration, not merely an import list: each class's
-    stable ``key`` must agree with the mapping key that selected it. System-check
-    callers may supply ``on_error`` to collect every invalid declaration while
-    ordinary callers retain fail-fast resolution.
+    ``ImplBase`` owns stable class keys, which must agree with their registry
+    keys. Native implementation classes without that contract use the registry
+    key alone. System-check callers may supply ``on_error`` to collect every
+    invalid declaration while ordinary callers retain fail-fast resolution.
     """
 
     classes: list[type[T]] = []
     for key in sorted(impl_registry(registry_setting)):
         try:
             impl = resolve_impl_class(registry_setting, key, base_class)
-            declared_key = impl.key
-            if declared_key != key:
+            if issubclass(impl, ImplBase) and impl.key != key:
                 raise ImproperlyConfigured(
                     f"settings.{registry_setting}[{key!r}] resolves "
-                    f"{impl.__name__} with key {declared_key!r}."
+                    f"{impl.__name__} with key {impl.key!r}."
                 )
         except (ImportError, ImproperlyConfigured) as error:
             if on_error is None:
                 raise
-            on_error(key, error)
+            on_error(error)
             continue
         classes.append(impl)
     return tuple(classes)
@@ -591,7 +590,7 @@ class ImplClassField(TextChoicesField):
     def __init__(
         self,
         *,
-        base_class: type | None = None,
+        base_class: type[object] | None = None,
         registry_setting: str = "",
         create_only: bool = False,
         **kwargs: Any,
@@ -618,7 +617,7 @@ class ImplClassField(TextChoicesField):
         return name, path, args, kwargs
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
-        """Validate the declaration and every configured impl path."""
+        """Validate the declaration, registry key agreement, and config forms."""
 
         errors = super().check(**kwargs)
         if not isinstance(self.base_class, type):
@@ -639,28 +638,17 @@ class ImplClassField(TextChoicesField):
                 )
             )
         elif isinstance(self.base_class, type):
-            for key, dotted in self._registry().items():
-                try:
-                    impl = import_string(dotted)
-                except ImportError as error:
-                    errors.append(
-                        checks.Error(
-                            f"settings.{self.registry_setting}[{key!r}] = {dotted!r} does not import: {error}",
-                            obj=self,
-                            id="angee.E003",
-                        )
+            for impl in resolve_all_impl_classes(
+                self.registry_setting,
+                self.base_class,
+                on_error=lambda error: errors.append(
+                    checks.Error(
+                        str(error),
+                        obj=self,
+                        id="angee.E003" if isinstance(error, ImportError) else "angee.E004",
                     )
-                    continue
-                if not (isinstance(impl, type) and issubclass(impl, self.base_class)):
-                    errors.append(
-                        checks.Error(
-                            f"settings.{self.registry_setting}[{key!r}] = {dotted!r} "
-                            f"is not a {self.base_class.__name__} subclass.",
-                            obj=self,
-                            id="angee.E004",
-                        )
-                    )
-                    continue
+                ),
+            ):
                 if issubclass(impl, ImplBase):
                     try:
                         impl.config_form_spec()

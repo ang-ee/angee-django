@@ -337,16 +337,16 @@ def test_direct_dispatch_mutations_and_invalid_targets_are_rejected(run: Workflo
     dispatch.send_count = 99
     with pytest.raises(TypeError, match="WorkflowDispatchManager"):
         dispatch.save(update_fields=["send_count"])
-    with pytest.raises(TypeError, match="collection updates"):
+    with pytest.raises(ValidationError, match="WorkflowDispatch rows cannot be edited"):
         WorkflowDispatch.objects.filter(pk=dispatch.pk).update(send_count=99)
     with pytest.raises(TypeError, match="bulk_create"):
         WorkflowDispatch.objects.bulk_create([dispatch])
-    with pytest.raises(TypeError, match="bulk_update"):
+    with pytest.raises(ValidationError, match="WorkflowDispatch rows cannot be edited"):
         WorkflowDispatch.objects.bulk_update([dispatch], ["send_count"])
     queryset = WorkflowDispatch.objects.filter(pk=dispatch.pk)
-    with pytest.raises(TypeError, match="durable delivery evidence"):
+    with pytest.raises(ValidationError, match="WorkflowDispatch rows cannot be deleted"):
         queryset.delete()
-    with pytest.raises(TypeError, match="durable delivery evidence"):
+    with pytest.raises(ValidationError, match="WorkflowDispatch rows cannot be deleted"):
         queryset._raw_delete(using=queryset.db)
     with pytest.raises(ValidationError, match="envelope does not match"):
         WorkflowDispatch.objects.deliver(dispatch.pk, expected_target_id=run.pk + 1000)

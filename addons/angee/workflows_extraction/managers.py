@@ -73,28 +73,10 @@ class EvidenceQuerySet(
 ):
     """Keep generic inserts closed and retained evidence append-only."""
 
-    def immutable_error(self, operation: str) -> Exception:
-        """Return extraction's established error for each forbidden mutation."""
-
-        if operation == "delete":
-            return ValueError("Extraction evidence is retained and cannot be deleted through the ORM.")
-        if operation == "_raw_delete":
-            return ValueError("Extraction evidence cannot be directly deleted.")
-        return ValueError("Extraction evidence is immutable.")
-
     def validate_insert(self) -> None:
         """Keep ordinary create and bulk_create outside retention closed."""
 
         raise ValueError("Extraction evidence can only be inserted by the retention owner.")
-
-    def _retain_rows(self, rows: Sequence[Any]) -> list[Any]:
-        """Insert the retention manager's ordered children without conflict updates.
-
-        Skip only AppendOnlyQuerySet's closed generic insertion entrypoint;
-        AngeeQuerySet and the upstream actor-aware bulk insertion still run.
-        """
-
-        return super(AppendOnlyQuerySet, self).bulk_create(rows)
 
 
 EvidenceManager: Any = AngeeManager.from_queryset(EvidenceQuerySet)
@@ -1090,7 +1072,7 @@ class ExtractionManager(EvidenceManager):
         page_results: Sequence[PageResult],
         parts: Sequence[DocumentPart]) -> None:
         source_model, page_model, part_model = self._evidence_models()
-        retained_sources = source_model._base_manager.all()._retain_rows(
+        retained_sources = source_model._base_manager.all()._owner_bulk_create(
             [
                 source_model(
                     extraction=extraction,
@@ -1103,7 +1085,7 @@ class ExtractionManager(EvidenceManager):
             ]
         )
         source_by_position = {source.position: source for source in retained_sources}
-        page_model._base_manager.all()._retain_rows(
+        page_model._base_manager.all()._owner_bulk_create(
             [
                 page_model(
                     extraction=extraction,
@@ -1121,7 +1103,7 @@ class ExtractionManager(EvidenceManager):
             ]
         )
         claims = extraction.provenance["claims"]
-        part_model._base_manager.all()._retain_rows(
+        part_model._base_manager.all()._owner_bulk_create(
             [
                 part_model(
                     extraction=extraction,
@@ -1151,7 +1133,7 @@ class ExtractionManager(EvidenceManager):
         )
         if [source.position for source in original_sources] != list(range(len(original_sources))):
             raise ValidationError({"extraction": "The retained source ordering is invalid."})
-        retained_sources = source_model._base_manager.all()._retain_rows(
+        retained_sources = source_model._base_manager.all()._owner_bulk_create(
             [
                 source_model(
                     extraction=extraction,
@@ -1172,7 +1154,7 @@ class ExtractionManager(EvidenceManager):
         )
         if [page.position for page in original_pages] != list(range(len(original_pages))):
             raise ValidationError({"extraction": "The retained page ordering is invalid."})
-        page_model._base_manager.all()._retain_rows(
+        page_model._base_manager.all()._owner_bulk_create(
             [
                 page_model(
                     extraction=extraction,
@@ -1195,7 +1177,7 @@ class ExtractionManager(EvidenceManager):
         if [part.position for part in original_parts] != list(range(len(original_parts))):
             raise ValidationError({"extraction": "The retained part ordering is invalid."})
         claims = extraction.provenance["claims"]
-        part_model._base_manager.all()._retain_rows(
+        part_model._base_manager.all()._owner_bulk_create(
             [
                 part_model(
                     extraction=extraction,

@@ -229,7 +229,7 @@ def test_artifact_batch_is_retained_once_and_part_of_duplicate_result_identity(
     with system_context(reason="inspect retained artifact"):
         artifact = StepArtifact.objects.get(attempt=attempt)
         queryset = StepArtifact.objects.filter(pk=artifact.pk)
-        with pytest.raises(TypeError, match="immutable retained result evidence"):
+        with pytest.raises(ValidationError, match="StepArtifact rows cannot be deleted"):
             queryset._raw_delete(using=queryset.db)
     assert artifact.declaration_index == 0
     assert artifact.label == "Workflow result"
@@ -489,13 +489,13 @@ def test_attempt_rows_and_owned_step_run_fields_reject_public_mutation(scheduled
     attempt = StepAttempt.objects.claim(scheduled_step_run, claimed_at=timezone.now()).attempt
     with system_context(reason="test attempt delete guard"):
         queryset = StepAttempt._base_manager.filter(pk=attempt.pk)
-        with pytest.raises(TypeError, match="collection updates"):
+        with pytest.raises(ValidationError, match="StepAttempt rows cannot be edited"):
             queryset.update(error="rewritten")
-        with pytest.raises(TypeError, match="bulk_update"):
+        with pytest.raises(ValidationError, match="StepAttempt rows cannot be edited"):
             queryset.bulk_update([attempt], ["error"])
-        with pytest.raises(TypeError, match="retained execution evidence"):
+        with pytest.raises(ValidationError, match="StepAttempt rows cannot be deleted"):
             queryset.delete()
-        with pytest.raises(TypeError, match="retained execution evidence"):
+        with pytest.raises(ValidationError, match="StepAttempt rows cannot be deleted"):
             queryset._raw_delete(using=queryset.db)
 
 
@@ -1646,7 +1646,10 @@ def test_attempt_generic_save_stays_closed_during_result_signals(
 
     post_save.connect(attempt_bypass, sender=StepAttempt, weak=False)
     try:
-        with pytest.raises(TypeError, match="Step attempts"):
+        with pytest.raises(
+            TypeError if bypass.endswith("save") else ValidationError,
+            match="Step attempts" if bypass.endswith("save") else "StepAttempt rows cannot be edited",
+        ):
             StepAttempt.objects.finalize(
                 current.pk,
                 lease_token=current.lease_token,

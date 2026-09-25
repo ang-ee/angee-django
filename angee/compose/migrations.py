@@ -113,11 +113,7 @@ class RuntimeMigrations:
                             f"{origin}: materialized target {node[0]!r} differs from "
                             f"declared target {declaration['app_label']!r}"
                         )
-                    accepted_source_digests = {
-                        source_sha256,
-                        *declaration.get("compatible_source_sha256", ()),
-                    }
-                    if getattr(migration, SOURCE_SHA256_ATTR, None) not in accepted_source_digests:
+                    if getattr(migration, SOURCE_SHA256_ATTR, None) != source_sha256:
                         raise RuntimeError(f"{origin}: source digest changed after materialization")
                     continue
                 applies = getattr(module, "applies", None)
@@ -231,7 +227,7 @@ class RuntimeMigrations:
     def materialize(
         self,
         *,
-        apps: Apps | None = None,
+        apps: Apps,
     ) -> tuple[Path, ...]:
         """Stage sources, then fail closed before Django can autodetect unsafe drops.
 
@@ -246,21 +242,18 @@ class RuntimeMigrations:
 
         plans = self.plan(
             apps=apps,
-            defer_drop_check=apps is not None,
+            defer_drop_check=True,
         )
         rendered = tuple((plan, self._render(plan)) for plan in plans)
         for plan, source in rendered:
             write_atomic(plan.output_path, source)
         importlib.invalidate_caches()
-        if apps is not None:
-            remaining = self.plan(apps=apps)
-            if remaining:
-                origins = ", ".join(plan.origin for plan in remaining)
-                raise RuntimeError(
-                    "addon runtime migration staging did not reach a fixed point: " + origins
-                )
-        elif plans:
-            MigrationLoader(None, ignore_no_migrations=True)
+        remaining = self.plan(apps=apps)
+        if remaining:
+            origins = ", ".join(plan.origin for plan in remaining)
+            raise RuntimeError(
+                "addon runtime migration staging did not reach a fixed point: " + origins
+            )
         return tuple(plan.output_path for plan in plans)
 
     def _check_autodetected_drops(
@@ -436,15 +429,6 @@ class RuntimeMigrations:
             raise RuntimeError(f"{origin}: unknown runtime migration target {declaration['app_label']!r}")
         if not declaration["name"].isidentifier() or not declaration["name"].islower():
             raise RuntimeError(f"{origin}: migration name must be a lower-case Python identifier")
-        compatible = declaration.get("compatible_source_sha256", [])
-        if not isinstance(compatible, list) or any(
-            not isinstance(digest, str) or len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)
-            for digest in compatible
-        ):
-            raise RuntimeError(
-                f"{origin}: compatible_source_sha256 must be a list of lowercase SHA-256 digests"
-            )
 
     @staticmethod
     def _source_module(addon: AppConfig, declaration: Mapping[str, Any], origin: str) -> ModuleType:

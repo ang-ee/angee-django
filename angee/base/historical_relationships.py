@@ -43,7 +43,9 @@ _REGISTRY_FIELDS = frozenset(
         "written_at_xid",
     }
 )
-_RESOURCE_FIELDS = frozenset({"id", "resource_type", "resource_id", "content_type", "object_pk"})
+_RESOURCE_FIELDS = frozenset(
+    {"id", "resource_type", "resource_id", "content_type", "object_pk"}
+)
 
 
 def _field_names(model: type[models.Model]) -> frozenset[str]:
@@ -58,9 +60,12 @@ def _require_field(
 ) -> models.Field:
     field = model._meta.get_field(name)
     if not isinstance(field, field_type) or any(
-        getattr(field, attribute) != expected for attribute, expected in attributes.items()
+        getattr(field, attribute) != expected
+        for attribute, expected in attributes.items()
     ):
-        raise ImproperlyConfigured(f"The historical REBAC field {model._meta.label}.{name} is unsupported.")
+        raise ImproperlyConfigured(
+            f"The historical REBAC field {model._meta.label}.{name} is unsupported."
+        )
     return field
 
 
@@ -114,9 +119,16 @@ def _validate_common_relationship_fields(model: type[models.Model]) -> None:
     )
     _require_field(model, "written_at_xid", models.BigIntegerField, default=0)
     reverse_relations = tuple(
-        field for field in model._meta.get_fields(include_hidden=True) if field.auto_created and not field.concrete
+        field
+        for field in model._meta.get_fields(include_hidden=True)
+        if field.auto_created and not field.concrete
     )
-    if model._meta.parents or model._meta.local_many_to_many or model._meta.private_fields or reverse_relations:
+    if (
+        model._meta.parents
+        or model._meta.local_many_to_many
+        or model._meta.private_fields
+        or reverse_relations
+    ):
         raise ImproperlyConfigured(
             f"The historical REBAC model {model._meta.label} is not safe for exact raw deletion."
         )
@@ -154,11 +166,15 @@ def _historical_relationship_store(
         )
         return "denormalized", relationship, None
     if model_name != "RelationshipRegistry" or fields != _REGISTRY_FIELDS:
-        raise ImproperlyConfigured("The configured historical REBAC relationship storage shape is unsupported.")
+        raise ImproperlyConfigured(
+            "The configured historical REBAC relationship storage shape is unsupported."
+        )
     _validate_common_relationship_fields(relationship)
     resource = apps.get_model("rebac", "RebacResource")
     if _field_names(resource) != _RESOURCE_FIELDS:
-        raise ImproperlyConfigured("The historical REBAC resource registry shape is unsupported.")
+        raise ImproperlyConfigured(
+            "The historical REBAC resource registry shape is unsupported."
+        )
     _require_field(resource, "id", models.BigAutoField, primary_key=True)
     for name in ("resource_type", "resource_id"):
         _require_field(resource, name, models.CharField, max_length=64)
@@ -183,7 +199,9 @@ def _historical_relationship_store(
         or content_type.remote_field.on_delete is not models.CASCADE
         or content_type.remote_field.related_name != "+"
     ):
-        raise ImproperlyConfigured("The historical REBAC resource backing relation is unsupported.")
+        raise ImproperlyConfigured(
+            "The historical REBAC resource backing relation is unsupported."
+        )
     _require_unique_constraint(resource, ("resource_type", "resource_id"))
     for name in ("resource_fk", "subject_fk"):
         field = relationship._meta.get_field(name)
@@ -193,7 +211,9 @@ def _historical_relationship_store(
             or field.remote_field.on_delete is not models.CASCADE
             or field.db_column != f"{name}_id"
         ):
-            raise ImproperlyConfigured("The historical REBAC relationship registry endpoints are unsupported.")
+            raise ImproperlyConfigured(
+                "The historical REBAC relationship registry endpoints are unsupported."
+            )
     _require_unique_constraint(
         relationship,
         (
@@ -291,8 +311,12 @@ def ensure_historical_relationships(
                     }
                 )
             row, created = rows.get_or_create(**identity, defaults=exact)
-            if not created and any(getattr(row, name) != expected for name, expected in exact.items()):
-                raise ImproperlyConfigured("An existing historical REBAC relationship has conflicting exact facts.")
+            if not created and any(
+                getattr(row, name) != expected for name, expected in exact.items()
+            ):
+                raise ImproperlyConfigured(
+                    "An existing historical REBAC relationship has conflicting exact facts."
+                )
 
 
 def delete_historical_relationships(
@@ -374,31 +398,28 @@ def retarget_historical_resource(
         if storage == "denormalized":
             if rows.filter(subject_type=old.resource_type, subject_id=old.resource_id).exists():
                 raise ImproperlyConfigured("A historical resource used as a subject cannot be retargeted.")
-            old_rows = (
-                rows.select_for_update()
-                .filter(
-                    resource_type=old.resource_type,
-                    resource_id=old.resource_id,
-                )
-                .order_by("pk")
-            )
+            old_rows = rows.select_for_update().filter(
+                resource_type=old.resource_type,
+                resource_id=old.resource_id,
+            ).order_by("pk")
             for row in old_rows:
-                duplicate = (
-                    rows.select_for_update()
-                    .filter(
-                        resource_type=new.resource_type,
-                        resource_id=new.resource_id,
-                        relation=row.relation,
-                        subject_type=row.subject_type,
-                        subject_id=row.subject_id,
-                        optional_subject_relation=row.optional_subject_relation,
-                        caveat_name=row.caveat_name,
-                    )
-                    .first()
-                )
+                duplicate = rows.select_for_update().filter(
+                    resource_type=new.resource_type,
+                    resource_id=new.resource_id,
+                    relation=row.relation,
+                    subject_type=row.subject_type,
+                    subject_id=row.subject_id,
+                    optional_subject_relation=row.optional_subject_relation,
+                    caveat_name=row.caveat_name,
+                ).first()
                 if duplicate is not None:
-                    if duplicate.caveat_context != row.caveat_context or duplicate.expires_at != row.expires_at:
-                        raise ImproperlyConfigured("Historical resource retargeting found conflicting grant facts.")
+                    if (
+                        duplicate.caveat_context != row.caveat_context
+                        or duplicate.expires_at != row.expires_at
+                    ):
+                        raise ImproperlyConfigured(
+                            "Historical resource retargeting found conflicting grant facts."
+                        )
                     rows.filter(pk=row.pk)._raw_delete(using)
                 else:
                     rows.filter(pk=row.pk).update(resource_id=new.resource_id)
@@ -406,26 +427,18 @@ def retarget_historical_resource(
 
         assert resource is not None
         resources = resource._base_manager.db_manager(using)
-        old_row = (
-            resources.select_for_update()
-            .filter(
-                resource_type=old.resource_type,
-                resource_id=old.resource_id,
-            )
-            .first()
-        )
+        old_row = resources.select_for_update().filter(
+            resource_type=old.resource_type,
+            resource_id=old.resource_id,
+        ).first()
         if old_row is None:
             return
         if rows.filter(subject_fk_id=old_row.pk).exists():
             raise ImproperlyConfigured("A historical resource used as a subject cannot be retargeted.")
-        new_row = (
-            resources.select_for_update()
-            .filter(
-                resource_type=new.resource_type,
-                resource_id=new.resource_id,
-            )
-            .first()
-        )
+        new_row = resources.select_for_update().filter(
+            resource_type=new.resource_type,
+            resource_id=new.resource_id,
+        ).first()
         if new_row is None:
             resources.filter(pk=old_row.pk).update(resource_id=new.resource_id)
             return
@@ -434,26 +447,29 @@ def retarget_historical_resource(
             old_value = getattr(old_row, field)
             new_value = getattr(new_row, field)
             if old_value and new_value and old_value != new_value:
-                raise ImproperlyConfigured("Historical resource retargeting found conflicting backing facts.")
+                raise ImproperlyConfigured(
+                    "Historical resource retargeting found conflicting backing facts."
+                )
             if old_value and not new_value:
                 resources.filter(pk=new_row.pk).update(**{field: old_value})
 
         old_rows = rows.select_for_update().filter(resource_fk_id=old_row.pk).order_by("pk")
         for row in old_rows:
-            duplicate = (
-                rows.select_for_update()
-                .filter(
-                    resource_fk_id=new_row.pk,
-                    relation=row.relation,
-                    subject_fk_id=row.subject_fk_id,
-                    optional_subject_relation=row.optional_subject_relation,
-                    caveat_name=row.caveat_name,
-                )
-                .first()
-            )
+            duplicate = rows.select_for_update().filter(
+                resource_fk_id=new_row.pk,
+                relation=row.relation,
+                subject_fk_id=row.subject_fk_id,
+                optional_subject_relation=row.optional_subject_relation,
+                caveat_name=row.caveat_name,
+            ).first()
             if duplicate is not None:
-                if duplicate.caveat_context != row.caveat_context or duplicate.expires_at != row.expires_at:
-                    raise ImproperlyConfigured("Historical resource retargeting found conflicting grant facts.")
+                if (
+                    duplicate.caveat_context != row.caveat_context
+                    or duplicate.expires_at != row.expires_at
+                ):
+                    raise ImproperlyConfigured(
+                        "Historical resource retargeting found conflicting grant facts."
+                    )
                 rows.filter(pk=row.pk)._raw_delete(using)
             else:
                 rows.filter(pk=row.pk).update(resource_fk_id=new_row.pk)

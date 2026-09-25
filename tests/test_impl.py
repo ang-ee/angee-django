@@ -22,6 +22,7 @@ from angee.base.impl import (
     model_config_form_spec,
     resolve_all_impl_classes,
 )
+from angee.storage.backends import LocalBackend, StorageBackend
 from angee.workflows.configs import EmitConfig, JoinContinuationConfig
 from tests.conftest import Integration, OAuthClient, VcsBridge
 from tests.tables import model_tables
@@ -122,21 +123,41 @@ def test_resolve_all_impl_classes_is_sorted_and_validates_keys() -> None:
         "base": "tests.test_impl._BaseImpl",
         "missing": "tests.test_impl.MissingImpl",
         "wrong_base": "builtins.str",
+        "wrong_key": "tests.test_impl._RefinedImpl",
     }
 )
-def test_resolve_all_impl_classes_can_collect_every_registry_fault() -> None:
-    """System-check callers receive all failures without duplicating resolution."""
+def test_impl_registry_and_field_collect_every_registry_fault() -> None:
+    """Field checks enforce the registry owner's full declaration contract."""
 
-    faults: list[tuple[str, Exception]] = []
+    faults: list[Exception] = []
 
     assert resolve_all_impl_classes(
         "ANGEE_TEST_IMPLS",
         _BaseImpl,
-        on_error=lambda key, error: faults.append((key, error)),
+        on_error=faults.append,
     ) == (_BaseImpl,)
-    assert [key for key, _error in faults] == ["missing", "wrong_base"]
-    assert isinstance(faults[0][1], ImportError)
-    assert isinstance(faults[1][1], ImproperlyConfigured)
+    assert len(faults) == 3
+    assert isinstance(faults[0], ImportError)
+    assert isinstance(faults[1], ImproperlyConfigured)
+    assert isinstance(faults[2], ImproperlyConfigured)
+
+    field = ImplClassField(base_class=_BaseImpl, registry_setting="ANGEE_TEST_IMPLS")
+    errors = field.check()
+    assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004"]
+    assert all(error.obj is field for error in errors)
+    assert "MissingImpl" in errors[0].msg
+    assert "is not a _BaseImpl" in errors[1].msg
+    assert "with key 'refined'" in errors[2].msg
+
+
+@override_settings(ANGEE_TEST_IMPLS={"local": "angee.storage.backends.LocalBackend"})
+def test_native_impl_field_uses_its_registry_key() -> None:
+    """Native storage classes need no ImplBase contract or duplicate key."""
+
+    field = ImplClassField(base_class=StorageBackend, registry_setting="ANGEE_TEST_IMPLS")
+
+    assert resolve_all_impl_classes("ANGEE_TEST_IMPLS", StorageBackend) == (LocalBackend,)
+    assert field.check() == []
 
 
 @override_settings(ANGEE_EMPTY_IMPLS={})

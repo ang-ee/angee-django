@@ -3355,11 +3355,6 @@ class RecordRevisionQuerySet(AppendOnlyQuerySet, AngeeQuerySet[Any]):
         """Select the latest revision for a link, usable as a row read or subquery."""
         return self.filter(link=link).order_by("-number")[:1]
 
-    def immutable_error(self, operation: str) -> Exception:
-        """Report one invariant for instance and collection mutation paths."""
-
-        return ValidationError("Record revisions are immutable.")
-
 
 class RecordRevisionManager(AngeeManager.from_queryset(RecordRevisionQuerySet)):  # type: ignore[misc]
     """Allocate revision numbers while holding the stable identity lock."""

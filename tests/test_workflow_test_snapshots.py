@@ -1244,18 +1244,18 @@ def test_output_fixture_is_immutable_nonphysical_retained_evidence(
         assert run.step_runs.get(step__key=selected.key).status == "succeeded"
         assert run.steps_taken == 0
         assert not WorkflowDispatch.objects.filter(step_attempt=attempt).exists()
-        with pytest.raises(TypeError, match="immutable"):
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be edited"):
             WorkflowTestFixture.objects.filter(pk=fixture.pk).update(outcome="changed")
         with pytest.raises(TypeError, match="WorkflowRunManager"):
             WorkflowTestFixture.objects.bulk_create([fixture])
-        with pytest.raises(TypeError, match="immutable"):
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be edited"):
             WorkflowTestFixture.objects.bulk_update([fixture], ["outcome"])
         queryset = WorkflowTestFixture.objects.filter(pk=fixture.pk)
-        with pytest.raises(TypeError, match="immutable"):
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be edited"):
             queryset.update(created_by=None, updated_by=None)
-        with pytest.raises(TypeError, match="retained admission facts"):
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be deleted"):
             queryset.delete()
-        with pytest.raises(TypeError, match="retained admission facts"):
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be deleted"):
             queryset._raw_delete(using=queryset.db)
 
 
@@ -1779,6 +1779,24 @@ def test_fixture_generic_writes_require_the_run_owner(
         row.save()
     with pytest.raises(TypeError, match="WorkflowRunManager"):
         WorkflowTestFixture.objects.bulk_create([row])
+
+
+@pytest.mark.parametrize("model", (WorkflowTestFixture, WorkflowRecoveryEvidence))
+def test_admission_evidence_rejects_all_generic_insert_paths(
+    model: type[models.Model], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The queryset owns admission even when a model save hook is replaced."""
+
+    def unexpected_save(*args: object, **kwargs: object) -> None:
+        pytest.fail("Generic insertion reached model persistence.")
+
+    monkeypatch.setattr(model, "save", unexpected_save)
+    with pytest.raises(TypeError, match="WorkflowRunManager"):
+        model._default_manager.create()
+    with pytest.raises(TypeError, match="WorkflowRunManager"):
+        model._default_manager.insert(model())
+    with pytest.raises(TypeError, match="WorkflowRunManager"):
+        model._default_manager.bulk_create([model()])
 
 
 def test_fixture_slot_uniqueness_rejects_signal_reentry(

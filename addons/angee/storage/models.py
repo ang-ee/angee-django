@@ -70,7 +70,7 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, role_anchor
 from angee.base.refs import RecordRefMixin, canonical_record_target
-from angee.base.scoping import elevated, system_queryset
+from angee.base.scoping import system_queryset
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -253,7 +253,7 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
         read access to the backend row itself.
         """
 
-        with elevated(reason="storage.drive.storage"):
+        with system_context(reason="storage.drive.storage"):
             return self.backend.storage
 
     def object_key(self, content_hash: str, filename: str) -> str:
@@ -1235,7 +1235,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         comes from the per-``(row, config)`` cache.
         """
 
-        with elevated(reason="storage.file.storage"):
+        with system_context(reason="storage.file.storage"):
             drive_field = self._meta.get_field("drive")
             if not drive_field.is_cached(self):
                 drive_field.set_cached_value(

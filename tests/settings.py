@@ -8,6 +8,7 @@ from pathlib import Path
 import environ
 from django.apps import AppConfig
 
+from angee.base.autoconfig import SETTINGS as BASE_SETTINGS
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
 from angee.jobs.autoconfig import SETTINGS as JOB_SETTINGS
 from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
@@ -125,6 +126,9 @@ CELERY_TASK_SOFT_TIME_LIMIT = JOB_SETTINGS["CELERY_TASK_SOFT_TIME_LIMIT"]
 
 # Bare tests skip addon autoconfig; reuse IAM's native REBAC policy binding.
 REBAC_UNIVERSAL_ADMIN_ROLE = IAM_SETTINGS["REBAC_UNIVERSAL_ADMIN_ROLE"]
+SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD = BASE_SETTINGS[
+    "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD"
+]
 USE_TZ = True
 ANGEE_RUNTIME_MODULE = "tests.runtime"
 ANGEE_ADDON_DIRS = (Path(__file__).resolve().parent.parent / "addons",)

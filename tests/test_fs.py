@@ -55,40 +55,18 @@ def test_generated_tree_reconcile_respects_ownership_and_prune_policy(tmp_path: 
     assert [(root / name).exists() for name in ("expected.txt", "orphan.txt", "notes.md")] == [True, False, True]
 
 
-@pytest.mark.parametrize("empty", [False, True])
-def test_generated_tree_prunes_nested_orphan_directories_in_one_pass(tmp_path: Path, empty: bool) -> None:
-    """Directory pruning retains artifact parents, history, and unowned contents."""
+def test_generated_tree_reconcile_leaves_directory_only_orphans(tmp_path: Path) -> None:
+    """Directory drift belongs to reset; reconciliation prunes files only."""
 
-    root = tmp_path / "generated"
-    (root / "expected").mkdir(parents=True)
-    (root / "expected" / "models.py").write_text("current", encoding="utf-8")
-    (root / "orphan" / "nested").mkdir(parents=True)
-    if not empty:
-        (root / "orphan" / "nested" / "models.py").write_text("stale", encoding="utf-8")
-    (root / "retained").mkdir()
-    (root / "retained" / "notes.md").write_text("keep", encoding="utf-8")
-    history = root / "removed" / "migrations" / "0001_saved.py"
-    history.parent.mkdir(parents=True)
-    history.write_text("history", encoding="utf-8")
-    tree = GeneratedTree(
-        root,
-        {Path("expected/models.py"): "current"},
-        owns=lambda path: path.suffix != ".md",
-    )
+    (tmp_path / "retired").mkdir()
+    tree = GeneratedTree(tmp_path, {}, owns=lambda path: True)
 
-    assert tree.drift()
-    assert tree.reconcile(prune=False) is False
-    assert (root / "orphan").exists()
-    assert tree.reconcile(prune=True) is True
-    assert not (root / "orphan").exists()
-    assert (root / "expected" / "models.py").read_text(encoding="utf-8") == "current"
-    assert (root / "retained" / "notes.md").read_text(encoding="utf-8") == "keep"
-    assert history.read_text(encoding="utf-8") == "history"
-    assert tree.drift() == []
+    assert tree.reconcile(prune=True) is False
+    assert tree.drift() == [Path("retired")]
 
 
-def test_generated_tree_cleanup_policy_knobs(tmp_path: Path) -> None:
-    """Cleanup guards and migration preservation are explicit policy knobs."""
+def test_generated_tree_cleanup_guards_and_migration_preservation(tmp_path: Path) -> None:
+    """Cleanup requires the configured generated root and preserves all migrations."""
 
     root = tmp_path / "generated"
     root.mkdir()
@@ -109,10 +87,6 @@ def test_generated_tree_cleanup_policy_knobs(tmp_path: Path) -> None:
 
     GeneratedTree(root, {}, owns=lambda path: True, sentinel=sentinel).clean()
     assert [migration.exists(), (root / "__init__.py").exists(), (root / "stale.txt").exists()] == [True, True, False]
-
-    GeneratedTree(root, {}, owns=lambda path: True, sentinel=sentinel, preserve_migrations=False).clean()
-    assert not migration.exists()
-    assert not any(root.iterdir())
 
 
 def test_generated_tree_drift_never_reports_preserved_migration_files(tmp_path: Path) -> None:

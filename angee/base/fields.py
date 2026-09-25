@@ -204,7 +204,11 @@ class StateField(TextChoicesField):
     angee_scalar_hint = "String"
 
     def __init__(self, **kwargs: Any) -> None:
-        """Default a state column to indexed; it is what queries filter on."""
+        """Index state columns and accept legacy blank-string migration state.
+
+        New optional state declarations use NULL; the blank-string spelling is
+        retained only so historical migration fields can still be reconstructed.
+        """
 
         self._angee_blank_string = bool(kwargs.get("blank")) and not bool(kwargs.get("null"))
         if self._angee_blank_string:
@@ -309,11 +313,11 @@ class FractionalRankField(models.FloatField):
         value = super().pre_save(model_instance, add)
         if value is not None:
             return cast(float, value)
-        rank = self.get_append_rank_for_instance(model_instance)
+        rank = self._get_append_rank_for_instance(model_instance)
         setattr(model_instance, self.attname, rank)
         return rank
 
-    def get_append_rank_for_instance(self, instance: models.Model) -> float:
+    def _get_append_rank_for_instance(self, instance: models.Model) -> float:
         """Read the next rank within the instance's unique context."""
 
         model = type(instance)

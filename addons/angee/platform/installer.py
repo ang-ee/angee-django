@@ -412,7 +412,7 @@ def _check_installer_backends(app_configs: Any, **kwargs: Any) -> list[CheckMess
     resolve_all_impl_classes(
         _REGISTRY_SETTING,
         AddonInstallerBackend,
-        on_error=lambda _key, error: resolution_errors.append(error),
+        on_error=resolution_errors.append,
     )
     for error in resolution_errors:
         errors.append(

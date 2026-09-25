@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from django.core.exceptions import FieldError
+from django.core.exceptions import FieldError, ValidationError
 from django.db import connection, models, transaction
 from django.db.models import OuterRef
 from django.test import override_settings
@@ -102,7 +102,7 @@ def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model:
     if model is StepAttempt:
         assert manager is model.system_objects
         assert isinstance(queryset, StepAttemptQuerySet)
-        with pytest.raises(TypeError, match="Step attempts do not support collection updates"):
+        with pytest.raises(ValidationError, match="StepAttempt rows cannot be edited"):
             queryset.update(status="bypassed")
     else:
         assert isinstance(manager, AngeeUnscopedManager)

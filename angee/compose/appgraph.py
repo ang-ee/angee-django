@@ -52,7 +52,6 @@ class AppGraph:
         aliases: dict[str, str] = {}
         dependencies_by_name: dict[str, tuple[str, ...]] = {}
         root_names: list[str] = []
-        seen_root_names: set[str] = set()
         root_name_set: set[str] = set()
         root_declarations: dict[str, str] = {}
         expanded: set[str] = set()
@@ -93,9 +92,6 @@ class AppGraph:
         for root in roots:
             config = root if isinstance(root, AppConfig) else create_app_config(aliases.get(root, root))
             declaration = config.name if isinstance(root, AppConfig) else root
-            if config.name in seen_root_names:
-                raise ImproperlyConfigured(f"Duplicate root app {config.name!r}")
-            seen_root_names.add(config.name)
             root_name = register(config).name
             root_names.append(root_name)
             if declared is None or declaration in declared:

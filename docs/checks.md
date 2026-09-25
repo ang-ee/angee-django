@@ -90,7 +90,7 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 |---|---|---|
 | Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/compose/management/commands/angee.py) defines ordering and options |
 | Build composed runtime | `uv run manage.py angee build` | Updates generated runtime, prunes obsolete generated sources, updates host dependency declarations and materializes pending addon migrations |
-| Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves and reports migration directories, including removed labels |
+| Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves migration directories and reports those belonging to removed labels |
 | Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts/dependency projection/migration history; Django bootstrap can repair runtime sources before dispatch |
 | Author schema migrations | `uv run manage.py makemigrations <app-labels>` | After composition; preserves existing migration history |
 | Apply migrations | `uv run manage.py migrate` | Operates on the selected stack database |

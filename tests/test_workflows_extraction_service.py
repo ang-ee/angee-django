@@ -2833,7 +2833,7 @@ class ExtractionServiceTests(TestCase):
         extraction_model = apps.get_model("workflows_extraction", "Extraction")
         with self.assertRaises(MissingActorError):
             extraction_model.objects.filter(pk=failed.pk).exists()
-        with self.assertRaisesRegex(ValueError, "immutable"):
+        with self.assertRaisesRegex(ValidationError, "Extraction rows cannot be edited"):
             extraction_model._base_manager.filter(pk=failed.pk).update(status="succeeded")
         with self.assertRaisesRegex(ValueError, "retention owner"):
             extraction_model._base_manager.create()
@@ -2847,7 +2847,7 @@ class ExtractionServiceTests(TestCase):
             extraction_model._base_manager.create(**valid_values)
         with self.assertRaisesRegex(ValueError, "retention owner"):
             extraction_model._base_manager.bulk_create([failed])
-        with self.assertRaisesRegex(ValueError, "directly deleted"):
+        with self.assertRaisesRegex(ValidationError, "Extraction rows cannot be deleted"):
             queryset = extraction_model._base_manager.filter(pk=failed.pk)
             queryset._raw_delete(using=queryset.db)
         with actor_context(self.owner):

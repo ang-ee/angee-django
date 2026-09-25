@@ -58,7 +58,8 @@ idempotent field normalization, and the primitive's own target write, so existin
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, NoReturn, cast
@@ -284,18 +285,11 @@ class StateTransitions:
             result = method(instance, *args, **kwargs)
             self._write_target(instance, target)
             if spec.on_success is not None:
-                previous = getattr(instance, "_angee_transition_save", None)
-                setattr(instance, "_angee_transition_save", self.field.attname)
-                try:
+                with _transition_save_context(instance, self.field.attname):
                     if persist is None:
                         spec.on_success(instance, source, target)
                     else:
                         spec.on_success(instance, source, target, persist=persist)
-                finally:
-                    if previous is None:
-                        delattr(instance, "_angee_transition_save")
-                    else:
-                        setattr(instance, "_angee_transition_save", previous)
         return result
 
     def force_state(self, instance: models.Model, target: Any, *, reason: str) -> None:
@@ -322,18 +316,12 @@ class StateTransitions:
             if hasattr(instance, "_transition_fields"):
                 delattr(instance, "_transition_fields")
             return
-        previous = getattr(instance, "_angee_transition_save", None)
-        setattr(instance, "_angee_transition_save", self.field.attname)
         try:
-            save_state(instance, source, target_value)
+            with _transition_save_context(instance, self.field.attname):
+                save_state(instance, source, target_value)
         except Exception:
             self._write_target(instance, source)
             raise
-        finally:
-            if previous is None:
-                delattr(instance, "_angee_transition_save")
-            else:
-                setattr(instance, "_angee_transition_save", previous)
 
     def not_allowed(self, source: Any, target: Any) -> NoReturn:
         """Raise the primitive's standard ``TransitionNotAllowed`` for this field."""
@@ -499,6 +487,21 @@ def _as_values(value: Any) -> tuple[Any, ...]:
     return (value,)
 
 
+@contextmanager
+def _transition_save_context(instance: models.Model, field_name: str) -> Iterator[None]:
+    """Expose this save's field and restore any enclosing transition context."""
+
+    previous = get_transition_save_field(instance)
+    setattr(instance, "_angee_transition_save", field_name)
+    try:
+        yield
+    finally:
+        if previous is None:
+            delattr(instance, "_angee_transition_save")
+        else:
+            setattr(instance, "_angee_transition_save", previous)
+
+
 def get_transition_save_field(instance: models.Model) -> str | None:
     """Return the active transition-save field's attname, or ``None``.
 
@@ -530,8 +533,9 @@ def save_state(
     publishers, and pre-save change trackers observe the real old->new transition.
 
     ``persist(instance, *, update_fields)`` composes this final save while
-    retaining the native concurrency guard. Custom success hooks must forward
-    it explicitly; no persistence callback is installed as ambient state.
+    retaining the concurrency guard when a cooperative ``save`` override requires
+    invocation-local arguments. Custom success hooks must forward it explicitly;
+    no persistence callback is installed as ambient state.
     """
 
     field_name = get_transition_save_field(instance)

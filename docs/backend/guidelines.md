@@ -255,7 +255,7 @@ Use these owners instead of maintaining another contract in an addon:
   `angee.data.field_classification` own resolution: surface metadata first,
   Django field declarations second, then the ordinary type fallback. Money
   projections use `MONEY_CURRENCY_FIELD_METADATA_KEY` from its owner
-  `angee.data.metadata` instead of repeating its metadata key. Presentation metadata alone grants no
+  `angee.data.field_classification` instead of repeating its metadata key. Presentation metadata alone grants no
   ORM write or aggregation capability; those still come from a real model field
   or explicit resource input policy.
 - Manually ordered rows use `FractionalRankField` (NOT NULL) plus a database
@@ -691,9 +691,10 @@ and current contracts before applying a historical example to a new deployment.
   local from the synchronized scope before enabling two-way sync.
 - [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
   subclasses from historical models because their expressions belong to the live
-  row. Its `ModelHistory` owner allocates a separate nullable text change-reason
-  field for each historical model; inherited tracking must never share mutable
-  field instances across models.
+  row. Base autoconfig enables the native
+  `SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD` setting, so simple-history
+  allocates a separate nullable text change-reason field for each historical
+  model; inherited tracking must never share mutable field instances across models.
 - **Domain renames need an explicit upgrade path.** When persisted references or
   permission namespaces change, describe which old state needs data migration
   and which reconciliation follows it. Keep those operations out of startup.
@@ -876,8 +877,14 @@ and current contracts before applying a historical example to a new deployment.
   instance deletion overrides do not protect against every collector path; choose
   FK policies deliberately, including generic relations that can cascade into
   retained rows. This is a modelling rule, not a mechanical system check. Shared
-  append-only collections compose [`AppendOnlyQuerySet`](../../angee/base/mixins.py),
-  whose collection updates remain closed. `AuditMixin` uses its serializable
+  retained collections compose [`AppendOnlyQuerySet`](../../angee/base/mixins.py),
+  which rejects generic updates and deletion with a model-labelled `ValidationError`.
+  Its `validate_insert` seam narrows all generic insert entrypoints. Retention
+  commands insert validated batches through `_owner_bulk_create`; lease state
+  machines expose exact conditional writes through domain queryset methods using
+  `_owner_update`. Those protected paths retain the downstream authorization and
+  queryset guards; each owner supplies its predicates and allowed fields. They do
+  not reopen generic mutations or replace model/FK invariants. `AuditMixin` uses its serializable
   `audit_set_null` FK policy to materialize the collector selection and schedule
   Django's native `UpdateQuery.update_batch` path for actor deletion.
   Never replace these rules with a database trigger or function.
@@ -918,7 +925,10 @@ and current contracts before applying a historical example to a new deployment.
   by stored id); the mixin rejects a reparent or create under a parent that differs
   on any listed field. It is generic and iam-free — there is no scope-field-name
   fallback, so a scoped tree that omits the declaration silently accepts a parent
-  outside its scope. `StateField` transitions guarded by `save_state` get an
+  outside its scope. Compose `HierarchyQuerySet` before every other queryset
+  guard, including on secondary managers; the base `angee.E021` check rejects
+  ordering or `update` overrides that path maintenance would bypass.
+  `StateField` transitions guarded by `save_state` get an
   optimistic-concurrency guard for free: the committed source is re-read under the
   same lock before the write, so a lost race raises `TransitionNotAllowed` instead
   of double-applying (e.g. double-posting a ledger).

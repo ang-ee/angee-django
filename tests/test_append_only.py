@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
 from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
@@ -104,3 +104,18 @@ def test_append_only_rejects_collection_mutation_and_collector_nullifies_audit_f
         assert first.created_by_id is first.updated_by_id is None
         assert second.created_by_id is second.updated_by_id is None
         assert outside.created_by_id == outside.updated_by_id == other_actor.pk
+
+
+def test_owner_writes_preserve_downstream_queryset_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Owner admission never skips a later queryset's authorization or policy."""
+
+    def deny(*args: Any, **kwargs: Any) -> Any:
+        raise PermissionDenied("downstream write guard")
+
+    monkeypatch.setattr(AngeeQuerySet, "update", deny)
+    monkeypatch.setattr(AngeeQuerySet, "bulk_create", deny)
+    queryset = RetainedEvidence.objects.filter(pk=1)
+    with pytest.raises(PermissionDenied, match="downstream write guard"):
+        queryset._owner_update(name="changed")
+    with pytest.raises(PermissionDenied, match="downstream write guard"):
+        queryset._owner_bulk_create([RetainedEvidence(name="new")])

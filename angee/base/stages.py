@@ -90,7 +90,9 @@ class Stage(models.Model):
         sudo = getattr(queryset, "sudo", None)
         if callable(sudo):
             queryset = sudo(reason="base.stage.for_container")
-        return queryset.filter(**{cls.container_field_name: container}).order_by("position", "pk")
+        return queryset.filter(**{cls.container_field_name: container}).order_by(
+            "position", "pk"
+        )
 
     @classmethod
     def resolve_default(cls, container: models.Model) -> Any | None:
@@ -101,8 +103,7 @@ class Stage(models.Model):
         deterministic ordered first row is the primitive's fallback.
         """
 
-        default_attname = f"{cls.default_stage_field_name}_id"
-        default_id = getattr(container, default_attname, None)
+        default_id = getattr(container, f"{cls.default_stage_field_name}_id", None)
         stages = cls.for_container(container)
         if default_id is not None:
             configured = stages.filter(pk=default_id).first()
@@ -170,16 +171,19 @@ class StagedModelMixin(models.Model):
     def validate_stage_scope(self) -> None:
         """Reject a stage that does not belong to this record's container."""
 
-        stage_attname = f"{self.stage_field_name}_id"
-        stage_id = getattr(self, stage_attname, None)
+        stage_id = getattr(self, f"{self.stage_field_name}_id", None)
         if stage_id is None:
             return
         container = self._stage_container()
         if container is None:
-            raise ValidationError({self.stage_container_field_name: "A staged record requires its stage container."})
+            raise ValidationError(
+                {self.stage_container_field_name: "A staged record requires its stage container."}
+            )
         stage_model = self.stage_model()
         if not stage_model.for_container(container).filter(pk=stage_id).exists():
-            raise ValidationError({self.stage_field_name: "Stage must belong to the record's container."})
+            raise ValidationError(
+                {self.stage_field_name: "Stage must belong to the record's container."}
+            )
 
     def clean(self) -> None:
         """Run model cleaning, then enforce the stage/container invariant."""
@@ -191,7 +195,9 @@ class StagedModelMixin(models.Model):
         """Return the native (possibly cached) container, including unsaved field edits."""
 
         if not self.stage_container_field_name:
-            raise ImproperlyConfigured(f"{self._meta.label} must declare stage_container_field_name.")
+            raise ImproperlyConfigured(
+                f"{self._meta.label} must declare stage_container_field_name."
+            )
         try:
             self._meta.get_field(self.stage_container_field_name)
         except FieldDoesNotExist as error:

@@ -209,14 +209,16 @@ def drive(tmp_path: Path, transactional_db: None) -> Any:
 def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
     drive: Any, django_assert_num_queries: Any
 ) -> None:
-    """First storage access joins both owners; subsequent access reuses their caches."""
+    """Fetch both owners once; cached accesses retain native REBAC audit writes."""
 
     row = File(drive_id=drive.pk)
-    with system_context(reason="test file storage query count"):
-        with django_assert_num_queries(1):
+    with actor_context(drive.alice):
+        # One joined fetch plus the file and drive system-context audit rows.
+        with django_assert_num_queries(3):
             backend = row.storage
             assert row.drive.backend.pk == drive.backend_id
-        with django_assert_num_queries(0):
+        # Cached owners issue only the three system-context audit writes.
+        with django_assert_num_queries(3):
             assert row.storage is backend
             assert backend is drive.storage
 

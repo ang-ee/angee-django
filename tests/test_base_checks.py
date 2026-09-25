@@ -16,7 +16,8 @@ from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
 from angee.base import checks as base_checks
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_rebac_database
+from angee.base.checks import check_hierarchy_queryset_order, check_rebac_database
+from angee.base.mixins import HierarchyQuerySet
 
 
 @pytest.mark.parametrize("write_alias", [None, "default", "external"])
@@ -72,6 +73,54 @@ def test_rebac_database_check_registered_by_base() -> None:
     config.ready()
     assert sum(check is check_rebac_database for check in registry.registered_checks) == 1
     assert checks.Tags.models in check_rebac_database.tags
+    assert sum(check is check_hierarchy_queryset_order for check in registry.registered_checks) == 1
+    assert checks.Tags.models in check_hierarchy_queryset_order.tags
+
+
+@pytest.mark.parametrize("ordering", ["first", "last", "override", "inherited", "plain"])
+@pytest.mark.parametrize("selected_apps", [False, True])
+def test_hierarchy_queryset_order_checks_every_declared_manager(
+    monkeypatch: pytest.MonkeyPatch, ordering: str, selected_apps: bool,
+) -> None:
+    """Path maintenance may skip its own guard, but must retain other update guards."""
+
+    class Guard(models.QuerySet):
+        def update(self, **kwargs):
+            raise AssertionError("The other owner's guard must remain reachable.")
+
+    class First(HierarchyQuerySet, Guard):
+        pass
+
+    class Last(Guard, HierarchyQuerySet):
+        pass
+
+    class Override(First):
+        def update(self, **kwargs):
+            return super().update(**kwargs)
+
+    class Inherited(First):
+        pass
+
+    queryset = {"first": First, "last": Last, "override": Override, "inherited": Inherited, "plain": Guard}[ordering]
+    with isolate_apps("django.contrib.contenttypes") as registry:
+        class Node(models.Model):
+            objects = models.Manager()
+            hierarchy = models.Manager.from_queryset(queryset)()
+
+            class Meta:
+                app_label = "contenttypes"
+
+        monkeypatch.setattr(base_checks, "apps", registry)
+        configs = list(registry.get_app_configs()) if selected_apps else None
+        errors = check_hierarchy_queryset_order(configs)
+
+    if ordering in {"last", "override"}:
+        [error] = errors
+        assert error.id == "angee.E021"
+        assert error.obj is Node
+        assert "contenttypes.Node.hierarchy" in error.msg
+    else:
+        assert errors == []
 
 
 @pytest.mark.parametrize("store_model", [Relationship, RelationshipRegistry, RebacResource])

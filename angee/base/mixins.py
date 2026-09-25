@@ -80,18 +80,10 @@ def _shared_reader_policy_field_spellings(model: type[models.Model]) -> frozense
 class ConditionalSharedReaderQuerySet(models.QuerySet[_ArchiveModelT]):
     """Protect fields that decide whether one row receives a wildcard reader."""
 
-    @classmethod
-    def _policy_fields(
-        cls,
-        model: type[models.Model],
-        fields: Iterable[str],
-    ) -> set[str]:
-        return {str(field) for field in fields} & _shared_reader_policy_field_spellings(model)
-
     def update(self, **kwargs: Any) -> int:
         """Keep eligibility changes on the owner that reconciles wildcard readers."""
 
-        if self._policy_fields(self.model, kwargs):
+        if kwargs.keys() & _shared_reader_policy_field_spellings(self.model):
             raise ValidationError("Change shared-reader eligibility through its native owner.")
         return super().update(**kwargs)
 
@@ -125,20 +117,15 @@ class ConditionalSharedReaderMixin(models.Model):
 
         return False
 
-    def _shared_reader_relationships(self) -> dict[str, tuple[SubjectRef, ...]]:
-        """Return the managed relation and its eligible subjects, empty to revoke."""
-
-        relation = self.shared_reader_relation
-        if relation is None:
-            return {}
-        return {relation: (_EVERY_AUTHENTICATED_USER,) if self.shared_reader_eligible else ()}
-
     def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, Iterable[SubjectRef | models.Model]]:
         """Propose only the shared-reader tuple that save will reconcile atomically."""
 
         # ``using`` is django-zed-rebac's own override signature; pass it through.
         relationships = dict(super().proposed_relationships(using=using))
-        relationships.update(self._shared_reader_relationships())
+        if self.shared_reader_relation is not None:
+            relationships[self.shared_reader_relation] = (
+                (_EVERY_AUTHENTICATED_USER,) if self.shared_reader_eligible else ()
+            )
         return relationships
 
     def save(self, *args: Any, **kwargs: Any) -> None:
@@ -170,25 +157,24 @@ class ConditionalSharedReaderMixin(models.Model):
             raise ValidationError("A shared reader requires a saved row.")
         with transaction.atomic():
             canonical = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
-            for relation, subjects in canonical._shared_reader_relationships().items():
-                resource = to_object_ref(canonical)
-                if subjects:
-                    write_relationships(
-                        [
-                            RelationshipTuple(resource=resource, relation=relation, subject=subject)
-                            for subject in subjects
-                        ]
+            relation = canonical.shared_reader_relation
+            if relation is None:
+                return
+            resource = to_object_ref(canonical)
+            if canonical.shared_reader_eligible:
+                write_relationships(
+                    [RelationshipTuple(resource=resource, relation=relation, subject=_EVERY_AUTHENTICATED_USER)]
+                )
+            else:
+                delete_relationships(
+                    RelationshipFilter(
+                        resource_type=resource.resource_type,
+                        resource_id=resource.resource_id,
+                        relation=relation,
+                        subject_type=_EVERY_AUTHENTICATED_USER.subject_type,
+                        subject_id=_EVERY_AUTHENTICATED_USER.subject_id,
                     )
-                else:
-                    delete_relationships(
-                        RelationshipFilter(
-                            resource_type=resource.resource_type,
-                            resource_id=resource.resource_id,
-                            relation=relation,
-                            subject_type=_EVERY_AUTHENTICATED_USER.subject_type,
-                            subject_id=_EVERY_AUTHENTICATED_USER.subject_id,
-                        )
-                    )
+                )
 
 
 class TimestampMixin(models.Model):
@@ -315,16 +301,18 @@ class AuditMixin(models.Model):
 
 
 class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
-    """Allow inserts, but never collection edits or deletion.
+    """Close generic collection edits and deletion around owner-controlled writes.
 
     Compose before the domain's base queryset to preserve authorization.
+    Retained evidence uses insert admission; retained state machines expose
+    exact conditional writes through their own methods and ``_owner_update``.
     Instance invariants and collector retention remain model/FK concerns;
     ``AuditMixin`` clears audit FKs through its collector policy without
     calling this queryset.
     """
 
-    def immutable_error(self, operation: str) -> Exception:
-        """Return the owner's error for a forbidden queryset mutation."""
+    def immutable_error(self, operation: str) -> ValidationError:
+        """Identify the model whose generic collection mutation is forbidden."""
 
         action = "deleted" if operation in {"delete", "_raw_delete"} else "edited"
         return ValidationError(f"{self.model._meta.label} rows cannot be {action}.")
@@ -352,12 +340,17 @@ class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
         if ignore_conflicts or update_conflicts:
             raise self.immutable_error("bulk_create")
         self.validate_insert()
-        return super().bulk_create(
-            objs,
-            batch_size=batch_size,
-            update_fields=tuple(update_fields) if update_fields is not None else None,
-            unique_fields=tuple(unique_fields) if unique_fields is not None else None,
-        )
+        return self._owner_bulk_create(objs, batch_size=batch_size)
+
+    def _owner_bulk_create(self, objs: Iterable[_ModelT], *, batch_size: int | None = None) -> list[_ModelT]:
+        """Insert a domain-validated batch through the remaining queryset guards."""
+
+        return super().bulk_create(objs, batch_size=batch_size)
+
+    def _owner_update(self, **kwargs: Any) -> int:
+        """Apply a domain-owned conditional write through the remaining guards."""
+
+        return super().update(**kwargs)
 
     def update(self, **kwargs: Any) -> int:
         """Reject every collection edit."""
@@ -449,17 +442,6 @@ class ModelHistory(HistoricalRecords):
         options = super().get_meta_options(model)
         options["app_label"] = model._meta.app_label
         return options
-
-    def _get_history_change_reason_field(self) -> models.TextField:
-        """Give each historical model its own nullable, unbounded change reason.
-
-        The inherited descriptor is shared, and django-simple-history reuses a
-        field passed to its constructor. Its native factory hook keeps field
-        instances independent and this policy local to HistoryMixin instead of
-        changing all history consumers through a project-wide setting.
-        """
-
-        return models.TextField(null=True)
 
     def copy_fields(self, model: type[models.Model]) -> dict[str, models.Field]:
         """Copy MTI identity as a regular historical relation, not an inheritance link."""

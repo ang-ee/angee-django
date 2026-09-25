@@ -22,9 +22,13 @@ from strawberry import auto
 
 import angee.base.fields as base_fields
 from angee.base.fields import SqidField
-from angee.data.field_classification import model_field_scalar, money_currency_field, resource_field_widget
-from angee.data.metadata import (
+from angee.data.field_classification import (
     MONEY_CURRENCY_FIELD_METADATA_KEY,
+    model_field_scalar,
+    money_currency_field,
+    resource_field_widget,
+)
+from angee.data.metadata import (
     DataResourceRoots,
     DataResourceTypeNames,
     serialize_data_resources,
