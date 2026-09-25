@@ -402,16 +402,26 @@ def test_start_rejects_malformed_input_presence_before_writes(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("schema_format", "valid_value"),
+    [
+        ("date", "2026-09-25"),
+        ("date-time", "2026-09-25T12:00:00Z"),
+        ("uri", "https://example.test/workflow"),
+    ],
+)
 def test_start_asserts_input_schema_formats_before_writes(
     workflow_engine_tables: None,
     no_workflow_queue: None,
+    schema_format: str,
+    valid_value: str,
 ) -> None:
     del workflow_engine_tables, no_workflow_queue
-    with system_context(reason="test workflow date input contract"):
+    with system_context(reason="test workflow format input contract"):
         draft = Workflow.objects.create(
             created_by=workflow_actor(),
-            name="Date input",
-            input_schema={"type": "string", "format": "date"},
+            name="Formatted input",
+            input_schema={"type": "string", "format": schema_format},
         )
         Step.objects.create(
             workflow=draft,
@@ -427,11 +437,11 @@ def test_start_asserts_input_schema_formats_before_writes(
     with pytest.raises(ValidationError, match="input does not satisfy"):
         engine.start(workflow, subject=None, actor=actor, input=JsonPresence(True, "nope"))
 
-    with system_context(reason="verify rejected date input"):
+    with system_context(reason="verify rejected formatted input"):
         assert WorkflowRun.objects.count() == 0
         assert WorkflowDispatch.objects.count() == 0
-    run = engine.start(workflow, subject=None, actor=actor, input=JsonPresence(True, "2026-09-25"))
-    assert run.input == "2026-09-25"
+    run = engine.start(workflow, subject=None, actor=actor, input=JsonPresence(True, valid_value))
+    assert run.input == valid_value
 
 
 @pytest.mark.django_db(transaction=True)

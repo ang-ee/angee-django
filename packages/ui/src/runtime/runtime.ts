@@ -34,6 +34,7 @@ export const HOME_PATH_PREFERENCE_KEY = "homePath";
 export const ROUTE_SHORTCUTS_PREFERENCE_KEY = "chrome.routeShortcuts";
 
 const FALLBACK_I18N = createAngeeI18nInstance({});
+const PLURAL_SUFFIXES = ["zero", "one", "two", "few", "many", "other"] as const;
 
 export interface RuntimeRouteShortcut {
   id: string;
@@ -413,7 +414,10 @@ export function useT(namespace: string): (key: string, vars?: MessageVars) => st
 /**
  * A namespaced translator with a bundled-English `fallback`: resolves a key
  * against the host runtime's merged i18n for `namespace`, with native plural
- * defaults from `fallback`, then the key. The translate-with-fallback owner
+ * defaults declared in `fallback`, then the key. For counted keys, `_other`
+ * supplies the default when the bundle omits the locale's selected category;
+ * zero gets a special default only when `_zero` is declared.
+ * The translate-with-fallback owner
  * — the UI namespace hook and each addon's `useXT` build on it — so a
  * component renders its English even before its runtime bundle is mounted
  * (unit tests, storybook, provider-less embeds). Stable identity (memoized on
@@ -426,12 +430,13 @@ export function useNamespaceT(
   const t = useT(namespace);
   return useCallback(
     (key: string, vars: MessageVars = {}) => {
-      const defaultValue = fallback[key] ?? key;
+      const defaultValue = (typeof vars.count === "number" ? fallback[`${key}_other`] : undefined)
+        ?? fallback[key] ?? key;
       const pluralDefaults = Object.fromEntries(
-        ["zero", "one", "two", "few", "many", "other"].map((suffix) => [
-          `defaultValue_${suffix}`,
-          fallback[`${key}_${suffix}`] ?? fallback[`${key}_other`] ?? defaultValue,
-        ]),
+        PLURAL_SUFFIXES.flatMap((suffix) => {
+          const value = fallback[`${key}_${suffix}`];
+          return value === undefined ? [] : [[`defaultValue_${suffix}`, value]];
+        }),
       );
       return t(key, { ...vars, defaultValue, ...pluralDefaults });
     },

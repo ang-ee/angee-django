@@ -34,6 +34,7 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
+from angee.base.scoping import lock_if_supported
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -72,9 +73,9 @@ class _AngeeQuerySetMixin(Generic[_ModelT]):
             return None
 
     def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
-        """Declare row-lock intent; Django owns write routing and backend support."""
+        """Expose shared lock intent on Angee querysets and managers."""
 
-        return cast(Self, cast(models.QuerySet[_ModelT], self).select_for_update(of=of))
+        return cast(Self, lock_if_supported(cast(models.QuerySet[_ModelT], self), of=of))
 
     def locked_get(self, *args: Any, **kwargs: Any) -> _ModelT:
         """Return one row under a database row lock when the backend supports it."""

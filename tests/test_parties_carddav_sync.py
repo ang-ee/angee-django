@@ -29,7 +29,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.serialization import canonical_json_sha256
-from angee.integrate.http import PinnedTransport
+from angee.integrate.http import HttpClient, PinnedTransport
 from angee.integrate.states import (
     DiscrepancyKind,
     DiscrepancyStatus,
@@ -266,7 +266,7 @@ def replica(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[
                 server.private_access.append(allow_private)
                 return httpx.MockTransport(server.handle_request)
 
-            monkeypatch.setattr("angee.integrate.http.PinnedTransport", transport)
+            monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
             backend = CardDavDirectoryBackend(directory)
             definitions = tuple(backend.streams())
             assert len(definitions) == 1
@@ -895,7 +895,7 @@ def test_same_origin_private_photo_is_refused_by_pinned_client(
     monkeypatch.setattr(
         "angee.integrate.http.resolved_addresses", lambda host, port: (ipaddress.ip_address("127.0.0.1"),)
     )
-    monkeypatch.setattr("angee.integrate.http.PinnedTransport", PinnedTransport)
+    monkeypatch.setattr(HttpClient, "transport_factory", PinnedTransport)
     contact = ParsedContact(photo=ParsedPhoto(uri="http://private.example/avatar.png", mime="image/png"))
     with pytest.raises(CardDavError) as rejected:
         replica.backend._resolve_photo(contact, collection="http://private.example/book/")

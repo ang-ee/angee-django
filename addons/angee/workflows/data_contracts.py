@@ -40,6 +40,7 @@ JsonPath: TypeAlias = Annotated[
     Field(min_length=1, description="Object keys and array indices encoded as decimal strings, such as '0'."),
 ]
 JsonSchemaDict: TypeAlias = Annotated[dict[str, Any], AfterValidator(_check_json_schema)]
+_FORMAT_CHECKER = FormatChecker()
 
 
 def json_schema_validator(
@@ -54,8 +55,10 @@ def json_schema_validator(
     retained-reference registry without changing the shared validation policy.
     """
 
+    # Preserve jsonschema's default warning-backed remote-reference registry;
+    # Decision validation explicitly supplies an empty registry to forbid retrieval.
     options = {} if registry is None else {"registry": registry}
-    return validator_class(schema, format_checker=FormatChecker(), **options)
+    return validator_class(schema, format_checker=_FORMAT_CHECKER, **options)
 
 
 def _array_index(segment: str | int) -> int | None:

@@ -24,6 +24,7 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry import RetryHandler
 
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.http import HttpClient
 from angee.integrate.live import PairingState
 from angee.integrate.streams import StreamPage, advance_stream
 from angee.messaging.backends import ChannelBackend, ParsedMessage, body_part
@@ -258,7 +259,7 @@ def test_invalid_history_cursor_retains_watermarks_across_generation(
         def conversations_history(self, **kwargs: Any) -> dict[str, Any]:
             self.calls.append(("conversations.history", kwargs))
             if kwargs.get("cursor") == "expired-page":
-                response = SimpleNamespace(data={"ok": False, "error": "invalid_cursor"})
+                response = SimpleNamespace(status_code=200, data={"ok": False, "error": "invalid_cursor"})
                 raise SlackApiError("History page expired", response)
             return {"messages": []}
 
@@ -494,10 +495,11 @@ def test_download_file_stops_streaming_after_the_byte_cap(monkeypatch: pytest.Mo
         assert request.headers["authorization"] == "Bearer xoxp-user-token"
         return httpx.Response(200, stream=CountingStream())
 
-    monkeypatch.setattr(
-        "angee.integrate.http.PinnedTransport",
-        lambda *, allow_private: httpx.MockTransport(handler),
-    )
+    def transport(*, allow_private: bool) -> httpx.MockTransport:
+        assert allow_private is False
+        return httpx.MockTransport(handler)
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
     backend = SlackChannelBackend(_BridgeStub(config={"max_media_bytes": 5}))
     backend._credential = backend.bridge.credential
 
@@ -506,16 +508,16 @@ def test_download_file_stops_streaming_after_the_byte_cap(monkeypatch: pytest.Mo
 
 
 @pytest.fixture
-def slack_http(monkeypatch: pytest.MonkeyPatch) -> tuple[deque[HTTPError], list[Request]]:
+def slack_http(monkeypatch: pytest.MonkeyPatch) -> tuple[deque[Exception], list[Request]]:
     """Serve raw HTTP responses through the real SDK's retry machinery."""
 
-    responses: deque[HTTPError] = deque()
+    responses: deque[Exception] = deque()
     requests: list[Request] = []
 
     def urlopen(request: Request, **_kwargs: Any) -> HTTPError:
         requests.append(request)
         response = responses.popleft()
-        if response.code >= 400:
+        if not isinstance(response, HTTPError) or response.code >= 400:
             raise response
         return response
 
@@ -536,7 +538,7 @@ def _slack_http_response(status: int, *, retry_after: str = "60") -> HTTPError:
 @pytest.mark.parametrize(("retry_after", "delay"), [("700", 60.0), ("invalid", 1.0), ("-1", 0.0)])
 def test_rate_limit_honors_retry_after_then_retries(
     monkeypatch: pytest.MonkeyPatch,
-    slack_http: tuple[deque[HTTPError], list[Request]],
+    slack_http: tuple[deque[Exception], list[Request]],
     retry_after: str,
     delay: float,
 ) -> None:
@@ -557,7 +559,7 @@ def test_rate_limit_honors_retry_after_then_retries(
 @pytest.mark.parametrize("discovery", [True, False])
 def test_rate_limit_stops_before_the_sync_deadline(
     monkeypatch: pytest.MonkeyPatch,
-    slack_http: tuple[deque[HTTPError], list[Request]],
+    slack_http: tuple[deque[Exception], list[Request]],
     discovery: bool,
 ) -> None:
     """A retry that cannot fit before the drain deadline becomes a transient error."""
@@ -579,7 +581,7 @@ def test_rate_limit_stops_before_the_sync_deadline(
 
 
 def test_rate_limit_stops_after_retry_budget(
-    monkeypatch: pytest.MonkeyPatch, slack_http: tuple[deque[HTTPError], list[Request]]
+    monkeypatch: pytest.MonkeyPatch, slack_http: tuple[deque[Exception], list[Request]]
 ) -> None:
     responses, requests = slack_http
     responses.extend(_slack_http_response(429) for _ in range(6))
@@ -591,6 +593,62 @@ def test_rate_limit_stops_after_retry_budget(
         backend.test_pages.next_batch()
     assert len(requests) == 6
     assert delays == [60.0] * 5
+
+
+@pytest.mark.parametrize("connection_first", [True, False])
+def test_rate_limit_and_connection_retries_share_the_sdk_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    slack_http: tuple[deque[Exception], list[Request]],
+    connection_first: bool,
+) -> None:
+    """Mixed failures consume one native attempt count, reset for each request."""
+
+    responses, requests = slack_http
+    connection_error = ConnectionResetError("Connection reset")
+    if connection_first:
+        responses.append(connection_error)
+        responses.extend(_slack_http_response(429) for _ in range(5))
+    else:
+        responses.extend([_slack_http_response(429), connection_error])
+    delays: list[float] = []
+    connection_delays: list[float] = []
+    monkeypatch.setattr("angee.messaging_integrate_slack.backend.sleep", delays.append)
+    monkeypatch.setattr("slack_sdk.http_retry.handler.time.sleep", connection_delays.append)
+    backend = _backend(monkeypatch, WebClient)
+
+    with pytest.raises(SlackRateLimitError if connection_first else ConnectionResetError):
+        backend.streams()
+    assert len(requests) == (6 if connection_first else 2)
+    assert delays == [60.0] * (4 if connection_first else 1)
+    assert len(connection_delays) == (1 if connection_first else 0)
+
+    responses.extend([_slack_http_response(429), _slack_http_response(200)])
+    assert backend.streams() == ()
+    assert delays[-1] == 60.0
+
+
+def test_retry_deadline_survives_client_access_and_is_restored(
+    monkeypatch: pytest.MonkeyPatch, slack_http: tuple[deque[Exception], list[Request]]
+) -> None:
+    """Reading the client preserves an explicit deadline, which ends with the scope."""
+
+    responses, requests = slack_http
+    responses.append(_slack_http_response(429))
+    delays: list[float] = []
+    monkeypatch.setattr("angee.messaging_integrate_slack.backend.sleep", delays.append)
+    backend = _backend(monkeypatch, WebClient)
+    backend._load_credentials()
+
+    with pytest.raises(SlackRateLimitError, match="time budget exhausted"):
+        with backend._rate_limit_retry.deadline(monotonic() + 1):
+            backend._client_or_create().users_conversations()
+    assert len(requests) == 1
+    assert delays == []
+
+    responses.extend([_slack_http_response(429), _slack_http_response(200)])
+    assert backend._client_or_create().users_conversations()["ok"] is True
+    assert len(requests) == 3
+    assert delays == [60.0]
 
 
 def test_poll_and_live_paths_read_backend_ingest_policy(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,9 +15,8 @@ from jsonschema.exceptions import ValidationError as SchemaValidationError
 from pydantic import BaseModel, ConfigDict, JsonValue, StrictInt, StrictStr, TypeAdapter, field_validator
 from pydantic import ValidationError as PydanticValidationError
 from rebac.resources import model_resource_type
-from referencing import Registry
 from referencing.exceptions import Unresolvable
-from referencing.jsonschema import DRAFT202012
+from referencing.jsonschema import DRAFT202012, EMPTY_REGISTRY
 
 from angee.base.identity import instance_from_public_id
 from angee.base.scoping import read_scoped_queryset
@@ -475,7 +474,7 @@ def validate_decision_resolution(decision: Any, payload: Any, *, actor: Any, ver
     errors: dict[str, list[str]] = {}
     try:
         failures = sorted(
-            json_schema_validator(resolution_schema, registry=Registry()).iter_errors(resolution),
+            json_schema_validator(resolution_schema, registry=EMPTY_REGISTRY).iter_errors(resolution),
             key=lambda item: (tuple(str(part) for part in item.path), item.message),
         )
     except Unresolvable as error:
@@ -574,7 +573,7 @@ def _validate_relation_fields(schema: dict[str, Any], resolution: dict[str, Any]
             json_schema_validator(
                 _decision_validation_schema(schema),
                 validator_class=relation_validator,
-                registry=Registry(),
+                registry=EMPTY_REGISTRY,
             ).iter_errors(resolution)
         )
     except Unresolvable as error:

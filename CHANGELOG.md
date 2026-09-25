@@ -13,11 +13,17 @@ live in code docstrings.
 
 - Runtime JSON Schema formats are now asserted everywhere, including workflow
   inputs and outputs, emitted values, Decision payloads, and extraction evidence.
+- Declare `jsonschema[format-nongpl]` so dependency-backed formats including
+  `date-time`, `uri`, `hostname`, and `duration` are checked as well.
 - Workflow publisher checks query only explicitly requested databases; replay
-  declaration checks remain available without database access. Row-lock helpers
-  now delegate write routing and backend support to Django.
-- Slack rate-limit retries use the SDK retry lifecycle with the existing deadline
-  and sleep cap. Translation fallbacks use native i18next plurals and interpolation.
+  declaration checks remain available without database access. Row-lock callers
+  consistently use `lock_if_supported`, which delegates write routing and backend
+  support to Django.
+- Slack rate-limit retries use the SDK's shared attempt budget, explicit polling
+  deadlines, and the existing sleep cap. Integration HTTP clients expose a
+  transport factory for injected test transports.
+- Translation fallbacks use native i18next plurals and interpolation, including
+  locale-specific zero-count selection unless the fallback declares a zero form.
 
 - Remove write-alias threading and custom `using=` parameters, including the
   `using` payload on `change_published` and `file_finalized`; Django routers own

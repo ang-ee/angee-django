@@ -339,4 +339,25 @@ describe("useNamespaceT", () => {
 
     expect(result.current("item", { count: 3 })).toBe("3 few");
   });
+
+  test("lets the locale choose zero's category unless the bundle declares zero", () => {
+    const fallback = { item_one: "{count} item", item_other: "{count} items" };
+    const i18n = createAngeeI18nInstance({}, "fr");
+    const { result } = renderHook(() => useNamespaceT("fixture", fallback), {
+      wrapper: wrapperFor({ i18n: i18n as RuntimeI18n }),
+    });
+
+    expect(result.current("item", { count: 0 })).toBe("0 item");
+    expect(result.current("item", { count: 2 })).toBe("2 items");
+  });
+
+  test("uses the other default when a locale category is absent from the bundle", () => {
+    const fallback = { item_one: "{count} item", item_other: "{count} items" };
+    const i18n = createAngeeI18nInstance({}, "cs");
+    const { result } = renderHook(() => useNamespaceT("fixture", fallback), {
+      wrapper: wrapperFor({ i18n: i18n as RuntimeI18n }),
+    });
+
+    expect(result.current("item", { count: 3 })).toBe("3 items");
+  });
 });

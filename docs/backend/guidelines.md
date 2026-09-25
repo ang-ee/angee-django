@@ -892,10 +892,10 @@ and current contracts before applying a historical example to a new deployment.
   re-declare the column. The field is NULL-safe by design, because a sqid can be
   selected through a nullable join where `django_sqids.SqidsField` crashes on a
   NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
-- **Row locks must keep the SQLite floor.** The owning queryset/manager's
-  `lock_if_supported()` names lock intent and delegates to native
-  `select_for_update(of=...)`. Django owns write routing and backend feature
-  checks: SQLite emits no lock SQL, including when `of` is requested. Backends
+- **Row locks must keep the SQLite floor.** `angee.base.scoping.lock_if_supported()`
+  names lock intent for both native querysets and the Angee queryset/manager
+  method, delegating to `select_for_update(of=...)`. Django owns write routing
+  and backend feature checks: SQLite emits no lock SQL, including when `of` is requested. Backends
   supporting row locks still enforce their supported lock options. Do not set
   private queryset write state or duplicate Django's feature checks.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes

@@ -418,22 +418,19 @@ export function AttemptRecoveryPanel({ attemptId }: { attemptId: string }): Reac
   }, [attemptId, reset]);
   const startRecovery = async () => {
     requestKey.current ??= crypto.randomUUID();
-    try {
-      const data = await start({
-        sourceAttempt: attemptId,
-        requestKey: requestKey.current,
-        acknowledgeUncertainExternal: Boolean(recovery?.requires_uncertainty_ack && uncertaintyAck),
-        priorRecovery: priorRecovery.trim() || null,
-      });
-      if (currentAttempt.current !== attemptId) return;
-      const result = data?.start_workflow_recovery;
-      if (result?.ok && result.id) {
-        const href = recordHref(RUN_MODEL, result.id);
-        setStarted({ id: result.id, href });
-        if (href) void navigate({ to: href });
-      }
-    } catch {
-      // The mutation state renders transport and domain errors.
+    // The mutation state renders transport and domain errors.
+    const data = await start({
+      sourceAttempt: attemptId,
+      requestKey: requestKey.current,
+      acknowledgeUncertainExternal: Boolean(recovery?.requires_uncertainty_ack && uncertaintyAck),
+      priorRecovery: priorRecovery.trim() || null,
+    }).catch(() => undefined);
+    if (currentAttempt.current !== attemptId) return;
+    const result = data?.start_workflow_recovery;
+    if (result?.ok && result.id) {
+      const href = recordHref(RUN_MODEL, result.id);
+      setStarted({ id: result.id, href });
+      if (href) void navigate({ to: href });
     }
   };
   if ((plan.isFetching && !plan.data) || (repair.isFetching && !repair.data)) return <RunRecoverySkeleton label={t("runs.loading")} />;
