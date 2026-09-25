@@ -11,6 +11,19 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Workflow resource lock planning resolves existing targets and retained ledgers
+  through `AngeeResource.resolve_existing` and the native import-export loader.
+- Root-local JSON Schema references use `referencing` in workflow structural proofs
+  and implementation forms; nested resource scopes remain outside these bounded
+  projections. Core declares its `jsonschema` and `referencing` dependencies.
+- IMAP sample preview fields and validation compose react-hook-form with
+  `DialogForm`; the backend remains the sample-limit authority.
+- CardDAV uses `HttpClient.request(same_origin_redirects=3)` for bounded redirects
+  that retain the request method, body and credentials only on the same origin.
+- Messaging adapters import `mapping`, `millis_to_utc`, `sequence` and `text` from
+  the public owner `angee.messaging.identity`. `_wire` remains private compatibility
+  imports while bridge callers migrate.
+
 - Remove write-alias threading and custom `using=` parameters, including the
   `using` payload on `change_published` and `file_finalized`; Django routers own
   database routing. Frozen migration helpers retain Django's connection alias.
@@ -46,9 +59,9 @@ live in code docstrings.
   schema autodetection can remove indexes previously retained by incorrect
   field serialization. Optional states must declare `null=True, blank=True`;
   concrete models with blank non-null states fail Django's field checks.
-- The public `angee.workflows.engine.deliver_artifact_dispatch` and
-  `cancel_run_dispatch` entrypoints retain their signatures and delegate to
-  `WorkflowDispatch.objects.deliver(...)`.
+- Remove the test-only `angee.workflows.engine.deliver_artifact_dispatch` and
+  `cancel_run_dispatch` forwarders. Call `WorkflowDispatch.objects.deliver(...)`
+  with `expected_kind` and, for cancellation, `expected_target_id`.
 - The integration ownership guard now belongs to its consumer addon. The
   framework no longer supplies `angee.integrate.ownership`; consumers own their
   ownership policy through the declared integration contract.

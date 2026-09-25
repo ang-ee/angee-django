@@ -25,8 +25,13 @@ An unanswered fetch for a UID still present fails instead of silently advancing.
 The frozen `ImapSamplePreviewRequest` carries this contract from the flat
 GraphQL arguments through the model to the backend.
 
-The [web action](web/src/ImportImapSampleAction.tsx) composes
-`useAuthoredKeysetFeed`: native Query pages retain loaded headers, mailbox
+The [web action](web/src/ImportImapSampleAction.tsx) composes `DialogForm` fields
+with React Hook Form for values, validation, and submission. Only a valid submitted
+request reaches `useAuthoredKeysetFeed`; incomplete drafts never become mailbox
+requests. Invalid page sizes show a validation error instead of being clamped.
+The operations expose no sample-limit metadata, so the exported
+`IMAP_SAMPLE_LIMIT` is the frontend's one bound, checked against the backend owner.
+Native Query pages retain loaded headers, mailbox
 identity, and the snapshot count, including when a page is empty. The dialog
 reads those page facts; continuation cursors stay private to the feed adapter. The preview opts out of automatic refetches and
 retries; mailbox probes follow explicit preview and load-older actions. A fresh

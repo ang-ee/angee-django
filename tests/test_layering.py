@@ -7,10 +7,12 @@ import json
 import subprocess
 import sys
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from angee.messaging import _wire, identity
 from angee.workflows_integrate import archive_steps, steps
 from tests.test_base_layering import _module_imports
 
@@ -149,6 +151,29 @@ def test_workflows_integrate_public_archive_extension_imports() -> None:
 
     assert steps.ArchiveExtractor is archive_steps.ArchiveExtractor
     assert steps.ArchiveExecutionReporter is archive_steps.ArchiveExecutionReporter
+
+
+def test_messaging_identity_public_owner() -> None:
+    """Bridge identity adapters have a vendor-free public coercion owner."""
+
+    for name in ("mapping", "millis_to_utc", "sequence", "text"):
+        public = getattr(identity, name)
+        assert public.__module__ == "angee.messaging.identity"
+        assert getattr(_wire, name) is public
+    assert identity.mapping({"id": 1}) == {"id": 1}
+    assert identity.mapping("id") is None
+    assert identity.sequence([1, 2]) == [1, 2]
+    assert identity.sequence("id") == ()
+    assert identity.text("  id  ") == "id"
+    assert identity.millis_to_utc(1000) == datetime(1970, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
+    assert identity.millis_to_utc("invalid") is None
+
+    violations = {
+        str(path.relative_to(PROJECT_ROOT))
+        for path in sorted((PROJECT_ROOT / "addons" / "angee").rglob("*.py"))
+        if "angee.messaging._wire" in _module_imports(path)
+    }
+    assert not violations
 
 
 def test_framework_does_not_import_retired_ownership_owner() -> None:

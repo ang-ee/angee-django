@@ -19,8 +19,9 @@ it permits RFC-1918 / loopback so those connections work, but still rejects the
 SSRF escapes that have no legitimate target either way — cloud metadata (the
 well-known IPs, link-local ``169.254/16``, and the RFC 6598 shared range that
 front metadata services), multicast, and unspecified. Redirects are not followed
-unless ``follow_redirects=True``; each hop re-enters the pinned backend, so
-following stays safe.
+unless requested through native ``follow_redirects`` or the bounded,
+method-preserving ``same_origin_redirects`` policy; each hop re-enters the pinned
+backend.
 """
 
 from __future__ import annotations
@@ -172,7 +173,8 @@ class HttpClient:
     URL, pins via :class:`PinnedTransport`, and dials the validated IP; a DNS rebind
     between check and connect cannot redirect it. A caller-supplied ``Host`` header
     cannot displace the URL's real host. Redirects are followed only when
-    ``follow_redirects=True`` (each hop re-validates).
+    ``follow_redirects=True`` or a positive ``same_origin_redirects`` bound is
+    supplied to ``request`` (each hop re-validates).
     """
 
     def get(
@@ -332,19 +334,41 @@ class HttpClient:
         body: bytes | None = None,
         allow_private: bool = False,
         follow_redirects: bool = False,
+        same_origin_redirects: int = 0,
         timeout: int = HTTP_TIMEOUT_SECONDS,
     ) -> httpx.Response:
         """Send one pinned request to ``url`` and return the response.
 
         Raises ``ValidationError`` when the URL or a resolved address is rejected by
         the SSRF gate, and ``OSError`` when every validated address is unreachable.
+        ``same_origin_redirects`` follows at most that many 301/302/307/308 hops,
+        retaining the method, body and headers. A changed origin is rejected
+        before sending credentials. It is exclusive with native ``follow_redirects``;
+        a missing location or exhausted hop bound returns the redirect response.
         """
 
-        parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
+        if same_origin_redirects < 0 or (same_origin_redirects and follow_redirects):
+            raise ValueError("same_origin_redirects must be nonnegative and exclusive with follow_redirects.")
         with httpx.Client(transport=PinnedTransport(allow_private=allow_private), timeout=timeout) as client:
-            response = client.request(
-                method, url, headers=_without_host(headers), content=body, follow_redirects=follow_redirects
-            )
+            for hop in range(same_origin_redirects + 1):
+                parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
+                response = client.request(
+                    method, url, headers=_without_host(headers), content=body, follow_redirects=follow_redirects
+                )
+                if (
+                    hop == same_origin_redirects
+                    or response.status_code not in {301, 302, 307, 308}
+                    or not response.headers.get("location")
+                    or response.next_request is None
+                ):
+                    break
+                destination = response.next_request.url
+                origin = response.url
+                if (destination.scheme, destination.host, destination.port) != (
+                    origin.scheme, origin.host, origin.port,
+                ):
+                    raise ValidationError("Redirects must retain the request origin.")
+                url = str(destination)
         return response
 
 

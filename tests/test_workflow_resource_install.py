@@ -726,6 +726,8 @@ def test_workflow_adoption_replaces_stale_ledger_without_changing_the_wrong_targ
         target_model=Workflow._meta.label, target_id=public_id_of(wrong),
         content_hash=resource._row_content_hash(group.dataset.dict[0]),
     )
+    with system_context(reason="plan stale workflow ledger replacement"):
+        assert WorkflowDefinitionResource._lock_targets(((group, resource),)) == {wrong.pk, intended.pk}
     result = _load(((group, resource),))
     assert result.updated == 1
     ledger.refresh_from_db()
@@ -734,6 +736,77 @@ def test_workflow_adoption_replaces_stale_ledger_without_changing_the_wrong_targ
     assert ledger.target_id == public_id_of(intended)
     assert wrong.name == "Unrelated"
     assert intended.name == "Updated"
+
+
+def test_existing_resource_resolution_retains_omissions_and_uses_native_loader_without_importing(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """Batch resolution honors the model's identity policy, including retained rows."""
+
+    addon = _addon(tmp_path)
+    groups = _groups(addon)
+    _load(groups)
+    with system_context(reason="prepare model-owned resource identity"):
+        for step in Step.system_queryset():
+            WorkflowResourceLedger.objects.filter(
+                target_model=Step._meta.label, target_id=public_id_of(step),
+            ).update(target_id=step.key)
+    monkeypatch.setattr(Step, "public_id_lookup", classmethod(lambda cls, value: {"key": value}))
+    monkeypatch.setattr(Step, "public_id_value", lambda self: self.key)
+    group, resource = groups[1]
+    group.dataset = tablib.Dataset(*group.dataset[:1], headers=group.dataset.headers)
+    native = resource.get_instance
+    rows = []
+
+    def get_instance(loader: Any, row: Any) -> Any:
+        rows.append(row["_xref"])
+        return native(loader, row)
+
+    def unexpected_import(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Existing-target resolution must not run import hooks.")
+
+    monkeypatch.setattr(resource, "get_instance", get_instance)
+    monkeypatch.setattr(resource, "before_import_row", unexpected_import)
+    monkeypatch.setattr(resource, "after_save_instance", unexpected_import)
+    with system_context(reason="resolve retained workflow facet"):
+        resolved, _references = AngeeResource.resolve_existing(((group.dataset, resource),))
+        assert resolved[(resource, "entry")].instance == Step.system_queryset().get(key="entry")
+        assert resolved[(resource, "alpha")].instance is None
+        assert resolved[(resource, "alpha")].retained_instance == Step.system_queryset().get(key="alpha")
+    assert rows == ["entry"]
+    assert resolved[(resource, "alpha")].ledger == WorkflowResourceLedger.objects.get(xref="alpha")
+    assert WorkflowResourceLedger.objects.count() == 9
+
+
+@pytest.mark.parametrize("new_source_first", [True, False])
+def test_resource_source_move_keeps_each_retained_target_before_adoption(
+    tmp_path: Path, new_source_first: bool,
+) -> None:
+    addon = _addon(tmp_path)
+    old_group, old_resource = _group(addon, Workflow, "resources/install/old.yaml", ())
+    new_group, new_resource = _group(addon, Workflow, "resources/install/new.yaml", (
+        {"_xref": "moved", "key": "intended", "name": "Updated"},
+    ))
+    new_group.entry.adopt = "key"
+    with system_context(reason="prepare retained workflow source move"):
+        retained = Workflow.objects.create(key="retained", name="Retained")
+        intended = Workflow.objects.create(key="intended", name="Intended")
+        ledger = WorkflowResourceLedger.objects.create(
+            source_addon=addon.name, source_path=old_group.entry.source, xref="moved",
+            tier=Resource.Tier.INSTALL, target_model=Workflow._meta.label,
+            target_id=public_id_of(retained), content_hash="",
+        )
+        groups = [(new_group, new_resource), (old_group, old_resource)]
+        if not new_source_first:
+            groups.reverse()
+        resolved, references = AngeeResource.resolve_existing(
+            [(group.dataset, resource) for group, resource in groups], references=[(addon.name, "moved")],
+        )
+        assert resolved[(old_resource, "moved")].instance is None
+        assert resolved[(new_resource, "moved")].instance == intended
+        assert all(row.ledger == ledger and row.retained_instance == retained for row in resolved.values())
+        assert references[(addon.name, "moved")] == intended
+        assert WorkflowDefinitionResource._lock_targets(groups) == {retained.pk, intended.pk}
 
 
 def test_canonical_ledger_hook_runs_once_per_persisted_row_and_never_for_skip(tmp_path: Path, monkeypatch: Any) -> None:
@@ -836,3 +909,30 @@ def test_lock_planning_batches_ledgers_and_targets_independently_of_row_count(
     # Each facet primes its declared and owned ledgers; each target model is read once.
     with system_context(reason="batched workflow lock planning"), django_assert_num_queries(9):
         assert WorkflowDefinitionResource._lock_targets(groups) == {head.pk}
+
+
+@pytest.mark.parametrize("reference_count", [1, 10])
+def test_lock_planning_batches_external_references(
+    tmp_path: Path, django_assert_num_queries: Any, reference_count: int,
+) -> None:
+    addon = _addon(tmp_path)
+    ids = set()
+    rows = []
+    with system_context(reason="prepare external workflow references"):
+        for index in range(reference_count):
+            head = Workflow.objects.create(name=f"Related {index}")
+            ids.add(head.pk)
+            WorkflowResourceLedger.objects.create(
+                source_addon="tests.related_resources", source_path="heads.yaml", xref=f"head_{index}",
+                tier=Resource.Tier.INSTALL, target_model=Workflow._meta.label,
+                target_id=public_id_of(head), content_hash="",
+            )
+            rows.append({
+                "_xref": f"head_{index}", "name": f"Declared {index}",
+                "error_workflow": f"tests.related_resources.head_{index}",
+            })
+    group, resource = _group(addon, Workflow, "resources/install/heads.yaml", tuple(rows))
+    resource.addon_aliases = {**resource.addon_aliases, "tests.related_resources": "tests.related_resources"}
+    # Two facet ledger reads, one related-addon ledger read, one workflow read.
+    with system_context(reason="batch external workflow locks"), django_assert_num_queries(4):
+        assert WorkflowDefinitionResource._lock_targets(((group, resource),)) == ids

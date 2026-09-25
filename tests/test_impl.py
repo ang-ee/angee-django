@@ -736,6 +736,47 @@ def test_typed_config_rejects_unsupported_shapes_with_exact_path(
     assert str(caught.value) == f"UnsupportedImpl.config_model field {field_path!r} uses unsupported schema: {detail}."
 
 
+def test_config_form_spec_resolves_escaped_local_references(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ReferencedConfig(BaseModel):
+        value: str
+
+    schema = ReferencedConfig.model_json_schema()
+    schema["$defs"] = {"Text/~ value": {"type": "string", "minLength": 2}}
+    schema["properties"]["value"] = {"$ref": "#/$defs/Text~1~0%20value", "title": "Value"}
+    monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
+    spec = model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
+
+    assert spec["properties"]["value"] == {
+        "type": "string", "minLength": 2, "label": "Value", "presenceRequired": True,
+    }
+
+
+@pytest.mark.parametrize("reference", ["#/$defs/Missing", "https://example.test/schema"])
+def test_config_form_spec_rejects_unresolved_or_remote_references(
+    reference: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ReferencedConfig(BaseModel):
+        value: str
+
+    schema = ReferencedConfig.model_json_schema()
+    schema["properties"]["value"] = {"$ref": reference}
+    monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
+    with pytest.raises(ImproperlyConfigured, match=r"ReferencedConfig.*config\.value.*reference"):
+        model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
+
+
+def test_config_form_spec_rejects_pointers_into_scoped_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ReferencedConfig(BaseModel):
+        value: str
+
+    schema = ReferencedConfig.model_json_schema()
+    schema["$defs"] = {"Scoped": {"$id": "child", "$defs": {"Value": {"type": "string"}}}}
+    schema["properties"]["value"] = {"$ref": "#/$defs/Scoped/$defs/Value"}
+    monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
+    with pytest.raises(ImproperlyConfigured, match=r"ReferencedConfig.*config\.value.*scoped reference"):
+        model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
+
+
 def test_typed_config_rejects_recursive_models_and_preserves_string_aliases() -> None:
     """References stay finite and one string alias remains the config wire identity."""
 

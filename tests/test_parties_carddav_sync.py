@@ -38,7 +38,15 @@ from angee.integrate.states import (
     StreamKind,
     StreamPhase,
 )
-from angee.integrate.streams import advance_stream, begin_stream_cycle, push_stream, reconcile_stream, sync_bridge
+from angee.integrate.streams import (
+    CursorInvalid,
+    RemoteRejected,
+    advance_stream,
+    begin_stream_cycle,
+    push_stream,
+    reconcile_stream,
+    sync_bridge,
+)
 from angee.parties.backends import (
     CONTACT_FIELDS,
     ParsedAddress,
@@ -1294,20 +1302,44 @@ def test_cross_origin_redirect_refuses_to_forward_basic_auth(
     replica: Replica,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sent: list[tuple[str, dict[str, Any]]] = []
+    sent: list[httpx.Request] = []
 
-    def redirect(method: str, url: str, **kwargs: Any) -> httpx.Response:
-        del method
-        sent.append((url, kwargs))
+    def redirect(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
         return httpx.Response(302, headers={"Location": "https://attacker.example/collect"})
 
-    monkeypatch.setattr(replica.server, "request", redirect)
+    monkeypatch.setattr("angee.integrate.http.PinnedTransport", lambda **_: httpx.MockTransport(redirect))
+    replica.backend.__dict__["http"] = HttpClient()
     monkeypatch.setattr(replica.backend, "_auth", lambda: {"Authorization": "Basic dXNlcjpwYXNz"})
     with pytest.raises(CardDavError):
         replica.backend._request("PROPFIND", _BOOK, "<propfind/>")
     assert len(sent) == 1
-    assert sent[0][0] == _BOOK
-    assert sent[0][1]["headers"]["Authorization"] == "Basic dXNlcjpwYXNz"
+    assert str(sent[0].url) == _BOOK
+    assert sent[0].headers["Authorization"] == "Basic dXNlcjpwYXNz"
+
+
+@pytest.mark.parametrize("status", [207, 412, 404])
+def test_same_origin_redirect_retains_dav_request_and_failure_translation(
+    replica: Replica, monkeypatch: pytest.MonkeyPatch, status: int,
+) -> None:
+    sent: list[httpx.Request] = []
+
+    def redirect(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(302, headers={"Location": "/relocated/"}) if len(sent) == 1 else httpx.Response(status)
+
+    monkeypatch.setattr("angee.integrate.http.PinnedTransport", lambda **_: httpx.MockTransport(redirect))
+    replica.backend.__dict__["http"] = HttpClient()
+    headers = {"If-Match": '"version"'}
+    if status == 207:
+        response = replica.backend._request("REPORT", _BOOK, "<sync/>", depth="1", headers=headers, cursor_request=True)
+        assert response.status_code == 207
+    else:
+        with pytest.raises(RemoteRejected if status == 412 else CursorInvalid):
+            replica.backend._request("REPORT", _BOOK, "<sync/>", depth="1", headers=headers, cursor_request=True)
+    assert [str(request.url) for request in sent] == [_BOOK, f"{_BASE}relocated/"]
+    assert all(request.method == "REPORT" and request.content == b"<sync/>" for request in sent)
+    assert all(request.headers["Depth"] == "1" and request.headers["If-Match"] == '"version"' for request in sent)
 
 
 def test_sync_report_skips_successful_collection_self_response(replica: Replica) -> None:

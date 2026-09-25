@@ -38,6 +38,7 @@ export const enMessagingImapMessages: Record<string, string> = {
   "channel.imap.sample.importSelected": "Import {count} selected",
   "channel.imap.sample.importing": "Importing…",
   "channel.imap.sample.invalidRange": "Choose a mailbox and a valid date window.",
+  "channel.imap.sample.invalidLimit": "Choose a whole number between 1 and {limit} messages per page.",
   "channel.imap.sample.rangeTooLong": "The preview window cannot exceed 366 days.",
   "channel.imap.sample.failed": "The mailbox sample could not be loaded.",
   "channel.imap.sample.subject": "Subject",

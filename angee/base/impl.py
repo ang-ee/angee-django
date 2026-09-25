@@ -24,6 +24,9 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
+from referencing import Registry
+from referencing.exceptions import Unresolvable
+from referencing.jsonschema import DRAFT202012
 
 from angee.base.fields import enum_member_for
 
@@ -104,16 +107,16 @@ _FORM_SPEC_RELATION_VALIDATOR = Draft202012Validator(_FORM_SPEC_RELATION_SCHEMA)
 
 
 class _ConfigFormSpecProjector:
-    """Own the bounded translation from one Pydantic schema into FormSpec."""
+    """Project bounded FormSpec shapes, resolving root-local refs through referencing."""
 
     def __init__(self, model: type[BaseModel], *, owner: str) -> None:
         self.owner = owner
         _validate_config_aliases(model, owner=owner)
-        self.schema = model.model_json_schema(by_alias=True)
-        definitions = self.schema.pop("$defs", {})
-        if not isinstance(definitions, dict):
+        schema = model.model_json_schema(by_alias=True)
+        if not isinstance(schema.get("$defs", {}), dict):
             self._unsupported("config", "$defs")
-        self.definitions = definitions
+        self.resolver = Registry().resolver_with_root(DRAFT202012.create_resource(schema))
+        self.schema = {key: value for key, value in schema.items() if key != "$defs"}
 
     def form_spec(self) -> dict[str, Any]:
         projected = self._project(self.schema, path="config", refs=())
@@ -135,13 +138,17 @@ class _ConfigFormSpecProjector:
         if "$ref" in schema:
             self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"$ref"}, path)
             reference = schema["$ref"]
-            prefix = "#/$defs/"
-            if not isinstance(reference, str) or not reference.startswith(prefix):
+            if not isinstance(reference, str) or not reference.startswith("#"):
                 self._unsupported(path, f"reference {reference!r}")
-            name = reference.removeprefix(prefix)
-            if name in refs:
+            if reference in refs:
                 self._unsupported(path, f"recursive reference {reference!r}")
-            projected = self._project(self.definitions.get(name), path=path, refs=(*refs, name))
+            try:
+                resolved = self.resolver.lookup(reference)
+                if resolved.resolver.lookup("#").contents is not self.resolver.lookup("#").contents:
+                    self._unsupported(path, f"scoped reference {reference!r}")
+            except Unresolvable:
+                self._unsupported(path, f"reference {reference!r}")
+            projected = self._project(resolved.contents, path=path, refs=(*refs, reference))
             projected.pop("label", None)
             return self._metadata(projected, schema)
 

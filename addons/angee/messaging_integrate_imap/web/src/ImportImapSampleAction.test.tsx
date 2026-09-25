@@ -234,12 +234,29 @@ describe("ImportImapSampleAction snapshot selection", () => {
     expect(previewCalls()).toHaveLength(1);
   });
 
-  test("an emptied limit remains at the minimum", async () => {
+  test.each(["", "0", "51", "1.5"])("an invalid limit %s stays editable and cannot start a preview", async (value) => {
     await openDialog();
-    fireEvent.change(screen.getByRole("spinbutton", { name: "Messages per page" }), { target: { value: "" } });
-    expect(screen.getByRole("spinbutton", { name: "Messages per page" }).getAttribute("value")).toBe("1");
+    const input = screen.getByRole("spinbutton", { name: "Messages per page" }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview messages" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Choose a whole number between 1 and 50 messages per page.");
+    expect(input.value).toBe(value);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(previewCalls()).toHaveLength(0);
+    fireEvent.change(input, { target: { value: "1" } });
     await preview();
     expect(previewCalls()[0]?.[0].meta.gqlVariables.limit).toBe(1);
+  });
+
+  test("a blank mailbox blocks submission and a corrected mailbox is trimmed", async () => {
+    await openDialog();
+    fireEvent.change(screen.getByLabelText("Mailbox"), { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview messages" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Choose a mailbox and a valid date window.");
+    expect(previewCalls()).toHaveLength(0);
+    fireEvent.change(screen.getByLabelText("Mailbox"), { target: { value: " Archive " } });
+    await preview();
+    expect(previewCalls()[0]?.[0].meta.gqlVariables.mailbox).toBe("Archive");
   });
 
   test("changing all dates invalidates the preview without querying", async () => {
@@ -260,8 +277,11 @@ describe("ImportImapSampleAction snapshot selection", () => {
     fireEvent.change(screen.getByLabelText("Since"), { target: { value: since } });
     fireEvent.change(screen.getByLabelText("Before"), { target: { value: before } });
     fireEvent.click(screen.getByRole("button", { name: "Preview messages" }));
-    expect(screen.getByRole("alert").textContent).toBe(error);
+    expect((await screen.findByRole("alert")).textContent).toBe(error);
     expect(previewCalls()).toHaveLength(0);
+    fireEvent.click(screen.getByRole("checkbox", { name: "All dates in this mailbox" }));
+    await preview();
+    expect(previewCalls()[0]?.[0].meta.gqlVariables).toMatchObject({ since: null, before: null, allDates: true });
   });
 
   test("focus, reconnect, invalidation and reopening do not implicitly probe a preview", async () => {

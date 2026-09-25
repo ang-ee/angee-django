@@ -348,6 +348,93 @@ def test_publish_proofs_reject_structural_siblings_of_refs_and_unions() -> None:
     assert union.literal_values_at_path([]) is None
 
 
+@pytest.mark.parametrize("reference", ["#/$defs/Result~1~0%20value", "#result", "#/$defs/Alias"])
+@pytest.mark.parametrize("root_id", [{}, {"$id": "https://schema.example/root"}])
+def test_local_references_preserve_catalogue_and_structural_proofs(reference: str, root_id: dict[str, str]) -> None:
+    contract = schema_data_contract(
+        {
+            **root_id,
+            "$defs": {
+                "Result/~ value": {
+                    "$anchor": "result",
+                    "type": "object",
+                    "required": ["status", "amount", "label"],
+                    "properties": {
+                        "status": {"type": "string", "const": "accepted"},
+                        "amount": {"type": "integer", "minimum": 2, "exclusiveMaximum": 7},
+                        "label": {"type": "string", "minLength": 1, "maxLength": 8},
+                    },
+                },
+                "Alias": {"$ref": "#/$defs/Result~1~0%20value"},
+            },
+            "$ref": reference,
+        }
+    )
+
+    for field in ("status", "amount", "label"):
+        assert contract.matches_path([field])
+        assert contract.guarantees_path([field])
+    assert contract.literal_values_at_path(["status"]) == ("accepted",)
+    assert contract.numeric_ranges_at_path(["amount"]) == ((2, False, 7, True),)
+    assert contract.string_length_ranges_at_path(["label"]) == ((1, 8),)
+
+
+@pytest.mark.parametrize("location", ["nested", "reference", "pointer"])
+def test_scoped_references_never_prove_against_the_outer_document(location: str) -> None:
+    scoped = {
+        "$id": "child",
+        "$defs": {"Value": {"type": "integer", "const": 7, "minimum": 7}},
+        "type": "object",
+        "required": ["value"],
+        "properties": {"value": {"$ref": "#/$defs/Value"}},
+    }
+    schema = {
+        "$id": "https://schema.example/root",
+        "$defs": {"Value": {"type": "string", "const": "outer", "minLength": 1, "maxLength": 5}},
+    }
+    if location == "nested":
+        schema.update(type="object", required=["child"], properties={"child": scoped})
+        path = ["child", "value"]
+    else:
+        schema["$defs"]["Scoped"] = scoped
+        schema["$ref"] = "#/$defs/Scoped" + ("/properties/value" if location == "pointer" else "")
+        path = [] if location == "pointer" else ["value"]
+    contract = schema_data_contract(schema)
+
+    node = contract.catalogue.at_path(path)
+    assert node is None or node.kind == "unknown"
+    assert not contract.guarantees_path(path)
+    assert contract.literal_values_at_path(path) is None
+    assert contract.numeric_ranges_at_path(path) is None
+    assert contract.string_length_ranges_at_path(path) is None
+
+
+def test_root_resource_identity_is_retained_across_shape_projection() -> None:
+    shape = {
+        "$id": "https://schema.example/root",
+        "type": "object",
+        "required": ["value"],
+        "properties": {"value": {"type": "string", "const": "accepted"}},
+    }
+    nullable = schema_data_contract({**shape, "type": ["object", "null"]})
+    assert nullable.matches_path(["value"])
+    assert nullable.catalogue.nullable
+    union = schema_data_contract({**shape, "anyOf": [{"type": "object"}, {"type": "object"}]})
+    assert union.guarantees_path(["value"])
+    assert union.literal_values_at_path(["value"]) == ("accepted",)
+
+
+@pytest.mark.parametrize("reference", ["#/$defs/Missing", "#missing", "#/$defs/Cycle", "#", "https://example.test"])
+def test_unresolved_or_recursive_references_leave_proofs_unknown(reference: str) -> None:
+    contract = schema_data_contract({"$defs": {"Cycle": {"$ref": "#/$defs/Cycle"}}, "$ref": reference})
+
+    assert contract.catalogue.kind == "unknown"
+    assert not contract.guarantees_path([])
+    assert contract.literal_values_at_path([]) is None
+    assert contract.numeric_ranges_at_path([]) is None
+    assert contract.string_length_ranges_at_path([]) is None
+
+
 def test_publish_proofs_accept_builder_base_schema_intersected_with_every_action_branch() -> None:
     authored = build_decision_action(
         actions=(

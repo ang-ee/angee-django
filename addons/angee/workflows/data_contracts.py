@@ -3,7 +3,7 @@
 JSON Schema's validators check concrete instances; workflow publication must
 also prove that a binding path exists for every value a producer can emit.
 This analyser supplies that conservative static check over supported shapes,
-while jsonschema owns declaration and runtime instance validation.
+while jsonschema owns validation and referencing resolves local references.
 """
 
 from __future__ import annotations
@@ -14,6 +14,9 @@ from typing import Annotated, Any, Literal, Mapping, Sequence, TypeAlias, cast
 from django.core.exceptions import ValidationError
 from jsonschema import Draft202012Validator
 from pydantic import AfterValidator, BaseModel, Field
+from referencing import Registry
+from referencing.exceptions import Unresolvable
+from referencing.jsonschema import DRAFT202012
 
 SchemaMode: TypeAlias = Literal["validation", "serialization"]
 ConcretePath: TypeAlias = Sequence[str | int]
@@ -275,22 +278,26 @@ def _supported_node(
     root: Mapping[str, Any],
     active_refs: frozenset[str],
 ) -> _SupportedSchemaNode | None:
-    """Resolve local refs and admit only the structural vocabulary proofs handle."""
+    """Resolve root-local refs and admit only the structural vocabulary proofs handle."""
 
-    if not isinstance(schema, Mapping):
+    if not isinstance(schema, Mapping) or "$id" in schema and schema is not root:
         return None
     reference = schema.get("$ref")
     if reference is not None:
         if (
             not isinstance(reference, str)
             or reference in active_refs
-            or not reference.startswith("#/$defs/")
+            or not reference.startswith("#")
             or _has_unsupported_structure(schema, allowed={"$ref"})
         ):
             return None
-        definitions = root.get("$defs", {})
-        target = definitions.get(reference.removeprefix("#/$defs/")) if isinstance(definitions, Mapping) else None
-        return _supported_node(target, root, active_refs | {reference})
+        try:
+            resolved = Registry().resolver_with_root(DRAFT202012.create_resource(root)).lookup(reference)
+            if resolved.resolver.lookup("#").contents is not root:
+                return None
+        except Unresolvable:
+            return None
+        return _supported_node(resolved.contents, root, active_refs | {reference})
 
     one_of = schema.get("oneOf")
     any_of = schema.get("anyOf")
@@ -299,7 +306,7 @@ def _supported_node(
             return None
         key = "oneOf" if one_of is not None else "anyOf"
         variants = one_of if one_of is not None else any_of
-        base = {name: value for name, value in schema.items() if name != key}
+        base = {name: value for name, value in schema.items() if name not in {key, "$id"}}
         if not isinstance(variants, list) or not variants or _has_unsupported_plain_structure(base):
             return None
         return _SupportedSchemaNode(base, tuple(variants), active_refs)
@@ -495,14 +502,11 @@ def _string_length_ranges_at_path(
 
 
 class _CatalogueProjector:
-    """Project refs, unions, objects, and homogeneous arrays; stop at other structural vocabulary."""
+    """Project root-local refs and bounded shapes; nested resources remain unknown."""
 
     def __init__(self, schema: dict[str, Any]) -> None:
         self.schema = schema
-        definitions = schema.get("$defs", {})
-        self.references = (
-            {f"#/$defs/{key}": value for key, value in definitions.items()} if isinstance(definitions, dict) else {}
-        )
+        self.resolver = Registry().resolver_with_root(DRAFT202012.create_resource(schema))
 
     def project(self) -> DataContractNode:
         return self._project(self.schema, active_refs=frozenset())
@@ -510,19 +514,25 @@ class _CatalogueProjector:
     def _project(self, schema: Any, *, active_refs: frozenset[str]) -> DataContractNode:
         if not isinstance(schema, Mapping):
             return _UNKNOWN
+        if "$id" in schema and schema is not self.schema:
+            return _with_metadata(_UNKNOWN, schema)
 
         reference = schema.get("$ref")
         if reference is not None:
             if (
                 not isinstance(reference, str)
                 or reference in active_refs
+                or not reference.startswith("#")
                 or _has_unsupported_structure(schema, allowed={"$ref", "$defs"})
             ):
                 return _with_metadata(_UNKNOWN, schema)
-            target = self.references.get(reference)
-            if target is None:
+            try:
+                resolved = self.resolver.lookup(reference)
+                if resolved.resolver.lookup("#").contents is not self.schema:
+                    return _with_metadata(_UNKNOWN, schema)
+            except Unresolvable:
                 return _with_metadata(_UNKNOWN, schema)
-            return _with_metadata(self._project(target, active_refs=active_refs | {reference}), schema)
+            return _with_metadata(self._project(resolved.contents, active_refs=active_refs | {reference}), schema)
 
         union = schema.get("anyOf", schema.get("oneOf"))
         if union is not None:
@@ -550,7 +560,9 @@ class _CatalogueProjector:
             concrete = [value for value in schema_type if value != "null"]
             if len(concrete) != 1 or not all(isinstance(value, str) for value in schema_type):
                 return _with_metadata(_UNKNOWN, schema)
-            projected = self._project({**schema, "type": concrete[0]}, active_refs=active_refs)
+            concrete_schema = {key: value for key, value in schema.items() if key != "$id"}
+            concrete_schema["type"] = concrete[0]
+            projected = self._project(concrete_schema, active_refs=active_refs)
             return _with_nullable(projected, "null" in schema_type)
 
         if schema_type == "object":

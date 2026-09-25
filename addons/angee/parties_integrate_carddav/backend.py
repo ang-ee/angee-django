@@ -26,6 +26,7 @@ from xml.sax.saxutils import escape
 import vobject
 from defusedxml import ElementTree
 from django.apps import apps
+from django.core.exceptions import ValidationError
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.states import LinkStatus
@@ -46,7 +47,6 @@ _NS = {
 }
 _MULTIGET_CHUNK = 100
 _PHOTO_CAP = 5 * 1024 * 1024
-_REDIRECT_STATUSES = (301, 302, 307, 308)
 # vCard's reserved year for a birthday/anniversary whose year is omitted (``--MMDD``).
 _NO_YEAR_SENTINEL = 1604
 
@@ -294,7 +294,6 @@ class CardDavDirectoryBackend(DirectoryBackend):
         depth: str = "0",
         headers: dict[str, str] | None = None,
         cursor_request: bool = False,
-        _hops: int = 0,
     ) -> Any:
         """Send DAV through the pinned client and translate conditional failures."""
 
@@ -304,24 +303,17 @@ class CardDavDirectoryBackend(DirectoryBackend):
             **self._auth(),
             **(headers or {}),
         }
-        response = self.http.request(
-            method, url, headers=request_headers, body=body.encode("utf-8"), allow_private=True
-        )
-        if response.status_code in _REDIRECT_STATUSES and _hops < 3:
-            location = response.headers.get("location", "")
-            if location:
-                destination = urljoin(url, location)
-                if _origin(destination) != _origin(url):
-                    raise CardDavError("CardDAV redirects must retain the request origin.")
-                return self._request(
-                    method,
-                    destination,
-                    body,
-                    depth=depth,
-                    headers=headers,
-                    cursor_request=cursor_request,
-                    _hops=_hops + 1,
-                )
+        try:
+            response = self.http.request(
+                method,
+                url,
+                headers=request_headers,
+                body=body.encode("utf-8"),
+                allow_private=True,
+                same_origin_redirects=3,
+            )
+        except ValidationError as error:
+            raise CardDavError("The CardDAV request URL or redirect was rejected.") from error
         if response.status_code == 412:
             raise RemoteRejected()
         if cursor_request:

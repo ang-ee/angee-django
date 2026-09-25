@@ -18,7 +18,8 @@
     "@angee/integrate": "workspace:*",
     "@angee/messaging": "workspace:*",
     "@angee/refine": "workspace:*",
-    "@angee/ui": "workspace:*"
+    "@angee/ui": "workspace:*",
+    "react-hook-form": "^7.81.0"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",
