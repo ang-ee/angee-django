@@ -187,6 +187,9 @@ importers:
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
 
   addons/angee/iam/web:
     dependencies:
@@ -294,9 +297,6 @@ importers:
       lucide-react:
         specifier: ^1.21.0
         version: 1.24.0(react@19.2.7)
-      use-debounce:
-        specifier: ^10.1.1
-        version: 10.1.1(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
         specifier: ^1.170.16
@@ -514,6 +514,9 @@ importers:
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
+      react-hook-form:
+        specifier: ^7.81.0
+        version: 7.81.0(react@19.2.7)
     devDependencies:
       '@tanstack/react-router':
         specifier: ^1.170.16
@@ -1725,9 +1728,6 @@ importers:
         specifier: ^1.4.0
         version: 1.4.2(typescript@6.0.3)
     devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.16
-        version: 1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/react':
         specifier: ^16.1.0
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -2278,6 +2278,9 @@ importers:
       graphql-tag:
         specifier: ^2.12.6
         version: 2.12.7(graphql@16.14.2)
+      i18next:
+        specifier: ^26.3.2
+        version: 26.3.6(typescript@6.0.3)
       lucide-react:
         specifier: ^1.21.0
         version: 1.24.0(react@19.2.7)
@@ -2290,9 +2293,6 @@ importers:
       react-hook-form:
         specifier: ^7.81.0
         version: 7.81.0(react@19.2.7)
-      react-json-view-lite:
-        specifier: ^2.5.0
-        version: 2.5.0(react@19.2.7)
       react-markdown:
         specifier: ^10.1.0
         version: 10.1.0(@types/react@19.2.17)(react@19.2.7)
@@ -6599,12 +6599,6 @@ packages:
 
   react-is@17.0.2:
     resolution: {integrity: sha512-w2GsyukL62IJnlaff/nRegPQR94C/XXamvMWmSHRJ4y7Ts/4ocGRmTHvOs8PSE6pB3dWOrD/nueuU5sduBsQ4w==}
-
-  react-json-view-lite@2.5.0:
-    resolution: {integrity: sha512-tk7o7QG9oYyELWHL8xiMQ8x4WzjCzbWNyig3uexmkLb54r8jO0yH3WCWx8UZS0c49eSA4QUmG5caiRJ8fAn58g==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      react: ^18.0.0 || ^19.0.0
 
   react-markdown@10.1.0:
     resolution: {integrity: sha512-qKxVopLT/TyA6BX3Ue5NwabOsAzm0Q7kAPwq6L+wWDwisYs7R8vZ0nRXqq6rkueboxpkjvLGU9fWifiX/ZZFxQ==}
@@ -11994,10 +11988,6 @@ snapshots:
       react: 19.2.7
 
   react-is@17.0.2: {}
-
-  react-json-view-lite@2.5.0(react@19.2.7):
-    dependencies:
-      react: 19.2.7
 
   react-markdown@10.1.0(@types/react@19.2.17)(react@19.2.7):
     dependencies:
