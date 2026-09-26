@@ -301,7 +301,7 @@ export const InboxMessage = graphql(`
         ...InboxMessageFields
         thread {
           id
-          display_name
+          conversation_label
         }
         received_at
         external_id
@@ -387,7 +387,7 @@ export const InboxTranscriptMatches = graphql(`
     ) {
       thread {
         id
-        display_name
+        conversation_label
       }
       count
       total

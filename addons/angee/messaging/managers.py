@@ -564,26 +564,33 @@ class ThreadQuerySet(AngeeQuerySet[Any]):
 
         An untitled direct thread names its counterpart; an untitled group names
         up to two people and counts the rest ("Anna, Tim +4"). People are the
-        actor-readable senders of inbound messages, most active first: outbound
-        messages are the account holder's own, whichever handle sent them.
-        Evaluate on a bounded page of threads.
+        actor-readable senders of inbound messages other than the actor's own
+        identity, most active first: outbound messages are the account holder's,
+        whichever handle sent them. A thread with no known people labels as
+        ``""`` so clients apply their own translated fallback. Evaluate on a
+        bounded page of threads; each call costs a fixed number of queries.
         """
 
         rows = list(self.order_by().values_list("pk", "modality", "title__text"))
         labels = {pk: str(title or "").strip() for pk, _, title in rows}
-        untitled = {pk: str(modality) for pk, modality, _ in rows if not labels[pk]}
+        untitled = {pk: modality for pk, modality, _ in rows if not labels[pk]}
         actor = self.actor() or current_actor()
         people: dict[Any, list[str]] = {pk: [] for pk in untitled}
         if untitled and actor is not None:
-            handles = apps.get_model("parties", "Handle").objects.with_actor(actor).with_sender_name()
-            activity = (
-                apps.get_model("messaging", "Participant")
+            handles = (
+                apps.get_model("parties", "Handle")
                 .objects.with_actor(actor)
+                .with_sender_name()
+                .excluding_identity_of(actor_user_id(actor))
+            )
+            participant_model = apps.get_model("messaging", "Participant")
+            activity = (
+                participant_model.objects.with_actor(actor)
                 .scoped_for_aggregate()
                 .filter(
                     thread_id__in=list(untitled),
-                    role="from",
-                    message__direction="inbound",
+                    role=participant_model.ParticipantRole.FROM,
+                    message__direction=apps.get_model("messaging", "Message").Direction.INBOUND,
                     handle_id__in=models.Subquery(handles.values("pk")),
                 )
                 .order_by()
@@ -601,15 +608,11 @@ class ThreadQuerySet(AngeeQuerySet[Any]):
                     people[thread_id].append(name)
         for pk, modality in untitled.items():
             present = people[pk]
-            if modality == "direct":
-                labels[pk] = present[0] if present else "Direct message"
-            elif modality == "group" and present:
+            if modality == self.model.Modality.DIRECT and present:
+                labels[pk] = present[0]
+            elif modality == self.model.Modality.GROUP and present:
                 shown = ", ".join(present[:2])
                 labels[pk] = f"{shown} +{len(present) - 2}" if len(present) > 2 else shown
-            elif modality == "group":
-                labels[pk] = "Group chat"
-            else:
-                labels[pk] = "Conversation"
         return labels
 
 
@@ -622,23 +625,49 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 
         return f"chat:{channel.pk if channel is not None else ''}:"
 
+    def name_untitled(self, names: Mapping[Any, str], *, owner_id: Any = None) -> int:
+        """Title threads that have none from source names; never rename one.
+
+        ``names`` maps thread pks to names. Each row is re-read under its lock, so
+        a title set concurrently (a racing ingest) always wins. Returns the number
+        of threads named.
+        """
+
+        fragment_model = apps.get_model("messaging", "Fragment")
+        named = 0
+        for pk, name in names.items():
+            text = str(name or "").strip()
+            if not text:
+                continue
+            with transaction.atomic():
+                thread = (
+                    self.sudo(reason="messaging.thread.name_untitled")
+                    .lock_if_supported()
+                    .filter(pk=pk, title__isnull=True)
+                    .first()
+                )
+                if thread is None:
+                    continue
+                thread.title_id = fragment_model.objects.upsert(text=text, owner_id=owner_id).pk
+                thread.save(update_fields=["title"])
+                named += 1
+        return named
+
     def fill_chat_titles(self, channel: Any, titles: Mapping[str, str], *, owner_id: Any = None) -> int:
         """Name a channel's untitled chat threads from source conversation names.
 
         ``titles`` maps a source conversation id (the ``ParsedThread.external_id``)
-        to its name. Only untitled threads change; an existing title is never
-        replaced, matching :meth:`resolve`. Returns the number of threads named.
+        to its name; see :meth:`name_untitled`.
         """
 
         prefix = self.chat_key_prefix(channel)
-        names = {f"{prefix}{key}": str(name).strip() for key, name in titles.items() if str(name).strip()}
-        fragment_model = apps.get_model("messaging", "Fragment")
-        named = 0
-        for thread in self.model._base_manager.filter(external_id__in=list(names), title__isnull=True):
-            thread.title_id = fragment_model.objects.upsert(text=names[thread.external_id], owner_id=owner_id).pk
-            thread.save(update_fields=["title"])
-            named += 1
-        return named
+        wanted = {f"{prefix}{key}": name for key, name in titles.items()}
+        untitled = (
+            self.sudo(reason="messaging.thread.fill_chat_titles")
+            .filter(channel_id=channel.pk, title__isnull=True, external_id__in=list(wanted))
+            .values_list("pk", "external_id")
+        )
+        return self.name_untitled({pk: wanted[external_id] for pk, external_id in untitled}, owner_id=owner_id)
 
     def resolve(
         self,
@@ -706,11 +735,12 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     "created_by_id": owner_id,
                 },
             )
-            if title is not None and named.title_id is None:
-                # Sources may learn a conversation's name after its first message
-                # (a group subject); fill an untitled thread, never rename one.
-                named.title_id = title.pk
-                named.save(update_fields=["title"])
+            # Sources may learn a conversation's name after its first message (a
+            # group subject); fill an untitled thread, never rename one.
+            if title is not None and named.title_id is None and self.name_untitled(
+                {named.pk: thread.title}, owner_id=owner_id
+            ):
+                named.refresh_from_db(fields=["title"])
             return named
         message_model = apps.get_model("messaging", "Message")
         if in_reply_to:

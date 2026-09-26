@@ -153,7 +153,7 @@ def test_subscription_renews_its_group_lease_and_releases_it_on_close(monkeypatc
         with contextlib.suppress(asyncio.CancelledError):
             await pending
         await stream.aclose()
-        renewals = [task for task in asyncio.all_tasks() if "renew_lease" in repr(task.get_coro())]
+        renewals = [task for task in asyncio.all_tasks() if task.get_name().startswith("angee-change-lease:")]
         return joined, renewed, dict(layer.groups.get(group, {})), len(renewals)
 
     joined, renewed, remaining, renewals = asyncio.run(scenario())
