@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -125,7 +126,7 @@ async def _subscribe(
             except Exception:
                 logger.warning("Renewing the %s change subscription failed.", group, exc_info=True)
 
-    renewal = asyncio.create_task(renew_lease())
+    renewal = asyncio.create_task(renew_lease(), name=f"angee-change-lease:{group}")
     try:
         while True:
             message = await layer.receive(channel)
@@ -133,5 +134,8 @@ async def _subscribe(
             if payload:
                 yield ChangePayload.from_mapping(payload)
     finally:
+        # Stop renewing before leaving, so an in-flight renewal cannot re-add.
         renewal.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await renewal
         await layer.group_discard(group, channel)

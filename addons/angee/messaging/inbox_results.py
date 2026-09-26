@@ -269,7 +269,7 @@ class InboxConversationGroups(InboxGroups):
             rows.append(replace(
                 row,
                 value=f"{kind}:{owner.public_id_from_pk(abs(key))}",
-                label=titles.get(key, "Conversation") if key > 0 else "Standalone message",
+                label=titles.get(key, "") if key > 0 else "Standalone message",
             ))
         return replace(result, rows=rows)
 

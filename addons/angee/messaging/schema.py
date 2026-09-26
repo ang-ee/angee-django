@@ -585,17 +585,28 @@ class RecordMessageType(AngeeNode):
 class ThreadType(AngeeNode):
     """GraphQL projection of a thread."""
 
-    @strawberry_django.field(
-        only=["title__text", "modality"],
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        only=["title__text"],
         select_related=["title"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )
-    def display_name(self) -> str:
-        """The thread title, else the people in the conversation for this viewer."""
+
+    @strawberry_django.field(
+        only=["title__text", "modality"],
+        select_related=["title"],
+        description=(
+            "The thread title, else the people in the conversation for this viewer; empty when "
+            "neither is known. An untitled thread costs a few queries: select it on single "
+            "threads, never per row of a list."
+        ),
+    )
+    def conversation_label(self) -> str:
+        """Resolve one thread's label through :meth:`ThreadQuerySet.conversation_labels`."""
 
         thread = cast(Any, self)
         title = thread.title.text.strip() if thread.title_id else ""
-        return title or Thread.objects.filter(pk=thread.pk).conversation_labels().get(thread.pk, str(thread))
+        return title or Thread.objects.filter(pk=thread.pk).conversation_labels().get(thread.pk, "")
 
     platform: auto
     modality: auto

@@ -277,8 +277,9 @@ def test_message_group_totals_span_pages_and_conversation_titles_remain_exact():
                 assert (result.count, result.record_count, result.message_count) == (count, 4, 4)
             assert sum(row.message_count for row in groups.page().rows) == 4
         conversations = results.groups("conversation").page()
+        # An untitled thread with no known people is unlabelled; clients translate it.
         assert [row.label for row in conversations.rows] == [
-            "Standalone message", "Conversation", "A document conversation",
+            "Standalone message", "", "A document conversation",
         ]
         assert [row.message_count for row in conversations.rows] == [1, 1, 2]
 

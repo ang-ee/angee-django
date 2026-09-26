@@ -3508,5 +3508,5 @@ def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any)
         f"chat:{scope}:dm-sofia": "Sofia",
         f"chat:{scope}:room-1": "Anna, Tim +2",
         f"chat:{scope}:room-2": "Weekend plans",
-        f"chat:{scope}:dm-silent": "Direct message",
+        f"chat:{scope}:dm-silent": "",
     }

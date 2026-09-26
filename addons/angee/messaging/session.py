@@ -58,9 +58,13 @@ class LiveChannelSession(LiveSession):
         if kind == "messages":
             return self._ingest(payload)
         if kind == "chat_titles":
-            apps.get_model("messaging", "Thread").objects.fill_chat_titles(
-                self.bridge, payload, owner_id=self.bridge.owner_id
-            )
+            try:
+                apps.get_model("messaging", "Thread").objects.fill_chat_titles(
+                    self.bridge, payload, owner_id=self.bridge.owner_id
+                )
+            except Exception:
+                # Best-effort naming must never end the live session.
+                logger.exception("Naming chats failed for channel %s.", self.bridge.pk)
         return self._still_wanted()
 
     def _ingest(self, batch: list[tuple[Any, Any]]) -> bool:

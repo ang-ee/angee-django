@@ -141,7 +141,9 @@ export function InboxResultsPane({
                       }
                     >
                       <Glyph name="comments" />
-                      <span className="truncate">{label}</span>
+                      <span className="truncate">
+                        {label || t("inbox.conversation")}
+                      </span>
                       <Glyph name="chevron-right" />
                     </Button>
                   ) : (

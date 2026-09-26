@@ -190,14 +190,17 @@ function NavigatorRow({
   row: InboxNavigatorRow;
   selected: boolean;
 }) {
+  const t = useNexusT();
+  // Untitled conversations with no known people arrive unlabelled.
+  const label = row.label || t("inbox.conversation");
   return (
     <div
       className={`flex min-w-0 items-start gap-2 py-2 ${selected ? "text-brand" : ""}`}
     >
-      <Avatar size="sm" initials={avatarInitials(row.label)} />
+      <Avatar size="sm" initials={avatarInitials(label)} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{row.label}</span>
+          <span className="truncate font-medium">{label}</span>
           <Tag className="ml-auto">{row.count}</Tag>
         </div>
         {row.handle ? (
