@@ -75,7 +75,15 @@ def applies(project_state: ProjectState) -> bool:
     return False
 
 
+def _check_constraints_now(schema_editor):
+    # PostgreSQL rejects the later ALTER TABLE while row updates leave deferred
+    # constraint trigger events pending in this migration's transaction.
+    if schema_editor.connection.vendor == "postgresql":
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
 def forwards(apps, schema_editor):
+    _check_constraints_now(schema_editor)
     # A literal expression bypasses StateField's '' -> None value preparation.
     empty = models.Value("", output_field=models.CharField())
     for model_name, field_name in STATE_FIELDS:
@@ -84,6 +92,7 @@ def forwards(apps, schema_editor):
 
 
 def backwards(apps, schema_editor):
+    _check_constraints_now(schema_editor)
     empty = models.Value("", output_field=models.CharField())
     for model_name, field_name in STATE_FIELDS:
         rows = apps.get_model("workflows", model_name)._base_manager.using(schema_editor.connection.alias)

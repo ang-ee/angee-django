@@ -16,3 +16,5 @@ dependencies = [
 name = "optional_states_nullable"
 app_label = "workflows"
 module = "runtime_migrations.optional_states_nullable"
+# Released body without the PostgreSQL constraint-timing fix.
+compatible_source_sha256 = ["74fc0385202f7f51c7e54c432a9f30bdf89c03cd0f5099dc6cf5eb050d0a7e3c"]

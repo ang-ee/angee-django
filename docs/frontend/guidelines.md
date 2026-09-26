@@ -492,7 +492,12 @@ history uses native Query pages with domain-owned
   refetch loop. Opt a model into live cross-actor refresh by declaring
   `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
   invalidate through refine mutations, and subscription pushes invalidate the
-  affected refine resources. Stream foreign-system state (e.g. the operator
+  affected refine resources. Authored reads receive pushes through the
+  [live coalescer](../packages/refine/src/query-invalidation.ts): a change
+  cancels matching in-flight requests at once and one refetch per burst follows
+  within the max wait, so declare each read's `models` from the owners its
+  resolver actually reads. Refine's own resource hooks still invalidate per
+  push. Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`/`onServiceLogs`) over its own subscriptions.
   A timed `setInterval` is only ever for non-data UI motion (a carousel) or
   rotating a short-lived credential before it expires — never to re-read a

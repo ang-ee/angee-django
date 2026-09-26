@@ -1,11 +1,13 @@
 import { InfiniteQueryObserver, isCancelledError, QueryClient, QueryObserver } from "@tanstack/react-query";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import {
   authoredQueryReadsChange,
+  createAuthoredLiveInvalidation,
   invalidateAuthoredQueries,
-  invalidateAuthoredQueriesForChange,
 } from "./query-invalidation";
+
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 function pending<T>() {
   let resolve!: (value: T) => void;
@@ -44,16 +46,20 @@ test("an unrelated row event does not starve an exact record's pending first req
       return Promise.resolve(requests);
     },
   };
+  vi.useFakeTimers();
+  const live = createAuthoredLiveInvalidation(cache);
   const observer = new QueryObserver(cache, options);
   const unsubscribe = observer.subscribe(() => undefined);
   try {
-    await invalidateAuthoredQueriesForChange(cache, "workflows.Decision", "wdc_other");
+    live.push({ model: "workflows.Decision", id: "wdc_other" });
+    await vi.advanceTimersByTimeAsync(300);
     expect(requests).toBe(1);
     expect(firstSignal.aborted).toBe(false);
-    await invalidateAuthoredQueriesForChange(cache, "workflows.Decision", "wdc_current");
+    live.push({ model: "workflows.Decision", id: "wdc_current" });
+    await vi.advanceTimersByTimeAsync(300);
     expect(requests).toBe(2);
     expect(firstSignal.aborted).toBe(true);
-    expect(observer.getCurrentResult().data).toBe(2);
+    await vi.waitFor(() => expect(observer.getCurrentResult().data).toBe(2));
   } finally {
     first.resolve(1);
     unsubscribe(); cache.clear();
@@ -80,22 +86,26 @@ test("a related child refreshes an exact parent without unrelated-child starvati
       return Promise.resolve(requests);
     },
   };
+  vi.useFakeTimers();
+  const live = createAuthoredLiveInvalidation(cache);
   const observer = new QueryObserver(cache, options);
   const unsubscribe = observer.subscribe(() => undefined);
   try {
-    await invalidateAuthoredQueriesForChange(
-      cache, "workflows.StepRun", "wsr_other",
-      [{ model: "workflows.WorkflowRun", id: "wfr_other" }],
-    );
+    live.push({
+      model: "workflows.StepRun", id: "wsr_other",
+      relatedRecords: [{ model: "workflows.WorkflowRun", id: "wfr_other" }],
+    });
+    await vi.advanceTimersByTimeAsync(300);
     expect(requests).toBe(1);
     expect(firstSignal.aborted).toBe(false);
-    await invalidateAuthoredQueriesForChange(
-      cache, "workflows.StepRun", "wsr_child",
-      [{ model: "workflows.WorkflowRun", id: "wfr_current" }],
-    );
+    live.push({
+      model: "workflows.StepRun", id: "wsr_child",
+      relatedRecords: [{ model: "workflows.WorkflowRun", id: "wfr_current" }],
+    });
+    await vi.advanceTimersByTimeAsync(300);
     expect(requests).toBe(2);
     expect(firstSignal.aborted).toBe(true);
-    expect(observer.getCurrentResult().data).toBe(2);
+    await vi.waitFor(() => expect(observer.getCurrentResult().data).toBe(2));
   } finally {
     first.resolve(1);
     unsubscribe(); cache.clear();
@@ -237,6 +247,95 @@ test("successive events cancel a retained infinite refresh and commit the latest
     expect(observer.getCurrentResult().data?.pages.flatMap((page) => page.rows)).toEqual(["current-0", "current-1"]);
   } finally {
     old.resolve({ rows: [], next: undefined });
+    unsubscribe(); cache.clear();
+  }
+});
+
+test("a burst of row changes refetches each affected read once and leaves unrelated reads alone", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const live = createAuthoredLiveInvalidation(cache);
+  const counts = { inbox: 0, accounts: 0 };
+  const inbox = new QueryObserver(cache, {
+    queryKey: ["inbox"], meta: { angeeModels: ["messaging.Message", "messaging.Part"] },
+    queryFn: async () => ++counts.inbox,
+  });
+  const accounts = new QueryObserver(cache, {
+    queryKey: ["accounts"], meta: { angeeModels: ["integrate.Integration"] },
+    queryFn: async () => ++counts.accounts,
+  });
+  const stop = [inbox.subscribe(() => undefined), accounts.subscribe(() => undefined)];
+  try {
+    await vi.waitFor(() => expect(counts).toEqual({ inbox: 1, accounts: 1 }));
+    for (let message = 0; message < 20; message++) {
+      live.push({ model: "messaging.Message", id: `msg_${message}` });
+      live.push({ model: "messaging.Part", id: `prt_${message}`, relatedRecords: [{ model: "messaging.Message", id: `msg_${message}` }] });
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    expect(counts.inbox).toBe(1);
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(counts.inbox).toBe(2));
+    expect(counts.accounts).toBe(1);
+  } finally {
+    stop.forEach((unsubscribe) => unsubscribe()); cache.clear();
+  }
+});
+
+test("a continuous change stream still flushes within the max wait", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const live = createAuthoredLiveInvalidation(cache);
+  let requests = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["inbox"], meta: { angeeModels: ["messaging.Message"] },
+    queryFn: async () => ++requests,
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  try {
+    await vi.waitFor(() => expect(requests).toBe(1));
+    for (let tick = 0; tick < 20; tick++) {
+      live.push({ model: "messaging.Message", id: `msg_${tick}` });
+      await vi.advanceTimersByTimeAsync(200);
+    }
+    // 4 s of changes every 200 ms: two max-wait flushes, never one per change.
+    expect(requests).toBe(3);
+  } finally {
+    unsubscribe(); cache.clear();
+  }
+});
+
+test("a live change cancels a populated in-flight refresh at once; its late response never commits", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const live = createAuthoredLiveInvalidation(cache);
+  const stale = pending<string[]>();
+  let revision = "initial";
+  let staleSignal!: AbortSignal;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["notes", "live"],
+    meta: { angeeModels: ["notes.Note"] },
+    queryFn: ({ signal }: { signal: AbortSignal }) => {
+      if (revision === "stale") { staleSignal = signal; return stale.promise; }
+      return Promise.resolve([revision]);
+    },
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  try {
+    await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["initial"]));
+    revision = "stale";
+    void observer.refetch();
+    await vi.waitFor(() => expect(staleSignal).toBeDefined());
+    revision = "current";
+    live.push({ model: "notes.Note", id: "note_revoked" });
+    // Cancelled on arrival, before the coalesced flush.
+    expect(staleSignal.aborted).toBe(true);
+    stale.resolve(["initial", "revoked"]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(observer.getCurrentResult().data).toEqual(["initial"]);
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["current"]));
+  } finally {
+    stale.resolve([]);
     unsubscribe(); cache.clear();
   }
 });

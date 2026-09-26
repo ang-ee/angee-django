@@ -24,7 +24,7 @@ import {
   type NavigatorLens,
   type ResultLens,
 } from "./contract";
-import { INBOX_MODELS, type InboxNavigation } from "./state";
+import { FADING_NAVIGATOR_MODELS, INBOX_MODELS, type InboxNavigation } from "./state";
 import type { useNexusT } from "../i18n";
 
 type Translate = ReturnType<typeof useNexusT>;
@@ -34,14 +34,18 @@ export function navigatorSource({
   timezone,
   lens,
   groupField,
+  fading,
   t,
 }: {
   coverage: ResourceViewFilter;
   timezone: string;
   lens: NavigatorLens;
   groupField: string;
+  /** Whether the finder filter selects fading ties, the only read of Nexus ties. */
+  fading: boolean;
   t: Translate;
 }): CollectionSource<InboxNavigatorRow> {
+  const models = fading ? FADING_NAVIGATOR_MODELS : INBOX_MODELS;
   const options = (request: CollectionPageRequest) => {
     const filter = new InboxFilter(request.filter);
     return {
@@ -62,7 +66,7 @@ export function navigatorSource({
     query: inboxCollectionQuery(navigatorAxes(lens)),
     rows: collectionQuery({
       document: InboxNavigator,
-      models: INBOX_MODELS,
+      models,
       variables: (request: CollectionPageRequest) => ({
         ...options(request),
         scope: new InboxFilter(request.filter).scope(),
@@ -80,7 +84,7 @@ export function navigatorSource({
     }),
     groups: collectionQuery({
       document: InboxNavigatorGroups,
-      models: INBOX_MODELS,
+      models,
       variables: (request: CollectionGroupRequest) => ({
         ...options(request),
         axis: request.group.field.slice(3),

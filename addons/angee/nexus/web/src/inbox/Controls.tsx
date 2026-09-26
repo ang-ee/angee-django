@@ -12,7 +12,7 @@ import {
   type ResourceViewFilter,
 } from "@angee/ui";
 import { InboxAccounts } from "./documents";
-import { INBOX_MODELS } from "./state";
+import { INBOX_SOURCE_MODELS } from "./state";
 import {
   COVERAGE_FIELDS,
   COVERAGE_KINDS,
@@ -141,7 +141,7 @@ export function useResultControls(lens: ResultLens) {
     new InboxFilter(view.state.filter).one("handle"),
   );
   const roles = useEnumOptions("messaging.Part", "role");
-  const sources = useAuthoredQuery(InboxAccounts, {}, { models: INBOX_MODELS });
+  const sources = useAuthoredQuery(InboxAccounts, {}, { models: INBOX_SOURCE_MODELS });
   const coverage = t("inbox.coverage");
   const messages = t("inbox.messages");
   const choices = (values: readonly string[]) =>

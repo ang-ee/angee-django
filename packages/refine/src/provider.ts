@@ -21,7 +21,11 @@ import {
   recordValue,
   stringValue,
 } from "./dialect/wire";
-import { invalidateAuthoredQueries, invalidateAuthoredQueriesForChange } from "./query-invalidation";
+import {
+  createAuthoredLiveInvalidation,
+  invalidateAuthoredQueries,
+  type AuthoredLiveChange,
+} from "./query-invalidation";
 
 type FetchFn = typeof globalThis.fetch;
 type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
@@ -240,6 +244,9 @@ export function createAngeeChangeLiveProvider(
   // consumer leaves.
   const subscriptions = new Map<string, ChangeSubscription>();
   let stopConnectionListener: () => void = noopSubscription;
+  const liveInvalidation = options.queryClient
+    ? createAuthoredLiveInvalidation(options.queryClient)
+    : undefined;
 
   function stopUnusedConnectionListener(): void {
     if (subscriptions.size === 0) {
@@ -259,10 +266,7 @@ export function createAngeeChangeLiveProvider(
   ): () => void {
     const consumer: ChangeConsumer = (data) => {
       const event = changeEventFromResult(data, changesRoot, channel, resource);
-      if (event) {
-        invalidateAuthoredQueriesForEvent(options.queryClient, event);
-        callback(event);
-      }
+      if (event) callback(event);
     };
     const entry = subscriptions.get(changesRoot) ?? {
       dispose: noopSubscription,
@@ -284,7 +288,11 @@ export function createAngeeChangeLiveProvider(
       entry.dispose = client.subscribe(
         { query: changeSubscriptionDocument(changesRoot) },
         {
-          next: (result) => entry.consumers.forEach((c) => c(result.data)),
+          next: (result) => {
+            // One upstream result is one change, however many consumers share it.
+            liveInvalidation?.push(liveChangeFromResult(result.data, changesRoot, resource));
+            entry.consumers.forEach((c) => c(result.data));
+          },
           error: (error) => {
             console.error(
               "Angee live subscription failed; the next subscriber will reconnect.",
@@ -343,23 +351,25 @@ export function resolveGraphQLWebSocketEndpoint(
   return graphQLWebSocketUrl(endpoint, origin);
 }
 
-function invalidateAuthoredQueriesForEvent(
-  queryClient: AuthoredQueryInvalidationClient | undefined,
-  event: LiveEvent,
-): void {
-  const model = stringValue(recordValue(event.payload)?.model);
-  const id = stringValue(recordValue(event.payload)?.id);
-  const relatedRecords = Array.isArray(recordValue(event.payload)?.relatedRecords)
-    ? (recordValue(event.payload)?.relatedRecords as unknown[]).flatMap((value) => {
+function liveChangeFromResult(
+  data: unknown,
+  changesRoot: string,
+  resource: AngeeLiveResource,
+): AuthoredLiveChange {
+  const event = recordValue(recordValue(data)?.[changesRoot]);
+  const relatedRecords = Array.isArray(event?.relatedRecords)
+    ? event.relatedRecords.flatMap((value) => {
       const record = recordValue(value);
-      const relatedModel = stringValue(record?.model);
-      const relatedId = stringValue(record?.id);
-      return relatedModel && relatedId ? [{ model: relatedModel, id: relatedId }] : [];
+      const model = stringValue(record?.model);
+      const id = stringValue(record?.id);
+      return model && id ? [{ model, id }] : [];
     })
     : [];
-  if (!queryClient || !model) return;
-  if (id) void invalidateAuthoredQueriesForChange(queryClient, model, id, relatedRecords);
-  else void invalidateAuthoredQueries(queryClient, [model]);
+  return {
+    model: stringValue(event?.model) ?? resource.modelLabel,
+    id: stringValue(event?.id) || undefined,
+    relatedRecords,
+  };
 }
 
 function hasuraOptions(

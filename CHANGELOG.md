@@ -11,9 +11,18 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- `optional_states_nullable` applies on populated PostgreSQL databases: its
+  data rewrite makes constraints immediate so the following `ALTER TABLE`
+  no longer fails on pending trigger events. `compatible_source_sha256`
+  returns so stacks keep an already-materialized released body; see the
+  backend migration pitfalls for recovering an unapplied released copy.
+- Intake captures needs again: `Message.transport_channel()` owns resolving a
+  message's concrete `messaging.Channel`, shared by delivery and intake.
+- Live authored reads coalesce subscription pushes: a change cancels matching
+  in-flight requests at once and each affected read refetches once per burst.
 - Generated-runtime rebuilds reset once, preserving migration history and
   warning only for labels outside the current composition. Remove unused
-  runtime wrappers and migration digest exceptions; materialization requires
+  runtime wrappers; materialization requires
   the composed app registry. Provision runs `makemigrations --noinput`, so
   missing required migration defaults fail promptly instead of prompting.
   Generated-tree pruning removes reported empty owned directories after their

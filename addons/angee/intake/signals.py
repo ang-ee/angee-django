@@ -34,25 +34,24 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
     if instance.channel_id is None:
         return
     try:
+        apps.get_model("messaging", "Channel")
         apps.get_model("intake", "Need")
-        channel: Any = instance.channel
     except LookupError:
         # Source-only test graphs may install addon declarations without emitted
         # concrete runtime models. The global messaging seam must remain inert.
         return
-    if channel is not None:
-        try:
-            channel.capture_ingested_message(instance)
-        except ValidationError as error:
-            logger.warning(
-                "Skipped intake capture for message %s on channel %s: %s",
-                instance.pk,
-                channel.pk,
-                error,
-            )
-        except Exception:
-            logger.exception(
-                "Intake capture failed for message %s on channel %s; primary ingest will continue.",
-                instance.pk,
-                channel.pk,
-            )
+    try:
+        instance.transport_channel(reason="intake.capture.channel").capture_ingested_message(instance)
+    except ValidationError as error:
+        logger.warning(
+            "Skipped intake capture for message %s on channel %s: %s",
+            instance.pk,
+            instance.channel_id,
+            error,
+        )
+    except Exception:
+        logger.exception(
+            "Intake capture failed for message %s on channel %s; primary ingest will continue.",
+            instance.pk,
+            instance.channel_id,
+        )
