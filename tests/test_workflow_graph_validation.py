@@ -288,6 +288,26 @@ def test_result_binding_ignores_schema_annotations() -> None:
     )
 
 
+def test_whole_output_reference_proves_an_identical_object_schema() -> None:
+    schema = DefaultedCodeOutput.model_json_schema(mode="serialization")
+    binding = parse_binding({"kind": "step_output", "step_key": "producer", "path": []})
+
+    assert _result_binding_compatible(
+        binding,
+        schema,
+        schema_data_contract({"type": "object", "properties": {}}),
+        schema_data_contract(schema),
+        "producer",
+    )
+    assert not _result_binding_compatible(
+        binding,
+        {**schema, "required": ["code"]},
+        schema_data_contract({"type": "object", "properties": {}}),
+        schema_data_contract(schema),
+        "producer",
+    )
+
+
 def test_result_binding_literal_subset_uses_json_type_semantics() -> None:
     binding = parse_binding({
         "kind": "step_output", "step_key": "producer", "path": ["status"],

@@ -1324,6 +1324,9 @@ def _result_binding_compatible(
         if kind == "step_output" and binding.step_key != producer_key:
             return False
         source = workflow_input if kind == "workflow_input" else producer_output
+        # A whole-value reference satisfies a target schema identical to its own.
+        if not binding.path and source.raw_schema is not None and json_values_equal(source.raw_schema, target_schema):
+            return True
         source_node = source.catalogue.at_path(binding.path)
         return source_node is not None and _catalogue_node_compatible(
             source_node,
