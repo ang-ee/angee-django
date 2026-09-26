@@ -7,6 +7,8 @@ from angee.projects.models import IntegrationProjects
 class Integration(IntegrationProjects, AbstractIntegration):
     """Concrete integration used by source-addon tests."""
 
+    rebac_grantable = AbstractIntegration.rebac_grantable
+
     class Meta(AbstractIntegration.Meta):
         """Django model options for the canonical test integration."""
 

@@ -35,6 +35,7 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.relationships import delete_relationship
 
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
@@ -2821,6 +2822,45 @@ class ExtractionServiceTests(TestCase):
                 retired_identities={},
                 claim_part_positions={0: 0},
             )
+
+    def test_source_file_readers_read_its_extraction_through_the_target_relation(self) -> None:
+        reader = get_user_model().objects.create_user(username="extraction-source-reader")
+        target = self.files[0]
+        config = {"result": {"number": "SOURCE", "rows": []}}
+        with actor_context(self.owner):
+            prepared = prepare_pages(
+                profile=FakeDocumentProfile(),
+                files=(target,),
+                message_parts=(),
+                authorized_target=target,
+                config=config,
+            )
+            retained = process(
+                prepared,
+                (),
+                schema=SCHEMA,
+                model=self.model,
+                authorized_target=target,
+                profile="fake_document",
+                config=config,
+            )
+        self.assertEqual(retained.target_relationship().subject.object, to_object_ref(target))
+        with self.assertRaises(PermissionDenied):
+            retained.with_actor(reader)._require_record_access("read")
+        with system_context(reason="grant source file read"):
+            write_relationships([RelationshipTuple(to_object_ref(target), "viewer", to_subject_ref(reader))])
+        retained.with_actor(reader)._require_record_access("read")
+        self.assertIsNone(self._extract(config={"failure": True}).target_relationship())
+
+        extraction_model = apps.get_model("workflows_extraction", "Extraction")
+        with system_context(reason="drop mirrored target tuple"):
+            delete_relationship(retained.target_relationship())
+        with self.assertRaises(PermissionDenied):
+            retained.with_actor(reader)._require_record_access("read")
+        mirrored = extraction_model.objects.resync_target_access()
+        self.assertGreaterEqual(mirrored, 1)
+        self.assertEqual(extraction_model.objects.resync_target_access(), mirrored)
+        retained.with_actor(reader)._require_record_access("read")
 
     def test_retains_failed_evidence_and_scopes_raw_values_to_authorized_readers(self) -> None:
         failed = self._extract(config={"failure": True})

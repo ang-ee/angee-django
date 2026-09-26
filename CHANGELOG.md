@@ -11,6 +11,20 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- **Upgrade:** Decisions no longer grant temporary evidence read. The
+  `pending_decision` relations, `DecisionRecordAccess`, gate/`GateBinding`/
+  `DecisionSpec` `record_access`, `Decision.record_access`, and the
+  `DecisionReadable*` model contributions are removed. Admission now requires
+  the admitted run actor and every assignee and escalation subject to hold
+  ordinary `read` on each record returned by
+  `angee.workflows.decision_actions.decision_evidence_refs` (error code
+  `decision_evidence_unreadable`). `integrate/integration` gains a grantable
+  `reader` relation, and an extraction is readable by readers of its File or
+  Message `target`. Follow the
+  [standing reviewer access cutover](docs/backend/guidelines.md#rebac)
+  sequence: drain pending Decisions, deploy, build, migrate,
+  `purge_decision_record_access --apply`, `rebac sync --force-overwrite`,
+  `resync_extraction_targets`, then grant reviewers standing read.
 - `optional_states_nullable` applies on populated PostgreSQL databases: its
   data rewrite makes constraints immediate so the following `ALTER TABLE`
   no longer fails on pending trigger events. `compatible_source_sha256`

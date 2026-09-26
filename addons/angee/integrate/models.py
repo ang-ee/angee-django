@@ -1483,6 +1483,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
     """
 
     runtime = True
+    rebac_grantable = {"reader": "write"}
 
     Lifecycle = IntegrationLifecycle
     """Expose the lifecycle vocabulary off the row for callers that cannot import this module."""

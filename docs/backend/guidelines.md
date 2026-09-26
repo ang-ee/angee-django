@@ -510,6 +510,22 @@ data through REBAC, never a queryset bypass.
   described in [Checks](../checks.md#composition-and-schema); each command
   delegates to its addon owner and is idempotent. No legacy tuple evidence is
   preserved or interpreted during this upgrade.
+- **Reviewers read evidence through standing grants.** A Decision never opens
+  records to its assignees; admission in
+  [`DecisionManager.create_for_suspension`](../../addons/angee/workflows/managers.py)
+  rejects any assignee or escalation subject that cannot already read every
+  record `decision_evidence_refs` returns. Grant reviewers read on the evidence
+  owner or its container (a folder `viewer`, an integration `reader`, or a
+  scope role arm). Stacks upgrading from per-Decision `pending_decision` grants
+  follow this order: list pending reviews with
+  `manage.py purge_decision_record_access --check-pending` and finish or cancel
+  them; deploy; `angee build`; `manage.py migrate` (drops
+  `Decision.record_access`); `manage.py purge_decision_record_access --apply`
+  (removes the retired tuples from both local stores; retained suspension
+  declarations stay untouched and decode without the retired key);
+  `manage.py rebac sync --force-overwrite` (only this flag prunes the retired
+  relation definitions; add `--yes` when non-interactive); `manage.py resync_extraction_targets`; then grant
+  reviewers their standing read. Rehearse against a restored database copy.
 - **Visibility and access are REBAC-native, always.** Put relations and
   permission arms on the model's zed and let the store scope reads; never stand
   authorization up with a Python provider, `visible_to` projection, or queryset

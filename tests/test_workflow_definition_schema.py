@@ -34,7 +34,6 @@ def test_gate_config_accepts_parsed_bindings_in_each_dynamic_field() -> None:
         "payload": {},
         "decision_schema": {},
         "targets": [],
-        "record_access": [],
         "clean": False,
     }
     declared = {name: {"kind": "constant", "value": value} for name, value in fields.items()}
