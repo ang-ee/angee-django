@@ -22,7 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 from rebac import system_context
 
 from angee.base.identity import canonical_subject_ref
-from angee.base.serialization import canonical_json_sha256
 from angee.workflows import engine
 from angee.workflows.attempts import (
     DecisionGateOutput,
@@ -69,7 +68,11 @@ class IdentityReviewConfig(WorkflowStepConfig):
 
 
 class IdentityReviewPassThrough(BaseModel):
-    """Frozen identity facts emitted when no human Decision is required."""
+    """Frozen identity facts emitted when no human Decision is required.
+
+    ``current`` is the workflow actor's visible projection; ``facts_hash`` is the
+    parties-owned actor-independent digest of the complete identity basis.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -314,7 +317,12 @@ class DedupeExecuteStepImpl(DecisionApplyStep):
 
 
 class IdentityReviewStepImpl(GateStep):
-    """Freeze one Party identity proposal and request explicit human choices."""
+    """Freeze one Party identity proposal and request explicit human choices.
+
+    The Decision shows only facts the workflow actor can read; its
+    ``facts_hash`` covers the complete basis so any reviewer applies against
+    the same expected state.
+    """
 
     key = "parties_identity_review"
     label = "Review party identity"
@@ -341,14 +349,8 @@ class IdentityReviewStepImpl(GateStep):
         config = type(self).normalize_config(step_run.step.config)
         proposal = _identity_input(step_run.input, default_address_label=config["default_address_label"])
         actor = engine.resolve_workflow_actor(run).subject
-        party, current = (
-            apps.get_model("parties", "Party")
-            .objects
-            .identity_snapshot(
-                proposal["party_id"],
-                actor=actor,
-            )
-        )
+        basis = apps.get_model("parties", "Party").objects.identity_basis(proposal["party_id"], actor=actor)
+        party, current = basis.party, basis.current
         facts = (
             ReviewFact(
                 pointer="/current",
@@ -380,7 +382,7 @@ class IdentityReviewStepImpl(GateStep):
         payload = {
             **proposal,
             "current": current,
-            "facts_hash": canonical_json_sha256(current),
+            "facts_hash": basis.facts_hash,
         }
         if not party.identity_differs(current, proposal["proposed"]):
             return StepResult.done(
@@ -447,15 +449,15 @@ class IdentityApplyStepImpl(DecisionApplyStep):
         value = _identity_apply_input(step_run.input)
         passthrough = _unchanged_identity_input(value)
         if passthrough is not None:
-            _, current = (
+            basis = (
                 apps.get_model("parties", "Party")
                 .objects
-                .identity_snapshot(
+                .identity_basis(
                     passthrough["party_id"],
                     actor=engine.resolve_workflow_actor(run).subject,
                 )
             )
-            if canonical_json_sha256(current) != passthrough["facts_hash"]:
+            if basis.facts_hash != passthrough["facts_hash"]:
                 return StepResult.done(
                     output={"party_id": passthrough["party_id"], "context": passthrough["context"]},
                     outcome="conflict",

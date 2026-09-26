@@ -28,6 +28,7 @@ from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
+from django.utils.crypto import salted_hmac
 from phonenumbers import (
     NumberParseException,
     PhoneNumberMatcher,
@@ -42,7 +43,7 @@ from angee.base.mixins import HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_model
 from angee.base.scoping import read_scoped_queryset
-from angee.base.serialization import canonical_json_sha256
+from angee.base.serialization import canonical_json
 from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.mixins import LinkSource, ScoredLinkMixin
@@ -68,6 +69,30 @@ class HandleAssociationAssessment:
     status: HandleAssociationStatus
     readable_links: tuple[Any, ...]
     conflict_evidence_readable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityBasis:
+    """One Party identity read: the actor-visible facts and the complete basis.
+
+    ``current`` is safe to show the reading actor. ``complete`` may contain rows
+    that actor cannot read; it is never shown and only anchors expected-state
+    checks through :attr:`facts_hash`.
+    """
+
+    party: Any
+    current: dict[str, Any]
+    complete: dict[str, Any]
+
+    @property
+    def facts_hash(self) -> str:
+        """Keyed digest of the complete basis; it cannot confirm guesses of hidden rows."""
+
+        return salted_hmac(
+            "angee.parties.identity_basis",
+            canonical_json(self.complete),
+            algorithm="sha256",
+        ).hexdigest()
 
 
 class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
@@ -1414,31 +1439,58 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     :meth:`for_user` lives here.
     """
 
-    def identity_snapshot(self, party_id: str, *, actor: Any, lock: bool = False) -> tuple[Any, dict[str, Any]]:
-        """Read the actor-visible identity basis, optionally locking its entire row set."""
+    def identity_basis(self, party_id: str, *, actor: Any, lock: bool = False) -> IdentityBasis:
+        """Read one Party's identity under ``actor``'s read authorization.
 
-        parties = self.with_actor(actor)
-        party = parties.from_public_id(party_id)
+        ``current`` projects only the Address and PartyHandle rows ``actor`` can
+        read (a link to an unreadable Handle stays hidden) and is what reviewers
+        see. ``complete`` projects every row, read under a system context, so
+        :attr:`IdentityBasis.facts_hash` is actor-independent: a reviewer who
+        cannot read a private handle compares the same basis the workflow actor
+        froze, while a concurrent change to that handle still invalidates the
+        review. ``lock`` locks the complete row set in the shared Handle, Party,
+        PartyHandle order, then the Party's addresses.
+        """
+
+        party = self.with_actor(actor).from_public_id(party_id)
         if party is None:
             raise ValidationError({"party_id": "Party was not found."})
         party.with_actor(actor)._require_record_access("read")
-        addresses = apps.get_model("parties", "Address").objects.with_actor(actor).filter(party=party)
-        readable_handles = apps.get_model("parties", "Handle").objects.with_actor(actor).scoped().values("pk")
+        reason = "parties.party.identity_basis"
+        address_owner = apps.get_model("parties", "Address").objects
         link_owner = apps.get_model("parties", "PartyHandle").objects
-        links = link_owner.with_actor(actor).filter(party=party, handle_id__in=Subquery(readable_handles))
+        addresses = address_owner.system_context(reason=reason).filter(party=party)
+        links = link_owner.system_context(reason=reason).filter(party=party)
         if lock:
-            handle_ids = tuple(links.order_by("handle_id").values_list("handle_id", flat=True))
             _handles, locked_parties = link_owner.lock_identity_rows(
                 party_ids=(party.pk,),
-                handle_ids=handle_ids,
+                handle_ids=tuple(links.values_list("handle_id", flat=True)),
             )
             party = locked_parties[party.pk].with_actor(actor)
-            addresses = addresses.order_by("pk").lock_if_supported()
-            links = links.order_by("pk").lock_if_supported()
-        return party, party.identity_values(
-            list(addresses.order_by("is_primary", "sqid")),
-            list(links.select_related("handle").order_by("sqid")),
+            addresses = addresses.lock_if_supported()
+        address_rows = list(addresses.order_by("is_primary", "sqid"))
+        link_rows = list(links.select_related("handle").order_by("sqid"))
+        readable_addresses = set(address_owner.with_actor(actor).filter(party=party).values_list("pk", flat=True))
+        readable_handles = apps.get_model("parties", "Handle").objects.with_actor(actor).scoped().values("pk")
+        readable_links = set(
+            link_owner.with_actor(actor)
+            .filter(party=party, handle_id__in=Subquery(readable_handles))
+            .values_list("pk", flat=True)
         )
+        return IdentityBasis(
+            party=party,
+            current=party.identity_values(
+                [row for row in address_rows if row.pk in readable_addresses],
+                [link for link in link_rows if link.pk in readable_links],
+            ),
+            complete=party.identity_values(address_rows, link_rows),
+        )
+
+    def identity_snapshot(self, party_id: str, *, actor: Any, lock: bool = False) -> tuple[Any, dict[str, Any]]:
+        """Return the Party and its actor-visible identity from :meth:`identity_basis`."""
+
+        basis = self.identity_basis(party_id, actor=actor, lock=lock)
+        return basis.party, basis.current
 
     def apply_identity(
         self,
@@ -1451,8 +1503,12 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     ) -> tuple[str, dict[str, str]]:
         """Apply plain reviewed values while the locked identity basis still matches.
 
-        A replay after a successful change returns conflict because the retained
-        basis hash no longer matches; unchanged choices are idempotent no-ops.
+        ``expected_facts_hash`` is :attr:`IdentityBasis.facts_hash` from review;
+        it is compared with the complete basis locked here, and exact-replace
+        expectations come from that same basis. Every write stays authorized as
+        ``actor``. A replay after a successful change returns conflict because
+        the retained basis hash no longer matches; unchanged choices are
+        idempotent no-ops.
         """
 
         allowed = {
@@ -1463,9 +1519,10 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         if set(choices) != set(allowed) or any(value not in allowed[name] for name, value in choices.items()):
             raise ValidationError({"choices": "Identity choices are invalid."})
         with transaction.atomic(), actor_context(actor):
-            party, current = self.identity_snapshot(party_id, actor=actor, lock=True)
+            basis = self.identity_basis(party_id, actor=actor, lock=True)
+            party, current = basis.party, basis.complete
             party._require_record_access("write")
-            if canonical_json_sha256(current) != expected_facts_hash:
+            if basis.facts_hash != expected_facts_hash:
                 return "conflict", {}
             results = {"name_result": "kept", "address_result": "kept", "handle_result": "kept"}
             if choices["name_action"] == "replace":
@@ -1486,7 +1543,11 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                 )
             elif choices["address_action"] == "replace":
                 primary = next((row for row in current["addresses"] if row["is_primary"]), None)
-                expected = addresses.with_actor(actor).from_public_id(primary["id"]) if primary else None
+                expected = (
+                    addresses.system_context(reason="parties.party.apply_identity").from_public_id(primary["id"])
+                    if primary
+                    else None
+                )
                 results["address_result"], _ = addresses.replace_primary_exact(
                     party=party,
                     values=proposed["address"],

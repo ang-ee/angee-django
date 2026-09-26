@@ -15,10 +15,11 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import close_old_connections, connection
 from django.utils import timezone
-from rebac import PermissionDenied, system_context
+from rebac import PermissionDenied, RelationshipTuple, system_context, to_subject_ref, write_relationships
+from rebac.resources import to_object_ref
 
 from angee.base.refs import canonical_record_target
-from angee.base.serialization import canonical_json_sha256
+from angee.base.serialization import canonical_json
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
 from angee.workflows import engine
@@ -681,7 +682,7 @@ def test_identity_owner_checks_basis_and_rolls_back_all_changes(
     actor = User.objects.create_user(username="identity-atomic-owner")
     with system_context(reason="identity operation fixture"):
         party = Party.objects.create(display_name="Original", created_by=actor)
-    _, current = Party.objects.identity_snapshot(str(party.sqid), actor=actor)
+    basis = Party.objects.identity_basis(str(party.sqid), actor=actor)
     proposed = {"name": "Replacement", "address": {"label": "Contact", "street": "Main 1"}, "handle": {}}
     choices = {"name_action": "replace", "address_action": "add", "handle_action": "keep"}
     outcome, _ = Party.objects.apply_identity(
@@ -700,7 +701,7 @@ def test_identity_owner_checks_basis_and_rolls_back_all_changes(
     with pytest.raises(RuntimeError, match="address failure"):
         Party.objects.apply_identity(
             party_id=str(party.sqid),
-            expected_facts_hash=canonical_json_sha256(current),
+            expected_facts_hash=basis.facts_hash,
             proposed=proposed,
             choices=choices,
             actor=actor,
@@ -877,3 +878,132 @@ def test_identity_snapshot_hides_private_handles_even_when_the_link_is_readable(
         _, snapshot = Party.objects.identity_snapshot(str(party.sqid), actor=actor)
     assert [row["id"] for row in snapshot["handles"]] == [str(visible_link.sqid)]
     assert snapshot["handles"][0]["value"] == "visible@example.test"
+
+
+def _private_handle_identity(owner: Any, reviewer: Any, *, value: str) -> tuple[Any, Any]:
+    """Return a reviewer-editable Party linked to a Handle only its owner can read."""
+
+    with system_context(reason="identity private-basis fixture"):
+        party = Party.objects.create(display_name="Private Basis", created_by=owner)
+        handle = Handle.objects.create(platform=Handle.Platform.EMAIL, value=value, created_by=owner)
+        link = PartyHandle.objects.link(party, handle, confidence=0.4, created_by_id=owner.pk)
+        write_relationships([RelationshipTuple(to_object_ref(party), "editor", to_subject_ref(reviewer))])
+    assert party.with_actor(reviewer).has_access("write")
+    assert not handle.with_actor(reviewer).has_access("read")
+    assert handle.with_actor(owner).has_access("read")
+    return party, link
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identity_review_applies_for_a_reviewer_who_cannot_read_a_private_handle(
+    workflows_parties_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """The basis hash is actor-independent while the reviewed facts stay actor-visible."""
+
+    del workflows_parties_tables, no_workflow_queue
+    owner = User.objects.create_user(username="identity-basis-owner")
+    reviewer = User.objects.create_user(username="identity-basis-reviewer")
+    party, _link = _private_handle_identity(owner, reviewer, value="private-basis@example.test")
+    owner_basis = Party.objects.identity_basis(str(party.sqid), actor=owner)
+    reviewer_basis = Party.objects.identity_basis(str(party.sqid), actor=reviewer)
+    assert owner_basis.facts_hash == reviewer_basis.facts_hash
+    assert reviewer_basis.current["handles"] == []
+    assert [row["value"] for row in reviewer_basis.complete["handles"]] == ["private-basis@example.test"]
+
+    proposal = {
+        "party_id": str(party.sqid),
+        "assignee": str(to_subject_ref(reviewer)),
+        "proposed": {"name": "Reviewed Basis", "address": {}, "handle": {}},
+        "context": {"document_id": "doc_private_basis"},
+    }
+    workflow = _identity_workflow()
+    run = engine.start(workflow, party, admit_workflow_actor(workflow, owner), input=JsonPresence(True, proposal))
+    advance_once(run)
+    execute_started(run)
+    with system_context(reason="test private-basis decision"):
+        assert step_run_for(run, "review").error == ""
+        decision = Decision._base_manager.get(step_run__run=run)
+    assert decision.payload["facts_hash"] == owner_basis.facts_hash
+    resolution = {
+        "action": "apply_identity",
+        "name_action": "replace",
+        "address_action": "keep",
+        "handle_action": "keep",
+    }
+    assert engine.decide(decision, "complete", payload=resolution, actor=reviewer).validation_error is None
+    run_to_terminal(run)
+    with system_context(reason="test private-basis result"):
+        applied = step_run_for(run, "apply")
+        assert applied.error == ""
+        assert applied.outcome == "applied"
+        party.refresh_from_db()
+    assert party.display_name == "Reviewed Basis"
+    assert party.updated_by_id == reviewer.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identity_apply_conflicts_when_an_unreadable_handle_changes_during_review(
+    workflows_parties_tables: None,
+) -> None:
+    del workflows_parties_tables
+    owner = User.objects.create_user(username="identity-hidden-change-owner")
+    reviewer = User.objects.create_user(username="identity-hidden-change-reviewer")
+    party, link = _private_handle_identity(owner, reviewer, value="hidden-change@example.test")
+    expected = Party.objects.identity_basis(str(party.sqid), actor=reviewer).facts_hash
+    PartyHandle.objects._transition(link, action="confirm", actor=owner)
+    outcome, results = Party.objects.apply_identity(
+        party_id=str(party.sqid),
+        expected_facts_hash=expected,
+        proposed={"name": "Must Not Apply", "address": {}, "handle": {}},
+        choices={"name_action": "replace", "address_action": "keep", "handle_action": "keep"},
+        actor=reviewer,
+    )
+    assert (outcome, results) == ("conflict", {})
+    with system_context(reason="identity hidden-change assertion"):
+        party.refresh_from_db()
+    assert party.display_name == "Private Basis"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_identity_review_payload_never_carries_an_unreadable_handle(
+    workflows_parties_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    del workflows_parties_tables, no_workflow_queue
+    owner = User.objects.create_user(username="identity-payload-handle-owner")
+    reviewer = User.objects.create_user(username="identity-payload-reviewer")
+    with system_context(reason="identity payload private-handle fixture"):
+        party = Party.objects.create(display_name="Payload Basis", created_by=reviewer)
+        visible = Handle.objects.create(
+            platform=Handle.Platform.EMAIL,
+            value="payload-visible@example.test",
+            created_by=reviewer,
+        )
+        link = PartyHandle.objects.link(party, visible, confidence=0.3, created_by_id=reviewer.pk)
+        hidden = Handle.objects.create(
+            platform=Handle.Platform.EMAIL,
+            value="payload-private@example.test",
+            created_by=owner,
+        )
+        hidden_link = PartyHandle.objects.link(party, hidden, confidence=0.3, created_by_id=reviewer.pk)
+    assert not hidden.with_actor(reviewer).has_access("read")
+    proposal = {
+        "party_id": str(party.sqid),
+        "proposed": {"name": "Payload Review", "address": {}, "handle": {}},
+        "context": {},
+    }
+    workflow = _identity_workflow()
+    run = engine.start(workflow, party, admit_workflow_actor(workflow, reviewer), input=JsonPresence(True, proposal))
+    advance_once(run)
+    execute_started(run)
+    with system_context(reason="test payload private-handle decision"):
+        assert step_run_for(run, "review").error == ""
+        decision = Decision._base_manager.get(step_run__run=run)
+    serialized = canonical_json({"payload": decision.payload, "form_schema": decision.form_schema})
+    assert "payload-private@example.test" not in serialized
+    assert str(hidden.sqid) not in serialized
+    assert str(hidden_link.sqid) not in serialized
+    assert str(link.sqid) in serialized
+    assert "payload-visible@example.test" in serialized
+    assert decision.payload["facts_hash"] == Party.objects.identity_basis(str(party.sqid), actor=reviewer).facts_hash
