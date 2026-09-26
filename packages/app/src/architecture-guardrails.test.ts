@@ -34,6 +34,9 @@ const REQUIRED_ADDON_ROOTS = [
 const OPTIONAL_ADDON_ROOTS = [
   resolve(MONOREPO_ROOT, "../angee-messaging-bridges/addons"),
 ] as const;
+// Parsing every framework, tooling, and addon source file grows with the tree,
+// not with a hang; Vitest's 5s unit default fails it on loaded CI runners.
+const FULL_TREE_SCAN_TIMEOUT_MS = 30_000;
 
 test("addon TypeScript resolves host-generated GraphQL before the standalone cache", () => {
   const path = join(MONOREPO_ROOT, "addons", "angee", "tsconfig.base.json");
@@ -168,6 +171,7 @@ describe("React architecture guardrails", () => {
     () => {
       expect(importViolations(allPackageRoots())).toEqual([]);
     },
+    FULL_TREE_SCAN_TIMEOUT_MS,
   );
 
   test("relative package escape detection reports a seeded violation", () => {
@@ -641,7 +645,13 @@ function sourceFiles(root: string): string[] {
   return files;
 }
 
-function importSpecifiers(file: string): string[] {
+// Source files do not change during a run, so each is parsed once across the
+// layering scan and the published-vitest graph of every guardrail.
+const importSpecifierCache = new Map<string, readonly string[]>();
+
+function importSpecifiers(file: string): readonly string[] {
+  const cached = importSpecifierCache.get(file);
+  if (cached) return cached;
   const text = readFileSync(file, "utf8");
   const source = ts.createSourceFile(
     file,
@@ -671,6 +681,7 @@ function importSpecifiers(file: string): string[] {
     ts.forEachChild(node, visit);
   };
   visit(source);
+  importSpecifierCache.set(file, specifiers);
   return specifiers;
 }
 

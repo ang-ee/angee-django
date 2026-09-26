@@ -314,11 +314,19 @@ test("recovery renders mutation state and resets it when the selected attempt ch
   expect(mocks.mutationState.reset).toHaveBeenCalledOnce();
 });
 
+/** A routed recovery navigates to the started run, so it mounts inside a router. */
+async function renderRecoveryInRouter(attemptId: string) {
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <AttemptRecoveryPanel attemptId={attemptId} /> }), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  await router.load();
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
 test("an uncertain recovery requires the shared labeled checkbox acknowledgement", async () => {
   mocks.loading = false;
   mocks.recoveryRequiresUncertaintyAck = true;
   mocks.mutation.mockResolvedValue({ start_workflow_recovery: { ok: true, id: "run-uncertain" } });
-  render(<AttemptRecoveryPanel attemptId="attempt-uncertain" />);
+  const router = await renderRecoveryInRouter("attempt-uncertain");
   const start = await screen.findByRole("button", { name: "Recover from this attempt" });
   expect((start as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("checkbox", {
@@ -330,13 +338,14 @@ test("an uncertain recovery requires the shared labeled checkbox acknowledgement
     sourceAttempt: "attempt-uncertain",
     acknowledgeUncertainExternal: true,
   })));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/records/run-uncertain"));
 });
 
 test("a Map recovery can name the exact retained prior recovery basis", async () => {
   mocks.loading = false;
   mocks.recoveryMapIndex = 2;
   mocks.mutation.mockResolvedValue({ start_workflow_recovery: { ok: true, id: "run-map-recovery" } });
-  render(<AttemptRecoveryPanel attemptId="attempt-map-failure" />);
+  const router = await renderRecoveryInRouter("attempt-map-failure");
   fireEvent.change(await screen.findByLabelText("Prior Map recovery run"), {
     target: { value: "wfr_exact_prior" },
   });
@@ -345,6 +354,7 @@ test("a Map recovery can name the exact retained prior recovery basis", async ()
     sourceAttempt: "attempt-map-failure",
     priorRecovery: "wfr_exact_prior",
   })));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/records/run-map-recovery"));
 });
 
 test("a terminal execution without retained attempts reports missing history without querying payloads", async () => {

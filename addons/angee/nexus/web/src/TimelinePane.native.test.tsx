@@ -3,6 +3,7 @@ import { createUiTestProviders } from "@angee/ui/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { authoredQueryReadsAnyModel, createAngeeChangeLiveProvider } from "@angee/refine";
 import type { ReactNode } from "react";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { afterEach, expect, test, vi } from "vitest";
 
 vi.mock("@angee/app", async (original) => ({
@@ -24,19 +25,19 @@ function fixture() {
   let denied = false;
   let missing = false;
   let emptied = false;
-  const custom = vi.fn(async ({ meta }: { meta: { gqlQuery: unknown; gqlVariables: Record<string, unknown> } }) => {
+  const dataProvider = { custom: vi.fn(async ({ meta }) => {
     if (denied) throw new Error("Unreadable scope");
     if (missing) return { data: {} };
-    const variables = meta.gqlVariables;
+    const variables = meta?.gqlVariables ?? {};
     const kind = variables.circle ? "circle" : "party";
-    if (meta.gqlQuery === NexusTimelineRevalidate) {
+    if (meta?.gqlQuery === NexusTimelineRevalidate) {
       const ids = variables.ids as string[];
       return { data: { [`${kind}_message_feed_revalidate`]: {
         messages: ids.filter((id) => !emptied && id !== "message-2").map((id) => row(Number(id.slice(-1)))),
         absent_ids: ids.filter((id) => emptied || id === "message-2"),
       } } };
     }
-    expect(meta.gqlQuery).toBe(NexusTimeline);
+    expect(meta?.gqlQuery).toBe(NexusTimeline);
     const messages = variables.beforeCursor ? [row(1)] : emptied ? [] : refreshed ? [row(4), row(3)] : [row(3), row(2)];
     return { data: { [`${kind}_message_feed`]: {
       messages, count: 4, older_cursor: messages.length ? `opaque-${messages.at(-1)!.id}` : null,
@@ -44,7 +45,8 @@ function fixture() {
       has_more_in_window: false,
       has_older_than_through: !variables.beforeCursor,
     } } };
-  });
+  }) } satisfies RefineTestDataProvider;
+  const { custom } = dataProvider;
   const onError = vi.fn(async () => ({}));
   const roots = [
     ["messaging.Message", "messageChanged"], ["messaging.Thread", "threadChanged"],
@@ -59,7 +61,6 @@ function fixture() {
       return () => { sinks.delete(root); };
     }, on: () => () => undefined,
   } as never, roots.map(([modelLabel, changes]) => ({ schemaName: "console", modelLabel, roots: { changes } })), { queryClient: client });
-  const dataProvider = { custom };
   function Providers({ children }: { children: ReactNode }) {
     return <Provider dataProvider={dataProvider} queryClient={client} liveProvider={liveProvider}
       authProvider={{ login: async () => ({ success: true }), logout: async () => ({ success: true }), check: async () => ({ authenticated: true }), onError }}
@@ -77,19 +78,19 @@ test.each(["party", "circle"] as const)("%s timeline uses native windows, revali
   const feed = fixture();
   render(kind === "circle" ? <TimelinePane circleId="root" /> : <TimelinePane partyId="root" />, { wrapper: feed.wrapper });
   await screen.findByText("Message 2");
-  expect(feed.custom.mock.calls[0]?.[0].meta.gqlVariables).toEqual({
+  expect(feed.custom.mock.calls[0]?.[0].meta?.gqlVariables).toEqual({
     partyId: "root", circleId: "root", circle: kind === "circle", search: "", beforeCursor: null, throughCursor: null, limit: 30,
   });
   fireEvent.click(screen.getByRole("button"));
   await screen.findByText("Message 1");
-  expect(feed.custom.mock.calls[1]?.[0].meta.gqlVariables.beforeCursor).toBe("opaque-message-2");
+  expect(feed.custom.mock.calls[1]?.[0].meta?.gqlVariables?.beforeCursor).toBe("opaque-message-2");
   feed.refresh();
   await act(async () => { await feed.client.invalidateQueries({ predicate: (query) => authoredQueryReadsAnyModel(query.meta, [kind === "circle" ? "parties.CircleMember" : "parties.Handle"]) }); });
   await screen.findByText("Message 4");
   expect(screen.queryByText("Message 2")).toBeNull();
   expect(screen.getByText("Message 1")).toBeTruthy();
-  const revalidation = feed.custom.mock.calls.filter(([request]) => request.meta.gqlQuery === NexusTimelineRevalidate);
-  expect(revalidation.map(([request]) => request.meta.gqlVariables.ids)).toEqual([["message-3", "message-2"], ["message-1"]]);
+  const revalidation = feed.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === NexusTimelineRevalidate);
+  expect(revalidation.map(([request]) => request.meta?.gqlVariables?.ids)).toEqual([["message-3", "message-2"], ["message-1"]]);
   const queries = feed.client.getQueryCache().findAll({ queryKey: ["angee", "authored"] });
   expect(queries).toHaveLength(1);
   expect(queries[0]?.meta?.angeeModels).toEqual(kind === "circle"
@@ -104,7 +105,7 @@ test.each(["parties.Handle", "parties.Party", "messaging.Thread", "parties.Circl
   act(() => feed.emit(model));
   await screen.findByText("Message 4");
   expect(screen.queryByText("Message 2")).toBeNull();
-  expect(feed.custom.mock.calls.some(([request]) => request.meta.gqlQuery === NexusTimelineRevalidate)).toBe(true);
+  expect(feed.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === NexusTimelineRevalidate)).toBe(true);
 });
 
 test("actual native refetch failure hides old rendered messages", async () => {
@@ -131,5 +132,5 @@ test("an empty refreshed timeline still loads messages below its retained cuts",
   await waitFor(() => expect(screen.queryByText("Message 2")).toBeNull());
   fireEvent.click(screen.getByRole("button"));
   await screen.findByText("Message 1");
-  expect(feed.custom.mock.calls.at(-1)?.[0].meta.gqlVariables.beforeCursor).toBe("opaque-message-2");
+  expect(feed.custom.mock.calls.at(-1)?.[0].meta?.gqlVariables?.beforeCursor).toBe("opaque-message-2");
 });
