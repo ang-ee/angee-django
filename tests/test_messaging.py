@@ -3219,15 +3219,21 @@ def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) 
     _ingest(
         [
             replace(_parsed("n-1", subject=""), thread=ParsedThread(external_id="g-1", modality="group")),
-            replace(_parsed("n-2", subject=""), thread=ParsedThread(external_id="g-2", modality="group", title="Kept")),
+            replace(
+                _parsed("n-2", subject=""),
+                thread=ParsedThread(external_id="g-2", modality="group", title="Kept"),
+            ),
             replace(_parsed("n-3", subject=""), thread=ParsedThread(external_id="g-3", modality="group")),
         ],
         channel=channel,
     )
-    _ingest([replace(_parsed("n-4", subject=""), thread=ParsedThread(external_id="g-1", modality="group"))], channel=other)
+    elsewhere = replace(_parsed("n-4", subject=""), thread=ParsedThread(external_id="g-1", modality="group"))
+    _ingest([elsewhere], channel=other)
 
     with system_context(reason="test fill chat titles"):
-        named = Thread.objects.fill_chat_titles(channel, {"g-1": "Climbers", "g-2": "Renamed", "g-3": "  ", "g-9": "Gone"})
+        named = Thread.objects.fill_chat_titles(
+            channel, {"g-1": "Climbers", "g-2": "Renamed", "g-3": "  ", "g-9": "Gone"}
+        )
 
     assert named == 1
     titles = {
