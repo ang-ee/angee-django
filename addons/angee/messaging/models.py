@@ -1889,6 +1889,19 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
             or ""
         )
 
+    def transport_channel(self, *, reason: str) -> Any | None:
+        """Return the concrete ``messaging.Channel`` this message travelled through.
+
+        ``channel`` targets the ``integrate.Integration`` parent row; transport and
+        channel contributions live on the ``Channel`` child with the same key.
+        This is a system read for delivery and ingest-time consumers; a dangling
+        key raises ``DoesNotExist``.
+        """
+
+        if self.channel_id is None:
+            return None
+        return apps.get_model("messaging", "Channel").objects.sudo(reason=reason).get(pk=self.channel_id)
+
     def channel_vendor_name(self) -> str:
         """Return the readable channel vendor selected by the inbox projection."""
 

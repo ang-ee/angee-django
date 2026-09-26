@@ -80,11 +80,7 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
         if str(message.status) == str(message.MessageStatus.SENT):
             return {"ok": True, "skipped": True, "reason": "already-sent"}
         try:
-            channel = (
-                apps.get_model("messaging", "Channel")
-                .objects.sudo(reason="messaging.delivery.channel")
-                .get(pk=message.channel_id)
-            )
+            channel = message.transport_channel(reason="messaging.delivery.channel")
             delivered = channel.backend.deliver(message)
         except Exception as error:
             _record_status(model, pk, external_id, status="failed")
