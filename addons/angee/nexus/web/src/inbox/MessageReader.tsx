@@ -83,7 +83,7 @@ export function InboxMessageReader({
                     navigation.conversation(message.thread!.id, message.id)
                   }
                 >
-                  {message.thread.title?.text || t("inbox.conversation")}
+                  {message.thread.conversation_label || t("inbox.conversation")}
                 </Button>
                 <Glyph name="chevron-right" size={12} />
               </>

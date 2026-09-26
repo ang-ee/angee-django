@@ -77,9 +77,6 @@ export const InboxNavigator = graphql(`
         }
         thread {
           id
-          title {
-            text
-          }
         }
         circle {
           id
@@ -302,6 +299,10 @@ export const InboxMessage = graphql(`
       }
       message {
         ...InboxMessageFields
+        thread {
+          id
+          conversation_label
+        }
         received_at
         external_id
         parts {
@@ -386,9 +387,7 @@ export const InboxTranscriptMatches = graphql(`
     ) {
       thread {
         id
-        title {
-          text
-        }
+        conversation_label
       }
       count
       total
