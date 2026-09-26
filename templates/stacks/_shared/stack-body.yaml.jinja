@@ -391,24 +391,25 @@ services:
     after: [provision{% if stack_flavor == "instance" %}, caddy{% endif %}]
 
 {# pongo2 has no list literals and takes Django-style filter args; split a string. #}
-{# Core roles plus one dedicated `celery-<queue>` worker per `celery_queues` entry: a #}
-{# queue worker isolates an addon's long-lived tasks (threads pool — enforces no time #}
+{# The shared worker plus one dedicated `celery-<queue>` worker per `celery_queues` entry: #}
+{# a queue worker isolates an addon's long-lived tasks (threads pool — enforces no time #}
 {# limits, so queue isolation IS the protection) from the shared prefork worker, and #}
-{# inherits this block's env/command owner instead of duplicating it elsewhere. The #}
+{# inherits this block's env/command owner instead of duplicating it elsewhere. The shared #}
+{# worker embeds beat (`--beat`, one per stack); beat's schedule lives in the database. The #}
 {# trailing comma yields one empty item when celery_queues is blank; the guard skips it. #}
-{% for role in "worker,beat,"|add:celery_queues|split:"," %}{% if role %}
+{% for role in "worker,"|add:celery_queues|split:"," %}{% if role %}
   # Dedicated queue workers retain their own pool and concurrency policy.
   celery-{{ role }}:
 {% include "../../_shared/python-runtime.yaml.jinja" %}
     # Let Celery finish a warm shutdown, then bound native supervisor updates.
     stop_grace_period: 30s
-{% if runtime_mode == "process" %}    command: ["uv", "run", "celery", "-A", "angee.jobs.celery:app", {% if role == "beat" %}"beat"{% else %}"worker"{% endif %}{% if role != "worker" and role != "beat" %}, "-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "celery", "-A", "angee.jobs.celery:app", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ role }}", "--pool", "threads", "--concurrency", "8"{% endif %}, "--loglevel=INFO"]
     after: [provision]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        {{ python_sync }}exec celery -A angee.jobs.celery:app {% if role == "beat" %}beat{% else %}worker{% endif %}{% if role != "worker" and role != "beat" %} -Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
+        {{ python_sync }}exec celery -A angee.jobs.celery:app worker {% if role == "worker" %}--beat{% else %}-Q {{ role }} --pool threads --concurrency 8{% endif %} --loglevel=INFO
     after: [provision, redis]
 {% endif %}
 {% endif %}{% endfor %}

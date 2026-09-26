@@ -15,6 +15,7 @@ CORE_APP_NAMES = [
     "reversion",
     "simple_history",
     "angee.base",
+    "django_celery_beat",
     "angee.jobs",
 ]
 
