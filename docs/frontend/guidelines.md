@@ -493,7 +493,7 @@ history uses native Query pages with domain-owned
   `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
   invalidate through refine mutations, and subscription pushes invalidate the
   affected refine resources. Authored reads receive pushes through the
-  [live coalescer](../packages/refine/src/query-invalidation.ts): a change
+  [live coalescer](../../packages/refine/src/query-invalidation.ts): a change
   cancels matching in-flight requests at once and one refetch per burst follows
   within the max wait, so declare each read's `models` from the owners its
   resolver actually reads. Refine's own resource hooks still invalidate per
