@@ -85,7 +85,7 @@ function MatchWindow({
     <Matches.Provider value={matches?.visible ?? []}>
       <div className="space-y-2 border-b border-border-subtle p-3">
         <div className="font-medium text-13">
-          {matches?.thread.title?.text || t("inbox.conversation")}
+          {matches?.thread.display_name || t("inbox.conversation")}
         </div>
         <div className="flex items-center gap-2 text-2xs text-fg-muted">
           <span className="mr-auto">

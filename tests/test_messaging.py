@@ -3407,3 +3407,48 @@ def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_pa
     lid.refresh_from_db()
     assert lid.value == "113352894324870@lid"
     assert lid.external_id == "113352894324870@lid"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any) -> None:
+    """Untitled chats read as who they are with; outbound senders are the account holder."""
+
+    def said(external_id: str, thread: ParsedThread, name: str, *, outbound: bool = False) -> ParsedMessage:
+        sender = ParsedHandle(platform="email", value=f"{name.lower()}@example.com", display_name=name)
+        return replace(
+            _parsed(external_id, subject=""),
+            thread=thread,
+            sender=sender,
+            recipients=(),
+            direction="outbound" if outbound else "inbound",
+        )
+
+    dm = ParsedThread(external_id="dm-sofia", modality="direct")
+    group = ParsedThread(external_id="room-1", modality="group")
+    named = ParsedThread(external_id="room-2", modality="group", title="Weekend plans")
+    silent = ParsedThread(external_id="dm-silent", modality="direct")
+    _ingest(
+        [
+            said("m1", dm, "Sofia"),
+            said("m2", dm, "Me", outbound=True),
+            said("m3", group, "Tim"),
+            said("m4", group, "Anna"),
+            said("m5", group, "Anna"),
+            said("m6", group, "Bea"),
+            said("m7", group, "Cy"),
+            said("m8", group, "Me", outbound=True),
+            said("m9", named, "Tim"),
+            said("m10", silent, "Me", outbound=True),
+        ],
+        channel=channel,
+    )
+    scope = channel.pk
+    with actor_context(channel.owner):
+        labels = Thread.objects.all().conversation_labels()
+    by_key = {Thread._base_manager.get(pk=pk).external_id: label for pk, label in labels.items()}
+    assert by_key == {
+        f"chat:{scope}:dm-sofia": "Sofia",
+        f"chat:{scope}:room-1": "Anna, Tim +2",
+        f"chat:{scope}:room-2": "Weekend plans",
+        f"chat:{scope}:dm-silent": "Direct message",
+    }

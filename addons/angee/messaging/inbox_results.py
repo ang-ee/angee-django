@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from django.db import models
 from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, Value, When
-from django.db.models.functions import Cast, Coalesce, TruncDate
+from django.db.models.functions import Cast, TruncDate
 from pydantic import BaseModel, ConfigDict, Field
 
 from angee.messaging.inbox import InboxPage, MessageInbox
@@ -260,12 +260,7 @@ class InboxConversationGroups(InboxGroups):
     def page(self, *, page: int = 1, size: int = 25) -> InboxGroupPage:
         result = super().page(page=page, size=size)
         keys = [int(cast(str, row.value)) for row in result.rows]
-        titles = dict(
-            self.inbox.threads.filter(pk__in=[key for key in keys if key > 0])
-            .order_by().values_list(
-                "pk", Coalesce("title__text", Value("Conversation"), output_field=models.TextField())
-            )
-        )
+        titles = self.inbox.threads.filter(pk__in=[key for key in keys if key > 0]).conversation_labels()
         rows = []
         for row in result.rows:
             key = int(cast(str, row.value))

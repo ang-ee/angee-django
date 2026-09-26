@@ -559,6 +559,59 @@ class ThreadQuerySet(AngeeQuerySet[Any]):
 
         return cast(ThreadQuerySet, self.filter(channel=channel))
 
+    def conversation_labels(self) -> dict[Any, str]:
+        """Label each thread for the actor: its title, else the people in it.
+
+        An untitled direct thread names its counterpart; an untitled group names
+        up to two people and counts the rest ("Anna, Tim +4"). People are the
+        actor-readable senders of inbound messages, most active first: outbound
+        messages are the account holder's own, whichever handle sent them.
+        Evaluate on a bounded page of threads.
+        """
+
+        rows = list(self.order_by().values_list("pk", "modality", "title__text"))
+        labels = {pk: str(title or "").strip() for pk, _, title in rows}
+        untitled = {pk: str(modality) for pk, modality, _ in rows if not labels[pk]}
+        actor = self.actor() or current_actor()
+        people: dict[Any, list[str]] = {pk: [] for pk in untitled}
+        if untitled and actor is not None:
+            handles = apps.get_model("parties", "Handle").objects.with_actor(actor).with_sender_name()
+            activity = (
+                apps.get_model("messaging", "Participant")
+                .objects.with_actor(actor)
+                .scoped_for_aggregate()
+                .filter(
+                    thread_id__in=list(untitled),
+                    role="from",
+                    message__direction="inbound",
+                    handle_id__in=models.Subquery(handles.values("pk")),
+                )
+                .order_by()
+                .values("thread_id", "handle_id")
+                .annotate(_turns=models.Count("pk"))
+                .order_by("thread_id", "-_turns", "handle_id")
+            )
+            ranked = [(row["thread_id"], row["handle_id"]) for row in activity]
+            names = dict(
+                handles.filter(pk__in={handle for _, handle in ranked}).values_list("pk", "_sender_name")
+            )
+            for thread_id, handle_id in ranked:
+                name = str(names.get(handle_id) or "").strip()
+                if name and name not in people[thread_id]:
+                    people[thread_id].append(name)
+        for pk, modality in untitled.items():
+            present = people[pk]
+            if modality == "direct":
+                labels[pk] = present[0] if present else "Direct message"
+            elif modality == "group" and present:
+                shown = ", ".join(present[:2])
+                labels[pk] = f"{shown} +{len(present) - 2}" if len(present) > 2 else shown
+            elif modality == "group":
+                labels[pk] = "Group chat"
+            else:
+                labels[pk] = "Conversation"
+        return labels
+
 
 class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore[misc]
     """Owns thread resolution — the 4-step RFC-5322 priority under a row lock."""
