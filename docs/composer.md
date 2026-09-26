@@ -216,8 +216,10 @@ each applicable origin it copies the complete source module to
 `runtime/<app_label>/migrations/`, gives it the next numeric name, and attaches
 it to the target app's single current leaf. The footer records the stable
 `<addon>:<name>` origin and source digest. Existing materialized bodies are
-immutable and repeated builds are idempotent. Changed source digests,
-copied-body edits, duplicate origins, split leaves, and invalid graphs fail
+immutable and repeated builds are idempotent. A declaration may list exact
+released digests under `compatible_source_sha256` when a source fix must keep
+already-materialized copies valid; the copies themselves still never change.
+Other changed source digests, copied-body edits, duplicate origins, split leaves, and invalid graphs fail
 before migration execution. A guarded app-label adoption may deliberately
 write reviewed staging nodes and then stop at the physical-table-owner drop check.
 This gives downstream migrations a concrete new graph without allowing the

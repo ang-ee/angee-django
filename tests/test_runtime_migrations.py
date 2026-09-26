@@ -539,6 +539,56 @@ def test_changed_released_source_fails_instead_of_rewriting(runtime_migration_pr
         materializer.materialize(apps=apps)
 
 
+def test_declared_compatible_released_source_remains_immutable(runtime_migration_probe) -> None:
+    """An exact historical source digest may coexist with its current declaration."""
+
+    materializer, addon, source_path, _, _ = runtime_migration_probe
+    (output,) = materializer.materialize(apps=apps)
+    released_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    source_path.write_text(source_path.read_text(encoding="utf-8") + "# current source\n", encoding="utf-8")
+    write_addon_manifest(
+        addon,
+        migrations=(
+            dict(
+                name="rename_legacy",
+                app_label="resources",
+                module="runtime_migrations.rename_legacy",
+                compatible_source_sha256=[released_digest],
+            ),
+        ),
+    )
+
+    assert materializer.materialize(apps=apps) == ()
+    output.write_text(
+        output.read_text(encoding="utf-8").replace("def forwards", "def edited_forwards", 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="materialized body digest changed"):
+        materializer.materialize(apps=apps)
+
+
+@pytest.mark.parametrize("digest", ["not-a-digest", "A" * 64, 7])
+def test_compatible_source_digest_requires_exact_lowercase_sha256(
+    runtime_migration_probe,
+    digest: object,
+) -> None:
+    materializer, addon, _, _, _ = runtime_migration_probe
+    write_addon_manifest(
+        addon,
+        migrations=(
+            dict(
+                name="rename_legacy",
+                app_label="resources",
+                module="runtime_migrations.rename_legacy",
+                compatible_source_sha256=[digest],
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="compatible_source_sha256"):
+        materializer.materialize(apps=apps)
+
+
 def test_changed_materialized_body_fails_instead_of_becoming_history(runtime_migration_probe) -> None:
     materializer, _, _, runtime_dir, _ = runtime_migration_probe
     (output,) = materializer.materialize(apps=apps)
