@@ -6,6 +6,7 @@ import { AppRuntimeProvider } from "@angee/ui";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { AGENT_CHAT_SLOT, useAgentChatContext } from "../chat-slot";
+import type { AgentRosterItem } from "../documents";
 import { AgentChat } from "./AgentChat";
 
 afterEach(cleanup);
@@ -50,9 +51,9 @@ describe("agent chat composition", () => {
   });
 
   test("keeps the chooser available to leave an unsupported runtime", () => {
-    const agents = ["pydantic", "opencode"].map((runtime) => ({
-      id: runtime, name: runtime, runtime_class: runtime, runtime_status: "RUNNING" as const,
-      is_template: false, updated_at: "2026-09-21", model: null,
+    const agents: AgentRosterItem[] = ["pydantic", "opencode"].map((runtime) => ({
+      id: runtime, name: runtime, runtime_class: runtime as AgentRosterItem["runtime_class"],
+      runtime_status: "RUNNING" as const, is_template: false, updated_at: "2026-09-21", model: null,
     }));
     function Switcher() {
       const [selected, select] = useState("pydantic");
