@@ -43,7 +43,7 @@ PROJECT_PYPROJECT_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template
 PROJECT_SETTINGS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "settings.yaml.jinja"
 
 # Services both stack templates render from the one shared body.
-SHARED_SERVICES = {"operator", "postgres", "redis", "django", "celery-worker", "celery-beat"}
+SHARED_SERVICES = {"operator", "postgres", "redis", "django", "celery-worker"}
 DJANGO_READY = {
     "cmd": [
         "python",
@@ -602,7 +602,7 @@ def test_local_django_source_mode_bootstraps_fresh_host_dependencies() -> None:
     assert "PYTHONPATH" not in django["env"]
 
     assert stack["sources"]["framework"]["path"] == "sources/angee"
-    for service_name in ("celery-worker", "celery-beat"):
+    for service_name in ("celery-worker",):
         service = stack["services"][service_name]
         assert service["image"] == "ghcr.io/ang-ee/django-angee-base:latest"
         assert "PYTHONPATH" not in service["env"]
@@ -622,7 +622,7 @@ def test_local_django_baked_mode_skips_uv_sync() -> None:
     assert "uv sync" not in django["command"][-1]
     assert "python manage.py angee provision --bootstrap-admin" in stack["jobs"]["provision"]["command"][-1]
     assert "framework" not in stack["sources"]
-    for service_name in ("celery-worker", "celery-beat"):
+    for service_name in ("celery-worker",):
         assert "uv sync" not in stack["services"][service_name]["command"][-1]
 
 
@@ -643,7 +643,7 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert stack["services"]["django"]["env"]["REDIS_URL"] == "redis://redis:6379/0"
     assert stack["services"]["django"]["env"]["CELERY_BROKER_URL"] == "redis://redis:6379/1"
     assert "celery -A angee.jobs.celery:app worker" in stack["services"]["celery-worker"]["command"][-1]
-    assert "celery -A angee.jobs.celery:app beat" in stack["services"]["celery-beat"]["command"][-1]
+    assert "celery -A angee.jobs.celery:app worker --beat" in stack["services"]["celery-worker"]["command"][-1]
 
     caddy = stack["services"]["caddy"]
     assert caddy["ports"] == ["5173:80"]
@@ -849,7 +849,6 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
     # The serving processes now hang off provision, not the old resources/schema jobs.
     assert stack["services"]["django"]["after"] == ["provision"]
     assert stack["services"]["celery-worker"]["after"] == ["provision"]
-    assert stack["services"]["celery-beat"]["after"] == ["provision"]
 
 
 def test_dev_stack_mounts_postgres_data_from_stack_root() -> None:
@@ -871,8 +870,9 @@ def test_dev_stack_runs_redis_and_celery_services() -> None:
     assert stack["services"]["celery-worker"]["env"]["CELERY_BROKER_URL"] == "redis://127.0.0.1:${ports.redis}/1"
     assert "celery" in stack["services"]["celery-worker"]["command"]
     assert "worker" in stack["services"]["celery-worker"]["command"]
-    assert "celery" in stack["services"]["celery-beat"]["command"]
-    assert "beat" in stack["services"]["celery-beat"]["command"]
+    # One worker per stack embeds beat; there is no separate beat process.
+    assert "--beat" in stack["services"]["celery-worker"]["command"]
+    assert "celery-beat" not in stack["services"]
 
 
 def test_dev_stack_ollama_is_opt_in_and_persistent() -> None:
@@ -951,7 +951,6 @@ def test_dev_stack_runs_bare_uv_against_the_project_root_pyproject() -> None:
         stack["jobs"]["operator-schema"],
         stack["services"]["django"],
         stack["services"]["celery-worker"],
-        stack["services"]["celery-beat"],
     ):
         assert node["workdir"] == "source://app"
         assert node["command"][:2] == ["uv", "run"]
@@ -1098,7 +1097,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert operator_svc["ports"] == ["${ports.operator}:9000"]
     assert "bind://.:${stack.root}" in operator_svc["mounts"]
     assert stack["services"]["django"]["env"]["ANGEE_OPERATOR_URL"] == "http://operator:9000"
-    for name in ("django", "celery-worker", "celery-beat", "frontend", "storybook"):
+    for name in ("django", "celery-worker", "frontend", "storybook"):
         assert stack["services"][name]["runtime"] == "container"
 
     django = stack["services"]["django"]
@@ -1113,7 +1112,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert django["env"]["ANGEE_OPERATOR_URL"] == "http://operator:9000"
     assert django["ready"] == DJANGO_READY
     assert django["after"] == ["provision"]
-    for name in ("celery-worker", "celery-beat"):
+    for name in ("celery-worker",):
         celery_command = stack["services"][name]["command"][-1]
         assert "uv sync --inexact && exec celery" in celery_command
         assert stack["services"][name]["after"] == ["provision", "redis"]
@@ -1186,7 +1185,7 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
     assert framework["services"]["frontend"]["ready"]["http"] == {"port": 5173, "path": "/"}
     assert instance["services"]["django"]["ready"] == DJANGO_READY
 
-    for name in ("celery-worker", "celery-beat", "celery-whatsapp"):
+    for name in ("celery-worker", "celery-whatsapp"):
         assert framework["services"][name]["after"] == ["provision", "redis"]
         assert instance["services"][name]["after"] == ["provision", "redis"]
     assert framework["services"]["frontend"]["after"] == ["django", "codegen"]
@@ -1336,13 +1335,13 @@ def test_uv_caches_are_stack_owned() -> None:
     """
 
     dev = _render_dev_stack()
-    for name in ("django", "celery-worker", "celery-beat"):
+    for name in ("django", "celery-worker"):
         assert "UV_CACHE_DIR" not in dev["services"][name]["env"]
 
     dev_docker = _render_dev_docker_stack()
     local = _render_local_stack()
     for stack in (dev_docker, local):
-        for name in ("django", "celery-worker", "celery-beat"):
+        for name in ("django", "celery-worker"):
             assert stack["services"][name]["env"]["UV_CACHE_DIR"] == "/app/caches/uv"
 
     for gitignore_path in (LOCAL_STACK_GITIGNORE, DEV_STACK_GITIGNORE):
@@ -1378,7 +1377,7 @@ def test_secret_key_is_mode_invariant() -> None:
     assert "secret-key" in dev_docker["secrets"]
     assert "secret-key" in local["secrets"]
     for stack in (dev, dev_docker, local):
-        for name in ("django", "celery-worker", "celery-beat"):
+        for name in ("django", "celery-worker"):
             assert stack["services"][name]["env"]["YAMLCONF_SECRET_KEY"] == "${secret.secret-key}"
     assert dev["jobs"]["provision"]["env"]["YAMLCONF_SECRET_KEY"] == "${secret.secret-key}"
 
@@ -1396,7 +1395,6 @@ def test_python_nodes_share_runtime_environment_and_restart_entry() -> None:
             stack["jobs"]["operator-schema"],
             stack["services"]["django"],
             stack["services"]["celery-worker"],
-            stack["services"]["celery-beat"],
         ]
         for node in nodes:
             assert node["env"]["ANGEE_OPERATOR_RESTART_JOB"] == restart_job
@@ -1466,12 +1464,8 @@ def test_celery_queue_workers_render_in_both_modes() -> None:
 
     for render in (_render_dev_stack, _render_dev_docker_stack, _render_local_stack):
         stack = render()
-        assert {name for name in stack["services"] if name.startswith("celery-")} == {
-            "celery-worker",
-            "celery-beat",
-        }
+        assert {name for name in stack["services"] if name.startswith("celery-")} == {"celery-worker"}
         assert stack["services"]["celery-worker"]["stop_grace_period"] == "30s"
-        assert stack["services"]["celery-beat"]["stop_grace_period"] == "30s"
 
     dev = _render_dev_stack(celery_queues="whatsapp")
     dev_service = dev["services"]["celery-whatsapp"]
@@ -1480,7 +1474,8 @@ def test_celery_queue_workers_render_in_both_modes() -> None:
     command = dev_service["command"]
     assert command[command.index("-Q") + 1] == "whatsapp"
     assert command[command.index("--pool") + 1] == "threads"
-    assert "beat" not in command
+    # Queue workers never embed beat: one scheduler per stack.
+    assert "--beat" not in command
     # The queue worker shares the shared block's env owner verbatim.
     assert dev_service["env"] == dev["services"]["celery-worker"]["env"]
 
@@ -1498,6 +1493,6 @@ def test_celery_queue_workers_render_in_both_modes() -> None:
     assert "worker -Q whatsapp --pool threads --concurrency 8" in exec_line
     assert local_service["image"] == local["services"]["celery-worker"]["image"]
 
-    # Two queues render two workers; the shared pair stays untouched.
+    # Two queues render two workers; the shared worker stays untouched.
     two = _render_dev_stack(celery_queues="whatsapp,voice")
-    assert {"celery-whatsapp", "celery-voice", "celery-worker", "celery-beat"} <= set(two["services"])
+    assert {"celery-whatsapp", "celery-voice", "celery-worker"} <= set(two["services"])

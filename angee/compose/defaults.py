@@ -51,6 +51,7 @@ _CORE_INSTALLED_APPS_PREFIX = (
     "reversion",
     "simple_history",
     "angee.base",
+    "django_celery_beat",
     "angee.jobs",
 )
 INSTALLED_APPS = [

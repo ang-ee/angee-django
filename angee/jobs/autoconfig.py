@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 SETTINGS: dict[str, int | str] = {
+    # Beat keeps its schedule in the database (django-celery-beat) while code owns
+    # it: addons declare CELERY_BEAT_SCHEDULE, beat writes those entries into
+    # PeriodicTask rows at startup and prunes rows no longer declared. Rows hold
+    # run state and the enabled flag; see angee.jobs.scheduler.
+    "CELERY_BEAT_SCHEDULER": "angee.jobs.scheduler:DatabaseScheduler",
     "CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP": True,
     "CELERY_TASK_IGNORE_RESULT": True,
     "CELERY_TASK_SOFT_TIME_LIMIT": 840,
@@ -27,11 +31,6 @@ def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
     """
 
     result: dict[str, Any] = {}
-    # Beat's schedule state file belongs in the stack's data dir, never in beat's
-    # workdir — a beat whose workdir is the project root would otherwise litter
-    # celerybeat-schedule* into the project source tree.
-    if data_dir := namespace.get("ANGEE_DATA_DIR"):
-        result["CELERY_BEAT_SCHEDULE_FILENAME"] = str(Path(data_dir) / "celerybeat-schedule")
     broker_url = os.environ.get("CELERY_BROKER_URL") or namespace.get("CELERY_BROKER_URL")
     if broker_url:
         result["CELERY_BROKER_URL"] = str(broker_url)
