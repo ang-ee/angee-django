@@ -32,8 +32,15 @@ export const INBOX_MODELS = [
   "parties.Circle",
   "parties.CircleMember",
   "parties.Relationship",
-  "nexus.Tie",
   "storage.File",
+  "integrate.Integration",
+] as const;
+/** Only the finder's fading predicate reads Nexus's derived ties. */
+export const NAVIGATOR_MODELS = [...INBOX_MODELS, "nexus.Tie"] as const;
+/** Source accounts, platforms and relation kinds: accounts with eligible messages. */
+export const INBOX_SOURCE_MODELS = [
+  "messaging.Message",
+  "messaging.MessageEdge",
   "integrate.Integration",
 ] as const;
 const PAGE_SIZE = 25;

@@ -71,3 +71,11 @@ describe("the explorer control contract", () => {
     ]);
   });
 });
+
+test("live interest stays with the owners each inbox read uses", async () => {
+  const { INBOX_MODELS, INBOX_SOURCE_MODELS, NAVIGATOR_MODELS } = await import("./state");
+  // Derived ties are rewritten hourly; only the finder's fading predicate reads them.
+  expect(INBOX_MODELS).not.toContain("nexus.Tie");
+  expect(NAVIGATOR_MODELS).toContain("nexus.Tie");
+  expect([...INBOX_SOURCE_MODELS].sort()).toEqual(["integrate.Integration", "messaging.Message", "messaging.MessageEdge"]);
+});

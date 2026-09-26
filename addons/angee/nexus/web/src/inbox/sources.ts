@@ -24,7 +24,7 @@ import {
   type NavigatorLens,
   type ResultLens,
 } from "./contract";
-import { INBOX_MODELS, type InboxNavigation } from "./state";
+import { INBOX_MODELS, NAVIGATOR_MODELS, type InboxNavigation } from "./state";
 import type { useNexusT } from "../i18n";
 
 type Translate = ReturnType<typeof useNexusT>;
@@ -62,7 +62,7 @@ export function navigatorSource({
     query: inboxCollectionQuery(navigatorAxes(lens)),
     rows: collectionQuery({
       document: InboxNavigator,
-      models: INBOX_MODELS,
+      models: NAVIGATOR_MODELS,
       variables: (request: CollectionPageRequest) => ({
         ...options(request),
         scope: new InboxFilter(request.filter).scope(),
@@ -80,7 +80,7 @@ export function navigatorSource({
     }),
     groups: collectionQuery({
       document: InboxNavigatorGroups,
-      models: INBOX_MODELS,
+      models: NAVIGATOR_MODELS,
       variables: (request: CollectionGroupRequest) => ({
         ...options(request),
         axis: request.group.field.slice(3),
