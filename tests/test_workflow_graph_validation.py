@@ -268,6 +268,26 @@ def test_result_binding_proves_only_bounded_literal_subsets(
     assert compatible is expected
 
 
+class DefaultedCodeOutput(BaseModel):
+    code: str = ""
+
+
+def test_result_binding_ignores_schema_annotations() -> None:
+    """A ``default`` annotates a field; it never blocks the field's proof."""
+
+    binding = parse_binding({
+        "kind": "step_output", "step_key": "producer", "path": ["code"],
+    })
+
+    assert _result_binding_compatible(
+        binding,
+        {"type": "string", "default": "", "title": "Code"},
+        schema_data_contract({"type": "object", "properties": {}}),
+        model_data_contract(DefaultedCodeOutput, mode="serialization"),
+        "producer",
+    )
+
+
 def test_result_binding_literal_subset_uses_json_type_semantics() -> None:
     binding = parse_binding({
         "kind": "step_output", "step_key": "producer", "path": ["status"],

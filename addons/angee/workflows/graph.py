@@ -1461,6 +1461,12 @@ def _tagged_one_of_choice(binding: Any, variants: list[Any]) -> dict[str, Any] |
     return selected[0] if len(selected) == 1 else None
 
 
+# JSON Schema annotation keywords describe a value without constraining it.
+_ANNOTATION_KEYWORDS = frozenset(
+    {"title", "description", "default", "examples", "deprecated", "readOnly", "writeOnly", "$comment"}
+)
+
+
 def _catalogue_node_compatible(
     source: DataContractNode,
     target_schema: dict[str, Any],
@@ -1471,10 +1477,8 @@ def _catalogue_node_compatible(
 ) -> bool:
     if not target_schema:
         return True
-    if set(target_schema) - {
+    if set(target_schema) - _ANNOTATION_KEYWORDS - {
         "type",
-        "title",
-        "description",
         "$defs",
         "items",
         "enum",
