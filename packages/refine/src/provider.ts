@@ -21,7 +21,12 @@ import {
   recordValue,
   stringValue,
 } from "./dialect/wire";
-import { invalidateAuthoredQueries, invalidateAuthoredQueriesForChange } from "./query-invalidation";
+import {
+  createAuthoredLiveInvalidation,
+  invalidateAuthoredQueries,
+  type AuthoredLiveChange,
+  type AuthoredLiveInvalidation,
+} from "./query-invalidation";
 
 type FetchFn = typeof globalThis.fetch;
 type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
@@ -240,6 +245,9 @@ export function createAngeeChangeLiveProvider(
   // consumer leaves.
   const subscriptions = new Map<string, ChangeSubscription>();
   let stopConnectionListener: () => void = noopSubscription;
+  const liveInvalidation = options.queryClient
+    ? createAuthoredLiveInvalidation(options.queryClient)
+    : undefined;
 
   function stopUnusedConnectionListener(): void {
     if (subscriptions.size === 0) {
@@ -260,7 +268,7 @@ export function createAngeeChangeLiveProvider(
     const consumer: ChangeConsumer = (data) => {
       const event = changeEventFromResult(data, changesRoot, channel, resource);
       if (event) {
-        invalidateAuthoredQueriesForEvent(options.queryClient, event);
+        invalidateAuthoredQueriesForEvent(liveInvalidation, event);
         callback(event);
       }
     };
@@ -344,22 +352,22 @@ export function resolveGraphQLWebSocketEndpoint(
 }
 
 function invalidateAuthoredQueriesForEvent(
-  queryClient: AuthoredQueryInvalidationClient | undefined,
+  liveInvalidation: AuthoredLiveInvalidation | undefined,
   event: LiveEvent,
 ): void {
-  const model = stringValue(recordValue(event.payload)?.model);
-  const id = stringValue(recordValue(event.payload)?.id);
-  const relatedRecords = Array.isArray(recordValue(event.payload)?.relatedRecords)
-    ? (recordValue(event.payload)?.relatedRecords as unknown[]).flatMap((value) => {
+  const payload = recordValue(event.payload);
+  const model = stringValue(payload?.model);
+  if (!liveInvalidation || !model) return;
+  const relatedRecords = Array.isArray(payload?.relatedRecords)
+    ? (payload.relatedRecords as unknown[]).flatMap((value) => {
       const record = recordValue(value);
       const relatedModel = stringValue(record?.model);
       const relatedId = stringValue(record?.id);
       return relatedModel && relatedId ? [{ model: relatedModel, id: relatedId }] : [];
     })
     : [];
-  if (!queryClient || !model) return;
-  if (id) void invalidateAuthoredQueriesForChange(queryClient, model, id, relatedRecords);
-  else void invalidateAuthoredQueries(queryClient, [model]);
+  const change: AuthoredLiveChange = { model, id: stringValue(payload?.id) || undefined, relatedRecords };
+  liveInvalidation.push(change);
 }
 
 function hasuraOptions(

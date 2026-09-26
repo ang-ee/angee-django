@@ -38,18 +38,11 @@ export function authoredQueryReadsChange(meta: unknown, model: string, id: strin
   });
 }
 
-/** Refetch authored reads affected by one exact live row change. */
-export async function invalidateAuthoredQueriesForChange(
-  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
-  model: string,
-  id: string,
-  relatedRecords: readonly { model: string; id: string }[] = [],
-): Promise<void> {
-  return invalidateAuthoredQueriesMatching(
-    queryClient,
-    (query) => authoredQueryReadsChange(query.meta, model, id)
-      || relatedRecords.some((record) => authoredQueryReadsChange(query.meta, record.model, record.id)),
-  );
+/** Match one live change: an exact row with its related rows, or a whole model. */
+function authoredQueryReadsLiveChange(meta: unknown, change: AuthoredLiveChange): boolean {
+  if (!change.id) return authoredQueryReadsAnyModel(meta, [change.model]);
+  return authoredQueryReadsChange(meta, change.model, change.id)
+    || (change.relatedRecords ?? []).some((record) => authoredQueryReadsChange(meta, record.model, record.id));
 }
 
 /** Refetch every active authored read registered against one of the moved models. */
@@ -63,7 +56,69 @@ export async function invalidateAuthoredQueries(
   );
 }
 
-/** One cancellation/refetch protocol shared by model-wide and exact-row invalidation. */
+/** One exact live row change, as delivered by a change subscription. */
+export interface AuthoredLiveChange {
+  model: string;
+  id?: string;
+  relatedRecords?: readonly { model: string; id: string }[];
+}
+
+export interface AuthoredLiveInvalidationOptions {
+  /** Quiet period that closes a burst of changes. */
+  windowMs?: number;
+  /** Longest a continuous stream may defer its first change. */
+  maxWaitMs?: number;
+}
+
+export interface AuthoredLiveInvalidation {
+  push: (change: AuthoredLiveChange) => void;
+  dispose: () => void;
+}
+
+/**
+ * Coalesce live row changes so each affected read refetches once per burst.
+ *
+ * A flush applies the shared protocol once for the union of the burst's
+ * changes, so a read is restarted at most once per flush instead of once per
+ * row event. The max wait bounds how long a continuous stream defers a flush.
+ */
+export function createAuthoredLiveInvalidation(
+  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
+  { windowMs = 300, maxWaitMs = 2000 }: AuthoredLiveInvalidationOptions = {},
+): AuthoredLiveInvalidation {
+  let changes: AuthoredLiveChange[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let firstAt: number | undefined;
+
+  function flush(): void {
+    const batch = changes;
+    changes = [];
+    timer = undefined;
+    firstAt = undefined;
+    void invalidateAuthoredQueriesMatching(
+      queryClient,
+      (query) => batch.some((change) => authoredQueryReadsLiveChange(query.meta, change)),
+    );
+  }
+
+  return {
+    push(change) {
+      changes.push(change);
+      const now = Date.now();
+      firstAt ??= now;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(flush, Math.max(0, Math.min(windowMs, firstAt + maxWaitMs - now)));
+    },
+    dispose() {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+      firstAt = undefined;
+      changes = [];
+    },
+  };
+}
+
+/** One cancellation/refetch protocol shared by model-wide, exact-row and live invalidation. */
 async function invalidateAuthoredQueriesMatching(
   queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
   predicate: (query: Query) => boolean,
