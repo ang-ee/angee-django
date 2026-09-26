@@ -89,7 +89,7 @@ class Group(ConditionalSharedReaderMixin, HierarchyMixin, SqidMixin, AuditMixin,
         max_length = slug_field.max_length or 50
         base = slugify(self.name)[:max_length] or "group"
         owner_model = slug_field.model
-        candidates = owner_model.system_queryset(lock=())
+        candidates = owner_model.system_queryset(lock=("self",))
         if self.pk is not None:
             candidates = candidates.exclude(pk=self.pk)
 

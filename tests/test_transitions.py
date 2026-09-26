@@ -184,7 +184,7 @@ def test_deferred_transition_refreshes_state_and_locks_before_saving(
         task.persist_with_body_write()
         assert task.commit_states == []
 
-    assert lock_requests == [()]
+    assert lock_requests == [("self",)]
     assert task.body_save_field is None
     assert task.save_contexts == ["state"]
     assert task.commit_states == [TransitionTask.State.DONE]

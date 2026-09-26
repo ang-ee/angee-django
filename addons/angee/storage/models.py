@@ -519,7 +519,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
             raise ValidationError({"drive": "A folder requires a drive."})
         if not self.parent_id:
             return
-        queryset = system_queryset(type(self), lock=() if lock else None)
+        queryset = system_queryset(type(self), lock=("self",) if lock else None)
         ancestor_id = self.parent_id
         visited: set[Any] = {self.pk} if self.pk is not None else set()
         while ancestor_id is not None:

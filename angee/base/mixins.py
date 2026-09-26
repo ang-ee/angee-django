@@ -763,7 +763,7 @@ class HierarchyMixin(models.Model):
             kwargs["update_fields"] = set(update_fields) | {"parent", "path"}
         with transaction.atomic():
             old_path = self._lock_moved_paths()
-            subtree = system_queryset(type(self), lock=()).filter(path__startswith=old_path)
+            subtree = system_queryset(type(self), lock=("self",)).filter(path__startswith=old_path)
             if old_path:
                 # Evaluate SELECT FOR UPDATE before moving any descendant's path.
                 list(subtree.order_by("pk").values_list("pk", flat=True))
@@ -824,7 +824,7 @@ class HierarchyMixin(models.Model):
     def _locked_paths(self, pks: list[Any]) -> dict[Any, str]:
         """Return committed paths, serializing overlapping moves when supported."""
 
-        reader = system_queryset(type(self), lock=())
+        reader = system_queryset(type(self), lock=("self",))
         return dict(reader.filter(pk__in=pks).values_list("pk", "path"))
 
     def _hierarchy_needs_repath(self) -> bool:

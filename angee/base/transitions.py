@@ -559,7 +559,7 @@ def _verify_uncontended_source(
 ) -> None:
     """Lock the row and reject a committed state that already left ``source``."""
 
-    reader = system_queryset(type(instance), lock=())
+    reader = system_queryset(type(instance), lock=("self",))
     committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
     field = cast(StateField, instance._meta.get_field(field_name))
     if _state_key(field, committed) != _state_key(field, source):

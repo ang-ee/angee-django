@@ -327,7 +327,7 @@ class FractionalRankField(models.FloatField):
             for context_field in context_fields
         }
         previous = (
-            system_queryset(model, lock=())
+            system_queryset(model, lock=("self",))
             .filter(**context)
             .order_by(f"-{self.name}")
             .values_list(self.name, flat=True)
@@ -430,7 +430,7 @@ class FractionalRankField(models.FloatField):
         context_filter = self._context_filter(context)
 
         with transaction.atomic():
-            writer = system_queryset(model, lock=()).filter(**context_filter)
+            writer = system_queryset(model, lock=("self",)).filter(**context_filter)
             rows = list(writer.only(model._meta.pk.name, self.name).order_by(self.name, model._meta.pk.name))
             current = [self._coerce_endpoint(getattr(row, self.attname), name=self.attname) for row in rows]
             clean = self._clean_ranks(len(rows))
