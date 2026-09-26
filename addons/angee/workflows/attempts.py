@@ -539,9 +539,24 @@ def serialize_decision_specs(specs: tuple[DecisionSpec, ...]) -> list[dict[str, 
     return _DECISION_SPECS.dump_python(_DECISION_SPECS.validate_python(specs), mode="json")
 
 
-def deserialize_decision_specs(value: Any) -> tuple[DecisionSpec, ...]:
-    """Decode retained decision declarations through their typed owner."""
+_RETIRED_DECISION_KEYS = frozenset({"record_access"})
+"""Keys historical suspension attempts may retain from retired declaration fields."""
 
+
+def deserialize_decision_specs(value: Any) -> tuple[DecisionSpec, ...]:
+    """Decode retained decision declarations through their typed owner.
+
+    Retained declarations are append-only history; keys of retired fields are
+    ignored so historical attempts stay readable without rewriting them.
+    """
+
+    if isinstance(value, list):
+        value = [
+            {key: item_value for key, item_value in item.items() if key not in _RETIRED_DECISION_KEYS}
+            if isinstance(item, dict)
+            else item
+            for item in value
+        ]
     return validate_json_value(_DECISION_SPECS.validate_json, value)
 
 

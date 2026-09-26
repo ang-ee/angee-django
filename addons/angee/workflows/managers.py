@@ -168,7 +168,6 @@ class RecordAccessPurge:
 
     relationships: int
     registry_relationships: int
-    retained_declarations: int
 
 
 @dataclass
@@ -5504,41 +5503,22 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         """Count, or with ``apply`` delete, retired per-Decision evidence access.
 
         Decisions once granted temporary evidence read through a
-        ``pending_decision`` relation whose subject was the Decision itself,
-        and suspension attempts retained each declaration's ``record_access``.
-        Both local relationship stores and the retained declarations are
-        cleaned in one transaction.
+        ``pending_decision`` relation whose subject was the Decision itself.
+        Both local relationship stores are cleaned in one transaction; retained
+        declarations stay untouched because their decoder ignores retired keys.
         """
 
         if not isinstance(rebac_backend(), LocalBackend):
             raise ValidationError({"rebac": "Decision evidence tuple purge requires the local REBAC adapter."})
-        attempt_model = self.model._meta.get_field("suspension_attempt").remote_field.model
         with transaction.atomic():
             stores = tuple(
                 store.objects.filter(relation="pending_decision", subject_type="workflows/decision")
                 for store in (Relationship, RelationshipRegistry)
             )
-            attempts = [
-                attempt
-                for attempt in system_queryset(attempt_model, lock=("self",) if apply else None)
-                .filter(result_kind=AttemptResultKind.SUSPEND)
-                .only("pk", "result_decisions")
-                .order_by("pk")
-                if any(isinstance(item, dict) and "record_access" in item for item in attempt.result_decisions)
-            ]
-            purge = RecordAccessPurge(stores[0].count(), stores[1].count(), len(attempts))
+            purge = RecordAccessPurge(stores[0].count(), stores[1].count())
             if apply:
                 for rows in stores:
                     rows.delete()
-                for attempt in attempts:
-                    system_queryset(attempt_model, lock=None).filter(pk=attempt.pk).owner_update(
-                        result_decisions=[
-                            {key: value for key, value in item.items() if key != "record_access"}
-                            if isinstance(item, dict)
-                            else item
-                            for item in attempt.result_decisions
-                        ]
-                    )
                 transaction.on_commit(mark_relationships_changed)
         return purge
 
