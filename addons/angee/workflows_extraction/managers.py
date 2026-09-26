@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
-from rebac import system_context, to_subject_ref
+from rebac import system_context, to_subject_ref, write_relationships
 from referencing.exceptions import Unresolvable
 
 from angee.base.actors import actor_user_id
@@ -83,8 +83,37 @@ class EvidenceQuerySet(
 EvidenceManager: Any = AngeeManager.from_queryset(EvidenceQuerySet)
 
 
+class EvidenceSystemManager(EvidenceManager):
+    """Expose guarded unscoped evidence rows to Django and field-backed REBAC traversal."""
+
+    def get_queryset(self) -> EvidenceQuerySet:
+        return super().get_queryset().system_context(reason="workflows_extraction.evidence.base_manager")
+
+
 class ExtractionManager(EvidenceManager):
     """Persist one authorized result and all of its ordered evidence atomically."""
+
+    def resync_target_access(self) -> int:
+        """Backfill File and Message ``target`` tuples of retained extractions after REBAC sync.
+
+        Repeated calls are idempotent and return the number of mirrored targets.
+        """
+
+        with transaction.atomic(), system_context(reason="workflows_extraction.extraction.resync_targets"):
+            rows = (
+                system_queryset(self.model, lock=None)
+                .defer("result", "schema", "provenance", "document_map", "profile_config", "retired_identities")
+                .prefetch_related("target")
+                .order_by("pk")
+            )
+            relationships = [
+                relationship
+                for extraction in rows.iterator(chunk_size=500)
+                if (relationship := extraction.target_relationship()) is not None
+            ]
+            if relationships:
+                write_relationships(relationships)
+        return len(relationships)
 
     def automatic_inference_mapping(
         self, base: Any, *, result: Any | None = None,
@@ -1207,13 +1236,8 @@ class ExtractionManager(EvidenceManager):
         )
 
 
-class ExtractionSystemManager(ExtractionManager):
-    """Expose guarded unscoped rows to Django and field-backed REBAC traversal."""
-
-    def get_queryset(self) -> EvidenceQuerySet:
-        return super().get_queryset().system_context(
-            reason="workflows_extraction.extraction.base_manager"
-        )
+class ExtractionSystemManager(EvidenceSystemManager, ExtractionManager):
+    """Expose guarded unscoped extraction rows with their retention operations."""
 
 
 def _claims_for_part(claims: dict[str, list[dict[str, Any]]], position: int) -> dict[str, list[dict[str, Any]]]:

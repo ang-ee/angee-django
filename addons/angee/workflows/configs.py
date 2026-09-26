@@ -20,7 +20,6 @@ from pydantic import (
     model_validator,
 )
 
-from angee.workflows.attempts import DecisionRecordAccess
 from angee.workflows.bindings import BindingNode, is_binding, is_gate_binding_mapping, parse_binding
 from angee.workflows.data_contracts import JsonPath, JsonSchemaDict, schema_data_contract
 from angee.workflows.decision_actions import ReviewAction, build_decision_action
@@ -106,7 +105,6 @@ class GateSlotConfig(BaseModel):
     payload: dict[str, Any] | None = None
     decision_schema: dict[str, Any] | None = None
     target: GateTargetConfig | None = None
-    record_access: list[DecisionRecordAccess] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -158,7 +156,6 @@ def _empty_dynamic_object(value: Any) -> Any:
 _GateSlots: TypeAlias = Annotated[list[GateSlotConfig], BeforeValidator(_default_slot_priorities)]
 _GateObject: TypeAlias = Annotated[dict[str, Any], BeforeValidator(_empty_dynamic_object)]
 _GateTargets: TypeAlias = list[GateTargetConfig]
-_GateRecordAccess: TypeAlias = list[DecisionRecordAccess]
 
 
 def _resolved_bindings(info: ValidationInfo) -> bool:
@@ -168,7 +165,7 @@ def _resolved_bindings(info: ValidationInfo) -> bool:
 
 
 class GateBinding(BaseModel):
-    """Resolved producer output for the six dynamic fields of a native gate.
+    """Resolved producer output for the five dynamic fields of a native gate.
 
     A producer declares ``output_model = GateBinding`` and returns
     ``binding.model_dump(mode="json")`` as its step output. Bind that output into
@@ -186,7 +183,6 @@ class GateBinding(BaseModel):
     payload: _GateObject = Field(default_factory=dict)
     decision_schema: _GateObject = Field(default_factory=dict)
     targets: _GateTargets = Field(default_factory=list)
-    record_access: _GateRecordAccess = Field(default_factory=list)
     clean: bool = False
 
 
@@ -209,7 +205,6 @@ class GateConfig(WorkflowStepConfig):
         json_schema_extra={"widget": "json"},
     )
     targets: BindingNode | _GateTargets = Field(default_factory=list, json_schema_extra={"widget": "json"})
-    record_access: BindingNode | _GateRecordAccess = Field(default_factory=list, json_schema_extra={"widget": "json"})
     clean: BindingNode | bool = Field(default=False, json_schema_extra={"widget": "json"})
     resume: bool = False
 

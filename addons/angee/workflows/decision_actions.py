@@ -229,9 +229,12 @@ def _review_json(value: Any) -> Any:
     raise TypeError("Review context values must use their declared Pydantic models.")
 
 
+_RECORD_ADAPTER = TypeAdapter(ReviewRecordReference)
+_RECORDS_ADAPTER = TypeAdapter(tuple[ReviewRecordReference, ...])
+_FACTS_ADAPTER = TypeAdapter(tuple[ReviewFact, ...])
 _CONTEXT_ADAPTERS = {
-    "record": (TypeAdapter(ReviewRecordReference), TypeAdapter(tuple[ReviewRecordReference, ...])),
-    "facts": (TypeAdapter(tuple[ReviewFact, ...]),),
+    "record": (_RECORD_ADAPTER, _RECORDS_ADAPTER),
+    "facts": (_FACTS_ADAPTER,),
     "object": (TypeAdapter(dict[StrictStr, JsonValue]),),
 }
 _VERDICTS = {"COMPLETE": "completed", "REJECT": "rejected", "ESCALATE": "escalated"}
@@ -323,6 +326,35 @@ class DecisionActionContract:
                 raise ValidationError({"payload": f"Decision context {name!r} does not satisfy its schema."})
             if not any(_valid_context(adapter, value) for adapter in _CONTEXT_ADAPTERS[widget]):
                 raise ValidationError({"payload": f"Decision context {name!r} is not a typed {widget} value."})
+
+    def evidence_refs(self, payload: dict[str, Any]) -> tuple[ReviewRecordReference, ...]:
+        """Return the checked context's distinct evidence records in (model, id) order.
+
+        Record-widget references, fact subjects, and fact evidence are the
+        records a reviewer inspects; a Decision's navigation target is not.
+        """
+
+        self.validate_context(payload)
+        refs: dict[tuple[str, str], ReviewRecordReference] = {}
+        for name, widget in sorted(self.context_fields.items()):
+            value = payload[name]
+            if widget == "record":
+                records = (
+                    (validate_json_value(_RECORD_ADAPTER.validate_json, value),)
+                    if isinstance(value, dict)
+                    else validate_json_value(_RECORDS_ADAPTER.validate_json, value)
+                )
+            elif widget == "facts":
+                records = tuple(
+                    record
+                    for fact in validate_json_value(_FACTS_ADAPTER.validate_json, value)
+                    for record in ((fact.subject,) if fact.subject is not None else ()) + fact.evidence
+                )
+            else:
+                continue
+            for record in records:
+                refs.setdefault((record.model.lower(), record.id), record)
+        return tuple(refs[key] for key in sorted(refs))
 
 
 def _valid_context(adapter: TypeAdapter[Any], value: Any) -> bool:
@@ -420,6 +452,13 @@ def compile_decision_action_schema(schema: Any) -> DecisionActionContract | None
     if set(checked) != set(values) or set(verdicts) != set(values):
         raise ValidationError({"decision_schema": "Action options and branches must cover enum exactly."})
     return DecisionActionContract(schema, verdicts, checked, context_fields)
+
+
+def decision_evidence_refs(schema: Any, payload: dict[str, Any]) -> tuple[ReviewRecordReference, ...]:
+    """Return the evidence records a retained Decision schema and payload declare."""
+
+    contract = compile_decision_action_schema(schema)
+    return () if contract is None else contract.evidence_refs(payload)
 
 
 def validate_decision_resolution(decision: Any, payload: Any, *, actor: Any, verdict: str) -> dict[str, Any]:

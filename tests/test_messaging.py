@@ -149,8 +149,6 @@ class Address(AbstractAddress):
 class PartyHandle(WorkflowPartyHandleContribution, AbstractPartyHandle):
     """Concrete identity link used when messaging attributes a user-owned handle."""
 
-    rebac_grantable = WorkflowPartyHandleContribution.rebac_grantable
-
     class Meta(_PartyHandleMeta):
         """Django model options for the canonical test party-handle."""
 
@@ -3510,3 +3508,24 @@ def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any)
         f"chat:{scope}:room-2": "Weekend plans",
         f"chat:{scope}:dm-silent": "",
     }
+
+
+def test_integration_reader_reads_channel_messages_and_parts_without_write(channel: Any) -> None:
+    """A standing integration ``reader`` reads what the channel carries, never writes it."""
+
+    reader = get_user_model().objects.create_user(username="integration-reader")
+    with system_context(reason="test integration reader ingest"):
+        (message,) = Message.objects.ingest([_parsed("integration-reader-1")], channel=channel)
+        part_ids = list(Part._base_manager.filter(message=message).values_list("pk", flat=True))
+    assert part_ids
+    assert not Message.objects.with_actor(reader).filter(pk=message.pk).exists()
+    assert not Part.objects.with_actor(reader).filter(pk__in=part_ids).exists()
+
+    with actor_context(channel.owner):
+        channel.grant_record_access("reader", reader)
+
+    assert channel.with_actor(reader).has_access("read")
+    assert not channel.with_actor(reader).has_access("write")
+    assert Message.objects.with_actor(reader).filter(pk=message.pk).exists()
+    assert set(Part.objects.with_actor(reader).filter(pk__in=part_ids).values_list("pk", flat=True)) == set(part_ids)
+    assert not message.with_actor(reader).has_access("write")

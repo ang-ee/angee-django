@@ -364,15 +364,6 @@ class AttemptClaim:
     newly_claimed: bool
 
 
-class DecisionRecordAccess(BaseModel):
-    """One exact record opened only while its owning Decision is pending."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    model: StrictStr
-    id: StrictStr
-
-
 class DecisionSpec(BaseModel):
     """Declaration for one awaited decision slot returned by an invocation."""
 
@@ -391,7 +382,6 @@ class DecisionSpec(BaseModel):
     target_model: StrictStr = ""
     target_id: StrictStr = ""
     target_tab: StrictStr = Field(default="", max_length=100)
-    record_access: tuple[DecisionRecordAccess, ...] = ()
 
     @model_validator(mode="after")
     def complete_target(self) -> Self:
