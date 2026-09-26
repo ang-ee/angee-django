@@ -7,10 +7,11 @@ from collections.abc import Mapping
 from typing import Any
 
 SETTINGS: dict[str, int | str] = {
-    # Beat keeps its schedule in the database (django-celery-beat): addons still
-    # declare CELERY_BEAT_SCHEDULE in code, beat syncs those entries into
-    # PeriodicTask rows at startup, and the rows hold run state and edits.
-    "CELERY_BEAT_SCHEDULER": "django_celery_beat.schedulers:DatabaseScheduler",
+    # Beat keeps its schedule in the database (django-celery-beat) while code owns
+    # it: addons declare CELERY_BEAT_SCHEDULE, beat writes those entries into
+    # PeriodicTask rows at startup and prunes rows no longer declared. Rows hold
+    # run state and the enabled flag; see angee.jobs.scheduler.
+    "CELERY_BEAT_SCHEDULER": "angee.jobs.scheduler:DatabaseScheduler",
     "CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP": True,
     "CELERY_TASK_IGNORE_RESULT": True,
     "CELERY_TASK_SOFT_TIME_LIMIT": 840,

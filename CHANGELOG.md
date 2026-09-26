@@ -11,10 +11,16 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
-- Beat keeps its schedule in the database through django-celery-beat's
-  `DatabaseScheduler` (no `celerybeat-schedule` file; `CELERY_BEAT_SCHEDULE_FILENAME`
-  is gone). Stack templates run beat inside the shared worker (`worker --beat`)
-  and no longer render a `celery-beat` service; re-render existing stacks.
+- Beat keeps its schedule in the database (django-celery-beat) through
+  `angee.jobs.scheduler.DatabaseScheduler`: code-declared `CELERY_BEAT_SCHEDULE`
+  entries are written at startup and rows no longer declared are pruned.
+  `CELERY_BEAT_SCHEDULE_FILENAME` is gone; delete stale
+  `ANGEE_DATA_DIR/celerybeat-schedule*` files. Stack templates run beat inside the
+  shared worker (`worker --beat`) and no longer render a `celery-beat` service.
+  Existing stacks keep working (their `celery-beat` service uses the database
+  scheduler after the next provision migrates it); when upgrading, remove
+  `celery-beat` and add `--beat` together, never one without the other, or
+  re-render the stack passing back every non-default answer.
 - `optional_states_nullable` applies on populated PostgreSQL databases: its
   data rewrite makes constraints immediate so the following `ALTER TABLE`
   no longer fails on pending trigger events. `compatible_source_sha256`

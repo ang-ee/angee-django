@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from django.apps import apps
 
 
@@ -66,6 +67,61 @@ def test_job_autoconfig_declares_celery_defaults_only() -> None:
     assert "CELERY_BEAT_SCHEDULE" not in SETTINGS
     assert "CELERY_BEAT_SCHEDULE:append" not in SETTINGS
     assert SETTINGS["CELERY_TASK_IGNORE_RESULT"] is True
+    # Beat keeps its schedule in the database through the jobs-owned scheduler.
+    assert SETTINGS["CELERY_BEAT_SCHEDULER"] == "angee.jobs.scheduler:DatabaseScheduler"
+    assert "CELERY_BEAT_SCHEDULE_FILENAME" not in SETTINGS
+
+
+@pytest.mark.django_db
+def test_beat_database_schedule_is_owned_by_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setup writes declared entries and prunes rows code no longer declares."""
+
+    from celery import Celery
+    from django_celery_beat import schedulers as native
+    from django_celery_beat.models import IntervalSchedule, PeriodicTask
+
+    from angee.jobs.scheduler import DatabaseScheduler
+
+    # The library recycles connections between reads; the in-memory test
+    # database would not survive being closed.
+    monkeypatch.setattr(native, "close_old_connections", lambda: None)
+
+    every_minute = IntervalSchedule.objects.create(every=60, period=IntervalSchedule.SECONDS)
+    PeriodicTask.objects.create(name="retired.tick", task="retired.tick", interval=every_minute)
+    app = Celery("beat-ownership-test", set_as_current=False)
+    app.conf.beat_schedule = {"kept.tick": {"task": "kept.tick", "schedule": 30.0}}
+
+    DatabaseScheduler(app=app)
+
+    names = set(PeriodicTask.objects.values_list("name", flat=True))
+    assert "retired.tick" not in names
+    assert "kept.tick" in names
+    # Library defaults (the result backend cleanup) are declared too, never pruned.
+    assert "celery.backend_cleanup" in names
+
+
+def test_beat_keeps_its_last_schedule_when_the_database_read_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Embedded beat has no supervisor: a failed re-read must not end it."""
+
+    from django.db.utils import OperationalError
+    from django_celery_beat.schedulers import DatabaseScheduler as NativeDatabaseScheduler
+
+    from angee.jobs import scheduler as jobs_scheduler
+    from angee.jobs.scheduler import DatabaseScheduler
+
+    recycled: list[bool] = []
+    monkeypatch.setattr(jobs_scheduler, "close_old_connections", lambda: recycled.append(True))
+    scheduler = DatabaseScheduler.__new__(DatabaseScheduler)
+    scheduler._schedule = {"kept.tick": object()}
+
+    def unavailable(self: object) -> dict[str, object]:
+        raise OperationalError("database restarting")
+
+    monkeypatch.setattr(NativeDatabaseScheduler, "all_as_schedule", unavailable)
+
+    assert scheduler.all_as_schedule() == {"kept.tick": scheduler._schedule["kept.tick"]}
+    # The broken connection is dropped so the next re-read reconnects.
+    assert recycled == [True]
 
 
 def test_addons_own_their_periodic_celery_schedules() -> None:

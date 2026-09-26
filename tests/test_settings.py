@@ -1580,20 +1580,6 @@ def test_addon_autoconfig_can_set_graphql_ide(
     assert settings["ANGEE_GRAPHQL_IDE"] == "custom"
 
 
-def test_beat_keeps_its_schedule_in_the_database(tmp_path: Path) -> None:
-    """Beat uses django-celery-beat's database scheduler; no schedule file is written."""
-
-    settings: dict[str, Any] = {
-        "INSTALLED_APPS": ("example.notes",),
-        "ANGEE_RUNTIME_DIR": tmp_path / "runtime",
-        "ANGEE_DATA_DIR": tmp_path / "data",
-    }
-    Composer(settings).compose_settings()
-
-    assert settings["CELERY_BEAT_SCHEDULER"] == "django_celery_beat.schedulers:DatabaseScheduler"
-    assert "CELERY_BEAT_SCHEDULE_FILENAME" not in settings
-
-
 def test_autoconfig_reuses_native_module_and_preserves_incremental_values(tmp_path, monkeypatch):
     """Each later addon sees prior defaults and yamlconf tracks both overlays."""
 
