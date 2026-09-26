@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any, cast
@@ -131,6 +132,34 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
 
     payload = asyncio.run(scenario())
     assert payload.id == "7"
+
+
+def test_subscription_renews_its_group_lease_and_releases_it_on_close(monkeypatch) -> None:
+    """A live subscriber keeps refreshing membership; closing cancels renewal and leaves."""
+
+    layer = InMemoryChannelLayer()
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
+    monkeypatch.setattr(subscriptions, "CHANGE_GROUP_RENEW_SECONDS", 0.02)
+    group = publishing.change_group(Group)
+
+    async def scenario() -> tuple[float, float, dict[str, float], int]:
+        stream = subscriptions._subscribe(Group)
+        pending = asyncio.ensure_future(stream.__anext__())
+        await asyncio.sleep(0.01)
+        (joined,) = layer.groups[group].values()
+        await asyncio.sleep(0.1)
+        (renewed,) = layer.groups[group].values()
+        pending.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pending
+        await stream.aclose()
+        renewals = [task for task in asyncio.all_tasks() if "renew_lease" in repr(task.get_coro())]
+        return joined, renewed, dict(layer.groups.get(group, {})), len(renewals)
+
+    joined, renewed, remaining, renewals = asyncio.run(scenario())
+    assert renewed > joined
+    assert remaining == {}
+    assert renewals == 0
 
 
 def test_subscription_resolver_gates_events_through_sync_adapter(

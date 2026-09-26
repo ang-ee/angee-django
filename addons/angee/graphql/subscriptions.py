@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -12,6 +14,7 @@ from rebac import current_actor
 
 from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.access import ChangeReadGate
+from angee.graphql.constants import CHANGE_GROUP_RENEW_SECONDS
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     attach_data_resource_contribution,
@@ -19,6 +22,8 @@ from angee.graphql.data.metadata import (
 )
 from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.publishing import change_channel_layer, change_group
+
+logger = logging.getLogger(__name__)
 
 
 def changes(
@@ -109,6 +114,18 @@ async def _subscribe(
     group = change_group(model)
     channel = await layer.new_channel()
     await layer.group_add(group, channel)
+
+    async def renew_lease() -> None:
+        # Membership is a lease: a process that dies without discarding (a
+        # restart) lets it expire instead of leaving a dead member for a day.
+        while True:
+            await asyncio.sleep(CHANGE_GROUP_RENEW_SECONDS)
+            try:
+                await layer.group_add(group, channel)
+            except Exception:
+                logger.warning("Renewing the %s change subscription failed.", group, exc_info=True)
+
+    renewal = asyncio.create_task(renew_lease())
     try:
         while True:
             message = await layer.receive(channel)
@@ -116,4 +133,5 @@ async def _subscribe(
             if payload:
                 yield ChangePayload.from_mapping(payload)
     finally:
+        renewal.cancel()
         await layer.group_discard(group, channel)
