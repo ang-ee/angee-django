@@ -2832,7 +2832,7 @@ class Decision(AuditMixin, AngeeDataModel):
     """One awaited resolution slot for a suspended step-run."""
 
     runtime = True
-    rebac_grantable = {"reader": "share", "pending_decision": "share"}
+    rebac_grantable = {"reader": "share"}
     _form_schema_state_attribute = "_workflows_form_schema_state"
 
     sqid_prefix = "wdc_"
@@ -2847,7 +2847,6 @@ class Decision(AuditMixin, AngeeDataModel):
     target_model = models.CharField(max_length=255, blank=True, default="", db_index=True)
     target_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
     target_tab = models.CharField(max_length=100, blank=True, default="")
-    record_access = models.JSONField(default=list, blank=True, editable=False)
     verdict = StateField(choices_enum=Verdict, default=Verdict.PENDING)
     resolution = models.JSONField(default=dict, blank=True)
     resolved_by = models.CharField(max_length=255, blank=True, default="")
@@ -2916,7 +2915,6 @@ class Decision(AuditMixin, AngeeDataModel):
                     "target_model",
                     "target_id",
                     "target_tab",
-                    "record_access",
                     "max_attempts",
                     "expires_at",
                     "escalate_at",
@@ -2939,7 +2937,6 @@ class Decision(AuditMixin, AngeeDataModel):
                     "target_model",
                     "target_id",
                     "target_tab",
-                    "record_access",
                     "max_attempts",
                     "expires_at",
                     "escalate_at",

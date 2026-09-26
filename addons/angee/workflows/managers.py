@@ -29,7 +29,6 @@ from django.utils import timezone
 from pydantic_core import PydanticSerializationError
 from rebac import (
     LocalBackend,
-    ObjectRef,
     RelationshipTuple,
     SubjectRef,
     actor_context,
@@ -39,7 +38,8 @@ from rebac import (
 )
 from rebac.actors import NoActorResolvedError, to_subject_ref
 from rebac.backends import backend as rebac_backend
-from rebac.relationships import delete_relationship
+from rebac.backends.local import mark_relationships_changed
+from rebac.models import Relationship, RelationshipRegistry, active_relationship_model
 from rebac.resources import to_object_ref
 from referencing.exceptions import Unresolvable
 
@@ -48,6 +48,7 @@ from angee.base.identity import (
     canonical_subject_ref,
     instance_from_public_id,
     public_id_for,
+    public_subject_ref,
 )
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
@@ -98,7 +99,9 @@ from angee.workflows.attempts import (
 )
 from angee.workflows.data_contracts import json_schema_validator
 from angee.workflows.decision_actions import (
+    ReviewRecordReference,
     compile_decision_action_schema,
+    decision_evidence_refs,
     retained_decision_form_schema,
     validate_decision_resolution,
 )
@@ -141,31 +144,6 @@ def resolve_actor_subject(actor: Any) -> SubjectRef:
     return to_subject_ref(actor)
 
 
-def _retained_record_access_refs(decision: Any) -> tuple[ObjectRef, ...]:
-    """Parse one Decision's immutable delegation identities without widening them."""
-
-    refs: list[ObjectRef] = []
-    seen: set[tuple[str, str]] = set()
-    for raw in decision.record_access:
-        if not isinstance(raw, dict) or set(raw) != {"resource_type", "resource_id"}:
-            raise ValidationError({"record_access": "Retained Decision delegation identity is invalid."})
-        resource_type = raw["resource_type"]
-        resource_id = raw["resource_id"]
-        if (
-            not isinstance(resource_type, str)
-            or not resource_type
-            or not isinstance(resource_id, str)
-            or not resource_id
-        ):
-            raise ValidationError({"record_access": "Retained Decision delegation identity is invalid."})
-        key = (resource_type, resource_id)
-        if key in seen:
-            raise ValidationError({"record_access": "Retained Decision delegation identities must be unique."})
-        seen.add(key)
-        refs.append(ObjectRef(resource_type, resource_id))
-    return tuple(refs)
-
-
 def _combined_delete_results(*results: tuple[int, dict[str, int]]) -> tuple[int, dict[str, int]]:
     """Combine Django delete counts from explicitly owned cascade phases."""
 
@@ -182,6 +160,15 @@ def _definition_rows(model: type[models.Model]) -> Any:
     """Return an internal unscoped queryset for ownership and lock verification."""
 
     return system_queryset(model, lock=None)
+
+
+@dataclass(frozen=True, slots=True)
+class RecordAccessPurge:
+    """Retired per-Decision evidence access found or removed by the cutover purge."""
+
+    relationships: int
+    registry_relationships: int
+    retained_declarations: int
 
 
 @dataclass
@@ -3185,7 +3172,6 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
             for sibling in decisions:
                 if sibling.verdict == Verdict.PENDING:
                     sibling.expire(resolved_by="workflows/gate_settlement", at=at)
-                    decision_model.objects._remove_pending_record_access(sibling)
             projected = retained_gate_output(attempt, decisions)
             if projected is None:
                 raise ValidationError({"decisions": "Retained gate settlement cannot be projected."})
@@ -5402,7 +5388,6 @@ class DecisionQuerySet(AngeeQuerySet[Any]):
             "target_model",
             "target_id",
             "target_tab",
-            "record_access",
             "verdict",
             "resolution",
             "resolved_by",
@@ -5514,6 +5499,83 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             if relationships:
                 write_relationships(relationships)
         return len(relationships)
+
+    def purge_record_access(self, *, apply: bool = False) -> RecordAccessPurge:
+        """Count, or with ``apply`` delete, retired per-Decision evidence access.
+
+        Decisions once granted temporary evidence read through a
+        ``pending_decision`` relation whose subject was the Decision itself,
+        and suspension attempts retained each declaration's ``record_access``.
+        Both local relationship stores and the retained declarations are
+        cleaned in one transaction.
+        """
+
+        if not isinstance(rebac_backend(), LocalBackend):
+            raise ValidationError({"rebac": "Decision evidence tuple purge requires the local REBAC adapter."})
+        attempt_model = self.model._meta.get_field("suspension_attempt").remote_field.model
+        with transaction.atomic():
+            stores = tuple(
+                store.objects.filter(relation="pending_decision", subject_type="workflows/decision")
+                for store in (Relationship, RelationshipRegistry)
+            )
+            attempts = [
+                attempt
+                for attempt in system_queryset(attempt_model, lock=("self",) if apply else None)
+                .filter(result_kind=AttemptResultKind.SUSPEND)
+                .only("pk", "result_decisions")
+                .order_by("pk")
+                if any(isinstance(item, dict) and "record_access" in item for item in attempt.result_decisions)
+            ]
+            purge = RecordAccessPurge(stores[0].count(), stores[1].count(), len(attempts))
+            if apply:
+                for rows in stores:
+                    rows.delete()
+                for attempt in attempts:
+                    system_queryset(attempt_model, lock=None).filter(pk=attempt.pk).owner_update(
+                        result_decisions=[
+                            {key: value for key, value in item.items() if key != "record_access"}
+                            if isinstance(item, dict)
+                            else item
+                            for item in attempt.result_decisions
+                        ]
+                    )
+                transaction.on_commit(mark_relationships_changed)
+        return purge
+
+    def pending_evidence_failures(self) -> tuple[tuple[Any, ValidationError], ...]:
+        """Return pending Decisions whose issuer or reviewers cannot read their evidence now."""
+
+        relationships = active_relationship_model().objects
+        failures: list[tuple[Any, ValidationError]] = []
+        pending = (
+            system_queryset(self.model, lock=None)
+            .filter(verdict=Verdict.PENDING)
+            .select_related("step_run__run")
+            .order_by("pk")
+        )
+        for decision in pending:
+            resource = to_object_ref(decision)
+            readers: dict[str, list[SubjectRef]] = {"assignees": [], "escalation": []}
+            for row in relationships.filter(
+                resource_type=resource.resource_type,
+                resource_id=resource.resource_id,
+                relation__in=("assignee", "escalation"),
+            ).order_by("relation", "subject_type", "subject_id", "optional_subject_relation"):
+                readers["assignees" if row.relation == "assignee" else "escalation"].append(
+                    SubjectRef.of(str(row.subject_type), str(row.subject_id), str(row.optional_subject_relation))
+                )
+            try:
+                actor = decision.step_run.run.admission_actor()
+                if actor is None:
+                    raise ValidationError({"issuer": "The Decision has no admitted run actor."})
+                self._require_evidence_readers(
+                    decision_evidence_refs(decision.form_schema, decision.payload),
+                    actor=actor,
+                    readers={name: tuple(subjects) for name, subjects in readers.items()},
+                )
+            except ValidationError as error:
+                failures.append((decision, error))
+        return tuple(failures)
 
     def predecessor_decision(self, step_run: Any, gate_step_class: type[Any]) -> Any:
         """Load the nearest declared gate's settled slot on retained ancestry.
@@ -5900,7 +5962,6 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             else:
                 if not decision.resolve(verdict, resolution=payload, resolved_by=str(actor_ref), at=at):
                     raise ValidationError({"decision": "This Decision is no longer pending."})
-                self._remove_pending_record_access(decision)
                 self._settle_collection(decision, at=at)
             self._schedule_advance(decision, at=at)
             return DecisionAttemptResult(decision.with_actor(actor_ref), validation_error)
@@ -5950,7 +6011,6 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             operation = decision.expire if verdict == Verdict.EXPIRED else decision.escalate
             if not operation(at=at, generation=generation, due=True):
                 return False
-            self._remove_pending_record_access(decision)
             self._settle_collection(decision, at=at)
             self._schedule_advance(decision, at=at)
             return True
@@ -5964,7 +6024,6 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         expired = 0
         for row in pending:
             if row.expire(resolved_by=resolved_by, at=at):
-                self._remove_pending_record_access(row)
                 expired += 1
         return expired
 
@@ -6035,8 +6094,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 .order_by("pk")
             )
             for decision in pending:
-                if decision.expire(resolved_by=resolved_by):
-                    self._remove_pending_record_access(decision)
+                decision.expire(resolved_by=resolved_by)
             return len(pending)
 
     def expire_orphaned_suspensions(self, step_run_id: int, *, resolved_by: str) -> int:
@@ -6073,8 +6131,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 )
                 if current_active:
                     continue
-                if decision.expire(resolved_by=resolved_by):
-                    self._remove_pending_record_access(decision)
+                decision.expire(resolved_by=resolved_by)
                 expired += 1
             return expired
 
@@ -6119,8 +6176,9 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         ORM and relationship rows share rollback through REBAC's transactional
         local backend.
 
-        The admitted run actor retains evidence-sharing authority as issuer,
-        independently of the requester's separation-of-duties restriction.
+        Every evidence record in a Decision's typed review context must be
+        readable by the admitted run actor (the issuer) and by every assignee
+        and escalation subject through ordinary REBAC relations.
         """
         if attempt.step_run_id != step_run.pk:
             raise ValidationError({"attempt": "The suspension attempt must belong to this step run."})
@@ -6136,27 +6194,32 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             raise ValidationError({"attempt": "Decisions require the current applicable suspension attempt."})
         if not isinstance(rebac_backend(), LocalBackend):
             raise ValidationError(
-                {"rebac": "Decision-scoped review access requires the transactional local REBAC adapter."}
+                {"rebac": "Decision assignment requires the transactional local REBAC adapter."}
             )
         declarations = deserialize_decision_specs(serialize_decision_specs(declarations))
 
         prepared_rows: list[tuple[Any, ...]] = []
         for spec in declarations:
-            grant_actor = step_run.run.admission_actor()
-            if grant_actor is None:
-                raise ValidationError({"actor": "Decision delegation requires the admitted run actor."})
+            issuer_actor = step_run.run.admission_actor()
+            if issuer_actor is None:
+                raise ValidationError({"actor": "Decision issuance requires the admitted run actor."})
+            assignees = tuple(canonical_subject_ref(subject) for subject in spec.assignees)
+            escalation = tuple(canonical_subject_ref(subject) for subject in spec.escalation)
+            contract = compile_decision_action_schema(spec.decision_schema)
+            if contract is not None:
+                self._require_evidence_readers(
+                    contract.evidence_refs(spec.payload),
+                    actor=issuer_actor,
+                    readers={"assignees": assignees, "escalation": escalation},
+                )
             prepared_rows.append(
                 (
                     spec,
-                    to_subject_ref(grant_actor),
-                    tuple(canonical_subject_ref(subject) for subject in spec.assignees),
+                    to_subject_ref(issuer_actor),
+                    assignees,
                     canonical_subject_ref(spec.requester) if spec.requester else None,
-                    tuple(canonical_subject_ref(subject) for subject in spec.escalation),
-                    self._validated_target(spec, actor=grant_actor),
-                    self._validated_record_access(
-                        spec,
-                        actor=grant_actor,
-                    ),
+                    escalation,
+                    self._validated_target(spec, actor=issuer_actor),
                 )
             )
         prepared = tuple(prepared_rows)
@@ -6170,11 +6233,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 requester,
                 escalation,
                 target,
-                record_access,
             ) in enumerate(prepared):
-                contract = compile_decision_action_schema(spec.decision_schema)
-                if contract is not None:
-                    contract.validate_context(spec.payload)
                 decision = self.model(
                     step_run=step_run,
                     suspension_attempt=attempt,
@@ -6185,10 +6244,6 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                     target_model=target[0],
                     target_id=target[1],
                     target_tab=spec.target_tab,
-                    record_access=[
-                        {"resource_type": ref.resource_type, "resource_id": ref.resource_id}
-                        for _, ref, _ in record_access
-                    ],
                     max_attempts=spec.max_attempts,
                     expires_at=spec.expires_at,
                     escalate_at=spec.escalate_at,
@@ -6209,10 +6264,6 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 )
                 if relationships:
                     write_relationships(relationships)
-                decision_subject = self._pending_decision_subject(decision)
-                for record, _, record_actor in record_access:
-                    with actor_context(record_actor):
-                        record.grant_record_access("pending_decision", decision_subject)
                 decisions.append(decision)
                 if spec.escalate_at is not None:
                     timer_intents.append(
@@ -6227,48 +6278,51 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         return tuple(decisions), tuple(timer_intents)
 
     @staticmethod
-    def _pending_decision_subject(decision: Any) -> SubjectRef:
-        ref = to_object_ref(decision)
-        return SubjectRef.of(ref.resource_type, ref.resource_id)
+    def _require_evidence_readers(
+        evidence: tuple[ReviewRecordReference, ...],
+        *,
+        actor: Any,
+        readers: dict[str, tuple[SubjectRef, ...]],
+    ) -> None:
+        """Admit a Decision only when its issuer and every reviewer can read its evidence.
 
-    @staticmethod
-    def _validated_record_access(spec: DecisionSpec, *, actor: Any) -> tuple[tuple[Any, Any, Any], ...]:
-        """Resolve explicit review records through the admitted run actor."""
+        The issuer resolves each record through its own read scope; each
+        assignee or escalation subject (including a group userset) must hold
+        ordinary ``read`` on the record through the permission schema.
+        """
 
-        selected: dict[tuple[str, str], tuple[Any, Any, Any]] = {}
-        for declared in spec.record_access:
+        backend = rebac_backend()
+        for reference in evidence:
             try:
-                model = apps.get_model(declared.model)
+                model = apps.get_model(reference.model)
             except (LookupError, ValueError) as error:
-                raise ValidationError({"record_access": "Decision review record model is not installed."}) from error
+                raise ValidationError(
+                    {"payload": f"Decision evidence model {reference.model!r} is not installed."}
+                ) from error
+            label = reference.label or str(model._meta.verbose_name)
             queryset = read_scoped_queryset(model, actor, action="read")
-            if queryset is None:
-                raise PermissionDenied("Decision review record is not readable by its delegating actor.")
-            record = instance_from_public_id(model, declared.id, queryset=queryset)
+            record = None if queryset is None else instance_from_public_id(model, reference.id, queryset=queryset)
             if record is None:
-                raise ValidationError({"record_access": "Decision review record was not found."})
-            if "pending_decision" not in type(record).get_rebac_grantable():
-                raise ValidationError({"record_access": "Decision review record has no delegation owner."})
-            record.with_actor(actor)
-            record.validate_record_access_target()
-            record._require_record_access(type(record).record_access_permission("pending_decision"))
-            ref = to_object_ref(record)
-            selected[(ref.resource_type, ref.resource_id)] = (record, ref, actor)
-        return tuple(selected[key] for key in sorted(selected))
-
-    @classmethod
-    def _remove_pending_record_access(cls, decision: Any) -> None:
-        """Remove only tuples retained for this terminal Decision, inside its verdict transaction."""
-
-        subject = cls._pending_decision_subject(decision)
-        for resource in _retained_record_access_refs(decision):
-            delete_relationship(
-                RelationshipTuple(
-                    resource=resource,
-                    relation="pending_decision",
-                    subject=subject,
+                raise ValidationError(
+                    {
+                        "issuer": ValidationError(
+                            f"{public_subject_ref(to_subject_ref(actor))} cannot read {label} {reference.id}.",
+                            code="decision_evidence_unreadable",
+                        )
+                    }
                 )
-            )
+            resource = to_object_ref(record)
+            for field_name, subjects in readers.items():
+                for subject in subjects:
+                    if not backend.has_access(subject=subject, action="read", resource=resource):
+                        raise ValidationError(
+                            {
+                                field_name: ValidationError(
+                                    f"{public_subject_ref(subject)} cannot read {label} {reference.id}.",
+                                    code="decision_evidence_unreadable",
+                                )
+                            }
+                        )
 
     @staticmethod
     def _validated_target(spec: DecisionSpec, *, actor: Any | None = None) -> tuple[str, str]:

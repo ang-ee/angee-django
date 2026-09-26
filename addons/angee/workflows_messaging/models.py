@@ -13,36 +13,6 @@ from angee.workflows.trigger_declarations import EventAdmissionPolicy, EventTrig
 MESSAGE_INGESTED = "message_ingested"
 
 
-class DecisionReadableMessage(models.Model):
-    """Opt an exact Message into pending Decision assignee read."""
-
-    extends = "messaging.Message"
-    rebac_grantable = {"reader": "write", "pending_decision": "write"}
-
-    class Meta:
-        abstract = True
-
-
-class DecisionReadableThread(models.Model):
-    """Opt one exact source conversation into pending Decision assignee read."""
-
-    extends = "messaging.Thread"
-    rebac_grantable = {"reader": "share", "pending_decision": "write"}
-
-    class Meta:
-        abstract = True
-
-
-class DecisionReadablePart(models.Model):
-    """Opt an exact Message Part into pending Decision assignee read."""
-
-    extends = "messaging.Part"
-    rebac_grantable = {"pending_decision": "write"}
-
-    class Meta:
-        abstract = True
-
-
 class MessageTrigger(models.Model):
     """Select the channel whose ingested Messages publish this event trigger."""
 

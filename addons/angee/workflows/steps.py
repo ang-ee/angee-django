@@ -49,7 +49,6 @@ from angee.workflows.attempts import (
     AttemptResult,
     AttemptResultKind,
     DecisionGateOutput,
-    DecisionRecordAccess,
     DecisionSpec,
     ExternalOperationPolicy,
     GateResumeState,
@@ -1411,9 +1410,6 @@ def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec
     targets = config.get("targets") or []
     if not isinstance(targets, list) or len(targets) not in {0, 1, len(slots)}:
         raise ValidationError({"targets": "Gate targets must be empty, shared once, or aligned with every slot."})
-    shared_record_access = config.get("record_access") or []
-    if not isinstance(shared_record_access, list):
-        raise ValidationError({"record_access": "Gate record_access must resolve to a list."})
     specs: list[DecisionSpec] = []
     for index, slot in enumerate(slots):
         if not isinstance(slot, Mapping):
@@ -1425,10 +1421,6 @@ def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec
             target = {}
         if not isinstance(target, Mapping):
             raise ValidationError({"targets": "Every gate target must be an object."})
-        slot_record_access = slot.get("record_access")
-        record_access = shared_record_access if slot_record_access is None else slot_record_access
-        if not isinstance(record_access, list):
-            raise ValidationError({"record_access": "Every gate record_access value must be a list."})
         specs.append(
             DecisionSpec(
                 assignees=_slot_assignees(slot),
@@ -1450,7 +1442,6 @@ def _decision_specs_from_config(config: Mapping[str, Any]) -> tuple[DecisionSpec
                 target_model=str(target.get("model") or ""),
                 target_id=str(target.get("id") or ""),
                 target_tab=str(target.get("tab") or ""),
-                record_access=tuple(DecisionRecordAccess.model_validate(item) for item in record_access),
             )
         )
     return tuple(specs)

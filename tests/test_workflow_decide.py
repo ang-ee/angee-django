@@ -1,4 +1,4 @@
-"""Complete Decision operations retain settlement, delegation and delivery together."""
+"""Complete Decision operations retain settlement and delivery together."""
 
 from __future__ import annotations
 
@@ -11,11 +11,9 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models.signals import pre_save
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
-from rebac.models import active_relationship_model
 
 from angee.workflows import managers
 from angee.workflows.attempts import (
-    DecisionRecordAccess,
     DecisionSpec,
     DecisionSubmission,
     RecoveryCapability,
@@ -26,9 +24,7 @@ from angee.workflows.states import StepRunStatus, Verdict
 from angee.workflows.steps import GateStep, StepExecutionMode, StepResult
 from angee.workflows.testing.drivers import advance_once, execute_started, run_to_terminal
 from angee.workflows.testing.models import Decision, StepRun, WorkflowDispatch, WorkflowRun
-from tests import test_workflows_gates as gate_tests
 from tests.conftest import create_platform_admin
-from tests.messaging_models import Party
 from tests.test_workflows_gates import (
     _decision_for,
     _decisions_for,
@@ -38,7 +34,6 @@ from tests.test_workflows_gates import (
 from tests.workflows import FixtureStep, start_run, workflow_with_steps
 
 User = get_user_model()
-workflow_gate_record_access_tables = gate_tests.workflow_gate_record_access_tables
 
 
 @pytest.fixture(autouse=True)
@@ -46,16 +41,14 @@ def quiet_decision_publication(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(managers, "enqueue_dispatch_publisher", lambda **kwargs: None)
 
 
-def test_decide_settlement_grants_and_dispatch_commit_together(
-    workflow_gate_record_access_tables: None,
+def test_decide_settlement_and_dispatch_commit_together(
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_gate_record_access_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     owner = create_platform_admin("decision-atomic-owner")
     resolver = User.objects.create_user(username="decision-atomic-resolver")
-    with system_context(reason="decision atomic target fixture"):
-        record = Party.objects.create(display_name="Pending review", created_by=owner)
 
     def suspend(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
@@ -64,7 +57,6 @@ def test_decide_settlement_grants_and_dispatch_commit_together(
                 DecisionSpec(
                     action="review",
                     assignees=(str(to_subject_ref(resolver)),),
-                    record_access=(DecisionRecordAccess(model=record._meta.label, id=str(record.sqid)),),
                 ),
             ),
         )
@@ -79,19 +71,15 @@ def test_decide_settlement_grants_and_dispatch_commit_together(
     advance_once(run)
     execute_started(run)
     decision = _decision_for(run, "gate")
-    relationships = active_relationship_model()
-    grant = {"relation": "pending_decision", "subject_id": str(decision.pk)}
     dispatch_manager = type(WorkflowDispatch.objects)
     schedule = dispatch_manager.schedule_advance
     with system_context(reason="decision atomic before"):
         dispatch_count = WorkflowDispatch.objects.count()
-        assert relationships.objects.filter(**grant).exists()
 
     def fail_delivery(self: Any, retained_run: Any, **kwargs: Any) -> Any:
         assert StepRun.objects.get(pk=decision.step_run_id).status == StepRunStatus.SUCCEEDED
         decision.suspension_attempt.refresh_from_db()
         assert decision.suspension_attempt.decision_settlement["decision_ids"] == [decision.pk]
-        assert not relationships.objects.filter(**grant).exists()
         schedule(self, retained_run, **kwargs)
         raise RuntimeError("delivery persistence failed")
 
@@ -108,7 +96,6 @@ def test_decide_settlement_grants_and_dispatch_commit_together(
         assert decision.verdict == Verdict.PENDING
         assert decision.suspension_attempt.decision_settlement == {}
         assert StepRun.objects.get(pk=decision.step_run_id).status == StepRunStatus.WAITING
-        assert relationships.objects.filter(**grant).exists()
         assert WorkflowDispatch.objects.count() == dispatch_count
 
     monkeypatch.setattr(dispatch_manager, "schedule_advance", schedule)
@@ -124,7 +111,6 @@ def test_decide_settlement_grants_and_dispatch_commit_together(
     assert result.decision.suspension_attempt.actor() == to_subject_ref(resolver)
     with system_context(reason="decision atomic committed"):
         assert StepRun.objects.get(pk=decision.step_run_id).status == StepRunStatus.SUCCEEDED
-        assert not relationships.objects.filter(**grant).exists()
         assert WorkflowDispatch.objects.count() > dispatch_count
 
 
