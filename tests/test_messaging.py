@@ -3189,6 +3189,58 @@ def test_ingest_named_thread_converges_chat_messages(channel: Any) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_ingest_named_thread_fills_a_missing_title_but_never_renames(channel: Any) -> None:
+    """A source may learn a chat's name after its first message (a group subject)."""
+
+    first = replace(_parsed("late-1", subject=""), thread=ParsedThread(external_id="room-5", modality="group"))
+    named = replace(
+        _parsed("late-2", subject=""),
+        thread=ParsedThread(external_id="room-5", modality="group", title="Climbing crew"),
+    )
+    renamed = replace(
+        _parsed("late-3", subject=""),
+        thread=ParsedThread(external_id="room-5", modality="group", title="Renamed"),
+    )
+
+    assert _ingest([first], channel=channel) == 1
+    room = Thread._base_manager.get(external_id=f"chat:{channel.pk}:room-5")
+    assert room.title_id is None
+    assert _ingest([named], channel=channel) == 1
+    room.refresh_from_db()
+    assert room.title.text == "Climbing crew"
+    assert _ingest([renamed], channel=channel) == 1
+    room.refresh_from_db()
+    assert room.title.text == "Climbing crew"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) -> None:
+    other = make_integration("other-chats")
+    _ingest(
+        [
+            replace(_parsed("n-1", subject=""), thread=ParsedThread(external_id="g-1", modality="group")),
+            replace(_parsed("n-2", subject=""), thread=ParsedThread(external_id="g-2", modality="group", title="Kept")),
+            replace(_parsed("n-3", subject=""), thread=ParsedThread(external_id="g-3", modality="group")),
+        ],
+        channel=channel,
+    )
+    _ingest([replace(_parsed("n-4", subject=""), thread=ParsedThread(external_id="g-1", modality="group"))], channel=other)
+
+    with system_context(reason="test fill chat titles"):
+        named = Thread.objects.fill_chat_titles(channel, {"g-1": "Climbers", "g-2": "Renamed", "g-3": "  ", "g-9": "Gone"})
+
+    assert named == 1
+    titles = {
+        thread.external_id: (thread.title.text if thread.title_id else None) for thread in Thread._base_manager.all()
+    }
+    prefix = Thread.objects.chat_key_prefix(channel)
+    assert titles[f"{prefix}g-1"] == "Climbers"
+    assert titles[f"{prefix}g-2"] == "Kept"
+    assert titles[f"{prefix}g-3"] is None
+    assert titles[f"{Thread.objects.chat_key_prefix(other)}g-1"] is None
+
+
+@pytest.mark.django_db(transaction=True)
 def test_ingest_named_thread_honors_visibility_hint(channel: Any) -> None:
     """A broadcast adapter names its feed public; the default stays private.
 
