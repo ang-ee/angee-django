@@ -195,6 +195,17 @@ class HandleQuerySet(AngeeQuerySet):
 
         return self.filter(owner=user)
 
+    def excluding_identity_of(self, user_id: Any) -> Self:
+        """Drop the user's own handles: owned by them or confirmed on their Person."""
+
+        if user_id is None:
+            return self
+        handles = self.exclude(owner_id=user_id)
+        identity = apps.get_model("parties", "Party").objects.identity_for_user_id(user_id)
+        if identity is not None:
+            handles = handles.exclude(party=identity, party_link_confirmed=True)
+        return handles
+
 
 class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore[misc]
     """Factory + upsert for handles (the contact-point write path)."""

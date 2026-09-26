@@ -48,10 +48,23 @@ class LiveChannelSession(LiveSession):
     """Live worker session that owns queued message media resolution and landing."""
 
     def _handle(self, kind: str, payload: Any) -> bool:
-        """Land messaging batches and ignore other implementation-specific events."""
+        """Land messaging batches and conversation names; ignore other events.
+
+        ``chat_titles`` carries ``{conversation id: name}`` for conversations the
+        source lists (joined groups), naming their untitled threads even when no
+        new message arrives in them.
+        """
 
         if kind == "messages":
             return self._ingest(payload)
+        if kind == "chat_titles":
+            try:
+                apps.get_model("messaging", "Thread").objects.fill_chat_titles(
+                    self.bridge, payload, owner_id=self.bridge.owner_id
+                )
+            except Exception:
+                # Best-effort naming must never end the live session.
+                logger.exception("Naming chats failed for channel %s.", self.bridge.pk)
         return self._still_wanted()
 
     def _ingest(self, batch: list[tuple[Any, Any]]) -> bool:

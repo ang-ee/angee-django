@@ -6,7 +6,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
+from angee.graphql.constants import CHANGE_GROUP_EXPIRY_SECONDS, PUBLIC_ID_FIELD_NAME
 
 SETTINGS = {
     "STRAWBERRY_DJANGO:append": {
@@ -31,7 +31,7 @@ def settings(namespace: Mapping[str, Any]) -> dict[str, str | None | dict[str, A
         derived["CHANNEL_LAYERS:append"] = {
             "default": {
                 "BACKEND": "channels_redis.core.RedisChannelLayer",
-                "CONFIG": {"hosts": [redis_url]},
+                "CONFIG": {"hosts": [redis_url], "group_expiry": CHANGE_GROUP_EXPIRY_SECONDS},
             }
         }
     return derived

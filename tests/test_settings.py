@@ -375,7 +375,7 @@ def test_graphql_uses_channels_redis_when_redis_url_is_set(
 
     assert settings["CHANNEL_LAYERS"]["default"] == {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": ["redis://127.0.0.1:6379/0"]},
+        "CONFIG": {"hosts": ["redis://127.0.0.1:6379/0"], "group_expiry": 900},
     }
 
 

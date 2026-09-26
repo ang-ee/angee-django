@@ -15,12 +15,8 @@ and the date encoding; this owner is neutral of all three. It reads landed
 ``chat:<channel-pk>:<thread-external-id>`` key, stripped back to the store's raw
 thread key — and hands the store each thread's newest already-imported instant as
 a plain ``datetime``; the store converts those to its native date filter. That
-``chat:<channel-pk>:`` key is derived inline here (``_THREAD_KEY_PREFIX``),
-mirroring how ``Message.objects.ingest`` composes the same key inline when it
-lands a chat thread (``angee.messaging.managers``); there is no shared manager
-method for it yet, so both sites spell the format out. Centralizing the
-derivation on a Thread/Message manager method — the single owner both the ingest
-and this resume path would then call — is a follow-up.
+``chat:<channel-pk>:`` key comes from ``ThreadManager.chat_key_prefix``, the
+same owner ingest uses when it lands a chat thread.
 
 The WhatsApp addon still carries its own resume-watermark query in
 :class:`angee.messaging_integrate_whatsapp.backup.BackupImporter`; its
@@ -42,9 +38,6 @@ from django.db.models import Max
 from rebac import system_context
 
 from angee.messaging.backends import ParsedMessage, ParsedPart
-
-_THREAD_KEY_PREFIX = "chat:{channel_pk}:"
-"""The manager's chat-thread external-id namespace; stripped to recover the store key."""
 
 DEFAULT_MAX_BATCH_BYTES = 64_000_000
 """Flush a batch once its buffered media reaches this many bytes.
@@ -106,7 +99,7 @@ def thread_watermarks(channel: Any, *, reason: str) -> dict[str, datetime]:
     """
 
     message_model = apps.get_model("messaging", "Message")
-    prefix = _THREAD_KEY_PREFIX.format(channel_pk=channel.pk)
+    prefix = apps.get_model("messaging", "Thread").objects.chat_key_prefix(channel)
     watermarks: dict[str, datetime] = {}
     with system_context(reason=reason):
         rows = (

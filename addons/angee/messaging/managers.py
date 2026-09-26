@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -559,9 +559,115 @@ class ThreadQuerySet(AngeeQuerySet[Any]):
 
         return cast(ThreadQuerySet, self.filter(channel=channel))
 
+    def conversation_labels(self) -> dict[Any, str]:
+        """Label each thread for the actor: its title, else the people in it.
+
+        An untitled direct thread names its counterpart; an untitled group names
+        up to two people and counts the rest ("Anna, Tim +4"). People are the
+        actor-readable senders of inbound messages other than the actor's own
+        identity, most active first: outbound messages are the account holder's,
+        whichever handle sent them. A thread with no known people labels as
+        ``""`` so clients apply their own translated fallback. Evaluate on a
+        bounded page of threads; each call costs a fixed number of queries.
+        """
+
+        rows = list(self.order_by().values_list("pk", "modality", "title__text"))
+        labels = {pk: str(title or "").strip() for pk, _, title in rows}
+        untitled = {pk: modality for pk, modality, _ in rows if not labels[pk]}
+        actor = self.actor() or current_actor()
+        people: dict[Any, list[str]] = {pk: [] for pk in untitled}
+        if untitled and actor is not None:
+            handles = (
+                apps.get_model("parties", "Handle")
+                .objects.with_actor(actor)
+                .with_sender_name()
+                .excluding_identity_of(actor_user_id(actor))
+            )
+            participant_model = apps.get_model("messaging", "Participant")
+            activity = (
+                participant_model.objects.with_actor(actor)
+                .scoped_for_aggregate()
+                .filter(
+                    thread_id__in=list(untitled),
+                    role=participant_model.ParticipantRole.FROM,
+                    message__direction=apps.get_model("messaging", "Message").Direction.INBOUND,
+                    handle_id__in=models.Subquery(handles.values("pk")),
+                )
+                .order_by()
+                .values("thread_id", "handle_id")
+                .annotate(_turns=models.Count("pk"))
+                .order_by("thread_id", "-_turns", "handle_id")
+            )
+            ranked = [(row["thread_id"], row["handle_id"]) for row in activity]
+            names = dict(
+                handles.filter(pk__in={handle for _, handle in ranked}).values_list("pk", "_sender_name")
+            )
+            for thread_id, handle_id in ranked:
+                name = str(names.get(handle_id) or "").strip()
+                if name and name not in people[thread_id]:
+                    people[thread_id].append(name)
+        for pk, modality in untitled.items():
+            present = people[pk]
+            if modality == self.model.Modality.DIRECT and present:
+                labels[pk] = present[0]
+            elif modality == self.model.Modality.GROUP and present:
+                shown = ", ".join(present[:2])
+                labels[pk] = f"{shown} +{len(present) - 2}" if len(present) > 2 else shown
+        return labels
+
 
 class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore[misc]
     """Owns thread resolution — the 4-step RFC-5322 priority under a row lock."""
+
+    @staticmethod
+    def chat_key_prefix(channel: Any) -> str:
+        """The external-id namespace of one channel's named chat threads."""
+
+        return f"chat:{channel.pk if channel is not None else ''}:"
+
+    def name_untitled(self, names: Mapping[Any, str], *, owner_id: Any = None) -> int:
+        """Title threads that have none from source names; never rename one.
+
+        ``names`` maps thread pks to names. Each row is re-read under its lock, so
+        a title set concurrently (a racing ingest) always wins. Returns the number
+        of threads named.
+        """
+
+        fragment_model = apps.get_model("messaging", "Fragment")
+        named = 0
+        for pk, name in names.items():
+            text = str(name or "").strip()
+            if not text:
+                continue
+            with transaction.atomic():
+                thread = (
+                    self.sudo(reason="messaging.thread.name_untitled")
+                    .lock_if_supported()
+                    .filter(pk=pk, title__isnull=True)
+                    .first()
+                )
+                if thread is None:
+                    continue
+                thread.title_id = fragment_model.objects.upsert(text=text, owner_id=owner_id).pk
+                thread.save(update_fields=["title"])
+                named += 1
+        return named
+
+    def fill_chat_titles(self, channel: Any, titles: Mapping[str, str], *, owner_id: Any = None) -> int:
+        """Name a channel's untitled chat threads from source conversation names.
+
+        ``titles`` maps a source conversation id (the ``ParsedThread.external_id``)
+        to its name; see :meth:`name_untitled`.
+        """
+
+        prefix = self.chat_key_prefix(channel)
+        wanted = {f"{prefix}{key}": name for key, name in titles.items()}
+        untitled = (
+            self.sudo(reason="messaging.thread.fill_chat_titles")
+            .filter(channel_id=channel.pk, title__isnull=True, external_id__in=list(wanted))
+            .values_list("pk", "external_id")
+        )
+        return self.name_untitled({pk: wanted[external_id] for pk, external_id in untitled}, owner_id=owner_id)
 
     def resolve(
         self,
@@ -588,9 +694,10 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         platform-wide merge: two linked accounts that each DM the same person
         are two private conversations owned by different people, so they must
         not fuse into one REBAC-shared thread. The hint's ``modality``/
-        ``visibility``/``title`` land on a newly created thread only — a
-        broadcast source names its feed public at the adapter that knows it,
-        instead of every public source re-owning the visibility default.
+        ``visibility`` land on a newly created thread only — a broadcast source
+        names its feed public at the adapter that knows it, instead of every
+        public source re-owning the visibility default. Its ``title`` also fills
+        an established thread that has none, and never replaces an existing one.
 
         Otherwise the email priority applies: ``In-Reply-To`` → ``References``
         (newest-first, i.e. right-to-left, resolved in one batch query) →
@@ -616,10 +723,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         fragment_model = apps.get_model("messaging", "Fragment")
         if thread is not None and thread.external_id:
             title = fragment_model.objects.upsert(text=thread.title, owner_id=owner_id) if thread.title else None
-            scope = channel.pk if channel is not None else ""
             named, _created = self.get_or_create_by_external_id(
                 platform=platform,
-                external_id=f"chat:{scope}:{thread.external_id}",
+                external_id=f"{self.chat_key_prefix(channel)}{thread.external_id}",
                 defaults={
                     "channel_id": channel.pk if channel is not None else None,
                     "title_id": title.pk if title is not None else None,
@@ -629,6 +735,12 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     "created_by_id": owner_id,
                 },
             )
+            # Sources may learn a conversation's name after its first message (a
+            # group subject); fill an untitled thread, never rename one.
+            if title is not None and named.title_id is None and self.name_untitled(
+                {named.pk: thread.title}, owner_id=owner_id
+            ):
+                named.refresh_from_db(fields=["title"])
             return named
         message_model = apps.get_model("messaging", "Message")
         if in_reply_to:

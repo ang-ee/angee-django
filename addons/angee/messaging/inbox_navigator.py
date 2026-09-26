@@ -7,7 +7,6 @@ from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from django.apps import apps
 from django.db import models
 from django.db.models import (
     Case,
@@ -92,11 +91,7 @@ class InboxNavigator(MessageInbox):
                     _party=Value(None, output_field=models.BigIntegerField()),
                 )
             )
-        handles = self.handles.exclude(owner_id=self.user_id) if self.user_id is not None else self.handles
-        if self.user_id is not None:
-            identity = apps.get_model("parties", "Party").objects.identity_for_user_id(self.user_id)
-            if identity is not None:
-                handles = handles.exclude(party=identity, party_link_confirmed=True)
+        handles = self.handles.excluding_identity_of(self.user_id)
         party_ids = Subquery(self.parties.order_by().values("pk"))
         activity = self.coverage(self.coverage_input)
         if self.options.recipient_activity:
@@ -334,6 +329,7 @@ class InboxNavigator(MessageInbox):
         selected_records = {
             record.pk: record for record in records.filter(pk__in=[row["handle_pk"] for row in selected])
         }
+        group_labels = records.filter(pk__in=list(selected_records)).conversation_labels() if is_group else {}
         return InboxPage(
             [
                 InboxNavigatorRow(
@@ -342,7 +338,7 @@ class InboxNavigator(MessageInbox):
                     else f"party:{parties[key].sqid}"
                     if key in parties
                     else f"handle:{record.sqid}",
-                    label=row["_name"] or f"Group {record.sqid}",
+                    label=group_labels[record.pk] if is_group else row["_name"],
                     handle=None if is_group else record,
                     party=parties.get(key),
                     thread=record if is_group else None,
