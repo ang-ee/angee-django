@@ -731,7 +731,19 @@ and current contracts before applying a historical example to a new deployment.
   Preserve retained rows and historical migration bodies; a generated schema
   alteration alone does not perform the data conversion. Regenerate SDL and client types after
   migration: workflow wait reasons use the `WaitingKind` enum's uppercase member
-  names on the wire.
+  names on the wire. The released workflow body failed on populated PostgreSQL
+  (`pending trigger events`); its declaration keeps that body valid through
+  `compatible_source_sha256`. A stack holding it **unapplied** (absent from
+  `showmigrations workflows`) recovers by deleting that materialized copy and
+  the unapplied `workflows` migrations generated after it, then running
+  `angee build` and `makemigrations` to materialize the fixed body under the
+  same name. Never delete an applied node.
+- **Row updates followed by DDL on the same tables need immediate constraints.**
+  PostgreSQL queues deferred foreign-key checks for rows a migration updates and
+  refuses a later `ALTER TABLE` or index build in the same atomic migration.
+  Run `SET CONSTRAINTS ALL IMMEDIATE` (PostgreSQL only) before the data step, as
+  the optional-state transition does. SQLite never shows this; rehearse such a
+  migration against populated PostgreSQL.
 - **A structural marker consumed after runtime emission must be emitted too.**
   A non-inherited `__dict__` source-model marker stops at the abstract source unless
   the composer carries it into the concrete runtime class body.

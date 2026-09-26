@@ -231,7 +231,7 @@ contract belongs to [`RuntimeMigrations`](../angee/compose/migrations.py) and it
 For new transitions, add a new declaration. Preserve old import paths needed by
 released history when code moves. See the [backend migration
 rules](backend/guidelines.md#migrations-and-runtime) before recovering a local
-database or changing historical source.
+database or changing historical source compatibility.
 
 Normal app boot and `emit_if_stale()` never materialize migrations.
 `angee build --check` validates existing history and reports applicable pending
