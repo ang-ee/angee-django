@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "tests.settings.BareComposeConfig",
     "angee.base",
     "tests.settings.BareGraphQLConfig",
+    "django_celery_beat",
     "angee.jobs",
     "angee.resources",
     "tests.iam_app.TestIAMConfig",
