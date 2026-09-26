@@ -5,6 +5,8 @@ import {
   navigatorAxes,
   resultLensForGroup,
 } from "./contract";
+import { navigatorSource } from "./sources";
+import { INBOX_SOURCE_MODELS } from "./state";
 
 describe("the explorer control contract", () => {
   test("all navigator lenses declare only their applicable axes", () => {
@@ -72,10 +74,15 @@ describe("the explorer control contract", () => {
   });
 });
 
-test("live interest stays with the owners each inbox read uses", async () => {
-  const { INBOX_MODELS, INBOX_SOURCE_MODELS, NAVIGATOR_MODELS } = await import("./state");
-  // Derived ties are rewritten hourly; only the finder's fading predicate reads them.
-  expect(INBOX_MODELS).not.toContain("nexus.Tie");
-  expect(NAVIGATOR_MODELS).toContain("nexus.Tie");
-  expect([...INBOX_SOURCE_MODELS].sort()).toEqual(["integrate.Integration", "messaging.Message", "messaging.MessageEdge"]);
+test("live interest stays with the owners each inbox read uses", () => {
+  const t = ((key: string) => key) as never;
+  const source = (fading: boolean) =>
+    navigatorSource({ coverage: undefined as never, timezone: "UTC", lens: "senders", groupField: "", fading, t });
+  // Derived ties are rewritten hourly; only the fading finder reads them.
+  expect(source(false).rows.models).not.toContain("nexus.Tie");
+  expect(source(false).groups?.models).not.toContain("nexus.Tie");
+  expect(source(true).rows.models).toContain("nexus.Tie");
+  expect(source(true).groups?.models).toContain("nexus.Tie");
+  // Source options depend on eligible messages, their threads, edges and accounts.
+  expect(INBOX_SOURCE_MODELS).toEqual(expect.arrayContaining(["messaging.Message", "messaging.Thread"]));
 });

@@ -13,7 +13,7 @@ import {
   useResourceView,
   type ResourceViewFilter,
 } from "@angee/ui";
-import { NAVIGATOR_LENSES, navigatorAxes } from "./contract";
+import { InboxFilter, NAVIGATOR_LENSES, navigatorAxes } from "./contract";
 import {
   InboxOrder,
   InboxClearFilters,
@@ -41,9 +41,10 @@ export function InboxNavigatorPane({
   const lens = navigation.finder;
   const controls = useNavigatorControls(lens);
   const groupField = view.state.groupStack[0]?.field ?? "";
+  const fading = new InboxFilter(view.state.filter).one("fading") === "yes";
   const source = useMemo(
-    () => navigatorSource({ coverage, timezone, lens, groupField, t }),
-    [coverage, timezone, lens, groupField, t],
+    () => navigatorSource({ coverage, timezone, lens, groupField, fading, t }),
+    [coverage, timezone, lens, groupField, fading, t],
   );
   const columns = useMemo(
     () => [
