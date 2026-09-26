@@ -521,8 +521,8 @@ data through REBAC, never a queryset bypass.
   `manage.py purge_decision_record_access --check-pending` and finish or cancel
   them; deploy; `angee build`; `manage.py migrate` (drops
   `Decision.record_access`); `manage.py purge_decision_record_access --apply`
-  (removes the retired tuples from both local stores and the retired
-  `record_access` key from retained suspension declarations);
+  (removes the retired tuples from both local stores; retained suspension
+  declarations stay untouched and decode without the retired key);
   `manage.py rebac sync --force-overwrite` (only this flag prunes the retired
   relation definitions; add `--yes` when non-interactive); `manage.py resync_extraction_targets`; then grant
   reviewers their standing read. Rehearse against a restored database copy.
