@@ -56,35 +56,33 @@ export async function invalidateAuthoredQueries(
   );
 }
 
-/** One exact live row change, as delivered by a change subscription. */
+/** One live change: an exact row with its related rows, or a whole model when ``id`` is absent. */
 export interface AuthoredLiveChange {
   model: string;
   id?: string;
   relatedRecords?: readonly { model: string; id: string }[];
 }
 
-export interface AuthoredLiveInvalidationOptions {
-  /** Quiet period that closes a burst of changes. */
-  windowMs?: number;
-  /** Longest a continuous stream may defer its first change. */
-  maxWaitMs?: number;
-}
+/** Quiet period that closes a burst of live changes. */
+const LIVE_WINDOW_MS = 300;
+/** Longest a continuous stream may defer its first buffered change. */
+const LIVE_MAX_WAIT_MS = 2000;
 
 export interface AuthoredLiveInvalidation {
   push: (change: AuthoredLiveChange) => void;
-  dispose: () => void;
 }
 
 /**
- * Coalesce live row changes so each affected read refetches once per burst.
+ * Coalesce live changes so each affected read refetches once per burst.
  *
- * A flush applies the shared protocol once for the union of the burst's
- * changes, so a read is restarted at most once per flush instead of once per
- * row event. The max wait bounds how long a continuous stream defers a flush.
+ * A change cancels matching in-flight requests as it arrives, so a response
+ * read before the change never commits. Only the refetch is deferred: one flush
+ * applies the shared protocol to the union of the burst, so affected reads keep
+ * their last committed data for at most the max wait. Under a continuous stream
+ * a read slower than the max wait is restarted at each flush.
  */
 export function createAuthoredLiveInvalidation(
   queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
-  { windowMs = 300, maxWaitMs = 2000 }: AuthoredLiveInvalidationOptions = {},
 ): AuthoredLiveInvalidation {
   let changes: AuthoredLiveChange[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -103,17 +101,15 @@ export function createAuthoredLiveInvalidation(
 
   return {
     push(change) {
+      void queryClient.cancelQueries({
+        predicate: (query) => query.state.fetchStatus !== "idle"
+          && authoredQueryReadsLiveChange(query.meta, change),
+      });
       changes.push(change);
-      const now = Date.now();
+      const now = performance.now();
       firstAt ??= now;
       if (timer !== undefined) clearTimeout(timer);
-      timer = setTimeout(flush, Math.max(0, Math.min(windowMs, firstAt + maxWaitMs - now)));
-    },
-    dispose() {
-      if (timer !== undefined) clearTimeout(timer);
-      timer = undefined;
-      firstAt = undefined;
-      changes = [];
+      timer = setTimeout(flush, Math.max(0, Math.min(LIVE_WINDOW_MS, firstAt + LIVE_MAX_WAIT_MS - now)));
     },
   };
 }

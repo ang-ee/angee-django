@@ -19,6 +19,11 @@ function jsonResponse(data: unknown): Response {
   });
 }
 
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
+
 describe("Angee Hasura provider defaults", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -252,6 +257,7 @@ describe("Angee Hasura provider defaults", () => {
       callback: vi.fn(),
       params: { resource: "workflow_decisions" },
     });
+    vi.useFakeTimers();
     nthSink(sinks, 0).next({
       data: {
         decisionChanged: {
@@ -261,6 +267,8 @@ describe("Angee Hasura provider defaults", () => {
         },
       },
     });
+    expect(invalidateQueries).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
 
     await vi.waitFor(() => expect(invalidateQueries).toHaveBeenCalledWith({
       predicate: expect.any(Function),
@@ -531,9 +539,11 @@ describe("Angee Hasura provider defaults", () => {
       callback: vi.fn(),
       params: { models: ["notes.Note"] },
     });
+    vi.useFakeTimers();
     nthSink(sinks, 0).next({
       data: { noteChanged: { model: "notes.Note", id: "note_1", action: "update" } },
     });
+    await vi.advanceTimersByTimeAsync(300);
 
     await vi.waitFor(() => expect(invalidateQueries).toHaveBeenCalledWith({
       predicate: expect.any(Function),
@@ -545,6 +555,32 @@ describe("Angee Hasura provider defaults", () => {
       | undefined;
     expect(predicate?.({ meta: { angeeModels: ["notes.Note"] } })).toBe(true);
     expect(predicate?.({ meta: { angeeModels: ["notes.Tag"] } })).toBe(false);
+  });
+
+  test("one upstream change invalidates once however many consumers share it", async () => {
+    const { subscribe, sinks } = recordingClient();
+    const invalidateQueries = vi.fn();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
+      [resource({ changes: "noteChanged", list: "notes", model: "notes.Note" })],
+      { queryClient: { invalidateQueries, cancelQueries: vi.fn(async () => undefined) } },
+    );
+    const callbacks = [vi.fn(), vi.fn(), vi.fn()];
+    provider.subscribe({ channel: "resources/notes", types: ["*"], callback: callbacks[0]!, params: { resource: "notes" } });
+    provider.subscribe({ channel: "angee/authored/notes.Note", types: ["*"], callback: callbacks[1]!, params: { models: ["notes.Note"] } });
+    provider.subscribe({ channel: "angee/authored/notes.Note", types: ["*"], callback: callbacks[2]!, params: { models: ["notes.Note"] } });
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    vi.useFakeTimers();
+    nthSink(sinks, 0).next({
+      data: { noteChanged: { model: "notes.Note", id: "note_1", action: "update" } },
+    });
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(invalidateQueries).toHaveBeenCalledTimes(1);
+    const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as (query: { meta: unknown }) => boolean;
+    expect(predicate({ meta: { angeeModels: ["notes.Note"] } })).toBe(true);
+    for (const callback of callbacks) expect(callback).toHaveBeenCalledTimes(1);
   });
 
   test("ignores authored models with no change root", () => {

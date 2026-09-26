@@ -7,7 +7,7 @@ import {
   invalidateAuthoredQueries,
 } from "./query-invalidation";
 
-afterEach(() => { vi.useRealTimers(); });
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 function pending<T>() {
   let resolve!: (value: T) => void;
@@ -62,7 +62,7 @@ test("an unrelated row event does not starve an exact record's pending first req
     await vi.waitFor(() => expect(observer.getCurrentResult().data).toBe(2));
   } finally {
     first.resolve(1);
-    live.dispose(); unsubscribe(); cache.clear();
+    unsubscribe(); cache.clear();
   }
 });
 
@@ -108,7 +108,7 @@ test("a related child refreshes an exact parent without unrelated-child starvati
     await vi.waitFor(() => expect(observer.getCurrentResult().data).toBe(2));
   } finally {
     first.resolve(1);
-    live.dispose(); unsubscribe(); cache.clear();
+    unsubscribe(); cache.clear();
   }
 });
 
@@ -277,14 +277,14 @@ test("a burst of row changes refetches each affected read once and leaves unrela
     await vi.waitFor(() => expect(counts.inbox).toBe(2));
     expect(counts.accounts).toBe(1);
   } finally {
-    live.dispose(); stop.forEach((unsubscribe) => unsubscribe()); cache.clear();
+    stop.forEach((unsubscribe) => unsubscribe()); cache.clear();
   }
 });
 
 test("a continuous change stream still flushes within the max wait", async () => {
   vi.useFakeTimers();
   const cache = client();
-  const live = createAuthoredLiveInvalidation(cache, { windowMs: 300, maxWaitMs: 2000 });
+  const live = createAuthoredLiveInvalidation(cache);
   let requests = 0;
   const observer = new QueryObserver(cache, {
     queryKey: ["inbox"], meta: { angeeModels: ["messaging.Message"] },
@@ -300,16 +300,42 @@ test("a continuous change stream still flushes within the max wait", async () =>
     // 4 s of changes every 200 ms: two max-wait flushes, never one per change.
     expect(requests).toBe(3);
   } finally {
-    live.dispose(); unsubscribe(); cache.clear();
+    unsubscribe(); cache.clear();
   }
 });
 
-test("dispose drops pending changes", async () => {
+test("a live change cancels a populated in-flight refresh at once; its late response never commits", async () => {
   vi.useFakeTimers();
-  const invalidateQueries = vi.fn();
-  const live = createAuthoredLiveInvalidation({ invalidateQueries, cancelQueries: vi.fn(async () => undefined) });
-  live.push({ model: "messaging.Message", id: "msg_1" });
-  live.dispose();
-  await vi.advanceTimersByTimeAsync(5000);
-  expect(invalidateQueries).not.toHaveBeenCalled();
+  const cache = client();
+  const live = createAuthoredLiveInvalidation(cache);
+  const stale = pending<string[]>();
+  let revision = "initial";
+  let staleSignal!: AbortSignal;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["notes", "live"],
+    meta: { angeeModels: ["notes.Note"] },
+    queryFn: ({ signal }: { signal: AbortSignal }) => {
+      if (revision === "stale") { staleSignal = signal; return stale.promise; }
+      return Promise.resolve([revision]);
+    },
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  try {
+    await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["initial"]));
+    revision = "stale";
+    void observer.refetch();
+    await vi.waitFor(() => expect(staleSignal).toBeDefined());
+    revision = "current";
+    live.push({ model: "notes.Note", id: "note_revoked" });
+    // Cancelled on arrival, before the coalesced flush.
+    expect(staleSignal.aborted).toBe(true);
+    stale.resolve(["initial", "revoked"]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(observer.getCurrentResult().data).toEqual(["initial"]);
+    await vi.advanceTimersByTimeAsync(300);
+    await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["current"]));
+  } finally {
+    stale.resolve([]);
+    unsubscribe(); cache.clear();
+  }
 });
