@@ -245,11 +245,8 @@ def test_purge_removes_only_retired_decision_access_from_both_stores_and_declara
     preview = StringIO()
     call_command("purge_decision_record_access", stdout=preview)
     assert "would delete 1 denormalized and 1 registry" in preview.getvalue()
-    assert "record_access from 1 retained suspension(s)" in preview.getvalue()
     with system_context(reason="test decision access purge preview"):
         assert all(store.objects.filter(**retired).count() == 1 for store in (Relationship, RelationshipRegistry))
-        attempt.refresh_from_db()
-        assert attempt.result_decisions == declarations
 
     applied = StringIO()
     call_command("purge_decision_record_access", "--apply", "--check-pending", stdout=applied)
@@ -260,7 +257,6 @@ def test_purge_removes_only_retired_decision_access_from_both_stores_and_declara
             assert not store.objects.filter(**retired).exists()
             assert store.objects.count() == before[store] - 1
         attempt.refresh_from_db()
-        assert all("record_access" not in item for item in attempt.result_decisions)
+        assert attempt.result_decisions == declarations
         (declaration,) = deserialize_decision_specs(attempt.result_decisions)
     assert declaration.assignees == (str(to_subject_ref(reviewer)),)
-    assert Decision.objects.purge_record_access().retained_declarations == 0

@@ -39,7 +39,6 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"purge_decision_record_access: {action} {purge.relationships} denormalized and "
-                f"{purge.registry_relationships} registry relationship(s), and "
-                f"record_access from {purge.retained_declarations} retained suspension(s)"
+                f"{purge.registry_relationships} registry relationship(s)"
             )
         )
