@@ -1,14 +1,13 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider, defaultWidgets } from "@angee/ui";
 
 const mocks = vi.hoisted(() => ({
   query: {} as Record<string, unknown>,
-  routeHref: vi.fn((name: string, params?: Record<string, string>) =>
-    `/${name}/${params?.id ?? ""}`),
 }));
 
 vi.mock("@angee/refine", async (importOriginal) => ({
@@ -16,21 +15,12 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredQuery: () => mocks.query,
 }));
 
-vi.mock("@angee/ui", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/ui")>()),
-  useRouteHref: () => mocks.routeHref,
-  useRouteRecordId: () => "workflows.Step.impl:decision",
-}));
-
-vi.mock("../i18n", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../i18n")>()),
-  usePlatformT: () => (key: string) => key,
-}));
-
-vi.mock("../lib/cells", () => ({
-  TextRouteLink: ({ href, children }: { href: string; children: React.ReactNode }) =>
-    <a href={href}>{children}</a>,
-}));
+vi.mock("@angee/ui", async (importOriginal) => {
+  const { createUiRouteTestDoubles, createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, createUiRouteTestDoubles(), {
+    useRouteRecordId: () => "workflows.Step.impl:decision",
+  });
+});
 
 import platform from "../index";
 import { ImplementationDetail } from "./ImplementationDetail";
@@ -64,10 +54,13 @@ const implementation = {
 };
 
 function renderDetail(): void {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory() });
   render(
-    <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-      <ImplementationDetail />
-    </AppRuntimeProvider>,
+    <RouterContextProvider router={router}>
+      <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <ImplementationDetail />
+      </AppRuntimeProvider>
+    </RouterContextProvider>,
   );
 }
 
@@ -77,7 +70,6 @@ beforeEach(() => {
     error: null,
     isPending: false,
   };
-  mocks.routeHref.mockClear();
 });
 
 afterEach(() => cleanup());
@@ -85,7 +77,9 @@ afterEach(() => cleanup());
 describe("ImplementationDetail", () => {
   test("shows only truthful read-only defaults", () => {
     renderDetail();
-    fireEvent.click(screen.getByRole("tab", { name: "implementation.settings" }));
+    expect(screen.getByRole("link", { name: "workflows.Step" }).getAttribute("href")).toBe("/platform.models.record/workflows.step");
+    expect(screen.getByRole("link", { name: "Workflows" }).getAttribute("href")).toBe("/platform.addons.record/angee.workflows");
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
 
     expect(screen.getByText("Explicit flag")).toBeTruthy();
     expect(screen.getByText("Schema flag")).toBeTruthy();
@@ -93,18 +87,18 @@ describe("ImplementationDetail", () => {
     expect(screen.getByRole("checkbox", { name: "Explicit flag" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByRole("checkbox", { name: "Schema flag" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByRole("checkbox", { name: "Unset flag" })).toBeNull();
-    expect(screen.getByText("implementation.noDefault")).toBeTruthy();
+    expect(screen.getByText("No default declared")).toBeTruthy();
   });
 
   test("distinguishes unavailable source from a query failure", () => {
     renderDetail();
-    fireEvent.click(screen.getByRole("tab", { name: "implementation.code" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
     expect(screen.getByText("Source is packaged without Python files.")).toBeTruthy();
 
     cleanup();
     mocks.query = { data: undefined, error: new Error("Access denied"), isPending: false };
     renderDetail();
-    expect(screen.getByText("implementation.loadError")).toBeTruthy();
+    expect(screen.getByText("Could not load implementation")).toBeTruthy();
     expect(screen.getByText("Access denied")).toBeTruthy();
   });
 

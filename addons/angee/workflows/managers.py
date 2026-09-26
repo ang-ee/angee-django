@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import json
 import logging
 import uuid
 from collections.abc import Callable, Collection, Iterable, Iterator
 from contextlib import contextmanager, nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from graphlib import CycleError, TopologicalSorter
 from typing import Any, Literal, Self, cast
 
 from django.apps import apps
@@ -19,16 +19,13 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.core.validators import validate_slug
 from django.db import (
-    DEFAULT_DB_ALIAS,
     IntegrityError,
     OperationalError,
-    connections,
+    connection,
     models,
     transaction,
 )
 from django.utils import timezone
-from jsonschema import Draft202012Validator
-from pydantic import ValidationError as PydanticValidationError
 from pydantic_core import PydanticSerializationError
 from rebac import (
     LocalBackend,
@@ -36,25 +33,25 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     actor_context,
-    resource_id_attr,
+    current_actor,
     system_context,
     write_relationships,
 )
 from rebac.actors import NoActorResolvedError, to_subject_ref
 from rebac.backends import backend as rebac_backend
 from rebac.relationships import delete_relationship
-from rebac.resources import model_for_resource_type, to_object_ref
+from rebac.resources import to_object_ref
+from referencing.exceptions import Unresolvable
 
 from angee.base.actors import actor_user_id
 from angee.base.identity import (
     canonical_subject_ref,
     instance_from_public_id,
-    public_data_id_field,
     public_id_for,
 )
-from angee.base.mixins import AuditMixin
+from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_model, canonical_record_target
+from angee.base.refs import CanonicalRecordTarget, canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.workflows.attempts import (
     ArtifactSpec,
@@ -64,13 +61,20 @@ from angee.workflows.attempts import (
     AttemptInput,
     AttemptResult,
     AttemptResultKind,
+    DecisionAttemptResult,
     DecisionGateOutput,
-    DecisionInputSource,
     DecisionResolution,
     DecisionSpec,
+    DecisionSubmission,
     DecisionTimerIntent,
     DecisionTimerKind,
     ExternalOperationPolicy,
+    FixtureRole,
+    FixtureSource,
+    FixtureSourcePage,
+    FixtureSourceSummary,
+    FixtureSpec,
+    GateResumeState,
     InvocationAdmission,
     JsonPresence,
     LeaseRevocation,
@@ -81,59 +85,31 @@ from angee.workflows.attempts import (
     RecoveryMode,
     RecoveryPlan,
     RetryIntent,
+    WorkflowRepairContext,
+    WorkflowScope,
+    WorkflowSetupPlan,
     deserialize_decision_specs,
     json_values_equal,
     map_child_input,
     serialize_decision_specs,
+    validate_fixture_spec,
     validate_json_presence,
     workflow_result_terminal_match_error,
 )
+from angee.workflows.data_contracts import json_schema_validator
 from angee.workflows.decision_actions import (
     compile_decision_action_schema,
     retained_decision_form_schema,
+    validate_decision_resolution,
 )
 from angee.workflows.definitions import StaleDefinitionError, WorkflowDefinitionManagerMixin
 from angee.workflows.dispatch import (
-    DispatchConsumption,
-    DispatchPreflight,
-    DispatchPreflightDisposition,
+    DispatchTarget,
     WorkflowDispatchEnvelope,
     WorkflowDispatchKind,
     enqueue_dispatch_publisher,
 )
 from angee.workflows.graph import GraphFreshnessReason, GraphIdentity, WorkflowGraph
-from angee.workflows.manager_authority import (
-    _artifact_batch_capability,
-    _artifact_write_capability,
-    _ArtifactBatchCapability,
-    _ArtifactWriteCapability,
-    _AtomicWriteCapability,
-    _attempt_save_capability,
-    _attempt_write_active,
-    _attempt_write_session,
-    _AttemptSaveCapability,
-    _AttemptWriteSession,
-    _decision_resolution_session,
-    _decision_save_capability,
-    _decision_write_session,
-    _DecisionResolutionSession,
-    _DecisionSaveCapability,
-    _DecisionWriteSession,
-    _definition_write_session,
-    _DefinitionWriteSession,
-    _dispatch_consume_session,
-    _dispatch_save_capability,
-    _DispatchConsumeSession,
-    _DispatchSaveCapability,
-    _recovery_evidence_batch,
-    _recovery_evidence_write_row,
-    _recovery_write_run,
-    _step_run_save_capability,
-    _StepRunSaveCapability,
-    _test_fixture_apply_ids,
-    _test_fixture_batch_rows,
-    _test_fixture_write_run,
-)
 from angee.workflows.states import (
     CURRENT_PUBLICATION_STATUSES,
     ParentRelation,
@@ -147,25 +123,22 @@ from angee.workflows.states import (
     WorkflowStatus,
 )
 from angee.workflows.steps import StepExecutionMode, retry_policy_from_config
-from angee.workflows.testing import (
-    FixtureRole,
-    FixtureSource,
-    FixtureSourcePage,
-    FixtureSourceSummary,
-    FixtureSpec,
-    WorkflowRepairContext,
-    WorkflowScope,
-    WorkflowSetupPlan,
-    validate_fixture_spec,
-)
 from angee.workflows.trigger_declarations import (
     EventAdmissionPolicy,
     EventSource,
     EventTriggerConfig,
 )
 
-_CURRENCY_STATUSES = CURRENT_PUBLICATION_STATUSES
 logger = logging.getLogger(__name__)
+
+
+def resolve_actor_subject(actor: Any) -> SubjectRef:
+    """Resolve a workflow action's explicit actor or its ambient principal."""
+
+    actor = current_actor() if actor is None else actor
+    if actor is None:
+        raise PermissionDenied("Authentication required.")
+    return to_subject_ref(actor)
 
 
 def _retained_record_access_refs(decision: Any) -> tuple[ObjectRef, ...]:
@@ -174,26 +147,15 @@ def _retained_record_access_refs(decision: Any) -> tuple[ObjectRef, ...]:
     refs: list[ObjectRef] = []
     seen: set[tuple[str, str]] = set()
     for raw in decision.record_access:
-        if (
-            not isinstance(raw, dict)
-            or set(raw) not in (
-                {"resource_type", "resource_id"},
-                {"resource_type", "resource_id", "authority_decision_id"},
-            )
-        ):
+        if not isinstance(raw, dict) or set(raw) != {"resource_type", "resource_id"}:
             raise ValidationError({"record_access": "Retained Decision delegation identity is invalid."})
         resource_type = raw["resource_type"]
         resource_id = raw["resource_id"]
-        authority_id = raw.get("authority_decision_id")
         if (
             not isinstance(resource_type, str)
             or not resource_type
             or not isinstance(resource_id, str)
             or not resource_id
-            or (
-                "authority_decision_id" in raw
-                and (not isinstance(authority_id, str) or not authority_id)
-            )
         ):
             raise ValidationError({"record_access": "Retained Decision delegation identity is invalid."})
         key = (resource_type, resource_id)
@@ -202,6 +164,7 @@ def _retained_record_access_refs(decision: Any) -> tuple[ObjectRef, ...]:
         seen.add(key)
         refs.append(ObjectRef(resource_type, resource_id))
     return tuple(refs)
+
 
 def _combined_delete_results(*results: tuple[int, dict[str, int]]) -> tuple[int, dict[str, int]]:
     """Combine Django delete counts from explicitly owned cascade phases."""
@@ -215,10 +178,26 @@ def _combined_delete_results(*results: tuple[int, dict[str, int]]) -> tuple[int,
     return total, counts
 
 
-def _definition_rows(model: type[models.Model], alias: str) -> Any:
+def _definition_rows(model: type[models.Model]) -> Any:
     """Return an internal unscoped queryset for ownership and lock verification."""
 
-    return system_queryset(model, using=alias, lock=None)
+    return system_queryset(model, lock=None)
+
+
+@dataclass
+class DefinitionWriteSession:
+    """Explicit accumulator for one definition transaction's revision changes."""
+
+    workflow_ids: frozenset[int]
+    rows: tuple[Any, ...]
+    changed_head_ids: set[int] = field(default_factory=set)
+
+    def changed(self, workflow_id: int) -> None:
+        if any(row.pk == workflow_id and row.published_from_id is None for row in self.rows):
+            self.changed_head_ids.add(workflow_id)
+
+    def revision(self, workflow_id: int, current: int) -> int:
+        return current + int(workflow_id in self.changed_head_ids)
 
 
 class DefinitionQuerySet(AngeeQuerySet[Any]):
@@ -262,7 +241,7 @@ class DefinitionQuerySet(AngeeQuerySet[Any]):
     def bulk_update(self, *args: Any, **kwargs: Any) -> int:
         raise TypeError("Workflow definitions do not support bulk_update(); save instances instead.")
 
-    def delete(self) -> tuple[int, dict[str, int]]:
+    def delete(self, *, session: DefinitionWriteSession | None = None) -> tuple[int, dict[str, int]]:
         instances = list(self.order_by("pk"))
         if not instances:
             return (0, {})
@@ -273,12 +252,12 @@ class DefinitionQuerySet(AngeeQuerySet[Any]):
             workflow_field = self.model._meta.get_field("workflow")
             workflow_model = workflow_field.remote_field.model
             workflow_ids = [instance.workflow_id for instance in instances]
-        manager = workflow_model.objects.db_manager(self.db)
-        with manager._definition_write(workflow_ids, using=self.db):
+        manager = workflow_model.objects
+        with manager._definition_write(workflow_ids, session=session) as session:
             total = 0
             counts: dict[str, int] = {}
             for instance in instances:
-                deleted, per_model = instance.delete()
+                deleted, per_model = instance.delete(session=session)
                 total += deleted
                 for label, count in per_model.items():
                     counts[label] = counts.get(label, 0) + count
@@ -288,21 +267,30 @@ class DefinitionQuerySet(AngeeQuerySet[Any]):
 class WorkflowQuerySet(DefinitionQuerySet):
     """QuerySet owning subject declaration discovery and version currency."""
 
+    def lineage_heads(self, key: str) -> Self:
+        """Return editable lineage heads for one stable workflow key."""
+
+        return self.filter(published_from__isnull=True, key=key)
+
+    def bump_revision(self) -> int:
+        """Increment only the saved draft revision owned by the definition verb."""
+
+        return super(DefinitionQuerySet, self).update(draft_revision=models.F("draft_revision") + 1)
+
     def current_published(self) -> Self:
         """Return rows that are the current published version of their lineage.
 
         The currency rule's single owner: a row survives when it is PUBLISHED
-        and no ``_CURRENCY_STATUSES`` sibling in the same lineage is newer by
+        and no ``CURRENT_PUBLICATION_STATUSES`` sibling in the same lineage is newer by
         ``(version, pk)`` — so a newer ARCHIVED row retires the lineage.
         """
 
         workflow_model = cast(Any, self.model)
         newer_version = (
-            workflow_model.objects
-            .sudo(reason="workflows.subject_declaration.current")
+            workflow_model.objects.sudo(reason="workflows.subject_declaration.current")
             .filter(
                 published_from_id=models.OuterRef("published_from_id"),
-                status__in=_CURRENCY_STATUSES,
+                status__in=CURRENT_PUBLICATION_STATUSES,
             )
             .filter(
                 models.Q(version__gt=models.OuterRef("version"))
@@ -312,6 +300,21 @@ class WorkflowQuerySet(DefinitionQuerySet):
         return cast(
             Self,
             self.filter(status=WorkflowStatus.PUBLISHED).filter(~models.Exists(newer_version)),
+        )
+
+    def current_published_for(self, workflow: Any) -> Any | None:
+        """Return the latest published version for ``workflow``'s lineage.
+
+        Composes the same ``CURRENT_PUBLICATION_STATUSES`` rule ``current_published``
+        owns, scoped to one explicit lineage pool.
+        """
+
+        head_id = workflow.published_from_id or workflow.pk
+        return (
+            self.current_published()
+            .filter(models.Q(pk=head_id) | models.Q(published_from_id=head_id))
+            .order_by("-version", "-pk")
+            .first()
         )
 
     def for_subject_declaration(self, subject_declaration: str) -> Self:
@@ -341,71 +344,37 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
         self,
         workflow_ids: Iterable[int],
         *,
-        using: str | None = None,
+        session: DefinitionWriteSession | None = None,
         _allow_status_transition: bool = False,
-    ) -> Iterator[list[Any]]:
-        """Lock declared lineages and share one revision owner across nested writes."""
+    ) -> Iterator[DefinitionWriteSession]:
+        """Lock definition lineages and pass one revision accumulator explicitly."""
 
-        alias = using or self.db
         ids = frozenset(workflow_ids)
-        active = _definition_write_session.get()
-        connection_id = id(connections[alias])
-        if active is not None:
-            if active.alias != alias or active.connection_id != connection_id:
-                raise RuntimeError("A workflow definition write cannot span database connections.")
-            undeclared = ids - active.workflow_ids - active.copy_target_ids
-            if undeclared:
-                raise RuntimeError("A workflow definition write cannot expand to a new lineage after locking.")
-            rows = list(system_queryset(self.model, using=alias, lock=None).filter(pk__in=ids).order_by("pk"))
+        if session is not None:
+            if not connection.in_atomic_block:
+                raise RuntimeError("A definition session must remain inside its manager's transaction.")
+            if ids - session.workflow_ids:
+                raise RuntimeError("A nested definition write cannot expand its locked lineage.")
+            rows = list(system_queryset(self.model, lock=("self",)).filter(pk__in=ids).order_by("pk"))
             if len(rows) != len(ids):
-                raise ValidationError("A workflow definition parent no longer exists.")
-            if not _allow_status_transition and any(
-                row.is_immutable and row.pk not in active.copy_target_ids for row in rows
-            ):
-                raise ValidationError("Published workflow versions are immutable.")
-            yield rows
-            return
-
-        ordered_ids = sorted(ids)
-        with transaction.atomic(using=alias):
-            rows = list(
-                system_queryset(self.model, using=alias, lock=("self",))
-                .filter(pk__in=ordered_ids)
-                .order_by("pk")
-            )
-            if len(rows) != len(ordered_ids):
                 raise ValidationError("A workflow definition parent no longer exists.")
             if not _allow_status_transition and any(row.is_immutable for row in rows):
                 raise ValidationError("Published workflow versions are immutable.")
-            session = _DefinitionWriteSession(alias, connection_id, ids, set(), set())
-            token = _definition_write_session.set(session)
-            try:
-                yield rows
-                for workflow_id in sorted(session.changed_head_ids):
-                    models.QuerySet.update(
-                        self.model._base_manager.using(alias).filter(
-                            pk=workflow_id, published_from__isnull=True
-                        ),
-                        draft_revision=models.F("draft_revision") + 1,
-                    )
-            finally:
-                _definition_write_session.reset(token)
-
-    def mark_definition_changed(self, workflow_id: int) -> None:
-        """Record one editable lineage as changed in the active write session."""
-
-        session = _definition_write_session.get()
-        if session is None or workflow_id not in session.workflow_ids:
-            raise RuntimeError("Definition changes require an active locked write session.")
-        session.changed_head_ids.add(workflow_id)
-
-    def _definition_revision(self, workflow_id: int, current: int) -> int:
-        """Return the exact revision this active locked session will commit."""
-
-        session = _definition_write_session.get()
-        if session is None or workflow_id not in session.workflow_ids:
-            raise RuntimeError("Definition revision projection requires its active locked write session.")
-        return current + int(workflow_id in session.changed_head_ids)
+            yield session
+            return
+        with transaction.atomic():
+            rows = list(system_queryset(self.model, lock=("self",)).filter(pk__in=ids).order_by("pk"))
+            if len(rows) != len(ids):
+                raise ValidationError("A workflow definition parent no longer exists.")
+            if not _allow_status_transition and any(row.is_immutable for row in rows):
+                raise ValidationError("Published workflow versions are immutable.")
+            session = DefinitionWriteSession(ids, tuple(rows))
+            yield session
+            for workflow_id in sorted(session.changed_head_ids):
+                self.get_queryset().system_context(reason="workflows.definition_write.revision").filter(
+                    pk=workflow_id,
+                    published_from__isnull=True,
+                ).bump_revision()
 
     @contextmanager
     def _definition_caller(self, workflow: Any) -> Iterator[None]:
@@ -415,67 +384,37 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
             yield
 
     @contextmanager
-    def _definition_read(self, workflow_id: int, *, using: str | None = None) -> Iterator[Any]:
+    def _definition_read(self, workflow_id: int) -> Iterator[Any]:
         """Lock one mutable or immutable definition for a coherent snapshot read."""
 
-        alias = using or self.db
-        with transaction.atomic(using=alias):
-            yield system_queryset(self.model, using=alias, lock=("self",)).get(pk=workflow_id)
+        with transaction.atomic():
+            yield system_queryset(self.model, lock=("self",)).get(pk=workflow_id)
 
-    @contextmanager
-    def _copy_to(self, workflow_id: int) -> Iterator[None]:
-        """Permit inserts into one new publication within the locked session."""
-
-        session = _definition_write_session.get()
-        if session is None:
-            raise RuntimeError("Publication copying requires an active definition write session.")
-        session.copy_target_ids.add(workflow_id)
-        try:
-            yield
-        finally:
-            session.copy_target_ids.remove(workflow_id)
-
-    def current_published_for(self, workflow: Any) -> Any | None:
-        """Return the latest published version for ``workflow``'s lineage.
-
-        Composes the same ``_CURRENCY_STATUSES`` rule ``current_published``
-        owns, scoped to one explicit lineage pool.
-        """
-
-        head = workflow if getattr(workflow, "published_from_id", None) is None else workflow.published_from
-        latest = (
-            self.filter(status__in=_CURRENCY_STATUSES)
-            .filter(models.Q(pk=head.pk) | models.Q(published_from=head))
-            .order_by("-version", "-pk")
-            .first()
-        )
-        if latest is None or latest.status != WorkflowStatus.PUBLISHED:
-            return None
-        return latest
-
-    def test_snapshot(
-        self, workflow: Any, *, expected_revision: int, require_readiness: bool = True
-    ) -> Any:
+    def test_snapshot(self, workflow: Any, *, expected_revision: int, require_readiness: bool = True) -> Any:
         """Return the immutable test copy of one exact saved draft revision."""
 
         self._validate_expected_revision(workflow, expected_revision)
         if workflow.published_from_id is not None:
             raise ValidationError({"workflow": "Test snapshots can only be taken from a lineage head."})
-        alias = self.db
-        with system_context(reason="workflows.test_snapshot"), self._definition_write(
-            (workflow.pk,), using=alias
+        with (
+            system_context(reason="workflows.test_snapshot"),
+            self._definition_write((workflow.pk,)) as session,
         ):
             draft = cast(
                 Any,
-                DefinitionQuerySet.bind_instance(_definition_rows(self.model, alias).get(pk=workflow.pk), workflow),
+                DefinitionQuerySet.bind_instance(_definition_rows(self.model).get(pk=workflow.pk), workflow),
             )
             if draft.draft_revision != expected_revision:
                 raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
-            existing = system_queryset(self.model, using=alias, lock=None).filter(
-                published_from=draft,
-                status=WorkflowStatus.TEST,
-                draft_revision=expected_revision,
-            ).first()
+            existing = (
+                system_queryset(self.model, lock=None)
+                .filter(
+                    published_from=draft,
+                    status=WorkflowStatus.TEST,
+                    draft_revision=expected_revision,
+                )
+                .first()
+            )
             if existing is not None:
                 return existing
             if require_readiness:
@@ -486,11 +425,10 @@ class WorkflowManager(WorkflowDefinitionManagerMixin, AngeeManager.from_queryset
                 draft_revision=expected_revision,
             )
             DefinitionQuerySet.bind_instance(snapshot, draft)
-            snapshot.save(using=alias)
-            with self._copy_to(snapshot.pk):
-                with DefinitionQuerySet.caller_context(draft):
-                    draft._copy_definition_to(snapshot)
-                snapshot.mark_test()
+            snapshot.insert_publication()
+            with DefinitionQuerySet.caller_context(draft):
+                draft._copy_definition_to(snapshot, session=session)
+            snapshot.mark_test()
             return snapshot
 
 
@@ -516,9 +454,7 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
             raise TypeError("Workflow run invocation identity and terminal facts are immutable.")
         return super().update(**kwargs)
 
-    def bulk_update(
-        self, objs: Iterable[Any], fields: Iterable[str], batch_size: int | None = None
-    ) -> int:
+    def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], batch_size: int | None = None) -> int:
         """Apply the same admitted-run identity rule to bulk writes."""
 
         field_names = tuple(fields)
@@ -533,7 +469,194 @@ class WorkflowRunQuerySet(AngeeQuerySet[Any]):
 
 
 class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # type: ignore[misc]
-    """Own immutable publication pinning and initial durable execution state."""
+    """Own immutable publication pinning and durable run operations."""
+
+    def lock_execution_ancestry(self, run_ids: Iterable[int]) -> dict[int, Any]:
+        """Lock persisted parent and recovery ancestors before their descendants.
+
+        Call inside the operation's transaction, before taking any execution-row
+        lock. Stable ancestry supplies one shared lock order for commands,
+        dispatch, recovery admission, and Decision application.
+        """
+
+        facts: dict[int, tuple[int | None, int | None, int | None, int | None]] = {}
+        pending = set(run_ids)
+        while pending:
+            rows = list(
+                system_queryset(self.model, lock=None)
+                .filter(pk__in=pending)
+                .order_by("pk")
+                .values_list(
+                    "pk",
+                    "parent_step_run_id",
+                    "parent_step_run__run_id",
+                    "recovery_source_attempt_id",
+                    "recovery_source_attempt__step_run__run_id",
+                )
+            )
+            if {row[0] for row in rows} != pending:
+                raise self.model.DoesNotExist("Workflow execution ancestry is incomplete.")
+            for pk, parent_step, parent_run, source_attempt, source_run in rows:
+                facts[pk] = (parent_step, parent_run, source_attempt, source_run)
+            pending = {
+                ancestor
+                for _, parent_run, _, source_run in facts.values()
+                for ancestor in (parent_run, source_run)
+                if ancestor is not None and ancestor not in facts
+            }
+        order: TopologicalSorter[int] = TopologicalSorter(
+            {
+                pk: tuple(ancestor for ancestor in (parent_run, source_run) if ancestor is not None)
+                for pk, (_, parent_run, _, source_run) in facts.items()
+            }
+        )
+        try:
+            order.prepare()
+        except CycleError as error:
+            raise ValidationError({"run": "Workflow execution ancestry is cyclic."}) from error
+        locked: dict[int, Any] = {}
+        while order.is_active():
+            ready = sorted(order.get_ready())
+            for row in (
+                system_queryset(self.model, lock=("self",))
+                .select_related("workflow", "parent_step_run__run", "recovery_source_attempt__step_run__run__workflow")
+                .filter(pk__in=ready)
+                .order_by("pk")
+            ):
+                parent = row.parent_step_run
+                source = row.recovery_source_attempt
+                retained = (
+                    row.parent_step_run_id,
+                    None if parent is None else parent.run_id,
+                    row.recovery_source_attempt_id,
+                    None if source is None else source.step_run.run_id,
+                )
+                if retained != facts[row.pk]:
+                    raise OperationalError("Workflow execution ancestry changed while locking.")
+                locked[row.pk] = row
+                row.execution_lineage_root_id()
+            order.done(*ready)
+        return locked
+
+    def cancel(self, run: Any, *, actor: Any) -> None:
+        """Authorize one actor's cancellation before retaining all terminal facts."""
+
+        if actor is None:
+            raise PermissionDenied("An actor is required to cancel a workflow run.")
+        run_id = run.pk
+        with transaction.atomic():
+            locked = self.lock_execution_ancestry((run_id,))[run_id]
+            if not locked.with_actor(actor).check_access("write").allowed:
+                raise PermissionDenied("The actor cannot cancel this workflow run.")
+            with system_context(reason="workflows.runs.cancel"):
+                locked.sudo(reason="workflows.runs.cancel.persistence")
+                self.cancel_locked(locked, at=timezone.now())
+
+    def override_run(self, run: models.Model, next_steps: Iterable[models.Model], *, actor: Any) -> Any:
+        """Cancel active rows, retain an override journal row, and schedule next steps."""
+
+        registry = self.model._meta.apps
+        steps = registry.get_model("workflows", "StepRun").objects
+        attempts = registry.get_model("workflows", "StepAttempt").objects
+        dispatches = registry.get_model("workflows", "WorkflowDispatch").objects
+        actor_id = actor_user_id(resolve_actor_subject(actor))
+        step_ids = [step.pk for step in next_steps]
+
+        with system_context(reason="workflows.runs.override"), transaction.atomic():
+            locked = self.lock_execution_ancestry((run.pk,))[run.pk]
+            if locked.status in RunStatus.TERMINAL:
+                raise ValidationError({"run": "A terminal workflow run cannot be overridden."})
+            for step_run in steps.lock_if_supported().filter(run=locked, status__in=list(StepRunStatus.ACTIVE)):
+                if step_run.step_id in step_ids:
+                    steps.reschedule_for_override(step_run.pk, input={}, at=timezone.now())
+                else:
+                    attempts.cancel_current(step_run.pk, at=timezone.now())
+            override = steps.create(
+                run_id=locked.pk,
+                step=None,
+                system_kind="override",
+                status=StepRunStatus.SUCCEEDED,
+                output={"next_steps": step_ids},
+                outcome="override",
+                created_by_id=actor_id,
+                updated_by_id=actor_id,
+            )
+            for step_id in step_ids:
+                row = steps.filter(run=locked, step_id=step_id, map_index=-1).first()
+                if row is None:
+                    row = steps.create(
+                        run_id=locked.pk,
+                        step_id=step_id,
+                        map_index=-1,
+                        status=StepRunStatus.SCHEDULED,
+                        input={},
+                    )
+                elif row.status in StepRunStatus.TERMINAL:
+                    row = steps.reschedule_for_override(row.pk, input={}, at=timezone.now())
+                steps.update_previous(row, [override], replace=True)
+            if locked.status == RunStatus.WAITING:
+                locked.resume()
+            dispatches.schedule_advance(locked, available_at=timezone.now())
+            transaction.on_commit(lambda: enqueue_dispatch_publisher())
+        return override
+
+    def expire_decisions(self, run: Any, *, resolved_by: str, include_current: bool) -> int:
+        """Expire a run's decisions while holding its canonical aggregate locks."""
+
+        registry = self.model._meta.apps
+        decisions = registry.get_model("workflows", "Decision").objects
+        steps = registry.get_model("workflows", "StepRun").objects
+        expired = 0
+        with transaction.atomic(), system_context(reason="workflows.runs.expire_decisions"):
+            locked = self.lock_execution_ancestry((run.pk,))[run.pk]
+            for step in steps.lock_if_supported().filter(run=locked).order_by("pk"):
+                if include_current:
+                    expired += decisions.expire_pending(step.pk, resolved_by=resolved_by)
+                expired += decisions.expire_orphaned_suspensions(step.pk, resolved_by=resolved_by)
+        return expired
+
+    def cancel_locked(self, run: Any, *, at: datetime) -> bool:
+        """Persist the admitted run cancellation and its owned-child intents."""
+
+        if run.is_terminal:
+            return False
+        registry = self.model._meta.apps
+        step_run_model = registry.get_model("workflows", "StepRun")
+        attempt_model = registry.get_model("workflows", "StepAttempt")
+        decision_model = registry.get_model("workflows", "Decision")
+        dispatch_model = registry.get_model("workflows", "WorkflowDispatch")
+        owned_children = list(
+            system_queryset(self.model)
+            .select_related("workflow", "parent_step_run__run", "recovery_source_attempt__step_run__run__workflow")
+            .filter(
+                parent_step_run__run=run,
+                parent_relation=ParentRelation.OWNED_CALL,
+                status__in=[RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING],
+            )
+            .order_by("pk")
+        )
+        for step_run in (
+            system_queryset(step_run_model, lock=("self",))
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .filter(run=run)
+            .order_by("pk")
+        ):
+            current_attempt = step_run.current_attempt
+            held_applied_suspension = (
+                step_run.status == StepRunStatus.WAITING
+                and current_attempt is not None
+                and current_attempt.is_held_suspension
+            )
+            attempt_model.objects.cancel_current(step_run.pk, at=at)
+            if held_applied_suspension:
+                decision_model.objects.expire_canceled_suspension(
+                    step_run.pk,
+                    resolved_by="workflows/cancel",
+                )
+        run.mark_canceled()
+        for child in owned_children:
+            dispatch_model.objects.schedule_child_cancel(child, available_at=at)
+        return True
 
     def start(
         self,
@@ -543,10 +666,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         trigger: Any = None,
         parent_step_run: Any = None,
-        parent_relation: ParentRelation | str = "",
+        parent_relation: ParentRelation | str | None = None,
         dedup_key: str | None = None,
         origin: RunOrigin | None = None,
-        input: JsonPresence = JsonPresence(),
+        input: JsonPresence | Callable[[], JsonPresence] = JsonPresence(),
         available_at: datetime | None = None,
         validate_new: Callable[[], None] | None = None,
     ) -> Any:
@@ -554,29 +677,39 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
         ``validate_new`` is a side-effect-free domain consistency check. It runs
         inside the start transaction only when no retained identity exists;
-        callers must perform authorization before entering this system-owned
-        persistence boundary.
+        the actor's run permission is checked here before engine persistence.
+        A callable ``input()`` performs database-only preparation after the
+        workflow and retained-run locks, then returns the input to freeze. It
+        also runs for a duplicate; native exact matching checks its returned
+        facts against the retained invocation.
         """
 
-        input = validate_json_presence(input, label="workflow run input")
-        if (parent_step_run is None) != (parent_relation == ""):
-            raise ValidationError({"parent_relation": "Choose a parent relationship exactly when starting from a parent step."})
-        if parent_relation and parent_relation not in ParentRelation.values:
-            raise ValidationError({"parent_relation": "Unknown parent relationship."})
+        try:
+            actor_ref = to_subject_ref(actor)
+        except NoActorResolvedError as error:
+            raise PermissionDenied("Starting a workflow requires an explicit actor.") from error
+        if not callable(input):
+            input = validate_json_presence(input, label="workflow run input")
+        parent_relation = self.model.normalize_parent_relation(
+            None if parent_step_run is None else parent_step_run.pk,
+            parent_relation,
+        )
         if dedup_key is not None and len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
             raise ValidationError({"dedup_key": "Workflow run dedup key is too long."})
-        alias = self.db
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         head_id = workflow.pk if workflow.published_from_id is None else workflow.published_from_id
-        with system_context(reason="workflows.runs.start"), transaction.atomic(using=alias):
+        with system_context(reason="workflows.runs.start"), transaction.atomic():
             locked_parent = self._lock_child_parent_for_start(
-                parent_step_run, origin=origin, using=alias,
+                parent_step_run,
+                origin=origin,
             )
-            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=head_id)
+            head = system_queryset(workflow_model, lock=("self",)).get(pk=head_id)
+            if not head.with_actor(actor_ref).check_access("write").allowed:
+                raise PermissionDenied("The actor cannot start this workflow.")
             locked_trigger = None
             if trigger is not None:
                 trigger_model = self.model._meta.get_field("trigger").remote_field.model
-                locked_trigger = system_queryset(trigger_model, using=alias, lock=("self",)).get(pk=trigger.pk)
+                locked_trigger = system_queryset(trigger_model, lock=("self",)).get(pk=trigger.pk)
                 if locked_trigger.workflow_id != head.pk:
                     raise ValidationError({"trigger": "Workflow trigger does not belong to this lineage."})
             return self._start_locked(
@@ -590,13 +723,16 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 origin=origin,
                 input=input,
                 available_at=available_at or timezone.now(),
-                using=alias,
                 validate_new=validate_new,
                 requested_publication_id=workflow.pk if workflow.published_from_id is not None else None,
             )
 
     def retained_child_for_start(
-        self, parent_step_run: Any, *, actor: Any, origin: RunOrigin,
+        self,
+        parent_step_run: Any,
+        *,
+        actor: Any,
+        origin: RunOrigin,
     ) -> Any | None:
         """Return the readable child retained for one authoritative start slot.
 
@@ -605,49 +741,60 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         validate their immutable domain input before reusing the returned run.
         """
 
-        alias = self.db
         step_run_model = self.model._meta.apps.get_model("workflows", "StepRun")
-        parent_run_id = system_queryset(step_run_model, using=alias, lock=None).values_list(
-            "run_id", flat=True,
-        ).get(pk=parent_step_run.pk)
+        parent_run_id = (
+            system_queryset(step_run_model, lock=None)
+            .values_list(
+                "run_id",
+                flat=True,
+            )
+            .get(pk=parent_step_run.pk)
+        )
         readable_runs = read_scoped_queryset(self.model, actor, action="read")
-        if readable_runs is not None:
-            readable_runs = readable_runs.using(alias)
         if readable_runs is None or not readable_runs.filter(pk=parent_run_id).exists():
             raise PermissionDenied("Parent workflow execution is unavailable.")
-        with system_context(reason="workflows.runs.retained_child_for_start"), transaction.atomic(using=alias):
+        with system_context(reason="workflows.runs.retained_child_for_start"), transaction.atomic():
             locked_parent = self._lock_child_parent_for_start(
-                parent_step_run, origin=origin, using=alias,
+                parent_step_run,
+                origin=origin,
             )
-            retained = system_queryset(self.model, using=alias, lock=("self",)).filter(
-                parent_step_run=locked_parent,
-            ).first()
+            retained = (
+                system_queryset(self.model, lock=("self",))
+                .select_related("workflow", "parent_step_run__run", "recovery_source_attempt__step_run__run__workflow")
+                .filter(
+                    parent_step_run=locked_parent,
+                )
+                .first()
+            )
         if retained is None:
             return None
         readable_runs = read_scoped_queryset(self.model, actor, action="read")
-        if readable_runs is not None:
-            readable_runs = readable_runs.using(alias)
         readable = None if readable_runs is None else readable_runs.filter(pk=retained.pk).first()
         if readable is None:
             raise PermissionDenied("Retained child workflow execution is unavailable.")
         return readable
 
-    def _lock_child_parent_for_start(
-        self, parent_step_run: Any | None, *, origin: RunOrigin | None, using: str,
-    ) -> Any | None:
+    def _lock_child_parent_for_start(self, parent_step_run: Any | None, *, origin: RunOrigin | None) -> Any | None:
         """Lock and normalize the one parent identity accepted by child start."""
 
         if parent_step_run is None:
             return None
         step_run_model = self.model._meta.apps.get_model("workflows", "StepRun")
-        parent_run_id = system_queryset(step_run_model, using=using, lock=None).values_list(
-            "run_id", flat=True,
-        ).get(pk=parent_step_run.pk)
-        locked_parent_run = system_queryset(
-            self.model, using=using, lock=("self",)
-        ).select_related("recovery_source_attempt__step_run").get(pk=parent_run_id)
-        locked_parent = system_queryset(step_run_model, using=using, lock=("self",)).get(
-            pk=parent_step_run.pk,
+        parent_run_id = (
+            system_queryset(step_run_model, lock=None)
+            .values_list(
+                "run_id",
+                flat=True,
+            )
+            .get(pk=parent_step_run.pk)
+        )
+        locked_parent_run = self.lock_execution_ancestry((parent_run_id,))[parent_run_id]
+        locked_parent = (
+            system_queryset(step_run_model, lock=("self",))
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .get(
+                pk=parent_step_run.pk,
+            )
         )
         if locked_parent.run_id != parent_run_id:
             raise OperationalError("Parent workflow step changed while locking.")
@@ -661,17 +808,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             and recovery_source.step_run.map_index == locked_parent.map_index
         ):
             return self._fresh_recovery_child_parent(
-                locked_parent_run, locked_parent, using=using,
+                locked_parent_run,
+                locked_parent,
             )
         return locked_parent
 
     def _fresh_recovery_child_parent(
-        self,
-        recovery_run: Any,
-        recovery_step_run: Any,
-        *,
-        using: str,
-        require_active: bool = True,
+        self, recovery_run: Any, recovery_step_run: Any, *, require_active: bool = True
     ) -> Any:
         """Resolve a replayed child handoff to its oldest exact FRESH source slot."""
 
@@ -680,7 +823,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         lineage, _retained_child_target = attempt_model.objects._fresh_recovery_anchor(
             recovery_step_run.current_attempt_id,
             recovery_run_id=recovery_run.pk,
-            alias=using,
             lock=("self",),
             require_active=require_active,
         )
@@ -694,9 +836,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             if lineage.pk in seen:
                 raise ValidationError({"parent_step_run": "Recovery attempt lineage contains a cycle."})
             seen.add(lineage.pk)
-            source = system_queryset(
-                attempt_model, using=using, lock=("self",)
-            ).select_related("step_run").get(pk=lineage.recovery_source_attempt_id)
+            source = (
+                system_queryset(attempt_model, lock=("self",))
+                .select_related("step_run")
+                .get(pk=lineage.recovery_source_attempt_id)
+            )
             source_parent = source.step_run
             if (
                 source_parent.step_id != parent.step_id
@@ -706,12 +850,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 or source.input_present != lineage.input_present
                 or not json_values_equal(source.input, lineage.input)
             ):
-                raise ValidationError({
-                    "parent_step_run": "Recovery child handoff source identity changed."
-                })
-            parent = system_queryset(
-                step_run_model, using=using, lock=("self",)
-            ).get(pk=source_parent.pk)
+                raise ValidationError({"parent_step_run": "Recovery child handoff source identity changed."})
+            parent = (
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+                .get(pk=source_parent.pk)
+            )
             lineage = source
         return parent
 
@@ -726,35 +870,54 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         request_key = request_key.strip() if isinstance(request_key, str) else ""
         if not request_key:
             raise ValidationError({"request_key": "Reprocessing requires a non-empty request key."})
-        alias = self.db
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
-        source = system_queryset(self.model, using=alias, lock=None).select_related("workflow").get(pk=source_run.pk)
+        source = (
+            system_queryset(self.model, lock=None)
+            .select_related("workflow", "parent_step_run__run", "recovery_source_attempt__step_run__run__workflow")
+            .get(pk=source_run.pk)
+        )
         head_id = source.workflow.published_from_id or source.workflow_id
         dedup_key = f"reprocess:{source.pk}:{request_key}"
         if len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
             raise ValidationError({"request_key": "Reprocessing request key is too long."})
-        with system_context(reason="workflows.runs.reprocess"), transaction.atomic(using=alias):
-            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=head_id)
-            existing = system_queryset(self.model, using=alias, lock=None).filter(dedup_key=dedup_key).first()
+        with system_context(reason="workflows.runs.reprocess"), transaction.atomic():
+            head = system_queryset(workflow_model, lock=("self",)).get(pk=head_id)
+            existing = (
+                system_queryset(self.model, lock=None)
+                .select_related("workflow", "parent_step_run__run", "recovery_source_attempt__step_run__run__workflow")
+                .filter(dedup_key=dedup_key)
+                .first()
+            )
             if existing is not None:
                 if existing.reprocessed_from_id != source.pk:
                     raise ValidationError("Reprocessing request identity conflicts with an existing run.")
                 return existing
-            lineage_versions = system_queryset(workflow_model, using=alias, lock=None).filter(
-                models.Q(pk=head.pk) | models.Q(published_from_id=head.pk)
-            ).values("pk")
-            active = system_queryset(self.model, using=alias, lock=("self",)).filter(
-                workflow_id__in=models.Subquery(lineage_versions),
-                subject_content_type_id=source.subject_content_type_id,
-                subject_object_id=source.subject_object_id,
-                status__in=(RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING),
-            ).exists()
+            lineage_versions = (
+                system_queryset(workflow_model, lock=None)
+                .filter(models.Q(pk=head.pk) | models.Q(published_from_id=head.pk))
+                .values("pk")
+            )
+            active = (
+                system_queryset(self.model, lock=("self",))
+                .filter(
+                    workflow_id__in=models.Subquery(lineage_versions),
+                    subject_content_type_id=source.subject_content_type_id,
+                    subject_object_id=source.subject_object_id,
+                    status__in=(RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING),
+                )
+                .exists()
+            )
             if active:
                 raise ValidationError({"source_run": "This workflow subject already has an active run."})
             return self._start_locked(
-                head, source.subject, actor, dedup_key=dedup_key, origin=cast(RunOrigin, RunOrigin.MANUAL),
+                head,
+                source.subject,
+                actor,
+                dedup_key=dedup_key,
+                origin=cast(RunOrigin, RunOrigin.MANUAL),
                 input=JsonPresence(source.input_present, copy.deepcopy(source.input)),
-                reprocessed_from=source, available_at=timezone.now(), using=alias,
+                reprocessed_from=source,
+                available_at=timezone.now(),
             )
 
     def _start_locked(
@@ -765,38 +928,48 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         trigger: Any = None,
         parent_step_run: Any = None,
-        parent_relation: ParentRelation | str = "",
+        parent_relation: ParentRelation | str | None = None,
         dedup_key: str | None = None,
         occurrence_id: str | None = None,
         origin: RunOrigin | None = None,
-        input: JsonPresence = JsonPresence(),
+        input: JsonPresence | Callable[[], JsonPresence] = JsonPresence(),
         available_at: datetime,
-        using: str,
         reprocessed_from: Any = None,
         validate_new: Callable[[], None] | None = None,
         requested_publication_id: int | None = None,
     ) -> Any:
         """Create initial rows after callers lock the exact lineage and trigger."""
 
-        connection = connections[using]
         if not connection.in_atomic_block:
             raise RuntimeError("Pinned workflow start requires its owning transaction.")
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         content_type = None if subject is None else ContentType.objects.get_for_model(subject, for_concrete_model=False)
-        run_dedup_key = dedup_key or self._trigger_dedup_key(trigger, content_type, None if subject is None else subject.pk)
+        run_dedup_key = dedup_key or self._trigger_dedup_key(
+            trigger, content_type, None if subject is None else subject.pk
+        )
         retained = None
         if parent_step_run is not None:
-            retained = system_queryset(self.model, using=using, lock=("self",)).select_related("workflow").filter(
-                parent_step_run=parent_step_run,
-            ).first()
+            retained = (
+                system_queryset(self.model, lock=("self",))
+                .select_related("workflow", "parent_step_run__run", "recovery_source_attempt__step_run__run__workflow")
+                .filter(
+                    parent_step_run=parent_step_run,
+                )
+                .first()
+            )
         if retained is None and run_dedup_key:
-            retained = system_queryset(self.model, using=using, lock=("self",)).select_related("workflow").filter(
-                dedup_key=run_dedup_key,
-            ).first()
+            retained = (
+                system_queryset(self.model, lock=("self",))
+                .select_related("workflow", "parent_step_run__run", "recovery_source_attempt__step_run__run__workflow")
+                .filter(
+                    dedup_key=run_dedup_key,
+                )
+                .first()
+            )
         if retained is not None and (retained.workflow.published_from_id or retained.workflow_id) != head.pk:
             raise ValidationError({"workflow": "Retained invocation belongs to a different workflow lineage."})
         if requested_publication_id is not None:
-            version = system_queryset(workflow_model, using=using, lock=("self",)).get(pk=requested_publication_id)
+            version = system_queryset(workflow_model, lock=("self",)).get(pk=requested_publication_id)
             if version.published_from_id != head.pk:
                 raise ValidationError({"workflow": "Requested publication does not belong to this lineage."})
         elif retained is not None:
@@ -809,6 +982,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             raise ValidationError({"workflow": "Workflow runs must pin a published version."})
         if retained is None and trigger is not None and not trigger.enabled:
             raise ValidationError({"trigger": "Workflow trigger is disabled."})
+        if callable(input):
+            input = validate_json_presence(input(), label="workflow run input")
         return self._start_pinned_locked(
             version,
             subject,
@@ -821,7 +996,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             origin=origin,
             input=input,
             available_at=available_at,
-            using=using,
             reprocessed_from=reprocessed_from,
             validate_new=validate_new,
         )
@@ -855,7 +1029,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         dedup_key = f"test:{head_id}:{request_key}"
         if len(dedup_key) > self.model._meta.get_field("dedup_key").max_length:
             raise ValidationError({"request_key": "Test launch request key is too long."})
-        alias = self.db
         authorized = read_scoped_queryset(workflow_model, actor, action="write")
         if authorized is None or not authorized.filter(pk=workflow.pk).exists():
             raise PermissionDenied("Test workflow access was denied.")
@@ -863,9 +1036,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if repair_source_attempt is not None:
             repair_context = self.test_repair_context(repair_source_attempt, actor=actor)
             if repair_context.draft_workflow_id != workflow_model.public_id_from_pk(head_id):
-                raise ValidationError(
-                    {"repair_source_attempt": "Repair evidence belongs to another workflow lineage."}
-                )
+                raise ValidationError({"repair_source_attempt": "Repair evidence belongs to another workflow lineage."})
             if (
                 scope is not WorkflowScope.NODE
                 or selected_step is None
@@ -874,11 +1045,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 raise ValidationError(
                     {"repair_source_attempt": "Repair tests must select the source operation in the current draft."}
                 )
-        with system_context(reason="workflows.runs.start_test"), transaction.atomic(using=alias):
-            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=head_id)
+        with system_context(reason="workflows.runs.start_test"), transaction.atomic():
+            head = system_queryset(workflow_model, lock=("self",)).get(pk=head_id)
             requested = head
             if workflow.published_from_id is not None:
-                requested = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=workflow.pk)
+                requested = system_queryset(workflow_model, lock=("self",)).get(pk=workflow.pk)
                 if requested.status != WorkflowStatus.TEST:
                     raise ValidationError({"workflow": "Test runs require a draft head or test snapshot."})
                 if requested.published_from_id != head.pk or requested.draft_revision != expected_revision:
@@ -896,9 +1067,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 selected_identity = selected_step.pk if selected_step is not None else None
                 if existing.test_source_step_id != selected_identity:
                     raise ValidationError({"request_key": "Test launch selected-step facts do not match."})
-                if existing.test_repair_source_attempt_id != getattr(
-                    repair_source_attempt, "pk", None
-                ):
+                if existing.test_repair_source_attempt_id != getattr(repair_source_attempt, "pk", None):
                     raise ValidationError({"request_key": "Test launch repair evidence does not match."})
 
                 retry_graph = WorkflowGraph.from_workflow(existing.workflow)
@@ -925,7 +1094,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             if selected_step is not None:
                 step_model = workflow_model._meta.apps.get_model("workflows", "Step")
                 try:
-                    locked_selected = system_queryset(step_model, using=alias, lock=("self",)).get(
+                    locked_selected = system_queryset(step_model, lock=("self",)).get(
                         pk=selected_step.pk,
                         workflow=requested,
                     )
@@ -983,7 +1152,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 test_repair_source_attempt=repair_source_attempt,
                 test_fixture_rows=fixture_rows,
                 available_at=timezone.now(),
-                using=alias,
             )
 
     def start_recovery(
@@ -999,18 +1167,19 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
         if not isinstance(request_key, str) or not request_key.strip():
             raise ValidationError({"request_key": "Recovery request keys must be non-empty strings."})
-        alias = self.db
         attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
         step_run_model = self.model._meta.apps.get_model("workflows", "StepRun")
-        source_run_id = system_queryset(attempt_model, using=alias, lock=None).values_list(
-            "step_run__run_id", flat=True
-        ).get(pk=source_attempt.pk)
+        source_run_id = (
+            system_queryset(attempt_model, lock=None)
+            .values_list("step_run__run_id", flat=True)
+            .get(pk=source_attempt.pk)
+        )
         readable = read_scoped_queryset(self.model, actor, action="read")
         if readable is None or not readable.filter(pk=source_run_id).exists():
             raise PermissionDenied("Recovery source evidence is unavailable.")
         capability_source = (
-            system_queryset(attempt_model, using=alias, lock=None)
-            .select_related("step_run__step")
+            system_queryset(attempt_model, lock=None)
+            .select_related("step_run__step", "step_run__run__workflow")
             .get(pk=source_attempt.pk)
         )
         if capability_source.step_run.step_id is None:
@@ -1022,35 +1191,29 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if not capability.available:
             raise ValidationError({"attempt": capability.unavailable_reason})
         if capability.requires_uncertainty_ack and not acknowledge_uncertain_external:
-            raise ValidationError({
-                "acknowledge_uncertain_external": capability.uncertainty_reason
-                or "This external request may already have run; explicit acknowledgement is required."
-            })
-        if acknowledge_uncertain_external and not capability.requires_uncertainty_ack:
-            raise ValidationError({"acknowledge_uncertain_external": "This recovery does not require uncertainty acknowledgement."})
-        with system_context(reason="workflows.runs.start_recovery"), transaction.atomic(using=alias):
-            source_run = system_queryset(self.model, using=alias, lock=("self",)).select_related(
-                "workflow"
-            ).get(pk=source_run_id)
-            writable_workflows = read_scoped_queryset(
-                type(source_run.workflow), actor, action="write"
+            raise ValidationError(
+                {
+                    "acknowledge_uncertain_external": capability.uncertainty_reason
+                    or "This external request may already have run; explicit acknowledgement is required."
+                }
             )
-            if writable_workflows is None or not writable_workflows.filter(
-                pk=source_run.workflow_id
-            ).exists():
+        if acknowledge_uncertain_external and not capability.requires_uncertainty_ack:
+            raise ValidationError(
+                {"acknowledge_uncertain_external": ("This recovery does not require uncertainty acknowledgement.")}
+            )
+        with system_context(reason="workflows.runs.start_recovery"), transaction.atomic():
+            source_run = self.lock_execution_ancestry((source_run_id,))[source_run_id]
+            writable_workflows = read_scoped_queryset(type(source_run.workflow), actor, action="write")
+            if writable_workflows is None or not writable_workflows.filter(pk=source_run.workflow_id).exists():
                 raise PermissionDenied("Recovery workflow access was denied.")
             source_subject = source_run.subject
             if source_subject is not None:
-                readable_subjects = read_scoped_queryset(
-                    type(source_subject), actor, action="read"
-                )
-                if readable_subjects is None or not readable_subjects.filter(
-                    pk=source_subject.pk
-                ).exists():
+                readable_subjects = read_scoped_queryset(type(source_subject), actor, action="read")
+                if readable_subjects is None or not readable_subjects.filter(pk=source_subject.pk).exists():
                     raise PermissionDenied("Recovery subject access was denied.")
             locked_step_runs = list(
-                system_queryset(step_run_model, using=alias, lock=("self",))
-                .select_related("step")
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
                 .filter(run=source_run)
                 .order_by("pk")
             )
@@ -1060,9 +1223,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             )
             if source_step_run is None:
                 raise ValidationError({"attempt": "Recovery source execution is unavailable."})
-            locked_attempt = system_queryset(attempt_model, using=alias, lock=("self",)).get(
-                pk=source_attempt.pk
-            )
+            locked_attempt = system_queryset(attempt_model, lock=("self",)).get(pk=source_attempt.pk)
             if (
                 source_step_run.run_id != source_run.pk
                 or source_step_run.step_id is None
@@ -1073,18 +1234,16 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 or source_step_run.status not in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
                 or not (
                     (
-                        locked_attempt.result_kind in {
-                            str(AttemptResultKind.ERROR),
-                            str(AttemptResultKind.NO_RESULT),
-                            str(AttemptResultKind.PREPARATION_ERROR),
-                            str(AttemptResultKind.TRANSIENT_ERROR),
+                        locked_attempt.result_kind
+                        in {
+                            AttemptResultKind.ERROR,
+                            AttemptResultKind.NO_RESULT,
+                            AttemptResultKind.PREPARATION_ERROR,
+                            AttemptResultKind.TRANSIENT_ERROR,
                         }
                         and locked_attempt.applied_at is not None
                     )
-                    or (
-                        locked_attempt.result_recorded_at is None
-                        and locked_attempt.lease_revoked_at is not None
-                    )
+                    or (locked_attempt.result_recorded_at is None and locked_attempt.lease_revoked_at is not None)
                 )
             ):
                 raise ValidationError({"attempt": "Recovery requires an applied retained failure."})
@@ -1107,11 +1266,14 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     lineage_rows.append(lineage)
                     if lineage.origin != RunOrigin.RECOVERY:
                         return tuple(lineage_rows)
-                    source = lineage.recovery_source_attempt
+                    source = (
+                        system_queryset(attempt_model, lock=None)
+                        .select_related("step_run__run__workflow")
+                        .filter(pk=lineage.recovery_source_attempt_id)
+                        .first()
+                    )
                     if source is None or source.step_run.run.workflow_id != source_run.workflow_id:
-                        raise ValidationError(
-                            {"run": "Workflow recovery lineage is incomplete or stale."}
-                        )
+                        raise ValidationError({"run": "Workflow recovery lineage is incomplete or stale."})
                     lineage = source.step_run.run
 
             def retained_skipped_controllers(step_ids: set[int]) -> tuple[Any, ...]:
@@ -1122,8 +1284,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 lineage_ids = [row.pk for row in recovery_lineage_runs()]
                 rank = {run_id: index for index, run_id in enumerate(lineage_ids)}
                 rows = list(
-                    system_queryset(step_run_model, using=alias, lock=None)
-                    .select_related("step", "run")
+                    system_queryset(step_run_model, lock=None)
+                    .select_related("step", "run__workflow", "current_attempt", "current_map_expansion", "run")
                     .filter(
                         run_id__in=lineage_ids,
                         step_id__in=step_ids,
@@ -1136,17 +1298,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 for row in rows:
                     nearest.setdefault(row.step_id, row)
                 return tuple(
-                    nearest[step_id]
-                    for step_id in sorted(nearest)
-                    if nearest[step_id].status == StepRunStatus.SKIPPED
+                    nearest[step_id] for step_id in sorted(nearest) if nearest[step_id].status == StepRunStatus.SKIPPED
                 )
 
             def downstream_merge_sibling_ids(entry_step: Any) -> set[int]:
                 """Find external predecessors of merges reachable from this recovery entry."""
 
-                edges = list(
-                    source_run.workflow.edges.select_related("source", "target").order_by("pk")
-                )
+                edges = list(source_run.workflow.edges.select_related("source", "target").order_by("pk"))
                 outgoing: dict[int, set[int]] = {}
                 incoming: dict[int, set[int]] = {}
                 steps: dict[int, Any] = {entry_step.pk: entry_step}
@@ -1181,34 +1339,32 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     or row.current_attempt_id != candidate.pk
                     or candidate.effect_key != row.effect_key
                     or candidate.effect_generation != row.effect_generation
-                    or candidate.result_kind
-                    not in {str(AttemptResultKind.DONE), str(AttemptResultKind.SUSPEND)}
+                    or candidate.result_kind not in {AttemptResultKind.DONE, AttemptResultKind.SUSPEND}
                     or candidate.applied_at is None
                     or candidate.lease_revoked_at is not None
                 ):
                     return False
-                if candidate.result_kind == str(AttemptResultKind.DONE):
+                if candidate.result_kind == AttemptResultKind.DONE:
                     return True
                 if not row.output_present:
                     return False
                 decisions = list(
                     system_queryset(
                         self.model._meta.apps.get_model("workflows", "Decision"),
-                        using=alias,
                         lock=None,
-                    ).filter(suspension_attempt=candidate).order_by("priority", "pk")
+                    )
+                    .filter(suspension_attempt=candidate)
+                    .order_by("priority", "pk")
                 )
                 projected = retained_gate_output(candidate, decisions)
-                return (
-                    projected is not None
-                    and projected["outcome"] == row.outcome
-                    and projected == row.output
-                )
+                return projected is not None and projected["outcome"] == row.outcome and projected == row.output
 
             def retained_success(row: Any) -> bool:
                 """Validate one exact applied success used only to follow its frozen route."""
 
                 attempt = None if row is None else row.current_attempt
+                if attempt is not None:
+                    attempt.step_run = row
                 return (
                     row is not None
                     and row.map_index == -1
@@ -1226,15 +1382,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     map_base_attempt,
                     _map_state,
                 ) = attempt_model.objects._map_recovery_source(
-                    locked_attempt.pk, alias=alias, lock=("self",),
+                    locked_attempt.pk,
+                    lock=("self",),
                 )
                 if prior_recovery is not None:
                     readable_prior = read_scoped_queryset(self.model, actor, action="read")
-                    prior = (
-                        None
-                        if readable_prior is None
-                        else readable_prior.using(alias).filter(pk=prior_recovery.pk).first()
-                    )
+                    prior = None if readable_prior is None else readable_prior.filter(pk=prior_recovery.pk).first()
                     if (
                         prior is None
                         or prior.origin != RunOrigin.RECOVERY
@@ -1244,21 +1397,31 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                         or prior.recovery_source_attempt_id is None
                         or prior.recovery_source_attempt.map_expansion_id != locked_attempt.map_expansion_id
                     ):
-                        raise ValidationError({
-                            "prior_recovery": "Prior Map recovery must be a readable terminal descendant of this expansion."
-                        })
-                    prior_controller = system_queryset(
-                        step_run_model, using=alias, lock=None,
-                    ).filter(
-                        run_id=prior.pk,
-                        step_id=map_controller.step_id,
-                        map_index=-1,
-                        status=StepRunStatus.SUCCEEDED,
-                    ).first()
+                        raise ValidationError(
+                            {
+                                "prior_recovery": (
+                                    "Prior Map recovery must be a readable terminal descendant of this expansion."
+                                )
+                            }
+                        )
+                    prior_controller = (
+                        system_queryset(
+                            step_run_model,
+                            lock=None,
+                        )
+                        .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+                        .filter(
+                            run_id=prior.pk,
+                            step_id=map_controller.step_id,
+                            map_index=-1,
+                            status=StepRunStatus.SUCCEEDED,
+                        )
+                        .first()
+                    )
                     if prior_controller is None or prior_controller.current_attempt_id is None:
-                        raise ValidationError({
-                            "prior_recovery": "Prior Map recovery has no retained controller aggregate."
-                        })
+                        raise ValidationError(
+                            {"prior_recovery": "Prior Map recovery has no retained controller aggregate."}
+                        )
                     (
                         _map_source,
                         _map_source_step,
@@ -1268,19 +1431,20 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                         _map_state,
                     ) = attempt_model.objects._map_recovery_source(
                         locked_attempt.pk,
-                        alias=alias,
                         lock=("self",),
                         aggregate_attempt_id=prior_controller.current_attempt_id,
                     )
                 elif source_run.origin == RunOrigin.RECOVERY:
-                    evidence = source_run.recovery_evidence.filter(
-                        step_id=map_controller.step_id,
-                        map_index=-1,
-                    ).select_related("source_attempt").first()
+                    evidence = (
+                        source_run.recovery_evidence.filter(
+                            step_id=map_controller.step_id,
+                            map_index=-1,
+                        )
+                        .select_related("source_attempt")
+                        .first()
+                    )
                     if evidence is None:
-                        raise ValidationError({
-                            "attempt": "Failed Map recovery has no admitted controller basis."
-                        })
+                        raise ValidationError({"attempt": "Failed Map recovery has no admitted controller basis."})
                     (
                         _map_source,
                         _map_source_step,
@@ -1290,48 +1454,36 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                         _map_state,
                     ) = attempt_model.objects._map_recovery_source(
                         locked_attempt.pk,
-                        alias=alias,
                         lock=("self",),
                         aggregate_attempt_id=evidence.source_attempt_id,
                     )
             elif prior_recovery is not None:
                 readable_prior = read_scoped_queryset(self.model, actor, action="read")
-                prior = (
-                    None
-                    if readable_prior is None
-                    else readable_prior.using(alias).filter(pk=prior_recovery.pk).first()
-                )
+                prior = None if readable_prior is None else readable_prior.filter(pk=prior_recovery.pk).first()
                 prior_rows = (
                     []
                     if prior is None
                     else list(
-                        system_queryset(step_run_model, using=alias, lock=("self",))
-                        .select_related("step", "current_attempt")
+                        system_queryset(step_run_model, lock=("self",))
+                        .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
                         .filter(run_id=prior.pk)
                         .order_by("pk")
                     )
                 )
-                prior_by_step = {
-                    row.step_id: row for row in prior_rows if row.map_index == -1
-                }
+                prior_by_step = {row.step_id: row for row in prior_rows if row.map_index == -1}
                 recovered = prior_by_step.get(source_step_run.step_id)
                 continuation_row = recovered
                 target = None
                 route_valid = True
                 seen_route: set[int] = set()
                 while continuation_row is not None:
-                    if continuation_row.step_id in seen_route or not retained_success(
-                        continuation_row
-                    ):
+                    if continuation_row.step_id in seen_route or not retained_success(continuation_row):
                         route_valid = False
                         break
                     seen_route.add(continuation_row.step_id)
                     routed_targets = list(
                         continuation_row.step.outgoing_edges.select_related("target")
-                        .filter(
-                            models.Q(condition="")
-                            | models.Q(condition=continuation_row.outcome)
-                        )
+                        .filter(models.Q(condition="") | models.Q(condition=continuation_row.outcome))
                         .order_by("target_id")
                     )
                     if len(routed_targets) != 1:
@@ -1343,16 +1495,15 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                         break
                     continuation_row = next_row
                 continuation_attempt = (
-                    continuation_row.current_attempt
-                    if route_valid and continuation_row is not None
-                    else None
+                    continuation_row.current_attempt if route_valid and continuation_row is not None else None
                 )
                 sibling_ids = (
                     set()
-                    if target is None
+                    if target is None or continuation_row is None
                     else set(
-                        target.incoming_edges.exclude(source_id=continuation_row.step_id)
-                        .values_list("source_id", flat=True)
+                        target.incoming_edges.exclude(source_id=continuation_row.step_id).values_list(
+                            "source_id", flat=True
+                        )
                     )
                 )
                 skipped = retained_skipped_controllers(sibling_ids)
@@ -1371,9 +1522,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     or any(row.status not in StepRunStatus.TERMINAL for row in prior_rows)
                     or any(row.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED} for row in prior_rows)
                     or recovered is None
+                    or continuation_row is None
                     or continuation_attempt is None
                     or continuation_attempt.step_run_id != continuation_row.pk
-                    or continuation_attempt.result_kind != str(AttemptResultKind.DONE)
+                    or continuation_attempt.result_kind != AttemptResultKind.DONE
                     or continuation_attempt.applied_at is None
                     or continuation_attempt.lease_revoked_at is not None
                     or target is None
@@ -1382,12 +1534,14 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     or unresolved_siblings
                     or any(row.step_id == target.pk for row in prior_rows)
                 ):
-                    raise ValidationError({
-                        "prior_recovery": (
-                            "Prior recovery does not retain one completed slot blocked only by "
-                            "its exact skipped merge siblings."
-                        )
-                    })
+                    raise ValidationError(
+                        {
+                            "prior_recovery": (
+                                "Prior recovery does not retain one completed slot blocked only by "
+                                "its exact skipped merge siblings."
+                            )
+                        }
+                    )
                 recovery_entry_step = target
                 recovery_skipped_steps = skipped
             elif source_step_run.map_index < 0:
@@ -1403,34 +1557,35 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             if existing is not None:
                 existing_map_basis_id = None
                 if map_controller is not None:
-                    existing_map_basis_id = existing.recovery_evidence.filter(
-                        step_id=map_controller.step_id,
-                        map_index=-1,
-                    ).values_list("source_attempt_id", flat=True).first()
+                    existing_map_basis_id = (
+                        existing.recovery_evidence.filter(
+                            step_id=map_controller.step_id,
+                            map_index=-1,
+                        )
+                        .values_list("source_attempt_id", flat=True)
+                        .first()
+                    )
                 existing_continuation_id = None
                 if continuation_attempt is not None:
-                    existing_continuation_id = existing.recovery_evidence.filter(
-                        step_id=continuation_attempt.step_run.step_id,
-                        map_index=-1,
-                    ).values_list("source_attempt_id", flat=True).first()
+                    existing_continuation_id = (
+                        existing.recovery_evidence.filter(
+                            step_id=continuation_attempt.step_run.step_id,
+                            map_index=-1,
+                        )
+                        .values_list("source_attempt_id", flat=True)
+                        .first()
+                    )
                 existing_skipped_ids = set(
-                    existing.step_runs.filter(status=StepRunStatus.SKIPPED)
-                    .values_list("step_id", flat=True)
+                    existing.step_runs.filter(status=StepRunStatus.SKIPPED).values_list("step_id", flat=True)
                 )
                 if (
                     existing.recovery_source_attempt_id != locked_attempt.pk
                     or existing.recovery_request_actor_ref != actor_ref
                     or existing.recovery_mode != str(capability.mode)
                     or existing.recovery_uncertainty_ack != acknowledge_uncertain_external
-                    or existing_map_basis_id != (
-                        None if map_base_attempt is None else map_base_attempt.pk
-                    )
-                    or existing_continuation_id != (
-                        None if continuation_attempt is None else continuation_attempt.pk
-                    )
-                    or not {row.step_id for row in recovery_skipped_steps}.issubset(
-                        existing_skipped_ids
-                    )
+                    or existing_map_basis_id != (None if map_base_attempt is None else map_base_attempt.pk)
+                    or existing_continuation_id != (None if continuation_attempt is None else continuation_attempt.pk)
+                    or not {row.step_id for row in recovery_skipped_steps}.issubset(existing_skipped_ids)
                 ):
                     raise ValidationError({"request_key": "Recovery request facts do not match."})
                 return existing
@@ -1438,17 +1593,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             recovery_graph = WorkflowGraph.from_workflow(source_run.workflow)
             accepted_step_ids = {
                 source.node_identity.existing_id
-                for source in recovery_graph.input_sources(
-                    GraphIdentity(existing_id=source_step_run.step_id)
-                )
-                if source.node_identity is not None
-                and source.node_identity.existing_id is not None
+                for source in recovery_graph.input_sources(GraphIdentity(existing_id=source_step_run.step_id))
+                if source.node_identity is not None and source.node_identity.existing_id is not None
             }
-            accepted_step_runs = [
-                row for row in locked_step_runs if row.step_id in accepted_step_ids
-            ]
+            accepted_step_runs = [row for row in locked_step_runs if row.step_id in accepted_step_ids]
             direct_candidate_ids = list(
-                system_queryset(attempt_model, using=alias, lock=None)
+                system_queryset(attempt_model, lock=None)
                 .filter(
                     step_run__in=accepted_step_runs,
                     step_run__status=StepRunStatus.SUCCEEDED,
@@ -1471,17 +1621,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             # have to rediscover predecessor output dynamically during execution.
             # Older recovery rows also let a new admission repair historical runs
             # created before evidence propagation, without rewriting those runs.
-            evidence_model = self.model._meta.apps.get_model(
-                "workflows", "WorkflowRecoveryEvidence"
-            )
-            lineage_run_ids = [
-                row.pk for row in recovery_lineage_runs()
-                if row.origin == RunOrigin.RECOVERY
-            ]
+            evidence_model = self.model._meta.apps.get_model("workflows", "WorkflowRecoveryEvidence")
+            lineage_run_ids = [row.pk for row in recovery_lineage_runs() if row.origin == RunOrigin.RECOVERY]
             lineage_root_id = source_run.execution_lineage_root_id()
 
             inherited_rows = list(
-                system_queryset(evidence_model, using=alias, lock=None)
+                system_queryset(evidence_model, lock=None)
                 .select_related("source_attempt__step_run__step", "source_attempt__step_run__run")
                 .filter(run_id__in=lineage_run_ids, step_id__in=accepted_step_ids)
                 .order_by("pk")
@@ -1495,7 +1640,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             candidates = {
                 candidate.pk: candidate
                 for candidate in (
-                    system_queryset(attempt_model, using=alias, lock=("self",))
+                    system_queryset(attempt_model, lock=("self",))
                     .select_related("step_run__step", "step_run__run")
                     .filter(
                         pk__in=candidate_ids,
@@ -1521,26 +1666,19 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     or candidate.step_run.run.execution_lineage_root_id() != lineage_root_id
                     or not accepted_recovery_evidence(candidate)
                 ):
-                    raise ValidationError({
-                        "attempt": "Recovery lineage contains stale predecessor evidence."
-                    })
+                    raise ValidationError({"attempt": "Recovery lineage contains stale predecessor evidence."})
                 accepted_by_slot.setdefault(
-                    (evidence.step_id, evidence.map_index), candidate,
+                    (evidence.step_id, evidence.map_index),
+                    candidate,
                 )
             for candidate_id in direct_candidate_ids:
                 candidate = candidates.get(candidate_id)
                 if candidate is None or not accepted_recovery_evidence(candidate):
                     continue
-                accepted_by_slot[
-                    (candidate.step_run.step_id, candidate.step_run.map_index)
-                ] = candidate
+                accepted_by_slot[(candidate.step_run.step_id, candidate.step_run.map_index)] = candidate
             if map_base_attempt is not None and map_controller is not None:
-                accepted_by_slot[
-                    (map_controller.step_id, -1)
-                ] = map_base_attempt
-            accepted = tuple(
-                accepted_by_slot[slot] for slot in sorted(accepted_by_slot)
-            )
+                accepted_by_slot[(map_controller.step_id, -1)] = map_base_attempt
+            accepted = tuple(accepted_by_slot[slot] for slot in sorted(accepted_by_slot))
             return self._start_pinned_locked(
                 source_run.workflow,
                 source_subject,
@@ -1557,7 +1695,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 recovery_map_index=source_step_run.map_index,
                 recovery_skipped_steps=recovery_skipped_steps,
                 available_at=timezone.now(),
-                using=alias,
             )
 
     def test_setup_plan(
@@ -1575,7 +1712,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     ) -> WorkflowSetupPlan:
         """Project the exact graph, fixture and effect facts used by test admission."""
 
-
         if not isinstance(scope, WorkflowScope):
             raise ValidationError({"scope": "Test plans require a declared scope."})
         if (scope is WorkflowScope.NODE) != (selected_step is not None):
@@ -1585,13 +1721,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         authorized = read_scoped_queryset(workflow_model, actor, action="write")
         if authorized is None or not authorized.filter(pk=workflow.pk).exists():
             raise PermissionDenied("Test workflow access was denied.")
-        alias = self.db
-        with system_context(reason="workflows.runs.test_setup_plan"), transaction.atomic(using=alias):
+        with system_context(reason="workflows.runs.test_setup_plan"), transaction.atomic():
             head_id = workflow.pk if workflow.published_from_id is None else workflow.published_from_id
-            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=head_id)
+            head = system_queryset(workflow_model, lock=("self",)).get(pk=head_id)
             requested = head
             if workflow.published_from_id is not None:
-                requested = system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=workflow.pk)
+                requested = system_queryset(workflow_model, lock=("self",)).get(pk=workflow.pk)
                 if requested.status != WorkflowStatus.TEST or requested.published_from_id != head.pk:
                     raise ValidationError({"workflow": "Test plans require a draft head or test snapshot."})
             elif head.status != WorkflowStatus.DRAFT:
@@ -1603,7 +1738,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             if selected_step is not None:
                 step_model = workflow_model._meta.apps.get_model("workflows", "Step")
                 try:
-                    locked_selected = system_queryset(step_model, using=alias, lock=("self",)).get(
+                    locked_selected = system_queryset(step_model, lock=("self",)).get(
                         pk=selected_step.pk,
                         workflow=requested,
                     )
@@ -1628,9 +1763,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             )
             plan = graph.test_execution_plan(
                 selected_identity=(
-                    GraphIdentity(existing_id=locked_selected.pk)
-                    if locked_selected is not None
-                    else None
+                    GraphIdentity(existing_id=locked_selected.pk) if locked_selected is not None else None
                 ),
                 output_slots=output_slots,
                 map_item_slots=frozenset(
@@ -1643,9 +1776,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 graph.test_freshness(
                     WorkflowGraph.from_workflow(head),
                     selected_identity=(
-                        GraphIdentity(existing_id=locked_selected.pk)
-                        if locked_selected is not None
-                        else None
+                        GraphIdentity(existing_id=locked_selected.pk) if locked_selected is not None else None
                     ),
                     plan=plan,
                 )
@@ -1658,9 +1789,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 locked_previous = (
                     None
                     if run_access is None
-                    else run_access.select_related("workflow", "test_step").filter(
+                    else run_access.select_related("workflow", "test_step")
+                    .filter(
                         pk=previous_run.pk,
-                    ).first()
+                    )
+                    .first()
                 )
                 if locked_previous is None:
                     raise PermissionDenied("Previous test evidence is unavailable.")
@@ -1705,32 +1838,21 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 )
                 freshness = tuple(dict.fromkeys((*freshness, *previous_freshness)))
                 proposed_content_type = (
-                    None
-                    if subject is None
-                    else ContentType.objects.get_for_model(subject, for_concrete_model=False)
+                    None if subject is None else ContentType.objects.get_for_model(subject, for_concrete_model=False)
                 )
-                if (
-                    locked_previous.subject_content_type_id
-                    != (None if proposed_content_type is None else proposed_content_type.pk)
-                    or locked_previous.subject_object_id != (None if subject is None else subject.pk)
-                ):
+                if locked_previous.subject_content_type_id != (
+                    None if proposed_content_type is None else proposed_content_type.pk
+                ) or locked_previous.subject_object_id != (None if subject is None else subject.pk):
                     freshness = (*freshness, GraphFreshnessReason("subject_changed", None, "subject"))
-                if (
-                    locked_previous.input_present is not input.present
-                    or not json_values_equal(
-                        locked_previous.input,
-                        input.value if input.present else None,
-                    )
+                if locked_previous.input_present is not input.present or not json_values_equal(
+                    locked_previous.input,
+                    input.value if input.present else None,
                 ):
                     freshness = (*freshness, GraphFreshnessReason("input_changed", None, "input"))
                 selected_key = locked_selected.key if locked_selected is not None else None
-                if (
-                    locked_previous.origin == RunOrigin.TEST
-                    and (
-                        (locked_previous.test_scope or WorkflowScope.WHOLE) != scope
-                        or (locked_previous.test_step.key if locked_previous.test_step_id else None)
-                        != selected_key
-                    )
+                if locked_previous.origin == RunOrigin.TEST and (
+                    (locked_previous.test_scope or WorkflowScope.WHOLE) != scope
+                    or (locked_previous.test_step.key if locked_previous.test_step_id else None) != selected_key
                 ):
                     freshness = (*freshness, GraphFreshnessReason("scope_changed", selected_key, "scope"))
                 actual_fixture_facts = [
@@ -1757,16 +1879,12 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     )
                     for row in fixture_rows
                 ]
-                actual_fixture_facts.sort(
-                    key=lambda value: (value[0], value[1], -1 if value[2] is None else value[2])
-                )
+                actual_fixture_facts.sort(key=lambda value: (value[0], value[1], -1 if value[2] is None else value[2]))
                 proposed_fixture_facts.sort(
                     key=lambda value: (value[0], value[1], -1 if value[2] is None else value[2])
                 )
                 if len(actual_fixture_facts) != len(proposed_fixture_facts) or any(
-                    left[:4] != right[:4]
-                    or not json_values_equal(left[4], right[4])
-                    or left[5:] != right[5:]
+                    left[:4] != right[:4] or not json_values_equal(left[4], right[4]) or left[5:] != right[5:]
                     for left, right in zip(
                         actual_fixture_facts,
                         proposed_fixture_facts,
@@ -1810,10 +1928,14 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 ):
                     source_step_id = step_model.public_id_from_pk(locked_previous.test_source_step_id)
                 else:
-                    source_step = system_queryset(step_model, using=alias, lock=None).filter(
-                        workflow=head,
-                        key=locked_selected.key,
-                    ).first()
+                    source_step = (
+                        system_queryset(step_model, lock=None)
+                        .filter(
+                            workflow=head,
+                            key=locked_selected.key,
+                        )
+                        .first()
+                    )
                     source_step_id = source_step.sqid if source_step is not None else None
             freshness = tuple(dict.fromkeys(freshness))
             return WorkflowSetupPlan(
@@ -1835,9 +1957,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
         attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
         readable_attempts = read_scoped_queryset(attempt_model, actor, action="read")
-        row = None if readable_attempts is None else readable_attempts.select_related(
-            "step_run__run__workflow", "step_run__step"
-        ).filter(pk=source_attempt.pk).first()
+        row = (
+            None
+            if readable_attempts is None
+            else readable_attempts.select_related("step_run__run__workflow", "step_run__step")
+            .filter(pk=source_attempt.pk)
+            .first()
+        )
         if row is None or row.step_run.step_id is None:
             raise PermissionDenied("Repair source evidence is unavailable.")
         source_run = row.step_run.run
@@ -1858,12 +1984,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             if readable_subjects is None or not readable_subjects.filter(pk=subject.pk).exists():
                 raise PermissionDenied("The source run subject is no longer available.")
         source_step = row.step_run.step
-        current_step = system_queryset(
-            type(source_step), using=self.db, lock=None
-        ).filter(workflow=head, key=source_step.key).first()
+        current_step = system_queryset(type(source_step), lock=None).filter(workflow=head, key=source_step.key).first()
         fixture_summaries: tuple[FixtureSourceSummary, ...] = ()
         if current_step is not None:
-
             with system_context(reason="workflows.runs.test_repair_context"):
                 graph = WorkflowGraph.from_workflow(head)
             plan = graph.test_plan(GraphIdentity(existing_id=current_step.pk))
@@ -1874,9 +1997,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 if identity in nodes_by_identity and identity.existing_id != current_step.pk
             }
             candidates = (
-                system_queryset(attempt_model, using=self.db, lock=None).select_related(
-                    "step_run__step", "step_run__run", "step_run__step__workflow"
-                )
+                system_queryset(attempt_model, lock=None)
+                .select_related("step_run__step", "step_run__run", "step_run__step__workflow")
                 .filter(
                     step_run__run=source_run,
                     step_run__step__key__in=admitted_keys,
@@ -1888,8 +2010,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 .order_by("step_run__step_id", "step_run__map_index", "pk")
             )
             fixture_summaries = tuple(
-                attempt_model.objects._fixture_source_summary(candidate, FixtureRole.OUTPUT)
-                for candidate in candidates
+                attempt_model.objects._fixture_source_summary(candidate, FixtureRole.OUTPUT) for candidate in candidates
             )
         return WorkflowRepairContext(
             source_attempt_id=row.sqid,
@@ -1912,12 +2033,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
     @staticmethod
     def _validate_test_scope_readiness(
-        snapshot: Any,
-        *,
-        scope: WorkflowScope,
-        selected_step: Any,
-        fixture_rows: tuple[Any, ...],
-        graph: Any = None,
+        snapshot: Any, *, scope: WorkflowScope, selected_step: Any, fixture_rows: tuple[Any, ...], graph: Any = None
     ) -> None:
 
         graph = graph or WorkflowGraph.from_workflow(snapshot)
@@ -1929,9 +2045,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             for row in fixture_rows
             if row.role == FixtureRole.OUTPUT
         )
-        selected_identity = (
-            GraphIdentity(existing_id=selected_step.pk) if scope == WorkflowScope.NODE else None
-        )
+        selected_identity = GraphIdentity(existing_id=selected_step.pk) if scope == WorkflowScope.NODE else None
         plan = graph.test_execution_plan(
             selected_identity=selected_identity,
             output_slots=output_slots,
@@ -1942,9 +2056,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             ),
         )
         if plan.diagnostics:
-            raise ValidationError(
-                {item.location.path: item.message for item in plan.diagnostics}
-            )
+            raise ValidationError({item.location.path: item.message for item in plan.diagnostics})
 
     def _validate_test_retry(
         self,
@@ -1960,9 +2072,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     ) -> None:
         """Reject reuse of one request identity with different admission facts."""
 
-        content_type = None if subject is None else ContentType.objects.get_for_model(
-            subject, for_concrete_model=False
-        )
+        content_type = None if subject is None else ContentType.objects.get_for_model(subject, for_concrete_model=False)
         object_id = None if subject is None else subject.pk
         matches = (
             run.origin == RunOrigin.TEST
@@ -1986,9 +2096,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         """Compare immutable fixture facts with exact JSON type semantics."""
 
         actual = list(
-            run.test_fixtures.select_related("step", "captured_attempt").order_by(
-                "step_id", "role", "item_index"
-            )
+            run.test_fixtures.select_related("step", "captured_attempt").order_by("step_id", "role", "item_index")
         )
         expected = sorted(fixture_rows, key=lambda row: (row.step_id, str(row.role), row.item_index or -1))
         return len(actual) == len(expected) and not any(
@@ -2010,13 +2118,13 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         *,
         trigger: Any = None,
         parent_step_run: Any = None,
-        parent_relation: ParentRelation | str = "",
+        parent_relation: ParentRelation | str | None = None,
         dedup_key: str | None = None,
         occurrence_id: str | None = None,
         origin: RunOrigin | None = None,
         input: JsonPresence = JsonPresence(),
         test_request_actor_ref: str = "",
-        test_scope: WorkflowScope | str = "",
+        test_scope: WorkflowScope | str | None = None,
         test_step: Any = None,
         test_source_step_id: int | None = None,
         test_repair_source_attempt: Any = None,
@@ -2030,28 +2138,37 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         recovery_map_index: int = -1,
         recovery_skipped_steps: tuple[Any, ...] = (),
         available_at: datetime,
-        using: str,
         reprocessed_from: Any = None,
         validate_new: Callable[[], None] | None = None,
     ) -> Any:
         """Create a Run and its first durable work for one explicit immutable definition."""
 
-        if list(Draft202012Validator(version.input_schema).iter_errors(input.value if input.present else None)):
+        try:
+            errors = list(
+                json_schema_validator(version.input_schema).iter_errors(input.value if input.present else None)
+            )
+        except Unresolvable as error:
+            raise ValidationError(
+                {"input": "Workflow input references must resolve inside the published schema."}
+            ) from error
+        if errors:
             raise ValidationError({"input": "Invocation input does not satisfy the published workflow schema."})
         version.validate_subject_declaration(subject)
         content_type = None if subject is None else ContentType.objects.get_for_model(subject, for_concrete_model=False)
         object_id = None if subject is None else subject.pk
         run_dedup_key = dedup_key or self._trigger_dedup_key(trigger, content_type, object_id)
-        owner_id = self._owner_id(actor, trigger, version)
+        admitted_actor = self._owner(actor, trigger, version)
+        owner_id = None if admitted_actor is None else admitted_actor.pk
         admitted_actor_ref = ""
         if owner_id is not None:
             owner_id = self.model._meta.get_field("created_by").target_field.get_prep_value(owner_id)
-            admitted_actor = get_user_model()._base_manager.using(using).get(pk=owner_id)
             admitted_actor_ref = str(to_subject_ref(admitted_actor))
         resolved_origin = origin or (
             RunOrigin.TRIGGER
             if trigger is not None
-            else RunOrigin.ERROR_WORKFLOW if parent_step_run is not None else RunOrigin.MANUAL
+            else RunOrigin.ERROR_WORKFLOW
+            if parent_step_run is not None
+            else RunOrigin.MANUAL
         )
         attrs = {
             "workflow": version,
@@ -2100,8 +2217,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 "subject_content_type": existing.subject_content_type_id,
                 "subject_object_id": existing.subject_object_id,
                 "actor": (
-                    str(existing.admission_actor_subject())
-                    if existing.admission_actor_subject() is not None else ""
+                    str(existing.admission_actor_subject()) if existing.admission_actor_subject() is not None else ""
                 ),
                 "origin": existing.origin,
                 "trigger": existing.trigger_id,
@@ -2112,8 +2228,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 "input_present": existing.input_present,
                 "recovery_uncertainty_ack": existing.recovery_uncertainty_ack,
             }
-            changed = {field: "Retained workflow invocation has different immutable facts." for field, value in expected.items()
-                       if actual[field] != value}
+            changed = {
+                field: "Retained workflow invocation has different immutable facts."
+                for field, value in expected.items()
+                if actual[field] != value
+            }
             if not json_values_equal(existing.input, input.value if input.present else None):
                 changed["input"] = "Retained workflow invocation has different frozen input."
             if changed:
@@ -2122,77 +2241,53 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
         retained = None
         if parent_step_run is not None:
-            retained = system_queryset(self.model, using=using, lock=("self",)).filter(
-                parent_step_run=parent_step_run,
-            ).first()
+            retained = (
+                system_queryset(self.model, lock=("self",))
+                .select_related("workflow", "parent_step_run__run", "recovery_source_attempt__step_run__run__workflow")
+                .filter(
+                    parent_step_run=parent_step_run,
+                )
+                .first()
+            )
         if retained is None and run_dedup_key:
-            retained = system_queryset(self.model, using=using, lock=("self",)).filter(
-                dedup_key=run_dedup_key,
-            ).first()
+            retained = (
+                system_queryset(self.model, lock=("self",))
+                .select_related("workflow", "parent_step_run__run", "recovery_source_attempt__step_run__run__workflow")
+                .filter(
+                    dedup_key=run_dedup_key,
+                )
+                .first()
+            )
         if retained is not None:
             return retain_exact(retained)
         if parent_step_run is not None:
-            parent_run = system_queryset(self.model, using=using, lock=("self",)).get(pk=parent_step_run.run_id)
+            parent_run = self.lock_execution_ancestry((parent_step_run.run_id,))[parent_step_run.run_id]
             if parent_run.status == RunStatus.CANCELED or (
                 parent_relation == ParentRelation.OWNED_CALL and parent_run.status in RunStatus.TERMINAL
             ):
                 raise ValidationError({"parent_step_run": "A terminal parent cannot admit another owned child."})
         if validate_new is not None:
             validate_new()
+        manager = self
         if parent_step_run is not None:
-            run, created = self.get_or_create(parent_step_run=parent_step_run, defaults=attrs)
+            run, created = manager.get_or_create(parent_step_run=parent_step_run, defaults=attrs)
         elif run_dedup_key:
-            run, created = self.get_or_create(dedup_key=run_dedup_key, defaults=attrs)
+            run, created = manager.get_or_create(dedup_key=run_dedup_key, defaults=attrs)
         else:
-            run, created = self.create(**attrs), True
+            run, created = manager.create(**attrs), True
         if not created:
             return retain_exact(run)
         fixtures: tuple[Any, ...] = ()
         if run.origin == RunOrigin.TEST:
             fixture_model = self.model._meta.apps.get_model("workflows", "WorkflowTestFixture")
-            connection = connections[using]
-            fixture_token = _test_fixture_write_run.set(
-                (using, id(connection), id(connection.atomic_blocks[0]), run.pk)
-            )
-            batch_token = _test_fixture_batch_rows.set(
-                frozenset(id(row) for row in test_fixture_rows)
-            )
-            try:
-                fixtures = fixture_model.objects._create_batch(run, test_fixture_rows)
-                apply_token = _test_fixture_apply_ids.set(
-                    frozenset(
-                        fixture.pk
-                        for fixture in fixtures
-                        if fixture.role == FixtureRole.OUTPUT
-                    )
-                )
-                attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
-                try:
-                    for fixture in fixtures:
-                        if (
-                            fixture.role == FixtureRole.OUTPUT
-                            and run.test_scope == WorkflowScope.NODE
-                        ):
-                            attempt_model.objects.record_test_fixture(fixture, at=available_at)
-                finally:
-                    _test_fixture_apply_ids.reset(apply_token)
-            finally:
-                _test_fixture_batch_rows.reset(batch_token)
-                _test_fixture_write_run.reset(fixture_token)
+            fixtures = fixture_model.objects._create_batch(run, test_fixture_rows)
+            attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
+            for fixture in fixtures:
+                if fixture.role == FixtureRole.OUTPUT and run.test_scope == WorkflowScope.NODE:
+                    attempt_model.objects.record_test_fixture(fixture, at=available_at)
         if run.origin == RunOrigin.RECOVERY:
             evidence_model = self.model._meta.apps.get_model("workflows", "WorkflowRecoveryEvidence")
-            connection = connections[using]
-            recovery_token = _recovery_write_run.set(
-                (using, id(connection), id(connection.atomic_blocks[0]), run.pk)
-            )
-            recovery_batch_token = _recovery_evidence_batch.set(
-                frozenset(attempt.pk for attempt in recovery_evidence)
-            )
-            try:
-                evidence_model.objects._create_for_run(run, recovery_evidence, using=using)
-            finally:
-                _recovery_evidence_batch.reset(recovery_batch_token)
-                _recovery_write_run.reset(recovery_token)
+            evidence_model.objects._create_for_run(run, recovery_evidence)
         if test_scope == WorkflowScope.NODE:
             entries = [test_step] if test_step is not None else []
         elif run.origin == RunOrigin.RECOVERY:
@@ -2229,7 +2324,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         dispatch_model = self.model._meta.apps.get_model("workflows", "WorkflowDispatch")
         dispatch_model.objects.schedule_advance(run, available_at=available_at)
 
-        transaction.on_commit(enqueue_dispatch_publisher, using=using)
+        transaction.on_commit(lambda: enqueue_dispatch_publisher())
         return run
 
     def _resolve_test_fixture_rows(
@@ -2245,7 +2340,6 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
     ) -> tuple[Any, ...]:
         """Resolve a complete fixture request before the test run writes begin."""
 
-
         fixture_model = self.model._meta.apps.get_model("workflows", "WorkflowTestFixture")
         attempt_model = self.model._meta.apps.get_model("workflows", "StepAttempt")
         graph = graph or WorkflowGraph.from_workflow(snapshot)
@@ -2253,12 +2347,8 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         allowed_outputs = set(step_by_key)
         allows_map_item = False
         if scope == WorkflowScope.NODE:
-            plan = graph.test_execution_plan(
-                selected_identity=GraphIdentity(existing_id=selected_step.pk)
-            )
-            allowed_outputs = {
-                node.key for node in graph.nodes if node.identity in plan.output_sources
-            }
+            plan = graph.test_execution_plan(selected_identity=GraphIdentity(existing_id=selected_step.pk))
+            allowed_outputs = {node.key for node in graph.nodes if node.identity in plan.output_sources}
             allows_map_item = plan.map_item
         rows: list[Any] = []
         seen: set[tuple[str, str, int | None]] = set()
@@ -2311,14 +2401,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 else:
                     value = JsonPresence(True, captured.map_item)
             if spec.role == FixtureRole.OUTPUT and outcome:
-                declared_outcomes = {
-                    declared.key
-                    for declared in step.resolve_impl("step_class").outcomes
-                }
+                declared_outcomes = {declared.key for declared in step.resolve_impl("step_class").outcomes}
                 if declared_outcomes and outcome not in declared_outcomes:
-                    raise ValidationError(
-                        {"fixtures": "Output fixture outcome is not declared by this operation."}
-                    )
+                    raise ValidationError({"fixtures": "Output fixture outcome is not declared by this operation."})
             rows.append(
                 fixture_model(
                     step=step,
@@ -2342,51 +2427,36 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         return f"trigger:{trigger.pk}:subject:{subject}"
 
     @staticmethod
-    def _owner_id(actor: Any, trigger: Any, workflow: Any) -> Any | None:
+    def _owner(actor: Any, trigger: Any, workflow: Any) -> Any | None:
+        """Resolve the admission user from the trigger, actor, or workflow lineage."""
+
         if trigger is not None and trigger.execution_actor_id is not None:
-            return trigger.execution_actor_id
+            return trigger.execution_actor
         if actor is not None:
             try:
                 user_id = actor_user_id(to_subject_ref(actor))
             except NoActorResolvedError:
                 user_id = None
             if user_id is not None:
-                return user_id
+                return get_user_model()._base_manager.get(pk=user_id)
         if trigger is not None and trigger.created_by_id is not None:
-            return trigger.created_by_id
-        lineage = workflow.published_from
-        return (
-            lineage.created_by_id
-            if lineage is not None and lineage.created_by_id is not None
-            else workflow.created_by_id
+            return trigger.created_by
+        lineage = (
+            system_queryset(type(workflow), lock=None).get(pk=workflow.published_from_id)
+            if workflow.published_from_id is not None
+            else None
         )
+        return lineage.created_by if lineage is not None and lineage.created_by_id is not None else workflow.created_by
 
 
 class WorkflowRunSystemManager(WorkflowRunManager):
     """Expose guarded unscoped rows to Django and field-backed REBAC traversal."""
 
     def get_queryset(self) -> WorkflowRunQuerySet:
-        return super().get_queryset().system_context(
-            reason="workflows.run.base_manager"
-        )
+        return super().get_queryset().system_context(reason="workflows.run.base_manager")
 
 
-class _WorkflowChildCreateQuerySetMixin:
-    """Let workflow-child models preflight their proposed parent relation."""
-
-    model: type[Any]
-    db: str
-
-    def create(self, **kwargs: Any) -> Any:
-        """Construct first so the model owner can authorize its related create."""
-
-        self._for_write = True
-        instance = DefinitionQuerySet.bind_instance(self.model(**kwargs), self)
-        instance.save(force_insert=True, using=self.db)
-        return instance
-
-
-class StepQuerySet(_WorkflowChildCreateQuerySetMixin, DefinitionQuerySet):
+class StepQuerySet(DefinitionQuerySet):
     """Guard collection writes to workflow steps."""
 
 
@@ -2394,7 +2464,7 @@ class StepManager(AngeeManager.from_queryset(StepQuerySet)):  # type: ignore[mis
     """Manager for guarded workflow-step writes."""
 
 
-class EdgeQuerySet(_WorkflowChildCreateQuerySetMixin, DefinitionQuerySet):
+class EdgeQuerySet(DefinitionQuerySet):
     """Guard collection writes to workflow edges."""
 
 
@@ -2402,7 +2472,7 @@ class EdgeManager(AngeeManager.from_queryset(EdgeQuerySet)):  # type: ignore[mis
     """Manager for guarded workflow-edge writes."""
 
 
-class TriggerQuerySet(_WorkflowChildCreateQuerySetMixin, AngeeQuerySet[Any]):
+class TriggerQuerySet(AngeeQuerySet[Any]):
     """Collection writes that preserve trigger activation and rule invariants."""
 
     def update(self, **kwargs: Any) -> int:
@@ -2457,11 +2527,7 @@ class TriggerQuerySet(_WorkflowChildCreateQuerySetMixin, AngeeQuerySet[Any]):
 def _trigger_extension_protected_fields(model: type[Any]) -> set[str]:
     """Collect same-row Trigger rule fields declared by composed donor classes."""
 
-    return {
-        field
-        for owner in model.__mro__
-        for field in owner.__dict__.get("trigger_protected_fields", ())
-    }
+    return {field for owner in model.__mro__ for field in owner.__dict__.get("trigger_protected_fields", ())}
 
 
 class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: ignore[misc]
@@ -2476,11 +2542,10 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         """Authorize, lock, and derive one trigger fire from canonical state."""
 
         caller._require_record_access("write")
-        alias = self.db
-        with system_context(reason="workflows.triggers.record_fire"), transaction.atomic(using=alias):
+        with system_context(reason="workflows.triggers.record_fire"), transaction.atomic():
             workflow_model = self.model._meta.get_field("workflow").remote_field.model
-            system_queryset(workflow_model, using=alias, lock=("self",)).get(pk=caller.workflow_id)
-            trigger = system_queryset(self.model, using=alias, lock=("self",)).get(pk=caller.pk)
+            system_queryset(workflow_model, lock=("self",)).get(pk=caller.workflow_id)
+            trigger = system_queryset(self.model, lock=("self",)).get(pk=caller.pk)
             if trigger.workflow_id != caller.workflow_id:
                 raise ValidationError({"workflow": "The trigger lineage changed before recording its fire."})
             self._record_fire_locked(trigger, timestamp=timestamp)
@@ -2496,7 +2561,6 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         trigger.hourly_fire_count += 1
         trigger.last_fire_at = timestamp
         trigger._save_validated(
-            using=self.db,
             update_fields={
                 "last_fire_at",
                 "hourly_window_started_at",
@@ -2507,7 +2571,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         )
 
     def _save_next_fire_locked(self, trigger: Any) -> None:
-        trigger._save_validated(using=self.db, update_fields={"next_fire_at", "updated_at"})
+        trigger._save_validated(update_fields={"next_fire_at", "updated_at"})
 
     def set_enabled(self, caller: Any, *, enabled: bool) -> Any:
         """Change activation under lineage-before-trigger locks."""
@@ -2515,31 +2579,26 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         caller._require_record_access("write")
         trigger_id = caller.pk
         expected_workflow_id = caller.workflow_id
-        alias = self.db
-        discovered = system_queryset(self.model, using=alias, lock=None).filter(pk=trigger_id).values(
-            "workflow_id"
-        ).first()
+        discovered = system_queryset(self.model, lock=None).filter(pk=trigger_id).values("workflow_id").first()
         if discovered is None:
             raise self.model.DoesNotExist
         if discovered["workflow_id"] != expected_workflow_id:
             raise ValidationError({"workflow": "The trigger lineage changed before activation."})
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
-        with system_context(reason="workflows.triggers.activation"), transaction.atomic(using=alias):
-            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(
-                pk=discovered["workflow_id"]
-            )
-            trigger = system_queryset(self.model, using=alias, lock=("self",)).get(pk=trigger_id)
+        with system_context(reason="workflows.triggers.activation"), transaction.atomic():
+            head = system_queryset(workflow_model, lock=("self",)).get(pk=discovered["workflow_id"])
+            trigger = system_queryset(self.model, lock=("self",)).get(pk=trigger_id)
             if trigger.workflow_id != head.pk:
                 raise ValidationError({"workflow": "The trigger lineage changed during activation."})
             if not enabled:
                 models.QuerySet.update(
-                    system_queryset(self.model, using=alias, lock=None).filter(pk=trigger.pk),
+                    system_queryset(self.model, lock=None).filter(pk=trigger.pk),
                     enabled=False,
                     updated_at=timezone.now(),
                 )
                 trigger.enabled = False
                 return trigger
-            if workflow_model.objects.db_manager(alias).current_published_for(head) is None:
+            if workflow_model.objects.current_published_for(head) is None:
                 raise ValidationError({"enabled": "Publish this workflow before enabling its trigger."})
             trigger.validated_config(require_publisher=True)
             trigger.enabled = True
@@ -2548,9 +2607,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             else:
                 trigger.next_fire_at = None
             trigger.full_clean()
-            trigger._save_validated(
-                update_fields={"enabled", "event_model_label", "next_fire_at", "updated_at"}
-            )
+            trigger._save_validated(update_fields={"enabled", "event_model_label", "next_fire_at", "updated_at"})
             return trigger
 
     def start_event(
@@ -2565,21 +2622,14 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
     ) -> Any | None:
         """Atomically admit one matching event occurrence and its pinned run."""
 
-        alias = self.db
-        discovered = system_queryset(self.model, using=alias, lock=None).filter(pk=trigger_id).values(
-            "workflow_id"
-        ).first()
+        discovered = system_queryset(self.model, lock=None).filter(pk=trigger_id).values("workflow_id").first()
         if discovered is None:
             return None
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         run_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
-        with system_context(reason="workflows.event_triggers.start"), transaction.atomic(using=alias):
-            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(
-                pk=discovered["workflow_id"]
-            )
-            trigger = system_queryset(self.model, using=alias, lock=("self",)).filter(
-                pk=trigger_id
-            ).first()
+        with system_context(reason="workflows.event_triggers.start"), transaction.atomic():
+            head = system_queryset(workflow_model, lock=("self",)).get(pk=discovered["workflow_id"])
+            trigger = system_queryset(self.model, lock=("self",)).filter(pk=trigger_id).first()
             if (
                 trigger is None
                 or trigger.workflow_id != head.pk
@@ -2598,12 +2648,11 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 return None
             if not trigger.condition_matches(type(subject), subject):
                 return None
-            content_type = ContentType.objects.db_manager(alias).get_for_model(subject, for_concrete_model=False)
+            content_type = ContentType.objects.get_for_model(subject, for_concrete_model=False)
             occurrence_max_length = cast(int, run_model._meta.get_field("occurrence_id").max_length)
             retained_occurrence = (
                 occurrence_id
-                if isinstance(occurrence_id, str)
-                and 0 < len(occurrence_id) <= occurrence_max_length
+                if isinstance(occurrence_id, str) and 0 < len(occurrence_id) <= occurrence_max_length
                 else None
             )
             if declaration.admission_policy == EventAdmissionPolicy.EACH_CHANGE:
@@ -2615,9 +2664,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             else:
                 retained_occurrence = None
                 dedup_key = f"trigger:{trigger.pk}:subject:{content_type.pk}:{subject.pk}"
-            existing = system_queryset(run_model, using=alias, lock=None).filter(
-                dedup_key=dedup_key
-            ).first()
+            existing = system_queryset(run_model, lock=None).filter(dedup_key=dedup_key).first()
             if existing is not None:
                 existing_head_id = existing.workflow.published_from_id or existing.workflow_id
                 if (
@@ -2647,7 +2694,6 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 occurrence_id=retained_occurrence,
                 input=input_snapshot,
                 available_at=timestamp,
-                using=alias,
             )
             self._record_fire_locked(trigger, timestamp=timestamp)
             return run
@@ -2672,14 +2718,23 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             raise ValidationError({"trigger": "Only an enabled event trigger can process an existing record."})
         if subject._meta.label_lower != declaration.model:
             raise ValidationError({"subject": "The record does not match this event trigger."})
-        identity = ":".join((
-            str(trigger.pk), str(getattr(actor, "pk", "")), subject._meta.label_lower,
-            str(subject.pk), request_key,
-        ))
+        identity = ":".join(
+            (
+                str(trigger.pk),
+                str(getattr(actor, "pk", "")),
+                subject._meta.label_lower,
+                str(subject.pk),
+                request_key,
+            )
+        )
         occurrence_id = f"manual:{hashlib.sha256(identity.encode()).hexdigest()}"
         run = self.start_event(
-            trigger.pk, subject=subject, occurrence_id=occurrence_id,
-            timestamp=timezone.now(), actor=actor, source=declaration.source,
+            trigger.pk,
+            subject=subject,
+            occurrence_id=occurrence_id,
+            timestamp=timezone.now(),
+            actor=actor,
+            source=declaration.source,
         )
         if run is None:
             raise ValidationError({"trigger": "The event trigger did not admit this record."})
@@ -2708,19 +2763,14 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
     def start_due_schedule(self, trigger_id: int, *, timestamp: datetime) -> tuple[Any, datetime] | None:
         """Claim one due occurrence and create its pinned durable start atomically."""
 
-        alias = self.db
-        discovered = system_queryset(self.model, using=alias, lock=None).filter(pk=trigger_id).values(
-            "workflow_id"
-        ).first()
+        discovered = system_queryset(self.model, lock=None).filter(pk=trigger_id).values("workflow_id").first()
         if discovered is None:
             return None
         workflow_model = self.model._meta.get_field("workflow").remote_field.model
         run_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
-        with system_context(reason="workflows.schedule_triggers.start"), transaction.atomic(using=alias):
-            head = system_queryset(workflow_model, using=alias, lock=("self",)).get(
-                pk=discovered["workflow_id"]
-            )
-            trigger = system_queryset(self.model, using=alias, lock=("self",)).filter(pk=trigger_id).first()
+        with system_context(reason="workflows.schedule_triggers.start"), transaction.atomic():
+            head = system_queryset(workflow_model, lock=("self",)).get(pk=discovered["workflow_id"])
+            trigger = system_queryset(self.model, lock=("self",)).filter(pk=trigger_id).first()
             if (
                 trigger is None
                 or trigger.workflow_id != head.pk
@@ -2744,7 +2794,6 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 dedup_key=f"schedule:{trigger.pk}:{due_at.isoformat()}",
                 input=JsonPresence(),
                 available_at=timestamp,
-                using=alias,
             )
             return run, due_at
 
@@ -2774,7 +2823,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     continue
                 try:
                     trigger.next_fire_at = trigger.initial_fire_at(now=timestamp)
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     logger.exception(
                         "Skipping workflow schedule trigger %s after initial fire calculation failed.",
                         trigger.pk,
@@ -2787,22 +2836,13 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         return primed
 
 
-class WorkflowTestFixtureQuerySet(AngeeQuerySet[Any]):
+class WorkflowTestFixtureQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Keep admitted test fixture facts append-only."""
 
-    def update(self, **kwargs: Any) -> int:
-        if AuditMixin.is_audit_nullification(kwargs):
-            return super().update(**kwargs)
-        raise TypeError("Workflow test fixtures are immutable admission facts.")
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the run admission owner."""
 
-    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
         raise TypeError("Workflow test fixtures can only be created by WorkflowRunManager.")
-
-    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
-        raise TypeError("Workflow test fixtures are immutable admission facts.")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise TypeError("Workflow test fixtures are retained admission facts.")
 
 
 class WorkflowTestFixtureManager(AngeeManager.from_queryset(WorkflowTestFixtureQuerySet)):  # type: ignore[misc]
@@ -2811,58 +2851,30 @@ class WorkflowTestFixtureManager(AngeeManager.from_queryset(WorkflowTestFixtureQ
     def _create_batch(self, run: Any, rows: Iterable[Any]) -> tuple[Any, ...]:
         if run.pk is None or run.origin != RunOrigin.TEST:
             raise ValidationError({"run": "Fixtures require a persisted workflow test run."})
-        connection = connections[self.db]
-        if not connection.in_atomic_block:
-            raise RuntimeError("Fixture admission requires the owning run transaction.")
-        authority = _test_fixture_write_run.get()
-        expected = (self.db, id(connection), id(connection.atomic_blocks[0]), run.pk)
-        if authority != expected:
-            raise RuntimeError("Fixture admission requires the exact owning run transaction.")
         prepared = tuple(rows)
-        expected_rows = frozenset(id(row) for row in prepared)
-        if _test_fixture_batch_rows.get() != expected_rows:
-            raise RuntimeError("Fixture admission requires the exact prepared batch.")
-        _test_fixture_batch_rows.set(frozenset())
         for row in prepared:
             row.run = run
             row.full_clean()
         created: list[Any] = []
         for row in prepared:
-            row._fixture_owner_write = expected
-            row.save(force_insert=True, using=self.db)
+            row.insert_retained()
             created.append(row)
         return tuple(created)
 
 
-class WorkflowRecoveryEvidenceQuerySet(AngeeQuerySet[Any]):
+class WorkflowRecoveryEvidenceQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Immutable accepted predecessor evidence for one recovery run."""
 
-    def update(self, **kwargs: Any) -> int:
-        raise TypeError("Recovery evidence is immutable admission data.")
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the recovery admission owner."""
 
-    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
         raise TypeError("Recovery evidence can only be created by WorkflowRunManager.")
-
-    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
-        raise TypeError("Recovery evidence is immutable admission data.")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise TypeError("Recovery evidence is immutable admission data.")
 
 
 class WorkflowRecoveryEvidenceManager(AngeeManager.from_queryset(WorkflowRecoveryEvidenceQuerySet)):  # type: ignore[misc]
-    def _create_for_run(self, run: Any, attempts: tuple[Any, ...], *, using: str) -> tuple[Any, ...]:
-        connection = connections[using]
-        owner = _recovery_write_run.get()
-        expected = (using, id(connection), id(connection.atomic_blocks[0]), run.pk)
-        attempt_ids = frozenset(attempt.pk for attempt in attempts)
-        if (
-            owner != expected
-            or _recovery_evidence_batch.get() != attempt_ids
-            or run.origin != RunOrigin.RECOVERY
-        ):
-            raise RuntimeError("Recovery evidence requires its exact run admission transaction.")
-        _recovery_evidence_batch.set(frozenset())
+    def _create_for_run(self, run: Any, attempts: tuple[Any, ...]) -> tuple[Any, ...]:
+        if run.pk is None or run.origin != RunOrigin.RECOVERY:
+            raise ValidationError({"run": "Recovery evidence requires a persisted recovery run."})
         rows: list[Any] = []
         for attempt in attempts:
             row = self.model(
@@ -2871,13 +2883,7 @@ class WorkflowRecoveryEvidenceManager(AngeeManager.from_queryset(WorkflowRecover
                 step=attempt.step_run.step,
                 map_index=attempt.step_run.map_index,
             )
-            token = _recovery_evidence_write_row.set(
-                (id(row), run.pk, attempt.pk, attempt.step_run.step_id, attempt.step_run.map_index)
-            )
-            try:
-                row.save(using=using, force_insert=True)
-            finally:
-                _recovery_evidence_write_row.reset(token)
+            row.insert_retained()
             rows.append(row)
         return tuple(rows)
 
@@ -2885,42 +2891,24 @@ class WorkflowRecoveryEvidenceManager(AngeeManager.from_queryset(WorkflowRecover
 class StepRunQuerySet(AngeeQuerySet[Any]):
     """Step-run collection writes protecting attempt-owned execution facts."""
 
-    _attempt_owned = frozenset(
-        {
-            "status",
-            "run",
-            "run_id",
-            "step",
-            "step_id",
-            "map_index",
-            "input",
-            "output",
-            "resume_state",
-            "claimed_deliveries",
-            "outcome",
-            "attempt",
-            "current_attempt",
-            "current_attempt_id",
-            "current_map_expansion",
-            "current_map_expansion_id",
-            "effect_key",
-            "effect_generation",
-            "wait_until",
-            "waiting_kind",
-            "heartbeat_at",
-            "error",
-            "stacktrace",
-        }
-    )
+    def _project_from_attempt(self, instance: Any, *, fields: set[str], previous: dict[str, Any]) -> int:
+        """Reserve one changed projection before model save receivers run."""
+
+        eligible = self.filter(
+            pk=instance.pk,
+            current_attempt_id=previous["current_attempt_id"],
+            status=previous["status"],
+        )
+        return super(StepRunQuerySet, eligible).update(**{name: getattr(instance, name) for name in fields})
 
     def update(self, **kwargs: Any) -> int:
-        if self._attempt_owned.intersection(kwargs):
+        if self.model.projection_field_names.intersection(kwargs):
             raise TypeError("Attempt-owned StepRun fields can only be changed by StepAttemptManager.")
         return super().update(**kwargs)
 
     def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], **kwargs: Any) -> int:
         field_names = tuple(fields)
-        if self._attempt_owned.intersection(field_names):
+        if self.model.projection_field_names.intersection(field_names):
             raise TypeError("Attempt-owned StepRun fields can only be changed by StepAttemptManager.")
         return super().bulk_update(objs, field_names, **kwargs)
 
@@ -2985,9 +2973,9 @@ def decision_gate_output(decisions: Collection[Any], *, outcome: str) -> dict[st
     )
     return DecisionGateOutput(
         resolutions=tuple(
-            _decision_resolution(decision, index=(
-                decision.declaration_index if decision.declaration_index is not None else index
-            ))
+            _decision_resolution(
+                decision, index=(decision.declaration_index if decision.declaration_index is not None else index)
+            )
             for index, decision in enumerate(ordered)
             if decision.verdict in Verdict.TERMINAL
         ),
@@ -2998,11 +2986,7 @@ def decision_gate_output(decisions: Collection[Any], *, outcome: str) -> dict[st
 def retained_gate_output(attempt: Any, decisions: Collection[Any]) -> dict[str, Any] | None:
     """Derive one historical gate value from its immutable suspension declaration."""
 
-    if (
-        attempt.result_kind != str(AttemptResultKind.SUSPEND)
-        or not attempt.checkpoint_present
-        or not isinstance(attempt.checkpoint, dict)
-    ):
+    if attempt.result_kind != AttemptResultKind.SUSPEND:
         return None
     settlement = attempt.decision_settlement
     if not isinstance(settlement, dict) or set(settlement) != {"decision_ids", "outcome"}:
@@ -3017,261 +3001,29 @@ def retained_gate_output(attempt: Any, decisions: Collection[Any]) -> dict[str, 
     return decision_gate_output(selected, outcome=outcome)
 
 
-def _decision_value_at(value: Any, path: Collection[str | int]) -> Any:
-    """Select one JSON value by a typed path without fallback or coercion."""
-
-    current = value
-    for part in path:
-        if isinstance(part, str) and isinstance(current, dict) and part in current:
-            current = current[part]
-        elif type(part) is int and isinstance(current, list) and 0 <= part < len(current):
-            current = current[part]
-        else:
-            raise ValidationError({"resolution_path": "The admitted resolution path does not exist."})
-    return current
-
-
-def _decision_source_leaf(
-    provenance: Any, path: tuple[str | int, ...], *, recovery_source_attempt_id: int | None
-) -> tuple[dict[str, Any], tuple[str | int, ...]]:
-    """Pair one admitted input path with its exact engine-authored source leaf."""
-
-    current = provenance
-    remaining = path
-    while isinstance(current, dict):
-        kind = current.get("kind")
-        if kind == "recovery_input":
-            if (
-                recovery_source_attempt_id is None
-                or current.get("attempt_id") != recovery_source_attempt_id
-            ):
-                break
-            current = current.get("source_provenance")
-            continue
-        if kind == "object" and remaining and isinstance(remaining[0], str):
-            fields = current.get("fields")
-            if not isinstance(fields, dict):
-                break
-            current = fields.get(remaining[0])
-            remaining = remaining[1:]
-            continue
-        if kind == "array" and remaining and type(remaining[0]) is int:
-            items = current.get("items")
-            if not isinstance(items, list) or remaining[0] < 0 or remaining[0] >= len(items):
-                break
-            current = items[remaining[0]]
-            remaining = remaining[1:]
-            continue
-        if kind in {"step_output", "recovery_evidence"}:
-            return current, remaining
-        break
-    raise ValidationError({"resolution_path": "This value was not admitted from a retained Decision gate."})
-
-
-def _admitted_source_attempt(
-    leaf: dict[str, Any], *, run: Any, alias: str, attempt_model: type[Any]
-) -> tuple[Any, Any]:
-    """Resolve one exact current output or immutable recovery-evidence source."""
-
-    if leaf.get("kind") == "recovery_evidence":
-        evidence_model = attempt_model._meta.apps.get_model("workflows", "WorkflowRecoveryEvidence")
-        evidence = system_queryset(evidence_model, using=alias, lock=None).filter(
-            sqid=leaf.get("evidence_id"), run_id=run.pk,
-            source_attempt_id=leaf.get("attempt_id"),
-        ).select_related("source_attempt__step_run__run", "step").first()
-        if (
-            evidence is None
-            or evidence.step.key != leaf.get("step_key")
-            or evidence.map_index != leaf.get("map_index")
-        ):
-            raise ValidationError({"decision": "Exact recovery source was not admitted."})
-        source_attempt = evidence.source_attempt
-        source_step_run = source_attempt.step_run
-    elif leaf.get("kind") == "step_output":
-        step_run_model = attempt_model._meta.get_field("step_run").remote_field.model
-        source_step_run = system_queryset(step_run_model, using=alias, lock=None).filter(
-            pk=leaf.get("step_run_id"), step__key=leaf.get("step_key"),
-        ).select_related("run").first()
-        if (
-            source_step_run is None
-            or source_step_run.current_attempt_id != leaf.get("attempt_id")
-            or source_step_run.status != StepRunStatus.SUCCEEDED
-            or source_step_run.effect_generation != leaf.get("effect_generation")
-        ):
-            raise ValidationError({"decision": "Exact upstream result is not current."})
-        source_attempt = system_queryset(attempt_model, using=alias, lock=None).filter(
-            pk=leaf.get("attempt_id"), step_run_id=source_step_run.pk,
-        ).first()
-    else:
-        raise ValidationError({"decision": "Decision authority requires an exact retained source."})
-    if (
-        source_attempt is None
-        or source_attempt.applied_at is None
-        or source_attempt.lease_revoked_at is not None
-        or (
-            leaf.get("kind") == "step_output"
-            and (
-                source_attempt.effect_key != source_step_run.effect_key
-                or source_attempt.effect_generation != source_step_run.effect_generation
-            )
-        )
-        or not run.same_execution_lineage(source_step_run.run)
-    ):
-        raise ValidationError({"decision": "Decision authority is outside exact execution lineage."})
-    return source_attempt, source_step_run
-
-
-def _canonical_decision_target(
-    model_label: str, public_id: str, *, actor: Any,
-) -> tuple[str, str]:
-    """Use the same native record target identity at creation and consumption."""
-
-    if not model_label and not public_id:
-        return "", ""
-    if not model_label or not public_id:
-        raise ValidationError({"target": "Decision target model and id must be supplied together."})
-    try:
-        model = apps.get_model(model_label)
-    except (LookupError, ValueError) as error:
-        raise ValidationError({"target": "Decision target model is not installed."}) from error
-    queryset = read_scoped_queryset(model, actor, action="read")
-    if queryset is None:
-        raise PermissionDenied("Decision target is not readable by the execution actor.")
-    target = instance_from_public_id(model, public_id, queryset=queryset)
-    if target is None:
-        raise ValidationError({"target": "Decision target was not found."})
-    canonical = canonical_record_target(target)
-    canonical_model = canonical.content_type.model_class()
-    if canonical_model is None:
-        raise ValidationError({"target": "Canonical Decision target model is not installed."})
-    return canonical_model._meta.label, public_id_for(canonical_model, canonical.object_id)
-
-
-def _canonical_declared_target(model_label: str, public_id: str) -> tuple[str, str]:
-    """Canonicalize a declared target identity without reading the target record."""
-
-    if not model_label and not public_id:
-        return "", ""
-    if not model_label or not public_id:
-        raise ValidationError({"target": "Decision target model and id must be supplied together."})
-    try:
-        model = apps.get_model(model_label)
-    except (LookupError, ValueError) as error:
-        raise ValidationError({"target": "Decision target model is not installed."}) from error
-    field = public_data_id_field(model)
-    try:
-        object_id = (
-            field.public_id_to_value(public_id)
-            if field is not None
-            else model._meta.pk.to_python(public_id)
-        )
-    except (TypeError, ValueError, ValidationError) as error:
-        raise ValidationError({"target": "Decision target id is invalid."}) from error
-    if object_id in (None, ""):
-        raise ValidationError({"target": "Decision target id is invalid."})
-    canonical = canonical_record_model(model)
-    return canonical._meta.label, public_id_for(canonical, object_id)
-
-
-def _admitted_decision_input(
-    *, input_source: DecisionInputSource, path: tuple[str | int, ...],
-    step_run: Any, attempt: Any, using: str,
-) -> tuple[Any, dict[str, Any] | None, Any, tuple[str | int, ...]]:
-    """Return one input path and the immutable provenance that admitted it.
-
-    Owned calls prove the original child slot and parent call attempt without
-    taking parent locks.  The caller already holds the child invocation locks,
-    so immutable evidence reads preserve the engine's parent-before-child lock
-    order.
-    """
-
-    if input_source == "attempt_input":
-        return attempt.input, attempt.input_provenance, step_run.run, path
-    if input_source != "owned_call_input":
-        raise ValidationError({"input_source": "Unknown admitted input source."})
-
-    run_model = step_run._meta.get_field("run").remote_field.model
-    original_child_id = step_run.run.execution_lineage_root_id()
-    original_child = system_queryset(run_model, using=using, lock=None).select_related(
-        "workflow", "parent_step_run__step",
-    ).filter(pk=original_child_id).first()
-    parent_step = None if original_child is None else original_child.parent_step_run
-    if (
-        original_child is None
-        or original_child.parent_relation != ParentRelation.OWNED_CALL
-        or parent_step is None
-        or parent_step.step_id is None
-        or parent_step.step.step_class != "call_workflow"
-        or not step_run.run.input_present
-        or not original_child.input_present
-        or not json_values_equal(step_run.run.input, original_child.input)
-    ):
-        raise ValidationError({"decision": "The active run is not this exact admitted owned call."})
-
-    parent_attempt = (
-        system_queryset(type(attempt), using=using, lock=None)
-        .select_related("step_run__run")
-        .filter(pk=parent_step.current_attempt_id, step_run_id=parent_step.pk)
-        .first()
-    )
-    retained_wait = (
-        parent_attempt is not None
-        and parent_step.status == StepRunStatus.WAITING
-        and parent_attempt.result_kind == str(AttemptResultKind.SUSPEND)
-    )
-    failed_source = (
-        parent_attempt is not None
-        and parent_step.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
-        and parent_attempt.result_kind in {
-            str(AttemptResultKind.ERROR),
-            str(AttemptResultKind.NO_RESULT),
-            str(AttemptResultKind.PREPARATION_ERROR),
-            str(AttemptResultKind.TRANSIENT_ERROR),
-        }
-    )
-    if (
-        parent_attempt is None
-        or not (retained_wait or failed_source)
-        or parent_attempt.result_recorded_at is None
-        or parent_attempt.applied_at is None
-        or parent_attempt.lease_revoked_at is not None
-        or original_child.admission_actor_subject() != parent_step.run.admission_actor_subject()
-    ):
-        raise ValidationError({"decision": "The owned call is not the exact retained parent invocation."})
-    child_target = canonical_record_target(original_child)
-    retained_target = (
-        parent_attempt.external_content_type_id, parent_attempt.external_object_id,
-    )
-    if retained_target != (child_target.content_type.pk, original_child.pk) and not (
-        failed_source and retained_target == (None, None)
-    ):
-        raise ValidationError({"decision": "The retained parent invocation names another child."})
-
-    payload = parent_attempt.input
-    child_input = payload.get("input") if isinstance(payload, dict) else None
-    if not isinstance(payload, dict) or "input" not in payload or not json_values_equal(
-        child_input, original_child.input,
-    ):
-        raise ValidationError({"decision": "The owned child input differs from its retained call input."})
-    publication_id = parent_step.step.config.get("publication")
-    if not publication_id:
-        publication_id = payload.get("publication")
-    if publication_id != public_id_for(type(original_child.workflow), original_child.workflow_id):
-        raise ValidationError({"decision": "The owned child publication differs from its retained call."})
-
-    child_value = _decision_value_at(attempt.input, path)
-    original_value = _decision_value_at(original_child.input, path)
-    parent_path = ("input", *path)
-    parent_value = _decision_value_at(parent_attempt.input, parent_path)
-    if not json_values_equal(child_value, original_value) or not json_values_equal(
-        original_value, parent_value,
-    ):
-        raise ValidationError({"decision": "The child input path differs from its exact owned-call source."})
-    return parent_attempt.input, parent_attempt.input_provenance, parent_step.run, parent_path
-
-
 class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: ignore[misc]
     """Manager preserving existing StepRun creation with guarded attempt facts."""
+
+    def update_previous(
+        self,
+        instance: Any,
+        previous: Iterable[Any],
+        *,
+        replace: bool = False,
+    ) -> None:
+        """Atomically add or replace previous edges through Django's relation owner.
+
+        Callers must hold ``system_context`` so replacement sees every old edge.
+        """
+
+        previous = tuple(previous)
+        if instance.pk is None or any(row.pk is None for row in previous):
+            raise ValueError("Previous edges require saved StepRun instances.")
+        with transaction.atomic(savepoint=False):
+            if replace:
+                instance.previous.set(previous)
+            else:
+                instance.previous.add(*previous)
 
     def bind_map_membership(
         self,
@@ -3284,39 +3036,32 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
     ) -> tuple[Any, ...]:
         """Bind the current Map generation to its complete body-slot membership."""
 
-        alias = self.db
         attempt_model = self.model._meta.get_field("current_attempt").remote_field.model
         run_model = self.model._meta.get_field("run").remote_field.model
-        with transaction.atomic(using=alias), system_context(reason="workflows.map.membership"):
-            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
+        with transaction.atomic(), system_context(reason="workflows.map.membership"):
+            run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
             locked_rows = list(
-                system_queryset(self.model, using=alias, lock=("self",)).filter(
-                    run_id=run.pk
-                ).order_by("pk")
+                system_queryset(self.model, lock=("self",))
+                .select_related("current_attempt", "step", "run__workflow")
+                .filter(run_id=run.pk)
+                .order_by("pk")
             )
-            rows = [
-                row for row in locked_rows
-                if row.step_id == target_id and row.map_index >= 0
-            ]
-            expansion = system_queryset(attempt_model, using=alias, lock=("self",)).get(
-                pk=expansion_attempt_id
-            )
+            rows = [row for row in locked_rows if row.step_id == target_id and row.map_index >= 0]
+            expansion = system_queryset(attempt_model, lock=("self",)).get(pk=expansion_attempt_id)
             controller = next((row for row in locked_rows if row.pk == expansion.step_run_id), None)
             checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
             map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
             if not isinstance(map_state, dict):
                 raise ValidationError({"map": "Map aggregate requires retained expansion facts."})
             items = map_state.get("items")
-            declared_target_id = (
-                map_state.get("target_step_id") if isinstance(map_state, dict) else None
-            )
+            declared_target_id = map_state.get("target_step_id") if isinstance(map_state, dict) else None
             if (
                 controller is None
                 or controller.current_attempt_id != expansion.pk
                 or controller.status != StepRunStatus.WAITING
                 or controller.effect_generation != expansion.effect_generation
                 or expansion.cause != str(AttemptCause.MAP_ENGINE)
-                or expansion.result_kind != str(AttemptResultKind.WAIT)
+                or expansion.result_kind != AttemptResultKind.WAIT
                 or expansion.applied_at is None
                 or expansion.lease_revoked_at is not None
                 or not isinstance(items, list)
@@ -3324,17 +3069,13 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                 or declared_target_id != target_id
             ):
                 raise ValidationError({"attempt": "Map membership requires this run's expansion wait."})
-            current_attempt_ids = sorted(
-                row.current_attempt_id for row in rows if row.current_attempt_id is not None
-            )
+            current_attempt_ids = sorted(row.current_attempt_id for row in rows if row.current_attempt_id is not None)
             current_attempts = {}
             if current_attempt_ids:
                 current_attempts = {
                     attempt.pk: attempt
                     for attempt in (
-                    system_queryset(attempt_model, using=alias, lock=("self",))
-                    .filter(pk__in=current_attempt_ids)
-                    .order_by("pk")
+                        system_queryset(attempt_model, lock=("self",)).filter(pk__in=current_attempt_ids).order_by("pk")
                     )
                 }
             current: list[Any] = []
@@ -3346,8 +3087,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                     and (row.status != StepRunStatus.SCHEDULED or row.is_retained)
                     and not (
                         row.current_attempt_id in current_attempts
-                        and current_attempts[row.current_attempt_id].cause
-                        == str(AttemptCause.TEST_FIXTURE)
+                        and current_attempts[row.current_attempt_id].cause == str(AttemptCause.TEST_FIXTURE)
                         and current_attempts[row.current_attempt_id].test_fixture_id is not None
                     )
                 ):
@@ -3357,16 +3097,13 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                 elif not wanted and row.status in StepRunStatus.ACTIVE:
                     attempt_model.objects.cancel_current(row.pk, at=at)
                     row.refresh_from_db()
-                with attempt_model.objects._write(alias, row.pk):
-                    row.current_map_expansion_id = expansion.pk if wanted else None
-                    attempt_model.objects._write_step_run(
-                        row,
-                        alias=alias,
-                        operation=lambda row=row: row.save(
-                            using=alias,
-                            update_fields=["current_map_expansion", "updated_at"],
-                        ),
+                    row.current_attempt = (
+                        system_queryset(attempt_model, lock=None).get(pk=row.current_attempt_id)
+                        if row.current_attempt_id is not None
+                        else None
                     )
+                row.current_map_expansion_id = expansion.pk if wanted else None
+                row.project_from_attempt(row.current_attempt, fields=["current_map_expansion", "updated_at"])
                 if wanted:
                     current.append(row)
             return tuple(sorted(current, key=lambda row: row.map_index))
@@ -3375,342 +3112,272 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
         """Fence one retained generation and reopen its logical slot."""
 
         attempt_model = self.model._meta.get_field("current_attempt").remote_field.model
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            attempt_model.objects._write(alias, step_run_id),
-            system_context(reason="workflows.step_run.override"),
-        ):
-            run_id = system_queryset(self.model, using=alias, lock=None).values_list("run_id", flat=True).get(
-                pk=step_run_id
-            )
+        with transaction.atomic(), system_context(reason="workflows.step_run.override"):
+            run_id = system_queryset(self.model, lock=None).values_list("run_id", flat=True).get(pk=step_run_id)
             run_model = self.model._meta.get_field("run").remote_field.model
-            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
+            run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
             if run.is_terminal:
                 raise ValidationError({"run": "A terminal workflow run cannot be overridden."})
-            step_run = system_queryset(self.model, using=alias, lock=("self",)).get(pk=step_run_id)
+            step_run = (
+                system_queryset(self.model, lock=("self",))
+                .select_related("current_attempt", "step")
+                .get(pk=step_run_id)
+            )
+            step_run.run = run
             if step_run.current_attempt_id is not None:
-                attempt = system_queryset(attempt_model, using=alias, lock=("self",)).get(
-                    pk=step_run.current_attempt_id
-                )
+                attempt = system_queryset(attempt_model, lock=("self",)).get(pk=step_run.current_attempt_id)
                 if attempt.result_recorded_at is None and attempt.lease_revoked_at is None:
                     attempt.lease_revoked_at = at
-                    attempt.lease_revocation_reason = str(LeaseRevocationReason.SUPERSEDED)
-                    attempt_model.objects._save_attempt(
-                        attempt,
-                        alias=alias,
-                        update_fields=["lease_revoked_at", "lease_revocation_reason", "updated_at"],
-                    )
+                    attempt.lease_revocation_reason = LeaseRevocationReason.SUPERSEDED
+                    attempt.revoke_lease()
             if step_run.status not in StepRunStatus.TERMINAL:
-                attempt_model.objects._write_step_run(
-                    step_run, alias=alias, operation=step_run.mark_canceled
-                )
-            attempt_model.objects._write_step_run(
-                step_run,
-                alias=alias,
-                operation=lambda: step_run.reschedule_for_override(input=input),
-            )
+                step_run.mark_canceled()
+            step_run.reschedule_for_override(input=input)
             step_run.current_map_expansion = None
             step_run.effect_generation += 1
             step_run.effect_key = uuid.uuid4()
-            attempt_model.objects._write_step_run(
-                step_run,
-                alias=alias,
-                operation=lambda: step_run.save(
-                    using=alias,
-                    update_fields=[
-                        "current_map_expansion",
-                        "effect_generation",
-                        "effect_key",
-                        "updated_at",
-                    ],
-                ),
+            step_run.project_from_attempt(
+                step_run.current_attempt,
+                fields=[
+                    "current_map_expansion",
+                    "effect_generation",
+                    "effect_key",
+                    "updated_at",
+                ],
             )
             return step_run
 
     def settle_retained_decisions(
-        self, step_run_id: int, *, outcome: str, decision_ids: tuple[int, ...], at: datetime
+        self, step_run_id: int, *, decision_id: int, outcome: str, decision_ids: tuple[int, ...], at: datetime
     ) -> Any:
         """Project one applied suspension's completed decision policy."""
 
         decision_model = self.model._meta.apps.get_model("workflows", "Decision")
-        active_resolution = _decision_resolution_session.get()
-        if active_resolution is None:
-            raise RuntimeError("Decision settlement requires the retained resolution owner.")
-        resolution_session = decision_model.objects._require_resolution_owner(
-            active_resolution.decision_id
-        )
         attempt_model = self.model._meta.get_field("current_attempt").remote_field.model
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            attempt_model.objects._write(alias, step_run_id),
-            system_context(reason="workflows.step_run.decisions"),
-        ):
-            run, step_run = attempt_model.objects._locked_ancestry(step_run_id, alias)
+        with transaction.atomic(), system_context(reason="workflows.step_run.decisions"):
+            run, step_run = attempt_model.objects._locked_ancestry(step_run_id)
             if step_run.current_attempt_id is None or step_run.status != StepRunStatus.WAITING or run.is_terminal:
                 raise ValidationError({"step_run": "Decision settlement requires the current retained wait."})
-            attempt = system_queryset(attempt_model, using=alias, lock=("self",)).get(
-                pk=step_run.current_attempt_id
-            )
-            if (
-                attempt.result_kind != str(AttemptResultKind.SUSPEND)
-                or attempt.applied_at is None
-                or attempt.lease_revoked_at is not None
-                or attempt.effect_generation != step_run.effect_generation
-            ):
+            attempt = system_queryset(attempt_model, lock=("self",)).get(pk=step_run.current_attempt_id)
+            if not attempt.is_held_suspension or attempt.effect_generation != step_run.effect_generation:
                 raise ValidationError({"step_run": "Decision settlement requires an applied suspension."})
             decision_model = step_run.decisions.model
             decisions = list(
-                system_queryset(decision_model, using=alias, lock=("self",))
+                system_queryset(decision_model, lock=("self",))
                 .filter(suspension_attempt=attempt)
                 .order_by("priority", "pk")
             )
             if tuple(decision.pk for decision in decisions) != decision_ids:
                 raise ValidationError({"decisions": "Decision settlement does not match this suspension."})
-            if resolution_session.decision_id not in decision_ids:
+            if decision_id not in decision_ids:
                 raise ValidationError({"decisions": "The resolving decision is outside this suspension."})
             authoritative = step_run.decision_gate.outcome(decisions)
             if authoritative is None or authoritative != outcome:
                 raise ValidationError({"outcome": "Decision outcome must be derived from the full policy."})
             if attempt.decision_settlement:
                 raise ValidationError({"decisions": "This suspension was already settled."})
-            settled = [decision for decision in decisions if decision.verdict in Verdict.TERMINAL]
+            settled = step_run.decision_gate.settled_decisions(decisions)
             attempt.decision_settlement = {
-                "decision_ids": [decision.pk for decision in settled], "outcome": outcome,
+                "decision_ids": [decision.pk for decision in settled],
+                "outcome": outcome,
             }
-            attempt_model.objects._save_attempt(
-                attempt, alias=alias, update_fields=["decision_settlement", "updated_at"]
-            )
+            attempt.settle_decisions()
             for sibling in decisions:
                 if sibling.verdict == Verdict.PENDING:
-                    decision_model.objects._write_retained(
-                        sibling,
-                        lambda sibling=sibling: sibling.resolve(
-                            Verdict.EXPIRED, resolution={}, resolved_by="workflows/gate_settlement"
-                        ),
-                    )
+                    sibling.expire(resolved_by="workflows/gate_settlement", at=at)
+                    decision_model.objects._remove_pending_record_access(sibling)
             projected = retained_gate_output(attempt, decisions)
             if projected is None:
                 raise ValidationError({"decisions": "Retained gate settlement cannot be projected."})
-            if step_run.resume_state.get("_resume_after_decisions"):
-                state = dict(step_run.resume_state)
-                state["_decision_outcome"] = outcome
-                state["_decision_resolutions"] = projected
-                step_run.resume_state = state
-                attempt_model.objects._write_step_run(
-                    step_run, alias=alias, operation=lambda: step_run.wake(at=at)
-                )
+            state = GateResumeState.from_checkpoint(step_run.resume_state or {})
+            if state.resume_after_decisions:
+                step_run.resume_state = state.model_copy(
+                    update={"decision_outcome": outcome, "decision_resolutions": projected}
+                ).model_dump(mode="json", exclude_defaults=True)
+                step_run.wake(at=at)
             else:
-                attempt_model.objects._write_step_run(
-                    step_run,
-                    alias=alias,
-                    operation=lambda: step_run.mark_succeeded(
-                        output=projected,
-                        outcome=outcome,
-                    ),
-                )
+                step_run.mark_succeeded(output=projected, outcome=outcome)
             return step_run
 
-    def fail_retained_decisions(self, step_run_id: int, *, error: str) -> Any:
+    def fail_retained_decisions(self, step_run_id: int, *, decision_id: int, error: str) -> Any:
         """Fail one applied suspension after exhausting invalid resolutions."""
 
         decision_model = self.model._meta.apps.get_model("workflows", "Decision")
-        active_resolution = _decision_resolution_session.get()
-        if active_resolution is None:
-            raise RuntimeError("Decision failure requires the retained resolution owner.")
-        resolution_session = decision_model.objects._require_resolution_owner(
-            active_resolution.decision_id
-        )
         attempt_model = self.model._meta.get_field("current_attempt").remote_field.model
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            attempt_model.objects._write(alias, step_run_id),
-            system_context(reason="workflows.step_run.decision_failure"),
-        ):
-            run, step_run = attempt_model.objects._locked_ancestry(step_run_id, alias)
+        with transaction.atomic(), system_context(reason="workflows.step_run.decision_failure"):
+            run, step_run = attempt_model.objects._locked_ancestry(step_run_id)
             if step_run.current_attempt_id is None or step_run.status != StepRunStatus.WAITING or run.is_terminal:
                 raise ValidationError({"step_run": "Decision failure requires the current retained wait."})
-            attempt = system_queryset(attempt_model, using=alias, lock=("self",)).get(
-                pk=step_run.current_attempt_id
-            )
-            if (
-                attempt.result_kind != str(AttemptResultKind.SUSPEND)
-                or attempt.applied_at is None
-                or attempt.lease_revoked_at is not None
-                or attempt.effect_generation != step_run.effect_generation
-            ):
+            attempt = system_queryset(attempt_model, lock=("self",)).get(pk=step_run.current_attempt_id)
+            if not attempt.is_held_suspension or attempt.effect_generation != step_run.effect_generation:
                 raise ValidationError({"step_run": "Decision failure requires an applied suspension."})
             decision_model = step_run.decisions.model
-            decision = system_queryset(decision_model, using=alias, lock=("self",)).get(
-                pk=resolution_session.decision_id,
+            decision = system_queryset(decision_model, lock=("self",)).get(
+                pk=decision_id,
                 suspension_attempt=attempt,
             )
             if decision.max_attempts is None or decision.attempts < decision.max_attempts:
                 raise ValidationError({"decision": "Decision failure requires exhausted attempts."})
-            attempt_model.objects._write_step_run(
-                step_run,
-                alias=alias,
-                operation=lambda: step_run.mark_failed(error=error, stacktrace=""),
-            )
+            step_run.mark_failed(error=error, stacktrace="")
             return step_run
 
 
-class StepAttemptQuerySet(AngeeQuerySet[Any]):
-    """Reject collection mutations that would bypass retained-evidence rules."""
+class StepAttemptQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+    """Keep lease writes on exact owner methods and generic mutations closed."""
 
-    def update(self, **kwargs: Any) -> int:
-        if AuditMixin.is_audit_nullification(kwargs):
-            return super().update(**kwargs)
-        raise TypeError("Step attempts do not support collection updates.")
+    def _admit_invocation(self, *, attempt_id: int, lease_token: uuid.UUID, at: datetime) -> int:
+        """Persist a first invocation through the native conditional update."""
 
-    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
-        raise TypeError("Step attempts do not support bulk_create().")
+        eligible = self.filter(
+            pk=attempt_id,
+            lease_token=lease_token,
+            started_at__isnull=True,
+            lease_revoked_at__isnull=True,
+            result_recorded_at__isnull=True,
+        )
+        return eligible.owner_update(started_at=at, heartbeat_at=at, updated_at=at)
 
-    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
-        raise TypeError("Step attempts do not support bulk_update().")
+    def _heartbeat(self, attempt: Any) -> int:
+        eligible = self.filter(
+            pk=attempt.pk,
+            lease_token=attempt.lease_token,
+            lease_revoked_at__isnull=True,
+            result_recorded_at__isnull=True,
+        ).filter(models.Q(heartbeat_at__lt=attempt.heartbeat_at) | models.Q(heartbeat_at__isnull=True))
+        return eligible.owner_update(heartbeat_at=attempt.heartbeat_at)
 
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise TypeError("Step attempts are retained execution evidence and cannot be deleted.")
+    def _revoke_lease(self, attempt: Any) -> int:
+        eligible = self.filter(
+            pk=attempt.pk,
+            lease_token=attempt.lease_token,
+            lease_revoked_at__isnull=True,
+            result_recorded_at__isnull=True,
+        )
+        return eligible.owner_update(
+            lease_revoked_at=attempt.lease_revoked_at,
+            lease_revocation_reason=attempt.lease_revocation_reason,
+        )
+
+    def _bind_external(self, attempt: Any) -> int:
+        eligible = self.filter(
+            pk=attempt.pk,
+            lease_token=attempt.lease_token,
+            external_content_type__isnull=True,
+            external_object_id__isnull=True,
+            lease_revoked_at__isnull=True,
+            result_recorded_at__isnull=True,
+        )
+        return eligible.owner_update(
+            external_content_type_id=attempt.external_content_type_id,
+            external_object_id=attempt.external_object_id,
+        )
+
+    def _retain_result(self, attempt: Any) -> int:
+        """Persist only model-owned result fields on one resultless lease."""
+
+        eligible = self.filter(pk=attempt.pk, lease_token=attempt.lease_token, result_recorded_at__isnull=True)
+        return eligible.owner_update(
+            **{name: getattr(attempt, name) for name in attempt.result_field_names}
+        )
+
+    def _settle_decisions(self, *, attempt_id: int, settlement: dict[str, Any]) -> int:
+        """Persist one settlement on an applied, previously unsettled suspension."""
+
+        eligible = self.filter(
+            pk=attempt_id,
+            result_kind=AttemptResultKind.SUSPEND,
+            applied_at__isnull=False,
+            decision_settlement={},
+        )
+        return eligible.owner_update(
+            decision_settlement=settlement,
+            updated_at=timezone.now(),
+        )
+
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the attempt allocation owner."""
+
+        raise TypeError("Step attempts can only be created by StepAttemptManager.")
 
 
 class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # type: ignore[misc]
     """Allocate, lease, and finalize retained attempts under ancestor locks."""
 
-    def admitted_continuation_child(
-        self, step_run_id: int, *, lease_token: uuid.UUID,
-        child_id_path: tuple[str | int, ...], expected_starter_class: str,
-    ) -> Any:
-        """Resolve the exact child named by a current admitted starter output."""
-
-        if (
-            not child_id_path
-            or any(type(part) not in {str, int} or part == "" for part in child_id_path)
-            or not expected_starter_class
-        ):
-            raise ValidationError({"child": "An exact typed starter output path and class are required."})
-        alias = self.db
-        with transaction.atomic(using=alias), self._write(alias, step_run_id), system_context(
-            reason="workflows.continuation.admitted_child"
-        ):
-            run, step_run = self._locked_ancestry(step_run_id, alias)
-            if run.is_terminal or step_run.status != StepRunStatus.STARTED or step_run.current_attempt_id is None:
-                raise ValidationError({"child": "Child result requires the current active invocation."})
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
-                pk=step_run.current_attempt_id
-            )
-            if (
-                attempt.step_run_id != step_run.pk
-                or attempt.lease_token != lease_token
-                or attempt.started_at is None
-                or attempt.result_recorded_at is not None
-                or attempt.lease_revoked_at is not None
-            ):
-                raise ValidationError({"child": "Child result requires the current admitted lease."})
-            leaf, remaining = _decision_source_leaf(
-                attempt.input_provenance, child_id_path,
-                recovery_source_attempt_id=run.recovery_source_attempt_id,
-            )
-            source_attempt, starter = _admitted_source_attempt(
-                leaf, run=run, alias=alias, attempt_model=self.model,
-            )
-            if (
-                source_attempt.result_kind != str(AttemptResultKind.DONE)
-                or not source_attempt.output_present
-                or starter.step.step_class != expected_starter_class
-                or (leaf.get("kind") == "step_output" and starter.status != StepRunStatus.SUCCEEDED)
-            ):
-                raise ValidationError({"child": "The admitted source is not a completed child starter."})
-            selected_path = leaf.get("path", [])
-            if not isinstance(selected_path, list) or any(type(part) not in {str, int} for part in selected_path):
-                raise ValidationError({"child": "The retained starter path is invalid."})
-            retained_id = _decision_value_at(
-                source_attempt.output, (*selected_path, *remaining),
-            )
-            admitted_id = _decision_value_at(attempt.input, child_id_path)
-            if not isinstance(retained_id, str) or not retained_id or retained_id != admitted_id:
-                raise ValidationError({"child": "The child id differs from its exact admitted starter."})
-            run_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
-            child = instance_from_public_id(
-                run_model, retained_id,
-                queryset=system_queryset(run_model, using=alias, lock=None),
-            )
-            if (
-                child is None
-                or child.parent_relation != ParentRelation.CONTINUATION
-                or child.admission_actor_subject() != run.admission_actor_subject()
-            ):
-                raise ValidationError({"child": "The retained run is not this admitted continuation child."})
-            if child.parent_step_run_id != starter.pk:
-                normalized_parent = run_model.objects._fresh_recovery_child_parent(
-                    starter.run,
-                    starter,
-                    using=alias,
-                    require_active=False,
-                )
-                if child.parent_step_run_id != normalized_parent.pk:
-                    raise ValidationError({
-                        "child": "The retained run is not this admitted continuation child."
-                    })
-            return child
-
-    def admitted_continuation_completion(
+    def join_continuation(
         self,
         step_run_id: int,
         *,
         lease_token: uuid.UUID,
-        child_id_path: tuple[str | int, ...],
+        child_id: str,
         expected_starter_class: str,
         actor: Any,
     ) -> tuple[Any, Any | None]:
-        """Resolve an admitted child and its one exact successful FRESH recovery."""
+        """Resolve a continuation child and its one exact successful FRESH recovery."""
 
         try:
             actor_ref = canonical_subject_ref(str(to_subject_ref(actor)))
         except (NoActorResolvedError, TypeError, ValueError) as error:
             raise PermissionDenied("Continuation completion requires an acting subject.") from error
-        alias = self.db
         run_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
-        with transaction.atomic(using=alias), system_context(
-            reason="workflows.continuation.admitted_completion"
-        ):
-            child = self.admitted_continuation_child(
-                step_run_id,
-                lease_token=lease_token,
-                child_id_path=child_id_path,
-                expected_starter_class=expected_starter_class,
+        with transaction.atomic(), system_context(reason="workflows.continuation.join"):
+            run, step_run = self._locked_ancestry(step_run_id)
+            if run.is_terminal or step_run.status != StepRunStatus.STARTED or step_run.current_attempt_id is None:
+                raise ValidationError({"child": "Child completion requires a current active invocation."})
+            attempt = system_queryset(self.model, lock=("self",)).get(pk=step_run.current_attempt_id)
+            if (
+                attempt.lease_token != lease_token
+                or attempt.started_at is None
+                or attempt.result_recorded_at is not None
+                or attempt.lease_revoked_at is not None
+            ):
+                raise ValidationError({"child": "Child completion requires the current invocation lease."})
+            child = instance_from_public_id(
+                run_model,
+                child_id,
+                queryset=system_queryset(run_model, lock=None).select_related(
+                    "parent_step_run__step", "parent_step_run__run"
+                ),
             )
-            original = system_queryset(run_model, using=alias, lock=("self",)).select_related(
-                "workflow"
-            ).get(pk=child.pk)
+            if (
+                child is None
+                or child.parent_step_run_id is None
+                or child.parent_relation != ParentRelation.CONTINUATION
+            ):
+                raise ValidationError({"child": "Select a retained continuation child."})
+            starter = child.parent_step_run
+            if (
+                starter.step_id is None
+                or starter.step.step_class != expected_starter_class
+                or starter.run.execution_lineage_root_id() != run.execution_lineage_root_id()
+                or child.admission_actor_subject() != run.admission_actor_subject()
+            ):
+                raise ValidationError({"child": "Child continuation belongs to another starter or execution lineage."})
+            original = system_queryset(run_model, lock=("self",)).select_related("workflow").get(pk=child.pk)
             readable = read_scoped_queryset(run_model, actor, action="read")
-            if readable is None or not readable.using(alias).filter(pk=original.pk).exists():
-                raise PermissionDenied("Admitted continuation child is unavailable.")
+            if readable is None or not readable.filter(pk=original.pk).exists():
+                raise PermissionDenied("Continuation child is unavailable.")
             if original.admission_actor_subject() != actor_ref:
-                raise PermissionDenied("Admitted continuation child belongs to another actor.")
+                raise PermissionDenied("Continuation child belongs to another actor.")
             if original.status == RunStatus.SUCCEEDED:
                 return original, original
             if original.status not in {RunStatus.FAILED, RunStatus.CANCELED}:
                 return original, None
             original_root_id = original.execution_lineage_root_id()
             if original_root_id != original.pk:
-                raise ValidationError({
-                    "child": "The admitted continuation child is not an execution-lineage root."
-                })
+                raise ValidationError({"child": "The continuation child is not an execution-lineage root."})
 
             recoveries = list(
-                system_queryset(run_model, using=alias, lock=("self",))
+                system_queryset(run_model, lock=("self",))
                 .select_related("workflow", "recovery_source_attempt__step_run__run")
                 .filter(
                     origin=RunOrigin.RECOVERY,
                     recovery_mode=str(RecoveryMode.FRESH),
                     recovery_source_attempt__step_run__run_id=original.pk,
-                    status=RunStatus.SUCCEEDED,
                 )
                 .order_by("pk")
             )
             exact: list[Any] = []
+            active: list[Any] = []
             for recovery in recoveries:
                 source = recovery.recovery_source_attempt
                 source_step = None if source is None else source.step_run
@@ -3729,239 +3396,29 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     or recovery.admission_actor_subject() != actor_ref
                     or recovery.recovery_request_actor_ref != str(actor_ref)
                     or recovery.execution_lineage_root_id() != original_root_id
-                    or not isinstance(result, dict)
-                    or result.get("status") != "succeeded"
-                    or not isinstance(result.get("outcome"), str)
-                    or not result.get("outcome")
-                    or result.get("error") is not None
-                    or "output" not in result
                 ):
-                    raise ValidationError({
-                        "child": "A successful child recovery has conflicting retained facts."
-                    })
-                exact.append(recovery)
+                    raise ValidationError({"child": "A child recovery has conflicting retained facts."})
+                if recovery.status in {RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING}:
+                    active.append(recovery)
+                elif recovery.status == RunStatus.SUCCEEDED:
+                    if (
+                        not isinstance(result, dict)
+                        or result.get("status") != "succeeded"
+                        or not isinstance(result.get("outcome"), str)
+                        or not result.get("outcome")
+                        or result.get("error") is not None
+                        or "output" not in result
+                    ):
+                        raise ValidationError({"child": "A successful child recovery has conflicting results."})
+                    exact.append(recovery)
             if len(exact) > 1:
-                raise ValidationError({
-                    "child": "The admitted child has multiple successful FRESH recoveries."
-                })
+                raise ValidationError({"child": "The continuation child has multiple successful FRESH recoveries."})
             if not exact:
-                return original, None
+                return (original, None) if active else (original, original)
             completion = exact[0]
-            if readable is None or not readable.using(alias).filter(pk=completion.pk).exists():
+            if readable is None or not readable.filter(pk=completion.pk).exists():
                 raise PermissionDenied("Successful child recovery is unavailable.")
             return original, completion
-
-    def target_read_authority(
-        self, step_run_id: int, *, lease_token: uuid.UUID,
-        authority_path: tuple[str | int, ...], proposal_gate_path: tuple[str | int, ...] = (),
-    ) -> tuple[Any, Any]:
-        """Resolve a prior human gate through this exact active invocation input."""
-
-        if not authority_path or any(type(part) not in {str, int} for part in authority_path):
-            raise ValidationError({"target": "Target authority needs an admitted typed input path."})
-        if any(type(part) not in {str, int} for part in proposal_gate_path):
-            raise ValidationError({"target": "Proposal gate path must be typed."})
-        alias = self.db
-        with transaction.atomic(using=alias), self._write(alias, step_run_id), system_context(
-            reason="workflows.decision.target_read_authority"
-        ):
-            run, step_run = self._locked_ancestry(step_run_id, alias)
-            if run.is_terminal or step_run.status != StepRunStatus.STARTED or step_run.current_attempt_id is None:
-                raise ValidationError({"step_run": "Target authority requires the active admitted step."})
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
-                pk=step_run.current_attempt_id
-            )
-            if (
-                attempt.step_run_id != step_run.pk
-                or attempt.lease_token != lease_token
-                or attempt.started_at is None
-                or attempt.result_recorded_at is not None
-                or attempt.lease_revoked_at is not None
-            ):
-                raise ValidationError({"attempt": "Target authority requires the current invocation lease."})
-            actor, prior = step_run.decisions.model.objects._resolve_admitted_input_authority(
-                input_source="attempt_input",
-                authority_path=authority_path, proposal_gate_path=proposal_gate_path,
-                step_run=step_run, attempt=attempt, using=alias,
-            )
-            if actor is None or prior is None:
-                raise ValidationError({"target": "No prior gate authority was admitted."})
-            return actor, prior
-
-    def consume_decision_resolution(
-        self,
-        step_run_id: int,
-        resolution_path: tuple[str | int, ...],
-        *,
-        lease_token: uuid.UUID,
-        input_source: DecisionInputSource = "attempt_input",
-        expected_action: str,
-        expected_target: tuple[str, str],
-        expected_verdict: str,
-        actor: Any,
-        required_record_access: Collection[models.Model] = (),
-    ) -> tuple[Any, DecisionResolution]:
-        """Authorize one current admitted gate value and its exact record basis."""
-
-        if (
-            not isinstance(resolution_path, tuple)
-            or not resolution_path
-            or any(type(part) not in {str, int} or part == "" for part in resolution_path)
-        ):
-            raise ValidationError({"resolution_path": "A nonempty typed admitted-input path is required."})
-        if (
-            not isinstance(expected_action, str)
-            or not expected_action
-            or not isinstance(expected_target, tuple)
-            or len(expected_target) != 2
-            or any(not isinstance(value, str) for value in expected_target)
-            or expected_verdict not in {str(value) for value in Verdict.TERMINAL}
-        ):
-            raise ValidationError({"decision": "The consumer must declare exact action, target and terminal verdict."})
-        try:
-            actor_ref = to_subject_ref(actor)
-        except NoActorResolvedError as error:
-            raise PermissionDenied("Decision resolution requires an acting subject.") from error
-        alias = self.db
-        with transaction.atomic(using=alias), self._write(alias, step_run_id), system_context(
-            reason="workflows.decision.consume"
-        ):
-            run, step_run = self._locked_ancestry(step_run_id, alias)
-            if run.is_terminal or step_run.status != StepRunStatus.STARTED or step_run.current_attempt_id is None:
-                raise ValidationError({"step_run": "Decision consumption requires the current active step."})
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
-                pk=step_run.current_attempt_id
-            )
-            if (
-                attempt.step_run_id != step_run.pk
-                or attempt.lease_token != lease_token
-                or attempt.started_at is None
-                or attempt.result_recorded_at is not None
-                or attempt.lease_revoked_at is not None
-            ):
-                raise ValidationError({"attempt": "Decision consumption requires the current admitted lease."})
-            admitted_input, provenance, admitted_run, admitted_path = _admitted_decision_input(
-                input_source=input_source, path=resolution_path,
-                step_run=step_run, attempt=attempt, using=alias,
-            )
-            leaf, remaining = _decision_source_leaf(
-                provenance,
-                admitted_path,
-                recovery_source_attempt_id=admitted_run.recovery_source_attempt_id,
-            )
-            source_attempt, source_step_run = _admitted_source_attempt(
-                leaf, run=admitted_run, alias=alias, attempt_model=self.model,
-            )
-            if source_attempt.result_kind != str(AttemptResultKind.SUSPEND):
-                raise ValidationError({"decision": "The admitted source is not a retained Decision gate."})
-            decision_model = self.model._meta.apps.get_model("workflows", "Decision")
-            source_decisions = list(
-                system_queryset(decision_model, using=alias, lock=None)
-                .filter(suspension_attempt_id=source_attempt.pk)
-                .order_by("priority", "pk")
-            )
-            projected = retained_gate_output(source_attempt, source_decisions)
-            if projected is None:
-                raise ValidationError({"decision": "The retained suspension has no terminal gate projection."})
-            if leaf.get("kind") == "step_output" and (
-                source_step_run.status != StepRunStatus.SUCCEEDED
-                or not source_step_run.output_present
-                or source_step_run.output != projected
-                or source_step_run.outcome != projected["outcome"]
-            ):
-                raise ValidationError({"decision": "The upstream gate projection does not match retained evidence."})
-            selected_path = leaf.get("path", [])
-            if not isinstance(selected_path, list) or any(type(part) not in {str, int} for part in selected_path):
-                raise ValidationError({"decision": "The admitted gate source path is invalid."})
-            retained_value = _decision_value_at(projected, (*selected_path, *remaining))
-            admitted_value = _decision_value_at(admitted_input, admitted_path)
-            if not json_values_equal(admitted_value, retained_value):
-                raise ValidationError({"decision": "The input resolution differs from its retained gate source."})
-            try:
-                resolution = DecisionResolution.model_validate_json(json.dumps(admitted_value, allow_nan=False))
-            except (PydanticValidationError, TypeError, ValueError) as error:
-                raise ValidationError({"decision": "The admitted gate resolution is not typed terminal evidence."}) from error
-            decision = instance_from_public_id(
-                decision_model,
-                resolution.decision_id,
-                queryset=system_queryset(decision_model, using=alias, lock=None),
-            )
-            canonical_expected_target = _canonical_declared_target(*expected_target)
-            if (
-                decision is None
-                or decision.pk not in {row.pk for row in source_decisions}
-                or not isinstance(leaf.get("settled_decision_ids"), list)
-                or decision.pk not in leaf["settled_decision_ids"]
-                or decision.pk not in source_attempt.decision_settlement.get("decision_ids", ())
-                or decision.suspension_attempt_id != source_attempt.pk
-                or decision.action != expected_action
-                or (decision.target_model, decision.target_id) != canonical_expected_target
-                or str(decision.verdict) != expected_verdict
-                or _decision_resolution(decision, index=decision.declaration_index) != resolution
-            ):
-                raise ValidationError({"decision": "Decision action, target, verdict or provenance differs."})
-            if not rebac_backend().check_access(
-                subject=actor_ref, action="read", resource=to_object_ref(decision)
-            ).allowed:
-                raise PermissionDenied("Decision resolution is not readable by this actor.")
-            if required_record_access:
-                self._validate_consumed_record_access(
-                    decision,
-                    resolution,
-                    required_record_access,
-                    using=alias,
-                )
-            return decision, resolution
-
-    @staticmethod
-    def _validate_consumed_record_access(
-        decision: Any,
-        resolution: DecisionResolution,
-        required_records: Collection[models.Model],
-        *,
-        using: str,
-    ) -> None:
-        """Authorize locked records by current reads or this Decision's exact delegation."""
-
-        required: dict[tuple[str, str], models.Model] = {}
-        for record in required_records:
-            if not isinstance(record, models.Model) or record.pk is None:
-                raise ValidationError({"record_access": "Required Decision records must be retained rows."})
-            ref = to_object_ref(record)
-            key = (ref.resource_type, ref.resource_id)
-            if not system_queryset(type(record), using=using, lock=("self",)).filter(pk=record.pk).exists():
-                raise ValidationError({"record_access": "A required Decision record is unavailable."})
-            required.setdefault(key, record)
-        try:
-            resolver_subject = canonical_subject_ref(resolution.resolved_by)
-        except (TypeError, ValueError) as error:
-            raise ValidationError({"record_access": "Decision record authority requires a human resolver."}) from error
-        resolver = get_user_model().objects.active_person_for_subject(resolver_subject)
-        if resolver is None:
-            raise ValidationError({"record_access": "Decision record authority requires an active human resolver."})
-        try:
-            canonical_resolver = canonical_subject_ref(str(to_subject_ref(resolver)))
-        except (NoActorResolvedError, TypeError, ValueError) as error:
-            raise ValidationError({"record_access": "Decision resolver identity is not canonical."}) from error
-        if canonical_resolver != resolver_subject:
-            raise ValidationError({"record_access": "Decision resolver identity is not canonical."})
-
-        if all(record.with_actor(resolver).has_access("read") for record in required.values()):
-            return
-
-        required_types = {resource_type for resource_type, _ in required}
-        delegated = {
-            (ref.resource_type, ref.resource_id)
-            for ref in _retained_record_access_refs(decision)
-            if ref.resource_type in required_types
-        }
-        if delegated != set(required):
-            raise PermissionDenied("The Decision does not authorize the complete required record basis.")
-        for record in required.values():
-            if "pending_decision" not in type(record).get_rebac_grantable():
-                raise ValidationError({
-                    "record_access": "A required record has no pending Decision delegation owner."
-                })
 
     def recovery_plan(self, attempt: Any, *, actor: Any) -> RecoveryPlan:
         """Return the operation-owned recovery capability for authorized evidence."""
@@ -3970,9 +3427,9 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         row = (
             None
             if readable_attempts is None
-            else readable_attempts.select_related(
-                "step_run__run__workflow", "step_run__step"
-            ).filter(pk=attempt.pk).first()
+            else readable_attempts.select_related("step_run__run__workflow", "step_run__step")
+            .filter(pk=attempt.pk)
+            .first()
         )
         if row is None or row.step_run.step_id is None:
             raise PermissionDenied("Recovery source evidence is unavailable.")
@@ -3984,12 +3441,9 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         workflow = step_run.run.workflow
         writable = read_scoped_queryset(type(workflow), actor, action="write")
         subject = step_run.run.subject
-        subject_readable = (
-            subject is None
-            or (
-                (scoped := read_scoped_queryset(type(subject), actor, action="read")) is not None
-                and scoped.filter(pk=subject.pk).exists()
-            )
+        subject_readable = subject is None or (
+            (scoped := read_scoped_queryset(type(subject), actor, action="read")) is not None
+            and scoped.filter(pk=subject.pk).exists()
         )
         admissible = (
             writable is not None
@@ -3998,10 +3452,16 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             and step_run.current_attempt_id == row.pk
             and step_run.status in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
             and (
-                (row.applied_at is not None and row.result_kind in {
-                    str(AttemptResultKind.ERROR), str(AttemptResultKind.NO_RESULT),
-                    str(AttemptResultKind.PREPARATION_ERROR), str(AttemptResultKind.TRANSIENT_ERROR),
-                })
+                (
+                    row.applied_at is not None
+                    and row.result_kind
+                    in {
+                        AttemptResultKind.ERROR,
+                        AttemptResultKind.NO_RESULT,
+                        AttemptResultKind.PREPARATION_ERROR,
+                        AttemptResultKind.TRANSIENT_ERROR,
+                    }
+                )
                 or (row.result_recorded_at is None and row.lease_revoked_at is not None)
             )
         )
@@ -4012,7 +3472,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         )
         if capability.available and step_run.map_index >= 0:
             try:
-                self._map_recovery_source(row.pk, alias=self.db, lock=None)
+                self._map_recovery_source(row.pk, lock=None)
             except ValidationError:
                 capability = RecoveryCapability(
                     None,
@@ -4051,13 +3511,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         )
 
     def _eligible_fixture_source_queryset(
-        self,
-        workflow: Any,
-        *,
-        actor: Any,
-        role: FixtureRole,
-        step_key: str,
-        item_index: int | None,
+        self, workflow: Any, *, actor: Any, role: FixtureRole, step_key: str, item_index: int | None
     ) -> Any:
         """Return authorized accepted evidence for one exact fixture slot."""
 
@@ -4072,18 +3526,20 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         if authorized is None:
             return self.none()
         head_id = workflow.published_from_id or workflow.pk
-        queryset = authorized.select_related(
-            "step_run__run", "step_run__step__workflow"
-        ).filter(
-            result_kind=AttemptResultKind.DONE,
-            result_recorded_at__isnull=False,
-            applied_at__isnull=False,
-            lease_revoked_at__isnull=True,
-            step_run__step__isnull=False,
-            step_run__step__key=step_key,
-        ).filter(
-            models.Q(step_run__step__workflow_id=head_id)
-            | models.Q(step_run__step__workflow__published_from_id=head_id)
+        queryset = (
+            authorized.select_related("step_run__run", "step_run__step__workflow")
+            .filter(
+                result_kind=AttemptResultKind.DONE,
+                result_recorded_at__isnull=False,
+                applied_at__isnull=False,
+                lease_revoked_at__isnull=True,
+                step_run__step__isnull=False,
+                step_run__step__key=step_key,
+            )
+            .filter(
+                models.Q(step_run__step__workflow_id=head_id)
+                | models.Q(step_run__step__workflow__published_from_id=head_id)
+            )
         )
         if role == FixtureRole.OUTPUT:
             queryset = queryset.filter(output_present=True)
@@ -4107,28 +3563,28 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
 
         if type(first) is not int or not 1 <= first <= 50:
             raise ValidationError({"first": "Captured source pages contain between one and fifty rows."})
-        queryset = self._eligible_fixture_source_queryset(
-            workflow,
-            actor=actor,
-            role=role,
-            step_key=step_key,
-            item_index=item_index,
-        ).only(
-            "pk",
-            "outcome",
-            "result_recorded_at",
-            "map_item_index",
-            "step_run_id",
-            "step_run__map_index",
-            "step_run__run_id",
-            "step_run__run__id",
-            "step_run__step_id",
-            "step_run__step__id",
-            "step_run__step__key",
-            "step_run__step__workflow_id",
-            "step_run__step__workflow__id",
-            "step_run__step__workflow__draft_revision",
-        ).order_by("-pk")
+        queryset = (
+            self._eligible_fixture_source_queryset(
+                workflow, actor=actor, role=role, step_key=step_key, item_index=item_index
+            )
+            .only(
+                "pk",
+                "outcome",
+                "result_recorded_at",
+                "map_item_index",
+                "step_run_id",
+                "step_run__map_index",
+                "step_run__run_id",
+                "step_run__run__id",
+                "step_run__step_id",
+                "step_run__step__id",
+                "step_run__step__key",
+                "step_run__step__workflow_id",
+                "step_run__step__workflow__id",
+                "step_run__step__workflow__draft_revision",
+            )
+            .order_by("-pk")
+        )
         if after is not None:
             cursor = queryset.filter(sqid=after).values_list("pk", flat=True).first()
             if cursor is None:
@@ -4171,48 +3627,33 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         return FixtureSource(self._fixture_source_summary(attempt, role), value)
 
     def _test_fixture_source_record(
-        self,
-        workflow: Any,
-        *,
-        actor: Any,
-        attempt_id: str,
-        role: FixtureRole,
-        step_key: str,
-        item_index: int | None,
+        self, workflow: Any, *, actor: Any, attempt_id: str, role: FixtureRole, step_key: str, item_index: int | None
     ) -> Any | None:
         """Resolve the exact persisted row used by both preview and admission."""
 
-        return self._eligible_fixture_source_queryset(
-            workflow,
-            actor=actor,
-            role=role,
-            step_key=step_key,
-            item_index=item_index,
-        ).filter(sqid=attempt_id).first()
+        return (
+            self._eligible_fixture_source_queryset(
+                workflow, actor=actor, role=role, step_key=step_key, item_index=item_index
+            )
+            .filter(sqid=attempt_id)
+            .first()
+        )
 
-    def record_test_fixture(
-        self, fixture: Any, *, at: datetime, due_step_run_id: int | None = None
-    ) -> Any:
+    def record_test_fixture(self, fixture: Any, *, at: datetime, due_step_run_id: int | None = None) -> Any:
         """Apply one admitted output fixture as nonphysical retained DONE evidence."""
 
-        alias = self.db
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
-        with transaction.atomic(using=alias), system_context(reason="workflows.test_fixture.apply"):
+        with transaction.atomic(), system_context(reason="workflows.test_fixture.apply"):
             run_model = step_run_model._meta.get_field("run").remote_field.model
             run_id = type(fixture)._base_manager.filter(pk=fixture.pk).values_list("run_id", flat=True).get()
-            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
-            connection = connections[alias]
-            authority = (alias, id(connection), id(connection.atomic_blocks[0]), run.pk)
-            if due_step_run_id is None and _test_fixture_write_run.get() != authority:
-                raise RuntimeError("Fixture application requires the exact owning run transaction.")
-            locked_fixture = system_queryset(type(fixture), using=alias, lock=("self",)).get(pk=fixture.pk)
+            run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
+            locked_fixture = (
+                system_queryset(type(fixture), lock=("self",))
+                .select_related("run", "step", "captured_attempt")
+                .get(pk=fixture.pk)
+            )
             if locked_fixture.run_id != run.pk:
                 raise ValidationError({"fixture": "Fixture ancestry changed during admission."})
-            if due_step_run_id is None:
-                allowed = _test_fixture_apply_ids.get()
-                if fixture.pk not in allowed:
-                    raise RuntimeError("Fixture application requires its exact admission authority.")
-                _test_fixture_apply_ids.set(allowed - {fixture.pk})
             locked_fixture.full_clean()
             fixture = locked_fixture
             if fixture.role != FixtureRole.OUTPUT:
@@ -4221,11 +3662,15 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 raise ValidationError({"fixture": "A terminal run cannot apply fixture evidence."})
             if run.origin != RunOrigin.TEST or fixture.step.workflow_id != run.workflow_id:
                 raise ValidationError({"fixture": "Fixture evidence must belong to its pinned test run."})
-            step_run, created = system_queryset(step_run_model, using=alias, lock=("self",)).get_or_create(
-                run=run,
-                step=fixture.step,
-                map_index=fixture.item_index if fixture.item_index is not None else -1,
-                defaults={"status": StepRunStatus.SCHEDULED, "input": {}},
+            step_run, created = (
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+                .get_or_create(
+                    run=run,
+                    step=fixture.step,
+                    map_index=fixture.item_index if fixture.item_index is not None else -1,
+                    defaults={"status": StepRunStatus.SCHEDULED, "input": {}},
+                )
             )
             if due_step_run_id is not None and (
                 created
@@ -4236,161 +3681,42 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 raise ValidationError({"fixture": "Output fixture substitution is not currently due."})
             if not created and step_run.current_attempt_id is not None:
                 raise ValidationError({"fixture": "This fixture slot already has retained evidence."})
-            with self._write(alias, step_run.pk):
-                attempt = self._allocate_locked(
-                    step_run,
-                    cause=AttemptCause.TEST_FIXTURE,
-                    input=AttemptInput(),
-                    claimed_at=at,
-                    alias=alias,
-                    test_fixture=fixture,
-                )
-                attempt.result_kind = str(AttemptResultKind.DONE)
-                attempt.result_recorded_at = at
-                attempt.output_present = fixture.value_present
-                attempt.output = copy.deepcopy(fixture.value)
-                attempt.outcome = fixture.outcome
-                attempt.applied_at = at
-                self._save_attempt(attempt, alias=alias)
-                self._write_step_run(
-                    step_run,
-                    alias=alias,
-                    operation=lambda: step_run.mark_started(
-                        heartbeat_at=None, claimed_deliveries=run.deliveries
-                    ),
-                )
-                self._write_step_run(
-                    step_run,
-                    alias=alias,
-                    operation=lambda: step_run.mark_succeeded(
-                        output=copy.deepcopy(fixture.value) if fixture.value_present else None,
-                        output_present=fixture.value_present,
-                        outcome=fixture.outcome,
-                    ),
-                )
+            attempt = self._allocate_locked(
+                step_run,
+                cause=AttemptCause.TEST_FIXTURE,
+                input=AttemptInput(),
+                claimed_at=at,
+                test_fixture=fixture,
+            )
+            attempt.result_kind = AttemptResultKind.DONE
+            attempt.result_recorded_at = at
+            attempt.output_present = fixture.value_present
+            attempt.output = copy.deepcopy(fixture.value)
+            attempt.outcome = fixture.outcome
+            attempt.applied_at = at
+            attempt.retain_result()
+            step_run.mark_started(heartbeat_at=None, claimed_deliveries=run.deliveries)
+            step_run.mark_succeeded(
+                output=copy.deepcopy(fixture.value) if fixture.value_present else None,
+                output_present=fixture.value_present,
+                outcome=fixture.outcome,
+            )
             return attempt
 
-    @contextmanager
-    def _write(self, alias: str, step_run_id: int) -> Iterator[None]:
-        connection = connections[alias]
-        if not connection.in_atomic_block:
-            raise RuntimeError("Attempt writes require an active database transaction.")
-        active = _attempt_write_session.get()
-        if active is not None:
-            if (
-                active.alias != alias
-                or active.connection_id != id(connection)
-                or active.step_run_id != step_run_id
-            ):
-                raise RuntimeError("An attempt write cannot span database connections or logical step runs.")
-            yield
-            return
-        token = _attempt_write_session.set(_AttemptWriteSession(alias, id(connection), step_run_id))
-        try:
-            yield
-        finally:
-            _attempt_write_session.reset(token)
-
-    def active_database_command_input(
-        self,
-        step_run_id: int,
-        *,
-        actor: Any,
-    ) -> tuple[Any, AttemptInput]:
-        """Return the exact input of this active database-command invocation."""
-
-        alias = self.db
-        if not _attempt_write_active(alias, step_run_id):
-            raise RuntimeError(
-                "Database-command input requires the active attempt write session."
-            )
-        try:
-            actor_ref = to_subject_ref(actor)
-        except NoActorResolvedError as error:
-            raise PermissionDenied(
-                "Database-command input requires the admitted actor."
-            ) from error
-        with system_context(reason="workflows.attempt.database_command.input"):
-            run, step_run = self._locked_ancestry(step_run_id, alias)
-            if step_run.current_attempt_id is None:
-                raise ValidationError(
-                    {"attempt": "Database-command input requires the current invocation."}
-                )
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
-                pk=step_run.current_attempt_id
-            )
-        if (
-            run.is_terminal
-            or step_run.status != StepRunStatus.STARTED
-            or step_run.current_attempt_id != attempt.pk
-            or step_run.effect_key != attempt.effect_key
-            or step_run.effect_generation != attempt.effect_generation
-            or run.admission_actor_subject() != actor_ref
-            or attempt.step_run_id != step_run.pk
-            or attempt.started_at is None
-            or attempt.lease_revoked_at is not None
-            or attempt.result_recorded_at is not None
-        ):
-            raise ValidationError(
-                {"attempt": "Database-command input requires the current admitted invocation."}
-            )
-        return step_run, AttemptInput(
-            present=attempt.input_present,
-            value=copy.deepcopy(attempt.input),
-            provenance=copy.deepcopy(attempt.input_provenance),
-        )
-
-    def _locked_ancestry(self, step_run_id: int, alias: str) -> tuple[Any, Any]:
+    def _locked_ancestry(self, step_run_id: int) -> tuple[Any, Any]:
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
         run_model = step_run_model._meta.get_field("run").remote_field.model
-        run_id = system_queryset(step_run_model, using=alias, lock=None).values_list("run_id", flat=True).get(
-            pk=step_run_id
+        run_id = system_queryset(step_run_model, lock=None).values_list("run_id", flat=True).get(pk=step_run_id)
+        run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
+        step_run = (
+            system_queryset(step_run_model, lock=("self",))
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .get(pk=step_run_id)
         )
-        run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
-        step_run = system_queryset(step_run_model, using=alias, lock=("self",)).get(
-            pk=step_run_id
-        )
+        step_run.run = run
         if step_run.run_id != run.pk:
             raise OperationalError("Step run ownership changed while its attempt was being locked.")
         return run, step_run
-
-    def _save_attempt(self, attempt: Any, *, alias: str, **kwargs: Any) -> None:
-        """Authorize one exact instance save and consume authority before signals run."""
-
-        connection = connections[alias]
-        capability = _AttemptSaveCapability(
-            atomic=_AtomicWriteCapability(
-                alias, id(connection), id(connection.atomic_blocks[0]), id(attempt)
-            ),
-            step_run_id=attempt.step_run_id,
-            pk=attempt.pk,
-            adding=attempt._state.adding,
-        )
-        token = _attempt_save_capability.set(capability)
-        try:
-            attempt.save(using=alias, **kwargs)
-        finally:
-            _attempt_save_capability.reset(token)
-
-    def _write_step_run(self, step_run: Any, *, alias: str, operation: Any) -> Any:
-        """Authorize exactly one retained projection save, spent before signals."""
-
-        connection = connections[alias]
-        if not connection.atomic_blocks:
-            raise RuntimeError("Retained StepRun projection writes require an owner transaction.")
-        capability = _StepRunSaveCapability(
-            atomic=_AtomicWriteCapability(alias, id(connection), id(connection.atomic_blocks[0]), id(step_run)),
-            run_id=step_run.run_id,
-            step_run_id=step_run.pk,
-        )
-        token = _step_run_save_capability.set(capability)
-        try:
-            result = operation()
-            if not capability.atomic.consumed:
-                raise RuntimeError("Retained StepRun projection operation did not save its exact row.")
-            return result
-        finally:
-            _step_run_save_capability.reset(token)
 
     def validate_result(self, result: AttemptResult) -> AttemptResult:
         """Validate one physical result before any retained write begins."""
@@ -4404,7 +3730,6 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         current_attempt_id: int | None,
         *,
         recovery_run_id: int,
-        alias: str,
         lock: tuple[str, ...] | None,
         require_active: bool,
     ) -> tuple[Any, tuple[int, int] | None]:
@@ -4414,16 +3739,22 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             raise ValidationError({"recovery": "FRESH recovery has no current attempt."})
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
         run_model = step_run_model._meta.get_field("run").remote_field.model
-        recovery_run = system_queryset(run_model, using=alias, lock=lock).get(
-            pk=recovery_run_id
+        recovery_run = system_queryset(run_model, lock=lock).get(pk=recovery_run_id)
+        step_run = (
+            system_queryset(step_run_model, lock=lock)
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .get(
+                current_attempt_id=current_attempt_id,
+                run_id=recovery_run.pk,
+            )
         )
-        step_run = system_queryset(step_run_model, using=alias, lock=lock).get(
-            current_attempt_id=current_attempt_id,
-            run_id=recovery_run.pk,
-        )
-        current = system_queryset(self.model, using=alias, lock=lock).get(
-            pk=current_attempt_id,
-            step_run_id=step_run.pk,
+        current = (
+            system_queryset(self.model, lock=lock)
+            .select_related("step_run__run__workflow", "step_run__step")
+            .get(
+                pk=current_attempt_id,
+                step_run_id=step_run.pk,
+            )
         )
         if require_active:
             eligible_current = (
@@ -4432,30 +3763,31 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 and current.lease_revoked_at is None
             )
         else:
-            eligible_current = (
-                (current.result_recorded_at is not None and current.applied_at is not None)
-                or (current.result_recorded_at is None and current.lease_revoked_at is not None)
+            eligible_current = (current.result_recorded_at is not None and current.applied_at is not None) or (
+                current.result_recorded_at is None and current.lease_revoked_at is not None
             )
         if not eligible_current:
             raise ValidationError({"recovery": "FRESH recovery current attempt is not retained."})
         lineage = current
         retained_target = (
             (current.external_content_type_id, current.external_object_id)
-            if current.external_content_type_id is not None
-            and current.external_object_id is not None
+            if current.external_content_type_id is not None and current.external_object_id is not None
             else None
         )
         while lineage.cause == str(AttemptCause.CONTINUATION):
-            previous = system_queryset(self.model, using=alias, lock=lock).filter(
-                step_run_id=step_run.pk,
-                ordinal=lineage.ordinal - 1,
-            ).first()
+            previous = (
+                system_queryset(self.model, lock=lock)
+                .select_related("step_run__run__workflow", "step_run__step")
+                .filter(
+                    step_run_id=step_run.pk,
+                    ordinal=lineage.ordinal - 1,
+                )
+                .first()
+            )
             if (
                 previous is None
-                or previous.result_kind != str(AttemptResultKind.SUSPEND)
+                or not previous.is_held_suspension
                 or previous.result_recorded_at is None
-                or previous.applied_at is None
-                or previous.lease_revoked_at is not None
                 or previous.external_content_type_id is None
                 or previous.external_object_id is None
                 or previous.input_present != lineage.input_present
@@ -4488,44 +3820,36 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         self,
         step_run: Any,
         *,
+        input: AttemptInput,
         at: datetime,
     ) -> tuple[Any, MapExpansionPlan] | None:
         """Retain one internal Map expansion wait without physical admission."""
 
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, step_run.pk),
-            system_context(reason="workflows.map.expand"),
-        ):
-            run, locked = self._locked_ancestry(step_run.pk, alias)
+        self._validate_claim(AttemptCause.MAP_ENGINE, input)
+        with transaction.atomic(), system_context(reason="workflows.map.expand"):
+            run, locked = self._locked_ancestry(step_run.pk)
             if run.is_terminal or locked.status != StepRunStatus.SCHEDULED:
                 raise ValidationError({"step_run": "Map expansion requires a scheduled current generation."})
-            plan = self._map_expansion_plan(locked)
+            plan = self._map_expansion_plan(locked, input=input)
             step_run_model = self.model._meta.get_field("step_run").remote_field.model
-            run_rows = system_queryset(step_run_model, using=alias, lock=None).filter(
-                run_id=run.pk
-            )
+            run_rows = system_queryset(step_run_model, lock=None).filter(run_id=run.pk)
             admitted = run_rows.filter(status=StepRunStatus.SCHEDULED).count()
             existing_rows = (
-                {
-                    row.map_index: row.status
-                    for row in run_rows.filter(
+                dict(
+                    run_rows.filter(
                         step_id=plan.target_id,
                         map_index__gte=0,
                         map_index__lt=len(plan.items),
-                    ).only("map_index", "status")
-                }
+                    ).values_list("map_index", "status")
+                )
                 if plan.target_id is not None
                 else {}
             )
             fixture_indexes: set[int] = set()
             if run.origin == RunOrigin.TEST and plan.target_id is not None:
-                fixture_model = self.model._meta.apps.get_model(
-                    "workflows", "WorkflowTestFixture"
-                )
+                fixture_model = self.model._meta.apps.get_model("workflows", "WorkflowTestFixture")
                 fixture_indexes = set(
-                    system_queryset(fixture_model, using=alias, lock=None)
+                    system_queryset(fixture_model, lock=None)
                     .filter(
                         run_id=run.pk,
                         step_id=plan.target_id,
@@ -4536,8 +3860,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     .values_list("item_index", flat=True)
                 )
             additional = sum(
-                index not in fixture_indexes
-                and existing_rows.get(index) != StepRunStatus.SCHEDULED
+                index not in fixture_indexes and existing_rows.get(index) != StepRunStatus.SCHEDULED
                 for index in range(len(plan.items))
             )
             if run.steps_taken + admitted + additional > run.workflow.max_steps:
@@ -4554,43 +3877,29 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             attempt = self._allocate_locked(
                 locked,
                 cause=AttemptCause.MAP_ENGINE,
-                input=AttemptInput(),
+                input=input,
                 claimed_at=at,
-                alias=alias,
             )
-            self._write_step_run(
-                locked,
-                alias=alias,
-                operation=lambda: locked.mark_started(
-                    heartbeat_at=None, claimed_deliveries=run.deliveries
-                ),
-            )
-            attempt.result_kind = str(AttemptResultKind.WAIT)
+            locked.mark_started(heartbeat_at=None, claimed_deliveries=run.deliveries)
+            attempt.result_kind = AttemptResultKind.WAIT
             attempt.result_recorded_at = at
             attempt.checkpoint_present = True
             attempt.checkpoint = copy.deepcopy(checkpoint)
             attempt.waiting_kind = "children"
             attempt.applied_at = at
-            self._save_attempt(attempt, alias=alias)
-            self._write_step_run(
-                locked,
-                alias=alias,
-                operation=lambda: locked.mark_waiting(
-                    resume_state=copy.deepcopy(checkpoint),
-                    waiting_kind=WaitingKind.CHILDREN,
-                ),
-            )
-            self._charge_logical_execution(run, alias=alias)
+            attempt.retain_result()
+            locked.mark_waiting(resume_state=copy.deepcopy(checkpoint), waiting_kind=WaitingKind.CHILDREN)
+            self._charge_logical_execution(run)
             return attempt, plan
 
     @staticmethod
-    def _map_expansion_plan(step_run: Any) -> MapExpansionPlan:
+    def _map_expansion_plan(step_run: Any, *, input: AttemptInput) -> MapExpansionPlan:
         impl_class = step_run.step.resolve_impl("step_class")
         if getattr(impl_class, "key", None) != "map":
             raise ValidationError({"step_run": "Map expansion requires a Map step."})
         try:
             target = impl_class.target_step(step_run)
-            items = impl_class.items(step_run)
+            items = impl_class.items(step_run, input=input)
         except ValidationError as error:
             return MapExpansionPlan(None, "", [], str(error))
         return MapExpansionPlan(target.pk, target.key, items, "")
@@ -4607,13 +3916,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 or item_attempt.map_item_index != child.map_index
                 or item_attempt.effect_key != child.effect_key
                 or item_attempt.effect_generation != child.effect_generation
-                or item_attempt.result_kind != str(AttemptResultKind.DONE)
+                or item_attempt.result_kind != AttemptResultKind.DONE
                 or item_attempt.applied_at is None
                 or item_attempt.lease_revoked_at is not None
             ):
-                raise ValidationError(
-                    {"map": "Map member success lacks current retained DONE evidence."}
-                )
+                raise ValidationError({"map": "Map member success lacks current retained DONE evidence."})
             if item_attempt.output_present:
                 output = copy.deepcopy(item_attempt.output)
         return {
@@ -4627,7 +3934,9 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
 
     @staticmethod
     def _map_aggregate_output(
-        results: list[dict[str, Any]], *, error: Any = None,
+        results: list[dict[str, Any]],
+        *,
+        error: Any = None,
     ) -> dict[str, Any]:
         """Build the one public ordered Map result shape from member projections."""
 
@@ -4637,8 +3946,10 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             for result in results
         )
         failures = sum(
-            result["status"] in {
-                str(StepRunStatus.FAILED), str(StepRunStatus.CANCELED),
+            result["status"]
+            in {
+                str(StepRunStatus.FAILED),
+                str(StepRunStatus.CANCELED),
             }
             or result["outcome"] in {"child_failed", "child_canceled"}
             for result in results
@@ -4667,20 +3978,21 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         )
 
     def _map_recovery_source(
-        self,
-        source_attempt_id: int,
-        *,
-        alias: str,
-        lock: tuple[str, ...] | None,
-        aggregate_attempt_id: int | None = None,
+        self, source_attempt_id: int, *, lock: tuple[str, ...] | None, aggregate_attempt_id: int | None = None
     ) -> tuple[Any, Any, Any, Any, Any, dict[str, Any]]:
         """Resolve an exact failed member and its already-applied retained Map join."""
 
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
-        source = system_queryset(self.model, using=alias, lock=lock).get(pk=source_attempt_id)
-        source_step = system_queryset(step_run_model, using=alias, lock=lock).select_related(
-            "run__workflow", "step"
-        ).get(pk=source.step_run_id)
+        source = (
+            system_queryset(self.model, lock=lock)
+            .select_related("step_run__run__workflow", "step_run__step")
+            .get(pk=source_attempt_id)
+        )
+        source_step = (
+            system_queryset(step_run_model, lock=lock)
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .get(pk=source.step_run_id)
+        )
         if (
             source_step.current_attempt_id != source.pk
             or source_step.status not in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
@@ -4701,14 +4013,15 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             anchor, _target = self._fresh_recovery_anchor(
                 root_source.pk,
                 recovery_run_id=recovery_run_id,
-                alias=alias,
                 lock=lock,
                 require_active=False,
             )
             if anchor.recovery_source_attempt_id is None:
                 raise ValidationError({"attempt": "Map recovery source lineage is incomplete."})
-            previous = system_queryset(self.model, using=alias, lock=lock).get(
-                pk=anchor.recovery_source_attempt_id
+            previous = (
+                system_queryset(self.model, lock=lock)
+                .select_related("step_run__run__workflow", "step_run__step")
+                .get(pk=anchor.recovery_source_attempt_id)
             )
             if (
                 previous.step_run.step_id != source_step.step_id
@@ -4720,9 +4033,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             ):
                 raise ValidationError({"attempt": "Map recovery source lineage changed its retained item."})
             root_source = previous
-        root_step = system_queryset(step_run_model, using=alias, lock=lock).select_related(
-            "run__workflow", "step"
-        ).get(pk=root_source.step_run_id)
+        root_step = (
+            system_queryset(step_run_model, lock=lock)
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .get(pk=root_source.step_run_id)
+        )
         if (
             root_step.current_attempt_id != root_source.pk
             or root_step.status not in {StepRunStatus.FAILED, StepRunStatus.CANCELED}
@@ -4731,21 +4046,28 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             or root_step.run.workflow_id != source_step.run.workflow_id
         ):
             raise ValidationError({"attempt": "Map recovery root evidence is no longer exact."})
-        expansion = system_queryset(self.model, using=alias, lock=lock).get(pk=root_source.map_expansion_id)
-        controller = system_queryset(step_run_model, using=alias, lock=lock).select_related(
-            "run__workflow", "step"
-        ).get(pk=expansion.step_run_id)
+        expansion = (
+            system_queryset(self.model, lock=lock)
+            .select_related("step_run__run__workflow", "step_run__step")
+            .get(pk=root_source.map_expansion_id)
+        )
+        controller = (
+            system_queryset(step_run_model, lock=lock)
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .get(pk=expansion.step_run_id)
+        )
         aggregate = (
-            system_queryset(self.model, using=alias, lock=lock).filter(
-                pk=aggregate_attempt_id or controller.current_attempt_id
-            ).first()
+            system_queryset(self.model, lock=lock)
+            .select_related("step_run__run__workflow", "step_run__step")
+            .filter(pk=aggregate_attempt_id or controller.current_attempt_id)
+            .first()
             if aggregate_attempt_id is not None or controller.current_attempt_id is not None
             else None
         )
         aggregate_controller = (
-            system_queryset(step_run_model, using=alias, lock=lock).select_related(
-                "run__workflow", "step"
-            ).get(pk=aggregate.step_run_id)
+            system_queryset(step_run_model, lock=lock)
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .get(pk=aggregate.step_run_id)
             if aggregate is not None
             else None
         )
@@ -4768,13 +4090,13 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             or aggregate_controller.step_id != controller.step_id
             or aggregate_controller.map_index != -1
             or aggregate.cause != str(AttemptCause.MAP_ENGINE)
-            or aggregate.result_kind != str(AttemptResultKind.DONE)
+            or aggregate.result_kind != AttemptResultKind.DONE
             or aggregate.applied_at is None
             or aggregate.lease_revoked_at is not None
             or aggregate.effect_key != aggregate_controller.effect_key
             or aggregate.effect_generation != aggregate_controller.effect_generation
             or expansion.cause != str(AttemptCause.MAP_ENGINE)
-            or expansion.result_kind != str(AttemptResultKind.WAIT)
+            or expansion.result_kind != AttemptResultKind.WAIT
             or expansion.applied_at is None
             or expansion.lease_revoked_at is not None
             or not isinstance(map_state, dict)
@@ -4792,29 +4114,33 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 self._map_member_result(root_step, root_source, expansion_id=expansion.pk),
             )
         ):
-            raise ValidationError({
-                "attempt": "Map recovery is unavailable until the exact retained expansion is aggregated."
-            })
+            raise ValidationError(
+                {"attempt": "Map recovery is unavailable until the exact retained expansion is aggregated."}
+            )
         return source, source_step, expansion, controller, aggregate, map_state
 
     def record_recovery_map_aggregate(
-        self, recovered_step_run_id: int, *, at: datetime,
+        self,
+        recovered_step_run_id: int,
+        *,
+        at: datetime,
     ) -> Any | None:
         """Overlay one recovered member onto its exact retained Map aggregate."""
 
-        alias = self.db
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
         run_model = step_run_model._meta.get_field("run").remote_field.model
-        with transaction.atomic(using=alias), system_context(reason="workflows.map.recovery_aggregate"):
-            run_id = system_queryset(step_run_model, using=alias, lock=None).values_list(
-                "run_id", flat=True
-            ).get(pk=recovered_step_run_id)
-            run = system_queryset(run_model, using=alias, lock=("self",)).select_related(
-                "recovery_source_attempt"
-            ).get(pk=run_id)
-            recovered = system_queryset(step_run_model, using=alias, lock=("self",)).select_related(
-                "step"
-            ).get(pk=recovered_step_run_id)
+        with transaction.atomic(), system_context(reason="workflows.map.recovery_aggregate"):
+            run_id = (
+                system_queryset(step_run_model, lock=None)
+                .values_list("run_id", flat=True)
+                .get(pk=recovered_step_run_id)
+            )
+            run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
+            recovered = (
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+                .get(pk=recovered_step_run_id)
+            )
             source_attempt_id = run.recovery_source_attempt_id
             if (
                 run.origin != RunOrigin.RECOVERY
@@ -4829,9 +4155,10 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if recovered.status != StepRunStatus.SUCCEEDED:
                 return None
             current = (
-                system_queryset(self.model, using=alias, lock=("self",)).filter(
-                    pk=recovered.current_attempt_id
-                ).first()
+                system_queryset(self.model, lock=("self",))
+                .select_related("step_run__run__workflow", "step_run__step")
+                .filter(pk=recovered.current_attempt_id)
+                .first()
                 if recovered.current_attempt_id is not None
                 else None
             )
@@ -4840,28 +4167,28 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 recovery_anchor, _recovery_target = self._fresh_recovery_anchor(
                     current.pk,
                     recovery_run_id=run.pk,
-                    alias=alias,
                     lock=("self",),
                     require_active=False,
                 )
-            source, _source_step, expansion, source_controller, _root_aggregate, _map_state = (
-                self._map_recovery_source(source_attempt_id, alias=alias, lock=None)
+            source, _source_step, expansion, source_controller, _root_aggregate, _map_state = self._map_recovery_source(
+                source_attempt_id, lock=None
             )
             evidence_model = run._meta.apps.get_model("workflows", "WorkflowRecoveryEvidence")
-            basis = system_queryset(evidence_model, using=alias, lock=None).filter(
-                run_id=run.pk,
-                step_id=source_controller.step_id,
-                map_index=-1,
-            ).first()
+            basis = (
+                system_queryset(evidence_model, lock=None)
+                .filter(
+                    run_id=run.pk,
+                    step_id=source_controller.step_id,
+                    map_index=-1,
+                )
+                .first()
+            )
             if basis is None:
                 raise ValidationError({"map": "Recovered Map aggregate basis was not admitted."})
-            source, _source_step, expansion, source_controller, source_aggregate, map_state = (
-                self._map_recovery_source(
-                    source_attempt_id,
-                    alias=alias,
-                    lock=None,
-                    aggregate_attempt_id=basis.source_attempt_id,
-                )
+            source, _source_step, expansion, source_controller, source_aggregate, map_state = self._map_recovery_source(
+                source_attempt_id,
+                lock=None,
+                aggregate_attempt_id=basis.source_attempt_id,
             )
             if (
                 current is None
@@ -4874,7 +4201,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 or not json_values_equal(current.map_item, source.map_item)
                 or current.effect_key != recovered.effect_key
                 or current.effect_generation != recovered.effect_generation
-                or current.result_kind != str(AttemptResultKind.DONE)
+                or current.result_kind != AttemptResultKind.DONE
                 or current.applied_at is None
                 or current.lease_revoked_at is not None
                 or run.workflow_id != source_controller.run.workflow_id
@@ -4886,10 +4213,13 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if not isinstance(results, list) or source.map_item_index is None:
                 raise ValidationError({"map": "Retained Map aggregate output is unavailable."})
             results[source.map_item_index] = self._map_member_result(
-                recovered, current, expansion_id=expansion.pk,
+                recovered,
+                current,
+                expansion_id=expansion.pk,
             )
             expected_output = self._map_aggregate_output(
-                results, error=map_state.get("error"),
+                results,
+                error=map_state.get("error"),
             )
 
             controller, _ = step_run_model.objects.get_or_create(
@@ -4898,18 +4228,22 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 map_index=-1,
                 defaults={"status": StepRunStatus.SCHEDULED, "input": {}},
             )
-            controller = system_queryset(
-                step_run_model, using=alias, lock=("self",)
-            ).select_related("run", "step").get(pk=controller.pk)
+            controller = (
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion", "run")
+                .get(pk=controller.pk)
+            )
             expected_outcome = self._map_policy_outcome(controller, expected_output)
             if controller.current_attempt_id is not None:
-                existing = system_queryset(self.model, using=alias, lock=("self",)).get(
-                    pk=controller.current_attempt_id
+                existing = (
+                    system_queryset(self.model, lock=("self",))
+                    .select_related("step_run__run__workflow", "step_run__step")
+                    .get(pk=controller.current_attempt_id)
                 )
                 if (
                     controller.status != StepRunStatus.SUCCEEDED
                     or existing.cause != str(AttemptCause.MAP_ENGINE)
-                    or existing.result_kind != str(AttemptResultKind.DONE)
+                    or existing.result_kind != AttemptResultKind.DONE
                     or existing.applied_at is None
                     or existing.lease_revoked_at is not None
                     or existing.output_present is not True
@@ -4920,36 +4254,22 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 return existing
             if controller.status != StepRunStatus.SCHEDULED or controller.is_retained:
                 raise ValidationError({"map": "Recovered Map controller is not pristine."})
-            with self._write(alias, controller.pk):
-                aggregate = self._allocate_locked(
-                    controller,
-                    cause=AttemptCause.MAP_ENGINE,
-                    input=AttemptInput(),
-                    claimed_at=at,
-                    alias=alias,
-                )
-                self._write_step_run(
-                    controller,
-                    alias=alias,
-                    operation=lambda: controller.mark_started(
-                        heartbeat_at=None, claimed_deliveries=run.deliveries,
-                    ),
-                )
-                aggregate.result_kind = str(AttemptResultKind.DONE)
-                aggregate.result_recorded_at = at
-                aggregate.output_present = True
-                aggregate.output = copy.deepcopy(expected_output)
-                aggregate.outcome = expected_outcome
-                aggregate.applied_at = at
-                self._save_attempt(aggregate, alias=alias)
-                self._write_step_run(
-                    controller,
-                    alias=alias,
-                    operation=lambda: controller.mark_succeeded(
-                        output=expected_output, outcome=expected_outcome,
-                    ),
-                )
-                return aggregate
+            aggregate = self._allocate_locked(
+                controller,
+                cause=AttemptCause.MAP_ENGINE,
+                input=AttemptInput(),
+                claimed_at=at,
+            )
+            controller.mark_started(heartbeat_at=None, claimed_deliveries=run.deliveries)
+            aggregate.result_kind = AttemptResultKind.DONE
+            aggregate.result_recorded_at = at
+            aggregate.output_present = True
+            aggregate.output = copy.deepcopy(expected_output)
+            aggregate.outcome = expected_outcome
+            aggregate.applied_at = at
+            aggregate.retain_result()
+            controller.mark_succeeded(output=expected_output, outcome=expected_outcome)
+            return aggregate
 
     def record_map_aggregate(
         self,
@@ -4960,36 +4280,28 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
     ) -> Any:
         """Retain a separate internal Map aggregate result without another charge."""
 
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, step_run_id),
-            system_context(reason="workflows.map.aggregate"),
-        ):
+        with transaction.atomic(), system_context(reason="workflows.map.aggregate"):
             step_run_model = self.model._meta.get_field("step_run").remote_field.model
             run_model = step_run_model._meta.get_field("run").remote_field.model
-            run_id = system_queryset(step_run_model, using=alias, lock=None).values_list(
-                "run_id", flat=True
-            ).get(pk=step_run_id)
-            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
+            run_id = system_queryset(step_run_model, lock=None).values_list("run_id", flat=True).get(pk=step_run_id)
+            run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
             locked_rows = list(
-                system_queryset(step_run_model, using=alias, lock=("self",))
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
                 .filter(run_id=run.pk)
                 .order_by("pk")
             )
             locked = next((row for row in locked_rows if row.pk == step_run_id), None)
             if locked is None:
                 raise OperationalError("Map controller disappeared while locking membership.")
-            expansion = system_queryset(self.model, using=alias, lock=("self",)).get(
-                pk=expansion_attempt_id
-            )
+            expansion = system_queryset(self.model, lock=("self",)).get(pk=expansion_attempt_id)
             if (
                 run.is_terminal
                 or locked.status != StepRunStatus.WAITING
                 or locked.current_attempt_id != expansion.pk
                 or expansion.step_run_id != locked.pk
                 or expansion.cause != str(AttemptCause.MAP_ENGINE)
-                or expansion.result_kind != str(AttemptResultKind.WAIT)
+                or expansion.result_kind != AttemptResultKind.WAIT
                 or expansion.applied_at is None
                 or expansion.lease_revoked_at is not None
                 or expansion.effect_generation != locked.effect_generation
@@ -5002,11 +4314,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             items = map_state.get("items")
             target_id = map_state.get("target_step_id")
             children = sorted(
-                (
-                    row
-                    for row in locked_rows
-                    if row.current_map_expansion_id == expansion.pk
-                ),
+                (row for row in locked_rows if row.current_map_expansion_id == expansion.pk),
                 key=lambda row: (row.map_index, row.pk),
             )
             if (
@@ -5019,50 +4327,44 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 raise ValidationError({"map": "Map aggregate requires complete current membership."})
             if any(child.status not in StepRunStatus.TERMINAL for child in children):
                 return None
-            attempt_ids = sorted(
-                child.current_attempt_id
-                for child in children
-                if child.current_attempt_id is not None
-            )
+            attempt_ids = sorted(child.current_attempt_id for child in children if child.current_attempt_id is not None)
             attempts = {
                 item.pk: item
-                for item in system_queryset(self.model, using=alias, lock=("self",))
-                .filter(pk__in=attempt_ids)
-                .order_by("pk")
+                for item in system_queryset(self.model, lock=("self",)).filter(pk__in=attempt_ids).order_by("pk")
             }
             results: list[dict[str, Any]] = []
             for child in children:
                 item_attempt = attempts.get(child.current_attempt_id)
                 results.append(
                     self._map_member_result(
-                        child, item_attempt, expansion_id=expansion.pk,
+                        child,
+                        item_attempt,
+                        expansion_id=expansion.pk,
                     )
                 )
             expected_output = self._map_aggregate_output(
-                results, error=map_state.get("error"),
+                results,
+                error=map_state.get("error"),
             )
             expected_outcome = self._map_policy_outcome(locked, expected_output)
             aggregate = self._allocate_locked(
                 locked,
                 cause=AttemptCause.MAP_ENGINE,
-                input=AttemptInput(),
+                input=AttemptInput(
+                    expansion.input_present,
+                    copy.deepcopy(expansion.input),
+                    copy.deepcopy(expansion.input_provenance),
+                ),
                 claimed_at=at,
-                alias=alias,
             )
-            aggregate.result_kind = str(AttemptResultKind.DONE)
+            aggregate.result_kind = AttemptResultKind.DONE
             aggregate.result_recorded_at = at
             aggregate.output_present = True
             aggregate.output = copy.deepcopy(expected_output)
             aggregate.outcome = expected_outcome
             aggregate.applied_at = at
-            self._save_attempt(aggregate, alias=alias)
-            self._write_step_run(
-                locked,
-                alias=alias,
-                operation=lambda: locked.mark_succeeded(
-                    output=expected_output, outcome=expected_outcome
-                ),
-            )
+            aggregate.retain_result()
+            locked.mark_succeeded(output=expected_output, outcome=expected_outcome)
             return aggregate
 
     def claim(
@@ -5079,19 +4381,14 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
 
         self._validate_claim(cause, input)
         self._validate_map_item(map_item)
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, step_run.pk),
-            system_context(reason="workflows.attempt.claim"),
-        ):
-            run, locked = self._locked_ancestry(step_run.pk, alias)
+        with transaction.atomic(), system_context(reason="workflows.attempt.claim"):
+            run, locked = self._locked_ancestry(step_run.pk)
             if run.is_terminal:
                 raise ValidationError({"step_run": "A terminal workflow run cannot claim an attempt."})
             if locked.step_id is not None and not run.allows_test_step(locked.step):
                 raise ValidationError({"step_run": "This step is outside the admitted test scope."})
             if locked.current_attempt_id is not None:
-                current = system_queryset(self.model, using=alias, lock=("self",)).get(pk=locked.current_attempt_id)
+                current = system_queryset(self.model, lock=("self",)).get(pk=locked.current_attempt_id)
                 active = current.result_recorded_at is None and current.lease_revoked_at is None
                 if locked.status == StepRunStatus.STARTED and active:
                     self._validate_duplicate_claim(current, cause, input, map_item)
@@ -5099,25 +4396,18 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 if active:
                     raise ValidationError({"step_run": "This step run already has an active attempt."})
             self._validate_claim_source(locked, cause)
-            self._validate_map_item_owner(locked, map_item, alias=alias)
-            self._validate_test_fixture_owner(locked, test_fixture, alias=alias)
+            self._validate_map_item_owner(locked, map_item)
+            self._validate_test_fixture_owner(locked, test_fixture)
             attempt = self._allocate_locked(
                 locked,
                 cause=cause,
                 input=input,
                 map_item=map_item,
                 claimed_at=claimed_at,
-                alias=alias,
                 test_fixture=test_fixture,
             )
-            self._write_step_run(
-                locked,
-                alias=alias,
-                operation=lambda: locked.mark_started(
-                    heartbeat_at=None, claimed_deliveries=run.deliveries
-                ),
-            )
-            self._charge_logical_execution(run, alias=alias)
+            locked.mark_started(heartbeat_at=None, claimed_deliveries=run.deliveries)
+            self._charge_logical_execution(run)
             return AttemptClaim(attempt, True)
 
     def fail_preparation(
@@ -5141,48 +4431,42 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         self._validate_result(result)
         if result.output_present or result.checkpoint_present or result.waiting_kind:
             raise ValidationError({"result": "Preparation failure cannot carry output, checkpoint, or wait state."})
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, step_run.pk),
-            system_context(reason="workflows.attempt.prepare"),
-        ):
-            run, locked = self._locked_ancestry(step_run.pk, alias)
+        with transaction.atomic(), system_context(reason="workflows.attempt.prepare"):
+            run, locked = self._locked_ancestry(step_run.pk)
             if run.is_terminal:
                 raise ValidationError({"step_run": "A terminal workflow run cannot record preparation failure."})
             if locked.current_attempt_id is not None:
-                current = system_queryset(self.model, using=alias, lock=("self",)).get(pk=locked.current_attempt_id)
+                current = system_queryset(self.model, lock=("self",)).get(pk=locked.current_attempt_id)
                 if current.result_recorded_at is None and current.lease_revoked_at is None:
                     raise ValidationError({"step_run": "This step run already has an active attempt."})
             self._validate_claim_source(locked, cause)
-            self._validate_map_item_owner(locked, map_item, alias=alias)
-            self._validate_test_fixture_owner(locked, test_fixture, alias=alias)
+            self._validate_map_item_owner(locked, map_item)
+            self._validate_test_fixture_owner(locked, test_fixture)
             attempt = self._allocate_locked(
                 locked,
                 cause=cause,
                 input=input,
                 map_item=map_item,
                 claimed_at=claimed_at,
-                alias=alias,
                 test_fixture=test_fixture,
             )
-            attempt.result_kind = str(result.kind)
+            attempt.result_kind = result.kind
             attempt.result_recorded_at = recorded_at
             attempt.error = result.error
             attempt.stacktrace = result.stacktrace
             attempt.outcome = result.outcome
             self._apply_result(run, locked, attempt, result)
             attempt.applied_at = recorded_at
-            self._save_attempt(attempt, alias=alias)
-            self._charge_logical_execution(run, alias=alias)
+            attempt.retain_result()
+            self._charge_logical_execution(run)
             return attempt
 
     @staticmethod
-    def _charge_logical_execution(run: Any, *, alias: str) -> None:
+    def _charge_logical_execution(run: Any) -> None:
         """Charge one newly retained logical execution under the locked run owner."""
 
         run.steps_taken += 1
-        run.save(using=alias, update_fields=["steps_taken", "updated_at"])
+        run.save(update_fields=["steps_taken", "updated_at"])
 
     def _allocate_locked(
         self,
@@ -5191,7 +4475,6 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         cause: AttemptCause,
         input: AttemptInput,
         claimed_at: datetime,
-        alias: str,
         map_item: MapItemSource | None = None,
         test_fixture: Any = None,
     ) -> Any:
@@ -5229,24 +4512,19 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             recovery_mode=(locked.run.recovery_mode if recovery_source is not None else ""),
             intended_effect_key=(recovery_source.effect_key if recovery_source is not None else None),
         )
-        self._save_attempt(attempt, alias=alias, force_insert=True)
+        attempt.allocate()
         locked.attempt = ordinal
         locked.current_attempt = attempt
-        self._write_step_run(
-            locked,
-            alias=alias,
-            operation=lambda: locked.save(
-                using=alias,
-                update_fields=["attempt", "current_attempt", "effect_key", "updated_at"],
-            ),
+        locked.project_from_attempt(
+            locked.current_attempt, fields=["attempt", "current_attempt", "effect_key", "updated_at"]
         )
         return attempt
 
-    def _validate_test_fixture_owner(self, step_run: Any, fixture: Any, *, alias: str) -> None:
+    def _validate_test_fixture_owner(self, step_run: Any, fixture: Any) -> None:
         if fixture is None:
             return
         fixture_model = self.model._meta.get_field("test_fixture").remote_field.model
-        locked = system_queryset(fixture_model, using=alias, lock=("self",)).get(pk=fixture.pk)
+        locked = system_queryset(fixture_model, lock=("self",)).get(pk=fixture.pk)
         if (
             locked.run_id != step_run.run_id
             or locked.step_id != step_run.step_id
@@ -5256,20 +4534,13 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         ):
             raise ValidationError({"test_fixture": "Map item fixture does not match this test slot."})
 
-    def admit_invocation(
-        self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime
-    ) -> InvocationAdmission:
+    def admit_invocation(self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime) -> InvocationAdmission:
         """Admit exactly the first physical invocation for a current logical claim."""
 
-        alias = self.db
-        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, unresolved.step_run_id),
-            system_context(reason="workflows.attempt.invoke"),
-        ):
-            run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+        unresolved = system_queryset(self.model, lock=None).get(pk=attempt_id)
+        with transaction.atomic(), system_context(reason="workflows.attempt.invoke"):
+            run, step_run = self._locked_ancestry(unresolved.step_run_id)
+            attempt = system_queryset(self.model, lock=("self",)).get(pk=attempt_id)
             if (
                 run.is_terminal
                 or step_run.status != StepRunStatus.STARTED
@@ -5285,27 +4556,17 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 return InvocationAdmission.NOT_DUE
             timestamps = (attempt.claimed_at, attempt.heartbeat_at, at)
             freshness = max(value for value in timestamps if value)
-            attempt.started_at = freshness
-            attempt.heartbeat_at = freshness
-            self._save_attempt(
-                attempt,
-                alias=alias,
-                update_fields=["started_at", "heartbeat_at", "updated_at"],
-            )
+            if not attempt.admit_invocation(lease_token=lease_token, at=freshness):
+                return InvocationAdmission.ALREADY_STARTED
             return InvocationAdmission.FIRST_START
 
     def heartbeat(self, attempt_id: int, *, lease_token: uuid.UUID, at: datetime) -> bool:
         """Refresh a live lease without changing logical lifecycle state."""
 
-        alias = self.db
-        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, unresolved.step_run_id),
-            system_context(reason="workflows.attempt.lease"),
-        ):
-            run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+        unresolved = system_queryset(self.model, lock=None).get(pk=attempt_id)
+        with transaction.atomic(), system_context(reason="workflows.attempt.lease"):
+            run, step_run = self._locked_ancestry(unresolved.step_run_id)
+            attempt = system_queryset(self.model, lock=("self",)).get(pk=attempt_id)
             if (
                 run.is_terminal
                 or step_run.current_attempt_id != attempt.pk
@@ -5319,48 +4580,24 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if attempt.started_at is None:
                 return False
             attempt.heartbeat_at = freshness
-            self._save_attempt(
-                attempt,
-                alias=alias,
-                update_fields=["started_at", "heartbeat_at", "updated_at"],
-            )
+            if not attempt.heartbeat():
+                return True
             step_run.heartbeat_at = freshness
-            self._write_step_run(
-                step_run,
-                alias=alias,
-                operation=lambda: step_run.save(
-                    using=alias, update_fields=["heartbeat_at", "updated_at"]
-                ),
-            )
+            step_run.project_from_attempt(step_run.current_attempt, fields=["heartbeat_at", "updated_at"])
             return True
 
     def wake_current(self, step_run_id: int, *, at: datetime) -> bool:
         """Make one retained wait due through its exact locked projection owner."""
 
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, step_run_id),
-            system_context(reason="workflows.attempt.wake"),
-        ):
-            _, step_run = self._locked_ancestry(step_run_id, alias)
+        with transaction.atomic(), system_context(reason="workflows.attempt.wake"):
+            _, step_run = self._locked_ancestry(step_run_id)
             if step_run.status != StepRunStatus.WAITING or step_run.current_attempt_id is None:
                 return False
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
-                pk=step_run.current_attempt_id
-            )
-            if (
-                attempt.result_kind == str(AttemptResultKind.SUSPEND)
-                and attempt.applied_at is not None
-                and attempt.lease_revoked_at is None
-            ):
+            attempt = system_queryset(self.model, lock=("self",)).get(pk=step_run.current_attempt_id)
+            if attempt.is_held_suspension:
                 decision_model = step_run.decisions.model
-                decision_model.objects.expire_departing_suspension(
-                    step_run.pk, resolved_by="workflows/wake"
-                )
-            self._write_step_run(
-                step_run, alias=alias, operation=lambda: step_run.wake(at=at)
-            )
+                decision_model.objects.expire_departing_suspension(step_run.pk, resolved_by="workflows/wake")
+            step_run.wake(at=at)
             return True
 
     def subscribe_external(
@@ -5372,83 +4609,80 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
     ) -> None:
         """Commit the complete current attempt target set before its predicate read."""
 
-        alias = self.db
-        if connections[alias].in_atomic_block:
+        if connection.in_atomic_block:
             raise RuntimeError("External subscription must commit before the domain predicate read.")
         identities: set[tuple[int, int]] = set()
         for resource in resources:
             target = canonical_record_target(resource)
             if not isinstance(target.object_id, int):
-                raise ValidationError({
-                    "resources": "External subscriptions require integer record identities."
-                })
+                raise ValidationError({"resources": "External subscriptions require integer record identities."})
             identities.add((target.content_type.pk, target.object_id))
         subscribed = tuple(sorted(identities))
         if not subscribed:
             raise ValidationError({"resources": "External subscription requires at least one target."})
-        step_run_id = system_queryset(self.model, using=alias, lock=None).values_list(
-            "step_run_id", flat=True
-        ).get(pk=attempt_id)
-        with transaction.atomic(using=alias), self._write(alias, step_run_id), system_context(
-            reason="workflows.attempt.subscribe_external"
-        ):
-            run, step_run = self._locked_ancestry(step_run_id, alias)
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+        step_run_id = system_queryset(self.model, lock=None).values_list("step_run_id", flat=True).get(pk=attempt_id)
+        with transaction.atomic(), system_context(reason="workflows.attempt.subscribe_external"):
+            run, step_run = self._locked_ancestry(step_run_id)
+            attempt = system_queryset(self.model, lock=("self",)).get(pk=attempt_id)
             if (
-                run.is_terminal or step_run.status != StepRunStatus.STARTED
+                run.is_terminal
+                or step_run.status != StepRunStatus.STARTED
                 or step_run.current_attempt_id != attempt.pk
                 or step_run.effect_key != attempt.effect_key
                 or step_run.effect_generation != attempt.effect_generation
-                or attempt.lease_token != lease_token or attempt.started_at is None
-                or attempt.lease_revoked_at is not None or attempt.result_recorded_at is not None
+                or attempt.lease_token != lease_token
+                or attempt.started_at is None
+                or attempt.lease_revoked_at is not None
+                or attempt.result_recorded_at is not None
             ):
                 raise ValidationError({"attempt": "External subscription requires the current started lease."})
-            subscription_model = self.model._meta.apps.get_model(
-                "workflows", "StepExternalSubscription"
+            subscription_model = self.model._meta.apps.get_model("workflows", "StepExternalSubscription")
+            existing = tuple(
+                sorted(
+                    subscription_model.objects.filter(
+                        attempt_id=attempt.pk,
+                    ).values_list("target_content_type_id", "target_object_id")
+                )
             )
-            existing = tuple(sorted(subscription_model.objects.using(alias).filter(
-                attempt_id=attempt.pk,
-            ).values_list("target_content_type_id", "target_object_id")))
             if existing == subscribed:
                 return
             if existing:
-                raise ValidationError({
-                    "resources": "This attempt already retained a different external target set."
-                })
+                raise ValidationError({"resources": "This attempt already retained a different external target set."})
             content_types = {
-                row.pk: row for row in ContentType.objects.db_manager(alias).filter(
-                    pk__in=[content_type_id for content_type_id, _ in subscribed]
-                )
+                row.pk: row
+                for row in ContentType.objects.filter(pk__in=[content_type_id for content_type_id, _ in subscribed])
             }
             for content_type_id, object_id in subscribed:
                 subscription_model(
                     attempt=attempt,
                     target_content_type=content_types[content_type_id],
                     target_object_id=object_id,
-                ).save(using=alias, force_insert=True)
+                ).insert_retained()
 
     def bind_call_child(self, attempt_id: int, *, lease_token: uuid.UUID, child: Any) -> None:
         """Bind the exact owned child while a fenced call command holds its parent."""
 
-        alias = self.db
-        if not connections[alias].in_atomic_block or _attempt_write_session.get() is None:
-            raise RuntimeError("Child completion binding requires the fenced database-command transaction.")
-        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with self._write(alias, unresolved.step_run_id), system_context(reason="workflows.attempt.bind_call_child"):
-            run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+        unresolved = system_queryset(self.model, lock=None).get(pk=attempt_id)
+        with transaction.atomic(), system_context(reason="workflows.attempt.bind_call_child"):
+            run, step_run = self._locked_ancestry(unresolved.step_run_id)
+            attempt = system_queryset(self.model, lock=("self",)).get(pk=attempt_id)
             child_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
-            retained = system_queryset(child_model, using=alias, lock=("self",)).select_related(
-                "parent_step_run__run"
-            ).get(pk=child.pk)
+            retained = (
+                system_queryset(child_model, lock=("self",)).select_related("parent_step_run__run").get(pk=child.pk)
+            )
             original = retained.parent_step_run
             if (
-                run.is_terminal or step_run.status != StepRunStatus.STARTED
+                run.is_terminal
+                or step_run.status != StepRunStatus.STARTED
                 or step_run.current_attempt_id != attempt.pk
-                or attempt.lease_token != lease_token or attempt.started_at is None
-                or attempt.lease_revoked_at is not None or attempt.result_recorded_at is not None
-                or retained.parent_relation != ParentRelation.OWNED_CALL or original is None
-                or original.step_id != step_run.step_id or original.map_index != step_run.map_index
+                or attempt.lease_token != lease_token
+                or attempt.started_at is None
+                or attempt.lease_revoked_at is not None
+                or attempt.result_recorded_at is not None
+                or retained.parent_relation != ParentRelation.OWNED_CALL
+                or original is None
+                or original.step_id != step_run.step_id
+                or original.map_index != step_run.map_index
                 or original.run.execution_lineage_root_id() != run.execution_lineage_root_id()
             ):
                 raise ValidationError({"child": "Call subscription does not match the current exact child slot."})
@@ -5460,63 +4694,38 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if existing != (None, None):
                 raise ValidationError({"child": "This call attempt is bound to a different child."})
             attempt.external_content_type_id, attempt.external_object_id = expected
-            self._save_attempt(
-                attempt, alias=alias,
-                update_fields=["external_content_type", "external_object_id", "updated_at"],
-            )
+            attempt.bind_external()
 
     def cancel_current(self, step_run_id: int, *, at: datetime) -> bool:
         """Revoke a resultless current lease and project logical cancellation."""
 
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, step_run_id),
-            system_context(reason="workflows.attempt.cancel"),
-        ):
-            _, step_run = self._locked_ancestry(step_run_id, alias)
+        with transaction.atomic(), system_context(reason="workflows.attempt.cancel"):
+            _, step_run = self._locked_ancestry(step_run_id)
             if step_run.status in StepRunStatus.TERMINAL:
                 return False
             if step_run.current_attempt_id is not None:
-                attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
-                    pk=step_run.current_attempt_id
-                )
+                attempt = system_queryset(self.model, lock=("self",)).get(pk=step_run.current_attempt_id)
                 if attempt.result_recorded_at is None and attempt.lease_revoked_at is None:
                     attempt.lease_revoked_at = at
-                    attempt.lease_revocation_reason = str(LeaseRevocationReason.CANCELED)
-                    self._save_attempt(
-                        attempt,
-                        alias=alias,
-                        update_fields=["lease_revoked_at", "lease_revocation_reason", "updated_at"],
-                    )
+                    attempt.lease_revocation_reason = LeaseRevocationReason.CANCELED
+                    attempt.revoke_lease()
             state = dict(step_run.resume_state or {})
             state["cancel_requested"] = True
             step_run.resume_state = state
             if step_run.status == StepRunStatus.STARTED:
-                self._write_step_run(
-                    step_run, alias=alias, operation=step_run.mark_canceled
-                )
+                step_run.mark_canceled()
             elif step_run.status in {StepRunStatus.SCHEDULED, StepRunStatus.WAITING}:
-                self._write_step_run(
-                    step_run, alias=alias, operation=step_run.mark_canceled
-                )
+                step_run.mark_canceled()
             return True
 
     def timeout_current(self, step_run_id: int, *, heartbeat_before: datetime, at: datetime) -> bool:
         """Revoke one stale current lease without inventing physical result evidence."""
 
-        alias = self.db
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, step_run_id),
-            system_context(reason="workflows.attempt.timeout"),
-        ):
-            _, step_run = self._locked_ancestry(step_run_id, alias)
+        with transaction.atomic(), system_context(reason="workflows.attempt.timeout"):
+            _, step_run = self._locked_ancestry(step_run_id)
             if step_run.status != StepRunStatus.STARTED or step_run.current_attempt_id is None:
                 return False
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(
-                pk=step_run.current_attempt_id
-            )
+            attempt = system_queryset(self.model, lock=("self",)).get(pk=step_run.current_attempt_id)
             heartbeat = attempt.heartbeat_at or attempt.started_at or attempt.claimed_at
             if (
                 attempt.started_at is None
@@ -5527,29 +4736,19 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             ):
                 return False
             attempt.lease_revoked_at = at
-            attempt.lease_revocation_reason = str(LeaseRevocationReason.HEARTBEAT_LOST)
-            self._save_attempt(
-                attempt,
-                alias=alias,
-                update_fields=["lease_revoked_at", "lease_revocation_reason", "updated_at"],
-            )
-            self._write_step_run(
-                step_run,
-                alias=alias,
-                operation=lambda: step_run.mark_failed(
-                    error=(
-                        "External request result is uncertain after heartbeat loss."
-                        if step_run.step.resolve_impl("step_class").execution_mode
-                        == StepExecutionMode.EXTERNAL_OPERATION
-                        else "Step heartbeat timed out."
-                    ),
-                    stacktrace="",
-                    outcome=(
-                        "uncertain_external_result"
-                        if step_run.step.resolve_impl("step_class").execution_mode
-                        == StepExecutionMode.EXTERNAL_OPERATION
-                        else "failed"
-                    ),
+            attempt.lease_revocation_reason = LeaseRevocationReason.HEARTBEAT_LOST
+            attempt.revoke_lease()
+            step_run.mark_failed(
+                error=(
+                    "External request result is uncertain after heartbeat loss."
+                    if step_run.step.resolve_impl("step_class").execution_mode == StepExecutionMode.EXTERNAL_OPERATION
+                    else "Step heartbeat timed out."
+                ),
+                stacktrace="",
+                outcome=(
+                    "uncertain_external_result"
+                    if step_run.step.resolve_impl("step_class").execution_mode == StepExecutionMode.EXTERNAL_OPERATION
+                    else "failed"
                 ),
             )
             return True
@@ -5586,28 +4785,17 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         if not map_item.value.present:
             raise ValidationError({"map_item": "A retained Map expansion item is always present."})
 
-    def _validate_map_item_owner(
-        self, step_run: Any, map_item: MapItemSource | None, *, alias: str
-    ) -> None:
+    def _validate_map_item_owner(self, step_run: Any, map_item: MapItemSource | None) -> None:
         if map_item is None:
             if step_run.current_map_expansion_id is not None:
-                raise ValidationError(
-                    {"map_item": "Current Map membership requires captured item provenance."}
-                )
+                raise ValidationError({"map_item": "Current Map membership requires captured item provenance."})
             return
         if step_run.run.origin == RunOrigin.RECOVERY:
             source_id = step_run.run.recovery_source_attempt_id
             if source_id is None:
                 raise ValidationError({"map_item": "Recovery Map item has no admitted source evidence."})
-            source = (
-                system_queryset(self.model, using=alias, lock=None)
-                .select_related("step_run")
-                .get(pk=source_id)
-            )
-            if (
-                source.step_run.step_id == step_run.step_id
-                and source.step_run.map_index == step_run.map_index
-            ):
+            source = system_queryset(self.model, lock=None).select_related("step_run").get(pk=source_id)
+            if source.step_run.step_id == step_run.step_id and source.step_run.map_index == step_run.map_index:
                 if (
                     source.map_expansion_id == map_item.expansion_attempt_id
                     and source.map_item_index == map_item.index
@@ -5615,20 +4803,15 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     and json_values_equal(source.map_item, map_item.value.value)
                 ):
                     return
-                raise ValidationError(
-                    {"map_item": "Recovery Map item does not match admitted source evidence."}
-                )
-        if (
-            step_run.map_index != map_item.index
-            or step_run.current_map_expansion_id != map_item.expansion_attempt_id
-        ):
+                raise ValidationError({"map_item": "Recovery Map item does not match admitted source evidence."})
+        if step_run.map_index != map_item.index or step_run.current_map_expansion_id != map_item.expansion_attempt_id:
             raise ValidationError({"map_item": "Map item source does not match current membership."})
-        expansion = system_queryset(self.model, using=alias, lock=("self",)).get(
-            pk=map_item.expansion_attempt_id
-        )
+        expansion = system_queryset(self.model, lock=("self",)).get(pk=map_item.expansion_attempt_id)
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
-        controller = system_queryset(step_run_model, using=alias, lock=None).get(
-            pk=expansion.step_run_id
+        controller = (
+            system_queryset(step_run_model, lock=None)
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .get(pk=expansion.step_run_id)
         )
         checkpoint = expansion.checkpoint if expansion.checkpoint_present else None
         map_state = checkpoint.get("map") if isinstance(checkpoint, dict) else None
@@ -5641,29 +4824,27 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             or controller.status != StepRunStatus.WAITING
             or controller.effect_generation != expansion.effect_generation
             or step_run.step_id != target_id
-            or expansion.result_kind != str(AttemptResultKind.WAIT)
+            or expansion.result_kind != AttemptResultKind.WAIT
             or expansion.applied_at is None
             or expansion.lease_revoked_at is not None
             or not isinstance(items, list)
             or map_item.index >= len(items)
             or not json_values_equal(items[map_item.index], map_item.value.value)
         ):
-            raise ValidationError(
-                {"map_item": "Map item source is not current applied expansion evidence."}
-            )
+            raise ValidationError({"map_item": "Map item source is not current applied expansion evidence."})
 
     @staticmethod
     def _validate_result(result: AttemptResult) -> None:
         if not isinstance(result.kind, AttemptResultKind):
             raise ValidationError({"result": "Attempt results require a declared result kind."})
-        for field, presence in (
+        for field_name, presence in (
             ("output", JsonPresence(result.output_present, result.output)),
             ("checkpoint", JsonPresence(result.checkpoint_present, result.checkpoint)),
         ):
             try:
-                validate_json_presence(presence, label=f"attempt {field}")
+                validate_json_presence(presence, label=f"attempt {field_name}")
             except ValueError as error:
-                raise ValidationError({field: str(error)}) from error
+                raise ValidationError({field_name: str(error)}) from error
         if result.waiting_kind and result.waiting_kind not in WaitingKind.values:
             raise ValidationError({"waiting_kind": "Attempt result waiting kind is not declared."})
         wait_facts = result.requested_until is not None or bool(result.decisions) or result.checkpoint_present
@@ -5681,9 +4862,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 or result.decisions
                 or result.waiting_kind
             ):
-                raise ValidationError(
-                    {"result": "Errors require an error, cannot carry output, timers, or decisions."}
-                )
+                raise ValidationError({"result": "Errors require an error, cannot carry output, timers, or decisions."})
         elif wait_facts or result.waiting_kind:
             raise ValidationError({"result": "This result kind cannot carry wait or decision facts."})
         if result.checkpoint_present and result.checkpoint is not None and not isinstance(result.checkpoint, dict):
@@ -5761,9 +4940,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             or attempt.map_expansion_id != (map_item.expansion_attempt_id if map_item else None)
             or attempt.map_item_index != (map_item.index if map_item else None)
             or attempt.map_item_present != (map_item.value.present if map_item else False)
-            or not json_values_equal(
-                attempt.map_item, map_item.value.value if map_item else None
-            )
+            or not json_values_equal(attempt.map_item, map_item.value.value if map_item else None)
         ):
             raise ValidationError({"step_run": "The active attempt was claimed with different immutable input."})
 
@@ -5774,28 +4951,19 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
 
         if not isinstance(reason, LeaseRevocationReason):
             raise ValidationError({"reason": "Lease revocation requires a declared reason."})
-        alias = self.db
-        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, unresolved.step_run_id),
-            system_context(reason="workflows.attempt.revoke"),
-        ):
-            _, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+        unresolved = system_queryset(self.model, lock=None).get(pk=attempt_id)
+        with transaction.atomic(), system_context(reason="workflows.attempt.revoke"):
+            _, step_run = self._locked_ancestry(unresolved.step_run_id)
+            attempt = system_queryset(self.model, lock=("self",)).get(pk=attempt_id)
             if attempt.lease_token != lease_token or step_run.current_attempt_id != attempt.pk:
                 return LeaseRevocation(False, attempt.result_recorded_at is not None)
             if attempt.result_recorded_at is not None:
                 return LeaseRevocation(False, True)
             if attempt.lease_revoked_at is not None:
-                return LeaseRevocation(attempt.lease_revocation_reason == str(reason), False)
+                return LeaseRevocation(attempt.lease_revocation_reason == reason, False)
             attempt.lease_revoked_at = at
-            attempt.lease_revocation_reason = str(reason)
-            self._save_attempt(
-                attempt,
-                alias=alias,
-                update_fields=["lease_revoked_at", "lease_revocation_reason", "updated_at"],
-            )
+            attempt.lease_revocation_reason = reason
+            attempt.revoke_lease()
             return LeaseRevocation(True, False)
 
     def execute_database_command(
@@ -5813,15 +4981,11 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         result; the caller records failure evidence in a later transaction.
         """
 
-        alias = self.db
-        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, unresolved.step_run_id),
-        ):
+        unresolved = system_queryset(self.model, lock=None).get(pk=attempt_id)
+        with transaction.atomic():
             with system_context(reason="workflows.attempt.database_command.fence"):
-                run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
-                attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+                run, step_run = self._locked_ancestry(unresolved.step_run_id)
+                attempt = system_queryset(self.model, lock=("self",)).get(pk=attempt_id)
             current = (
                 not run.is_terminal
                 and step_run.status == StepRunStatus.STARTED
@@ -5868,15 +5032,10 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         except (TypeError, ValueError, PydanticSerializationError) as error:
             raise ValidationError({"decisions": "Decision declarations are invalid."}) from error
         encoded_artifacts = self._validated_artifacts(result)
-        alias = self.db
-        unresolved = system_queryset(self.model, using=alias, lock=None).get(pk=attempt_id)
-        with (
-            transaction.atomic(using=alias),
-            self._write(alias, unresolved.step_run_id),
-            system_context(reason="workflows.attempt.finalize"),
-        ):
-            run, step_run = self._locked_ancestry(unresolved.step_run_id, alias)
-            attempt = system_queryset(self.model, using=alias, lock=("self",)).get(pk=attempt_id)
+        unresolved = system_queryset(self.model, lock=None).get(pk=attempt_id)
+        with transaction.atomic(), system_context(reason="workflows.attempt.finalize"):
+            run, step_run = self._locked_ancestry(unresolved.step_run_id)
+            attempt = system_queryset(self.model, lock=("self",)).get(pk=attempt_id)
             if attempt.lease_token != lease_token:
                 return AttemptFinalization(False, False)
             if attempt.result_recorded_at is not None:
@@ -5885,14 +5044,14 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                 applied = attempt.applied_at is not None
                 intents: tuple[DecisionTimerIntent, ...] = ()
                 if applied and result.kind == AttemptResultKind.SUSPEND:
-                    intents = step_run.decisions.model.objects.timer_intents_for(attempt=attempt, using=alias)
+                    intents = step_run.decisions.model.objects.timer_intents_for(attempt=attempt)
                 return AttemptFinalization(
                     False,
                     applied,
                     intents,
-                    self._retry_intent_for(attempt, alias=alias),
+                    self._retry_intent_for(attempt),
                 )
-            attempt.result_kind = str(result.kind)
+            attempt.result_kind = result.kind
             attempt.result_recorded_at = recorded_at
             attempt.output_present = result.output_present
             attempt.output = result.output
@@ -5906,12 +5065,13 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             attempt.result_decisions = encoded_decisions
             attempt.artifacts_present = result.artifacts_present
             applicable = (
-                not run.is_terminal
-                and step_run.current_attempt_id == attempt.pk
-                and attempt.lease_revoked_at is None
+                not run.is_terminal and step_run.current_attempt_id == attempt.pk and attempt.lease_revoked_at is None
             )
             timer_intents: tuple[DecisionTimerIntent, ...] = ()
             retry_intent: RetryIntent | None = None
+            if applicable:
+                attempt.applied_at = recorded_at
+            attempt.retain_result()
             if applicable:
                 if result.kind == AttemptResultKind.TRANSIENT_ERROR:
                     retry_intent = self._apply_transient_result(
@@ -5919,32 +5079,19 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                         attempt,
                         result,
                         recorded_at=recorded_at,
-                        alias=alias,
                     )
                 else:
                     timer_intents = self._apply_result(run, step_run, attempt, result)
-                attempt.applied_at = recorded_at
-            self._save_attempt(attempt, alias=alias)
+                if attempt.orchestration_error:
+                    attempt.retain_orchestration_error()
             if result.artifacts_present:
                 artifact_model = self.model._meta.apps.get_model("workflows", "StepArtifact")
-                connection = connections[alias]
-                capability = _ArtifactBatchCapability(
-                    _AtomicWriteCapability(
-                        alias, id(connection), id(connection.atomic_blocks[0]), id(attempt)
-                    ),
-                    attempt.pk,
-                    encoded_artifacts,
-                )
-                token = _artifact_batch_capability.set(capability)
-                try:
-                    artifact_model.objects._record_for_attempt(attempt, encoded_artifacts, using=alias)
-                finally:
-                    _artifact_batch_capability.reset(token)
+                artifact_model.objects.retain_artifacts(attempt, encoded_artifacts)
             return AttemptFinalization(True, applicable, timer_intents, retry_intent)
 
-    def _retry_intent_for(self, attempt: Any, *, alias: str) -> RetryIntent | None:
+    def _retry_intent_for(self, attempt: Any) -> RetryIntent | None:
         successor = (
-            system_queryset(self.model, using=alias, lock=None)
+            system_queryset(self.model, lock=None)
             .filter(retry_of=attempt)
             .values("pk", "lease_token", "available_at")
             .first()
@@ -5957,13 +5104,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         return RetryIntent(successor["pk"], successor["lease_token"], available_at)
 
     def _apply_transient_result(
-        self,
-        step_run: Any,
-        attempt: Any,
-        result: AttemptResult,
-        *,
-        recorded_at: datetime,
-        alias: str,
+        self, step_run: Any, attempt: Any, result: AttemptResult, *, recorded_at: datetime
     ) -> RetryIntent | None:
         """Project exhaustion or allocate one automatic successor under the existing locks."""
 
@@ -5975,14 +5116,10 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             if not isinstance(provider_policy, ExternalOperationPolicy):
                 raise ValidationError({"operation": "External operation policy is invalid."})
             if provider_policy is not ExternalOperationPolicy.IDEMPOTENT_REQUEST:
-                self._write_step_run(
-                    step_run,
-                    alias=alias,
-                    operation=lambda: step_run.mark_failed(
-                        error="External request result is uncertain; automatic replay is unavailable.",
-                        stacktrace=result.stacktrace or "",
-                        outcome="uncertain_external_result",
-                    ),
+                step_run.mark_failed(
+                    error="External request result is uncertain; automatic replay is unavailable.",
+                    stacktrace=result.stacktrace or "",
+                    outcome="uncertain_external_result",
                 )
                 return None
         try:
@@ -5995,18 +5132,10 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             )
         except (ValidationError, OverflowError) as error:
             attempt.orchestration_error = f"Retry policy could not schedule a successor: {error}"
-            self._write_step_run(
-                step_run,
-                alias=alias,
-                operation=lambda: self._project_transient_failure(step_run, result),
-            )
+            self._project_transient_failure(step_run, result)
             return None
         if retry_index >= policy.max_attempts:
-            self._write_step_run(
-                step_run,
-                alias=alias,
-                operation=lambda: self._project_transient_failure(step_run, result),
-            )
+            self._project_transient_failure(step_run, result)
             return None
         if available_at is None:
             raise OperationalError("An allowed automatic retry has no availability time.")
@@ -6017,7 +5146,6 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             retry_index=retry_index,
             available_at=available_at,
             claimed_at=recorded_at,
-            alias=alias,
         )
         return RetryIntent(successor.pk, successor.lease_token, available_at)
 
@@ -6030,22 +5158,15 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         )
 
     def _allocate_retry_locked(
-        self,
-        step_run: Any,
-        *,
-        retry_of: Any,
-        retry_index: int,
-        available_at: datetime,
-        claimed_at: datetime,
-        alias: str,
+        self, step_run: Any, *, retry_of: Any, retry_index: int, available_at: datetime, claimed_at: datetime
     ) -> Any:
         """Allocate one automatic successor without charging the logical run again."""
 
         successor = self.model(
-            step_run=step_run,
+            step_run_id=step_run.pk,
             ordinal=step_run.attempt + 1,
             cause=str(AttemptCause.AUTOMATIC_RETRY),
-            retry_of=retry_of,
+            retry_of_id=retry_of.pk,
             retry_index=retry_index,
             available_at=available_at,
             lease_token=uuid.uuid4(),
@@ -6061,17 +5182,12 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             map_item=copy.deepcopy(retry_of.map_item),
             test_fixture_id=retry_of.test_fixture_id,
         )
-        self._save_attempt(successor, alias=alias, force_insert=True)
+        successor.allocate()
         step_run.attempt = successor.ordinal
         step_run.current_attempt = successor
         step_run.heartbeat_at = None
-        self._write_step_run(
-            step_run,
-            alias=alias,
-            operation=lambda: step_run.save(
-                using=alias,
-                update_fields=["attempt", "current_attempt", "heartbeat_at", "updated_at"],
-            ),
+        step_run.project_from_attempt(
+            step_run.current_attempt, fields=["attempt", "current_attempt", "heartbeat_at", "updated_at"]
         )
         return successor
 
@@ -6080,7 +5196,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
         """Compare a retry with the retained semantic envelope, excluding delivery time."""
 
         return (
-            attempt.result_kind == str(result.kind)
+            attempt.result_kind == result.kind
             and attempt.output_present == result.output_present
             and json_values_equal(attempt.output, result.output)
             and attempt.checkpoint_present == result.checkpoint_present
@@ -6090,9 +5206,7 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             and attempt.outcome == result.outcome
             and attempt.waiting_kind == result.waiting_kind
             and attempt.result_requested_until == result.requested_until
-            and json_values_equal(
-                attempt.result_decisions, serialize_decision_specs(result.decisions)
-            )
+            and json_values_equal(attempt.result_decisions, serialize_decision_specs(result.decisions))
             and attempt.artifacts_present == result.artifacts_present
             and (
                 not result.artifacts_present
@@ -6100,7 +5214,8 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     attempt.artifacts.order_by("declaration_index").values_list(
                         "target_content_type_id", "target_object_id", "label"
                     )
-                ) == StepAttemptManager._validated_artifacts(result)
+                )
+                == StepAttemptManager._validated_artifacts(result)
             )
         )
 
@@ -6117,27 +5232,17 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
             step_run.stacktrace = result.stacktrace or ""
             step_run.outcome = result.outcome or "failed"
             step_run.wait_until = None
-            step_run.waiting_kind = ""
+            step_run.waiting_kind = None
             step_run._transition_fields = {"error", "stacktrace", "outcome", "wait_until", "waiting_kind"}
-            self._write_step_run(
-                step_run,
-                alias=self.db,
-                operation=lambda: step_run.status_transitions.force_state(
-                    step_run, StepRunStatus.FAILED, reason="attempt preparation failed before invocation"
-                ),
-            )
+            step_run.mark_preparation_failed()
             return ()
         if attempt.started_at is None or step_run.status != StepRunStatus.STARTED:
             raise ValidationError({"result": "This result requires a started current attempt."})
         if result.kind == AttemptResultKind.DONE:
-            self._write_step_run(
-                step_run,
-                alias=self.db,
-                operation=lambda: step_run.mark_succeeded(
-                    output=result.output if result.output_present else None,
-                    output_present=result.output_present,
-                    outcome=result.outcome,
-                ),
+            step_run.mark_succeeded(
+                output=result.output if result.output_present else None,
+                output_present=result.output_present,
+                outcome=result.outcome,
             )
         elif result.kind in {AttemptResultKind.WAIT, AttemptResultKind.SUSPEND}:
             effective_until = result.requested_until
@@ -6151,41 +5256,27 @@ class StepAttemptManager(AngeeManager.from_queryset(StepAttemptQuerySet)):  # ty
                     step_run=step_run,
                     attempt=attempt,
                     declarations=result.decisions,
-                    using=self.db,
                 )
-                resume_state = dict(resume_state or {})
-                if decisions:
-                    resume_state["_decision_ids"] = [decision.pk for decision in decisions]
+                state = GateResumeState.from_checkpoint(resume_state or {})
                 schemas = {
                     str(decision.pk): retained_decision_form_schema(spec.decision_schema)
                     for decision, spec in zip(decisions, result.decisions, strict=True)
                     if spec.decision_schema
                 }
-                if schemas:
-                    resume_state["_decision_schemas"] = schemas
-            self._write_step_run(
-                step_run,
-                alias=self.db,
-                operation=lambda: step_run.mark_waiting(
-                    until=effective_until,
-                    resume_state=resume_state,
-                    waiting_kind=result.waiting_kind or WaitingKind.EXTERNAL,
-                ),
+                resume_state = state.model_copy(
+                    update={"decision_ids": [decision.pk for decision in decisions], "decision_schemas": schemas}
+                ).model_dump(mode="json", exclude_defaults=True)
+            step_run.mark_waiting(
+                until=effective_until,
+                resume_state=resume_state,
+                waiting_kind=result.waiting_kind or WaitingKind.EXTERNAL,
             )
             return timer_intents
         elif result.kind in {AttemptResultKind.ERROR, AttemptResultKind.NO_RESULT}:
             error = result.error or (
                 "Step implementation returned no result." if result.kind == AttemptResultKind.NO_RESULT else ""
             )
-            self._write_step_run(
-                step_run,
-                alias=self.db,
-                operation=lambda: step_run.mark_failed(
-                    error=error,
-                    stacktrace=result.stacktrace or "",
-                    outcome=result.outcome or "failed",
-                ),
-            )
+            step_run.mark_failed(error=error, stacktrace=result.stacktrace or "", outcome=result.outcome or "failed")
         else:
             raise ValidationError({"result": f"Unsupported attempt result kind {result.kind!s}."})
         return ()
@@ -6195,25 +5286,16 @@ class StepAttemptSystemManager(StepAttemptManager):
     """Expose guarded unscoped rows to Django and field-backed REBAC traversal."""
 
     def get_queryset(self) -> StepAttemptQuerySet:
-        return super().get_queryset().system_context(
-            reason="workflows.step_attempt.base_manager"
-        )
+        return super().get_queryset().system_context(reason="workflows.step_attempt.base_manager")
 
 
-class StepExternalSubscriptionQuerySet(AngeeQuerySet[Any]):
+class StepExternalSubscriptionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Immutable attempt-owned targets registered before an external predicate read."""
 
-    def update(self, **kwargs: Any) -> int:
-        raise TypeError("External subscriptions are immutable attempt evidence.")
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the external subscription owner."""
 
-    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
         raise TypeError("External subscriptions can only be recorded by StepAttemptManager.")
-
-    def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], batch_size: int | None = None) -> int:
-        raise TypeError("External subscriptions are immutable attempt evidence.")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise TypeError("External subscriptions are retained for their attempt lifecycle.")
 
 
 class StepExternalSubscriptionManager(
@@ -6222,7 +5304,7 @@ class StepExternalSubscriptionManager(
     """Read manager for the exact external targets retained by one invocation."""
 
 
-class StepArtifactQuerySet(AngeeQuerySet[Any]):
+class StepArtifactQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
     """Read-only collection of explicit retained result artifacts."""
 
     def for_runs(self, runs: models.QuerySet[Any]) -> Self:
@@ -6234,65 +5316,59 @@ class StepArtifactQuerySet(AngeeQuerySet[Any]):
                 attempt__step_run__run_id__in=models.Subquery(
                     runs.order_by().values("pk"),
                 ),
-            ).select_related("attempt__step_run__run").order_by("created_at", "pk"),
+            )
+            .select_related("attempt__step_run__run")
+            .order_by("created_at", "pk"),
         )
 
     def history_page(
-        self, runs: models.QuerySet[Any], *, limit: int = 200,
+        self,
+        runs: models.QuerySet[Any],
+        *,
+        limit: int = 200,
     ) -> tuple[Self, bool]:
         """Return one newest row per target-and-label meaning before bounding history."""
 
         bounded = max(1, min(int(limit), 200))
         scope = self.for_runs(runs).order_by()
-        representative = scope.filter(
-            target_content_type_id=models.OuterRef("target_content_type_id"),
-            target_object_id=models.OuterRef("target_object_id"),
-            label=models.OuterRef("label"),
-        ).order_by("-created_at", "-pk").values("pk")[:1]
-        candidates = scope.annotate(
-            _history_representative_id=models.Subquery(representative),
-        ).filter(pk=models.F("_history_representative_id")).order_by("-created_at", "-pk")
+        representative = (
+            scope.filter(
+                target_content_type_id=models.OuterRef("target_content_type_id"),
+                target_object_id=models.OuterRef("target_object_id"),
+                label=models.OuterRef("label"),
+            )
+            .order_by("-created_at", "-pk")
+            .values("pk")[:1]
+        )
+        candidates = (
+            scope.annotate(
+                _history_representative_id=models.Subquery(representative),
+            )
+            .filter(pk=models.F("_history_representative_id"))
+            .order_by("-created_at", "-pk")
+        )
         candidate_ids = list(candidates.values_list("pk", flat=True)[: bounded + 1])
-        page = self.filter(pk__in=candidate_ids[:bounded]).select_related(
-            "attempt__step_run__run",
-        ).order_by("-created_at", "-pk")
+        page = (
+            self.filter(pk__in=candidate_ids[:bounded])
+            .select_related(
+                "attempt__step_run__run",
+            )
+            .order_by("-created_at", "-pk")
+        )
         return cast(Self, page), len(candidate_ids) > bounded
 
-    def update(self, **kwargs: Any) -> int:
-        raise TypeError("Workflow artifacts are immutable retained result evidence.")
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the attempt finalization owner."""
 
-    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
         raise TypeError("Workflow artifacts can only be recorded during attempt finalization.")
-
-    def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], batch_size: int | None = None) -> int:
-        raise TypeError("Workflow artifacts are immutable retained result evidence.")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise TypeError("Workflow artifacts are immutable retained result evidence.")
 
 
 class StepArtifactManager(AngeeManager.from_queryset(StepArtifactQuerySet)):  # type: ignore[misc]
     """Record a validated artifact batch for one result inside its attempt transaction."""
 
-    def _record_for_attempt(
-        self,
-        attempt: Any,
-        rows: tuple[tuple[int, int, str], ...],
-        *,
-        using: str,
-    ) -> tuple[Any, ...]:
-        connection = connections[using]
-        batch_capability = _artifact_batch_capability.get()
-        if (
-            batch_capability is None
-            or batch_capability.attempt_id != attempt.pk
-            or batch_capability.rows != rows
-            or not _attempt_write_active(using, attempt.step_run_id)
-            or attempt.result_recorded_at is None
-            or not attempt.artifacts_present
-            or not batch_capability.atomic.consume(using, attempt)
-        ):
-            raise RuntimeError("Artifact recording requires the exact attempt finalization transaction.")
+    def retain_artifacts(self, attempt: Any, rows: tuple[tuple[int, int, str], ...]) -> tuple[Any, ...]:
+        if attempt.result_recorded_at is None or not attempt.artifacts_present:
+            raise ValidationError({"attempt": "Artifacts require a retained declared result."})
         created: list[Any] = []
         for index, (content_type_id, object_id, label) in enumerate(rows):
             artifact = self.model(
@@ -6302,16 +5378,7 @@ class StepArtifactManager(AngeeManager.from_queryset(StepArtifactQuerySet)):  # 
                 target_object_id=object_id,
                 label=label,
             )
-            write_capability = _ArtifactWriteCapability(
-                _AtomicWriteCapability(using, id(connection), id(connection.atomic_blocks[0]), id(artifact)),
-                attempt.pk,
-                index,
-            )
-            token = _artifact_write_capability.set(write_capability)
-            try:
-                artifact.save(using=using, force_insert=True)
-            finally:
-                _artifact_write_capability.reset(token)
+            artifact.insert_retained()
             created.append(artifact)
         return tuple(created)
 
@@ -6321,25 +5388,91 @@ class DecisionQuerySet(AngeeQuerySet[Any]):
 
     _PROTECTED_FIELDS = frozenset(
         {
-            "suspension_attempt", "suspension_attempt_id", "declaration_index",
-            "priority", "action", "payload", "max_attempts", "expires_at", "escalate_at",
-            "target_model", "target_id", "target_tab",
-            "target_authority_decision", "target_authority_decision_id", "record_access",
-            "verdict", "resolution", "resolved_by", "attempts",
+            "step_run",
+            "step_run_id",
+            "suspension_attempt",
+            "suspension_attempt_id",
+            "declaration_index",
+            "priority",
+            "action",
+            "payload",
+            "max_attempts",
+            "expires_at",
+            "escalate_at",
+            "target_model",
+            "target_id",
+            "target_tab",
+            "record_access",
+            "verdict",
+            "resolution",
+            "resolved_by",
+            "attempts",
             "resolved_at",
         }
     )
+
+    def with_context_projection(self) -> Self:
+        """Annotate the complete context before materializing a Decision list."""
+
+        decision_model = cast(Any, self.model)
+        return cast(Self, self.annotate(**decision_model.context_projection_annotation()))
 
     def update(self, **kwargs: Any) -> int:
         if self._PROTECTED_FIELDS.intersection(kwargs):
             raise TypeError("Decision suspension provenance is owned by DecisionManager.")
         return super().update(**kwargs)
 
+    def _reject_retained_deletion(self) -> None:
+        structural = self.system_context(reason="workflows.decision.retention_probe")
+        if structural.filter(
+            models.Q(suspension_attempt_id__isnull=False) | models.Q(declaration_index__isnull=False)
+        ).exists():
+            raise TypeError("Retained workflow Decisions cannot be deleted.")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        self._reject_retained_deletion()
+        return super().delete()
+
+    def _raw_delete(self, using: str) -> int:
+        self._reject_retained_deletion()
+        return super()._raw_delete(using)
+
+    def resolve_pending(
+        self,
+        *,
+        verdict: Verdict,
+        resolution: dict[str, Any],
+        resolved_by: str,
+        at: datetime,
+        generation: int | None = None,
+        deadline: Literal["expires_at", "escalate_at"] | None = None,
+    ) -> int:
+        """Claim a pending resolution before save callbacks can reenter it."""
+
+        if verdict not in Verdict.TERMINAL:
+            raise ValidationError({"verdict": "Decision verdict must be terminal."})
+        pending = self.filter(verdict=Verdict.PENDING)
+        if generation is not None:
+            pending = pending.filter(attempts=generation)
+        if deadline is not None:
+            pending = pending.filter(**{f"{deadline}__lte": at})
+        return super(DecisionQuerySet, pending).update(
+            verdict=verdict,
+            resolution=resolution,
+            resolved_by=resolved_by,
+            resolved_at=at,
+            updated_at=at,
+        )
+
+    def record_invalid_resolution(self, *, generation: int, at: datetime) -> int:
+        """Increment the still-pending generation exactly once."""
+
+        pending = self.filter(verdict=Verdict.PENDING, attempts=generation)
+        return super(DecisionQuerySet, pending).update(attempts=models.F("attempts") + 1, updated_at=at)
+
     def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
         rows = list(objs)
-        retained = any(
-            row.suspension_attempt_id is not None or row.declaration_index is not None for row in rows
-        )
+        retained = any(row.suspension_attempt_id is not None or row.declaration_index is not None for row in rows)
         if retained:
             raise TypeError("Decision suspension provenance is owned by DecisionManager.")
         return super().bulk_create(rows, *args, **kwargs)
@@ -6359,51 +5492,266 @@ class DecisionQuerySet(AngeeQuerySet[Any]):
 class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ignore[misc]
     """Create actionable decisions and their authorization tuples atomically."""
 
-    def retained_record_access(
-        self,
-        decision: Any,
-        *,
-        actor: Any,
-    ) -> tuple[models.Model, ...]:
-        """Resolve one canonical Decision's immutable delegated record rows.
+    def resync_issuers(self) -> int:
+        """Backfill issuer tuples from immutable run admission after REBAC sync.
 
-        This does not authorize the resolver to use the rows. Consumers pass the
-        exact returned basis back to ``consume_decision_resolution``, which owns
-        resolver identity and pending-delegation validation.
+        Missing admission and deleted principals grant no authority. Repeated
+        calls are idempotent and return the number of eligible Decisions.
         """
 
-        readable = read_scoped_queryset(self.model, actor, action="read")
-        if (
-            not isinstance(decision, self.model)
-            or decision.pk is None
-            or (decision._state.db or self.db) != self.db
-        ):
-            raise PermissionDenied("The retained Decision is unavailable.")
-        canonical = (
-            None
-            if readable is None
-            else readable.using(self.db).filter(pk=decision.pk).first()
-        )
-        if canonical is None:
-            raise PermissionDenied("The retained Decision is unavailable.")
-        references = _retained_record_access_refs(canonical)
-        rows: list[models.Model] = []
-        with system_context(reason="workflows.decision.retained_record_access"):
-            for ref in references:
-                model = model_for_resource_type(ref.resource_type)
-                if model is None:
-                    raise ValidationError({
-                        "record_access": "A retained Decision record type is not installed."
-                    })
-                row = system_queryset(model, using=self.db, lock=None).filter(
-                    **{resource_id_attr(model): ref.resource_id}
-                ).first()
-                if row is None or to_object_ref(row) != ref:
-                    raise ValidationError({
-                        "record_access": "A retained Decision record is unavailable."
-                    })
-                rows.append(row)
-        return tuple(rows)
+        if not isinstance(rebac_backend(), LocalBackend):
+            raise ValidationError({"rebac": "Decision issuer resync requires the transactional local REBAC adapter."})
+        with transaction.atomic(), system_context(reason="workflows.decision.resync_issuers"):
+            relationships = []
+            for decision in system_queryset(self.model, lock=None).select_related("step_run__run").order_by("pk"):
+                actor = decision.step_run.run.admission_actor()
+                if actor is not None:
+                    relationships.append(
+                        RelationshipTuple(
+                            resource=to_object_ref(decision), relation="issuer", subject=to_subject_ref(actor)
+                        )
+                    )
+            if relationships:
+                write_relationships(relationships)
+        return len(relationships)
+
+    def predecessor_decision(self, step_run: Any, gate_step_class: type[Any]) -> Any:
+        """Load the nearest declared gate's settled slot on retained ancestry.
+
+        Count matching executed gates at the first depth containing any, following
+        the same ancestry as application validation, including an exact FRESH
+        source. Skipped and unexecuted rows cannot supply a Decision; an executed
+        gate without settlement still blocks fallback to deeper gates.
+        This reads selection evidence only. Application callers keep the returned
+        identity and enter ``locked_resolution`` before changing domain rows.
+        """
+
+        step_run_model = self.model._meta.get_field("step_run").remote_field.model
+        with system_context(reason="workflows.decision.predecessor"):
+            step_runs = system_queryset(step_run_model, lock=None).select_related(
+                "step", "run__workflow", "run__recovery_source_attempt", "current_attempt", "current_map_expansion"
+            )
+            cursor = step_runs.get(pk=step_run.pk)
+            seen: set[int] = set()
+            while cursor.run.origin == RunOrigin.RECOVERY and not step_runs.filter(next_step_runs=cursor).exists():
+                cursor.run.execution_lineage_root_id()
+                source = step_runs.get(
+                    pk=system_queryset(
+                        self.model._meta.get_field("suspension_attempt").remote_field.model,
+                        lock=None,
+                    )
+                    .values_list("step_run_id", flat=True)
+                    .get(pk=cursor.run.recovery_source_attempt_id)
+                )
+                if cursor.pk in seen or (source.step_id, source.map_index) != (cursor.step_id, cursor.map_index):
+                    raise ValidationError({"gate": "Decision apply recovery requires its exact retained source."})
+                seen.add(cursor.pk)
+                cursor = source
+            gates = []
+            for candidates in self._iter_predecessor_levels(cursor):
+                gates = [
+                    row
+                    for row in candidates
+                    if row.current_attempt is not None
+                    and row.status != StepRunStatus.SKIPPED
+                    and row.step is not None
+                    and issubclass(row.step.resolve_impl("step_class"), gate_step_class)
+                ]
+                if gates:
+                    break
+            if len(gates) != 1 or gates[0].current_attempt is None:
+                raise ValidationError({"gate": "Decision apply requires one declared predecessor gate."})
+            gate = gates[0]
+            ids = gate.current_attempt.decision_settlement.get("decision_ids")
+            if not isinstance(ids, list) or not ids or any(type(value) is not int for value in ids):
+                raise ValidationError({"gate": "Decision apply requires retained predecessor settlement."})
+            retained = list(
+                system_queryset(self.model, lock=None)
+                .filter(pk__in=ids, step_run=gate, suspension_attempt=gate.current_attempt)
+                .order_by("priority", "pk")
+            )
+            if len(retained) != len(ids) or any(row.verdict not in Verdict.TERMINAL for row in retained):
+                raise ValidationError({"gate": "Decision apply predecessor settlement is incomplete."})
+            settled = gate.decision_gate.settled_decisions(retained)
+            if len(settled) != 1:
+                raise ValidationError({"gate": "Decision apply requires one settled predecessor slot."})
+            return settled[0]
+
+    @contextmanager
+    def locked_resolution(
+        self,
+        decision_id: int,
+        *,
+        actor: Any,
+        consumer_step_run_id: int | None = None,
+        expected_action: str | None = None,
+        expected_verdict: Verdict = Verdict.COMPLETED,
+    ) -> Iterator[Any]:
+        """Hold validated retained Decision ancestry before a domain command locks rows.
+
+        Persisted suspension and settlement facts identify the resolution; the
+        pinned actor must match its resolver and still hold ``act``. Timer expiry
+        may be applied without a human actor only when explicitly requested.
+        Consumers own domain permission, expected state, and durable idempotence.
+        """
+
+        step_model = self.model._meta.get_field("step_run").remote_field.model
+        attempt_model = self.model._meta.get_field("suspension_attempt").remote_field.model
+        run_model = step_model._meta.get_field("run").remote_field.model
+        with transaction.atomic():
+            with system_context(reason="workflows.decision.locked_resolution"):
+                source = system_queryset(self.model, lock=None).get(pk=decision_id)
+                if source.suspension_attempt_id is None:
+                    raise ValidationError({"decision": "Application requires a retained suspension Decision."})
+                step_ids = {source.step_run_id}
+                if consumer_step_run_id is not None:
+                    step_ids.add(consumer_step_run_id)
+                run_by_step = dict(
+                    system_queryset(step_model, lock=None).filter(pk__in=step_ids).values_list("pk", "run_id")
+                )
+                if consumer_step_run_id is not None and consumer_step_run_id not in run_by_step:
+                    raise ValidationError({"decision": "Application requires this active predecessor consumer."})
+                runs = run_model.objects.lock_execution_ancestry(
+                    (run_by_step[consumer_step_run_id or source.step_run_id],)
+                )
+                if run_by_step[source.step_run_id] not in runs:
+                    raise ValidationError({"decision": "Application requires this active predecessor consumer."})
+                step_ids.update(row.parent_step_run_id for row in runs.values() if row.parent_step_run_id is not None)
+                step_ids.update(
+                    row.recovery_source_attempt.step_run_id
+                    for row in runs.values()
+                    if row.recovery_source_attempt_id is not None
+                )
+                steps = {
+                    row.pk: row
+                    for row in system_queryset(step_model, lock=("self",))
+                    .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+                    .filter(pk__in=step_ids)
+                    .order_by("pk")
+                }
+                gate = steps[source.step_run_id]
+                gate.run = runs[gate.run_id]
+                consumer = steps.get(consumer_step_run_id)
+                attempt_ids = {source.suspension_attempt_id}
+                attempt_ids.update(
+                    row.recovery_source_attempt_id
+                    for row in runs.values()
+                    if row.recovery_source_attempt_id is not None
+                )
+                if consumer is not None and consumer.current_attempt_id is not None:
+                    attempt_ids.add(consumer.current_attempt_id)
+                attempts = {
+                    row.pk: row
+                    for row in system_queryset(attempt_model, lock=("self",)).filter(pk__in=attempt_ids).order_by("pk")
+                }
+                for row in steps.values():
+                    row.run = runs[row.run_id]
+                for row in attempts.values():
+                    row.step_run = steps[row.step_run_id]
+                historical_runs: set[int] = set()
+                parent_runs = {
+                    steps[row.parent_step_run_id].run_id
+                    for row in runs.values()
+                    if row.parent_step_run_id is not None and row.parent_relation == ParentRelation.CONTINUATION
+                }
+                for row in runs.values():
+                    if row.recovery_source_attempt_id is not None:
+                        row.recovery_source_attempt = attempts[row.recovery_source_attempt_id]
+                        historical_runs.add(row.recovery_source_attempt.step_run.run_id)
+                decision = system_queryset(self.model, lock=("self",)).get(pk=decision_id)
+                attempt = attempts[source.suspension_attempt_id]
+                decision.step_run = gate
+                decision.suspension_attempt = attempt
+                if (
+                    decision.step_run_id != source.step_run_id
+                    or decision.suspension_attempt_id != source.suspension_attempt_id
+                    or attempt.step_run_id != gate.pk
+                    or gate.current_attempt_id != attempt.pk
+                    or not attempt.is_held_suspension
+                    or decision.pk not in attempt.decision_settlement.get("decision_ids", ())
+                    or decision.verdict != expected_verdict
+                    or (expected_action is not None and decision.action != expected_action)
+                ):
+                    raise ValidationError({"decision": "The retained resolution does not match this application."})
+                if consumer_step_run_id is not None:
+                    active = None if consumer is None else attempts.get(consumer.current_attempt_id)
+                    if (
+                        consumer is None
+                        or consumer.pk == gate.pk
+                        or any(row.is_terminal and row.pk not in historical_runs | parent_runs for row in runs.values())
+                        or consumer.status != StepRunStatus.STARTED
+                        or active is None
+                        or active.started_at is None
+                        or active.result_recorded_at is not None
+                        or active.lease_revoked_at is not None
+                        or not self._has_predecessor_gate(consumer, gate=gate, runs=runs)
+                    ):
+                        raise ValidationError({"decision": "Application requires this active predecessor consumer."})
+                resolver = decision.resolution_actor_subject()
+                if actor is None:
+                    if expected_verdict not in {Verdict.EXPIRED, Verdict.ESCALATED} or resolver is not None:
+                        raise PermissionDenied("A human Decision requires its resolving actor.")
+                else:
+                    actor_ref = to_subject_ref(actor)
+                    if resolver != actor_ref:
+                        raise PermissionDenied("Only this Decision's resolving actor may apply it.")
+                    if not decision.with_actor(actor_ref).check_access("act").allowed:
+                        raise PermissionDenied("The actor cannot act on this Decision.")
+                    for row in (gate, gate.run, attempt):
+                        row.with_actor(actor_ref)
+            yield decision
+
+    def _has_predecessor_gate(self, consumer: Any, *, gate: Any, runs: dict[int, Any]) -> bool:
+        """Check the gate against retained ancestry inside the locked run set."""
+
+        return any(row.pk == gate.pk for rows in self._iter_predecessor_levels(consumer, runs=runs) for row in rows)
+
+    def _iter_predecessor_levels(self, consumer: Any, *, runs: dict[int, Any] | None = None) -> Iterator[list[Any]]:
+        """Merge previous, parent, recovery, and Map links into breadth-first levels.
+
+        Yield each retained row once at its nearest depth, excluding the consumer.
+        All link kinds share one frontier per depth, with no precedence between
+        them; matching gate candidates tied at that depth are counted together.
+        Application validation supplies locked runs; selection reads the same
+        relations without acquiring application locks.
+        """
+
+        step_model = type(consumer)
+        seen = {consumer.pk}
+        pending = {consumer.pk}
+        rows = [consumer]
+        while pending:
+            previous = set(
+                system_queryset(step_model, lock=None)
+                .filter(next_step_runs__pk__in=pending)
+                .values_list("pk", flat=True)
+            )
+            for row in rows:
+                run = row.run if runs is None else runs.get(row.run_id)
+                if run is None:
+                    return
+                if run.parent_step_run_id is not None:
+                    previous.add(run.parent_step_run_id)
+                if run.origin == RunOrigin.RECOVERY:
+                    previous.add(run.recovery_source_attempt.step_run_id)
+                if row.current_map_expansion_id is not None:
+                    previous.add(row.current_map_expansion.step_run_id)
+            pending = previous - seen
+            seen.update(pending)
+            if pending:
+                rows = list(
+                    system_queryset(step_model, lock=None)
+                    .select_related(
+                        "step",
+                        "run__workflow",
+                        "run__recovery_source_attempt",
+                        "current_attempt",
+                        "current_map_expansion",
+                    )
+                    .filter(pk__in=pending)
+                    .order_by("pk")
+                )
+                yield rows
 
     def ensure_sequential_turn(self, decision: Any) -> None:
         """Enforce system-owned priority after the public action check.
@@ -6414,258 +5762,306 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
 
         if not decision.step_run.decision_gate.is_sequential:
             return
-        current_id = system_queryset(self.model, using=self.db, lock=None).filter(
-            step_run_id=decision.step_run_id,
-            suspension_attempt_id=decision.suspension_attempt_id,
-            verdict=Verdict.PENDING,
-        ).order_by("priority", "pk").values_list("pk", flat=True).first()
+        current_id = (
+            system_queryset(self.model, lock=None)
+            .filter(
+                step_run_id=decision.step_run_id,
+                suspension_attempt_id=decision.suspension_attempt_id,
+                verdict=Verdict.PENDING,
+            )
+            .order_by("priority", "pk")
+            .values_list("pk", flat=True)
+            .first()
+        )
         if current_id != decision.pk:
             raise ValidationError({"decision": "Sequential decisions must resolve in priority order."})
 
-    @contextmanager
-    def _resolution_owner(self, decision_id: int) -> Iterator[None]:
-        """Require one retained resolution to finish its logical projection."""
-
-        alias = self.db
-        connection = connections[alias]
-        if not connection.atomic_blocks:
-            raise RuntimeError("Retained decision resolution requires an outer owner transaction.")
-        session = _DecisionResolutionSession(
-            alias, id(connection), id(connection.atomic_blocks[0]), decision_id
-        )
-        token = _decision_resolution_session.set(session)
-        try:
-            yield
-            if not session.completed:
-                raise RuntimeError("Retained decision resolution did not complete its projection.")
-        finally:
-            _decision_resolution_session.reset(token)
-
-    def _require_resolution_owner(self, decision_id: int) -> _DecisionResolutionSession:
-        session = _decision_resolution_session.get()
-        connection = connections[self.db]
-        if (
-            session is None
-            or session.completed
-            or session.alias != self.db
-            or session.connection_id != id(connection)
-            or not connection.atomic_blocks
-            or session.outer_atomic_id != id(connection.atomic_blocks[0])
-            or session.decision_id != decision_id
-        ):
-            raise RuntimeError("Retained decision writes require their exact transition owner.")
-        return session
-
-    def complete_retained_resolution(self, decision_id: int) -> None:
-        """Mark the exact retained resolution's projection and dispatch complete."""
-
-        self._require_resolution_owner(decision_id).completed = True
-
-    def _write_retained(self, decision: Any, operation: Any) -> Any:
-        """Authorize one exact retained Decision save and spend it before signals."""
-
-        connection = connections[self.db]
-        if not connection.atomic_blocks:
-            raise RuntimeError("Retained Decision writes require an owner transaction.")
-        capability = _DecisionSaveCapability(
-            _AtomicWriteCapability(self.db, id(connection), id(connection.atomic_blocks[0]), id(decision)),
-            decision.pk,
-        )
-        token = _decision_save_capability.set(capability)
-        try:
-            result = operation()
-            if not capability.atomic.consumed:
-                raise RuntimeError("Retained Decision transition did not save its exact row.")
-            if decision.is_terminal:
-                self._remove_pending_record_access(decision)
-            return result
-        finally:
-            _decision_save_capability.reset(token)
-
-    def _lock_retained_resolution(self, decision_id: int, *, using: str) -> Any | None:
+    def _lock_retained_resolution(self, decision_id: int, *, require_current: bool = True) -> Any | None:
         """Lock and validate one retained decision in canonical ancestry order."""
 
-        discovered = system_queryset(self.model, using=using, lock=None).filter(pk=decision_id).values(
-            "step_run_id", "suspension_attempt_id"
-        ).first()
+        discovered = (
+            system_queryset(self.model, lock=None)
+            .filter(pk=decision_id)
+            .values("step_run_id", "suspension_attempt_id")
+            .first()
+        )
         if discovered is None or discovered["suspension_attempt_id"] is None:
             return None
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
         attempt_model = self.model._meta.get_field("suspension_attempt").remote_field.model
         run_model = step_run_model._meta.get_field("run").remote_field.model
-        run_id = system_queryset(step_run_model, using=using, lock=None).values_list(
-            "run_id", flat=True
-        ).get(pk=discovered["step_run_id"])
-        run = system_queryset(run_model, using=using, lock=("self",)).get(pk=run_id)
-        step_run = system_queryset(step_run_model, using=using, lock=("self",)).get(
-            pk=discovered["step_run_id"]
+        run_id = (
+            system_queryset(step_run_model, lock=None)
+            .values_list("run_id", flat=True)
+            .get(pk=discovered["step_run_id"])
         )
-        attempt = system_queryset(attempt_model, using=using, lock=("self",)).get(
-            pk=discovered["suspension_attempt_id"]
+        run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
+        step_run = (
+            system_queryset(step_run_model, lock=("self",))
+            .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+            .get(pk=discovered["step_run_id"])
         )
-        decision = system_queryset(self.model, using=using, lock=("self",)).select_related(
-            "step_run__run", "step_run__step"
-        ).get(pk=decision_id)
-        valid = (
-            step_run.run_id == run.pk
-            and attempt.step_run_id == step_run.pk
-            and decision.step_run_id == step_run.pk
-            and decision.suspension_attempt_id == attempt.pk
-            and step_run.current_attempt_id == attempt.pk
+        attempt = system_queryset(attempt_model, lock=("self",)).get(pk=discovered["suspension_attempt_id"])
+        decision = (
+            system_queryset(self.model, lock=("self",))
+            .select_related("step_run__run", "step_run__step")
+            .get(pk=decision_id)
+        )
+        if (
+            step_run.run_id != run.pk
+            or attempt.step_run_id != step_run.pk
+            or decision.step_run_id != step_run.pk
+            or decision.suspension_attempt_id != attempt.pk
+        ):
+            raise ValidationError({"decision": "Decision ancestry does not match its suspension."})
+        step_run.run = run
+        decision.step_run = step_run
+        decision.suspension_attempt = attempt
+        return decision if not require_current or self._is_current_suspension(decision) else None
+
+    @staticmethod
+    def _is_current_suspension(decision: Any) -> bool:
+        step_run = decision.step_run
+        attempt = decision.suspension_attempt
+        return bool(
+            step_run.current_attempt_id == attempt.pk
             and step_run.status == StepRunStatus.WAITING
-            and not run.is_terminal
-            and attempt.result_kind == str(AttemptResultKind.SUSPEND)
-            and attempt.applied_at is not None
-            and attempt.lease_revoked_at is None
+            and not step_run.run.is_terminal
+            and attempt.is_held_suspension
         )
-        return decision if valid else None
 
-    def resolve_retained(
-        self,
-        decision_id: int,
-        *,
-        verdict: Any,
-        resolution: Any,
-        resolved_by: str,
-        at: datetime,
-        expected_attempts: int | None = None,
-        deadline: str | None = None,
-    ) -> Any | None:
-        """Resolve one current retained suspension decision under canonical locks."""
+    def submit(self, decision: Any, verb: str, *, payload: Any = None, actor: Any = None) -> DecisionAttemptResult:
+        """Parse a public human action for one retained Decision instance."""
 
-        self._require_resolution_owner(decision_id)
-        alias = self.db
-        with transaction.atomic(using=alias), system_context(reason="workflows.decision.resolve"):
-            decision = self._lock_retained_resolution(decision_id, using=alias)
-            if decision is None or decision.verdict != Verdict.PENDING:
-                return None
-            if expected_attempts is not None and decision.attempts != expected_attempts:
-                return None
-            self.ensure_sequential_turn(decision)
-            deadline_at = getattr(decision, deadline, None) if deadline else None
-            if deadline and (deadline_at is None or deadline_at > at):
-                return None
-            self._write_retained(
-                decision,
-                lambda: decision.resolve(verdict, resolution=resolution, resolved_by=resolved_by),
-            )
-            return decision
+        actor = resolve_actor_subject(actor)
+        verdicts = {"complete": Verdict.COMPLETED, "reject": Verdict.REJECTED, "escalate": Verdict.ESCALATED}
+        try:
+            verdict = verdicts[verb.lower()]
+        except KeyError as error:
+            raise ValidationError({"verdict": "Verdict must be complete, reject, or escalate."}) from error
+        return self.decide(
+            decision.pk,
+            actor=actor,
+            resolution=DecisionSubmission(verdict=verdict, payload=payload),
+        )
 
-    def record_invalid_retained(self, decision_id: int) -> tuple[Any, bool]:
-        """Record one invalid submission against the exact current suspension."""
+    def decide(self, decision_id: int, *, actor: Any, resolution: DecisionSubmission) -> DecisionAttemptResult:
+        """Authorize and commit one complete human Decision operation.
 
-        self._require_resolution_owner(decision_id)
-        alias = self.db
-        with transaction.atomic(using=alias), system_context(reason="workflows.decision.invalid"):
-            decision = self._lock_retained_resolution(decision_id, using=alias)
-            if decision is None or decision.verdict != Verdict.PENDING:
+        ``resolution`` carries the native terminal verdict and submitted payload.
+        Validation failures increment the generation and return a field error;
+        successful resolutions settle their whole gate, revoke pending grants,
+        and retain advancement in the same transaction. A repeated terminal
+        submission is inert. The actor is pinned even inside system context.
+        """
+
+        if actor is None:
+            raise PermissionDenied("Authentication required.")
+        actor_ref = to_subject_ref(actor)
+        try:
+            verdict = Verdict(resolution.verdict)
+        except ValueError as error:
+            raise ValidationError({"verdict": "Decision verdict must be complete, reject, or escalate."}) from error
+        if verdict not in {Verdict.COMPLETED, Verdict.REJECTED, Verdict.ESCALATED}:
+            raise ValidationError({"verdict": "Human Decisions cannot expire a review."})
+        with transaction.atomic(), system_context(reason="workflows.decision.decide"):
+            decision = self._lock_retained_resolution(decision_id, require_current=False)
+            if decision is None:
+                raise ValidationError({"decision": "Decision resolution requires retained suspension evidence."})
+            if not decision.with_actor(actor_ref).check_access("act").allowed:
+                raise PermissionDenied("The actor cannot act on this Decision.")
+            for row in (decision.step_run, decision.step_run.run, decision.suspension_attempt):
+                row.with_actor(actor_ref)
+            if decision.verdict != Verdict.PENDING:
+                return DecisionAttemptResult(decision)
+            decision.sudo(reason="workflows.decision.persist")
+            if not self._is_current_suspension(decision):
                 raise ValidationError({"decision": "This retained decision is no longer current."})
             self.ensure_sequential_turn(decision)
-            self._write_retained(decision, decision.record_invalid_resolution)
-            exhausted = decision.max_attempts is not None and decision.attempts >= decision.max_attempts
-            return decision, exhausted
+            validation_error = None
+            at = timezone.now()
+            try:
+                payload = validate_decision_resolution(decision, resolution.payload, actor=actor_ref, verdict=verdict)
+            except ValidationError as error:
+                validation_error = error
+                if not decision.record_invalid_resolution(at=at):
+                    raise ValidationError({"decision": "This resolution generation is no longer current."}) from error
+                if decision.max_attempts is not None and decision.attempts >= decision.max_attempts:
+                    type(decision.step_run).objects.fail_retained_decisions(
+                        decision.step_run_id,
+                        decision_id=decision.pk,
+                        error=f"Decision resolution failed validation: {error}",
+                    )
+                    self._expire_pending_slots(decision, resolved_by="workflows/invalid_resolution", at=at)
+                    # Slot expiration persists resolution through a separate locked instance.
+                    decision.refresh_from_db(fields=["verdict", "resolution", "resolved_by", "resolved_at"])
+                else:
+                    self._schedule_timers(decision)
+            else:
+                if not decision.resolve(verdict, resolution=payload, resolved_by=str(actor_ref), at=at):
+                    raise ValidationError({"decision": "This Decision is no longer pending."})
+                self._remove_pending_record_access(decision)
+                self._settle_collection(decision, at=at)
+            self._schedule_advance(decision, at=at)
+            return DecisionAttemptResult(decision.with_actor(actor_ref), validation_error)
 
-    def expire_retained_suspension(self, decision_id: int, *, resolved_by: str) -> Any | None:
-        """Expire every pending slot of one exact current retained suspension."""
+    def _settle_collection(self, decision: Any, *, at: datetime) -> None:
+        """Project the canonical complete decision collection through its owner."""
 
-        self._require_resolution_owner(decision_id)
-        alias = self.db
-        with transaction.atomic(using=alias), system_context(reason="workflows.decision.expire_all"):
-            decision = self._lock_retained_resolution(decision_id, using=alias)
-            if decision is None:
-                return None
-            pending = list(
-                system_queryset(self.model, using=alias, lock=("self",)).filter(
-                    suspension_attempt_id=decision.suspension_attempt_id,
-                    verdict=Verdict.PENDING,
-                ).order_by("priority", "pk")
+        step_run = decision.step_run
+        decisions = list(
+            system_queryset(self.model, lock=("self",))
+            .filter(suspension_attempt_id=decision.suspension_attempt_id)
+            .order_by("priority", "pk")
+        )
+        outcome = step_run.decision_gate.outcome(decisions)
+        if outcome is not None:
+            type(step_run).objects.settle_retained_decisions(
+                step_run.pk,
+                decision_id=decision.pk,
+                outcome=outcome,
+                decision_ids=tuple(row.pk for row in decisions),
+                at=at,
             )
-            for pending_decision in pending:
-                self._write_retained(
-                    pending_decision,
-                    lambda pending_decision=pending_decision: pending_decision.resolve(
-                        Verdict.EXPIRED, resolution={}, resolved_by=resolved_by
-                    ),
-                )
-            return decision
+
+    def _schedule_advance(self, decision: Any, *, at: datetime) -> None:
+        dispatch_model = self.model._meta.apps.get_model("workflows", "WorkflowDispatch")
+        dispatch_model.objects.schedule_advance(decision.step_run.run, available_at=at)
+        transaction.on_commit(lambda: enqueue_dispatch_publisher())
+
+    def _schedule_timers(self, decision: Any) -> None:
+        dispatch_model = self.model._meta.apps.get_model("workflows", "WorkflowDispatch")
+        manager = dispatch_model.objects
+        if decision.escalate_at is not None:
+            manager.schedule_decision(WorkflowDispatchKind.DECISION_ESCALATE, decision)
+        if decision.expires_at is not None:
+            manager.schedule_decision(WorkflowDispatchKind.DECISION_EXPIRE, decision)
+
+    def resolve_timed(self, decision_id: int, *, generation: int, verdict: Verdict, at: datetime) -> bool:
+        """Resolve a due timer without inventing a human actor or action admission."""
+
+        if verdict not in {Verdict.EXPIRED, Verdict.ESCALATED}:
+            raise ValidationError({"verdict": "A Decision timer must expire or escalate."})
+        with transaction.atomic(), system_context(reason="workflows.decision.timer"):
+            decision = self._lock_retained_resolution(decision_id)
+            if decision is None or decision.verdict != Verdict.PENDING:
+                return False
+            self.ensure_sequential_turn(decision)
+            operation = decision.expire if verdict == Verdict.EXPIRED else decision.escalate
+            if not operation(at=at, generation=generation, due=True):
+                return False
+            self._remove_pending_record_access(decision)
+            self._settle_collection(decision, at=at)
+            self._schedule_advance(decision, at=at)
+            return True
+
+    def _expire_pending_slots(self, decision: Any, *, resolved_by: str, at: datetime) -> int:
+        pending = list(
+            system_queryset(self.model, lock=("self",))
+            .filter(suspension_attempt_id=decision.suspension_attempt_id, verdict=Verdict.PENDING)
+            .order_by("priority", "pk")
+        )
+        expired = 0
+        for row in pending:
+            if row.expire(resolved_by=resolved_by, at=at):
+                self._remove_pending_record_access(row)
+                expired += 1
+        return expired
+
+    def expire_pending(self, step_run_id: int, *, resolved_by: str) -> int:
+        """Expire and settle every current pending slot in one complete operation."""
+
+        with transaction.atomic(), system_context(reason="workflows.decision.expire_all"):
+            decision_id = (
+                system_queryset(self.model, lock=None)
+                .filter(step_run_id=step_run_id, verdict=Verdict.PENDING)
+                .order_by("priority", "pk")
+                .values_list("pk", flat=True)
+                .first()
+            )
+            if decision_id is None:
+                return 0
+            decision = self._lock_retained_resolution(decision_id)
+            if decision is None:
+                return 0
+            at = timezone.now()
+            expired = self._expire_pending_slots(decision, resolved_by=resolved_by, at=at)
+            self._settle_collection(decision, at=at)
+            self._schedule_advance(decision, at=at)
+            return expired
 
     def expire_departing_suspension(self, step_run_id: int, *, resolved_by: str) -> int:
         """Expire the exact current suspension before its step becomes runnable again."""
 
-        return self._expire_exact_suspension(
-            step_run_id, resolved_by=resolved_by, transition="depart"
-        )
+        return self._expire_exact_suspension(step_run_id, resolved_by=resolved_by, transition="depart")
 
     def _expire_exact_suspension(
         self, step_run_id: int, *, resolved_by: str, transition: Literal["depart", "cancel"]
     ) -> int:
         """Expire one applied current suspension under its exact lifecycle transition."""
 
-        alias = self.db
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
         attempt_model = self.model._meta.get_field("suspension_attempt").remote_field.model
         run_model = step_run_model._meta.get_field("run").remote_field.model
-        with transaction.atomic(using=alias), system_context(reason=f"workflows.decision.{transition}"):
-            run_id = system_queryset(step_run_model, using=alias, lock=None).values_list(
-                "run_id", flat=True
-            ).get(pk=step_run_id)
-            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
-            step_run = system_queryset(step_run_model, using=alias, lock=("self",)).get(pk=step_run_id)
-            expected_status = (
-                StepRunStatus.WAITING if transition == "depart" else StepRunStatus.CANCELED
+        with transaction.atomic(), system_context(reason=f"workflows.decision.{transition}"):
+            run_id = system_queryset(step_run_model, lock=None).values_list("run_id", flat=True).get(pk=step_run_id)
+            run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
+            step_run = (
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+                .get(pk=step_run_id)
             )
+            expected_status = StepRunStatus.WAITING if transition == "depart" else StepRunStatus.CANCELED
             transition_label = "departure" if transition == "depart" else "cancellation"
             if step_run.run_id != run.pk or step_run.status != expected_status:
-                raise ValidationError({
-                    "step_run": f"Decision {transition_label} requires a {expected_status} retained slot."
-                })
+                raise ValidationError(
+                    {"step_run": f"Decision {transition_label} requires a {expected_status} retained slot."}
+                )
             if transition == "depart" and run.is_terminal:
-                raise ValidationError({
-                    "step_run": "Decision departure requires a current waiting slot."
-                })
+                raise ValidationError({"step_run": "Decision departure requires a current waiting slot."})
             if step_run.current_attempt_id is None:
                 return 0
-            attempt = system_queryset(attempt_model, using=alias, lock=("self",)).get(
-                pk=step_run.current_attempt_id
-            )
-            if (
-                attempt.step_run_id != step_run.pk
-                or attempt.result_kind != str(AttemptResultKind.SUSPEND)
-                or attempt.applied_at is None
-                or attempt.lease_revoked_at is not None
-            ):
-                raise ValidationError({
-                    "attempt": f"Decision {transition_label} requires the applied current suspension."
-                })
-            pending = list(system_queryset(self.model, using=alias, lock=("self",)).filter(
-                suspension_attempt=attempt, verdict=Verdict.PENDING,
-            ).order_by("pk"))
-            for decision in pending:
-                self._write_retained(
-                    decision,
-                    lambda decision=decision: decision.resolve(
-                        Verdict.EXPIRED, resolution={}, resolved_by=resolved_by
-                    ),
+            attempt = system_queryset(attempt_model, lock=("self",)).get(pk=step_run.current_attempt_id)
+            if attempt.step_run_id != step_run.pk or not attempt.is_held_suspension:
+                raise ValidationError(
+                    {"attempt": f"Decision {transition_label} requires the applied current suspension."}
                 )
+            pending = list(
+                system_queryset(self.model, lock=("self",))
+                .filter(
+                    suspension_attempt=attempt,
+                    verdict=Verdict.PENDING,
+                )
+                .order_by("pk")
+            )
+            for decision in pending:
+                if decision.expire(resolved_by=resolved_by):
+                    self._remove_pending_record_access(decision)
             return len(pending)
 
     def expire_orphaned_suspensions(self, step_run_id: int, *, resolved_by: str) -> int:
         """Expire pending retained Decisions that no longer own an active suspension."""
 
-        alias = self.db
         step_run_model = self.model._meta.get_field("step_run").remote_field.model
         run_model = step_run_model._meta.get_field("run").remote_field.model
-        with transaction.atomic(using=alias), system_context(reason="workflows.decision.expire_orphans"):
-            run_id = system_queryset(step_run_model, using=alias, lock=None).values_list(
-                "run_id", flat=True
-            ).get(pk=step_run_id)
-            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
-            step_run = system_queryset(step_run_model, using=alias, lock=("self",)).get(pk=step_run_id)
-            pending = list(system_queryset(self.model, using=alias, lock=("self",)).filter(
-                step_run=step_run,
-                suspension_attempt__isnull=False,
-                verdict=Verdict.PENDING,
-            ).select_related("suspension_attempt").order_by("pk"))
+        with transaction.atomic(), system_context(reason="workflows.decision.expire_orphans"):
+            run_id = system_queryset(step_run_model, lock=None).values_list("run_id", flat=True).get(pk=step_run_id)
+            run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
+            step_run = (
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+                .get(pk=step_run_id)
+            )
+            pending = list(
+                system_queryset(self.model, lock=("self",))
+                .filter(
+                    step_run=step_run,
+                    suspension_attempt__isnull=False,
+                    verdict=Verdict.PENDING,
+                )
+                .select_related("suspension_attempt")
+                .order_by("pk")
+            )
             expired = 0
             for decision in pending:
                 attempt = decision.suspension_attempt
@@ -6673,34 +6069,26 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                     not run.is_terminal
                     and step_run.status == StepRunStatus.WAITING
                     and step_run.current_attempt_id == attempt.pk
-                    and attempt.result_kind == str(AttemptResultKind.SUSPEND)
-                    and attempt.applied_at is not None
-                    and attempt.lease_revoked_at is None
+                    and attempt.is_held_suspension
                 )
                 if current_active:
                     continue
-                self._write_retained(
-                    decision,
-                    lambda decision=decision: decision.resolve(
-                        Verdict.EXPIRED, resolution={}, resolved_by=resolved_by
-                    ),
-                )
+                if decision.expire(resolved_by=resolved_by):
+                    self._remove_pending_record_access(decision)
                 expired += 1
             return expired
 
     def expire_canceled_suspension(self, step_run_id: int, *, resolved_by: str) -> int:
         """Expire pending decisions only after their retained suspension was canceled."""
 
-        return self._expire_exact_suspension(
-            step_run_id, resolved_by=resolved_by, transition="cancel"
-        )
+        return self._expire_exact_suspension(step_run_id, resolved_by=resolved_by, transition="cancel")
 
-    def timer_intents_for(self, *, attempt: Any, using: str) -> tuple[DecisionTimerIntent, ...]:
+    def timer_intents_for(self, *, attempt: Any) -> tuple[DecisionTimerIntent, ...]:
         """Reconstruct deterministic post-commit work for an applied suspension."""
 
-        decisions = system_queryset(self.model, using=using, lock=None).filter(
-            suspension_attempt=attempt
-        ).order_by("declaration_index")
+        decisions = (
+            system_queryset(self.model, lock=None).filter(suspension_attempt=attempt).order_by("declaration_index")
+        )
         intents: list[DecisionTimerIntent] = []
         for decision in decisions:
             if decision.escalate_at is not None:
@@ -6724,54 +6112,16 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         return tuple(intents)
 
     def create_for_suspension(
-        self,
-        *,
-        step_run: Any,
-        attempt: Any,
-        declarations: tuple[DecisionSpec, ...],
-        using: str,
+        self, *, step_run: Any, attempt: Any, declarations: tuple[DecisionSpec, ...]
     ) -> tuple[tuple[Any, ...], tuple[DecisionTimerIntent, ...]]:
         """Create one validated, ordered batch for an applicable suspension.
 
-        ORM and relationship rows share rollback on the current host's default
-        database with REBAC's transactional local backend. Other aliases and
-        remote backends require a durable relationship-intent contract before
-        this unused API can enter the production execution cutover.
+        ORM and relationship rows share rollback through REBAC's transactional
+        local backend.
+
+        The admitted run actor retains evidence-sharing authority as issuer,
+        independently of the requester's separation-of-duties restriction.
         """
-        if using != DEFAULT_DB_ALIAS:
-            raise ValidationError(
-                {"using": "Atomic decision relationship creation currently requires the default database."}
-            )
-        if not isinstance(rebac_backend(), LocalBackend):
-            raise ValidationError({
-                "rebac": "Decision-scoped review access requires the transactional local REBAC adapter."
-            })
-        if not _attempt_write_active(using, step_run.pk):
-            raise RuntimeError("Retained decisions require an active StepAttemptManager transaction.")
-
-        declarations = deserialize_decision_specs(serialize_decision_specs(declarations))
-
-        prepared_rows: list[tuple[Any, ...]] = []
-        for spec in declarations:
-            delegated_actor, target_authority = self._target_actor(
-                spec, step_run=step_run, attempt=attempt, using=using,
-            )
-            grant_actor = step_run.run.admission_actor()
-            if grant_actor is None:
-                raise ValidationError({"actor": "Decision delegation requires the admitted run actor."})
-            prepared_rows.append((
-                spec,
-                tuple(canonical_subject_ref(subject) for subject in spec.assignees),
-                canonical_subject_ref(spec.requester) if spec.requester else None,
-                tuple(canonical_subject_ref(subject) for subject in spec.escalation),
-                self._validated_target(spec, actor=delegated_actor or grant_actor),
-                self._validated_record_access(
-                    spec, actor=grant_actor, step_run=step_run, attempt=attempt, using=using,
-                ),
-                grant_actor,
-                target_authority,
-            ))
-        prepared = tuple(prepared_rows)
         if attempt.step_run_id != step_run.pk:
             raise ValidationError({"attempt": "The suspension attempt must belong to this step run."})
         if (
@@ -6780,59 +6130,79 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             or step_run.run.is_terminal
             or attempt.started_at is None
             or attempt.lease_revoked_at is not None
-            or attempt.result_kind != str(AttemptResultKind.SUSPEND)
+            or attempt.result_kind != AttemptResultKind.SUSPEND
             or attempt.result_recorded_at is None
         ):
             raise ValidationError({"attempt": "Decisions require the current applicable suspension attempt."})
+        if not isinstance(rebac_backend(), LocalBackend):
+            raise ValidationError(
+                {"rebac": "Decision-scoped review access requires the transactional local REBAC adapter."}
+            )
+        declarations = deserialize_decision_specs(serialize_decision_specs(declarations))
 
+        prepared_rows: list[tuple[Any, ...]] = []
+        for spec in declarations:
+            grant_actor = step_run.run.admission_actor()
+            if grant_actor is None:
+                raise ValidationError({"actor": "Decision delegation requires the admitted run actor."})
+            prepared_rows.append(
+                (
+                    spec,
+                    to_subject_ref(grant_actor),
+                    tuple(canonical_subject_ref(subject) for subject in spec.assignees),
+                    canonical_subject_ref(spec.requester) if spec.requester else None,
+                    tuple(canonical_subject_ref(subject) for subject in spec.escalation),
+                    self._validated_target(spec, actor=grant_actor),
+                    self._validated_record_access(
+                        spec,
+                        actor=grant_actor,
+                    ),
+                )
+            )
+        prepared = tuple(prepared_rows)
         decisions: list[Any] = []
         timer_intents: list[DecisionTimerIntent] = []
-        with transaction.atomic(using=using):
-            connection = connections[using]
-            manager = self.db_manager(using)
-            for index, (spec, assignees, requester, escalation, target, record_access,
-                        grant_actor, target_authority) in enumerate(prepared):
+        with transaction.atomic():
+            for index, (
+                spec,
+                issuer,
+                assignees,
+                requester,
+                escalation,
+                target,
+                record_access,
+            ) in enumerate(prepared):
                 contract = compile_decision_action_schema(spec.decision_schema)
                 if contract is not None:
                     contract.validate_context(spec.payload)
-                token = _decision_write_session.set(
-                    _DecisionWriteSession(using, id(connection), step_run.pk, attempt.pk, index)
+                decision = self.model(
+                    step_run=step_run,
+                    suspension_attempt=attempt,
+                    declaration_index=index,
+                    priority=spec.priority,
+                    action=spec.action,
+                    payload=spec.payload,
+                    target_model=target[0],
+                    target_id=target[1],
+                    target_tab=spec.target_tab,
+                    record_access=[
+                        {"resource_type": ref.resource_type, "resource_id": ref.resource_id}
+                        for _, ref, _ in record_access
+                    ],
+                    max_attempts=spec.max_attempts,
+                    expires_at=spec.expires_at,
+                    escalate_at=spec.escalate_at,
                 )
-                try:
-                    decision = manager.create(
-                        step_run=step_run,
-                        suspension_attempt=attempt,
-                        declaration_index=index,
-                        priority=spec.priority,
-                        action=spec.action,
-                        payload=spec.payload,
-                        target_model=target[0],
-                        target_id=target[1],
-                        target_tab=spec.target_tab,
-                        target_authority_decision=target_authority,
-                        record_access=[{
-                            "resource_type": ref.resource_type,
-                            "resource_id": ref.resource_id,
-                            **(
-                                {"authority_decision_id": prior.sqid}
-                                if prior is not None else {}
-                            ),
-                        } for _, ref, _, prior in record_access],
-                        max_attempts=spec.max_attempts,
-                        expires_at=spec.expires_at,
-                        escalate_at=spec.escalate_at,
-                    )
-                finally:
-                    _decision_write_session.reset(token)
+                decision.create_for_suspension()
                 resource = to_object_ref(decision)
                 relationships = [
-                    RelationshipTuple(resource=resource, relation="assignee", subject=subject)
-                    for subject in assignees
+                    RelationshipTuple(resource=resource, relation="issuer", subject=issuer),
                 ]
+                relationships.extend(
+                    RelationshipTuple(resource=resource, relation="assignee", subject=subject) for subject in assignees
+                )
                 if requester is not None:
-                    relationships.append(
-                        RelationshipTuple(resource=resource, relation="requester", subject=requester)
-                    )
+                    relationships.append(RelationshipTuple(resource=resource, relation="requester", subject=requester))
                 relationships.extend(
                     RelationshipTuple(resource=resource, relation="escalation", subject=subject)
                     for subject in escalation
@@ -6840,7 +6210,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                 if relationships:
                     write_relationships(relationships)
                 decision_subject = self._pending_decision_subject(decision)
-                for record, _, record_actor, _ in record_access:
+                for record, _, record_actor in record_access:
                     with actor_context(record_actor):
                         record.grant_record_access("pending_decision", decision_subject)
                 decisions.append(decision)
@@ -6852,9 +6222,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
                     )
                 if spec.expires_at is not None:
                     timer_intents.append(
-                        DecisionTimerIntent(
-                            DecisionTimerKind.EXPIRE, decision.pk, decision.attempts, spec.expires_at
-                        )
+                        DecisionTimerIntent(DecisionTimerKind.EXPIRE, decision.pk, decision.attempts, spec.expires_at)
                     )
         return tuple(decisions), tuple(timer_intents)
 
@@ -6864,55 +6232,28 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         return SubjectRef.of(ref.resource_type, ref.resource_id)
 
     @staticmethod
-    def _validated_record_access(
-        spec: DecisionSpec, *, actor: Any, step_run: Any, attempt: Any, using: str,
-    ) -> tuple[tuple[Any, Any, Any, Any | None], ...]:
-        """Resolve and deduplicate the exact opting-in review records."""
+    def _validated_record_access(spec: DecisionSpec, *, actor: Any) -> tuple[tuple[Any, Any, Any], ...]:
+        """Resolve explicit review records through the admitted run actor."""
 
-        selected: dict[tuple[str, str], tuple[Any, Any, Any, Any | None]] = {}
+        selected: dict[tuple[str, str], tuple[Any, Any, Any]] = {}
         for declared in spec.record_access:
-            record_actor, prior = (
-                DecisionManager._resolve_admitted_input_authority(
-                    input_source=declared.authority_input.source,
-                    authority_path=declared.authority_input.path,
-                    proposal_gate_path=declared.authority_input.proposal_gate_path,
-                    step_run=step_run, attempt=attempt, using=using,
-                )
-                if declared.authority_input is not None
-                else (actor, None)
-            )
-            if record_actor is None:
-                raise ValidationError({"record_access": "Decision review delegation has no admitted actor."})
             try:
                 model = apps.get_model(declared.model)
             except (LookupError, ValueError) as error:
                 raise ValidationError({"record_access": "Decision review record model is not installed."}) from error
-            queryset = read_scoped_queryset(model, record_actor, action="read")
+            queryset = read_scoped_queryset(model, actor, action="read")
             if queryset is None:
-                raise PermissionDenied("Decision review record is not readable by its admitted delegating actor.")
+                raise PermissionDenied("Decision review record is not readable by its delegating actor.")
             record = instance_from_public_id(model, declared.id, queryset=queryset)
             if record is None:
                 raise ValidationError({"record_access": "Decision review record was not found."})
             if "pending_decision" not in type(record).get_rebac_grantable():
-                raise ValidationError({
-                    "record_access": "Decision review record has no pending_decision delegation owner."
-                })
+                raise ValidationError({"record_access": "Decision review record has no delegation owner."})
+            record.with_actor(actor)
+            record.validate_record_access_target()
+            record._require_record_access(type(record).record_access_permission("pending_decision"))
             ref = to_object_ref(record)
-            key = (ref.resource_type, ref.resource_id)
-            existing = selected.get(key)
-            actor_ref = canonical_subject_ref(str(to_subject_ref(record_actor)))
-            prior_id = None if prior is None else prior.pk
-            if existing is not None and (
-                canonical_subject_ref(str(to_subject_ref(existing[2]))) != actor_ref
-                or (None if existing[3] is None else existing[3].pk) != prior_id
-            ):
-                raise ValidationError({
-                    "record_access": "One record cannot use competing Decision delegation authority."
-                })
-            with actor_context(record_actor):
-                record.validate_record_access_target()
-                record._require_record_access(type(record).record_access_permission("pending_decision"))
-            selected[key] = (record, ref, record_actor, prior)
+            selected[(ref.resource_type, ref.resource_id)] = (record, ref, actor)
         return tuple(selected[key] for key in sorted(selected))
 
     @classmethod
@@ -6921,378 +6262,188 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
 
         subject = cls._pending_decision_subject(decision)
         for resource in _retained_record_access_refs(decision):
-            delete_relationship(RelationshipTuple(
-                resource=resource,
-                relation="pending_decision",
-                subject=subject,
-            ))
-
-    @staticmethod
-    def _target_actor(
-        spec: DecisionSpec, *, step_run: Any, attempt: Any, using: str
-    ) -> tuple[Any | None, Any | None]:
-        return DecisionManager._resolve_admitted_input_authority(
-            input_source="attempt_input",
-            authority_path=spec.target_authority_path,
-            proposal_gate_path=spec.target_authority_gate_path,
-            step_run=step_run, attempt=attempt, using=using,
-        )
-
-    @staticmethod
-    def _resolve_admitted_input_authority(
-        *, input_source: DecisionInputSource,
-        authority_path: tuple[str | int, ...], proposal_gate_path: tuple[str | int, ...],
-        step_run: Any, attempt: Any, using: str,
-    ) -> tuple[Any | None, Any | None]:
-        """Prove one explicitly forwarded, exact settled gate Decision for target read."""
-
-        if not authority_path:
-            return None, None
-        admitted_input, provenance, admitted_run, admitted_path = _admitted_decision_input(
-            input_source=input_source, path=authority_path,
-            step_run=step_run, attempt=attempt, using=using,
-        )
-        selected_id = _decision_value_at(admitted_input, admitted_path)
-        if not isinstance(selected_id, str) or not selected_id:
-            raise ValidationError({"target": "Admitted target authority ID is missing."})
-        leaf, remaining = _decision_source_leaf(
-            provenance, admitted_path,
-            recovery_source_attempt_id=admitted_run.recovery_source_attempt_id,
-        )
-        producer_attempt, producer_step = _admitted_source_attempt(
-            leaf, run=admitted_run, alias=using, attempt_model=type(attempt),
-        )
-        source_path = leaf.get("path", [])
-        if not isinstance(source_path, list) or any(type(part) not in {str, int} for part in source_path):
-            raise ValidationError({"target": "Admitted target authority source path is invalid."})
-        if producer_attempt.result_kind == str(AttemptResultKind.SUSPEND):
-            if proposal_gate_path:
-                raise ValidationError({"target": "Direct gate authority cannot name a proposal gate path."})
-            gate_attempt = producer_attempt
-            gate_decisions = list(system_queryset(
-                step_run._meta.apps.get_model("workflows", "Decision"), using=using, lock=None,
-            ).filter(suspension_attempt=gate_attempt).order_by("declaration_index"))
-            gate_output = retained_gate_output(gate_attempt, gate_decisions)
-            if gate_output is None or not json_values_equal(
-                selected_id, _decision_value_at(gate_output, (*source_path, *remaining))
-            ):
-                raise ValidationError({"target": "Direct target authority differs from its settled gate."})
-        elif producer_attempt.result_kind == str(AttemptResultKind.DONE):
-            if not proposal_gate_path:
-                raise ValidationError({"target": "Proposal authority needs its admitted gate path."})
-            if leaf.get("kind") == "step_output" and (
-                not producer_step.output_present
-                or not json_values_equal(producer_step.output, producer_attempt.output)
-            ):
-                raise ValidationError({"target": "Current proposal output differs from retained evidence."})
-            if not producer_attempt.output_present or not json_values_equal(
-                selected_id, _decision_value_at(producer_attempt.output, (*source_path, *remaining))
-            ):
-                raise ValidationError({"target": "Proposal did not retain the selected authority ID."})
-            gate_leaf, gate_remaining = _decision_source_leaf(
-                producer_attempt.input_provenance, proposal_gate_path,
-                recovery_source_attempt_id=producer_step.run.recovery_source_attempt_id,
-            )
-            gate_attempt, _ = _admitted_source_attempt(
-                gate_leaf, run=producer_step.run, alias=using, attempt_model=type(attempt),
-            )
-            gate_decisions = list(system_queryset(
-                step_run._meta.apps.get_model("workflows", "Decision"), using=using, lock=None,
-            ).filter(suspension_attempt=gate_attempt).order_by("declaration_index"))
-            gate_output = retained_gate_output(gate_attempt, gate_decisions)
-            gate_path = gate_leaf.get("path", [])
-            admitted_gate_value = _decision_value_at(
-                producer_attempt.input, proposal_gate_path
-            )
-            forwarded_id = (
-                admitted_gate_value.get("decision_id")
-                if isinstance(admitted_gate_value, dict) else admitted_gate_value
-            )
-            if (
-                gate_output is None
-                or not isinstance(gate_path, list)
-                or any(type(part) not in {str, int} for part in gate_path)
-                or forwarded_id != selected_id
-                or not json_values_equal(
-                    admitted_gate_value,
-                    _decision_value_at(gate_output, (*gate_path, *gate_remaining)),
+            delete_relationship(
+                RelationshipTuple(
+                    resource=resource,
+                    relation="pending_decision",
+                    subject=subject,
                 )
-            ):
-                raise ValidationError({"target": "Proposal did not admit the original settled gate."})
-        else:
-            raise ValidationError({"target": "Target authority needs a retained gate or one proposal producer."})
-        decision_model = step_run._meta.apps.get_model("workflows", "Decision")
-        prior = system_queryset(decision_model, using=using, lock=None).filter(
-            sqid=selected_id, suspension_attempt=gate_attempt, verdict=Verdict.COMPLETED,
-        ).first()
-        if (
-            prior is None
-            or prior.pk not in gate_attempt.decision_settlement.get("decision_ids", ())
-            or prior.step_run_id == step_run.pk
-        ):
-            raise ValidationError({"target": "Selected target authority is not this exact completed gate."})
-        try:
-            subject = canonical_subject_ref(prior.resolved_by)
-        except (TypeError, ValueError) as error:
-            raise ValidationError({"target": "Decision target authority requires a human resolver."}) from error
-        if get_user_model().objects.active_person_for_subject(subject) is None:
-            raise ValidationError({"target": "Decision target authority requires a human resolver."})
-        return subject, prior
+            )
 
     @staticmethod
     def _validated_target(spec: DecisionSpec, *, actor: Any | None = None) -> tuple[str, str]:
         """Resolve one declared related record through the execution actor's read scope."""
 
-        return _canonical_decision_target(
-            spec.target_model, spec.target_id, actor=actor,
+        if not spec.target_model and not spec.target_id:
+            return "", ""
+        if not spec.target_model or not spec.target_id:
+            raise ValidationError({"target": "Decision target model and id must be supplied together."})
+        try:
+            model = apps.get_model(spec.target_model)
+        except (LookupError, ValueError) as error:
+            raise ValidationError({"target": "Decision target model is not installed."}) from error
+        queryset = read_scoped_queryset(model, actor, action="read")
+        if queryset is None:
+            raise PermissionDenied("Decision target is not readable by the execution actor.")
+        target = instance_from_public_id(model, spec.target_id, queryset=queryset)
+        if target is None:
+            raise ValidationError({"target": "Decision target was not found."})
+        canonical = canonical_record_target(target)
+        canonical_model = canonical.content_type.model_class()
+        if canonical_model is None:
+            raise ValidationError({"target": "Canonical Decision target model is not installed."})
+        return canonical_model._meta.label, public_id_for(canonical_model, canonical.object_id)
+
+
+class WorkflowDispatchQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet[Any]):
+    """Keep delivery lease writes on exact owner methods and generic mutations closed."""
+
+    def with_envelope(self) -> Self:
+        """Load spec-owned lease scalars in the dispatch query."""
+
+        return self.annotate(
+            _dispatch_lease_token=models.Case(
+                *(
+                    models.When(kind=kind, then=models.F(f"{kind.spec.lease_field}__lease_token"))
+                    for kind in WorkflowDispatchKind
+                    if kind.spec.lease_field is not None
+                ),
+                default=None,
+                output_field=models.UUIDField(),
+            )
         )
 
+    def _consume(self, envelope: WorkflowDispatchEnvelope, *, at: datetime) -> int:
+        """Consume one matching durable generation and invocation lease once."""
 
-class WorkflowDispatchQuerySet(AngeeQuerySet[Any]):
-    """Read durable delivery intents without exposing collection mutation bypasses."""
+        eligible = self.filter(
+            pk=envelope.dispatch_id,
+            consumed_at__isnull=True,
+            kind=envelope.kind,
+            generation=envelope.generation,
+            available_at__lte=at,
+        )
+        if envelope.lease_token is not None:
+            eligible = eligible.filter(**{f"{envelope.kind.spec.lease_field}__lease_token": envelope.lease_token})
+        return eligible.owner_update(consumed_at=at, updated_at=at)
 
-    def update(self, **kwargs: Any) -> int:
-        if AuditMixin.is_audit_nullification(kwargs):
-            return super().update(**kwargs)
-        raise TypeError("Workflow dispatches do not support collection updates.")
+    def validate_insert(self) -> None:
+        """Keep every generic insert behind the dispatch scheduling owner."""
 
-    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
-        raise TypeError("Workflow dispatches do not support bulk_create().")
-
-    def bulk_update(self, *args: Any, **kwargs: Any) -> int:
-        raise TypeError("Workflow dispatches do not support bulk_update().")
-
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise TypeError("Workflow dispatches are durable delivery evidence and cannot be deleted.")
+        raise TypeError("Workflow dispatches can only be created by WorkflowDispatchManager.")
 
 
 class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySet)):  # type: ignore[misc]
     """Schedule intents and own bounded publication telemetry."""
 
     @staticmethod
-    def _advance_error_prefix(dispatch: Any) -> str:
+    def advance_error_prefix(dispatch: Any) -> str:
         return f"Workflow advancement {dispatch.sqid} could not continue: "
 
-    def _save(self, dispatch: Any, *, alias: str, **kwargs: Any) -> None:
-        connection = connections[alias]
-        if not connection.atomic_blocks:
-            raise RuntimeError("Workflow dispatch writes require an owner transaction.")
-        capability = _DispatchSaveCapability(
-            _AtomicWriteCapability(alias, id(connection), id(connection.atomic_blocks[0]), id(dispatch)),
-            dispatch.pk,
-            dispatch._state.adding,
-            str(dispatch.kind),
-            dispatch.target_identity,
-        )
-        token = _dispatch_save_capability.set(capability)
-        try:
-            dispatch.save(using=alias, **kwargs)
-        finally:
-            _dispatch_save_capability.reset(token)
+    def _lock_target(self, dispatch: Any) -> DispatchTarget:
+        """Lock the spec's ancestry in run, step, attempt, decision order."""
 
-    @contextmanager
-    def _owner_transition(
-        self,
-        *,
-        dispatch_id: int,
-        lease_token: uuid.UUID | None,
-        at: datetime,
-        using: str,
-    ) -> Iterator[DispatchPreflight]:
-        """Lock canonical ancestry and preflight one exact delivery intent."""
+        spec = dispatch.kind.spec
+        paths = tuple(lock.path for lock in spec.lock_plan)
+        facts = system_queryset(self.model, lock=None).values(*paths).get(pk=dispatch.pk) if paths else {}
+        locked = {}
+        for lock in spec.lock_plan:
+            identity = facts[lock.path]
+            if identity is None:
+                continue
+            model = self.model
+            for name in lock.path.split("__"):
+                model = model._meta.get_field(name).remote_field.model
+            locked[lock.path] = (
+                model.objects.lock_execution_ancestry((identity,))[identity]
+                if lock.execution_ancestry
+                else system_queryset(model, lock=("self",)).get(pk=identity)
+            )
+        if paths and facts != system_queryset(self.model, lock=None).values(*paths).get(pk=dispatch.pk):
+            raise OperationalError("Dispatch ancestry changed while locking.")
+        row = dispatch if spec.target_relation is None else locked[spec.target_relation]
+        return DispatchTarget(row, dispatch, dict.fromkeys(spec.result_fields, 0))
 
-        connection = connections[using]
-        if not connection.in_atomic_block or not connection.atomic_blocks:
-            raise RuntimeError("Dispatch consumption requires the owning database transaction.")
-        if _dispatch_consume_session.get() is not None:
-            raise RuntimeError("Dispatch consumption authority is single-use and cannot nest.")
-        unresolved = system_queryset(self.model, using=using, lock=None).get(pk=dispatch_id)
-        if unresolved.kind == WorkflowDispatchKind.ADVANCE:
-            run_model = self.model._meta.get_field("run").remote_field.model
-            locked_run = system_queryset(run_model, using=using, lock=("self",)).get(pk=unresolved.run_id)
-            if locked_run.pk != unresolved.run_id:
-                raise OperationalError("Advance dispatch ancestry changed while locking.")
-        elif unresolved.kind == WorkflowDispatchKind.RUN_CANCEL:
-            run_model = self.model._meta.get_field("run").remote_field.model
-            locked_run = system_queryset(run_model, using=using, lock=("self",)).get(pk=unresolved.run_id)
-            if locked_run.pk != unresolved.run_id:
-                raise OperationalError("Run cancellation target changed while locking.")
-        elif unresolved.kind == WorkflowDispatchKind.CHILD_CANCEL:
-            run_model = self.model._meta.get_field("run").remote_field.model
-            ancestry = system_queryset(run_model, using=using, lock=None).values(
-                "parent_step_run_id", "parent_step_run__run_id",
-            ).get(pk=unresolved.run_id)
-            if ancestry["parent_step_run_id"] is None or ancestry["parent_step_run__run_id"] is None:
-                raise OperationalError("Owned-child cancellation lost its original parent slot.")
-            parent = system_queryset(run_model, using=using, lock=("self",)).get(
-                pk=ancestry["parent_step_run__run_id"]
-            )
-            step_run_model = run_model._meta.apps.get_model("workflows", "StepRun")
-            slot = system_queryset(step_run_model, using=using, lock=("self",)).get(
-                pk=ancestry["parent_step_run_id"]
-            )
-            child = system_queryset(run_model, using=using, lock=("self",)).get(pk=unresolved.run_id)
-            if slot.run_id != parent.pk or child.parent_step_run_id != slot.pk:
-                raise OperationalError("Owned-child cancellation ancestry changed while locking.")
-        elif unresolved.kind == WorkflowDispatchKind.EXECUTE:
-            attempt_model = self.model._meta.get_field("step_attempt").remote_field.model
-            ancestry = system_queryset(attempt_model, using=using, lock=None).values(
-                "step_run_id", "step_run__run_id"
-            ).get(pk=unresolved.step_attempt_id)
-            step_run_model = attempt_model._meta.get_field("step_run").remote_field.model
-            run_model = step_run_model._meta.get_field("run").remote_field.model
-            locked_run = system_queryset(run_model, using=using, lock=("self",)).get(
-                pk=ancestry["step_run__run_id"]
-            )
-            locked_step_run = system_queryset(step_run_model, using=using, lock=("self",)).get(
-                pk=ancestry["step_run_id"]
-            )
-            locked_attempt = system_queryset(attempt_model, using=using, lock=("self",)).get(
-                pk=unresolved.step_attempt_id
-            )
-            if (
-                locked_step_run.run_id != locked_run.pk
-                or locked_attempt.step_run_id != locked_step_run.pk
-            ):
-                raise OperationalError("Execution dispatch ancestry changed while locking.")
-        elif unresolved.kind == WorkflowDispatchKind.ARTIFACT_DELIVERY:
-            # The sender inserts only this intent while holding domain locks.
-            # Delivery scans subscribed runs after the sender commits.
-            system_queryset(self.model, using=using, lock=("self",)).get(pk=dispatch_id)
-        else:
-            decision_model = self.model._meta.get_field("decision").remote_field.model
-            ancestry = system_queryset(decision_model, using=using, lock=None).values(
-                "step_run_id", "step_run__run_id", "suspension_attempt_id"
-            ).get(pk=unresolved.decision_id)
-            step_run_model = decision_model._meta.get_field("step_run").remote_field.model
-            run_model = step_run_model._meta.get_field("run").remote_field.model
-            locked_run = system_queryset(run_model, using=using, lock=("self",)).get(
-                pk=ancestry["step_run__run_id"]
-            )
-            locked_step_run = system_queryset(step_run_model, using=using, lock=("self",)).get(
-                pk=ancestry["step_run_id"]
-            )
-            locked_attempt = None
-            if ancestry["suspension_attempt_id"] is not None:
-                attempt_model = self.model._meta.get_field("step_attempt").remote_field.model
-                locked_attempt = system_queryset(attempt_model, using=using, lock=("self",)).get(
-                    pk=ancestry["suspension_attempt_id"]
-                )
-            locked_decision = system_queryset(decision_model, using=using, lock=("self",)).get(
-                pk=unresolved.decision_id
-            )
-            if (
-                locked_step_run.run_id != locked_run.pk
-                or locked_decision.step_run_id != locked_step_run.pk
-                or locked_decision.suspension_attempt_id != ancestry["suspension_attempt_id"]
-                or (
-                    locked_attempt is not None
-                    and locked_attempt.step_run_id != locked_step_run.pk
-                )
-            ):
-                raise OperationalError("Decision dispatch ancestry changed while locking.")
-        dispatch = system_queryset(self.model, using=using, lock=None).select_related(
-            "step_attempt"
-        ).get(pk=dispatch_id)
-        envelope = dispatch.envelope
-        if envelope.lease_token != lease_token:
-            yield DispatchPreflight(envelope, DispatchPreflightDisposition.FENCED)
-            return
-        if dispatch.consumed_at is not None:
-            yield DispatchPreflight(envelope, DispatchPreflightDisposition.DUPLICATE)
-            return
-        if at < dispatch.available_at:
-            yield DispatchPreflight(envelope, DispatchPreflightDisposition.EARLY)
-            return
-        token = _dispatch_consume_session.set(
-            _DispatchConsumeSession(
-                using,
-                id(connection),
-                id(connection.atomic_blocks[0]),
-                str(dispatch.kind),
-                envelope.target_id,
-                dispatch.generation,
-                dispatch.pk,
-                lease_token,
-            )
-        )
-        try:
-            yield DispatchPreflight(envelope, DispatchPreflightDisposition.READY)
-            session = _dispatch_consume_session.get()
-            if session is not None and not session.consumed:
-                raise RuntimeError("Ready dispatch transition exited without consuming its intent.")
-        finally:
-            _dispatch_consume_session.reset(token)
-
-    def _consume_locked(
+    def deliver(
         self,
         dispatch_id: int,
         *,
-        at: datetime,
-        fenced: bool = False,
-    ) -> DispatchConsumption:
-        """Consume one exact intent last in an already locked domain transition."""
+        expected_target_id: int | None = None,
+        lease_token: uuid.UUID | None = None,
+        now: datetime | None = None,
+        expected_kind: WorkflowDispatchKind | None = None,
+        expected_generation: int | None = None,
+        supplied_envelope: WorkflowDispatchEnvelope | None = None,
+    ) -> dict[str, int]:
+        """Admit, perform and consume one spec-owned durable delivery.
 
-        alias = self.db
-        session = _dispatch_consume_session.get()
-        connection = connections[alias]
-        if (
-            session is None
-            or session.alias != alias
-            or session.connection_id != id(connection)
-            or not connection.in_atomic_block
-            or not connection.atomic_blocks
-            or session.outer_atomic_id != id(connection.atomic_blocks[0])
-            or session.consumed
-            or session.dispatch_id != dispatch_id
-        ):
-            raise RuntimeError("Dispatch consumption requires exact domain-owner authority.")
-        dispatch = system_queryset(self.model, using=alias, lock=("self",)).get(pk=dispatch_id)
-        if (
-            dispatch.kind != session.kind
-            or dispatch.envelope.target_id != session.target_id
-            or dispatch.generation != session.generation
-            or dispatch.envelope.lease_token != session.lease_token
-        ):
-            raise RuntimeError("Dispatch consumption authority does not match this intent.")
-        if dispatch.consumed_at is not None or at < dispatch.available_at:
-            raise RuntimeError("Ready dispatch admission changed before consumption.")
-        session.consumed = True
-        if dispatch.kind == WorkflowDispatchKind.ADVANCE and not fenced:
-            run_model = self.model._meta.get_field("run").remote_field.model
-            run = system_queryset(run_model, using=alias, lock=None).get(pk=dispatch.run_id)
-            if (
-                run.status not in {RunStatus.FAILED, RunStatus.CANCELED}
-                and run.error.startswith(self._advance_error_prefix(dispatch))
-            ):
-                run.error = ""
-                run.save(using=alias, update_fields=["error", "updated_at"])
-        dispatch.consumed_at = at
-        self._save(dispatch, alias=alias, update_fields=["consumed_at", "updated_at"])
-        return DispatchConsumption.FENCED if fenced else DispatchConsumption.CONSUMED
+        Transport callers supply the complete envelope, compared once under
+        the locks. Local facade callers may assert individual identity fields.
+        A wrong local lease, duplicate or early delivery is inert. A handler returning
+        false fences and consumes its stale intent. Exceptions roll back domain
+        effects and consumption together. Executable attempts invoke their step
+        after this delivery transaction exits. Callers performing external work
+        must not enclose delivery in another transaction.
+        """
+
+        at = now or timezone.now()
+        admitted = False
+        spec = None
+        try:
+            with transaction.atomic(), system_context(reason="workflows.dispatch.deliver"):
+                unresolved = system_queryset(self.model, lock=None).get(pk=dispatch_id)
+                spec = unresolved.kind.spec
+                target = self._lock_target(unresolved)
+                dispatch = system_queryset(self.model, lock=("self",)).with_envelope().get(pk=dispatch_id)
+                if dispatch.kind != unresolved.kind:
+                    raise OperationalError("Dispatch kind changed while locking.")
+                target.dispatch = dispatch
+                envelope = dispatch.envelope
+                if supplied_envelope is not None and supplied_envelope != envelope:
+                    raise ValidationError({"dispatch": "Transport envelope does not match its durable intent."})
+                invocation_lease = supplied_envelope.lease_token if supplied_envelope is not None else lease_token
+                if (
+                    envelope.lease_token != invocation_lease
+                    or dispatch.consumed_at is not None
+                    or at < dispatch.available_at
+                ):
+                    return target.result
+                if (
+                    (expected_target_id is not None and expected_target_id != envelope.target_id)
+                    or (expected_kind is not None and expected_kind != envelope.kind)
+                    or (expected_generation is not None and expected_generation != envelope.generation)
+                ):
+                    raise ValidationError({"dispatch": "Transport envelope does not match its durable intent."})
+                admitted = True
+                applied = spec.handler(target, at=at)
+                if system_queryset(self.model, lock=None)._consume(envelope, at=at) != 1:
+                    raise RuntimeError("Dispatch was already consumed or its admission changed.")
+                if not applied:
+                    return dict.fromkeys(spec.result_fields, 0)
+        except Exception as error:
+            if admitted and spec is not None and spec.error_handler is not None:
+                try:
+                    getattr(self, spec.error_handler)(dispatch_id, error=error)
+                except Exception:  # noqa: BLE001 - preserve the original domain failure.
+                    logger.exception("Could not retain workflow dispatch failure visibility.")
+            raise
+        return target.after_unlock() if target.after_unlock is not None else target.result
 
     def record_advance_error(self, dispatch_id: int, *, error: Exception) -> bool:
         """Expose one failed ADVANCE while preserving its durable retry intent."""
 
-        alias = self.db
-        unresolved = system_queryset(self.model, using=alias, lock=None).values(
-            "kind", "run_id"
-        ).get(pk=dispatch_id)
+        unresolved = system_queryset(self.model, lock=None).values("kind", "run_id").get(pk=dispatch_id)
         if unresolved["kind"] != WorkflowDispatchKind.ADVANCE or unresolved["run_id"] is None:
             raise ValidationError({"dispatch": "Advance errors require an ADVANCE intent."})
         run_model = self.model._meta.get_field("run").remote_field.model
-        with transaction.atomic(using=alias), system_context(reason="workflows.dispatch.advance_error"):
-            run = system_queryset(run_model, using=alias, lock=("self",)).get(
-                pk=unresolved["run_id"]
-            )
-            dispatch = system_queryset(self.model, using=alias, lock=("self",)).get(
-                pk=dispatch_id
-            )
+        with transaction.atomic(), system_context(reason="workflows.dispatch.advance_error"):
+            run = run_model.objects.lock_execution_ancestry((unresolved["run_id"],))[unresolved["run_id"]]
+            dispatch = system_queryset(self.model, lock=("self",)).get(pk=dispatch_id)
             if dispatch.kind != WorkflowDispatchKind.ADVANCE or dispatch.run_id != run.pk:
                 raise OperationalError("Advance dispatch ancestry changed while locking.")
             if dispatch.consumed_at is not None or run.is_terminal:
                 return False
-            prefix = self._advance_error_prefix(dispatch)
+            prefix = self.advance_error_prefix(dispatch)
             if run.error and not run.error.startswith(prefix):
                 return False
             detail = " ".join(str(error).split()) or type(error).__name__
@@ -7300,27 +6451,54 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
             if run.error == message:
                 return False
             run.error = message
-            run.save(using=alias, update_fields=["error", "updated_at"])
+            run.save(update_fields=["error", "updated_at"])
             return True
 
     def schedule_advance(self, run: Any, *, available_at: datetime) -> Any:
         """Create one independent run advance after locking its owner."""
 
-        alias = self.db
         run_model = self.model._meta.get_field("run").remote_field.model
-        with transaction.atomic(using=alias), system_context(reason="workflows.dispatch.schedule_advance"):
-            locked = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run.pk)
-            dispatch = self.model(kind=WorkflowDispatchKind.ADVANCE, run=locked, available_at=available_at)
-            self._save(dispatch, alias=alias, force_insert=True)
+        with transaction.atomic(), system_context(reason="workflows.dispatch.schedule_advance"):
+            locked = run_model.objects.lock_execution_ancestry((run.pk,))[run.pk]
+            dispatch = self.model(kind=WorkflowDispatchKind.ADVANCE, run_id=locked.pk, available_at=available_at)
+            dispatch.persist_delivery()
             return dispatch
+
+    def schedule_run_settle(self, run: Any) -> tuple[Any, bool]:
+        """Retain one subject settlement in the terminal run's transaction."""
+
+        if not connection.in_atomic_block:
+            raise RuntimeError("Subject settlement must share the terminal run transaction.")
+        run_model = self.model._meta.get_field("run").remote_field.model
+        locked = system_queryset(run_model, lock=("self",)).get(pk=run.pk)
+        if not locked.is_terminal:
+            raise ValidationError({"run": "Subject settlement requires a terminal run."})
+        existing = (
+            system_queryset(self.model, lock=None)
+            .filter(
+                kind=WorkflowDispatchKind.RUN_SETTLE,
+                run_id=locked.pk,
+            )
+            .first()
+        )
+        if existing is not None:
+            return existing, False
+        dispatch = self.model(
+            kind=WorkflowDispatchKind.RUN_SETTLE,
+            run_id=locked.pk,
+            available_at=timezone.now(),
+        )
+        with system_context(reason="workflows.dispatch.schedule_run_settle"):
+            dispatch.persist_delivery()
+        transaction.on_commit(lambda: enqueue_dispatch_publisher())
+        return dispatch, True
 
     def schedule_artifact_delivery(self, resource: Any, *, available_at: datetime | None = None) -> Any:
         """Retain a domain-change intent without taking any Workflow run lock."""
 
-        alias = self.db
-        if not connections[alias].in_atomic_block:
+        if not connection.in_atomic_block:
             raise RuntimeError("Artifact delivery must share the domain transition transaction.")
-        target = canonical_record_target(resource)
+        target = resource if isinstance(resource, CanonicalRecordTarget) else canonical_record_target(resource)
         if not isinstance(target.object_id, int):
             raise ValidationError({"resource": "Artifact delivery requires an integer record identity."})
         dispatch = self.model(
@@ -7330,32 +6508,37 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
             available_at=available_at or timezone.now(),
         )
         with system_context(reason="workflows.dispatch.schedule_artifact_delivery"):
-            self._save(dispatch, alias=alias, force_insert=True)
-        transaction.on_commit(enqueue_dispatch_publisher, using=alias)
+            dispatch.persist_delivery()
+        transaction.on_commit(lambda: enqueue_dispatch_publisher())
         return dispatch
 
     def schedule_child_cancel(self, child: Any, *, available_at: datetime | None = None) -> tuple[Any, bool]:
         """Retain one owned-child cancellation while the canceling parent is locked."""
 
-        alias = self.db
-        if not connections[alias].in_atomic_block:
+        if not connection.in_atomic_block:
             raise RuntimeError("Owned-child cancellation must share the parent cancellation transaction.")
         run_model = self.model._meta.get_field("run").remote_field.model
         with system_context(reason="workflows.dispatch.child_cancel"):
-            retained = system_queryset(run_model, using=alias, lock=None).get(pk=child.pk)
+            retained = system_queryset(run_model, lock=None).get(pk=child.pk)
             if retained.parent_relation != ParentRelation.OWNED_CALL or retained.parent_step_run_id is None:
                 raise ValidationError({"child": "Cancellation target is not an owned child call."})
-            existing = system_queryset(self.model, using=alias, lock=None).filter(
-                kind=WorkflowDispatchKind.CHILD_CANCEL, run_id=retained.pk,
-            ).first()
+            existing = (
+                system_queryset(self.model, lock=None)
+                .filter(
+                    kind=WorkflowDispatchKind.CHILD_CANCEL,
+                    run_id=retained.pk,
+                )
+                .first()
+            )
             if existing is not None:
                 return existing, False
             dispatch = self.model(
-                kind=WorkflowDispatchKind.CHILD_CANCEL, run=retained,
+                kind=WorkflowDispatchKind.CHILD_CANCEL,
+                run_id=retained.pk,
                 available_at=available_at or timezone.now(),
             )
-            self._save(dispatch, alias=alias, force_insert=True)
-            transaction.on_commit(enqueue_dispatch_publisher, using=alias)
+            dispatch.persist_delivery()
+            transaction.on_commit(lambda: enqueue_dispatch_publisher())
             return dispatch, True
 
     def schedule_run_cancel(
@@ -7364,66 +6547,87 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
         run: Any,
         *,
         actor: Any,
+        lease_token: uuid.UUID,
         available_at: datetime | None = None,
     ) -> tuple[Any, bool]:
         """Retain one cross-run cancellation from an exact database command."""
 
-        alias = self.db
         run_model = self.model._meta.get_field("run").remote_field.model
         attempt_model = run_model._meta.apps.get_model("workflows", "StepAttempt")
-        owner_step, _input = attempt_model.objects.active_database_command_input(
-            step_run_id,
-            actor=actor,
-        )
-        with system_context(reason="workflows.dispatch.run_cancel"):
-            retained = system_queryset(run_model, using=alias, lock=None).get(pk=run.pk)
+        with transaction.atomic(), system_context(reason="workflows.dispatch.run_cancel"):
+            owner_run, owner_step = attempt_model.objects._locked_ancestry(step_run_id)
+            attempt = system_queryset(attempt_model, lock=("self",)).get(pk=owner_step.current_attempt_id)
+            if (
+                owner_run.is_terminal
+                or owner_step.status != StepRunStatus.STARTED
+                or attempt.lease_token != lease_token
+                or attempt.started_at is None
+                or attempt.result_recorded_at is not None
+                or attempt.lease_revoked_at is not None
+                or owner_run.admission_actor_subject() != to_subject_ref(actor)
+            ):
+                raise ValidationError({"attempt": "Run cancellation requires the current invocation lease."})
+            retained = system_queryset(run_model, lock=None).get(pk=run.pk)
+            if not retained.with_actor(actor).check_access("write").allowed:
+                raise PermissionDenied("The actor cannot cancel this workflow run.")
             if retained.pk == owner_step.run_id:
                 raise ValidationError({"run": "A workflow cannot defer cancellation of itself."})
-            existing = system_queryset(self.model, using=alias, lock=None).filter(
-                kind=WorkflowDispatchKind.RUN_CANCEL,
-                run_id=retained.pk,
-            ).first()
+            existing = (
+                system_queryset(self.model, lock=None)
+                .filter(
+                    kind=WorkflowDispatchKind.RUN_CANCEL,
+                    run_id=retained.pk,
+                )
+                .first()
+            )
             if existing is not None:
                 return existing, False
             dispatch = self.model(
                 kind=WorkflowDispatchKind.RUN_CANCEL,
-                run=retained,
+                run_id=retained.pk,
                 available_at=available_at or timezone.now(),
             )
             try:
-                with transaction.atomic(using=alias):
-                    self._save(dispatch, alias=alias, force_insert=True)
+                with transaction.atomic():
+                    dispatch.persist_delivery()
             except IntegrityError:
-                existing = system_queryset(self.model, using=alias, lock=None).filter(
-                    kind=WorkflowDispatchKind.RUN_CANCEL,
-                    run_id=retained.pk,
-                ).first()
+                existing = (
+                    system_queryset(self.model, lock=None)
+                    .filter(
+                        kind=WorkflowDispatchKind.RUN_CANCEL,
+                        run_id=retained.pk,
+                    )
+                    .first()
+                )
                 if existing is None:
                     raise
                 return existing, False
-            transaction.on_commit(enqueue_dispatch_publisher, using=alias)
+            transaction.on_commit(lambda: enqueue_dispatch_publisher())
             return dispatch, True
 
     def schedule_execute(self, attempt: Any) -> tuple[Any, bool]:
         """Ensure one execution intent using the attempt's immutable availability."""
 
-        alias = self.db
         attempt_model = self.model._meta.get_field("step_attempt").remote_field.model
-        row = system_queryset(attempt_model, using=alias, lock=None).values("step_run_id").get(pk=attempt.pk)
+        row = system_queryset(attempt_model, lock=None).values("step_run_id").get(pk=attempt.pk)
         step_run_model = attempt_model._meta.get_field("step_run").remote_field.model
         run_model = step_run_model._meta.get_field("run").remote_field.model
-        run_id = system_queryset(step_run_model, using=alias, lock=None).values_list("run_id", flat=True).get(
-            pk=row["step_run_id"]
-        )
-        with transaction.atomic(using=alias), system_context(reason="workflows.dispatch.schedule_execute"):
-            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=run_id)
-            step_run = system_queryset(step_run_model, using=alias, lock=("self",)).get(pk=row["step_run_id"])
-            locked = system_queryset(attempt_model, using=alias, lock=("self",)).get(pk=attempt.pk)
+        run_id = system_queryset(step_run_model, lock=None).values_list("run_id", flat=True).get(pk=row["step_run_id"])
+        with transaction.atomic(), system_context(reason="workflows.dispatch.schedule_execute"):
+            run = run_model.objects.lock_execution_ancestry((run_id,))[run_id]
+            step_run = (
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+                .get(pk=row["step_run_id"])
+            )
+            locked = system_queryset(attempt_model, lock=("self",)).get(pk=attempt.pk)
             if locked.step_run_id != step_run.pk or step_run.run_id != run.pk:
                 raise OperationalError("Execution dispatch ancestry changed while locking.")
-            existing = system_queryset(self.model, using=alias, lock=("self",)).filter(
-                kind=WorkflowDispatchKind.EXECUTE, step_attempt=locked
-            ).first()
+            existing = (
+                system_queryset(self.model, lock=("self",))
+                .filter(kind=WorkflowDispatchKind.EXECUTE, step_attempt=locked)
+                .first()
+            )
             if existing is not None:
                 return existing, False
             if (
@@ -7440,10 +6644,10 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
                 raise ValidationError({"attempt": "Execution dispatch requires a claimed availability time."})
             dispatch = self.model(
                 kind=WorkflowDispatchKind.EXECUTE,
-                step_attempt=locked,
+                step_attempt_id=locked.pk,
                 available_at=available_at,
             )
-            self._save(dispatch, alias=alias, force_insert=True)
+            dispatch.persist_delivery()
             return dispatch, True
 
     def schedule_decision(self, kind: WorkflowDispatchKind, decision: Any) -> tuple[Any, bool]:
@@ -7451,54 +6655,59 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
 
         if kind not in {WorkflowDispatchKind.DECISION_EXPIRE, WorkflowDispatchKind.DECISION_ESCALATE}:
             raise ValidationError({"kind": "Decision dispatch kind must be expire or escalate."})
-        alias = self.db
         decision_model = self.model._meta.get_field("decision").remote_field.model
-        ancestry = system_queryset(decision_model, using=alias, lock=None).values(
-            "step_run_id", "step_run__run_id", "suspension_attempt_id"
-        ).get(pk=decision.pk)
+        ancestry = (
+            system_queryset(decision_model, lock=None)
+            .values("step_run_id", "step_run__run_id", "suspension_attempt_id")
+            .get(pk=decision.pk)
+        )
         step_run_model = decision_model._meta.get_field("step_run").remote_field.model
         run_model = step_run_model._meta.get_field("run").remote_field.model
         attempt_model = self.model._meta.get_field("step_attempt").remote_field.model
-        with transaction.atomic(using=alias), system_context(reason="workflows.dispatch.schedule_decision"):
-            run = system_queryset(run_model, using=alias, lock=("self",)).get(pk=ancestry["step_run__run_id"])
-            step_run = system_queryset(step_run_model, using=alias, lock=("self",)).get(pk=ancestry["step_run_id"])
+        with transaction.atomic(), system_context(reason="workflows.dispatch.schedule_decision"):
+            run = run_model.objects.lock_execution_ancestry((ancestry["step_run__run_id"],))[
+                ancestry["step_run__run_id"]
+            ]
+            step_run = (
+                system_queryset(step_run_model, lock=("self",))
+                .select_related("step", "run__workflow", "current_attempt", "current_map_expansion")
+                .get(pk=ancestry["step_run_id"])
+            )
             attempt = None
             if ancestry["suspension_attempt_id"] is not None:
-                attempt = system_queryset(attempt_model, using=alias, lock=("self",)).get(
-                    pk=ancestry["suspension_attempt_id"]
-                )
-            locked = system_queryset(decision_model, using=alias, lock=("self",)).get(pk=decision.pk)
-            if locked.step_run_id != step_run.pk or step_run.run_id != run.pk or (
-                attempt is not None and attempt.step_run_id != step_run.pk
+                attempt = system_queryset(attempt_model, lock=("self",)).get(pk=ancestry["suspension_attempt_id"])
+            locked = system_queryset(decision_model, lock=("self",)).get(pk=decision.pk)
+            if (
+                locked.step_run_id != step_run.pk
+                or step_run.run_id != run.pk
+                or (attempt is not None and attempt.step_run_id != step_run.pk)
             ):
                 raise OperationalError("Decision dispatch ancestry changed while locking.")
-            existing = system_queryset(self.model, using=alias, lock=("self",)).filter(
-                kind=kind, decision=locked, generation=locked.attempts
-            ).first()
+            existing = (
+                system_queryset(self.model, lock=("self",))
+                .filter(kind=kind, decision=locked, generation=locked.attempts)
+                .first()
+            )
             if existing is not None:
                 return existing, False
-            available_at = (
-                locked.expires_at
-                if kind == WorkflowDispatchKind.DECISION_EXPIRE
-                else locked.escalate_at
-            )
+            available_at = locked.expires_at if kind == WorkflowDispatchKind.DECISION_EXPIRE else locked.escalate_at
             if available_at is None:
                 raise ValidationError({"decision": "Decision dispatch requires its declared deadline."})
             if locked.verdict != Verdict.PENDING or step_run.status != StepRunStatus.WAITING or run.is_terminal:
                 raise ValidationError({"decision": "Decision timer dispatch requires a current pending decision."})
             if attempt is not None and (
                 step_run.current_attempt_id != attempt.pk
-                or attempt.result_kind != str(AttemptResultKind.SUSPEND)
+                or attempt.result_kind != AttemptResultKind.SUSPEND
                 or attempt.applied_at is None
             ):
                 raise ValidationError({"decision": "Decision timer dispatch requires its applied suspension."})
             dispatch = self.model(
                 kind=kind,
-                decision=locked,
+                decision_id=locked.pk,
                 generation=locked.attempts,
                 available_at=available_at,
             )
-            self._save(dispatch, alias=alias, force_insert=True)
+            dispatch.persist_delivery()
             return dispatch, True
 
     def due_envelopes(self, *, now: datetime, limit: int) -> tuple[WorkflowDispatchEnvelope, ...]:
@@ -7510,16 +6719,17 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
                     consumed_at__isnull=True,
                     available_at__lte=now,
                     next_send_at__lte=now,
-                ).select_related("step_attempt").order_by("next_send_at", "available_at", "pk")[:limit]
+                )
+                .with_envelope()
+                .order_by("next_send_at", "available_at", "pk")[:limit]
             )
         return tuple(row.envelope for row in rows)
 
     def record_publication(self, dispatch_id: int, *, attempted_at: datetime, error: str) -> None:
         """Record bounded send telemetry after one unlocked transport call."""
 
-        alias = self.db
-        with transaction.atomic(using=alias), system_context(reason="workflows.dispatch.telemetry"):
-            dispatch = system_queryset(self.model, using=alias, lock=("self",)).get(pk=dispatch_id)
+        with transaction.atomic(), system_context(reason="workflows.dispatch.telemetry"):
+            dispatch = system_queryset(self.model, lock=("self",)).get(pk=dispatch_id)
             dispatch.send_count += 1
             fields = ["send_count", "updated_at"]
             if dispatch.last_sent_at is None or attempted_at >= dispatch.last_sent_at:
@@ -7528,8 +6738,4 @@ class WorkflowDispatchManager(AngeeManager.from_queryset(WorkflowDispatchQuerySe
                 seconds = min(300, 2 ** min(dispatch.send_count, 8)) if error else 30
                 dispatch.next_send_at = attempted_at + timedelta(seconds=seconds)
                 fields.extend(["last_sent_at", "last_send_error", "next_send_at"])
-            self._save(
-                dispatch,
-                alias=alias,
-                update_fields=fields,
-            )
+            dispatch.persist_delivery(fields=fields)

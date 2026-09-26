@@ -10,14 +10,14 @@ from __future__ import annotations
 import copy
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, NoReturn, cast, get_args
 
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.db import models, router
+from django.db import models
 from django.utils.module_loading import import_string
 from django_choices_field import TextChoicesField
 from jsonschema import Draft202012Validator
@@ -26,6 +26,7 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.fields import enum_member_for
+from angee.base.jsonschema import LocalSchemaReferences
 
 __all__ = [
     "ImplBase",
@@ -33,6 +34,7 @@ __all__ = [
     "ImplClassField",
     "ImplDefaultsMixin",
     "impl_registry",
+    "resolve_all_impl_classes",
     "resolve_impl_class",
     "model_config_form_spec",
 ]
@@ -103,16 +105,16 @@ _FORM_SPEC_RELATION_VALIDATOR = Draft202012Validator(_FORM_SPEC_RELATION_SCHEMA)
 
 
 class _ConfigFormSpecProjector:
-    """Own the bounded translation from one Pydantic schema into FormSpec."""
+    """Project bounded FormSpec shapes, resolving root-local refs through referencing."""
 
     def __init__(self, model: type[BaseModel], *, owner: str) -> None:
         self.owner = owner
-        self._validate_aliases(model, path="config", seen=frozenset())
-        self.schema = model.model_json_schema(by_alias=True)
-        definitions = self.schema.pop("$defs", {})
-        if not isinstance(definitions, dict):
+        _validate_config_aliases(model, owner=owner)
+        schema = model.model_json_schema(by_alias=True)
+        if not isinstance(schema.get("$defs", {}), dict):
             self._unsupported("config", "$defs")
-        self.definitions = definitions
+        self.references = LocalSchemaReferences(schema)
+        self.schema = {key: value for key, value in schema.items() if key != "$defs"}
 
     def form_spec(self) -> dict[str, Any]:
         projected = self._project(self.schema, path="config", refs=())
@@ -134,13 +136,12 @@ class _ConfigFormSpecProjector:
         if "$ref" in schema:
             self._reject_keywords(schema, _SCHEMA_COMMON_KEYS | {"$ref"}, path)
             reference = schema["$ref"]
-            prefix = "#/$defs/"
-            if not isinstance(reference, str) or not reference.startswith(prefix):
+            target = self.references.resolve(reference)
+            if target is None:
                 self._unsupported(path, f"reference {reference!r}")
-            name = reference.removeprefix(prefix)
-            if name in refs:
+            if reference in refs:
                 self._unsupported(path, f"recursive reference {reference!r}")
-            projected = self._project(self.definitions.get(name), path=path, refs=(*refs, name))
+            projected = self._project(target, path=path, refs=(*refs, reference))
             projected.pop("label", None)
             return self._metadata(projected, schema)
 
@@ -291,38 +292,6 @@ class _ConfigFormSpecProjector:
         if unsupported:
             self._unsupported(path, f"keywords {', '.join(unsupported)}")
 
-    def _validate_aliases(
-        self, model: type[BaseModel], *, path: str, seen: frozenset[type[BaseModel]]
-    ) -> None:
-        if model in seen:
-            return
-        wire_names = [field.alias or name for name, field in model.model_fields.items()]
-        duplicates = sorted({name for name in wire_names if wire_names.count(name) > 1})
-        if duplicates:
-            raise ImproperlyConfigured(
-                f"{self.owner}.config_model field {path!r} has colliding wire names: {', '.join(duplicates)}."
-            )
-        for name, field in model.model_fields.items():
-            field_path = f"{path}.{name}"
-            alias = field.alias
-            if (
-                alias is None
-                and (field.validation_alias is not None or field.serialization_alias is not None)
-            ) or (
-                alias is not None
-                and (
-                    not isinstance(alias, str)
-                    or field.validation_alias != alias
-                    or field.serialization_alias != alias
-                )
-            ):
-                raise ImproperlyConfigured(
-                    f"{self.owner}.config_model field {field_path!r} must use one string alias "
-                    "for validation and serialization."
-                )
-            for nested in _pydantic_models_in(field.annotation):
-                self._validate_aliases(nested, path=field_path, seen=seen | {model})
-
     def _unsupported(self, path: str, detail: str) -> NoReturn:
         raise ImproperlyConfigured(f"{self.owner}.config_model field {path!r} uses unsupported schema: {detail}.")
 
@@ -331,6 +300,33 @@ def _pydantic_models_in(annotation: Any) -> tuple[type[BaseModel], ...]:
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return (annotation,)
     return tuple(model for argument in get_args(annotation) for model in _pydantic_models_in(argument))
+
+
+def _validate_config_aliases(
+    model: type[BaseModel], *, owner: str, path: str = "config", seen: frozenset[type[BaseModel]] = frozenset()
+) -> None:
+    """Keep one unambiguous input/output identity for every declared config field."""
+
+    if model in seen:
+        return
+    wire_names = [field.alias or name for name, field in model.model_fields.items()]
+    duplicates = sorted({name for name in wire_names if wire_names.count(name) > 1})
+    if duplicates:
+        raise ImproperlyConfigured(
+            f"{owner}.config_model field {path!r} has colliding wire names: {', '.join(duplicates)}."
+        )
+    for name, field in model.model_fields.items():
+        field_path = f"{path}.{name}"
+        alias = field.alias
+        if (alias is None and (field.validation_alias is not None or field.serialization_alias is not None)) or (
+            alias is not None
+            and (not isinstance(alias, str) or field.validation_alias != alias or field.serialization_alias != alias)
+        ):
+            raise ImproperlyConfigured(
+                f"{owner}.config_model field {field_path!r} must use one string alias for validation and serialization."
+            )
+        for nested in _pydantic_models_in(field.annotation):
+            _validate_config_aliases(nested, owner=owner, path=field_path, seen=seen | {model})
 
 
 def model_config_form_spec(model: type[BaseModel], *, owner: str) -> dict[str, Any]:
@@ -389,16 +385,21 @@ class ImplBase:
 
     @classmethod
     def config_defaults(cls) -> dict[str, Any]:
-        """Return non-empty config suggestions from the authoritative typed declaration."""
+        """Return non-empty static input suggestions from Pydantic's JSON Schema.
+
+        Pydantic's validation schema owns default encoding and omits factories;
+        ``normalize_config`` resolves those when validating runtime input.
+        FormSpec support does not determine which backend defaults are available.
+        """
 
         if cls.config_model is None:
             return {}
-        spec = cls.config_form_spec()
-        assert spec is not None
+        _validate_config_aliases(cls.config_model, owner=cls.__name__)
+        schema = cls.config_model.model_json_schema(by_alias=True)
         return {
-            name: copy.deepcopy(field["defaultValue"])
-            for name, field in spec["properties"].items()
-            if field.get("defaultValue") not in (None, "")
+            name: copy.deepcopy(field["default"])
+            for name, field in schema["properties"].items()
+            if field.get("default") not in (None, "")
         }
 
     @classmethod
@@ -441,6 +442,18 @@ class ImplBase:
         return validated.model_dump(mode="json", by_alias=True)
 
     @classmethod
+    def declared_config_keys(cls) -> frozenset[str] | None:
+        """Return the top-level config wire names this impl accepts.
+
+        ``None`` means the config is untyped or open (``extra="allow"``), so every
+        key is accepted.
+        """
+
+        if cls.config_model is None or cls.config_model.model_config.get("extra") == "allow":
+            return None
+        return frozenset(field.alias or name for name, field in cls.config_model.model_fields.items())
+
+    @classmethod
     def config_form_spec(cls) -> dict[str, Any] | None:
         """Translate Pydantic's supported JSON Schema subset into FormSpec."""
 
@@ -449,7 +462,12 @@ class ImplBase:
         return model_config_form_spec(cls.config_model, owner=cls.__name__)
 
     @classmethod
-    def materialize(cls, instance: models.Model, *, provided: frozenset[str] = frozenset()) -> set[str]:
+    def materialize(
+        cls,
+        instance: models.Model,
+        *,
+        provided: frozenset[str] = frozenset(),
+    ) -> set[str]:
         """Seed ``instance``'s fields from this impl's effective defaults on create.
 
         Seeds only fields the caller did not supply. A string foreign-key default
@@ -506,7 +524,7 @@ def impl_registry(registry_setting: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in mapping.items()}
 
 
-def resolve_impl_class(registry_setting: str, key: str, base_class: type) -> type:
+def resolve_impl_class[T](registry_setting: str, key: str, base_class: type[T]) -> type[T]:
     """Return the impl class ``registry_setting`` binds to ``key``.
 
     The dotted path comes from composed, trusted settings and is checked against
@@ -528,6 +546,38 @@ def resolve_impl_class(registry_setting: str, key: str, base_class: type) -> typ
     return impl
 
 
+def resolve_all_impl_classes[T](
+    registry_setting: str,
+    base_class: type[T],
+    *,
+    on_error: Callable[[Exception], None] | None = None,
+) -> tuple[type[T], ...]:
+    """Resolve and validate every configured impl in deterministic key order.
+
+    ``ImplBase`` owns stable class keys, which must agree with their registry
+    keys. Native implementation classes without that contract use the registry
+    key alone. System-check callers may supply ``on_error`` to collect every
+    invalid declaration while ordinary callers retain fail-fast resolution.
+    """
+
+    classes: list[type[T]] = []
+    for key in sorted(impl_registry(registry_setting)):
+        try:
+            impl = resolve_impl_class(registry_setting, key, base_class)
+            if issubclass(impl, ImplBase) and impl.key != key:
+                raise ImproperlyConfigured(
+                    f"settings.{registry_setting}[{key!r}] resolves "
+                    f"{impl.__name__} with key {impl.key!r}."
+                )
+        except (ImportError, ImproperlyConfigured) as error:
+            if on_error is None:
+                raise
+            on_error(error)
+            continue
+        classes.append(impl)
+    return tuple(classes)
+
+
 class ImplClassField(TextChoicesField):
     """A column naming a non-model implementation class by a short key.
 
@@ -540,7 +590,7 @@ class ImplClassField(TextChoicesField):
     def __init__(
         self,
         *,
-        base_class: type | None = None,
+        base_class: type[object] | None = None,
         registry_setting: str = "",
         create_only: bool = False,
         **kwargs: Any,
@@ -567,7 +617,7 @@ class ImplClassField(TextChoicesField):
         return name, path, args, kwargs
 
     def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
-        """Validate the declaration and every configured impl path."""
+        """Validate the declaration, registry key agreement, and config forms."""
 
         errors = super().check(**kwargs)
         if not isinstance(self.base_class, type):
@@ -588,28 +638,17 @@ class ImplClassField(TextChoicesField):
                 )
             )
         elif isinstance(self.base_class, type):
-            for key, dotted in self._registry().items():
-                try:
-                    impl = import_string(dotted)
-                except ImportError as error:
-                    errors.append(
-                        checks.Error(
-                            f"settings.{self.registry_setting}[{key!r}] = {dotted!r} does not import: {error}",
-                            obj=self,
-                            id="angee.E003",
-                        )
+            for impl in resolve_all_impl_classes(
+                self.registry_setting,
+                self.base_class,
+                on_error=lambda error: errors.append(
+                    checks.Error(
+                        str(error),
+                        obj=self,
+                        id="angee.E003" if isinstance(error, ImportError) else "angee.E004",
                     )
-                    continue
-                if not (isinstance(impl, type) and issubclass(impl, self.base_class)):
-                    errors.append(
-                        checks.Error(
-                            f"settings.{self.registry_setting}[{key!r}] = {dotted!r} "
-                            f"is not a {self.base_class.__name__} subclass.",
-                            obj=self,
-                            id="angee.E004",
-                        )
-                    )
-                    continue
+                ),
+            ):
                 if issubclass(impl, ImplBase):
                     try:
                         impl.config_form_spec()
@@ -646,10 +685,14 @@ class ImplClassField(TextChoicesField):
         keys = sorted(self._registry())
         if not keys:
             if self.base_class is None:
+                # A migration-state field (``deconstruct`` drops ``base_class`` and
+                # ``choices``) only describes its varchar column, so it must load
+                # even when its registry was renamed or retired after the migration
+                # was written.
                 default = self._historical_default
-                if isinstance(default, str) and default:
-                    members = [(default.upper(), (default, default))]
-                    return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
+                key = default if isinstance(default, str) and default else "historical"
+                members = [(key.upper(), (key, key))]
+                return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
             raise ImproperlyConfigured(
                 f"ImplClassField registry settings.{self.registry_setting} is empty; an addon must "
                 "contribute at least one impl (e.g. a noop/null-object default) before the field is built."
@@ -763,7 +806,7 @@ class ImplDefaultsMixin(models.Model):
                 if isinstance(impl, type) and issubclass(impl, ImplBase):
                     impl.materialize(self, provided=provided)
         update_fields = kwargs.get("update_fields")
-        self.validate_impl_keys(update_fields=update_fields, using=kwargs.get("using"))
+        self.validate_impl_keys(update_fields=update_fields)
         self.validate_impl_configs(update_fields=update_fields)
         super().save(*args, **kwargs)
         loaded = dict(getattr(self, "_loaded_impl_keys", {}))
@@ -775,7 +818,7 @@ class ImplDefaultsMixin(models.Model):
                 loaded[field.attname] = self.__dict__[field.attname]
         self._loaded_impl_keys = loaded
 
-    def validate_impl_keys(self, *, update_fields: Any = None, using: str | None = None) -> None:
+    def validate_impl_keys(self, *, update_fields: Any = None) -> None:
         """Reject persisted implementation switches at the shared model boundary."""
 
         if self._state.adding and self.pk is None:
@@ -785,13 +828,15 @@ class ImplDefaultsMixin(models.Model):
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField) or not field.create_only:
                 continue
+            # A deferred selector omitted from the write keeps Django's loaded-field save semantics.
+            if not self._state.adding and updated is None and field.attname not in self.__dict__:
+                continue
             if field.attname not in loaded:
                 if updated is not None and field.name not in updated and field.attname not in updated:
                     continue
-                alias = using or router.db_for_write(type(self), instance=self)
                 with system_context(reason="base.impl.validate_stored_key"):
                     stored_row = (
-                        type(self)._base_manager.using(alias).filter(pk=self.pk).values_list(field.attname).first()
+                        type(self)._base_manager.filter(pk=self.pk).values_list(field.attname).first()
                     )
                 if stored_row is None and self._state.adding:
                     continue
@@ -828,9 +873,10 @@ class ImplDefaultsMixin(models.Model):
     def validate_impl_configs(self, *, update_fields: Any = None) -> None:
         """Validate every declared adapter config before any model save ingress."""
 
-        if not hasattr(self, "config"):
-            return
         if not self._state.adding and update_fields is not None and "config" not in update_fields:
+            return
+        # Do not load and rewrite deferred config on an unrelated model save.
+        if "config" not in self.__dict__ and (update_fields is None or "config" not in update_fields):
             return
         for field in self._meta.get_fields():
             if not isinstance(field, ImplClassField):

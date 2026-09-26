@@ -13,10 +13,12 @@ vi.mock("@angee/workflows", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/workflows")>(),
   WorkflowApprovals: (props: Record<string, unknown>) => { approvalProps.current = props; return null; },
 }));
-vi.mock("@angee/ui", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@angee/ui")>(),
-  useRouteSearch: () => ({ recordTab: "accounting", decision: "decision-7" }),
-}));
+vi.mock("@angee/ui", async (importOriginal) => {
+  const { createUiRouteTestDoubles, createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, createUiRouteTestDoubles({
+    search: { recordTab: "details", decision: "decision-7" },
+  }));
+});
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...await importOriginal<typeof import("@tanstack/react-router")>(),
   useNavigate: () => vi.fn(),
@@ -29,7 +31,7 @@ describe("workflows-parties addon manifest", () => {
     expect(() => expectValidBaseAddon(workflowsParties)).not.toThrow();
   });
 
-  test("opens the selected Party task over its declared Accounting tab without a nested portal", () => {
+  test("opens the selected Party task over its declared Details tab without a nested portal", () => {
     render(
       <RecordChromeProvider value={{ resource: "parties.Organization", canonicalResource: "parties.Party", dataProviderName: "console", recordId: "party-7", record: { id: "party-7" }, formReadOnly: false }}>
         <SelectedPartyDecision />
@@ -39,7 +41,7 @@ describe("workflows-parties addon manifest", () => {
     expect(screen.getByText("Review party details")).toBeTruthy();
     expect(screen.getByText("Review party details").closest("body")).toBe(document.body);
     expect(approvalProps.current).toMatchObject({
-      target: { model: "parties.Party", id: "party-7", tab: "accounting" },
+      target: { model: "parties.Party", id: "party-7", tab: "details" },
       decisionId: "decision-7",
       includeResolved: true,
       selectedTaskOnly: true,

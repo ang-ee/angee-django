@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, cast
 
 from django.apps import apps
@@ -29,6 +29,7 @@ from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin, canonical_record_model, canonical_record_target
 from angee.base.scoping import bind_actor
 from angee.messaging.models import ThreadedModelMixin
+from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.scheduling.fields import RecurrenceField
 
 
@@ -95,18 +96,7 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
 
 
 class TaskManager(AngeeManager):
-    """Own task creation policy and ThreadActivity maturation."""
-
-    def check_create(
-        self,
-        relationships: Mapping[str, Sequence[Any]] | None = None,
-    ) -> SubjectRef:
-        """Require project write when a new task is attached to a project."""
-
-        project_values = tuple((relationships or {}).get("project", ()))
-        if any(not project.has_access("write") for project in project_values):
-            raise PermissionDenied("Write access to the project is required to add a task.")
-        return super().check_create(relationships)
+    """Own idempotent task promotion from a ThreadActivity."""
 
     def from_activity(self, activity: models.Model) -> models.Model:
         """Return the one task promoted from ``activity``, creating it if needed."""
@@ -129,9 +119,8 @@ class TaskManager(AngeeManager):
                 assignee_id=locked_activity.user_id,
                 due_date=locked_activity.due_date,
                 converted_from_activity_id=locked_activity.pk,
-                sort_order=self._append_rank("sort_order", project=None),
-                sub_sort_order=self._append_rank("sub_sort_order", parent=None),
             )
+            task.allocate_ordering_ranks()
             task.full_clean(validate_unique=False, validate_constraints=False)
             task.sudo(reason="projects.task.promote_from_activity")
             try:
@@ -142,14 +131,6 @@ class TaskManager(AngeeManager):
                     task = self.get(converted_from_activity_id=activity.pk)
             bind_actor(task, verified_actor)
             return task
-
-    def _append_rank(self, field_name: str, **context: Any) -> float:
-        """Return an append rank for one exact task ordering context."""
-
-        field = cast(FractionalRankField, self.model._meta.get_field(field_name))
-        with system_context(reason=f"projects.task.append_{field_name}"):
-            previous = self.filter(**context).order_by(f"-{field_name}").values_list(field_name, flat=True).first()
-        return field.get_append_rank(previous)
 
 
 class LinkManager(AngeeManager):
@@ -265,13 +246,8 @@ class ProjectBindingQuerySet(AngeeQuerySet[Any]):
     def delete(self) -> tuple[int, dict[str, int]]:
         """Require canonical unbind authority for every explicit bulk deletion."""
 
-        from angee.projects.access import require_binding_access
-
-        project_model = apps.get_model("projects", "Project")
         for binding in self.select_related("content_type"):
-            project = project_model.objects.filter(pk=binding.project_id).first()
-            if project is None:
-                raise PermissionDenied("Share access to the binding project is required for deletion.")
+            project = binding.project
             target = binding.target
             if target is None:
                 raise ValidationError({"target": "A live project binding target is required for deletion."})
@@ -369,22 +345,21 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
 
         update_fields = kwargs.get("update_fields")
         folder_is_written = update_fields is None or bool({"folder", "folder_id"}.intersection(update_fields))
+        previous: Any = None
         previous_folder_id = None
         if not self._state.adding and folder_is_written:
-            previous_folder_id = type(self)._base_manager.filter(pk=self.pk).values_list("folder_id", flat=True).first()
+            previous = type(self)._base_manager.filter(pk=self.pk).only("folder").first()
+            previous_folder_id = previous.folder_id if previous is not None else None
             self._projects_previous_folder_id = previous_folder_id
         else:
             self.__dict__.pop("_projects_previous_folder_id", None)
         folder_changed = folder_is_written and (self._state.adding or previous_folder_id != self.folder_id)
         if folder_changed:
-            from angee.projects.access import require_binding_access, require_target_binding_access
-
             if self._state.adding and self.folder_id is not None:
                 require_target_binding_access(self.folder)
             elif not self._state.adding:
-                folder_model = apps.get_model("storage", "Folder")
                 if previous_folder_id is not None:
-                    previous_folder = folder_model._base_manager.get(pk=previous_folder_id)
+                    previous_folder: Any = previous.folder
                     require_binding_access(project=self, target=previous_folder)
                 if self.folder_id is not None:
                     require_binding_access(project=self, target=self.folder)
@@ -579,6 +554,13 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
 
         return self.title
 
+    def allocate_ordering_ranks(self) -> None:
+        """Fill omitted project and parent ordering ranks through their fields."""
+
+        for field_name in ("sort_order", "sub_sort_order"):
+            field = cast(FractionalRankField, self._meta.get_field(field_name))
+            field.pre_save(self, True)
+
     def clean(self) -> None:
         """Normalize insert lifecycle state and reject invalid task structure."""
 
@@ -587,7 +569,15 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         self._validate_structure(lock=False)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist after revalidating mutable project structure."""
+        """Authorize project attachment on insert and revalidate mutable structure."""
+
+        if self._state.adding and self.project_id is not None:
+            actor, bypass = self.effective_actor(strict=True)
+            if not bypass:
+                assert actor is not None
+                project = cast(Project, self.project).with_actor(actor)
+                if not project.has_access("write"):
+                    raise PermissionDenied("Write access to the project is required to add a task.")
 
         self._normalize_insert_lifecycle()
         update_fields = kwargs.get("update_fields")
@@ -676,7 +666,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         with system_context(reason="projects.task.validate_structure"):
             if self.milestone_id is not None:
                 milestone_model = self._meta.get_field("milestone").related_model
-                milestone = milestone_model.objects.filter(pk=self.milestone_id).only("project_id").first()
+                milestone = milestone_model._base_manager.filter(pk=self.milestone_id).first()
                 if milestone is not None and milestone.project_id != self.project_id:
                     raise ValidationError({"milestone": "Milestone must belong to the task's project."})
 
@@ -910,18 +900,19 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         key_is_written = update_fields is None or bool(key_fields.intersection(update_fields))
         canonical = canonical_record_target(target)
         if key_is_written:
-            from angee.projects.access import require_binding_access
-
             if not self._state.adding:
-                previous = type(self)._base_manager.filter(pk=self.pk).values_list(
-                    "project_id", "content_type_id", "object_id"
-                ).first()
+                previous = (
+                    type(self)
+                    ._base_manager.filter(pk=self.pk)
+                    .values_list("project_id", "content_type_id", "object_id")
+                    .first()
+                )
                 current = (self.project_id, canonical.content_type.pk, canonical.object_id)
                 if previous is not None and previous != current:
                     previous_project_id, previous_content_type_id, previous_object_id = previous
-                    previous_project = apps.get_model("projects", "Project").objects.filter(
-                        pk=previous_project_id
-                    ).first()
+                    previous_project = (
+                        apps.get_model("projects", "Project").objects.filter(pk=previous_project_id).first()
+                    )
                     if previous_project is None:
                         raise PermissionDenied("Share access to the previous binding project is required.")
                     previous_content_type = ContentType.objects.get_for_id(previous_content_type_id)
@@ -934,8 +925,6 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Require canonical unbind authority for direct instance deletion."""
-
-        from angee.projects.access import require_binding_access
 
         target = self.target
         if target is None:

@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import { Badge } from "../ui/badge";
-import { statusTone } from "./status-tones";
+import { useStatusTone } from "./use-status-tone";
 import { StatusSelectEdit } from "./statusSelectEdit";
 import { optionLabel, type WidgetDefinition, type WidgetRenderProps } from "./types";
 
@@ -9,6 +9,7 @@ function StatusBadgeRead({
   value,
   field,
 }: WidgetRenderProps<string>): ReactElement {
+  const statusTone = useStatusTone();
   const label = optionLabel(field?.options, value);
   return (
     <Badge

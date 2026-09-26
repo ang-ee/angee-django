@@ -33,7 +33,7 @@ export const Resizable: Story = {
               <h2 className="text-sm font-semibold text-fg">Metadata</h2>
               <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-2 text-13">
                 <dt className="text-fg-muted">Owner</dt>
-                <dd>Alexis</dd>
+                <dd>Alex</dd>
                 <dt className="text-fg-muted">Class</dt>
                 <dd>Internal</dd>
                 <dt className="text-fg-muted">Updated</dt>

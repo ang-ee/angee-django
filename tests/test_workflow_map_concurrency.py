@@ -13,9 +13,11 @@ from rebac import system_context
 
 from angee.workflows.attempts import AttemptResultKind
 from angee.workflows.models import StepRunStatus
-from angee.workflows.steps import HandlerStep, StepResult
+from angee.workflows.steps import StepResult
+from angee.workflows.testing.drivers import advance_once, execute_started
+from angee.workflows.testing.models import StepAttempt, StepRun
 from tests.test_workflow_retained_map import _map_workflow
-from tests.workflows import StepAttempt, StepRun, advance_once, execute_started, start_run
+from tests.workflows import FixtureStep, start_run
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -27,13 +29,13 @@ pytestmark = [
 
 
 def test_concurrent_map_aggregate_records_one_current_generation(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )

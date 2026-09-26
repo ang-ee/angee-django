@@ -8,27 +8,20 @@ themselves).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from django.core.management import call_command
-from django.db import connection
 from django.utils import timezone
 from rebac import system_context
 
 from angee.integrate_vcs.backend import LocalVCSBackend
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
-    VCS_TEST_MODELS,
     Repository,
     Source,
     Template,
     VcsBridge,
-    _create_missing_tables,
     make_integration,
 )
 
@@ -56,22 +49,6 @@ TREE = [
 BLOBS = {"templates/dev/copier.yml": "_angee:\n  kind: workspace\n  name: Dev\n"}
 
 
-@pytest.fixture()
-def vcs_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the iam/integrate/VCS test tables and sync the REBAC schema."""
-
-    del transactional_db
-    created = _create_missing_tables(IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + VCS_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
 def _vcs_bridge(slug: str, *, config: dict[str, Any], backend_class: str = "stub") -> Any:
     """Create a VCS bridge child whose host/local data rides on config."""
 
@@ -86,10 +63,10 @@ def _repo_names() -> set[str]:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_discover_repositories_reconciles_and_prunes(vcs_tables: None) -> None:
+def test_discover_repositories_reconciles_and_prunes(composed_tables: None) -> None:
     """discoverRepositories inventories every repo and prunes ones that vanished."""
 
-    del vcs_tables
+    del composed_tables
     vcs = _vcs_bridge("disco", config={"stub_repos": REPOS})
 
     assert vcs.discover_repositories() == 2
@@ -103,10 +80,10 @@ def test_discover_repositories_reconciles_and_prunes(vcs_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_import_repository_adds_one_without_pruning(vcs_tables: None) -> None:
+def test_import_repository_adds_one_without_pruning(composed_tables: None) -> None:
     """addRepository inventories the picked repo and leaves the others in place."""
 
-    del vcs_tables
+    del composed_tables
     vcs = _vcs_bridge("imp", config={"stub_repos": REPOS})
     vcs.discover_repositories()
 
@@ -116,19 +93,19 @@ def test_import_repository_adds_one_without_pruning(vcs_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_search_repositories_is_the_typeahead(vcs_tables: None) -> None:
+def test_search_repositories_is_the_typeahead(composed_tables: None) -> None:
     """searchRepositories returns name-matching host candidates for the typeahead."""
 
-    del vcs_tables
+    del composed_tables
     vcs = _vcs_bridge("search", config={"stub_repos": REPOS})
     assert [candidate.name for candidate in vcs.search_repositories("widget")] == ["acme/widgets"]
 
 
 @pytest.mark.django_db(transaction=True)
-def test_search_repositories_uses_backend_declared_scope_key(vcs_tables: None) -> None:
+def test_search_repositories_uses_backend_declared_scope_key(composed_tables: None) -> None:
     """The VCS bridge asks its backend which config key scopes repository search."""
 
-    del vcs_tables
+    del composed_tables
     repos = [
         *REPOS,
         {
@@ -145,10 +122,10 @@ def test_search_repositories_uses_backend_declared_scope_key(vcs_tables: None) -
 
 
 @pytest.mark.django_db(transaction=True)
-def test_source_refresh_materializes_templates(vcs_tables: None) -> None:
+def test_source_refresh_materializes_templates(composed_tables: None) -> None:
     """A template source refresh walks the tree and upserts Template rows."""
 
-    del vcs_tables
+    del composed_tables
     vcs = _vcs_bridge("tpl", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test"):
@@ -162,10 +139,10 @@ def test_source_refresh_materializes_templates(vcs_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_run_sync_refreshes_sources_and_records_lifecycle(vcs_tables: None) -> None:
+def test_run_sync_refreshes_sources_and_records_lifecycle(composed_tables: None) -> None:
     """The Bridge sync owner refreshes sources and records lifecycle telemetry."""
 
-    del vcs_tables
+    del composed_tables
     vcs = _vcs_bridge("sync", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
     vcs.discover_repositories()
     with system_context(reason="test"):
@@ -186,7 +163,7 @@ def test_run_sync_refreshes_sources_and_records_lifecycle(vcs_tables: None) -> N
 
 
 @pytest.mark.django_db(transaction=True)
-def test_local_backend_materializes_templates_through_the_source_flow(vcs_tables: None, tmp_path: Any) -> None:
+def test_local_backend_materializes_templates_through_the_source_flow(composed_tables: None, tmp_path: Any) -> None:
     """A `local`-backed integration inventories a working tree into Template rows.
 
     Drives the same ``discover → Source.refresh`` path the resource-seeded console
@@ -194,7 +171,7 @@ def test_local_backend_materializes_templates_through_the_source_flow(vcs_tables
     Template`` and that skip-dirs keep a stray ``copier.yml`` out of the inventory.
     """
 
-    del vcs_tables
+    del composed_tables
     template_dir = tmp_path / "templates" / "workspaces" / "dev"
     template_dir.mkdir(parents=True)
     (template_dir / "copier.yml").write_text("_angee:\n  kind: workspace\n  name: Dev\n")

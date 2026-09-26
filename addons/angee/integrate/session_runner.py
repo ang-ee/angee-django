@@ -35,7 +35,14 @@ def run_bridge_session_job(
     """Run one bridge's live session for the life of its vendor connection."""
 
     with system_context(reason="integrate.run_bridge_session"):
-        bridge = _bridge(model_label, pk)
+        try:
+            app_label, model_name = str(model_label).split(".", 1)
+        except ValueError:
+            return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
+        model = apps.get_model(app_label, model_name)
+        if not issubclass(model, Bridge):
+            return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
+        bridge = model._default_manager.filter(pk=pk).first()
         if bridge is None:
             return {"ok": True, "skipped": True, "reason": "not-a-bridge"}
         if type(bridge).live_implementation_field() is None:
@@ -139,19 +146,6 @@ def _record_duplicate_account(bridge: Any, *, session: Any) -> None:
     bridge.record_sync_error(error, now=timezone.now())
     impl.release_account(desired=bridge.LiveState.STOPPED)
     session.discard_new_store()
-
-
-def _bridge(model_label: str, pk: Any) -> Any | None:
-    """Return one bridge row for a live session task, or ``None``."""
-
-    try:
-        app_label, model_name = str(model_label).split(".", 1)
-    except ValueError:
-        return None
-    model = apps.get_model(app_label, model_name)
-    if not issubclass(model, Bridge):
-        return None
-    return model._default_manager.filter(pk=pk).first()
 
 
 def _require_live_impl(bridge: Any) -> LiveBridgeImpl:

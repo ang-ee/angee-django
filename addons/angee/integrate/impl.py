@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
@@ -15,6 +15,20 @@ from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
 from angee.integrate.live import PairingProjection, SessionLoggedOut
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.locks import LockKey
+
+if TYPE_CHECKING:
+    from angee.integrate.streams import (
+        ApplyResult,
+        LocalChange,
+        RecordChange,
+        StreamDefinition,
+        StreamPage,
+        WriteBackResult,
+    )
+
+
+class AdapterContractError(TypeError):
+    """A bridge implementation violated the record-sync contract."""
 
 
 class IntegrationImpl(ImplBase):
@@ -38,7 +52,8 @@ class IntegrationImpl(ImplBase):
         ``{vendor}`` template.
         """
 
-        vendor_slug = str(getattr(getattr(self.integration, "vendor", None), "slug", "") or "")
+        vendor = self.integration.vendor
+        vendor_slug = str(getattr(vendor, "slug", "") or "")
         hint = str(self.oauth_client or "")
         return enabled_oauth_client_from_hint(
             hint or vendor_slug,
@@ -49,7 +64,7 @@ class IntegrationImpl(ImplBase):
 
 
 class BridgeImpl(IntegrationImpl):
-    """Base descriptor for an inbound bridge — it pulls/subscribes to external data.
+    """Base descriptor for a bridge that exchanges data with an external system.
 
     Bridges run through the queued due scheduler over ``Bridge.next_sync_at`` and
     keep their sync state on a concrete ``Bridge`` child model.
@@ -58,12 +73,87 @@ class BridgeImpl(IntegrationImpl):
     category = "bridge"
     label = "Bridge"
     icon = "plug"
+    sync_parallelism: ClassVar[int | None] = None
+    """Optional protocol cap; the bridge config and database may lower it."""
+    supports_identity_reads: ClassVar[bool] = False
+    """Declare identity reads; otherwise retries request a fresh baseline."""
+
+    def streams(self, *, deadline: float | None = None) -> Iterable[StreamDefinition]:
+        """Declare each independently ordered partition exactly once."""
+        raise AdapterContractError("Stream adapters must declare their partitions.")
+
+    def seed_config(self, legacy_cursor: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return config defaults and the remaining legacy cursor without mutating it.
+
+        Remove migrated policy from the returned cursor so later partitions cannot
+        restore it after an operator changes config. Retain their progress for
+        ``seed_cursor``. The driver persists both values under the bridge lock.
+        """
+        return {}, legacy_cursor
+
+    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
+        """Translate a legacy bridge position once when opening its first empty epoch."""
+        return None
+
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        """Fetch at most page_bound records outside transactions within the deadline."""
+        raise AdapterContractError("Stream adapters must extract bounded pages.")
+
+    def read_keys(self, stream: Any, keys: Sequence[str]) -> Iterable[RecordChange]:
+        """Read every requested identity exactly once, including missing-key tombstones."""
+        raise AdapterContractError("This adapter does not support identity reads.")
+
+    def apply_record(self, stream: Any, record: Any) -> ApplyResult:
+        """Apply one record using database work only; return its applied evidence.
+
+        The driver owns primary link promotion. Record-local refusals raise
+        SemanticError or ValidationError; infrastructure failures propagate.
+        """
+        raise AdapterContractError("Stream adapters must apply individual records.")
+
+    def close(self) -> None:
+        """Release any transport resources after the caller finishes the cycle."""
 
     @property
     def bridge(self) -> Any:
         """Return the concrete bridge child this implementation is bound to."""
 
         return self.integration
+
+    def enumerate_keys(self, stream: Any, *, after: str | None = None) -> Iterable[str]:
+        """Yield unique remote identities in stable order, resuming after a key.
+
+        Seek directly past ``after`` instead of materializing the inventory or
+        replaying its prefix. The adapter owns its identity ordering.
+        """
+
+        raise AdapterContractError("Replica adapters must enumerate remote keys.")
+
+    def prepare_page(self, stream: Any, page: StreamPage) -> None:
+        """Lock the page's complete identity/target set before record savepoints.
+
+        This optional hook runs inside the page transaction: database work only,
+        in a canonical order. Fetch all remote facts during extraction.
+        """
+
+    def on_revalidated(self, stream: Any, links: Sequence[Any]) -> None:
+        """Restore native projection visibility after unchanged-row revalidation."""
+
+    def on_absent(self, stream: Any, links: Sequence[Any]) -> None:
+        """Withdraw native projection visibility when absence changes link status."""
+
+    def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
+        """Finish domain batch relationships before the page cursor commits."""
+
+    def local_changes(self, stream: Any, *, keys: frozenset[str] | None = None) -> Iterable[LocalChange]:
+        """Project only selected local identities, or all candidates when keys is None."""
+
+        raise AdapterContractError("Push adapters must project local changes.")
+
+    def write_back(self, link: Any, projection: Any, *, expected_version: str) -> WriteBackResult:
+        """Conditionally write a remote record or raise RemoteRejected."""
+
+        raise AdapterContractError("Push adapters must implement conditional write-back.")
 
 
 class LiveBridgeImpl(BridgeImpl):

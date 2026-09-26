@@ -7,8 +7,6 @@ import { platformScopeSearch } from "../lib/paths";
 import { LinkedChips, useRouteNavigate } from "../lib/cells";
 import { usePlatformAddon } from "../lib/explorer";
 
-const shortName = (dep: string): string => dep.split(".").pop() ?? dep;
-
 export function AddonDetail(): ReactElement {
   const t = usePlatformT();
   const id = useRouteRecordId();
@@ -91,7 +89,6 @@ export function AddonDetail(): ReactElement {
                 <LinkedChips
                   items={dependsOn}
                   href={(id) => routeHref("platform.addons.record", { id })}
-                  format={shortName}
                 />,
               ],
               [
@@ -99,7 +96,6 @@ export function AddonDetail(): ReactElement {
                 <LinkedChips
                   items={dependedBy}
                   href={(id) => routeHref("platform.addons.record", { id })}
-                  format={shortName}
                 />,
               ],
             ]}

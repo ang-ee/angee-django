@@ -36,7 +36,8 @@ from angee.graphql.field_types import register_field_type
 from angee.graphql.publishing import publication_ingestion_context
 from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
-from tests.conftest import SchemaAddon, _clear_model_tables, _create_missing_tables
+from tests.conftest import SchemaAddon
+from tests.tables import model_tables
 
 
 @pytest.fixture(autouse=True)
@@ -98,8 +99,7 @@ def test_audit_mixin_stamps_from_rebac_actor_inside_save() -> None:
     creator = GlobalUser.objects.create_user(username="audit-creator")
     editor = GlobalUser.objects.create_user(username="audit-editor")
 
-    created_models = _create_missing_tables((AuditStamped,))
-    try:
+    with model_tables((AuditStamped,)):
         with actor_context(creator):
             row = AuditStamped.objects.create(id="known", name="first")
         row.refresh_from_db()
@@ -116,11 +116,6 @@ def test_audit_mixin_stamps_from_rebac_actor_inside_save() -> None:
         assert row.created_by_id == creator.pk
         assert row.updated_by_id == editor.pk
         assert row.updated_at > previous_updated_at
-    finally:
-        _clear_model_tables((AuditStamped,))
-        if created_models:
-            with connection.schema_editor() as editor_schema:
-                editor_schema.delete_model(AuditStamped)
 
 
 def test_connect_publishers_is_idempotent() -> None:
@@ -151,7 +146,7 @@ def test_publish_uses_public_id_and_changed_values(
     monkeypatch.setattr(
         publishing.transaction,
         "on_commit",
-        lambda callback: callback(),
+        lambda callback, **kwargs: callback(),
     )
     publishing.connect_change_broadcast_receiver()
     group = Group(id=7, name="editors")
@@ -192,7 +187,7 @@ def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
         resolutions.append("resolved")
         return ("name",)
 
-    monkeypatch.setattr(publishing.transaction, "on_commit", callbacks.append)
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callbacks.append(callback))
     group = Group(id=7, name="editors")
 
     publishing.publish_change(group, action="create", update_fields=None, readable_fields=readable_fields)
@@ -243,8 +238,8 @@ def test_partial_update_payload_is_captured_before_commit(
 
     callbacks: list[Any] = []
     sent: list[ChangePayload] = []
-    monkeypatch.setattr(publishing.transaction, "on_commit", callbacks.append)
-    monkeypatch.setattr(publishing, "_send_change", lambda model, payload: sent.append(payload))
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callbacks.append(callback))
+    monkeypatch.setattr(publishing, "_send_change", lambda model, payload, **kwargs: sent.append(payload))
     group = Group(id=9, name="before")
 
     publishing.publish_change(
@@ -273,7 +268,7 @@ def test_change_signal_receiver_sees_broadcast_payload(
         payloads.append(payload)
 
     monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append((model, event)))
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.connect_change_broadcast_receiver()
     publishing.change_published.connect(
         receiver,
@@ -315,7 +310,7 @@ def test_publish_change_suppresses_non_broadcasting_rows(
         del sender, kwargs
         payloads.append(payload)
 
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.change_published.connect(
         receiver,
         dispatch_uid="tests.publish_change_suppresses_non_broadcasting_rows",
@@ -344,7 +339,7 @@ def test_publish_change_marks_sync_ingestion_and_still_broadcasts(
         payloads.append(payload)
 
     monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append(event))
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.connect_change_broadcast_receiver()
     publishing.change_published.connect(
         receiver,
@@ -378,7 +373,7 @@ def test_publish_change_robust_receivers_log_and_continue(
         del sender, payload, kwargs
         calls.append("later")
 
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     publishing.change_published.connect(failing_receiver, dispatch_uid="tests.publish_change.failing")
     publishing.change_published.connect(later_receiver, dispatch_uid="tests.publish_change.later")
     try:
@@ -472,41 +467,37 @@ def test_graphql_ready_connects_publishers_without_building_until_partial_save(
         del sender, kwargs
         payloads.append(payload)
 
-    created_models = _create_missing_tables((ReadyPublished,))
-    from angee.graphql.apps import GraphQLConfig
+    with model_tables((ReadyPublished,)):
+        from angee.graphql.apps import GraphQLConfig
 
-    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
-    monkeypatch.setattr(publishing, "_broadcast", lambda model, event: None)
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
-    publishing.disconnect_publishers(ReadyPublished)
-    publishing.change_published.connect(
-        receiver,
-        dispatch_uid="tests.graphql_ready_connects_publishers_without_schema_build",
-    )
-    try:
-        GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
-        assert schemas._builds == {}
-        row = ReadyPublished.objects.create(name="ready")
-        assert schemas._builds == {}
-        row.name = "updated"
-        row.code = "second"
-        row.secret = "still hidden"
-        row.save(update_fields=("name", "code", "secret"))
-    finally:
+        monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+        monkeypatch.setattr(publishing, "_broadcast", lambda model, event: None)
+        monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
         publishing.disconnect_publishers(ReadyPublished)
-        publishing.change_published.disconnect(
+        publishing.change_published.connect(
+            receiver,
             dispatch_uid="tests.graphql_ready_connects_publishers_without_schema_build",
         )
-        _clear_model_tables((ReadyPublished,))
-        if created_models:
-            with connection.schema_editor() as editor_schema:
-                editor_schema.delete_model(ReadyPublished)
+        try:
+            GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
+            assert schemas._builds == {}
+            row = ReadyPublished.objects.create(name="ready")
+            assert schemas._builds == {}
+            row.name = "updated"
+            row.code = "second"
+            row.secret = "still hidden"
+            row.save(update_fields=("name", "code", "secret"))
+        finally:
+            publishing.disconnect_publishers(ReadyPublished)
+            publishing.change_published.disconnect(
+                dispatch_uid="tests.graphql_ready_connects_publishers_without_schema_build",
+            )
 
-    assert [payload.model for payload in payloads] == ["auth.ReadyPublished"] * 2
-    assert [payload.action for payload in payloads] == ["create", "update"]
-    assert payloads[0].changed_values is None
-    assert payloads[1].changed_values == {"code": "second", "name": "updated"}
-    assert tuple(sorted(schemas._builds)) == ("internal", "public")
+        assert [payload.model for payload in payloads] == ["auth.ReadyPublished"] * 2
+        assert [payload.action for payload in payloads] == ["create", "update"]
+        assert payloads[0].changed_values is None
+        assert payloads[1].changed_values == {"code": "second", "name": "updated"}
+        assert tuple(sorted(schemas._builds)) == ("internal", "public")
 
 
 def test_publisher_membership_discovery_does_not_build_or_require_field_registration(

@@ -21,10 +21,18 @@ print(response.usage.input_tokens, response.usage.output_tokens)
 ```
 
 `InferenceProvider.chat` accepts keyword-only `model=...`, `messages=...`,
-`model_settings=...`, `model_request_parameters=...` and `credential=...`.
+`model_settings=...`, `model_request_parameters=...`, and `credential=...`.
 `InferenceModel.chat` resolves its wire model name and takes native messages as
 its first argument. It returns `pydantic_ai.messages.ModelResponse`.
-`InferenceRequest`, `InferenceResponse` and `ChatAPI` no longer exist.
+
+For structured output, call `model.require_usable(actor, role, uses=uses)` at the
+entry of the authorized operation. Declare accepted model uses with
+`InferenceModelUse` members, then call `model.infer(messages, output_schema=schema)`.
+`InferenceResult` exposes the native `response`, normalized
+`usage`, and decoded `output` object. JSON text, fenced JSON, and native output
+tools share the agents decoder. Function-tool declarations return calls in the
+native response and leave `output` unset. A malformed structured response raises
+`InferenceOutputError`, retaining its `response` and `usage` for accounting.
 
 The direct call makes one logical model request; the SDK may retry transport
 failures. Declare tools with native
@@ -36,18 +44,47 @@ then `async with binding as model` inside the runner. Custom backends implement
 not add a second request/response protocol. Client contexts close on normal
 completion, provider errors and cancellation.
 
-Workflow one-shot configuration still accepts its existing prompt/system fields,
-OpenAI or Anthropic function declarations, and vendor body options. Owned model,
-message, token-limit and tool fields cannot be overwritten through `options`.
-Common native settings pass directly; other supported vendor body fields are
-encoded once into `extra_body`. Invalid/unsupported options fail the activity.
+Workflow one-shot inference uses the `infer` step. Its exact contracts are
+`InferInput`/`InferRequest` and `InferOutput` on
+[`InferStepImpl`](../../addons/angee/workflows_agents/steps.py). Bind `model` to
+an `InferenceModel` public id (sqid) through `workflow_input` or `step_output`,
+and supply the required policy `role`; a workflow definition must not hard-code
+the selected model. `request` accepts native Pydantic AI `messages`, `images`,
+`output_schema`, and `settings` restricted to `ModelSettings` keys. The
+step-level `timeout` is the only timeout input; `request.settings.timeout` is
+rejected. Transport overrides such as
+`extra_headers`, `extra_query`, and arbitrary `extra_body` keys are rejected by
+the backend owner. `infer` always uses the credential owned by the selected
+provider; it has no agent-credential override.
 
-The persisted request summary keeps its vocabulary. New response summaries use
-`format_version: 2`, native serialized message parts and native usage. Existing saved
-journals remain stored in their original shape; this change adds no journal replay
-adapter. The bounded journal limit remains 4096 bytes.
-Budgets use `input_tokens`, `output_tokens` and `tokens`. Before upgrading a
-deployment with `prompt_tokens`, `completion_tokens` or `total_tokens` budget
-axes, republish those definitions with the corresponding canonical axes. Active
-runs pinned to old publications need an explicit publication and spent-ledger
-transition before resuming; runtime accounting does not translate old axes.
+The shared workflows inference helper resolves the catalogue row and calls
+`InferenceModel.require_usable` once before invoking the provider. That model
+method requires the admission actor's read access, approved deployment identity,
+and a live model with an accepted use. Roles name approval policies, independently
+of modality. The generic infer step requires image or multimodal use when
+`request.images` is nonempty and chat or multimodal use otherwise; domain
+callers can declare their own accepted `uses`. An absent
+`ANGEE_INFERENCE_APPROVED_DEPLOYMENTS` setting leaves the catalogue
+unrestricted by deployment policy; actor read access remains required. Once
+configured, missing roles and exact deployment-identity mismatches are rejected.
+The effective endpoint comes from `InferenceBackend.endpoint` for both SDK
+clients and deployment approval. Provider and credential persistence follows the
+[Database routing rule](../backend/guidelines.md#rules).
+
+Provider success returns the serialized native `ModelResponse`, decoded
+`output`, and usage and routes `completed`. A terminal provider failure returns
+`response: null`, normalized usage and `{type, message}` error data on `failed`.
+A structured-output decoding failure instead retains the paid native `response`
+alongside the error. The helper debits usage exactly once, including decoding failures.
+`InferenceBackend.is_transient_error` classifies native HTTP
+429/server errors and connection/timeout exceptions; vendor adapters extend
+that policy with SDK exception types. Invalid local timeout settings are terminal
+configuration errors. Transient provider failures use the workflow retry policy. Adapter
+timestamps and provider ids in the response are retained evidence, not stable
+hash or reuse keys.
+
+[`normalize_inference_usage`](../../addons/angee/agents/models.py) is the one
+usage projection for direct requests and agent sessions. It emits non-zero
+`input_tokens`, `output_tokens`, `tokens`, `requests`, and `tool_calls` axes;
+`requests` remains a workflow budget axis because the run budget owner admits
+arbitrary numeric axes.

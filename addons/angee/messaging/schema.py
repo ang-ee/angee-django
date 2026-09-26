@@ -141,11 +141,11 @@ def _channel_webform_extension() -> type[Any] | None:
 _CHANNEL_WEBFORM_EXTENSION = _channel_webform_extension()
 
 
-def _pairing_result(operation: Any, *args: Any) -> Any:
+def _pairing_result(operation: Any, *args: Any, **kwargs: Any) -> Any:
     """Expose only pairing-owner failures whose text is deliberately public."""
 
     try:
-        return operation(*args)
+        return operation(*args, **kwargs)
     except connect.PairingActionError as error:
         raise GraphQLError(str(error), extensions={"code": "BAD_USER_INPUT"}) from error
 
@@ -174,7 +174,9 @@ class MessagingPairingMutation:
     def resume_channel_pairing(self, id: PublicID) -> ActionResult:
         """Resume retained pairing material or start a new pairing session."""
 
-        with action_target(Channel, id, reason="messaging.graphql.resume_channel_pairing") as channel:
+        with action_target(
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.resume_channel_pairing"
+        ) as channel:
             _pairing_result(connect.resume_channel_pairing, channel)
         return ActionResult(ok=True, message="Channel connection started.")
 
@@ -183,7 +185,9 @@ class MessagingPairingMutation:
     def submit_channel_password(self, id: PublicID, password: str) -> ActionResult:
         """Submit one consume-once account password to the live channel session."""
 
-        with action_target(Channel, id, reason="messaging.graphql.submit_channel_password") as channel:
+        with action_target(
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.submit_channel_password"
+        ) as channel:
             _pairing_result(connect.submit_channel_password, channel, password)
         return ActionResult(ok=True, message="Password submitted.")
 
@@ -191,7 +195,9 @@ class MessagingPairingMutation:
     def skip_channel_password(self, id: PublicID) -> ActionResult:
         """Skip one optional consume-once secret round."""
 
-        with action_target(Channel, id, reason="messaging.graphql.skip_channel_password") as channel:
+        with action_target(
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.skip_channel_password"
+        ) as channel:
             _pairing_result(connect.skip_channel_password, channel)
         return ActionResult(ok=True, message="Password skipped.")
 
@@ -199,7 +205,9 @@ class MessagingPairingMutation:
     def reset_channel_pairing(self, id: PublicID) -> ActionResult:
         """Wipe released pairing material and restart with a fresh session."""
 
-        with action_target(Channel, id, reason="messaging.graphql.reset_channel_pairing") as channel:
+        with action_target(
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.reset_channel_pairing"
+        ) as channel:
             _pairing_result(connect.reset_channel_pairing, channel)
         return ActionResult(ok=True, message="Pairing reset; link the channel again.")
 
@@ -207,7 +215,9 @@ class MessagingPairingMutation:
     def disconnect_channel(self, id: PublicID) -> ActionResult:
         """Stop the live session while retaining reusable pairing material."""
 
-        with action_target(Channel, id, reason="messaging.graphql.disconnect_channel") as channel:
+        with action_target(
+            Channel, id, queryset=Channel.objects.all(), reason="messaging.graphql.disconnect_channel"
+        ) as channel:
             _pairing_result(connect.disconnect_channel, channel)
         return ActionResult(ok=True, message="Disconnected channel.")
 
@@ -1131,9 +1141,12 @@ class MessageFeedPage:
 
         page = queryset.feed_page(**options)
         return cls(
-            messages=cast(list[MessageType], page.rows), count=page.count,
-            older_cursor=page.older_cursor, newer_cursor=page.newer_cursor,
-            has_older=page.has_older, has_newer=page.has_newer,
+            messages=cast(list[MessageType], page.rows),
+            count=page.count,
+            older_cursor=page.older_cursor,
+            newer_cursor=page.newer_cursor,
+            has_older=page.has_older,
+            has_newer=page.has_newer,
             has_more_in_window=page.has_more_in_window,
             has_older_than_through=page.has_older_than_through,
             has_newer_than_before=page.has_newer_than_before,
@@ -1339,11 +1352,7 @@ class MessagingMutation:
             if kind == "note":
                 if recipient_user_ids or input.autofollow_recipients:
                     raise ValueError("Internal notes cannot target recipients.")
-                message = cast(Any, record).message_log(
-                    input.body,
-                    attachments=attachments,
-                    parent=parent,
-                )
+                message = cast(Any, record).message_log(input.body, attachments=attachments, parent=parent)
             else:
                 message = cast(Any, record).message_post(
                     input.body,
@@ -1358,7 +1367,7 @@ class MessagingMutation:
         return RecordMessagePostPayload.from_thread_state(
             payload,
             message=message,
-            thread=message.thread,
+            thread=payload.thread,
         )
 
     @strawberry.mutation(name="update_record_message")
@@ -1386,7 +1395,7 @@ class MessagingMutation:
         return RecordMessageUpdatePayload.from_thread_state(
             payload,
             message=message,
-            thread=message.thread,
+            thread=payload.thread,
         )
 
     @strawberry.mutation(name="delete_record_message")
@@ -1440,10 +1449,7 @@ class MessagingMutation:
             return RecordMessageReactionPayload(error="record not found", error_code="NOT_FOUND")
         try:
             message = cast(Any, record).message_reaction(
-                message,
-                reaction=input.reaction,
-                action=input.action,
-                user=user,
+                message, reaction=input.reaction, action=input.action, user=user
             )
         except (PermissionDenied, ValueError) as error:
             return RecordMessageReactionPayload.from_error(error, invalid_code="BAD_REACTION")
@@ -1471,11 +1477,7 @@ class MessagingMutation:
         if record is None:
             return RecordMessageStarPayload(error="record not found", error_code="NOT_FOUND")
         try:
-            starred = cast(Any, record).message_set_starred(
-                message,
-                user=user,
-                starred=input.starred,
-            )
+            starred = cast(Any, record).message_set_starred(message, user=user, starred=input.starred)
         except (PermissionDenied, ValueError) as error:
             return RecordMessageStarPayload.from_error(error, invalid_code="BAD_MESSAGE")
         return RecordMessageStarPayload(message=message, starred=starred)
@@ -1737,7 +1739,8 @@ class _ChannelWriteBackend(AngeeHasuraWriteBackend):
         """Purge, then delete, one public-id-addressed channel; return the deleted row."""
 
         del info
-        channel = require_instance_for_id(Channel, str(pk), queryset=self.write_target_queryset())
+        queryset = self.write_target_queryset()
+        channel = require_instance_for_id(Channel, str(pk), queryset=queryset)
         Channel.objects.purge(channel)
         return channel
 
@@ -2036,7 +2039,8 @@ def _threaded_record(input: RecordReferenceInput) -> Any | None:
     if not issubclass(model, ThreadedModelMixin):
         raise ValueError(f"{model._meta.label} does not inherit ThreadedModelMixin.")
     try:
-        return instance_from_public_id(model, str(input.record_id))
+        queryset = model._default_manager.all()
+        return instance_from_public_id(model, str(input.record_id), queryset=queryset)
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
 
@@ -2084,10 +2088,7 @@ def _message_reaction_groups(message: Any, user: Any | None) -> list[MessageReac
     ]
 
 
-def _record_message_reaction_groups(
-    message: Any,
-    user: Any | None,
-) -> list[RecordMessageReactionGroupType]:
+def _record_message_reaction_groups(message: Any, user: Any | None) -> list[RecordMessageReactionGroupType]:
     """Project model-owned reaction groups without generic handle backedges."""
 
     return [
@@ -2269,7 +2270,12 @@ def _user_from_public_id(user_id: strawberry.ID | None) -> Any:
     if user_id is None:
         raise ValueError("A user id is required.")
     try:
-        return require_instance_for_id(get_user_model(), user_id, not_found="assigned user not found")
+        return require_instance_for_id(
+            get_user_model(),
+            user_id,
+            queryset=get_user_model()._default_manager.all(),
+            not_found="assigned user not found",
+        )
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
 
@@ -2279,7 +2285,12 @@ def _users_from_public_ids(user_ids: list[strawberry.ID]) -> tuple[Any, ...]:
 
     try:
         return tuple(
-            require_instance_for_id(get_user_model(), user_id, not_found="recipient user not found")
+            require_instance_for_id(
+                get_user_model(),
+                user_id,
+                queryset=get_user_model()._default_manager.all(),
+                not_found="recipient user not found",
+            )
             for user_id in user_ids
         )
     except ImproperlyConfigured as error:
@@ -2300,7 +2311,7 @@ def _thread_activity(activity_id: strawberry.ID) -> Any:
         return require_instance_for_id(
             ThreadActivity,
             activity_id,
-            queryset=ThreadActivity.system_queryset(),
+            queryset=ThreadActivity.system_queryset().select_related("attachment", "attachment__content_type"),
             not_found="activity not found",
         )
     except ImproperlyConfigured as error:
@@ -2325,7 +2336,9 @@ def _message(message_id: strawberry.ID) -> Any:
     """Return a message by public id."""
 
     try:
-        return require_instance_for_id(Message, message_id, not_found="message not found")
+        return require_instance_for_id(
+            Message, message_id, queryset=Message.objects.all(), not_found="message not found"
+        )
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
 

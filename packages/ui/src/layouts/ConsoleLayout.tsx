@@ -205,7 +205,7 @@ export function ConsoleLayout({
 /**
  * The console content region: the single `Workbench` every console page flows
  * through — page-published context as the (collapsible) primary pane, the page
- * as content, and Chatter or a record preview as the (collapsible) secondary pane. Lives inside
+ * as content, and Chatter as the (collapsible) secondary pane. Lives inside
  * `ChatterProvider` so it can register the secondary pane's collapse controller
  * with the shell bridge. The primary pane's controller is surfaced up to
  * `ConsoleLayout` so the TopBar's left-panel toggle drives it too.
@@ -224,7 +224,7 @@ function ConsoleWorkbench({
   children: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
-  const { recordSupportKey, recordPreview, registerSecondaryController, setCollapsed } = useChatter();
+  const { registerSecondaryController } = useChatter();
   const { node: publishedPrimary } = usePrimaryPaneContent();
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
   const [desktopPrimaryController, setDesktopPrimaryController] =
@@ -234,9 +234,8 @@ function ConsoleWorkbench({
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
-  const compactAsideAvailable = showChatter || recordSupportKey !== null;
-  const desktopChatter = showChatter && largeViewport && recordSupportKey === null;
-  const desktopPreview = largeViewport && recordSupportKey !== null ? recordPreview : null;
+  const compactAsideAvailable = showChatter;
+  const desktopChatter = showChatter && largeViewport;
   const desktopPrimary = largeViewport ? publishedPrimary : null;
   const compactPrimary = !largeViewport ? publishedPrimary : null;
   const toggleCompactPrimary = React.useCallback(() => {
@@ -272,18 +271,10 @@ function ConsoleWorkbench({
     onPrimaryController(effectivePrimaryController);
     return () => onPrimaryController(null);
   }, [effectivePrimaryController, onPrimaryController]);
-  React.useEffect(() => {
-    if (desktopPreview) setCollapsed(false);
-  }, [desktopPreview, setCollapsed]);
   React.useLayoutEffect(() => {
     setCompactPrimaryOpen(false);
     setCompactChatterOpen(false);
   }, [pathname, largeViewport]);
-  React.useLayoutEffect(() => {
-    if (largeViewport || !recordPreview) return;
-    setCompactPrimaryOpen(false);
-    setCompactChatterOpen(true);
-  }, [largeViewport, recordPreview]);
   React.useLayoutEffect(() => {
     if (!compactAsideAvailable || largeViewport) return;
     registerSecondaryController(compactChatterController);
@@ -315,17 +306,13 @@ function ConsoleWorkbench({
             </ControlBandProvider>
           ) : undefined
         }
-        secondary={desktopPreview ? (
-          <ControlBandProvider host={undefined}>
-            {desktopPreview}
-          </ControlBandProvider>
-        ) : desktopChatter ? (
+        secondary={desktopChatter ? (
           <ControlBandProvider host={undefined}>
             <Chatter />
           </ControlBandProvider>
         ) : undefined}
         onPrimaryController={setDesktopPrimaryController}
-        onSecondaryController={desktopChatter || desktopPreview ? registerSecondaryController : undefined}
+        onSecondaryController={desktopChatter ? registerSecondaryController : undefined}
       >
         <main className="console-content-main">{children}</main>
       </Workbench>
@@ -346,7 +333,7 @@ function ConsoleWorkbench({
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
-      {!largeViewport && (recordSupportKey === null || recordPreview) ? <Drawer.Root
+      {!largeViewport && showChatter ? <Drawer.Root
         open={compactAsideAvailable && compactChatterOpen}
         onOpenChange={setCompactChatterOpen}
       >
@@ -354,11 +341,11 @@ function ConsoleWorkbench({
           <Drawer.Backdrop />
           <Drawer.Content
             side="right"
-            aria-label={recordSupportKey === null ? "Chatter" : t("chatter.tabRecords")}
+            aria-label={t("chatter.label")}
             className="w-[min(28rem,calc(100vw-1rem))] p-0"
           >
             <ControlBandProvider host={undefined}>
-              {recordSupportKey === null ? <Chatter /> : recordPreview}
+              <Chatter />
             </ControlBandProvider>
           </Drawer.Content>
         </Drawer.Portal>

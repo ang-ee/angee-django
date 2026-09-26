@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
 from django.apps import AppConfig
+from django.core.management import call_command
 from rebac import system_context
 
 from angee.addons import addon_manifest
@@ -17,8 +17,8 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.resources.models import Resource
 from angee.workflows import models as workflow_models
 from angee.workflows.definitions import DefinitionEdit, NodePatch
+from angee.workflows.testing.models import Trigger, Workflow
 from tests.conftest import write_addon_manifest
-from tests.workflows import WORKFLOW_DEFINITION_MODELS, Trigger, Workflow, workflow_table_setup
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,8 +35,8 @@ class WorkflowResourceLedger(Resource):
 
 
 @pytest.fixture()
-def workflow_resource_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Create concrete workflow definition and resource ledger tables."""
+def workflow_resource_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync workflow permissions after publishing the fixture's change-feed labels."""
 
     del transactional_db
 
@@ -46,10 +46,8 @@ def workflow_resource_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPa
         def change_publisher_model_labels(self) -> frozenset[str]:
             return frozenset({"notes.note"})
 
-    models: tuple[type[Any], ...] = (*WORKFLOW_DEFINITION_MODELS, WorkflowResourceLedger)
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: PublishedLabels()))
-    with workflow_table_setup(models):
-        yield
+    call_command("rebac", "sync", verbosity=0)
 
 
 def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(
@@ -226,12 +224,12 @@ def test_resource_republication_preserves_omitted_same_impl_config_until_explici
 
     steps_path.write_text(steps_path.read_text().replace(
         "      step_class: agent_session\n      config: {}\n",
-        "      step_class: archive_probe\n",
+        "      step_class: parties_dedupe_scan\n",
         1,
     ))
     edges_path = Path(owner.path) / "resources" / "demo" / "102_workflows.edge.yaml"
     edges_path.write_text(edges_path.read_text().replace(
-        "      condition: needs_review\n", "      condition: recognized\n", 1,
+        "      condition: needs_review\n", "      condition: found\n", 1,
     ))
     WorkflowResourceLedger.objects.load_addons(
         (owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True,
@@ -239,7 +237,7 @@ def test_resource_republication_preserves_omitted_same_impl_config_until_explici
     with system_context(reason="test changed implementation config reset"):
         draft.refresh_from_db()
         entry = draft.steps.get(key="entry")
-        assert entry.step_class == "archive_probe"
+        assert entry.step_class == "parties_dedupe_scan"
         assert entry.config == {}
 
 

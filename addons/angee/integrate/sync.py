@@ -5,11 +5,18 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from enum import StrEnum
 from typing import Any
 
 from django.db import transaction
 
 from angee.graphql.publishing import publication_ingestion_context
+
+
+class SyncDispatch(StrEnum):
+    """A durable execution owner will report this sync's terminal result later."""
+
+    DISPATCHED = "dispatched"
 
 
 @contextmanager
@@ -40,7 +47,11 @@ class BridgeProgressReporter:
         details: Mapping[str, Any] | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
-        """Merge progress under a row lock without clobbering a queued run."""
+        """Merge telemetry under a row lock; supplied details replace prior details.
+
+        Dispatch identity belongs to Bridge.sync_run_id, independently of this
+        payload. A progress report preserves a queued stage until work starts.
+        """
 
         with transaction.atomic():
             row = (
@@ -93,6 +104,7 @@ def current_bridge_progress() -> BridgeProgressReporter | None:
 
 __all__ = [
     "BridgeProgressReporter",
+    "SyncDispatch",
     "bridge_progress_context",
     "bridge_sync_context",
     "current_bridge_progress",

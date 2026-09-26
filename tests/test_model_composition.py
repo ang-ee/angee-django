@@ -9,13 +9,16 @@ import pytest
 import reversion
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, models
-from django.db.migrations.state import ModelState
+from django.db import models
+from django.db.migrations.autodetector import MigrationAutodetector
+from django.db.migrations.operations import CreateModel
+from django.db.migrations.state import ModelState, ProjectState
 from django.test.utils import isolate_apps
 
 from angee.base.mixins import HistoryMixin, RevisionMixin, SqidMixin
 from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
+from tests.tables import model_tables
 
 
 @pytest.fixture
@@ -360,6 +363,73 @@ class Child(ResourceLoadMixin):
     assert "after_resource_load" not in render_models(composition, config.label)
 
 
+@isolate_apps()
+def test_native_history_change_reason_fields_belong_to_each_historical_model(modules):
+    create, emit = modules
+    config, module = create("native_history_reasons")
+    for name in ("First", "Second"):
+        source(module, name, config.label, bases=(HistoryMixin, models.Model), runtime=True)
+
+    generated = emit(ModelComposition.discover((config,)))[config.label]
+    histories = (generated.First.history.model, generated.Second.history.model)
+    reasons = [history._meta.get_field("history_change_reason") for history in histories]
+
+    assert reasons[0] is not reasons[1]
+    for history, reason in zip(histories, reasons, strict=True):
+        assert reason.model is history
+        assert isinstance(reason, models.TextField)
+        assert reason.null is True
+
+
+@isolate_apps()
+def test_native_history_excludes_generated_fields_from_final_model(modules):
+    create, emit = modules
+    config, module = create("native_generated_history")
+
+    class BooleanGeneratedField(models.GeneratedField):
+        pass
+
+    source(
+        module,
+        "Tracked",
+        config.label,
+        bases=(HistoryMixin, models.Model),
+        runtime=True,
+        value=models.IntegerField(),
+        doubled=models.GeneratedField(
+            expression=models.F("value") * 2,
+            output_field=models.IntegerField(),
+            db_persist=True,
+        ),
+    )
+    source(
+        module,
+        "TrackedExtension",
+        config.label,
+        extends=f"{config.label}.Tracked",
+        positive=BooleanGeneratedField(
+            expression=models.Q(value__gt=0),
+            output_field=models.BooleanField(),
+            db_persist=True,
+        ),
+    )
+    generated = emit(ModelComposition.discover((config,)))[config.label]
+    Tracked = generated.Tracked
+    history = Tracked.history.model
+
+    assert generated.HistoricalTracked is history
+    assert not history._meta.abstract
+    assert {
+        field.name for field in Tracked._meta.local_fields if isinstance(field, models.GeneratedField)
+    } == {"doubled", "positive"}
+    assert isinstance(Tracked._meta.get_field("positive"), BooleanGeneratedField)
+    historical_fields = {field.name for field in history._meta.local_fields}
+    assert {"id", "value"} <= historical_fields
+    assert {"doubled", "positive"}.isdisjoint(historical_fields)
+    assert not any(isinstance(field, models.GeneratedField) for field in history._meta.local_fields)
+    assert {field.name for field in history.tracked_fields} == {"id", "value"}
+
+
 @pytest.mark.django_db(transaction=True)
 def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modules):
     create, emit = modules
@@ -389,10 +459,7 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
     assert not hasattr(generated, "HistoricalChild")
     assert generated.Child.history.model is history
     assert "sqid" not in {field.name for field in history._meta.local_fields}
-    with connection.schema_editor() as editor:
-        editor.create_model(Tracked)
-        editor.create_model(history)
-    try:
+    with model_tables((Tracked, history)):
         record = Tracked.objects.create(title="first")
         record.title = "second"
         record.save()
@@ -400,10 +467,71 @@ def test_native_history_saves_virtual_fields_and_preserves_parent_tracking(modul
         assert record.history.latest().instance.title == "second"
         record.delete()
         assert history.objects.count() == 3
-    finally:
-        with connection.schema_editor() as editor:
-            editor.delete_model(history)
-            editor.delete_model(Tracked)
+
+
+@isolate_apps()
+def test_native_history_mti_reference_has_a_migration_dependency(modules):
+    create, emit = modules
+    config, module = create("native_history_mti")
+    source(
+        module,
+        "Tracked",
+        config.label,
+        bases=(HistoryMixin, models.Model),
+        runtime=True,
+        title=models.CharField(max_length=32),
+    )
+    source(
+        module,
+        "Child",
+        config.label,
+        bases=(HistoryMixin, models.Model),
+        runtime=True,
+        extends=f"{config.label}.Tracked",
+        extra=models.IntegerField(default=0),
+    )
+    generated = emit(ModelComposition.discover((config,)))[config.label]
+    history = generated.Child.history.model
+    parent_reference = history._meta.get_field("tracked_ptr")
+
+    assert parent_reference.auto_created is False
+    assert parent_reference.remote_field.parent_link is False
+    assert parent_reference.target_field.name == "id"
+    snapshot = history(
+        tracked_ptr_id=7,
+        id=7,
+        title="parent",
+        extra=2,
+        history_user_id=None,
+    )
+    assert snapshot.instance.pk == 7
+    assert snapshot.instance.extra == 2
+
+    models_to_migrate = (generated.Tracked, generated.Child, history)
+    target = ProjectState()
+    for model in models_to_migrate:
+        state = ModelState.from_model(model)
+        if state.name == "HistoricalChild":
+            state.fields.pop("history_user")
+        target.add_model(state)
+    changes = MigrationAutodetector(ProjectState(), target)._detect_changes()
+    operations = changes[config.label][0].operations
+    parent_create = next(
+        index
+        for index, operation in enumerate(operations)
+        if isinstance(operation, CreateModel) and operation.name == "Tracked"
+    )
+    history_create = next(
+        index
+        for index, operation in enumerate(operations)
+        if isinstance(operation, CreateModel) and operation.name == "HistoricalChild"
+    )
+
+    assert parent_create < history_create
+    rendered = ProjectState()
+    for operation in operations:
+        operation.state_forwards(config.label, rendered)
+    rendered.apps.get_model(config.label, "HistoricalChild")
 
 
 @isolate_apps()

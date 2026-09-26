@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
+import type { Row } from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import { parseFlatSearch, stringifyFlatSearch } from "@angee/app";
@@ -32,7 +33,6 @@ const fileResource = testDataResource("storage.File", {
   })),
 });
 const resources = [fileResource, testDataResource("storage.Drive"), testDataResource("storage.Folder", { roots: { deletePreview: "delete_folders_preview" } })];
-const metadata = schemaFieldMetadataFromDataResources(resources);
 const scope = { filter: { drive: { exact: "drive-a" }, is_trashed: { exact: false } }, order: { updated_at: "DESC" as const }, page: 1, pageSize: 50 };
 const drive = { id: "drive-a", slug: "assets", name: "Assets" };
 function file(id: string, title: string) {
@@ -46,7 +46,8 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://files" });
+afterEach(() => { cleanup(); clearClients(); vi.restoreAllMocks(); });
 
 test("cold Files navigation preserves the real shell, tree, pager and active Details tab while native reads run in parallel", async () => {
   installTestLocalStorage();
@@ -75,9 +76,9 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
     }
     throw new Error("Unexpected authored request");
   });
-  const provider = { getApiUrl: () => "test://files", getOne, custom, update,
-    create: vi.fn(), deleteOne: vi.fn(), getList: vi.fn(async () => ({ data: records, total: records.length })),
-  } as DataProvider;
+  const provider = { getOne, custom, update,
+    deleteOne: vi.fn(), getList: vi.fn(async () => ({ data: records, total: records.length })),
+  } satisfies RefineTestDataProvider;
   const root = createRootRoute({ component: () => <ConsoleLayout><Outlet /></ConsoleLayout> });
   const files = createRoute({ getParentRoute: () => root, path: "/storage", component: StoragePage });
   const detail = createRoute({ getParentRoute: () => files, path: "$id" });
@@ -86,15 +87,13 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
     parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch,
   });
   const view = render(
-    <Refine resources={[...refineResourcesFromDataResources(resources)]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
+    <Provider resources={resources} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
       <OperationDocumentsProvider documents={{ console: { deletePreviews: { "storage.File": "mutation DeleteFiles($id: ID!) { delete_files_preview(id: $id) { deleted } }", "storage.Folder": "mutation DeleteFolders($id: ID!) { delete_folders_preview(id: $id) { deleted } }" } } }}>
-      <ModelMetadataProvider metadata={metadata}>
-        <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
-          <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
-        </AppRuntimeProvider>
-      </ModelMetadataProvider>
+      <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets, routeHref: createRouteHref(storage.routes ?? []) }}>
+        <ModalsHost><ToastProvider><RouterProvider router={router} /></ToastProvider></ModalsHost>
+      </AppRuntimeProvider>
       </OperationDocumentsProvider>
-    </Refine>,
+    </Provider>,
   );
   const details = await screen.findByRole("tab", { name: "Details" });
   fireEvent.click(details);

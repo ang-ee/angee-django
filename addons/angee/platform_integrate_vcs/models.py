@@ -57,7 +57,12 @@ class AddonCatalogManager(AngeeManager):
         """
 
         addon = apps.get_model("platform", "Addon")
-        vcs_bridge = source.repository.vcs_bridge
+        repository_field = source._meta.get_field("repository")
+        repository = repository_field.related_model._base_manager.select_related(
+            "vcs_bridge__credential__oauth_client"
+        ).get(pk=source.repository_id)
+        source.repository = repository
+        vcs_bridge = repository.vcs_bridge
         descriptors = vcs_bridge.discover(source, marker="addon.toml", parse=parse_addon_meta)
         available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))
         seen: set[str] = set()
@@ -67,14 +72,14 @@ class AddonCatalogManager(AngeeManager):
                 if not name:
                     continue
                 seen.add(name)
-                provenance = {"vcs_source": source, "vcs_path": str(descriptor.get("path", ""))}
+                provenance = {"vcs_source_id": source.pk, "vcs_path": str(descriptor.get("path", ""))}
                 if name in available:
                     addon.objects.filter(name=name).update(**provenance)
                     continue
                 addon.objects.update_or_create(
                     name=name,
                     defaults={
-                        "label": str(descriptor.get("label", "")),
+                        "label": "",
                         "namespace": str(descriptor.get("namespace", "")),
                         # The board groups by ``category`` and renders ``description``/
                         # ``keywords`` — a discovered marketplace row carries the same
@@ -86,13 +91,14 @@ class AddonCatalogManager(AngeeManager):
                         "source": addon.Source.REMOTE,
                         "state": addon.State.DISABLED,
                         "depends_on": list(descriptor.get("depends_on", [])),
+                        **addon.reset_runtime_facts(),
                         **provenance,
                     },
                 )
             (
                 addon.objects.filter(vcs_source=source, source=addon.Source.REMOTE)
                 .exclude(name__in=seen)
-                .update(state=addon.State.REMOVED)
+                .update(state=addon.State.REMOVED, **addon.reset_runtime_facts())
             )
             source.last_synced_at = timezone.now()
             source.save(update_fields=["last_synced_at", "updated_at"])

@@ -35,6 +35,8 @@ definition projects/task {
 
     // With a project set, its grant arms apply. A NULL project contributes no
     // arrow result, leaving the creator as the standalone task owner.
+    // Task.save requires project->write on insertion when project is set.
+    // A create arrow alone cannot admit authenticated standalone tasks.
     permission create = authenticated
     permission read   = project->read + owner + reader + editor + admin->member
     permission write  = project->write + owner + editor + admin->member

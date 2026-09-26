@@ -91,16 +91,16 @@ describe("ResourceToolbar list-kind regression", () => {
       view: "list",
       groupOptions: [],
       customGroupOptions: [
-        { id: "partner", label: "Supplier", group: { field: "partner" } },
+        { id: "partner", label: "Counterparty", group: { field: "partner" } },
         { id: "currency", label: "Currency", group: { field: "currency" } },
       ],
       onGroupStackChange,
     });
 
     fireEvent.click(screen.getByLabelText("Filter and group"));
-    expect(screen.queryByRole("button", { name: "Supplier" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Counterparty" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
-    expect(screen.getByLabelText("Group field").textContent).toContain("Supplier");
+    expect(screen.getByLabelText("Group field").textContent).toContain("Counterparty");
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     expect(onGroupStackChange).toHaveBeenCalledWith([{ field: "partner" }]);
   });
@@ -125,17 +125,17 @@ describe("ResourceToolbar list-kind regression", () => {
       view: "list",
       groupOptions: [],
       customGroupOptions: [{
-        id: "invoice-date",
-        label: "Invoice date",
-        group: { field: "invoice_date" },
+        id: "document-date",
+        label: "Document date",
+        group: { field: "document_date" },
         type: "date",
         granularities: ["month", "year"],
       }],
-      groupStack: [{ field: "invoice_date", granularity: "month" }],
+      groupStack: [{ field: "document_date", granularity: "month" }],
       onGroupStackChange,
     });
 
-    expect(screen.getByText("Invoice date · Month")).toBeTruthy();
+    expect(screen.getByText("Document date · Month")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Filter and group"));
     fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
     expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
@@ -162,18 +162,18 @@ describe("ResourceToolbar list-kind regression", () => {
       view="list"
       groupOptions={[]}
       customGroupOptions={[{
-        id: "invoice-date", label: "Invoice date", group: { field: "invoice_date" },
+        id: "document-date", label: "Document date", group: { field: "document_date" },
         type: "date", granularities: ["month"],
       }]}
       onGroupStackChange={onGroupStackChange}
       onFilterTextChange={vi.fn()}
     />);
 
-    expect(screen.getByLabelText("Group field").textContent).toContain("Invoice date");
+    expect(screen.getByLabelText("Group field").textContent).toContain("Document date");
     expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     expect(onGroupStackChange).toHaveBeenCalledWith([
-      { field: "invoice_date", granularity: "month" },
+      { field: "document_date", granularity: "month" },
     ]);
   });
 
@@ -184,7 +184,7 @@ describe("ResourceToolbar list-kind regression", () => {
       maxGroupDepth: 1,
       groupOptions: [],
       customGroupOptions: [
-        { id: "partner", label: "Supplier", group: { field: "partner" } },
+        { id: "partner", label: "Counterparty", group: { field: "partner" } },
       ],
       groupStack: [{ field: "status" }],
       onGroupStackChange,

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { testDataResource, testResourceQuery } from "@angee/metadata/testing";
-import { Refine, type DataProvider } from "@angee/refine";
 import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
@@ -28,7 +28,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
   };
 });
 
-import { AttemptHistory } from "./RunsPage";
+import { AttemptHistory } from "./RunInspection";
 
 const field = (name: string, scalar = "String") => ({
   name, kind: "scalar" as const, scalar, values: [], readable: true, filterable: true,
@@ -52,7 +52,8 @@ const resource = testDataResource("workflows.StepAttempt", {
   } }),
 });
 
-afterEach(() => { cleanup(); payloads.length = 0; });
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://workflows" });
+afterEach(() => { cleanup(); clearClients(); payloads.length = 0; });
 
 test("the native attempt record tabs mount only the selected payload pane", async () => {
   const row = {
@@ -64,33 +65,31 @@ test("the native attempt record tabs mount only the selected payload pane", asyn
   const returnedError = { ...row, id: "attempt-error", ordinal: 2, result_kind: "ERROR", applied_at: null };
   const returnedWait = { ...row, id: "attempt-wait", ordinal: 3, result_kind: "WAIT" };
   const provider = {
-    getApiUrl: () => "test://workflows",
     getOne: vi.fn(async () => ({ data: row })),
     getList: vi.fn(async () => ({ data: [returnedError, returnedWait], total: 2 })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as unknown as DataProvider;
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const view = render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
-      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+    <Provider resources={[resource]} dataProvider={provider}>
+      <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
           <AttemptHistory executionId="execution-1" attemptId={null} onSelect={vi.fn()} />
         </AppRuntimeProvider></ToastProvider></ModalsHost>
-      </ModelMetadataProvider></RouterContextProvider>
-    </Refine>,
+      </RouterContextProvider>
+    </Provider>,
   );
   await waitFor(() => expect(provider.getList).toHaveBeenCalledWith(expect.objectContaining({ pagination: expect.objectContaining({ pageSize: 20 }) })));
   expect(await screen.findByText("Returned · not applied")).toBeTruthy();
   expect(screen.getByText("Error")).toBeTruthy();
   expect(screen.getByText("Wait")).toBeTruthy();
   view.rerender(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true }}>
-      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+    <Provider resources={[resource]} dataProvider={provider}>
+      <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
           <AttemptHistory executionId="execution-1" attemptId="attempt-1" onSelect={vi.fn()} />
         </AppRuntimeProvider></ToastProvider></ModalsHost>
-      </ModelMetadataProvider></RouterContextProvider>
-    </Refine>,
+      </RouterContextProvider>
+    </Provider>,
   );
   await waitFor(() => expect(payloads.at(-1)).toEqual(expect.objectContaining({ includeInput: true, includeOutput: false })));
   fireEvent.click(await screen.findByRole("tab", { name: "Output" }));

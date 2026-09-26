@@ -34,13 +34,12 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
     if instance.channel_id is None:
         return
     try:
-        channel_model = apps.get_model("messaging", "Channel")
         apps.get_model("intake", "Need")
+        channel: Any = instance.channel
     except LookupError:
         # Source-only test graphs may install addon declarations without emitted
         # concrete runtime models. The global messaging seam must remain inert.
         return
-    channel = channel_model._base_manager.select_related("intake_queue").filter(pk=instance.channel_id).first()
     if channel is not None:
         try:
             channel.capture_ingested_message(instance)

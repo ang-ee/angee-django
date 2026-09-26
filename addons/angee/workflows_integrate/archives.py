@@ -18,17 +18,6 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
-__all__ = (
-    "EXTRACT_DECLARED_LIMIT",
-    "ArchiveError",
-    "BoundedReader",
-    "archive_entries",
-    "extract_archive",
-    "safe_member_name",
-    "stage_subtree",
-    "subtree_entries",
-)
-
 EXTRACT_DECLARED_LIMIT = 128 * 1024 * 1024 * 1024
 """Aggregate declared uncompressed bytes accepted for one staged subtree."""
 
@@ -118,7 +107,7 @@ def subtree_entries(
 
     if str(parent) == ".":
         return entries
-    prefix = parent.as_posix() + "/"
+    prefix = safe_member_name(parent.as_posix()) + "/"
     return {name: info for name, info in entries.items() if name.startswith(prefix)}
 
 
@@ -131,6 +120,7 @@ def extract_archive(
     """Extract normalized files deterministically without following links."""
 
     for name, info in sorted(entries.items()):
+        name = safe_member_name(name)
         mode = info.external_attr >> 16
         if stat.S_ISLNK(mode):
             raise ArchiveError(f"Archive member {name!r} is a symbolic link.")

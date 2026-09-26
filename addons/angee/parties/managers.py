@@ -16,11 +16,11 @@ from __future__ import annotations
 import mimetypes
 import re
 from collections import defaultdict
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from itertools import combinations
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import Any, Self, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -28,6 +28,7 @@ from django.core.validators import validate_email
 from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
+from django.utils.crypto import salted_hmac
 from phonenumbers import (
     NumberParseException,
     PhoneNumberMatcher,
@@ -40,14 +41,13 @@ from rebac import PermissionDenied, actor_context, current_actor, system_context
 from angee.base.identity import public_id_for
 from angee.base.mixins import HierarchyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
-from angee.base.refs import canonical_record_target
+from angee.base.refs import canonical_record_model
 from angee.base.scoping import read_scoped_queryset
+from angee.base.serialization import canonical_json
+from angee.parties.backends import ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
-from angee.parties.mixins import LinkSource
-
-if TYPE_CHECKING:
-    from angee.parties.backends import ParsedContact
-
+from angee.parties.mixins import LinkSource, ScoredLinkMixin
+from angee.storage.models import UploadState
 
 _SIGNATURE_PHONE_CANDIDATE = re.compile(r"(?<!\w)\+?\d(?:[\d \t()./\-]*\d)?(?!\w)")
 
@@ -69,6 +69,30 @@ class HandleAssociationAssessment:
     status: HandleAssociationStatus
     readable_links: tuple[Any, ...]
     conflict_evidence_readable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityBasis:
+    """One Party identity read: the actor-visible facts and the complete basis.
+
+    ``current`` is safe to show the reading actor. ``complete`` may contain rows
+    that actor cannot read; it is never shown and only anchors expected-state
+    checks through :attr:`facts_hash`.
+    """
+
+    party: Any
+    current: dict[str, Any]
+    complete: dict[str, Any]
+
+    @property
+    def facts_hash(self) -> str:
+        """Keyed digest of the complete basis; it cannot confirm guesses of hidden rows."""
+
+        return salted_hmac(
+            "angee.parties.identity_basis",
+            canonical_json(self.complete),
+            algorithm="sha256",
+        ).hexdigest()
 
 
 class CircleQuerySet(HierarchyQuerySet, AngeeQuerySet):
@@ -200,7 +224,14 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             changed += 1
         return changed
 
-    def upsert(self, *, platform: str, value: str, created_by_id: Any = None, **fields: Any) -> Any:
+    def upsert(
+        self,
+        *,
+        platform: str,
+        value: str,
+        created_by_id: Any = None,
+        **fields: Any,
+    ) -> Any:
         """Get-or-create a handle on the identity it actually has, refreshing display fields.
 
         A source-stable ``external_id`` (in ``fields``, when the source has one)
@@ -344,6 +375,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
 
         person_model = apps.get_model("parties", "Person")
         party_handle_model = apps.get_model("parties", "PartyHandle")
+        link_owner = party_handle_model.objects
         with system_context(reason="parties.handle.claim_own"), transaction.atomic():
             handle = self.upsert(
                 platform=platform,
@@ -352,10 +384,20 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
                 display_name=display_name,
                 metadata=metadata or {},
             )
-            handle = self.lock_if_supported().get(pk=handle.pk)
+            handles, _existing_parties = link_owner.lock_identity_rows(
+                party_ids=(),
+                handle_ids=(handle.pk,),
+            )
+            handle = handles[handle.pk]
             person = person_model.objects.for_user(user)
+            handles, parties = link_owner.lock_identity_rows(
+                party_ids=(person.pk,),
+                handle_ids=(handle.pk,),
+            )
+            handle = handles[handle.pk]
+            person = parties[person.pk]
             if handle.owner_id is not None and handle.owner_id != user.pk:
-                party_handle_model.objects.link(
+                link_owner.link(
                     person,
                     handle,
                     confidence=0.3,
@@ -367,7 +409,7 @@ class HandleManager(AngeeManager.from_queryset(HandleQuerySet)):  # type: ignore
             if handle.owner_id is None:
                 handle.owner = user
                 handle.save(update_fields=["owner", "updated_at"])
-            party_handle_model.objects.link(
+            link_owner.link(
                 person,
                 handle,
                 confidence=1.0,
@@ -416,17 +458,71 @@ class PartyHandleQuerySet(AngeeQuerySet):
         )
 
     def update(self, **kwargs: Any) -> int:
+        """Keep association transitions on the owner that resolves handles."""
+
         raise TypeError("Party-handle transitions must use link(), confirm(), dismiss(), or delete().")
 
-    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[Any]:
+        """Require new associations to run the manager's resolution bookkeeping."""
+
         raise TypeError("Party-handle links must be created through PartyHandleManager.link().")
-
-    def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], batch_size: int | None = None) -> int:
-        raise TypeError("Party-handle transitions must use link(), confirm(), dismiss(), or delete().")
 
 
 class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # type: ignore[misc]
     """Owns the confidence link between a party and a handle, and the resolution."""
+
+    def lock_identity_rows(
+        self,
+        *,
+        party_ids: Iterable[int],
+        handle_ids: Iterable[int],
+    ) -> tuple[dict[int, Any], dict[int, Any]]:
+        """Lock identity rows in the total Handle, Party, PartyHandle order."""
+
+        handle_model = self.model._meta.get_field("handle").remote_field.model
+        party_model = self.model._meta.get_field("party").remote_field.model
+        ordered_handle_ids = sorted(set(handle_ids))
+        ordered_party_ids = sorted(set(party_ids))
+        with system_context(reason="parties.party_handle.lock_identity_rows"):
+            handles = {
+                row.pk: row
+                for row in handle_model.objects.filter(pk__in=ordered_handle_ids).order_by("pk").lock_if_supported()
+            }
+            ordered_party_ids = sorted(
+                set(ordered_party_ids)
+                .union(row.party_id for row in handles.values() if row.party_id is not None)
+                .union(self.filter(handle_id__in=ordered_handle_ids).values_list("party_id", flat=True))
+            )
+            parties = {
+                row.pk: row
+                for row in party_model.objects.filter(pk__in=ordered_party_ids).order_by("pk").lock_if_supported()
+            }
+            list(
+                self.filter(party_id__in=ordered_party_ids, handle_id__in=ordered_handle_ids)
+                .order_by("pk")
+                .lock_if_supported()
+            )
+        return handles, parties
+
+    def _transition(self, link: Any, *, action: str, actor: Any) -> None:
+        """Apply a confirmation transition under the canonical identity lock set."""
+
+        if action not in {"confirm", "dismiss"}:
+            raise ValueError("Unknown PartyHandle transition.")
+        if actor is None:
+            raise PermissionDenied("write access to the party-handle link is required")
+        with transaction.atomic():
+            self.lock_identity_rows(
+                party_ids=(link.party_id,),
+                handle_ids=(link.handle_id,),
+            )
+            locked = self.with_actor(actor).with_action("write").get(pk=link.pk)
+            if not locked.has_access("write"):
+                raise PermissionDenied("write access to the party-handle link is required")
+            with system_context(reason=f"parties.party_handle.{action}"):
+                getattr(ScoredLinkMixin, action)(locked)
+            for field in ("confidence", "source", "is_confirmed", "is_dismissed", "updated_at"):
+                setattr(link, field, getattr(locked, field))
 
     def propose_manual_contact(
         self,
@@ -472,9 +568,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     {"value": "Enter a valid international phone number including country code."}
                 ) from exc
             if not is_possible_number(number) or not is_valid_number(number):
-                raise ValidationError(
-                    {"value": "Enter a valid international phone number including country code."}
-                )
+                raise ValidationError({"value": "Enter a valid international phone number including country code."})
 
         candidate = handle_model(
             platform=normalized_platform,
@@ -484,21 +578,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             created_by_id=getattr(actor, "pk", None),
         )
         candidate.full_clean(validate_unique=False, validate_constraints=False)
-        alias = party._state.db or self.db
-        party_model = apps.get_model("parties", "Party")
 
-        with transaction.atomic(using=alias), actor_context(actor):
-            locked_party = (
-                party_model.objects.db_manager(alias)
-                .sudo(reason="parties.party_handle.propose_manual_contact.lock_party")
-                .locked_get(pk=party.pk)
-            )
-            locked_party.with_actor(actor)._require_record_access("write")
-
-            handle_owner = handle_model.objects.db_manager(alias)
+        with transaction.atomic(), actor_context(actor):
+            handle_owner = handle_model.objects
             handle = (
-                handle_owner
-                .sudo(reason="parties.party_handle.propose_manual_contact.handle")
+                handle_owner.sudo(reason="parties.party_handle.propose_manual_contact.handle")
                 .lock_if_supported()
                 .filter(platform=normalized_platform, value=contact_value)
                 .first()
@@ -511,18 +595,21 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                         value=contact_value,
                         created_by_id=getattr(actor, "pk", None),
                     )
-                handle = handle_owner.sudo(
-                    reason="parties.party_handle.propose_manual_contact.lock_handle",
-                ).locked_get(pk=handle.pk)
+            handles, parties = self.lock_identity_rows(
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+            )
+            handle = handles[handle.pk]
+            locked_party = parties[party.pk].with_actor(actor)
+            locked_party._require_record_access("write")
             if not handle.with_actor(actor).has_access("read"):
                 raise PermissionDenied("Denied: cannot add this contact point.")
             if normalized_label and not handle.label and handle.has_access("write"):
                 handle.label = normalized_label
-                handle.save(using=alias, update_fields=("label", "updated_at"))
+                handle.save(update_fields=("label", "updated_at"))
 
             existing = (
-                self.db_manager(alias)
-                .sudo(reason="parties.party_handle.propose_manual_contact.lookup")
+                self.sudo(reason="parties.party_handle.propose_manual_contact.lookup")
                 .lock_if_supported()
                 .filter(party_id=locked_party.pk, handle_id=handle.pk)
                 .first()
@@ -532,14 +619,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                     raise PermissionDenied("Denied: cannot add this contact point.")
                 return existing
 
-            server_handle = handle_owner.sudo(
-                reason="parties.party_handle.propose_manual_contact.resolve_handle",
-            ).locked_get(pk=handle.pk)
-            verified_link_actor = self.db_manager(alias).check_create()
+            verified_link_actor = self.check_create()
             with system_context(reason="parties.party_handle.propose_manual_contact.link"):
-                link = self.db_manager(alias).link(
+                link = self.link(
                     locked_party,
-                    server_handle,
+                    handle,
                     confidence=0.4,
                     source=cast(LinkSource, LinkSource.MANUAL),
                     is_confirmed=False,
@@ -557,7 +641,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         handle.with_actor(actor)._require_record_access("read")
         with system_context(reason="parties.party_handle.has_confirmed_association"):
             return self.filter(
-                handle_id=handle.pk, is_confirmed=True, is_dismissed=False,
+                handle_id=handle.pk,
+                is_confirmed=True,
+                is_dismissed=False,
             ).exists()
 
     def assess_claimed_handle(self, party: Any, handle: Any, *, actor: Any) -> HandleAssociationAssessment:
@@ -570,11 +656,10 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         visible = read_scoped_queryset(self.model, actor)
         readable = (
             tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
-            if visible is not None else ()
+            if visible is not None
+            else ()
         )
-        return self._assess_claimed_handle_authorized(
-            party=party, handle=handle, readable_links=readable
-        )
+        return self._assess_claimed_handle_authorized(party=party, handle=handle, readable_links=readable)
 
     def _assess_claimed_handle_authorized(
         self,
@@ -589,17 +674,12 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             raise ValidationError({"handle": "Retained association evidence has the wrong Handle."})
         with system_context(reason="parties.party_handle.assess_claimed_handle"):
             authoritative = tuple(
-                self.filter(handle_id=handle.pk)
-                .only("party_id", "is_confirmed", "is_dismissed")
-                .order_by("pk")
+                self.filter(handle_id=handle.pk).only("party_id", "is_confirmed", "is_dismissed").order_by("pk")
             )
         same = tuple(link for link in authoritative if link.party_id == party.pk)
         if any(link.is_dismissed for link in same):
             status = HandleAssociationStatus.SAME_DISMISSED
-        elif any(
-            link.is_confirmed and not link.is_dismissed and link.party_id != party.pk
-            for link in authoritative
-        ):
+        elif any(link.is_confirmed and not link.is_dismissed and link.party_id != party.pk for link in authoritative):
             status = HandleAssociationStatus.CONFIRMED_OTHER
         elif any(link.is_confirmed and not link.is_dismissed for link in same):
             status = HandleAssociationStatus.SAME_CONFIRMED
@@ -609,14 +689,11 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
             status = HandleAssociationStatus.UNKNOWN
         readable_ids = {link.pk for link in readable_links}
         conflict_ids = {
-            link.pk for link in authoritative
+            link.pk
+            for link in authoritative
             if (
                 (link.party_id == party.pk and link.is_dismissed)
-                or (
-                    link.party_id != party.pk
-                    and link.is_confirmed
-                    and not link.is_dismissed
-                )
+                or (link.party_id != party.pk and link.is_confirmed and not link.is_dismissed)
             )
         }
         return HandleAssociationAssessment(
@@ -663,23 +740,24 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         party.with_actor(actor)._require_record_access("write")
         if not 0 < confidence < 0.5:
             raise ValidationError({"confidence": "Claimed-handle proposals require confidence below 0.5."})
-        evidence_target = canonical_record_target(evidence)
-        evidence_model = evidence_target.content_type.model_class()
-        if evidence_model is None:
-            raise ValidationError({"evidence": "The evidence record has no canonical model."})
+        evidence_model = canonical_record_model(type(evidence))
         evidence_ref = {
             "model": evidence_model._meta.label,
-            "id": public_id_for(evidence_model, evidence_target.object_id),
+            "id": public_id_for(evidence_model, evidence.pk),
         }
-        alias = handle._state.db or self.db
-        with system_context(reason="parties.party_handle.propose_claimed_handle"), transaction.atomic(using=alias):
-            locked_handle = type(handle)._base_manager.using(alias).select_for_update().get(pk=handle.pk)
-            existing = self.using(alias).select_for_update().filter(party=party, handle=locked_handle).first()
+        with system_context(reason="parties.party_handle.propose_claimed_handle"), transaction.atomic():
+            handles, parties = self.lock_identity_rows(
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+            )
+            locked_handle = handles[handle.pk]
+            locked_party = parties[party.pk]
+            existing = self.filter(party=locked_party, handle=locked_handle).first()
             refs = list((existing.metadata or {}).get("evidence", ())) if existing is not None else []
             if evidence_ref not in refs:
                 refs.append(evidence_ref)
-            return self.db_manager(alias).link(
-                party,
+            return self.link(
+                locked_party,
                 locked_handle,
                 confidence=confidence,
                 source=cast(LinkSource, LinkSource.EMAIL_MATCH),
@@ -712,9 +790,14 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         a later importer can add provenance without erasing prior evidence.
         """
 
-        alias = handle._state.db or self.db
-        with transaction.atomic(using=alias):
-            link, created = self.using(alias).get_or_create(
+        with transaction.atomic():
+            handles, parties = self.lock_identity_rows(
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+            )
+            handle = handles[handle.pk]
+            party = parties[party.pk]
+            link, created = self.get_or_create(
                 party=party,
                 handle=handle,
                 defaults={
@@ -739,7 +822,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 link.metadata = merged_metadata
                 dirty.append("metadata")
             if dirty:
-                link.save(using=alias, update_fields=[*dict.fromkeys(dirty), "updated_at"])
+                link.save(update_fields=[*dict.fromkeys(dirty), "updated_at"])
             if created or upgraded or handle.party_id != party.pk:
                 link._resolve_link()
             return link
@@ -753,14 +836,15 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         the previous owner too, so its ``handle_count`` never goes stale.
         """
 
-        alias = handle._state.db or self.db
-        with transaction.atomic(using=alias):
+        with transaction.atomic():
+            handles, _parties = self.lock_identity_rows(
+                party_ids=(),
+                handle_ids=(handle.pk,),
+            )
+            handle = handles[handle.pk]
             previous_pk = handle.party_id
             winner = (
-                self.using(alias).filter(handle=handle, is_dismissed=False)
-                .order_by("-is_confirmed", "-confidence", "sqid")
-                .select_related("party")
-                .first()
+                self.filter(handle=handle, is_dismissed=False).order_by("-is_confirmed", "-confidence", "sqid").first()
             )
             resolved = winner.party if winner else None
             resolved_pk = resolved.pk if resolved else None
@@ -773,14 +857,14 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 handle.party_link_confirmed = is_confirmed
                 dirty.append("party_link_confirmed")
             if dirty:
-                handle.save(using=alias, update_fields=[*dirty, "updated_at"])
+                handle.save(update_fields=[*dirty, "updated_at"])
             if resolved is not None:
-                self.db_manager(alias).recount(resolved)
+                self.recount(resolved)
             if previous_pk is not None and previous_pk != resolved_pk:
                 party_model = apps.get_model("parties", "Party")
-                previous = party_model.objects.using(alias).filter(pk=previous_pk).first()
+                previous = party_model.objects.filter(pk=previous_pk).first()
                 if previous is not None:
-                    self.db_manager(alias).recount(previous)
+                    self.recount(previous)
             handle._party_links_resolved()
 
     def recount(self, party: Any) -> None:
@@ -1000,20 +1084,27 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
     ) -> int:
         """Create one unconfirmed rule link, or skip its durable existing pair."""
 
-        _, created = self.get_or_create(
-            party=party,
-            handle=handle,
-            defaults={
-                "confidence": confidence,
-                "source": LinkSource.RULE,
-                "metadata": metadata,
-                "created_by_id": created_by_id,
-            },
-        )
-        if not created:
-            return 0
-        self.resolve(handle)
-        return 1
+        with transaction.atomic():
+            handles, parties = self.lock_identity_rows(
+                party_ids=(party.pk,),
+                handle_ids=(handle.pk,),
+            )
+            locked_handle = handles[handle.pk]
+            locked_party = parties[party.pk]
+            _, created = self.get_or_create(
+                party_id=locked_party.pk,
+                handle_id=locked_handle.pk,
+                defaults={
+                    "confidence": confidence,
+                    "source": LinkSource.RULE,
+                    "metadata": metadata,
+                    "created_by_id": created_by_id,
+                },
+            )
+            if not created:
+                return 0
+            self.resolve(locked_handle)
+            return 1
 
     @staticmethod
     def _signature_phone_values(text: str, *, handle_model: Any) -> tuple[str, ...]:
@@ -1068,7 +1159,7 @@ class MergeVetoManager(AngeeManager):
             ).values_list("party_a_id", "party_b_id")
             return set(rows)
 
-    def veto(self, a: Any, b: Any) -> Any:
+    def veto(self, a: Any, b: Any, *, actor: Any = None) -> Any:
         """Persist the canonical keep-separate fact after locking both writable parties.
 
         The pair lock is the same lock, in the same order, that :meth:`PartyManager.merge`
@@ -1077,9 +1168,9 @@ class MergeVetoManager(AngeeManager):
         """
 
         party_a_id, party_b_id = self._ordered_ids(a, b)
-        actor = current_actor()
+        actor = actor or current_actor()
         party_model = apps.get_model("parties", "Party")
-        with transaction.atomic():
+        with transaction.atomic(), actor_context(actor):
             locked = {
                 party.pk: party
                 for party in party_model.objects.lock_if_supported()
@@ -1088,8 +1179,8 @@ class MergeVetoManager(AngeeManager):
             }
             if party_a_id not in locked or party_b_id not in locked:
                 raise ValidationError("One of the parties no longer exists.")
-            party_a = locked[party_a_id]
-            party_b = locked[party_b_id]
+            party_a = locked[party_a_id].with_actor(actor)
+            party_b = locked[party_b_id].with_actor(actor)
             if party_a.merged_into_id is not None or party_b.merged_into_id is not None:
                 raise ValidationError("Only canonical parties can be kept separate.")
             if not party_a.has_access("write") or not party_b.has_access("write"):
@@ -1340,7 +1431,6 @@ class PartyQuerySet(AngeeQuerySet):
         ]
 
 
-
 class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[misc]
     """Factory for parties, including the idempotent directory-sync ingest.
 
@@ -1349,6 +1439,189 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
     :meth:`for_user` lives here.
     """
 
+    def identity_basis(self, party_id: str, *, actor: Any, lock: bool = False) -> IdentityBasis:
+        """Read one Party's identity under ``actor``'s read authorization.
+
+        ``current`` projects only the Address and PartyHandle rows ``actor`` can
+        read (a link to an unreadable Handle stays hidden) and is what reviewers
+        see. ``complete`` projects every row, read under a system context, so
+        :attr:`IdentityBasis.facts_hash` is actor-independent: a reviewer who
+        cannot read a private handle compares the same basis the workflow actor
+        froze, while a concurrent change to that handle still invalidates the
+        review. ``lock`` locks the complete row set in the shared Handle, Party,
+        PartyHandle order, then the Party's addresses.
+        """
+
+        party = self.with_actor(actor).from_public_id(party_id)
+        if party is None:
+            raise ValidationError({"party_id": "Party was not found."})
+        party.with_actor(actor)._require_record_access("read")
+        reason = "parties.party.identity_basis"
+        address_owner = apps.get_model("parties", "Address").objects
+        link_owner = apps.get_model("parties", "PartyHandle").objects
+        addresses = address_owner.system_context(reason=reason).filter(party=party)
+        links = link_owner.system_context(reason=reason).filter(party=party)
+        if lock:
+            _handles, locked_parties = link_owner.lock_identity_rows(
+                party_ids=(party.pk,),
+                handle_ids=tuple(links.values_list("handle_id", flat=True)),
+            )
+            party = locked_parties[party.pk].with_actor(actor)
+            addresses = addresses.lock_if_supported()
+        address_rows = list(addresses.order_by("is_primary", "sqid"))
+        link_rows = list(links.select_related("handle").order_by("sqid"))
+        readable_addresses = set(address_owner.with_actor(actor).filter(party=party).values_list("pk", flat=True))
+        readable_handles = apps.get_model("parties", "Handle").objects.with_actor(actor).scoped().values("pk")
+        readable_links = set(
+            link_owner.with_actor(actor)
+            .filter(party=party, handle_id__in=Subquery(readable_handles))
+            .values_list("pk", flat=True)
+        )
+        return IdentityBasis(
+            party=party,
+            current=party.identity_values(
+                [row for row in address_rows if row.pk in readable_addresses],
+                [link for link in link_rows if link.pk in readable_links],
+            ),
+            complete=party.identity_values(address_rows, link_rows),
+        )
+
+    def identity_snapshot(self, party_id: str, *, actor: Any, lock: bool = False) -> tuple[Any, dict[str, Any]]:
+        """Return the Party and its actor-visible identity from :meth:`identity_basis`."""
+
+        basis = self.identity_basis(party_id, actor=actor, lock=lock)
+        return basis.party, basis.current
+
+    def apply_identity(
+        self,
+        *,
+        party_id: str,
+        expected_facts_hash: str,
+        proposed: Mapping[str, Any],
+        choices: Mapping[str, str],
+        actor: Any,
+    ) -> tuple[str, dict[str, str]]:
+        """Apply plain reviewed values while the locked identity basis still matches.
+
+        ``expected_facts_hash`` is :attr:`IdentityBasis.facts_hash` from review;
+        it is compared with the complete basis locked here, and exact-replace
+        expectations come from that same basis. Every write stays authorized as
+        ``actor``. A replay after a successful change returns conflict because
+        the retained basis hash no longer matches; unchanged choices are
+        idempotent no-ops.
+        """
+
+        allowed = {
+            "name_action": {"keep", "replace"},
+            "address_action": {"keep", "add", "replace"},
+            "handle_action": {"keep", "confirm", "dismiss"},
+        }
+        if set(choices) != set(allowed) or any(value not in allowed[name] for name, value in choices.items()):
+            raise ValidationError({"choices": "Identity choices are invalid."})
+        with transaction.atomic(), actor_context(actor):
+            basis = self.identity_basis(party_id, actor=actor, lock=True)
+            party, current = basis.party, basis.complete
+            party._require_record_access("write")
+            if basis.facts_hash != expected_facts_hash:
+                return "conflict", {}
+            results = {"name_result": "kept", "address_result": "kept", "handle_result": "kept"}
+            if choices["name_action"] == "replace":
+                results["name_result"] = self.replace_name_exact(
+                    party=party,
+                    expected=current["name"],
+                    proposed=str(proposed["name"]),
+                    actor=actor,
+                )
+            addresses = apps.get_model("parties", "Address").objects
+            if choices["address_action"] == "add":
+                results["address_result"], _ = addresses.attach_exact(
+                    party=party,
+                    values=proposed["address"],
+                    actor=actor,
+                    label=proposed["address"]["label"],
+                    conflict="append",
+                )
+            elif choices["address_action"] == "replace":
+                primary = next((row for row in current["addresses"] if row["is_primary"]), None)
+                expected = (
+                    addresses.system_context(reason="parties.party.apply_identity").from_public_id(primary["id"])
+                    if primary
+                    else None
+                )
+                results["address_result"], _ = addresses.replace_primary_exact(
+                    party=party,
+                    values=proposed["address"],
+                    actor=actor,
+                    expected_id=expected.pk if expected else None,
+                    label=proposed["address"]["label"],
+                )
+            if choices["handle_action"] != "keep":
+                link = (
+                    apps.get_model("parties", "PartyHandle")
+                    .objects.with_actor(actor)
+                    .lock_if_supported()
+                    .from_public_id(proposed["handle"]["party_handle_id"])
+                )
+                if link is None or link.party_id != party.pk:
+                    raise ValidationError({"handle_action": "The proposed PartyHandle changed during review."})
+                getattr(link.with_actor(actor), choices["handle_action"])()
+                results["handle_result"] = f"{choices['handle_action']}ed"
+            outcome = "applied" if any(value not in {"kept", "matched"} for value in results.values()) else "unchanged"
+            return outcome, results
+
+    @staticmethod
+    def prepare_duplicate_pairs(proposed: Any, approved: Any) -> list[dict[str, str]]:
+        """Validate the fixed pair basis and retain only supported pair operations."""
+
+        if not isinstance(proposed, list) or not isinstance(approved, list) or len(proposed) != len(approved):
+            raise ValidationError({"pairs": "Duplicate review must preserve every proposed pair."})
+        rows = []
+        for expected, resolved in zip(proposed, approved, strict=True):
+            if not isinstance(expected, Mapping) or not isinstance(resolved, Mapping):
+                raise ValidationError({"pairs": "Duplicate pairs must be objects."})
+            if any(
+                resolved.get(key) != expected.get(key)
+                for key in ("left", "right", "left_name", "right_name", "evidence")
+            ):
+                raise ValidationError({"pairs": "Duplicate review changed a proposed pair."})
+            action, survivor = resolved.get("action"), resolved.get("survivor")
+            if action not in {"merge", "skip", "keep_separate"} or survivor not in {"left", "right"}:
+                raise ValidationError({"pairs": "Duplicate review carries an unsupported choice."})
+            if action != "skip":
+                rows.append(
+                    {
+                        "left": str(expected["left"]),
+                        "right": str(expected["right"]),
+                        "action": action,
+                        "survivor": survivor,
+                    }
+                )
+        return rows
+
+    def apply_duplicate_pair(self, *, left_id: str, right_id: str, survivor: str, action: str, actor: Any) -> str:
+        """Apply one merge or durable veto using plain values and an explicit actor."""
+
+        if survivor not in {"left", "right"} or action not in {"merge", "keep_separate"}:
+            raise ValidationError({"pair": "Unsupported duplicate pair operation."})
+        with transaction.atomic(), actor_context(actor):
+            left = self.with_actor(actor).from_public_id(left_id)
+            right = self.with_actor(actor).from_public_id(right_id)
+            if left is None or right is None:
+                raise ValidationError({"pair": "Duplicate pair references a missing party."})
+            if action == "keep_separate":
+                apps.get_model("parties", "MergeVeto").objects.veto(left, right, actor=actor)
+                return "vetoed"
+            locked = {
+                row.pk: row.with_actor(actor)
+                for row in self.lock_if_supported().filter(pk__in=[left.pk, right.pk]).order_by("pk")
+            }
+            into, source = (
+                (locked[left.pk], locked[right.pk]) if survivor == "left" else (locked[right.pk], locked[left.pk])
+            )
+            already_merged = source.merged_into_id == into.pk
+            self.merge(into=into, source=source, actor=actor)
+            return "already_merged" if already_merged else "merged"
+
     def replace_name_exact(self, *, party: Any, expected: str, proposed: str, actor: Any) -> str:
         """Apply a reviewed name only while the frozen Party name still matches."""
 
@@ -1356,7 +1629,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         if not normalized:
             raise ValidationError({"name": "A replacement Party name must not be empty."})
         with transaction.atomic(), actor_context(actor):
-            locked = self.model._base_manager.select_for_update().get(pk=party.pk)
+            locked = self.with_actor(actor).locked_get(pk=party.pk)
             if locked.display_name != expected:
                 raise ValidationError({"name": "The Party name changed during review."})
             if not locked.has_access("write"):
@@ -1405,7 +1678,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         """
 
         person_model = apps.get_model("parties", "Person")
-        person, _created = person_model._default_manager.get_or_create(
+        person, _created = person_model.objects.get_or_create(
             user=user,
             defaults={"display_name": _user_display_name(user), "created_by_id": user.pk},
         )
@@ -1422,7 +1695,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             .order_by("display_name", "sqid")[:bounded]
         )
 
-    def merge(self, *, into: Any, source: Any, field_overrides: Any = None) -> Any:
+    def merge(self, *, into: Any, source: Any, field_overrides: Any = None, actor: Any = None) -> Any:
         """Merge ``source`` into ``into`` with vetted scalar overrides in one transaction."""
 
         if into.pk is None or source.pk is None:
@@ -1430,19 +1703,22 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         if into.pk == source.pk:
             raise ValidationError("A party cannot be merged into itself.")
 
+        actor = actor or current_actor()
         merge_veto_model = apps.get_model("parties", "MergeVeto")
-        with transaction.atomic():
+        with transaction.atomic(), actor_context(actor):
             locked = {
                 party.pk: party for party in self.lock_if_supported().filter(pk__in=(into.pk, source.pk)).order_by("pk")
             }
             if into.pk not in locked or source.pk not in locked:
                 raise ValidationError("One of the parties no longer exists.")
-            survivor = locked[into.pk]
-            merged = locked[source.pk]
-            if survivor.merged_into_id is not None or merged.merged_into_id is not None:
-                raise ValidationError("Only canonical parties can be merged.")
+            survivor = locked[into.pk].with_actor(actor)
+            merged = locked[source.pk].with_actor(actor)
             if not survivor.has_access("write") or not merged.has_access("write"):
                 raise PermissionDenied("write access to both parties is required")
+            if merged.merged_into_id == survivor.pk and survivor.merged_into_id is None:
+                return survivor
+            if survivor.merged_into_id is not None or merged.merged_into_id is not None:
+                raise ValidationError("Only canonical parties can be merged.")
             if merge_veto_model.objects.forbids(survivor, merged):
                 raise ValidationError("These parties have been marked to stay separate.")
             survivor.apply_merge_field_overrides(merged, field_overrides)
@@ -1468,7 +1744,205 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
             return None
         return person.user
 
-    def ingest_contact(self, parsed: ParsedContact, *, folder: Any, created_by_id: Any) -> Any:
+    def lock_contact(
+        self,
+        person: Any | None,
+        *,
+        parsed: ParsedContact | None = None,
+    ) -> None:
+        """Lock the mapped contact aggregate before a caller rechecks its base.
+
+        Follow the shared Handle, Party, PartyHandle order before locking the
+        Person child and its mapped collections. The parent row lock also fences
+        inserts through its foreign keys while the page transaction is open.
+        """
+
+        associations = apps.get_model("parties", "PartyHandle").objects
+        handles = apps.get_model("parties", "Handle").objects
+        handle_ids = (
+            set(associations.filter(party_id=person.pk).values_list("handle_id", flat=True))
+            if person is not None
+            else set()
+        )
+        if parsed is not None:
+            handle_ids.update(
+                handles.filter(
+                    Q(platform="email", value__in=[item[0] for item in parsed.emails])
+                    | Q(platform="phone", value__in=[item[0] for item in parsed.phones])
+                ).values_list("pk", flat=True)
+            )
+        associations.lock_identity_rows(
+            party_ids=(person.pk,) if person is not None else (),
+            handle_ids=handle_ids,
+        )
+        if person is None:
+            return
+        list(
+            apps.get_model("parties", "Person")
+            .objects.filter(
+                pk=person.pk,
+            )
+            .order_by("pk")
+            .lock_if_supported()
+        )
+        list(
+            apps.get_model("parties", "Address")
+            .objects.filter(
+                party_id=person.pk,
+            )
+            .order_by("pk")
+            .lock_if_supported()
+        )
+        list(
+            apps.get_model("parties", "Relationship")
+            .objects.filter(
+                party_id=person.pk,
+                kind__slug="employee",
+                source=LinkSource.CARDDAV,
+                other_party__isnull=True,
+            )
+            .order_by("pk")
+            .lock_if_supported()
+        )
+
+    def project_contact(self, person: Any) -> ParsedContact:
+        """Read one contact through the same batched projection used by sync."""
+
+        projected = self.project_contacts((person,))
+        if person.pk not in projected:
+            raise apps.get_model("parties", "Person").DoesNotExist
+        return projected[person.pk]
+
+    def project_contacts(self, people: Iterable[Any]) -> dict[Any, ParsedContact]:
+        """Project contacts with bounded queries and no avatar storage reads.
+
+        Explicitly bound value queries read related scalar facts in bulk. The
+        shared contact projection owns canonical ordering and JSON encoding.
+        """
+
+        people = tuple(apps.get_model("parties", "Person").objects.filter(pk__in=[row.pk for row in people]))
+        ids = [person.pk for person in people]
+        if not ids:
+            return {}
+        platforms = apps.get_model("parties", "Handle").Platform
+        handles: dict[Any, dict[str, list[tuple[str, str, bool]]]] = defaultdict(lambda: defaultdict(list))
+        for row in (
+            apps.get_model("parties", "PartyHandle")
+            .objects.filter(
+                party_id__in=ids, is_dismissed=False, handle__platform__in=(platforms.EMAIL, platforms.PHONE)
+            )
+            .values("party_id", "handle__platform", "handle__value", "handle__label", "handle__is_preferred")
+        ):
+            handles[row["party_id"]][row["handle__platform"]].append(
+                (row["handle__value"], row["handle__label"], row["handle__is_preferred"])
+            )
+        addresses: dict[Any, list[ParsedAddress]] = defaultdict(list)
+        for address in apps.get_model("parties", "Address").objects.filter(party_id__in=ids):
+            addresses[address.party_id].append(
+                ParsedAddress(
+                    label=address.label,
+                    po_box=address.po_box,
+                    extended=address.extended,
+                    street=address.street,
+                    city=address.city,
+                    region=address.region,
+                    postal_code=address.postal_code,
+                    country=str(address.country),
+                )
+            )
+        employment = {
+            edge.party_id: edge
+            for edge in (
+                apps.get_model("parties", "Relationship").objects.filter(
+                    party_id__in=ids, kind__slug="employee", source=LinkSource.CARDDAV, other_party__isnull=True
+                )
+            )
+        }
+        photos = {
+            row["pk"]: ParsedPhoto(content_hash=row["content_hash"], mime=row["mime_type__mime_type"] or "")
+            for row in (
+                apps.get_model("storage", "File")
+                .objects.filter(pk__in=[person.avatar_id for person in people if person.avatar_id])
+                .values("pk", "content_hash", "mime_type__mime_type")
+            )
+        }
+        result = {}
+        for person in people:
+            edge = employment.get(person.pk)
+            result[person.pk] = ParsedContact(
+                uid=person.source_uid,
+                etag=person.source_etag,
+                raw_vcard=person.raw_vcard,
+                display_name=person.display_name,
+                name_prefix=person.name_prefix,
+                given_name=person.given_name,
+                additional_name=person.additional_name,
+                family_name=person.family_name,
+                name_suffix=person.name_suffix,
+                nickname=person.nickname,
+                notes=person.notes,
+                birthday=person.birthday,
+                anniversary=person.anniversary,
+                emails=tuple(handles[person.pk][platforms.EMAIL]),
+                phones=tuple(handles[person.pk][platforms.PHONE]),
+                addresses=tuple(addresses[person.pk]),
+                organization=edge.other_name if edge is not None else "",
+                title=edge.title if edge is not None else "",
+                role=edge.notes if edge is not None else "",
+                photo=photos.get(person.avatar_id),
+            )
+        return result
+
+    def prepare_contact(self, parsed: ParsedContact, *, created_by_id: Any) -> ParsedContact:
+        """Store fetched photo bytes before contact locks, retaining their address."""
+
+        photo = parsed.photo
+        if photo is None or photo.content_hash:
+            return parsed
+        if photo.uri:
+            raise ValidationError("Contact photo URIs must be resolved before preparation.")
+        if not photo.data:
+            return replace(parsed, photo=None)
+        extension = mimetypes.guess_extension(photo.mime) if photo.mime else ""
+        avatar = apps.get_model("storage", "File").objects.ingest_bytes(
+            photo.data,
+            filename=f"avatar{extension or '.bin'}",
+            owner_id=created_by_id,
+        )
+        mime: Any = avatar.mime_type
+        return replace(
+            parsed,
+            photo=ParsedPhoto(content_hash=avatar.content_hash, mime=mime.mime_type if mime is not None else ""),
+        )
+
+    def resolve_contact_photo(self, photo: ParsedPhoto | None, *, lock: bool = False) -> Any:
+        """Resolve a prepared avatar, optionally validating it under its row lock."""
+
+        if photo is None:
+            return None
+        if not photo.content_hash or photo.data is not None or photo.uri:
+            raise ValidationError("Contact photos must have a prepared content address.")
+        rows = apps.get_model("storage", "File").objects.filter(
+            content_hash=photo.content_hash,
+            mime_type__mime_type=photo.mime,
+            upload_state=UploadState.READY,
+            is_trashed=False,
+        )
+        if lock:
+            rows = rows.lock_if_supported()
+        avatar = rows.order_by("pk").first()
+        if avatar is None:
+            raise ValidationError("The prepared contact photo is no longer available.")
+        return avatar
+
+    def ingest_contact(
+        self,
+        parsed: ParsedContact,
+        *,
+        folder: Any,
+        created_by_id: Any,
+        target: Any = None,
+    ) -> Any:
         """Upsert a person and its handles/addresses from one parsed contact.
 
         Keyed on ``(folder, source_uid)`` so a re-sync updates the same row instead
@@ -1477,11 +1951,14 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         ``Handle`` rows and link to the person, but the person's identity is the
         source UID, not handle overlap. A contact with no ``source_uid`` has no stable
         key and is skipped — without it the ``(folder, "")`` upsert would collapse
-        every keyless card onto one row.
+        every keyless card onto one row. ``target`` binds a previously local
+        Person after its first push; only a blank or matching source UID may
+        adopt the observed identity, and it must remain in the same folder.
         """
 
         if not parsed.uid:
             return None
+        parsed = self.prepare_contact(parsed, created_by_id=created_by_id)
 
         person_model = apps.get_model("parties", "Person")
         handle_model = apps.get_model("parties", "Handle")
@@ -1491,50 +1968,76 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         relationship_kind_model = apps.get_model("parties", "RelationshipKind")
 
         with transaction.atomic():
-            person, _created = person_model.objects.update_or_create(
-                folder=folder,
-                source_uid=parsed.uid,
-                defaults={
-                    "display_name": parsed.display_name or parsed.family_name or person_model.PLACEHOLDER_NAME,
-                    "name_prefix": parsed.name_prefix,
-                    "given_name": parsed.given_name,
-                    "additional_name": parsed.additional_name,
-                    "family_name": parsed.family_name,
-                    "name_suffix": parsed.name_suffix,
-                    "nickname": parsed.nickname,
-                    "notes": parsed.notes,
-                    "birthday": parsed.birthday,
-                    "anniversary": parsed.anniversary,
-                    # Mirror the source's photo: re-syncing identical bytes dedups to
-                    # the same File, and a removed photo clears the avatar.
-                    "avatar": self._ingest_avatar(parsed, created_by_id=created_by_id),
-                    "raw_vcard": parsed.raw_vcard,
-                    "source_etag": parsed.etag,
-                    "created_by_id": created_by_id,
-                },
-            )
+            if target is not None:
+                self.lock_contact(target, parsed=parsed)
+            handles = []
+            for platform, values in (
+                (handle_model.Platform.EMAIL, parsed.emails),
+                (handle_model.Platform.PHONE, parsed.phones),
+            ):
+                for value, label, is_preferred in values:
+                    handle = handle_model.objects.upsert(
+                        platform=platform,
+                        value=value,
+                        created_by_id=created_by_id,
+                        label=label,
+                        is_preferred=is_preferred,
+                        display_name=parsed.display_name,
+                    )
+                    # Unlike a generic enrichment upsert, the source mapping also
+                    # represents a removed label or preference.
+                    mapped = {"label": label, "is_preferred": is_preferred}
+                    dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]
+                    if dirty:
+                        for name in dirty:
+                            setattr(handle, name, mapped[name])
+                        handle.save(update_fields=[*dirty, "updated_at"])
+                    handles.append(handle)
+            people = person_model.objects
+            identity = {"folder": folder, "source_uid": parsed.uid}
+            if target is not None:
+                target = people.lock_if_supported().filter(pk=target.pk).first()
+                if target is None or target.folder_id != folder.pk or target.source_uid not in ("", parsed.uid):
+                    raise ValidationError("The linked contact no longer has the expected folder and source identity.")
+                if people.filter(folder=folder, source_uid=parsed.uid).exclude(pk=target.pk).exists():
+                    raise ValidationError("Another contact already has this directory source identity.")
+                identity = {"pk": target.pk, "folder": folder}
+            try:
+                with transaction.atomic():
+                    person, _created = people.update_or_create(
+                        **identity,
+                        defaults={
+                            "source_uid": parsed.uid,
+                            "display_name": parsed.display_name or parsed.family_name or person_model.PLACEHOLDER_NAME,
+                            "name_prefix": parsed.name_prefix,
+                            "given_name": parsed.given_name,
+                            "additional_name": parsed.additional_name,
+                            "family_name": parsed.family_name,
+                            "name_suffix": parsed.name_suffix,
+                            "nickname": parsed.nickname,
+                            "notes": parsed.notes,
+                            "birthday": parsed.birthday,
+                            "anniversary": parsed.anniversary,
+                            # Preparation stored the bytes before this transaction.
+                            "avatar": self.resolve_contact_photo(parsed.photo, lock=True),
+                            "raw_vcard": parsed.raw_vcard,
+                            "source_etag": parsed.etag,
+                            "created_by_id": created_by_id,
+                        },
+                    )
+            except IntegrityError as exc:
+                if (
+                    target is not None
+                    and people.filter(
+                        folder=folder,
+                        source_uid=parsed.uid,
+                    )
+                    .exclude(pk=target.pk)
+                    .exists()
+                ):
+                    raise ValidationError("Another contact already has this directory source identity.") from exc
+                raise
 
-            handles = [
-                handle_model.objects.upsert(
-                    platform=handle_model.Platform.EMAIL,
-                    value=value,
-                    created_by_id=created_by_id,
-                    label=label,
-                    is_preferred=is_preferred,
-                    display_name=parsed.display_name,
-                )
-                for value, label, is_preferred in parsed.emails
-            ] + [
-                handle_model.objects.upsert(
-                    platform=handle_model.Platform.PHONE,
-                    value=value,
-                    created_by_id=created_by_id,
-                    label=label,
-                    is_preferred=is_preferred,
-                    display_name=parsed.display_name,
-                )
-                for value, label, is_preferred in parsed.phones
-            ]
             for handle in handles:
                 party_handle_model.objects.link(
                     person,
@@ -1543,6 +2046,12 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     source=LinkSource.CARDDAV,
                     created_by_id=created_by_id,
                 )
+            # Retire only this source's vanished associations. Shared Handle rows
+            # and links established by another source retain their own lifecycle.
+            party_handle_model.objects.filter(
+                party_id=person.pk,
+                source=LinkSource.CARDDAV,
+            ).exclude(handle_id__in=[handle.pk for handle in handles]).delete()
 
             # Addresses carry no stable id, so mirror the parsed set wholesale —
             # idempotent because the result is exactly the source's.
@@ -1594,59 +2103,18 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
                     },
                 )
                 if not created:
-                    values = {
+                    employment_values = {
                         "other_name": parsed.organization,
                         "title": parsed.title,
                         "notes": parsed.role,
                     }
-                    dirty = [name for name, value in values.items() if getattr(edge, name) != value]
+                    dirty = [name for name, value in employment_values.items() if getattr(edge, name) != value]
                     if dirty:
                         for name in dirty:
-                            setattr(edge, name, values[name])
+                            setattr(edge, name, employment_values[name])
                         edge.save(update_fields=[*dirty, "updated_at"])
 
             return person
-
-    def _ingest_avatar(self, parsed: ParsedContact, *, created_by_id: Any) -> Any:
-        """Persist a parsed contact photo through the storage File owner, or return None.
-
-        Delegates to ``File.objects.ingest_bytes`` — the storage owner's server-side
-        byte intake — so the avatar lands content-addressed (identical photos dedup)
-        and ``Party.avatar`` resolves. A URI photo is already resolved to bytes by
-        the directory backend's transport step before it reaches here.
-        """
-
-        photo = parsed.photo
-        if photo is None or not photo.data:
-            return None
-        file_model = apps.get_model("storage", "File")
-        extension = mimetypes.guess_extension(photo.mime) if photo.mime else ""
-        return file_model.objects.ingest_bytes(
-            photo.data,
-            filename=f"avatar{extension or '.bin'}",
-            owner_id=created_by_id,
-        )
-
-    def purge_missing(self, *, folder: Any, keep_uids: set[str]) -> int:
-        """Delete the folder's synced parties whose source UID is no longer present.
-
-        This is how a contact deleted on the source is mirrored locally: anything in
-        ``folder`` carrying a ``source_uid`` not in ``keep_uids`` is removed (the MTI
-        child cascades with its parent). Cascaded PartyHandle deletes re-resolve
-        shared handles through the delete-path signal owner.
-        """
-
-        stale_pks = list(
-            self.filter(folder=folder)
-            .exclude(source_uid="")
-            .exclude(source_uid__in=keep_uids)
-            .values_list("pk", flat=True)
-        )
-        if not stale_pks:
-            return 0
-        # PartyHandle's post_delete receiver owns cascade re-resolution.
-        deleted, _by_model = self.filter(pk__in=stale_pks).delete()
-        return deleted
 
 
 def _user_display_name(user: Any) -> str:

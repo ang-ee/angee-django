@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.core.management import call_command
-from django.db import connection
 from django.test import RequestFactory, override_settings
 from rebac import (
     ObjectRef,
@@ -27,8 +24,7 @@ from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant, revoke
 
 from angee.graphql.data.metadata import _grantable_relations
-from tests.conftest import IAM_CONNECTION_TEST_MODELS, _clear_model_tables, addon_schema, execute_schema
-from tests.conftest import _create_missing_tables as _create_connection_tables
+from tests.conftest import addon_schema, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
 from tests.projects_models import Project
@@ -41,7 +37,7 @@ iam_roles = importlib.import_module("angee.iam.roles")
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
 @pytest.mark.parametrize("via_group", [False, True])
 def test_platform_admin_is_grantable_without_django_superuser(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
     storage: str,
     via_group: bool,
 ) -> None:
@@ -82,7 +78,7 @@ def test_platform_admin_is_grantable_without_django_superuser(
 
 
 def test_permission_hub_queries_are_admin_only(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """Console permission-hub queries require platform-admin reach."""
 
@@ -139,7 +135,7 @@ def test_permission_hub_queries_are_admin_only(
 
 
 def test_users_resource_includes_service_accounts(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """The identity catalogue includes service users so access grants can select agents."""
 
@@ -171,7 +167,7 @@ def test_users_resource_includes_service_accounts(
 
 
 def test_rebac_relationships_resource_is_admin_scoped(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """The relationships Hasura resource lists rows for admins, empty otherwise.
 
@@ -213,7 +209,7 @@ def test_rebac_relationships_resource_is_admin_scoped(
 
 
 def test_roles_grants_resources_are_admin_scoped(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """The ``iam_roles`` / ``iam_grants`` computed resources list for admins only.
 
@@ -246,7 +242,7 @@ def test_roles_grants_resources_are_admin_scoped(
 
 
 def test_legacy_and_computed_role_bindings_share_canonical_rows(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """One role computation preserves legacy short IDs and canonical resource IDs."""
 
@@ -280,7 +276,7 @@ def test_legacy_and_computed_role_bindings_share_canonical_rows(
 
 
 def test_roles_query_excludes_role_types_missing_from_rebac_schema(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """Tuple-derived roles are limited to resource types in the installed schema."""
 
@@ -330,7 +326,7 @@ def test_roles_query_excludes_role_types_missing_from_rebac_schema(
 
 
 def test_roles_include_declared_empty_and_tuple_only_legacy_rows(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """Schema names are grantable while retained tuple-only role ids stay visible."""
 
@@ -387,7 +383,7 @@ def test_roles_include_declared_empty_and_tuple_only_legacy_rows(
 
 
 def test_grants_query_labels_principals_by_display_name(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """The grants list surfaces each principal's display name, not a raw id."""
 
@@ -425,7 +421,7 @@ def test_grants_query_labels_principals_by_display_name(
 
 
 def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """The IAM overview is a backend aggregate, not a summary of page-limited rows."""
 
@@ -512,7 +508,7 @@ def test_iam_overview_aggregates_do_not_depend_on_paginated_rows(
 
 
 def test_iam_overview_privileged_grants_on_registry_relationship_storage(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """Privileged-grant filtering works on the FK-backed registry relationship store.
 
@@ -553,7 +549,7 @@ def test_iam_overview_privileged_grants_on_registry_relationship_storage(
 
 
 def test_permission_hub_mutations_are_admin_only(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """Console role-grant mutations require platform-admin reach."""
 
@@ -597,7 +593,7 @@ def test_permission_hub_mutations_are_admin_only(
 
 
 def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """The permission-hub mutations persist and remove direct role tuples."""
 
@@ -643,7 +639,7 @@ def test_grant_role_then_revoke_role_writes_and_removes_role_tuple(
 
 
 def test_grant_role_accepts_canonical_user_subject(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """The grant mutation accepts the canonical subject exposed by UserType."""
 
@@ -692,7 +688,7 @@ def test_grant_role_accepts_canonical_user_subject(
 
 
 def test_grant_role_rejects_noncanonical_subject(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """Encoded Relay IDs are not accepted as public principal IDs."""
 
@@ -722,7 +718,7 @@ def test_grant_role_rejects_noncanonical_subject(
 
 
 def test_revoke_role_returns_false_for_missing_membership(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """No-op role revocation reports false."""
 
@@ -750,7 +746,7 @@ def test_revoke_role_returns_false_for_missing_membership(
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
 def test_caveated_grants_have_distinct_identity_and_revoke_exact_selected_tuple(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
     storage: str,
 ) -> None:
     """Caveat identity and selected-row deletion use the native tuple key in both stores."""
@@ -814,7 +810,7 @@ def test_caveated_grants_have_distinct_identity_and_revoke_exact_selected_tuple(
 
 
 def test_role_refs_are_current_user_only(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
 ) -> None:
     """Role refs are exposed only for the session user."""
 
@@ -849,7 +845,7 @@ def test_role_refs_are_current_user_only(
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
 def test_group_members_and_bindings_preserve_canonical_tuple_identity(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
     storage: str,
 ) -> None:
     """Group detail projects direct members and group-set bindings in both stores."""
@@ -930,7 +926,7 @@ def test_group_members_and_bindings_preserve_canonical_tuple_identity(
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
 def test_recipient_resources_follow_user_and_group_read_permissions(
-    iam_permission_hub_tables: None,
+    composed_tables: None,
     storage: str,
 ) -> None:
     """A non-admin sharer discovers readable service users and its member groups."""
@@ -996,25 +992,6 @@ def test_recipient_resources_follow_user_and_group_read_permissions(
         all_data = _data(_execute(schema, query, user=admin))
         assert hidden.username in {row["username"] for row in all_data["users"]}
         assert hidden_group.name in {row["name"] for row in all_data["groups"]}
-
-
-@pytest.fixture()
-def iam_permission_hub_tables(transactional_db: Any) -> Iterator[None]:
-    """Create concrete source-addon tables and sync REBAC schema."""
-
-    del transactional_db
-    created_models = _create_connection_tables()
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(IAM_CONNECTION_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
-
 
 
 def _role_membership_exists(user: Any, role: str) -> bool:

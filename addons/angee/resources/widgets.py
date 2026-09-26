@@ -9,6 +9,8 @@ from django.apps import apps
 from django.db import models
 from import_export import widgets
 
+from angee.base.serialization import canonical_json
+
 
 class XrefWidgetMixin:
     """Carry the resource ledger model bound by ``AngeeResource``."""
@@ -90,6 +92,20 @@ class _NativeJSONWidget(widgets.JSONWidget):
             return value
         return super().clean(value, row=row, **kwargs)
 
+    def render(
+        self,
+        value: Any,
+        obj: Any | None = None,
+        **kwargs: Any,
+    ) -> str | None:
+        """Return one canonical JSON representation for import diffs."""
+
+        del kwargs
+        self._obj_deprecation_warning(obj)
+        if value is None:
+            return None
+        return canonical_json(value)
+
 
 def resolve_xref(
     value: str,
@@ -102,7 +118,7 @@ def resolve_xref(
         raise ValueError("xref resolution requires a bound ledger model")
     if addon_aliases is None:
         raise ValueError("xref resolution requires addon aliases")
-    source_addon, xref = _split_xref(value, addon_aliases)
+    source_addon, xref = split_xref(value, addon_aliases)
     matches = list(
         ledger_model._default_manager.filter(
             source_addon=source_addon,
@@ -145,7 +161,7 @@ def resolve_ledger_xref(handle: str) -> models.Model | None:
         return None
 
 
-def _split_xref(
+def split_xref(
     value: str,
     addon_aliases: Mapping[str, str],
 ) -> tuple[str, str]:

@@ -1,1 +1,1 @@
-"""Guarded upgrades owned by the workflows extraction addon."""
+"""Self-contained upgrade transitions copied into composed runtime history."""

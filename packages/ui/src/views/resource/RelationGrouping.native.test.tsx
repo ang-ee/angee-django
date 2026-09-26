@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
-import { ResourceQuery, ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type DataResourceMetadata, type Row } from "@angee/metadata";
+import type { GetListParams } from "@refinedev/core";
+import { ResourceQuery, schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type DataResourceMetadata, type Row } from "@angee/metadata";
 import { testDataResource, testQueryField } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 
 import { ToastProvider } from "../../feedback";
 import { BoardView } from "./BoardView";
@@ -56,8 +56,11 @@ const rows: Row[] = Array.from({ length: 6 }, (_, index) => ({
   sent_at: index % 2 ? "2026-09-01T00:00:00Z" : "2026-08-01T00:00:00Z",
   channel: { id: `channel-${index % 3}`, display_name: channelNames[index % 3] },
 }));
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.splice(0).forEach((client) => client.clear()); });
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://inbox",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 function fixture({
   view = "board", source = "state", data = rows, resource = message, target = integration, groups, displayColumns = columns,
@@ -74,10 +77,6 @@ function fixture({
   const model = schema.labels[resource.modelLabel]!;
   const groupStack = groups ?? [{ field: "channel" }];
   const getList = vi.fn(async (_params: GetListParams) => ({ data, total: data.length }));
-  const provider = { getApiUrl: () => "test://inbox", getList, getOne: vi.fn(),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
   let surface!: ResourceViewSurface<Row>;
   let resourceViewState!: ReturnType<typeof useResourceView>;
   const useSurface = resource.rowModel === "client" ? useClientResourceViewSurface : useResourceViewSurface;
@@ -94,14 +93,13 @@ function fixture({
         interactive={false} selectable={false} emptyContent="No messages" />;
   }
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource, target])]} dataProvider={{ default: provider, console: provider }}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-      <ModelMetadataProvider metadata={schema}><ToastProvider>
+    <Provider metadata={schema} dataProvider={{ getList }}>
+      <ToastProvider>
         <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ view, pageSize: 20,
           // Default groups are a surface declaration; the URL state can be empty.
           groupStack: source === "default" ? [] : groupStack }}><Surface /></ResourceViewProvider>
-      </ToastProvider></ModelMetadataProvider>
-    </Refine>,
+      </ToastProvider>
+    </Provider>,
   );
   return { get surface() { return surface; }, get view() { return resourceViewState; }, getList, model, schema, groupStack };
 }

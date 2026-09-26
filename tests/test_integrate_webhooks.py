@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hmac
 import socket
-from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -12,7 +11,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, transaction
+from django.db import transaction
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
@@ -20,12 +19,9 @@ from angee.base.models import AngeeModel
 from angee.integrate.events import EventKind
 from angee.integrate.models import Bridge
 from angee.integrate.net import validate_public_url
-from angee.integrate.webhooks import SIGNATURE_HEADER
+from angee.integrate.webhooks import SIGNATURE_HEADER, WebhookDeliveryError
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
     WebhookSubscription,
-    _create_missing_tables,
     make_integration,
 )
 
@@ -64,35 +60,11 @@ class DispatchBridge(Bridge, AngeeModel):
         """No-op live subscription stop for the fixture."""
 
 
-@pytest.fixture()
-def webhook_tables(transactional_db: Any) -> Iterator[None]:
-    """Create IAM and webhook tables required by source-addon webhook tests."""
-
-    del transactional_db
-    created_iam_models = _create_missing_tables(IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS)
-    webhook_created = False
-    if WebhookSubscription._meta.db_table not in connection.introspection.table_names():
-        with connection.schema_editor() as schema_editor:
-            schema_editor.create_model(WebhookSubscription)
-        webhook_created = True
-
-    try:
-        yield
-    finally:
-        if webhook_created:
-            with connection.schema_editor() as schema_editor:
-                schema_editor.delete_model(WebhookSubscription)
-        if created_iam_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_iam_models):
-                    schema_editor.delete_model(model)
-
-
 @pytest.mark.django_db(transaction=True)
-def test_webhook_subscription_owner_is_field_backed(webhook_tables: None) -> None:
+def test_webhook_subscription_owner_is_field_backed(transactional_db: None) -> None:
     """WebhookSubscription owner access comes from the owner field."""
 
-    del webhook_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
     user = get_user_model().objects.create_user(username="webhook-owner", email="owner@example.com")
     other_user = get_user_model().objects.create_user(
@@ -161,12 +133,12 @@ def test_runtime_marker_is_per_class() -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_deliver_event_signs_and_posts_only_matching_subscriptions(
-    webhook_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Outbound delivery signs raw JSON and skips disabled or filtered subscriptions."""
 
-    del webhook_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
     posts = _record_posts(monkeypatch, status=202)
 
@@ -210,7 +182,7 @@ def test_deliver_event_signs_and_posts_only_matching_subscriptions(
             target_url="https://hooks-impl.example.test/events",
             secret="impl-secret",
             event_kinds=[EventKind.BRIDGE_SYNCED.value],
-            impl_app_filter=["billing"],
+            impl_app_filter=["records"],
         )
         wrong_account = WebhookSubscription.objects.create(
             owner=user,
@@ -253,12 +225,12 @@ def test_deliver_event_signs_and_posts_only_matching_subscriptions(
 
 @pytest.mark.django_db(transaction=True)
 def test_enqueue_event_delivers_after_commit(
-    webhook_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The manager-owned queue seam sends webhook fan-out after commit."""
 
-    del webhook_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
     posts = _record_posts(monkeypatch, status=202)
 
@@ -283,12 +255,12 @@ def test_enqueue_event_delivers_after_commit(
 
 @pytest.mark.django_db(transaction=True)
 def test_deliver_event_prefilters_integration_scope_before_row_matching(
-    webhook_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The manager excludes integration-filter misses before calling row matchers."""
 
-    del webhook_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
     _record_posts(monkeypatch, status=202)
 
@@ -333,12 +305,12 @@ def test_deliver_event_prefilters_integration_scope_before_row_matching(
 
 @pytest.mark.django_db(transaction=True)
 def test_deliver_event_failure_increments_consecutive_failures(
-    webhook_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed POST records telemetry and increments the failure counter."""
 
-    del webhook_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
     posts = _record_posts(monkeypatch, post_error=ConnectionRefusedError("connection refused"))
 
@@ -367,10 +339,10 @@ def test_deliver_event_failure_increments_consecutive_failures(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_record_delivery_failure_refreshes_incremented_counter(webhook_tables: None) -> None:
+def test_record_delivery_failure_refreshes_incremented_counter(transactional_db: None) -> None:
     """Failure telemetry leaves the row instance with the database counter value."""
 
-    del webhook_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
 
     user = get_user_model().objects.create_user(username="webhook-refresh", email="refresh@example.com")
@@ -397,13 +369,13 @@ def test_record_delivery_failure_refreshes_incremented_counter(webhook_tables: N
     ],
 )
 def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
-    webhook_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
     address: str,
 ) -> None:
     """Delivery fails closed when DNS resolves a webhook target to an unsafe address."""
 
-    del webhook_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
     _resolve_to(monkeypatch, address)
 
@@ -433,12 +405,12 @@ def test_deliver_event_rejects_unsafe_resolved_target_without_connecting(
 
 @pytest.mark.django_db(transaction=True)
 def test_deliver_event_redirect_response_fails_without_following(
-    webhook_tables: None,
+    transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A 3xx delivery response is telemetry failure and never another request."""
 
-    del webhook_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
     posts = _record_posts(monkeypatch, status=302)
 
@@ -578,3 +550,43 @@ def _owner_tuple_exists(owner: Any, resource: Any) -> bool:
         )
         .exists()
     )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("failure", [False, True])
+def test_webhook_commit_fanout_and_delivery_telemetry(
+    transactional_db: None,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: bool,
+) -> None:
+    """Fanout waits for commit, then records delivery success or failure."""
+
+    user = get_user_model().objects.create_user(username=f"routed-webhook-{failure}")
+    with system_context(reason="test routed webhook setup"):
+        subscription = WebhookSubscription.objects.create(
+            owner_id=user.pk,
+            target_url="https://hooks.example.test/events",
+            secret="test",
+            event_kinds=[EventKind.BRIDGE_SYNCED.value],
+        )
+    deliveries: list[bytes] = []
+
+    def deliver(_subscription: Any, body: bytes) -> str:
+        deliveries.append(body)
+        if failure:
+            raise WebhookDeliveryError("HTTP failure", status="503")
+        return "204"
+
+    monkeypatch.setattr(WebhookSubscription, "deliver", deliver)
+    with system_context(reason="test webhook fanout"):
+        with transaction.atomic():
+            WebhookSubscription.objects.enqueue_event(
+                kind=EventKind.BRIDGE_SYNCED,
+                payload={"items": 2},
+            )
+            assert deliveries == []
+        assert deliveries == [b'{"items":2}']
+        stored = WebhookSubscription.objects.get(pk=subscription.pk)
+        assert stored.consecutive_failures == int(failure)
+        assert stored.last_delivery_at is not None
+        assert stored.last_delivery_status == ("503" if failure else "204")

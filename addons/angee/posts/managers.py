@@ -47,8 +47,8 @@ class FeedFollowManager(RebacManager.from_queryset(FeedFollowQuerySet)):  # type
         """Open (or re-open) the follow of ``feed`` by ``handle``; idempotent."""
 
         follow, created = self.get_or_create(
-            feed=feed,
-            handle=handle,
+            feed_id=feed.pk,
+            handle_id=handle.pk,
             defaults={"started_at": timezone.now(), "created_by_id": owner_id},
         )
         if not created and follow.ended_at is not None:
@@ -60,7 +60,9 @@ class FeedFollowManager(RebacManager.from_queryset(FeedFollowQuerySet)):  # type
     def unfollow(self, *, feed: Any, handle: Any) -> int:
         """Close the open follow of ``feed`` by ``handle``; returns rows closed."""
 
-        return self.filter(feed=feed, handle=handle, ended_at__isnull=True).update(ended_at=timezone.now())
+        return self.filter(feed=feed, handle=handle, ended_at__isnull=True).update(
+            ended_at=timezone.now(),
+        )
 
 
 class PostMetricsManager(AngeeManager):
@@ -75,7 +77,7 @@ class PostMetricsManager(AngeeManager):
         """
 
         row, _created = self.update_or_create(
-            message=message,
+            message_id=message.pk,
             defaults={
                 "view_count": metrics.view_count,
                 "like_count": metrics.like_count,
@@ -118,12 +120,7 @@ class QuotaManager(RebacManager.from_queryset(QuotaQuerySet)):  # type: ignore[m
     _DEFAULT_WINDOW = timedelta(days=1)
 
     def open_period(
-        self,
-        *,
-        integration: Any,
-        limit: int,
-        now: datetime | None = None,
-        window: timedelta | None = None,
+        self, *, integration: Any, limit: int, now: datetime | None = None, window: timedelta | None = None
     ) -> Any:
         """Return the current ledger row for ``integration``, opening one if due."""
 
@@ -132,20 +129,13 @@ class QuotaManager(RebacManager.from_queryset(QuotaQuerySet)):  # type: ignore[m
         epoch = datetime(1970, 1, 1, tzinfo=moment.tzinfo)
         period_start = epoch + ((moment - epoch) // span) * span
         row, _created = self.get_or_create(
-            integration=integration,
+            integration_id=integration.pk,
             period_start=period_start,
             defaults={"period_end": period_start + span, "quota_limit": limit},
         )
         return row
 
-    def consume(
-        self,
-        *,
-        integration: Any,
-        units: int,
-        limit: int,
-        now: datetime | None = None,
-    ) -> bool:
+    def consume(self, *, integration: Any, units: int, limit: int, now: datetime | None = None) -> bool:
         """Atomically consume ``units`` from the current period; ``False`` if it would exceed.
 
         Bumps ``quota_used`` with an ``F()`` delta under a row lock so concurrent

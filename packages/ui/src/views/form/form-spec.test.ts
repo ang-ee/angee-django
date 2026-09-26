@@ -1,22 +1,148 @@
 import { describe, expect, test } from "vitest";
 
 import { defaultWidgets } from "../../widgets";
+import { FORM_SPEC_ANNOTATIONS } from "./form-spec-schema";
 import {
   deserializeFormSpec,
   formSpecInitialValues,
   normalizeFormSpecValues,
 } from "./form-spec";
 
+test("FormSpec registers only its presentation annotations with JSON Schema validators", () => {
+  expect(FORM_SPEC_ANNOTATIONS).toEqual([
+    "propertyOrder", "widget", "label", "addLabel", "removeLabel", "placeholder",
+    "hidden", "layout", "omittable", "presenceRequired", "defaultValue", "options", "relation",
+  ]);
+});
+
 describe("deserializeFormSpec", () => {
+  test("retains hidden schema fields through initialization and normalized submission", () => {
+    const fields = deserializeFormSpec({
+      type: "object",
+      properties: {
+        identity: { type: "string", hidden: true, readOnly: true },
+        details: { type: "object", widget: "object", properties: {
+          fingerprint: { type: "string", hidden: true },
+          title: { type: "string" },
+        } },
+        items: { type: "array", widget: "list", items: {
+          type: "object", widget: "object", properties: {
+            identity: { type: "string", hidden: true },
+            title: { type: "string" },
+          },
+        } },
+      },
+    }, defaultWidgets);
+    const payload = {
+      identity: "retained-root",
+      details: { fingerprint: "retained-fingerprint", title: "Details" },
+      items: [{ identity: "retained-item", title: "Item" }],
+    };
+
+    expect(fields[0]).toMatchObject({ hidden: true, readOnly: true });
+    expect(fields[1]?.objectTemplate?.[0]).toMatchObject({ hidden: true });
+    expect(fields[2]?.itemTemplate?.objectTemplate?.[0]).toMatchObject({ hidden: true });
+    const initialValues = formSpecInitialValues(fields, payload);
+    expect(initialValues).toEqual(payload);
+    expect(normalizeFormSpecValues(fields, initialValues)).toEqual(payload);
+  });
+
+  test.each(["$defs", "definitions"])("resolves %s references for rows, objects, and list items without losing annotations", (definitions) => {
+    const ref = (name: string) => ({ $ref: `#/${definitions}/${name}` });
+    const schema = {
+      type: "object",
+      [definitions]: {
+        Identity: { type: "string", enum: ["first", "second"], label: "Default identity" },
+        Choice: {
+          type: "object", required: ["identity", "reason"],
+          propertyOrder: ["identity", "reason"],
+          properties: {
+            reason: { type: "string", label: "Reason", minLength: 1 },
+            identity: {
+              ...ref("Identity"), label: "Identity", default: "first",
+              options: [{ value: "first", label: "First identity" }, { value: "second", label: "Second identity" }],
+            },
+          },
+        },
+        Alias: ref("Choice"),
+      },
+      properties: {
+        choices: { type: "array", items: ref("Alias") },
+        editable: { type: "array", widget: "list", items: { ...ref("Choice"), widget: "object" } },
+        choice: { ...ref("Choice"), widget: "object" },
+        identity: ref("Identity"),
+      },
+    };
+    const original = structuredClone(schema);
+    const fields = deserializeFormSpec(schema, defaultWidgets);
+    const columns = [
+      {
+        name: "identity", kind: "string", widget: "select", label: "Identity", required: true,
+        defaultValue: "first", hasDefault: true,
+        options: [{ value: "first", label: "First identity" }, { value: "second", label: "Second identity" }],
+      },
+      { name: "reason", kind: "string", widget: "text", label: "Reason", required: true, minLength: 1 },
+    ];
+
+    expect(fields[0]).toEqual({ name: "choices", kind: "array", widget: "rows", rowTemplate: columns });
+    expect(fields[1]?.itemTemplate?.objectTemplate).toEqual(columns);
+    expect(fields[2]?.objectTemplate).toEqual(columns);
+    expect(fields[3]).toMatchObject({ label: "Default identity", options: [
+      { value: "first", label: "first" }, { value: "second", label: "second" },
+    ] });
+    expect(schema).toEqual(original);
+  });
+
+  test.each(["#/$defs/Missing", "#/definitions/Missing", "https://example.test/schema"])(
+    "rejects an unresolved item reference %s", ($ref) => {
+      expect(() => deserializeFormSpec({ properties: {
+        choices: { type: "array", items: { $ref } },
+      } }, defaultWidgets)).toThrow(/Invalid .*choices.*reference/i);
+    },
+  );
+
+  test("decodes escaped definition names", () => {
+    expect(deserializeFormSpec({
+      $defs: { "Identity/with~space ": { type: "string" } },
+      properties: { identity: { $ref: "#/$defs/Identity~1with~0space%20" } },
+    }, defaultWidgets)).toEqual([{ name: "identity", kind: "string", widget: "text" }]);
+  });
+
+  test.each([
+    { Choice: { $ref: "#/$defs/Choice" } },
+    { Choice: { $ref: "#/$defs/Other" }, Other: { $ref: "#/$defs/Choice" } },
+    { Choice: { type: "object", widget: "object", properties: { children: { type: "array", items: { $ref: "#/$defs/Choice" } } } } },
+    { Choice: { type: "array", widget: "list", items: { $ref: "#/$defs/Choice" } } },
+  ])("rejects cyclic references instead of recursing indefinitely", ($defs) => {
+    expect(() => deserializeFormSpec({ $defs, properties: {
+      choices: { type: "array", widget: "list", items: { $ref: "#/$defs/Choice" } },
+    } }, defaultWidgets)).toThrow(/Invalid .*choices.*cyclic reference/i);
+  });
+
+  test.each([{ widget: "json" }, { layout: "context", widget: "object" }])(
+    "leaves a recursive property opaque when its widget owns the value", (presentation) => {
+      const fields = deserializeFormSpec({
+        $defs: { Node: { type: "object", properties: {
+          name: { type: "string" }, parent: { $ref: "#/$defs/Node", ...presentation },
+        } } },
+        properties: { nodes: { type: "array", items: { $ref: "#/$defs/Node" } } },
+      }, defaultWidgets);
+      expect(fields[0]?.rowTemplate).toEqual([
+        { name: "name", kind: "string", widget: "text" },
+        { name: "parent", kind: "object", ...presentation },
+      ]);
+    },
+  );
+
   test("uses retained property order after persisted nested properties are reordered", () => {
     const fields = deserializeFormSpec({
       type: "object",
-      propertyOrder: ["invoice", "note"],
+      propertyOrder: ["document", "note"],
       properties: {
         note: { type: "string" },
-        invoice: {
+        document: {
           type: "object", widget: "object",
-          propertyOrder: ["supplier", "reference", "lines"],
+          propertyOrder: ["counterparty", "reference", "lines"],
           properties: {
             lines: {
               type: "array", widget: "list",
@@ -30,15 +156,15 @@ describe("deserializeFormSpec", () => {
               },
             },
             reference: { type: "string" },
-            supplier: { type: "string" },
+            counterparty: { type: "string" },
           },
         },
       },
     }, defaultWidgets);
 
-    expect(fields.map((field) => field.name)).toEqual(["invoice", "note"]);
+    expect(fields.map((field) => field.name)).toEqual(["document", "note"]);
     expect(fields[0]?.objectTemplate?.map((field) => field.name))
-      .toEqual(["supplier", "reference", "lines"]);
+      .toEqual(["counterparty", "reference", "lines"]);
     expect(fields[0]?.objectTemplate?.[2]?.itemTemplate?.objectTemplate?.map((field) => field.name))
       .toEqual(["description", "quantity"]);
   });
@@ -322,20 +448,28 @@ describe("formSpecInitialValues", () => {
     });
   });
 
-  test("preserves an opaque read-only context object for its owning renderer", () => {
-    const fields = deserializeFormSpec({ properties: {
+  test("preserves an opaque recursive context for its owning renderer", () => {
+    const fields = deserializeFormSpec({ $defs: {
+      Context: { type: "object", properties: {
+        children: { type: "array", items: { $ref: "#/$defs/Context" } },
+      } },
+    }, properties: {
       review_context: {
-        type: "object", layout: "context", readOnly: true, widget: "object",
+        $ref: "#/$defs/Context", layout: "context", readOnly: true, widget: "object",
+      },
+      contexts: {
+        type: "array", items: { $ref: "#/$defs/Context" }, layout: "context", widget: "json",
       },
     } }, { ...defaultWidgets, object: { read: () => null } });
     const reviewContext = {
-      kind: "supplier_confirmation",
-      subject: { invoice_id: "inv_1" },
+      kind: "counterparty_confirmation",
+      subject: { document_id: "doc_1" },
       candidates: [{ party_id: "pty_1" }],
     };
 
-    expect(formSpecInitialValues(fields, { review_context: reviewContext }))
-      .toEqual({ review_context: reviewContext });
+    const payload = { review_context: reviewContext, contexts: [reviewContext] };
+    expect(formSpecInitialValues(fields, payload)).toEqual(payload);
+    expect(fields.every((field) => !field.objectTemplate && !field.rowTemplate && !field.itemTemplate)).toBe(true);
   });
 
   test("preserves omitted, defaulted, nullable, and falsey JSON values", () => {

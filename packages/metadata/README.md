@@ -8,7 +8,11 @@ Resource indexes retain the parsed resource contract. `ResourceQuery.from(resour
 resolves its executable filter, order, selection, and grouping semantics. Local
 collections use `ResourceQuery.forRows` with explicit field declarations. Query
 validation reports a `QueryParseError`; callers must surface it before issuing
-dependent reads. Relation identity and display paths are separate query facts.
+dependent reads. `ResourceQuery.textSearchFields()` preserves declared record-search
+order, filters unsupported comparisons, and falls back to the declared record
+representation, then to the first field supporting `iContains`. Wider search must
+declare `recordSearchFields`; explicit fields never broaden through these fallbacks.
+Relation identity and display paths are separate query facts.
 
 Operation roots, GraphQL node names, and record representations live on
 `model.resource`. Relation targets use canonical `relationModelLabel` values.

@@ -1,4 +1,4 @@
-"""Django system checks for composed GraphQL schemas."""
+"""Django system checks for GraphQL composition."""
 
 from __future__ import annotations
 

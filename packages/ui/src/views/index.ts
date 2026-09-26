@@ -76,7 +76,6 @@ export {
 } from "./form/MutationDialog";
 export { RowsField, type RowsValue } from "./form/RowsField";
 export {
-  compileDecisionActionFormSpec,
   deserializeFormSpec,
   formSpecInitialValues,
   normalizeFormSpecValues,
@@ -84,11 +83,14 @@ export {
   type FormSpecFieldDescriptor,
   type FormSpecFieldType,
   type FormSpecRelationCreate,
-  type DecisionActionFormSpec,
-  type DecisionFormActionOption,
-  type DecisionFormValidation,
 } from "./form/form-spec";
-export { structuredFieldErrorPaths } from "./form/field-values";
+export {
+  FORM_SPEC_ANNOTATIONS,
+  parseFormSpec,
+  parseFormSpecPayload,
+  type FormSpecWire,
+} from "./form/form-spec-schema";
+export { structuredFieldErrorPaths, textValue } from "./form/field-values";
 export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";
 export {
   ActionFormDialog,
@@ -103,13 +105,17 @@ export {
 } from "./form/use-action-form";
 export {
   useDottedPathFieldErrors,
+  directDottedPathMessages,
   lineRowErrorsFromDottedPaths,
+  messagesForDottedPath,
+  validationErrorMessages,
   validationErrorMap,
   validationErrorsFromError,
   type DottedPathFieldErrorMap,
   type DottedPathFieldErrors,
   type ValidationErrors,
 } from "./form/validation-errors";
+export { fieldErrorMessages, isCompositeFieldDescriptor } from "./form/form-view-model";
 export {
   FieldDescriptorControl,
   type FieldDescriptorControlProps,

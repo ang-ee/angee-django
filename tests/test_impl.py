@@ -5,16 +5,27 @@ from __future__ import annotations
 import importlib.util
 from datetime import date, datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
 import pytest
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.test import override_settings
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from django.test.utils import isolate_apps
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer
 
-from angee.base.impl import ImplBase, ImplChoice, ImplClassField, model_config_form_spec
+from angee.base.impl import (
+    ImplBase,
+    ImplChoice,
+    ImplClassField,
+    ImplDefaultsMixin,
+    model_config_form_spec,
+    resolve_all_impl_classes,
+)
+from angee.storage.backends import LocalBackend, StorageBackend
+from angee.workflows.configs import EmitConfig, JoinContinuationConfig
 from tests.conftest import Integration, OAuthClient, VcsBridge
+from tests.tables import model_tables
 
 
 class _BaseImpl(ImplBase):
@@ -70,6 +81,7 @@ def test_impl_owner_public_import_contract() -> None:
         ImplClassField,
         ImplDefaultsMixin,
         impl_registry,
+        resolve_all_impl_classes,
         resolve_impl_class,
     )
 
@@ -78,10 +90,74 @@ def test_impl_owner_public_import_contract() -> None:
     assert ImplClassField.__name__ == "ImplClassField"
     assert ImplDefaultsMixin.__name__ == "ImplDefaultsMixin"
     assert callable(impl_registry)
+    assert callable(resolve_all_impl_classes)
     assert callable(resolve_impl_class)
     legacy_modules = ("impl_types", "registry")
     for legacy_module in legacy_modules:
         assert importlib.util.find_spec(f"angee.base.{legacy_module}") is None
+
+
+@override_settings(
+    ANGEE_TEST_IMPLS={
+        "refined": "tests.test_impl._RefinedImpl",
+        "base": "tests.test_impl._BaseImpl",
+    }
+)
+def test_resolve_all_impl_classes_is_sorted_and_validates_keys() -> None:
+    """Registry enumeration is deterministic and owns declaration-key agreement."""
+
+    assert resolve_all_impl_classes("ANGEE_TEST_IMPLS", _BaseImpl) == (
+        _BaseImpl,
+        _RefinedImpl,
+    )
+
+    with (
+        override_settings(ANGEE_TEST_IMPLS={"wrong": "tests.test_impl._RefinedImpl"}),
+        pytest.raises(ImproperlyConfigured, match="with key 'refined'"),
+    ):
+        resolve_all_impl_classes("ANGEE_TEST_IMPLS", _BaseImpl)
+
+
+@override_settings(
+    ANGEE_TEST_IMPLS={
+        "base": "tests.test_impl._BaseImpl",
+        "missing": "tests.test_impl.MissingImpl",
+        "wrong_base": "builtins.str",
+        "wrong_key": "tests.test_impl._RefinedImpl",
+    }
+)
+def test_impl_registry_and_field_collect_every_registry_fault() -> None:
+    """Field checks enforce the registry owner's full declaration contract."""
+
+    faults: list[Exception] = []
+
+    assert resolve_all_impl_classes(
+        "ANGEE_TEST_IMPLS",
+        _BaseImpl,
+        on_error=faults.append,
+    ) == (_BaseImpl,)
+    assert len(faults) == 3
+    assert isinstance(faults[0], ImportError)
+    assert isinstance(faults[1], ImproperlyConfigured)
+    assert isinstance(faults[2], ImproperlyConfigured)
+
+    field = ImplClassField(base_class=_BaseImpl, registry_setting="ANGEE_TEST_IMPLS")
+    errors = field.check()
+    assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004"]
+    assert all(error.obj is field for error in errors)
+    assert "MissingImpl" in errors[0].msg
+    assert "is not a _BaseImpl" in errors[1].msg
+    assert "with key 'refined'" in errors[2].msg
+
+
+@override_settings(ANGEE_TEST_IMPLS={"local": "angee.storage.backends.LocalBackend"})
+def test_native_impl_field_uses_its_registry_key() -> None:
+    """Native storage classes need no ImplBase contract or duplicate key."""
+
+    field = ImplClassField(base_class=StorageBackend, registry_setting="ANGEE_TEST_IMPLS")
+
+    assert resolve_all_impl_classes("ANGEE_TEST_IMPLS", StorageBackend) == (LocalBackend,)
+    assert field.check() == []
 
 
 @override_settings(ANGEE_EMPTY_IMPLS={})
@@ -104,12 +180,82 @@ def test_historical_impl_field_reconstructs_without_removed_registry() -> None:
     assert reconstructed.deconstruct()[3]["registry_setting"] == "ANGEE_EMPTY_IMPLS"
 
 
+@override_settings(ANGEE_RENAMED_IMPLS={})
+def test_historical_impl_field_loads_when_its_registry_was_renamed() -> None:
+    """A migration state whose registry setting no longer exists still loads as a column."""
+
+    historical = ImplClassField(editable=False, max_length=100, registry_setting="ANGEE_RENAMED_IMPLS")
+    _, _, args, kwargs = historical.deconstruct()
+    reconstructed = ImplClassField(*args, **kwargs)
+
+    assert reconstructed.base_class is None
+    assert "choices" not in reconstructed.deconstruct()[3]
+    assert reconstructed.deconstruct()[3]["registry_setting"] == "ANGEE_RENAMED_IMPLS"
+
+
 def test_model_impl_field_is_the_public_declared_accessor() -> None:
     """Models expose their impl field through the declared public seam."""
 
     with pytest.raises(FieldDoesNotExist, match="Integration.lifecycle is not an ImplClassField"):
         Integration.impl_field("lifecycle")
     assert not hasattr(Integration, "_impl_field")
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_base_validation_refreshes_and_normalizes_deferred_config() -> None:
+    """Inherited validation refreshes deferred config before normalizing a write."""
+
+    class DeferredConfigRecord(ImplDefaultsMixin):
+        adapter = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS", create_only=True)
+        config = models.JSONField(default=dict)
+
+        class Meta:
+            app_label = "tests"
+
+    with model_tables((DeferredConfigRecord,)):
+        record = DeferredConfigRecord.objects.create(adapter="typed", config={"retries": 1})
+        DeferredConfigRecord.objects.filter(pk=record.pk).update(config={"retries": "3"})
+        deferred = DeferredConfigRecord.objects.only("pk").get(pk=record.pk)
+        # Pin the deferred setup whose explicit config write must still validate.
+        assert deferred.get_deferred_fields() == {"adapter", "config"}
+
+        deferred.save(update_fields={"config"})
+        stored = DeferredConfigRecord.objects.get(pk=record.pk)
+
+        assert stored.config == {"endpoint": "https://example.test", "retries": 3}
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_impl_save_leaves_untouched_config_and_selector_deferred(django_assert_num_queries) -> None:
+    """An unrelated save neither reads nor rewrites the deferred config and selector."""
+
+    class DeferredConfigRecord(ImplDefaultsMixin):
+        adapter = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS", create_only=True)
+        config = models.JSONField(default=dict)
+        label = models.CharField(max_length=50)
+
+        class Meta:
+            app_label = "tests"
+
+    with model_tables((DeferredConfigRecord,)):
+        record = DeferredConfigRecord.objects.create(adapter="typed", config={"retries": 1}, label="before")
+        deferred = DeferredConfigRecord.objects.only("label").get(pk=record.pk)
+        DeferredConfigRecord.objects.filter(pk=record.pk).update(config={"retries": 7})
+        deferred.label = "after"
+
+        with django_assert_num_queries(1):
+            deferred.save()
+
+        assert "config" not in deferred.__dict__
+        assert "adapter" not in deferred.__dict__
+        stored = DeferredConfigRecord.objects.get(pk=record.pk)
+        assert stored.label == "after"
+        assert stored.config == {"retries": 7}
+        assert stored.adapter == "typed"
 
 
 def test_effective_defaults_merges_along_mro() -> None:
@@ -184,6 +330,96 @@ def test_typed_config_projects_supported_scalars_and_validates_paths() -> None:
 
     with pytest.raises(ValidationError, match="config.retries"):
         _TypedConfigImpl.normalize_config({"endpoint": "https://example.test"})
+
+
+def test_typed_config_defaults_do_not_depend_on_form_projection() -> None:
+    """Backend defaults remain available for declarations the bounded UI cannot render."""
+
+    class BackendConfig(BaseModel):
+        required: str
+        headers: dict[str, str] = {"Accept": "application/json"}
+        blank: str = ""
+        optional: str | None = None
+        enabled: bool = False
+        retries: int = 0
+
+    class BackendImpl(ImplBase):
+        config_model = BackendConfig
+
+    assert BackendImpl.config_defaults() == {
+        "headers": {"Accept": "application/json"},
+        "enabled": False,
+        "retries": 0,
+    }
+    assert BackendImpl.effective_defaults()["config"] == BackendImpl.config_defaults()
+    with pytest.raises(ImproperlyConfigured, match=r"config\.headers.*additionalProperties"):
+        BackendImpl.config_form_spec()
+
+
+def test_typed_config_defaults_preserve_json_aliases_and_mutable_isolation() -> None:
+    """Static defaults retain aliases, native JSON encoding and mutable isolation."""
+
+    class Mode(str, Enum):
+        SAFE = "safe"
+
+    class NestedConfig(BaseModel):
+        tags: list[str] = Field(default=["declared"], alias="wireTags")
+
+    class BackendConfig(BaseModel):
+        model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
+
+        nested: NestedConfig = Field(default=NestedConfig(), alias="wireNested")
+        scheduled: date = date(2026, 9, 20)
+        mode: Mode = Mode.SAFE
+        encoded: bytes = b"declared"
+
+    class BackendImpl(ImplBase):
+        config_model = BackendConfig
+
+    expected = {
+        "wireNested": {"wireTags": ["declared"]},
+        "scheduled": "2026-09-20",
+        "mode": "safe",
+        "encoded": "ZGVjbGFyZWQ=",
+    }
+    first = BackendImpl.config_defaults()
+    second = BackendImpl.config_defaults()
+    assert first == second == BackendImpl.normalize_config(first) == expected
+    first["wireNested"]["wireTags"].append("changed")
+    assert second == BackendImpl.config_defaults() == expected
+
+
+def test_typed_config_defaults_are_inputs_before_output_serializers_and_exclusions() -> None:
+    """Suggestions preserve input defaults; normalization owns the model's output rules."""
+
+    class BackendConfig(BaseModel):
+        value: Annotated[int, PlainSerializer(lambda value: f"{value:02d}", return_type=str)] = 7
+        internal_token: str = Field(default="seed", exclude=True)
+
+    class BackendImpl(ImplBase):
+        config_model = BackendConfig
+
+    suggestions = BackendImpl.config_defaults()
+    assert suggestions == {"value": 7, "internal_token": "seed"}
+    assert BackendImpl.normalize_config(suggestions) == {"value": "07"}
+    spec = BackendImpl.config_form_spec()
+    assert spec is not None
+    assert spec["properties"]["value"]["defaultValue"] == 7
+
+
+def test_typed_config_defaults_compose_native_json_schema_declarations() -> None:
+    """Native schema customization supplies the same suggestion to backend and form."""
+
+    class BackendConfig(BaseModel):
+        value: int = Field(default=7, json_schema_extra={"default": 9})
+
+    class BackendImpl(ImplBase):
+        config_model = BackendConfig
+
+    assert BackendImpl.config_defaults() == {"value": 9}
+    spec = BackendImpl.config_form_spec()
+    assert spec is not None
+    assert spec["properties"]["value"]["defaultValue"] == 9
 
 
 def test_typed_config_projects_native_input_constraints() -> None:
@@ -439,6 +675,22 @@ def test_typed_config_projects_nested_arrays_nullable_and_enum_contracts() -> No
     }
 
 
+def test_workflow_id_paths_project_as_lists_of_strings() -> None:
+    """Emit artifacts and continuation joins use the native string-list form shape."""
+
+    emit_spec = model_config_form_spec(EmitConfig, owner="EmitStep")
+    join_spec = model_config_form_spec(JoinContinuationConfig, owner="JoinContinuation")
+
+    artifact_id_path = emit_spec["properties"]["artifacts"]["items"]["properties"]["id_path"]
+    child_id_path = join_spec["properties"]["child_id_path"]
+    for path_spec in (artifact_id_path, child_id_path):
+        assert path_spec["type"] == "array"
+        assert path_spec["widget"] == "list"
+        assert path_spec["minItems"] == 1
+        assert path_spec["items"] == {"type": "string", "minLength": 1}
+        assert path_spec["presenceRequired"] is True
+
+
 def test_typed_config_omits_default_factory_without_invoking_it() -> None:
     """Build-time metadata never executes a dynamic Pydantic default factory."""
 
@@ -462,18 +714,24 @@ def test_typed_config_omits_default_factory_without_invoking_it() -> None:
     assert "defaultValue" not in spec["properties"]["generated"]
     assert spec["properties"]["static"]["defaultValue"] == ["declared"]
     assert FactoryImpl.config_defaults() == {"static": ["declared"]}
+    assert FactoryImpl.choice().defaults == {"config": {"static": ["declared"]}}
     assert calls == 0
+    assert FactoryImpl.normalize_config({}) == {"generated": ["runtime"], "static": ["declared"]}
+    assert calls == 1
 
 
 @pytest.mark.parametrize(
-    ("annotation", "detail"),
+    ("annotation", "field_path", "detail"),
     [
-        (str | int, "union"),
-        (dict[str, str], "additionalProperties"),
-        (tuple[str, int], "prefixItems"),
+        (str | int, "config.payload", "union"),
+        (list[str | int], "config.payload[]", "union"),
+        (dict[str, str], "config.payload", "mapping/additionalProperties"),
+        (tuple[str, int], "config.payload", "keywords prefixItems"),
     ],
 )
-def test_typed_config_rejects_unsupported_shapes_with_exact_path(annotation: object, detail: str) -> None:
+def test_typed_config_rejects_unsupported_shapes_with_exact_path(
+    annotation: object, field_path: str, detail: str,
+) -> None:
     """A shape FormSpec cannot preserve fails at the declaring field path."""
 
     UnsupportedConfig = type(
@@ -485,8 +743,50 @@ def test_typed_config_rejects_unsupported_shapes_with_exact_path(annotation: obj
     class UnsupportedImpl(ImplBase):
         config_model = UnsupportedConfig
 
-    with pytest.raises(ImproperlyConfigured, match=rf"UnsupportedImpl.*config\.payload.*{detail}"):
+    with pytest.raises(ImproperlyConfigured) as caught:
         UnsupportedImpl.config_form_spec()
+    assert str(caught.value) == f"UnsupportedImpl.config_model field {field_path!r} uses unsupported schema: {detail}."
+
+
+def test_config_form_spec_resolves_escaped_local_references(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ReferencedConfig(BaseModel):
+        value: str
+
+    schema = ReferencedConfig.model_json_schema()
+    schema["$defs"] = {"Text/~ value": {"type": "string", "minLength": 2}}
+    schema["properties"]["value"] = {"$ref": "#/$defs/Text~1~0%20value", "title": "Value"}
+    monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
+    spec = model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
+
+    assert spec["properties"]["value"] == {
+        "type": "string", "minLength": 2, "label": "Value", "presenceRequired": True,
+    }
+
+
+@pytest.mark.parametrize("reference", ["#/$defs/Missing", "https://example.test/schema"])
+def test_config_form_spec_rejects_unresolved_or_remote_references(
+    reference: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ReferencedConfig(BaseModel):
+        value: str
+
+    schema = ReferencedConfig.model_json_schema()
+    schema["properties"]["value"] = {"$ref": reference}
+    monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
+    with pytest.raises(ImproperlyConfigured, match=r"ReferencedConfig.*config\.value.*reference"):
+        model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
+
+
+def test_config_form_spec_rejects_pointers_into_scoped_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ReferencedConfig(BaseModel):
+        value: str
+
+    schema = ReferencedConfig.model_json_schema()
+    schema["$defs"] = {"Scoped": {"$id": "child", "$defs": {"Value": {"type": "string"}}}}
+    schema["properties"]["value"] = {"$ref": "#/$defs/Scoped/$defs/Value"}
+    monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
+    with pytest.raises(ImproperlyConfigured, match=r"ReferencedConfig.*config\.value.*reference"):
+        model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
 
 
 def test_typed_config_rejects_recursive_models_and_preserves_string_aliases() -> None:
@@ -525,6 +825,8 @@ def test_typed_config_rejects_recursive_models_and_preserves_string_aliases() ->
 
     with pytest.raises(ImproperlyConfigured, match=r"AmbiguousImpl.*config\.value.*one string alias"):
         AmbiguousImpl.config_form_spec()
+    with pytest.raises(ImproperlyConfigured, match=r"AmbiguousImpl.*config\.value.*one string alias"):
+        AmbiguousImpl.config_defaults()
 
     class CollidingConfig(BaseModel):
         value: str = Field(alias="wireValue")
@@ -535,6 +837,8 @@ def test_typed_config_rejects_recursive_models_and_preserves_string_aliases() ->
 
     with pytest.raises(ImproperlyConfigured, match=r"CollidingImpl.*colliding wire names.*wireValue"):
         CollidingImpl.config_form_spec()
+    with pytest.raises(ImproperlyConfigured, match=r"CollidingImpl.*colliding wire names.*wireValue"):
+        CollidingImpl.config_defaults()
 
 
 def test_materialize_seeds_only_unprovided_fields() -> None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import itertools
 import sys
 import tempfile
-from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -16,8 +15,6 @@ import tomlkit
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.core.management import call_command
-from django.db import connection, models, transaction
 from django.test import RequestFactory
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
@@ -25,6 +22,7 @@ from rebac.roles import grant as grant_role
 from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
@@ -62,10 +60,9 @@ from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from tests import messaging_models  # noqa: F401 -- register the managed posts FK targets before database setup
-from tests.iam_models import Group as IAMGroup
 from tests.integrate_models import Integration
 
-pytest_plugins = ("tests.workflows",)
+pytest_plugins = ("angee.testing.fixtures", "tests.workflows")
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):
@@ -97,7 +94,7 @@ class ExternalAccount(AbstractExternalAccount):
         rebac_resource_type = "integrate/external_account"
 
 
-class Credential(AbstractCredential):
+class Credential(AbstractCredentialOidc, AbstractCredential):
     """Concrete integration credential used by source-addon tests."""
 
     class Meta(AbstractCredential.Meta):
@@ -174,13 +171,6 @@ class MarkdownPage(AbstractMarkdownPage):
         rebac_resource_type = "knowledge/markdown_page"
 
 
-IAM_CONNECTION_TEST_MODELS = (IAMGroup, OAuthClient, ExternalAccount, Credential)
-"""Concrete integration connection models created on demand by connection test fixtures."""
-
-INTEGRATE_TEST_MODELS = (Vendor, Integration)
-"""Concrete integration catalogue/integration models created on demand by integrate fixtures."""
-
-
 class VcsBridge(AbstractVcsBridge, Integration):
     """Concrete VCS bridge used by source-addon tests.
 
@@ -255,13 +245,6 @@ class Template(AbstractTemplate):
         rebac_resource_type = "integrate_vcs/template"
 
 
-VCS_TEST_MODELS = (VcsBridge, Repository, Source, Template)
-"""Concrete VCS inventory models created on demand by VCS test fixtures."""
-
-STORAGE_INTEGRATE_TEST_MODELS = (Mount,)
-"""Concrete Mount model created on demand by storage-integrate tests."""
-
-
 def make_integration(
     slug: str,
     *,
@@ -276,8 +259,8 @@ def make_integration(
     Builds owner → OAuth client → credential → vendor → model row. ``kind``/
     ``material`` pick the credential kind (default a static token); pass
     ``kind=CredentialKind.OAUTH`` for an OAuth-backed integration. ``model`` may
-    be a concrete MTI child such as ``VcsBridge``; VCS child rows choose
-    ``backend_class`` while parent-only integrations have no selector.
+    be a concrete MTI child such as ``VcsBridge``. Omitted ``backend_class``
+    values use the model field's default; parent-only integrations have no selector.
     """
 
     if material is None:
@@ -299,9 +282,8 @@ def make_integration(
             "lifecycle": "connected",
             **attrs,
         }
-        field_names = {field.name for field in model._meta.fields}
-        if "backend_class" in field_names:
-            values["backend_class"] = backend_class or "local"
+        if backend_class is not None:
+            values["backend_class"] = backend_class
         return model.objects.create(**values)
 
 
@@ -434,10 +416,6 @@ class RecordBinding(AbstractRecordBinding):
         rebac_resource_type = "knowledge/record_binding"
 
 
-KNOWLEDGE_TEST_MODELS = (Vault, Page, MarkdownPage, Link, RecordBinding, Vault.history.model, Page.history.model)
-"""Concrete knowledge models created on demand by knowledge test fixtures."""
-
-
 class Backend(AbstractStorageBackend):
     """Concrete storage backend used by source-addon tests."""
 
@@ -528,14 +506,9 @@ class StorageRole(AbstractStorageRole):
         rebac_resource_type = "storage/role"
 
 
-STORAGE_TEST_MODELS = (Backend, Drive, Folder, MimeType, File, FileAttachment)
-"""Concrete storage models created on demand by storage test fixtures."""
-
 # Register the projects concretes only after their storage FK targets above.
-from tests.projects_models import PROJECT_TEST_MODELS  # noqa: E402, F401
-
 # Proposal concretes depend on the project graph and register their role anchor.
-from tests.proposals_models import PROPOSAL_TEST_MODELS  # noqa: E402, F401
+from tests import projects_models, proposals_models  # noqa: E402, F401
 
 
 def make_mount(
@@ -614,10 +587,6 @@ class AddonCatalog(AbstractAddonCatalog):
         rebac_resource_type = "platform_integrate_vcs/catalog"
 
 
-PLATFORM_TEST_MODELS = (Addon,)
-"""Concrete platform reflection table created on demand by marketplace test fixtures."""
-
-
 class Feed(AbstractFeed, Integration):
     """Concrete public-content feed used by posts tests.
 
@@ -669,82 +638,6 @@ class Quota(AbstractQuota):
         app_label = "posts"
         db_table = "test_posts_quota"
         rebac_resource_type = "posts/quota"
-
-
-POSTS_TEST_MODELS = (Feed, FeedFollow, PostMetrics, Quota)
-"""Concrete posts models created on demand by posts test fixtures."""
-
-
-def _create_missing_tables(
-    test_models: tuple[type[models.Model], ...] = IAM_CONNECTION_TEST_MODELS,
-) -> list[type[models.Model]]:
-    """Create concrete source-addon test tables when pytest did not sync them."""
-
-    existing_tables = set(connection.introspection.table_names())
-    missing = []
-    for model in test_models:
-        if model._meta.db_table in existing_tables:
-            continue
-        missing.append(model)
-        existing_tables.add(model._meta.db_table)
-    if not missing:
-        return []
-    with connection.schema_editor() as schema_editor:
-        for model in missing:
-            schema_editor.create_model(model)
-    return missing
-
-
-def _clear_model_tables(test_models: tuple[type[models.Model], ...]) -> None:
-    """Delete rows from schema-editor-created model tables without dropping them.
-
-    Source-addon tests share concrete unmanaged tables across modules. Keeping the
-    schema lets post-migrate hooks see registered models; clearing rows before
-    pytest-django flushes the managed tables prevents dangling FKs and uniqueness
-    leaks when a later fixture reuses an already-created table. One transaction
-    lets PostgreSQL check Django's deferred foreign keys after all selected
-    tables are cleared, including tables with cyclic references.
-    """
-
-    existing_tables = set(connection.introspection.table_names())
-    table_names = []
-    for model in test_models:
-        table_name = model._meta.db_table
-        if table_name not in existing_tables:
-            continue
-        table_names.append(table_name)
-        for field in model._meta.many_to_many:
-            through_table_name = field.remote_field.through._meta.db_table
-            if through_table_name in existing_tables:
-                table_names.append(through_table_name)
-
-    if not table_names:
-        return
-
-    with (
-        connection.constraint_checks_disabled(),
-        transaction.atomic(using=connection.alias),
-        connection.cursor() as cursor,
-    ):
-        for table_name in reversed(tuple(dict.fromkeys(table_names))):
-            cursor.execute(f"DELETE FROM {connection.ops.quote_name(table_name)}")
-
-
-@pytest.fixture()
-def knowledge_tables(transactional_db: Any) -> Iterator[None]:
-    """Create concrete knowledge tables and sync the REBAC schema."""
-
-    del transactional_db
-    created_models = _create_missing_tables(KNOWLEDGE_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(KNOWLEDGE_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
 
 
 def create_user(username: str) -> Any:

@@ -68,6 +68,7 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
     if checked.dropped:
         return JsonResponse({"submission_id": submission_id}, status=202)
 
+    channel_model = apps.get_model("messaging", "Channel")
     channel = _published_webform(slug)
     if checked.body_size > int(channel.max_body_bytes):
         return _ingress_error(

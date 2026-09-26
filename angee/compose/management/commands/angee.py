@@ -34,7 +34,6 @@ class Command(BaseCommand):
 
         build = subcommands.add_parser("build")
         build.add_argument("--check", action="store_true")
-        build.add_argument("--fresh-history", action="store_true")
         build.set_defaults(handler=self._handle_build)
 
         clean = subcommands.add_parser("clean")
@@ -66,7 +65,6 @@ class Command(BaseCommand):
             metavar="SECONDS",
             help="Seconds to wait for the default database (default: 60).",
         )
-        provision.add_argument("--fresh-history", action="store_true")
         provision.add_argument("--post-build", action="store_true", help=SUPPRESS)
         provision.set_defaults(handler=self._handle_provision)
 
@@ -82,16 +80,11 @@ class Command(BaseCommand):
 
         runtime = Runtime.from_django()
         try:
-            fresh_history = options.get("fresh_history", False)
             if options["check"]:
-                if fresh_history:
-                    raise CommandError("angee build --check does not accept --fresh-history")
                 runtime.check()
                 message = "angee build --check: ok"
             else:
-                if fresh_history:
-                    self._require_fresh_history_database()
-                dependency_result = runtime.build(fresh_history=fresh_history)
+                dependency_result = runtime.build()
                 style = self.style.WARNING if dependency_result.skipped else self.style.SUCCESS
                 self.stdout.write(style(f"angee build: addon dependencies {dependency_result.value}"))
                 message = "angee build: ok"
@@ -120,22 +113,20 @@ class Command(BaseCommand):
         1. Wait for the default database to accept connections (in-process).
         2. ``angee build`` — emit the concrete runtime and materialize applicable
            addon-owned migrations onto each downstream app's current leaf.
-        3. ``makemigrations --skip-checks`` — every provision defers system checks
-           until migrations and permission sync have reconciled persisted state
-           with the newly emitted model graph.
-        4. With ``--fresh-history`` only, ``angee build --fresh-history`` — attach
-           explicitly classified historical declarations to the newly generated
-           final-model initial graph while retaining current operational migrations.
-        5. ``migrate --noinput --skip-checks`` with checks deferred on every provision.
-        6. ``reconcile_permissions`` — prune stale package-managed REBAC schema
+        3. ``makemigrations --noinput --skip-checks`` — required migration defaults
+           fail without prompting. Every provision defers system checks until
+           migrations and permission sync reconcile persisted state with the
+           newly emitted model graph.
+        4. ``migrate --noinput --skip-checks`` with checks deferred on every provision.
+        5. ``reconcile_permissions`` — prune stale package-managed REBAC schema
            only after identity migrations have preserved moved rows.
-        7. ``rebac --skip-checks sync --yes`` (``--force-overwrite`` when
+        6. ``rebac --skip-checks sync --yes`` (``--force-overwrite`` when
            ``--force-rebac``) — replace old persisted policy before validating it.
-        8. ``check`` — enforce the complete model and persisted-REBAC contract
+        7. ``check`` — enforce the complete model and persisted-REBAC contract
            after migration and sync, before user data or schema output proceeds.
-        9. ``resources load`` (``--include-demo`` when ``--demo``).
-        10. ``schema`` — render the GraphQL SDL.
-        11. ``bootstrap_admin`` — only when ``--bootstrap-admin``.
+        8. ``resources load`` (``--include-demo`` when ``--demo``).
+        9. ``schema`` — render the GraphQL SDL.
+        10. ``bootstrap_admin`` — only when ``--bootstrap-admin``.
 
         Build runs in the parent. One fresh interpreter then loads the emitted
         models and runs the remaining commands together via ``call_command``.
@@ -157,7 +148,7 @@ class Command(BaseCommand):
         self._wait_for_database(options["wait_db"])
         self._run_step(steps[0])
         child = [sys.executable, self._manage_py_path(), "angee", "provision", "--post-build"]
-        for option in ("demo", "force_rebac", "bootstrap_admin", "fresh_history"):
+        for option in ("demo", "force_rebac", "bootstrap_admin"):
             if options[option]:
                 child.append(f"--{option.replace('_', '-')}")
         result = subprocess.run(child, check=False)
@@ -181,40 +172,19 @@ class Command(BaseCommand):
         resources_load = ["resources", "load"]
         if options["demo"]:
             resources_load.append("--include-demo")
-        fresh_history = options.get("fresh_history", False)
-        build = ["angee", "build", "--fresh-history"] if fresh_history else ["angee", "build"]
         plan = [
-            build,
-            ["makemigrations", "--skip-checks"],
+            ["angee", "build"],
+            ["makemigrations", "--noinput", "--skip-checks"],
+            ["migrate", "--noinput", "--skip-checks"],
+            ["reconcile_permissions"],
+            rebac_sync,
+            ["check"],
+            resources_load,
+            ["schema"],
         ]
-        if fresh_history:
-            plan.append(build)
-        plan.extend(
-            [
-                ["migrate", "--noinput", "--skip-checks"],
-                ["reconcile_permissions"],
-                rebac_sync,
-                ["check"],
-                resources_load,
-                ["schema"],
-            ]
-        )
         if options["bootstrap_admin"]:
             plan.append(["bootstrap_admin"])
         return plan
-
-    @staticmethod
-    def _require_fresh_history_database() -> None:
-        """Refuse baseline generation unless the selected database is empty."""
-
-        connection = connections["default"]
-        with connection.cursor() as cursor:
-            tables = connection.introspection.table_names(cursor)
-        if tables:
-            rendered = ", ".join(sorted(tables)[:5])
-            raise CommandError(
-                "angee fresh-history requires an empty database; found " + rendered
-            )
 
     @staticmethod
     def _manage_py_path() -> str:

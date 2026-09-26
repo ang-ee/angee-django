@@ -68,10 +68,11 @@ def boot(
 
 
 def resource_values() -> dict[str, Any]:
-    """Check declared literals using each real emitted model's field instance."""
+    """Check declared literals, excluding dataset padding, with emitted fields."""
 
     from django.apps import apps
     from django.core.exceptions import FieldDoesNotExist, ValidationError
+    from django.db.models.fields import NOT_PROVIDED
 
     from angee.addons import is_angee_addon
     from angee.resources.entries import GRANT_KIND, ResourceEntry, resource_manifest_for
@@ -98,6 +99,8 @@ def resource_values() -> dict[str, Any]:
                             failures.append(f"{prefix}: targets unknown model {group.model_label!r}")
                             continue
                         for name, value in row.items():
+                            if value is NOT_PROVIDED:
+                                continue
                             try:
                                 model_field = model._meta.get_field(name)
                             except FieldDoesNotExist as error:
@@ -175,7 +178,7 @@ def main() -> None:
         action="store_true",
         help="Exclude showcase addons from the composed host profile.",
     )
-    parser.add_argument("--action", choices=("resources", "snapshot", "state", "tests"), default="resources")
+    parser.add_argument("--action", choices=("resources", "snapshot", "state", "tests", "schemas"), default="resources")
     parser.add_argument("--test-label", action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -226,7 +229,12 @@ def main() -> None:
             + ").items()})\n"
         )
         return
-    result = resource_values() if args.action == "resources" else model_snapshot()
+    if args.action == "schemas":
+        from angee.graphql.schema import GraphQLSchemas
+
+        result = GraphQLSchemas.from_discovery().render_sdl()
+    else:
+        result = resource_values() if args.action == "resources" else model_snapshot()
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
 
 

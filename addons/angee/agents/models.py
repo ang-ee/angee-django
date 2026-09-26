@@ -13,23 +13,37 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
 from django.db.models.signals import class_prepared, post_delete
 from django.utils import timezone
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    UserPromptPart,
+)
 from pydantic_ai.models import Model, ModelRequestParameters
+from pydantic_ai.output import OutputObjectDefinition
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.tools import ToolDefinition
+from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import SubjectRef, system_context, to_subject_ref
 from rebac.mixins import RebacModelBase
 
 from angee.agents.backends import InferenceBackend
+from angee.agents.deployments import InferenceDeploymentIdentity
 from angee.agents.runtimes import AgentRuntime, operator_secret_ref
 from angee.agents.skills import parse_skill_meta
 from angee.base.fields import StateField
@@ -39,7 +53,7 @@ from angee.base.models import AngeeManager, AngeeModel, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
 
 
-class InferenceModelUse(models.TextChoices):
+class InferenceModelUse(models.TextChoices, StrEnum):
     """What an inference model is used for (mirrors the LLM catalogue's model use)."""
 
     CHAT = "chat", "Chat"
@@ -48,6 +62,13 @@ class InferenceModelUse(models.TextChoices):
     MULTIMODAL = "multimodal", "Multimodal"
     GENERATION = "generation", "Generation"
     IMAGE = "image", "Image"
+
+
+TEXT_INFERENCE_MODEL_USES = frozenset((InferenceModelUse.CHAT, InferenceModelUse.MULTIMODAL))
+"""Catalogue uses accepted for text inference requests."""
+
+IMAGE_INFERENCE_MODEL_USES = frozenset((InferenceModelUse.MULTIMODAL, InferenceModelUse.IMAGE))
+"""Catalogue uses accepted for inference requests containing images."""
 
 
 class InferenceModelStatus(models.TextChoices):
@@ -76,6 +97,117 @@ class MCPTransport(models.TextChoices):
 
 BUILTIN_MCP_ANGEE = "angee"
 """``MCPServer.config["builtin"]`` value for this process's built-in Angee MCP server."""
+
+INFERENCE_OUTPUT_TOOL = "inference_output"
+"""Native output-tool name used when a provider implements JSON output through tools."""
+
+InferenceOutputSchema = Mapping[str, Any] | Sequence[ToolDefinition]
+"""One JSON output schema or native function-tool declarations for a direct request."""
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceResult:
+    """One provider response, normalized usage and optional decoded schema object."""
+
+    response: ModelResponse
+    usage: dict[str, int]
+    output: dict[str, Any] | None = None
+
+
+class InferenceOutputError(ValueError):
+    """A paid provider response whose structured output could not be decoded."""
+
+    def __init__(self, message: str, *, response: ModelResponse, usage: dict[str, int]) -> None:
+        """Retain response telemetry and usage for caller-owned accounting."""
+
+        super().__init__(message)
+        self.response = response
+        self.usage = usage
+
+
+def inference_request_parameters(
+    output_schema: InferenceOutputSchema | None,
+) -> ModelRequestParameters:
+    """Build the one native request-parameter envelope used by direct inference.
+
+    A JSON-schema mapping supplies both native output shapes so the model's
+    profile can select JSON-schema or output-tool mode. A sequence retains
+    pydantic-ai's native :class:`ToolDefinition` values as callable function tools;
+    direct inference returns those calls without executing a tool loop.
+    """
+
+    if output_schema is None:
+        return ModelRequestParameters()
+    if isinstance(output_schema, Mapping):
+        output = OutputObjectDefinition(
+            json_schema=dict(output_schema),
+            name=INFERENCE_OUTPUT_TOOL,
+            description="A structured result matching the declared JSON schema.",
+        )
+        return ModelRequestParameters(
+            output_mode="auto",
+            output_object=output,
+            output_tools=[
+                ToolDefinition(
+                    name=INFERENCE_OUTPUT_TOOL,
+                    parameters_json_schema=output.json_schema,
+                    description=output.description,
+                    kind="output",
+                )
+            ],
+        )
+    function_tools = list(output_schema)
+    if not all(isinstance(tool, ToolDefinition) for tool in function_tools):
+        raise TypeError("Inference function tools must be native pydantic-ai ToolDefinition values.")
+    return ModelRequestParameters(function_tools=function_tools)
+
+
+def decode_inference_output(response: ModelResponse) -> dict[str, Any]:
+    """Decode the declared schema object from a native output tool or JSON text."""
+
+    output_calls = [
+        part for part in response.parts if isinstance(part, ToolCallPart) and part.tool_name == INFERENCE_OUTPUT_TOOL
+    ]
+    if output_calls:
+        if len(output_calls) != 1:
+            raise ValueError("Structured inference response is missing or ambiguous.")
+        try:
+            return output_calls[0].args_as_dict(raise_if_invalid=True)
+        except AssertionError as error:
+            raise ValueError("Structured inference output root must be an object.") from error
+    text = response.text
+    if text is None:
+        raise ValueError("Structured inference response is missing or ambiguous.")
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) < 3 or lines[-1].strip() != "```":
+            raise ValueError("Structured inference response has an incomplete code fence.")
+        text = "\n".join(lines[1:-1]).strip()
+        if text.startswith("json\n"):
+            text = text[5:].lstrip()
+    value = json.loads(text)
+    if not isinstance(value, dict):
+        raise ValueError("Structured inference output root must be an object.")
+    return value
+
+
+def normalize_inference_usage(usage: RequestUsage | RunUsage) -> dict[str, int]:
+    """Project native usage into every numeric workflow budget axis.
+
+    ``requests`` is retained deliberately: ``WorkflowRun.debit_budget`` and the
+    engine budget gate accept arbitrary top-level numeric axes, and both agent
+    sessions and extraction already account for provider request count.
+    """
+
+    values = {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "tokens": usage.total_tokens,
+        "requests": usage.requests,
+        "tool_calls": usage.tool_calls if isinstance(usage, RunUsage) else 0,
+    }
+    return {key: int(value) for key, value in values.items() if value}
 
 
 ToolRole = role_anchor("agents/toolrole", name="ToolRole")
@@ -214,7 +346,8 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
     ) -> ModelResponse:
         """Send one request using Pydantic AI's native message/settings contract."""
 
-        return self.backend.chat(
+        backend = self.backend
+        return backend.chat(
             model,
             messages,
             model_settings=model_settings,
@@ -233,10 +366,11 @@ class InferenceModelManager(AngeeManager):
         never broken by a transient provider response; deprecation is a status edit.
         """
 
-        specs = list(provider.backend.list_models())
+        backend = provider.backend
+        specs = list(backend.list_models())
         with system_context(reason="agents.inference_model.sync"), transaction.atomic():
             for spec in specs:
-                self.update_or_create(provider=provider, name=spec.handle, defaults=spec.upsert_defaults())
+                self.update_or_create(provider_id=provider.pk, name=spec.handle, defaults=spec.upsert_defaults())
         return len(specs)
 
 
@@ -306,7 +440,64 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
     def bind(self, *, credential: Any | None = None) -> AbstractAsyncContextManager[Model]:
         """Bind this catalogue model's native adapter and own its client lifetime."""
 
-        return self.provider.backend.model(self.provider_model_name, credential=credential)
+        provider: Any = self.provider
+        backend = provider.backend
+        return backend.model(self.provider_model_name, credential=credential)
+
+    def deployment_identity(self) -> InferenceDeploymentIdentity:
+        """Return the non-secret endpoint binding used by role approval policy."""
+
+        provider: Any = self.provider
+        backend = provider.backend
+        return {
+            "model": str(self.sqid),
+            "provider": str(provider.sqid),
+            "backend": str(provider.backend_class),
+            "native_model": str(self.provider_model_name),
+            "endpoint": backend.endpoint,
+        }
+
+    def require_approved(self, role: str) -> None:
+        """Enforce this deployment's exact identity in the configured role allowlist.
+
+        An absent policy leaves the catalogue unrestricted. A configured policy
+        fails closed for missing roles, malformed entries and identity changes.
+        Denial raises ``PermissionDenied``; malformed policy raises ``ValueError``.
+        """
+
+        policy = getattr(settings, "ANGEE_INFERENCE_APPROVED_DEPLOYMENTS", None)
+        if policy is None:
+            return
+        if not isinstance(policy, Mapping):
+            raise ValueError("The inference deployment approval policy is invalid.")
+        approved = policy.get(role, [])
+        if not isinstance(approved, (list, tuple)) or not all(isinstance(item, Mapping) for item in approved):
+            raise ValueError(f"The inference {role} deployment approval policy is invalid.")
+        identity = self.deployment_identity()
+        if not any(dict(item) == identity for item in approved):
+            raise PermissionDenied(f"The configured {role} model deployment is not approved.")
+
+    def require_capability(self, uses: Collection[InferenceModelUse]) -> None:
+        """Require a callable lifecycle and one of the declared model uses."""
+
+        if self.status in {InferenceModelStatus.DEPRECATED, InferenceModelStatus.RETIRED}:
+            raise ValueError("Select an available inference model.")
+        if self.model_use not in uses:
+            raise ValueError(f"Inference requires a model with one of these uses: {', '.join(sorted(uses))}.")
+
+    def require_usable(
+        self,
+        actor: Any,
+        role: str,
+        *,
+        uses: Collection[InferenceModelUse],
+    ) -> None:
+        """Require actor read access, role approval and a declared model capability."""
+
+        if not self.with_actor(actor).has_access("read"):
+            raise PermissionDenied("You cannot read the configured inference model.")
+        self.require_approved(role)
+        self.require_capability(uses)
 
     def chat(
         self,
@@ -318,13 +509,50 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
     ) -> ModelResponse:
         """Make one native request using this catalogue model's provider handle."""
 
-        return self.provider.chat(
+        provider: Any = self.provider
+        return provider.chat(
             model=self.provider_model_name,
             messages=messages,
             model_settings=model_settings,
             model_request_parameters=model_request_parameters,
             credential=credential,
         )
+
+    def infer(
+        self,
+        messages: Sequence[ModelMessage],
+        *,
+        output_schema: InferenceOutputSchema | None = None,
+        images: Sequence[BinaryContent] = (),
+        settings: ModelSettings | None = None,
+        credential: Any | None = None,
+    ) -> InferenceResult:
+        """Make one request and expose native response, usage and structured output.
+
+        Images stay as pydantic-ai :class:`BinaryContent` values. They are appended
+        as one user message so provider adapters retain ownership of their wire
+        representation. A sequence passed as ``output_schema`` is interpreted as
+        native function tools; no tool is executed by this one-shot call.
+        """
+
+        request_messages = list(messages)
+        image_parts = list(images)
+        if not all(isinstance(image, BinaryContent) for image in image_parts):
+            raise TypeError("Inference images must be native pydantic-ai BinaryContent values.")
+        if image_parts:
+            request_messages.append(ModelRequest(parts=[UserPromptPart(image_parts)]))
+        response = self.chat(
+            request_messages,
+            model_settings=settings,
+            model_request_parameters=inference_request_parameters(output_schema),
+            credential=credential,
+        )
+        usage = normalize_inference_usage(response.usage)
+        try:
+            output = decode_inference_output(response) if isinstance(output_schema, Mapping) else None
+        except ValueError as error:
+            raise InferenceOutputError(str(error), response=response, usage=usage) from error
+        return InferenceResult(response=response, usage=usage, output=output)
 
 
 class SkillManager(AngeeManager):
@@ -333,13 +561,14 @@ class SkillManager(AngeeManager):
     def sync_from_source(self, source: Any) -> int:
         """Walk the source for ``SKILL.md`` and upsert/prune :class:`Skill` rows."""
 
-        vcs_bridge = source.repository.vcs_bridge
+        repository: Any = source.repository
+        vcs_bridge = repository.vcs_bridge
         descriptors = vcs_bridge.discover(source, marker="SKILL.md", parse=parse_skill_meta)
         seen: set[Any] = set()
         with system_context(reason="agents.skill.sync"), transaction.atomic():
             for descriptor in descriptors:
                 skill, _created = self.update_or_create(
-                    source=source,
+                    source_id=source.pk,
                     path=str(descriptor.get("path", "")),
                     defaults={
                         "name": str(descriptor.get("name", "")),
@@ -573,6 +802,7 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
 
         return self.name
 
+
 class AgentManager(AngeeManager):
     """Manager owning service-user lifecycle for agent principals."""
 
@@ -601,7 +831,7 @@ class AgentManager(AngeeManager):
         }
         with system_context(reason="agents.service_user.sync"), transaction.atomic():
             if agent.user_id:
-                user = user_model._base_manager.get(pk=agent.user_id)
+                user: Any = agent.user
                 changed: set[str] = set()
                 for field, value in {"username": username, **defaults}.items():
                     if getattr(user, field) != value:
@@ -611,17 +841,17 @@ class AgentManager(AngeeManager):
                     user.save(update_fields=changed)
                 return user
             user, _created = user_model._base_manager.update_or_create(username=username, defaults=defaults)
-            agent.user_id = user.pk
+            agent.user = user
             type(agent)._base_manager.filter(pk=agent.pk).update(user_id=user.pk)
             return user
 
-    def deactivate_service_user(self, agent: Any, *, using: str | None = None) -> None:
+    def deactivate_service_user(self, agent: Any) -> None:
         """Deactivate ``agent``'s linked service user, leaving attribution FKs intact."""
 
         if not agent.user_id:
             return
         user_model = get_user_model()
-        manager = user_model._base_manager.db_manager(using) if using else user_model._base_manager
+        manager = user_model._base_manager
         with system_context(reason="agents.service_user.deactivate"):
             manager.filter(pk=agent.user_id).update(is_active=False)
 
@@ -774,7 +1004,18 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         if self.user_id is None:
             raise ValueError("Agent has no service user and cannot act.")
-        return to_subject_ref(self.user)
+        user: Any = self.user
+        return to_subject_ref(user)
+
+    def is_transient_inference_error(self, error: Exception) -> bool:
+        """Classify with the bound inference provider, if this agent has a model."""
+
+        with system_context(reason="agents.agent.inference_error"):
+            model: Any = self.model
+            if model is None:
+                return False
+            provider: Any = model.provider
+            return bool(provider.backend.is_transient_error(error))
 
     @property
     def runtime_backend(self) -> AgentRuntime:
@@ -786,6 +1027,20 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         runtime_class = cast(type[AgentRuntime], self.resolve_impl("runtime_class", default="none"))
         return runtime_class()
+
+    @property
+    def expects_service(self) -> bool:
+        """Whether this agent's runtime renders an operator service."""
+
+        return self.runtime_backend.renders_service
+
+    @property
+    def can_chat(self) -> bool:
+        """Whether the running agent has an in-process runtime or a rendered service."""
+
+        return self.runtime_status == RuntimeStatus.RUNNING and (
+            self.runtime_backend.runs_in_process or bool(self.service)
+        )
 
     @property
     def can_provision(self) -> bool:
@@ -984,7 +1239,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
 
         structured: dict[str, str] = {}
         runtime = self.runtime_backend
-        model = getattr(self, "model", None)
+        model: Any = self.model
         if model is not None:
             structured["model"] = runtime.model_handle(model)
         # Advertise auth only when the runtime renders a service and there is a usable secret
@@ -1163,7 +1418,8 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         credential = self.inference_credential_for_runtime()
         runtime = self.runtime_backend
         if credential is None:
-            return not self.model.provider.backend.requires_credential and not runtime.renders_service
+            model: Any = self.model
+            return not model.provider.backend.requires_credential and not runtime.renders_service
         if not self.inference_secret():
             return False
         return not runtime.renders_service or runtime.supports_credential(credential)
@@ -1171,9 +1427,10 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
     def inference_model(self) -> AbstractAsyncContextManager[Model]:
         """Bind the native model using this agent's credential override."""
 
-        if self.model is None:
+        if self.model_id is None:
             raise ValueError("An in-process agent requires an inference model.")
-        return self.model.bind(credential=self.inference_credential_for_runtime())
+        model: Any = self.model
+        return model.bind(credential=self.inference_credential_for_runtime())
 
     def inference_credential_for_runtime(self) -> Any:
         """Return the ``integrate.Credential`` backing this agent's inference, or ``None``.
@@ -1184,11 +1441,12 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         than walked here.
         """
 
-        override = getattr(self, "inference_credential", None)
-        if override is not None:
-            return override
-        model = getattr(self, "model", None)
-        return model.credential if model is not None else None
+        if self.inference_credential_id is not None:
+            return self.inference_credential
+        if self.model_id is None:
+            return None
+        model: Any = self.model
+        return model.credential
 
 
 class AgentSession(SqidMixin, AuditMixin, AngeeModel):
@@ -1405,13 +1663,12 @@ class AgentTurn(SqidMixin, AuditMixin, AngeeModel):
 def _deactivate_agent_service_user(
     sender: type[models.Model],
     instance: models.Model,
-    using: str,
     **kwargs: Any,
 ) -> None:
     """Deactivate an agent service user after every delete path Django supports."""
 
     del sender, kwargs
-    type(instance).objects.deactivate_service_user(instance, using=using)
+    type(instance).objects.deactivate_service_user(instance)
 
 
 def _connect_agent_lifecycle(sender: type[models.Model], **kwargs: Any) -> None:

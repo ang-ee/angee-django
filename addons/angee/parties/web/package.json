@@ -26,6 +26,7 @@
     "react-dom": "^19"
   },
   "devDependencies": {
+    "@angee/metadata": "workspace:*",
     "@tanstack/react-router": "^1.170.16",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.17",

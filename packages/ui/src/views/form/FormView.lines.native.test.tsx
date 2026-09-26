@@ -1,14 +1,19 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useFieldArray, type Control } from "react-hook-form";
-import { refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
+import type { ComponentProps } from "react";
+import { schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
+import { OperationDocumentsProvider, type ResourceSaveVariables } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
+import { AppRuntimeProvider } from "../../runtime";
+import { createUiTestProviders } from "../../testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
+import { defaultWidgets } from "../../widgets";
+import { FormView } from "./FormView";
 import { useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
 import type { FieldDescriptor } from "../page";
 
@@ -27,26 +32,59 @@ const resource = testDataResource("review.Document", {
   },
 });
 const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).labels["review.Document"]!;
+const renderedResource = testDataResource(resource.modelLabel, {
+  ...resource,
+  roots: { ...resource.roots, save: "documents_save" },
+  linesResource: {
+    ...resource.linesResource!,
+    fields: [...(resource.linesResource!.fields ?? []), lineField("price", "Decimal")],
+  },
+});
+const saveDocument = { kind: "Document", definitions: [] };
 const initialLines: readonly Row[] = [
   { id: "a", label: "Alpha", quantity: 10, position: 0 },
   { id: "b", label: "Bravo", quantity: 20, position: 1 },
   { id: "c", label: "Charlie", quantity: 30, position: 2 },
 ];
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://lines",
+  queryClientConfig: { defaultOptions: { queries: { retry: false }, mutations: { retry: false } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
-async function fixture(options: { submit?: FormSubmit; lines?: readonly Row[]; isCreate?: boolean; create?: () => Promise<{ data: Row }> } = {}) {
+async function fixture(options: {
+  submit?: FormSubmit;
+  lines?: readonly Row[];
+  isCreate?: boolean;
+  create?: () => Promise<{ data: Row }>;
+  publicView?: boolean;
+  save?: (variables: ResourceSaveVariables) => Promise<Row>;
+  recordExtras?: ComponentProps<typeof FormView>["recordExtras"];
+} = {}) {
   const seedLines = options.lines ?? initialLines;
+  const activeResource = options.publicView ? renderedResource : resource;
   let record: Row = { id: "doc-1", title: "Original", lines: seedLines };
   const getOne = vi.fn(async () => ({ data: record }));
   const submit = vi.fn(options.submit ?? (async () => null));
+  const update = vi.fn(async ({ variables }: { variables: Row }) => {
+    record = { ...record, ...variables };
+    return { data: record };
+  });
+  const custom = vi.fn(async ({ payload }: { payload: ResourceSaveVariables }) => {
+    const root = activeResource.roots.save;
+    if (!root) throw new Error("No save root configured for this resource.");
+    record = options.save ? await options.save(payload) : {
+      ...record,
+      ...payload.patch,
+      lines: payload.lines?.map((line, index) => ({ ...line, id: line.id ?? `new-${index}` })) ?? record.lines,
+    };
+    return { data: { [root]: record } };
+  });
   const provider = {
-    getApiUrl: () => "test://lines", getOne,
+    getOne,
     getList: vi.fn(async () => ({ data: [], total: 0 })),
-    create: vi.fn(options.create), update: vi.fn(), deleteOne: vi.fn(),
-  } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  clients.push(client);
+    create: vi.fn(options.create), update, custom,
+  } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   let surface!: FormViewSaveSurface;
   let remove!: (index: number) => void;
@@ -75,15 +113,30 @@ async function fixture(options: { submit?: FormSubmit; lines?: readonly Row[]; i
       </div>)}
     </>;
   }
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-    <RouterContextProvider router={router}><ModalsHost><ToastProvider><Probe /></ToastProvider></ModalsHost></RouterContextProvider>
-  </Refine>);
+  render(<Provider resources={[activeResource]} dataProvider={provider}>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider>
+      {options.publicView ? (
+        <OperationDocumentsProvider documents={{ [activeResource.schemaName]: { saves: { [activeResource.modelLabel]: saveDocument } } }}>
+          <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+            <FormView
+              resource={activeResource.modelLabel}
+              id={options.isCreate ? null : "doc-1"}
+              fields={[{ name: "title", label: "Title", title: true }]}
+              formExtras={(context) => { surface = context.form; return null; }}
+              recordExtras={options.recordExtras}
+            />
+          </AppRuntimeProvider>
+        </OperationDocumentsProvider>
+      ) : <Probe />}
+    </ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>);
   if (!options.isCreate) {
-    await screen.findByLabelText("c.label");
+    if (options.publicView) await screen.findByDisplayValue("Charlie");
+    else await screen.findByLabelText("c.label");
     await waitFor(() => expect(surface?.form.getValues("lines")).toMatchObject(seedLines));
   }
   return {
-    surface: () => surface, submit, getOne, provider,
+    surface: () => surface, submit, getOne, provider, update, custom,
     setRecord: (next: Row) => { record = next; },
     append: (row: Row) => act(() => append(row)),
     remove: (index: number) => act(() => remove(index)),
@@ -98,29 +151,144 @@ async function fixture(options: { submit?: FormSubmit; lines?: readonly Row[]; i
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
 
-test("new documents create their draft lines in one native nested insert", async () => {
-  const saved = { id: "doc-new", title: "Quotation", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };
-  const f = await fixture({ isCreate: true, create: async () => ({ data: saved }) });
+test("new documents render Add line and create their draft lines in one native nested insert", async () => {
+  const saved = { id: "doc-new", title: "Draft document", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };
+  const f = await fixture({ isCreate: true, publicView: true, create: async () => ({ data: saved }) });
   expect(f.surface().linesActive).toBe(true);
-  edit("title", "Quotation");
-  f.append({ label: "Lamp", quantity: 1 });
-  await act(async () => f.surface().submitForm());
-  expect(f.provider.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-    variables: { title: "Quotation", lines: { data: [{ label: "Lamp", quantity: 1, position: 0 }] } },
-  }));
+  edit("Title", "Draft document");
+  fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+  edit("Label", "Lamp");
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(f.provider.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    variables: { title: "Draft document", lines: { data: [{ label: "Lamp", position: 0 }] } },
+  })));
   expect(f.provider.update).not.toHaveBeenCalled();
+  expect(f.custom).not.toHaveBeenCalled();
   expect(f.getOne).not.toHaveBeenCalled();
   await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
   expect(f.surface().form.getValues("lines")).toEqual(saved.lines);
 });
 
+test("seeds rendered document lines without a reseed loop", async () => {
+  const f = await fixture({ publicView: true });
+  expect(screen.getByDisplayValue("Alpha")).toBeTruthy();
+  expect(screen.getByDisplayValue("Bravo")).toBeTruthy();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Original");
+  expect(screen.getByDisplayValue("Alpha")).toBeTruthy();
+  expect(f.custom).not.toHaveBeenCalled();
+});
+
+test("routes a dirty-lines save through the resource save mutation", async () => {
+  const f = await fixture({ publicView: true });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  const payload = {
+    pk: "doc-1",
+    patch: {},
+    lines: [{ ...initialLines[0], label: "Edited alpha" }, ...initialLines.slice(1)],
+  };
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
+    payload,
+    meta: expect.objectContaining({ gqlMutation: saveDocument, gqlVariables: payload }),
+  }));
+  expect(f.update).not.toHaveBeenCalled();
+  await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
+});
+
+test("a rendered new line with untouched numeric cells saves without those keys", async () => {
+  const f = await fixture({ publicView: true });
+  fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+  const newLabelCell = screen.getAllByLabelText("Label")
+    .find((cell) => (cell as HTMLInputElement).value === "");
+  expect(newLabelCell).toBeTruthy();
+  fireEvent.change(newLabelCell as HTMLInputElement, { target: { value: "New" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  const lines = f.custom.mock.calls[0]![0].payload.lines!;
+  expect(lines[3]).toEqual({ label: "New", position: 3 });
+  expect(lines[3]).not.toHaveProperty("quantity");
+  expect(lines[3]).not.toHaveProperty("price");
+  expect(lines[0]).toEqual(expect.objectContaining({ id: "a", quantity: 10 }));
+});
+
+test("a created line edited and reordered during save keeps its server ID for the next save", async () => {
+  let resolveFirst!: (row: Row) => void;
+  let first = true;
+  const f = await fixture({
+    publicView: true,
+    save: async (variables) => {
+      if (first) {
+        first = false;
+        return new Promise<Row>((resolve) => { resolveFirst = resolve; });
+      }
+      return { id: "doc-1", title: "Original", lines: variables.lines };
+    },
+    recordExtras: (context) => <button type="button" onClick={() => {
+      const rows = context.form.form.getValues("lines") as Row[];
+      context.form.form.setValue("lines", [rows[3], ...rows.slice(0, 3)], { shouldDirty: true });
+    }}>Move new line first</button>,
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+  const newLabelCell = screen.getAllByLabelText("Label")
+    .find((cell) => (cell as HTMLInputElement).value === "");
+  expect(newLabelCell).toBeTruthy();
+  fireEvent.change(newLabelCell as HTMLInputElement, { target: { value: "Submitted" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  fireEvent.change(screen.getByDisplayValue("Submitted"), { target: { value: "Later edit" } });
+  fireEvent.click(screen.getByRole("button", { name: "Move new line first" }));
+  const lines = f.custom.mock.calls[0]![0].payload.lines!;
+  const accepted = {
+    id: "doc-1", title: "Original",
+    lines: lines.map((line, index) => ({ ...line, id: line.id ?? `new-${index}` })),
+  };
+  await act(async () => resolveFirst(accepted));
+  expect(screen.getByDisplayValue("Later edit")).toBeTruthy();
+  await waitFor(() => expect(f.surface().pending).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
+  const nextLines = f.custom.mock.calls[1]![0].payload.lines!;
+  expect(nextLines[0]).toEqual(expect.objectContaining({ id: "new-3", label: "Later edit", position: 0 }));
+  expect(nextLines.filter((line) => line.id == null)).toHaveLength(0);
+});
+
+test("keeps a parent-only edit on the stock update path with rendered lines", async () => {
+  const f = await fixture({ publicView: true });
+  edit("Title", "Renamed");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({
+    id: "doc-1", variables: { title: "Renamed" },
+  }));
+  expect(f.custom).not.toHaveBeenCalled();
+});
+
+test("maps a line save validation error to its rendered row", async () => {
+  const f = await fixture({ publicView: true, save: async () => {
+    throw { graphQLErrors: [{
+      message: "Validation failed.",
+      extensions: {
+        code: "VALIDATION",
+        validationErrors: { "lines.1.label": ["This field is required."] },
+        formErrors: [],
+      },
+    }] };
+  } });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  expect(await screen.findByText("This field is required.")).toBeTruthy();
+});
+
 test("failed nested creation preserves the header and lines for retry", async () => {
   const f = await fixture({ isCreate: true, create: async () => { throw new Error("Line rejected"); } });
-  edit("title", "Quotation");
+  edit("title", "Draft document");
   f.append({ label: "Lamp", quantity: "1" });
   await act(async () => f.surface().submitForm());
   expect(f.provider.create).toHaveBeenCalledTimes(1);
-  expect(f.surface().form.getValues("title")).toBe("Quotation");
+  expect(f.surface().form.getValues("title")).toBe("Draft document");
   expect(f.surface().form.getValues("lines")).toMatchObject([{ label: "Lamp", quantity: "1" }]);
   expect(f.surface().formIsDirty).toBe(true);
   expect(f.surface().form.formState.errors.root?.server?.message).toBe("Line rejected");

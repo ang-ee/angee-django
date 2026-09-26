@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createRouteHref } from "@angee/ui/runtime";
 
@@ -22,6 +22,9 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     columns = [],
     resource,
     rowHref,
+    textFilterField,
+    order,
+    fields,
   }: {
     columns?: ReadonlyArray<{
       field: string;
@@ -29,6 +32,9 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     }>;
     resource: string;
     rowHref?: (row: Record<string, unknown>) => string;
+    textFilterField?: string | null;
+    order?: Record<string, unknown>;
+    fields?: readonly string[];
   }) => {
     const row: Record<string, unknown> = resource === "platform.Field"
       ? {
@@ -51,16 +57,23 @@ vi.mock("@angee/ui", async (importOriginal) => ({
             resource_type: "notes.note",
             depends_on: ["iam.User"],
           }
-        : { id: "example.notes" };
+        : { id: "example.notes", name: "example.notes", label: "example.notes" };
     return (
-      <div data-testid={resource} data-row-href={rowHref?.(row) ?? ""}>
+      <div
+        data-testid={resource}
+        data-row-href={rowHref?.(row) ?? ""}
+        data-sort-field={columns[0]?.field}
+        data-search-field={textFilterField ?? ""}
+        data-order={JSON.stringify(order)}
+        data-fields={JSON.stringify(fields)}
+      >
         {columns.map((column) => (
           <span key={column.field}>{column.render?.(row)}</span>
         ))}
       </div>
     );
   },
-  statusTone: () => "neutral",
+  useStatusTone: () => () => "neutral",
   textRoleVariants: () => "",
   useRouteHref: () => mocks.routeHref,
 }));
@@ -143,5 +156,16 @@ describe("platform route consumers", () => {
     expect(mocks.routeHref).toHaveBeenCalledWith("platform.addons.record", {
       id: "example.notes",
     });
+  });
+
+  test("AddonsPage displays server labels and searches and sorts by canonical name", () => {
+    render(<AddonsPage />);
+
+    const list = screen.getByTestId("platform.Addon");
+    expect(screen.getAllByText("example.notes")).toHaveLength(2);
+    expect(list.getAttribute("data-sort-field")).toBe("name");
+    expect(list.getAttribute("data-search-field")).toBe("name");
+    expect(list.getAttribute("data-order")).toBe(JSON.stringify({ name: "ASC" }));
+    expect(list.getAttribute("data-fields")).toContain('"label"');
   });
 });

@@ -140,7 +140,7 @@ describe("platform detail surfaces", () => {
     expect(screen.getByText("col.models")).toBeTruthy();
     expect(screen.getByText("2")).toBeTruthy();
     expect(screen.getByText("detail.dependencies")).toBeTruthy();
-    expect((screen.getByRole("link", { name: "iam" }) as HTMLAnchorElement).pathname)
+    expect((screen.getByRole("link", { name: "angee.iam" }) as HTMLAnchorElement).pathname)
       .toBe("/platform/addons/angee.iam");
     expect(screen.getByText("detail.modelsWithCount:1")).toBeTruthy();
     expect(
@@ -151,6 +151,29 @@ describe("platform detail surfaces", () => {
       "platform.models.record",
       { id: "storage.File" },
     );
+  });
+
+  test("AddonDetail uses the server's label for an unresolved catalogue entry", () => {
+    routerMocks.params = { id: "example.base" };
+    platformMocks.usePlatformAddon.mockReturnValue({
+      addon: {
+        field_count: 0,
+        id: "example.base",
+        kind: "required",
+        label: "example.base",
+        model_count: 0,
+        namespace: "example",
+        resource_count: 0,
+      },
+      dependedBy: [],
+      dependsOn: [],
+      isFetching: false,
+      modelLabels: [],
+    });
+
+    render(<AddonDetail />);
+
+    expect(screen.getByRole("heading", { name: "example.base" })).toBeTruthy();
   });
 
   test("ModelDetail keeps metric links navigable", () => {

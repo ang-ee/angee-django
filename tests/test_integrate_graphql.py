@@ -14,27 +14,31 @@ projection.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import connection
 from django.db.models.signals import post_save
-from django.test import RequestFactory
+from django.test import RequestFactory, TestCase
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import system_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
+from angee.integrate.states import DiscrepancyKind, DiscrepancyStatus, StreamKind
+from angee.integrate.testing.models import RecordLink, SyncDiscrepancy, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
+from tests import (
+    test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
+    test_messaging,  # noqa: F401 -- register the concrete relation graph
+)
 from tests.conftest import (
-    POSTS_TEST_MODELS,
     Credential,
     Integration,
     OAuthClient,
@@ -42,20 +46,15 @@ from tests.conftest import (
     VcsBridge,
     Vendor,
     WebhookSubscription,
-    _clear_model_tables,
     execute_schema,
     make_integration,
-)
-from tests.conftest import (
-    _create_missing_tables as _create_connection_tables,
 )
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import (
     result_data as _data,
 )
+from tests.messaging_models import Channel
 from tests.test_agents import InferenceProvider
-from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
-from tests.test_messaging import MESSAGING_TEST_MODELS
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -66,7 +65,7 @@ _BRIDGE_SYNCED = str(EventKind.BRIDGE_SYNCED)
 
 
 def test_integration_node_resolves_nested_relations(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """An integration's nested vendor/credential/owner/account relations resolve for an admin."""
 
@@ -106,8 +105,242 @@ def test_integration_node_resolves_nested_relations(
     }
 
 
+def test_sync_stream_filter_and_batched_integration_projection(composed_tables: None) -> None:
+    """The owner foreign key filters by public id and batches its projection."""
+
+    del composed_tables
+    admin = _platform_admin("stream-relation-admin")
+    bridge = make_integration("stream-relation", model=Channel)
+    other = make_integration("stream-relation-other", model=Channel)
+    with system_context(reason="test stream relation projection"):
+        SyncStream.objects.current(bridge, "messages", "first")
+        SyncStream.objects.current(other, "messages", "hidden")
+    schema = _schema()
+    query = """
+        query StreamOwner($id: String!) {
+            sync_streams(where: {integration: {_eq: $id}}, limit: 20) {
+                partition
+                integration { id display_name }
+            }
+        }
+    """
+    with CaptureQueriesContext(connection) as one:
+        first = _data(_execute(schema, query, {"id": _public_id(bridge)}, user=admin))["sync_streams"]
+    assert [row["partition"] for row in first] == ["first"]
+    assert first[0]["integration"]["id"] == _public_id(bridge)
+
+    with system_context(reason="test additional stream partitions"):
+        for index in range(4):
+            SyncStream.objects.current(bridge, "messages", f"partition-{index}")
+    with CaptureQueriesContext(connection) as many:
+        rows = _data(_execute(schema, query, {"id": _public_id(bridge)}, user=admin))["sync_streams"]
+    assert len(rows) == 5
+    assert all(row["integration"] == first[0]["integration"] for row in rows)
+    assert len(many) <= len(one) + 1
+
+
+@pytest.mark.parametrize(
+    ("root", "bridge_filter", "group_field"),
+    [
+        ("sync_streams", "integration", "KEY"),
+        ("record_links", "stream__integration", "STATUS"),
+        ("sync_discrepancies", "stream__integration", "STATUS"),
+    ],
+)
+def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
+    composed_tables: None,
+    root: str,
+    bridge_filter: str,
+    group_field: str,
+) -> None:
+    """Rows, aggregates and facet/group buckets preserve the Integration owner scope."""
+
+    del composed_tables
+    bridge = make_integration("stream-data-owner", model=Channel)
+    other = make_integration("stream-data-other", model=Channel)
+    with system_context(reason="test sync data-view graph"):
+        owner, outsider = bridge.owner, other.owner
+        for item in (bridge, other):
+            stream = SyncStream.objects.current(item, "contacts", kind=StreamKind.RECORD_REPLICA)
+            link = RecordLink.objects.observe(stream, "person:1")
+            SyncDiscrepancy.objects.record(stream, link=link, kind=DiscrepancyKind.SEMANTIC, code="invalid")
+    schema = _schema()
+    query = (
+        """
+        query ScopedSync($bridge: String!) {
+          rows: ROOT(where: {BRIDGE_FILTER: {_eq: $bridge}}, limit: 20) { id }
+          total: ROOT_aggregate(where: {BRIDGE_FILTER: {_eq: $bridge}}) { aggregate { count } }
+          groups: ROOT_groups(
+            where: {BRIDGE_FILTER: {_eq: $bridge}}, group_by: [{field: GROUP_FIELD}]
+          ) { aggregate { count } }
+          group_count: ROOT_groups_count(
+            where: {BRIDGE_FILTER: {_eq: $bridge}}, group_by: [{field: GROUP_FIELD}]
+          )
+        }
+    """.replace("ROOT", root)
+        .replace("BRIDGE_FILTER", bridge_filter)
+        .replace("GROUP_FIELD", group_field)
+    )
+    visible = _data(_execute(schema, query, {"bridge": _public_id(bridge)}, user=owner))
+    assert len(visible["rows"]) == 1
+    assert visible["total"]["aggregate"]["count"] == visible["group_count"] == 1
+    assert visible["groups"] == [{"aggregate": {"count": 1}}]
+    hidden = _data(_execute(schema, query, {"bridge": _public_id(bridge)}, user=outsider))
+    assert hidden == {"rows": [], "total": {"aggregate": {"count": 0}}, "groups": [], "group_count": 0}
+
+
+def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_tables: None) -> None:
+    """Narrow simultaneous count selections neither multiply joins nor fetch per row."""
+
+    del composed_tables
+    bridge = make_integration("stream-counts", model=Channel)
+    with system_context(reason="test stream count fixtures"):
+        owner = bridge.owner
+        stream = SyncStream.objects.current(bridge, "contacts", "one", kind=StreamKind.RECORD_REPLICA)
+        for index in range(3):
+            RecordLink.objects.observe(stream, f"person:{index}")
+        for index in range(3):
+            discrepancy = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code=f"invalid-{index}")
+            if index == 1:
+                SyncDiscrepancy.objects.retry(discrepancy)
+            elif index == 2:
+                SyncDiscrepancy.objects.resolve(discrepancy)
+    schema = _schema()
+    query = """
+        query Counts($bridge: String!) {
+          sync_streams(where: {integration: {_eq: $bridge}}, limit: 20, order_by: [{partition: asc}]) {
+            open_discrepancy_count link_count
+          }
+        }
+    """
+    variables = {"bridge": _public_id(bridge)}
+    _data(_execute(schema, query, variables, user=owner))
+    with CaptureQueriesContext(connection) as one:
+        initial = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
+    assert initial == [{"open_discrepancy_count": 2, "link_count": 3}]
+    with system_context(reason="test extra zero-count streams"):
+        for index in range(5):
+            SyncStream.objects.current(bridge, "contacts", f"zero-{index}", kind=StreamKind.RECORD_REPLICA)
+    with TestCase().assertNumQueries(len(one)):
+        many = _data(_execute(schema, query, variables, user=owner))["sync_streams"]
+    assert many == [*initial, *[{"open_discrepancy_count": 0, "link_count": 0}] * 5]
+
+
+def test_integration_stream_count_is_inherited_by_bridge_projection(composed_tables: None) -> None:
+    """Saved-record tab visibility reads the same count on a parent and its child."""
+
+    del composed_tables
+    admin = _platform_admin("stream-tab-count-admin")
+    bridge = make_integration("stream-tab-count", model=VcsBridge)
+    empty = make_integration("stream-tab-empty", model=VcsBridge)
+    with system_context(reason="test inherited stream count"):
+        SyncStream.objects.current(bridge, "repository", "one")
+        SyncStream.objects.current(bridge, "repository", "two")
+    rows = _data(
+        _execute(_schema(), "{ integrations { id stream_count } vcs_bridges { id stream_count } }", user=admin)
+    )
+    expected = {_public_id(bridge): 2, _public_id(empty): 0}
+    for root in ("integrations", "vcs_bridges"):
+        assert {row["id"]: row["stream_count"] for row in rows[root]} == expected
+
+
+def test_record_link_target_uses_shared_public_reference(composed_tables: None) -> None:
+    """The target projection carries resource identity and a public id, never a raw PK."""
+
+    del composed_tables
+    bridge = make_integration("link-target", model=Channel)
+    with system_context(reason="test record link target"):
+        owner = bridge.owner
+        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "bound", target=stream)
+        empty = RecordLink.objects.observe(stream, "unbound")
+    rows = _data(_execute(_schema(), "{ record_links { id model_label record_id } }", user=owner))["record_links"]
+    assert {row["id"]: (row["model_label"], row["record_id"]) for row in rows} == {
+        _public_id(link): ("integrate.SyncStream", _public_id(stream)),
+        _public_id(empty): ("", ""),
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "model", "verb"),
+    [
+        ("resolveSyncDiscrepancy", SyncDiscrepancy, "resolve"),
+        ("retrySyncDiscrepancy", SyncDiscrepancy, "retry"),
+        ("resyncSyncStream", SyncStream, "request_resync"),
+    ],
+)
+def test_sync_actions_dispatch_managers_and_refuse_non_admins(
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    model: Any,
+    verb: str,
+) -> None:
+    """Even the integration owner needs the admin role; admitted writes use manager verbs."""
+
+    del composed_tables
+    bridge = make_integration("sync-action", model=Channel)
+    admin = _platform_admin("sync-action-admin")
+    outsider = User.objects.create_user(username="sync-action-outsider")
+    with system_context(reason="test sync action fixtures"):
+        owner = bridge.owner
+        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        discrepancy = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="invalid")
+    target = stream if model is SyncStream else discrepancy
+    original = getattr(type(model.objects), verb)
+    calls: list[int] = []
+
+    def tracked(manager: Any, row: Any, **kwargs: Any) -> Any:
+        calls.append(row.pk)
+        return original(manager, row, **kwargs)
+
+    monkeypatch.setattr(type(model.objects), verb, tracked)
+    schema = _schema()
+    query = "mutation Action($id: ID!) { ACTION(id: $id) { ok message } }".replace("ACTION", mutation)
+    for denied in (owner, outsider, AnonymousUser()):
+        result = _execute(schema, query, {"id": _public_id(target)}, user=denied)
+        assert result.errors and result.errors[0].extensions["code"] == "PERMISSION_DENIED"
+    assert calls == []
+    before = timezone.now()
+    assert _data(_execute(schema, query, {"id": _public_id(target)}, user=admin))[mutation]["ok"]
+    assert calls == [target.pk]
+    with system_context(reason="test sync action outcome"):
+        target.refresh_from_db()
+        if verb == "request_resync":
+            assert target.resync_required and target.generation == 1
+        elif verb == "retry":
+            assert target.status == DiscrepancyStatus.RETRY and target.retry_at >= before
+        else:
+            assert target.status == DiscrepancyStatus.RESOLVED and target.resolved_at >= before
+
+
+def test_sync_data_view_metadata_exposes_read_only_group_and_facet_contract() -> None:
+    """The existing Hasura owner supplies queries, grouping and facet axes without CRUD."""
+
+    schema = _schema()
+    resources = {item.model_label: item for item in schema.angee_resources}
+    for label, root, axes in (
+        ("SyncStream", "sync_streams", {"key", "partition", "kind", "direction", "phase", "resync_required"}),
+        ("RecordLink", "record_links", {"status", "origin"}),
+        ("SyncDiscrepancy", "sync_discrepancies", {"kind", "code", "status"}),
+    ):
+        metadata = resources[f"integrate.{label}"]
+        assert metadata.roots.list_name == root
+        assert metadata.roots.aggregate_name == f"{root}_aggregate"
+        assert metadata.roots.group_name == f"{root}_groups"
+        assert metadata.roots.create_name is metadata.roots.update_name is metadata.roots.delete_name is None
+        assert set(metadata.query.axes) == axes
+    sdl = schema.as_str()
+    assert "resolveSyncDiscrepancy(id: ID!, keep: ConflictKeep = null): ActionResult!" in sdl
+    assert "sync_run_id:" not in sdl
+    assert "enum DiscrepancyKind {" in sdl
+    assert "enum StreamKind {" in sdl
+    for action in ("retrySyncDiscrepancy", "resyncSyncStream"):
+        assert f"{action}(id: ID!): ActionResult!" in sdl
+
+
 def test_integration_capabilities_are_native_creatable_children(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Runtime capabilities expose only installed children with a real create ingress."""
 
@@ -127,7 +360,7 @@ def test_integration_capabilities_are_native_creatable_children(
 
 
 def test_integration_concrete_target_keeps_parent_only_rows_unavailable(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Parent-only legacy rows remain visible without a guessed child target."""
 
@@ -151,7 +384,7 @@ def test_integration_concrete_target_keeps_parent_only_rows_unavailable(
 
 
 def test_concrete_target_fails_closed_for_unexposed_and_ambiguous_children(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Real hidden and sibling child rows never disclose an arbitrary target."""
 
@@ -174,7 +407,7 @@ def test_concrete_target_fails_closed_for_unexposed_and_ambiguous_children(
 
 
 def test_concrete_target_list_query_cost_is_bounded_by_child_types(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Adding parent rows does not add one concrete-child query per row."""
 
@@ -199,7 +432,7 @@ def test_concrete_target_list_query_cost_is_bounded_by_child_types(
 
 
 def test_integration_groups_aggregate_runs_with_rebac_scope(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """The integration aggregate root executes through the Angee aggregate queryset seam."""
 
@@ -389,7 +622,38 @@ def test_resource_metadata_names_the_impl_columns_it_projects() -> None:
     assert wire["integrate.Vendor"]["implFields"] == []
 
 
-def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
+def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
+    composed_tables: None,
+) -> None:
+    """Preparation preserves omitted fields until the provider seeds its defaults."""
+
+    admin = _platform_admin("oauth-create-defaults-admin")
+    created = _data(
+        _execute(
+            _schema(),
+            """
+            mutation CreateClient($object: oauth_clients_insert_input!) {
+              insert_oauth_clients_one(object: $object) { id }
+            }
+            """,
+            {"object": {"slug": "create-defaults", "display_name": "Defaults", "provider_type": "GOOGLE"}},
+            user=admin,
+        )
+    )["insert_oauth_clients_one"]
+
+    client = OAuthClient.objects.as_user(admin).get(sqid=created["id"])
+    assert client.discovery_url == "https://accounts.google.com/.well-known/openid-configuration"
+    assert client.authorize_endpoint == "https://accounts.google.com/o/oauth2/v2/auth"
+    assert client.default_scopes == [
+        "openid",
+        "profile",
+        "email",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+    ]
+
+
+def test_impl_choices_are_admin_only(composed_tables: None) -> None:
     """Impl choice metadata is console data, so it is platform-admin gated."""
 
     console_schema = _schema()
@@ -459,7 +723,7 @@ def test_impl_choices_are_admin_only(integrate_console_tables: None) -> None:
     }
 
 
-def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tables: None) -> None:
+def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None) -> None:
     """Creating an MTI child creates the Integration parent identity row."""
 
     user = User.objects.create_user(username="impl-factory-owner", email="impl-factory@example.com")
@@ -498,7 +762,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(integrate_console_tab
 
 
 def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Concrete GraphQL creation enforces backend config at the model save boundary."""
 
@@ -527,7 +791,7 @@ def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(
     }
 
 
-def test_integration_kind_backfill_recovers_child_rows(integrate_console_tables: None) -> None:
+def test_integration_kind_backfill_recovers_child_rows(composed_tables: None) -> None:
     """Existing parent rows recover their concrete integration kind after migration."""
 
     bridge = make_integration("kind-backfill", backend_class="stub", model=VcsBridge)
@@ -540,7 +804,7 @@ def test_integration_kind_backfill_recovers_child_rows(integrate_console_tables:
 
 
 def test_integration_update_delete_are_admin_only(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Updating then deleting an integration is platform-admin gated."""
 
@@ -585,7 +849,7 @@ def test_integration_update_delete_are_admin_only(
 
 
 def test_attach_integration_credential_targets_owned_concrete_child(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Credential-first ingress preserves the concrete identity and rejects another owner."""
 
@@ -624,7 +888,7 @@ def test_attach_integration_credential_targets_owned_concrete_child(
 
 
 def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """OAuth ingress carries the authorized child resource and public id through attach."""
 
@@ -664,7 +928,7 @@ def test_connect_integration_reuses_live_oauth_for_explicit_concrete_child(
 
 
 def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Admin action mutations move Integration lifecycle through guarded transitions."""
 
@@ -725,7 +989,7 @@ def test_integration_lifecycle_action_mutations_pause_connect_and_disconnect(
 
 
 def test_webhook_crud_secret_write_only(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """The webhook secret is a write-only input absent from the output type; delete is admin gated."""
 
@@ -824,7 +1088,7 @@ def test_webhook_crud_secret_write_only(
 
 
 def test_integration_action_mutations_are_admin_only(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """sync/test/rotate action mutations are platform-admin gated."""
 
@@ -852,7 +1116,7 @@ def test_integration_action_mutations_are_admin_only(
 
 
 def test_test_connection_probes_the_credential_of_a_parent_integration(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """A parent-only integration proves its credential; a detached one says so in band."""
 
@@ -872,7 +1136,7 @@ def test_test_connection_probes_the_credential_of_a_parent_integration(
 
 
 def test_sync_integration_runs_for_an_admin(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """An admin can queue an integration sync; with no bridges it is a no-op."""
 
@@ -893,7 +1157,7 @@ def test_sync_integration_runs_for_an_admin(
 
 
 def test_sync_integration_queues_bridge_for_an_admin(
-    integrate_console_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A manual integration sync records queued state and defers bridge work."""
@@ -958,7 +1222,7 @@ def test_sync_integration_queues_bridge_for_an_admin(
 
 
 def test_rotate_webhook_secret_changes_the_stored_secret(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Rotation returns a fresh secret once and persists it write-only."""
 
@@ -990,7 +1254,7 @@ def test_rotate_webhook_secret_changes_the_stored_secret(
 
 
 def test_test_webhook_delivery_records_failure_status(
-    integrate_console_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1034,7 +1298,7 @@ def test_test_webhook_delivery_records_failure_status(
 
 
 def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """A VCS bridge lifecycle patch accepts the lowercase model value and reads back the enum."""
 
@@ -1059,7 +1323,7 @@ def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
         assert str(bridge.lifecycle) == "disconnected"
 
 
-def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(integrate_console_tables: None) -> None:
+def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(composed_tables: None) -> None:
     """A guarded lifecycle patch saves in the transition hook, not again in the caller."""
 
     console_schema = _schema()
@@ -1095,7 +1359,7 @@ def test_update_vcs_bridge_lifecycle_only_emits_one_state_save(integrate_console
 
 
 def test_update_vcs_bridge_lifecycle_accepts_the_graphql_enum_name(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """A lifecycle patch can echo the read-side GraphQL enum name back to the server."""
 
@@ -1121,7 +1385,7 @@ def test_update_vcs_bridge_lifecycle_accepts_the_graphql_enum_name(
 
 
 def test_create_vcs_bridge_creates_child_row(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """VCS bridge create writes the child row directly."""
 
@@ -1167,7 +1431,7 @@ def test_create_vcs_bridge_creates_child_row(
 
 @pytest.mark.parametrize("name, expected_name", [("Renamed", "Renamed"), (None, "")])
 def test_update_vcs_bridge_merges_typed_config(
-    integrate_console_tables: None,
+    composed_tables: None,
     name: str | None,
     expected_name: str,
 ) -> None:
@@ -1200,7 +1464,7 @@ def test_update_vcs_bridge_merges_typed_config(
         assert bridge.config == expected
 
 
-def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(integrate_console_tables: None) -> None:
+def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(composed_tables: None) -> None:
     """Patch merging still runs the typed config's unknown-key validation on save."""
 
     bridge = make_integration(
@@ -1233,7 +1497,7 @@ def test_update_vcs_bridge_rejects_unknown_config_key_after_merge(integrate_cons
 
 
 def test_update_vcs_bridge_rejects_backend_switch(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """A saved child cannot reinterpret its private config under another backend."""
 
@@ -1264,7 +1528,7 @@ def test_update_vcs_bridge_rejects_backend_switch(
 
 
 def test_model_save_rejects_backend_switch_and_scopes_partial_config_validation(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """The model boundary guards direct writers without blocking unrelated legacy-row updates."""
 
@@ -1279,7 +1543,7 @@ def test_model_save_rejects_backend_switch_and_scopes_partial_config_validation(
 
         reconstructed = VcsBridge(pk=bridge.pk, backend_class="local")
         with pytest.raises(ValidationError, match="Implementation selection is create-only"):
-            reconstructed.save(using="default")
+            reconstructed.save()
 
         unpersisted = VcsBridge.objects.get(pk=bridge.pk)
         unpersisted.backend_class = "local"
@@ -1321,7 +1585,7 @@ def test_model_save_rejects_backend_switch_and_scopes_partial_config_validation(
             refreshed.save()
 
 
-def test_non_create_only_impl_field_remains_editable(integrate_console_tables: None) -> None:
+def test_non_create_only_impl_field_remains_editable(composed_tables: None) -> None:
     """The integration invariant does not freeze unrelated implementation selectors."""
 
     provider_field = OAuthClient.impl_field("provider_type")
@@ -1339,7 +1603,7 @@ def test_non_create_only_impl_field_remains_editable(integrate_console_tables: N
 
 
 def test_update_vcs_bridge_rejects_unknown_backend_class(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """VCS backend updates validate through the VCS backend registry."""
 
@@ -1367,7 +1631,7 @@ def test_update_vcs_bridge_rejects_unknown_backend_class(
 
 
 def test_update_vcs_bridge_rejects_parent_impl_class(
-    integrate_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """The VCS patch exposes backend_class, not the parent impl_class."""
 
@@ -1389,24 +1653,6 @@ def test_update_vcs_bridge_rejects_parent_impl_class(
 
     assert result.errors is not None
     assert "impl_class" in result.errors[0].message
-
-
-@pytest.fixture()
-def integrate_console_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the iam + integrate (incl. webhook) console tables and sync REBAC."""
-
-    del transactional_db
-    connection_models = tuple(
-        dict.fromkeys(
-            MESSAGING_TEST_MODELS + POSTS_TEST_MODELS + (VcsBridge, WebhookSubscription) + AGENTS_GRAPHQL_MODELS
-        )
-    )
-    _create_connection_tables(connection_models)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(connection_models)
 
 
 def _schema() -> Any:
@@ -1445,8 +1691,6 @@ def _request(user: Any) -> Any:
     return request
 
 
-
-
 def _public_id(value: Any) -> str:
     """Return the public id mutations resolve for ``value``."""
 
@@ -1460,3 +1704,58 @@ def _sdl_block(sdl: str, header: str) -> str:
     body = sdl.index("{", start)
     end = sdl.index("\n}", body)
     return sdl[start:end]
+
+
+def test_discrepancy_open_filter_tracks_bulk_status_changes(composed_tables: None) -> None:
+    """The same stored expression serves reads, filters and bulk status updates."""
+    bridge = make_integration("open-discrepancy-filter", model=Channel)
+    with system_context(reason="test discrepancy boolean filter"):
+        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        first = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="first")
+        second = SyncDiscrepancy.objects.record(stream, kind=DiscrepancyKind.SEMANTIC, code="second")
+        SyncDiscrepancy.objects.filter(pk=second.pk).update(status=DiscrepancyStatus.RESOLVED)
+        owner = bridge.owner
+    query = """query {
+      sync_discrepancies(where: {is_open: {_eq: true}}) { id is_open }
+      sync_discrepancies_aggregate(where: {is_open: {_eq: true}}) { aggregate { count } }
+    }"""
+    result = _data(_execute(_schema(), query, user=owner))
+    assert result == {
+        "sync_discrepancies": [{"id": _public_id(first), "is_open": True}],
+        "sync_discrepancies_aggregate": {"aggregate": {"count": 1}},
+    }
+
+
+@pytest.mark.parametrize("keep", ["remote", "local"])
+def test_conflict_action_forwards_explicit_choice_to_owner(
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    keep: str,
+) -> None:
+    admin = _platform_admin(f"conflict-choice-{keep}")
+    bridge = make_integration(f"conflict-choice-{keep}", model=Channel)
+    with system_context(reason="test explicit conflict action"):
+        stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "one")
+        discrepancy = SyncDiscrepancy.objects.record(
+            stream, link=link, kind=DiscrepancyKind.CONFLICT, code="both_changed"
+        )
+    calls: list[tuple[int, str]] = []
+
+    def resolve(manager: Any, row: Any, *, keep: str) -> Any:
+        calls.append((row.pk, keep))
+        return row
+
+    monkeypatch.setattr(type(SyncDiscrepancy.objects), "resolve_conflict", resolve)
+    query = """mutation Resolve($id: ID!, $keep: ConflictKeep) {
+      resolveSyncDiscrepancy(id: $id, keep: $keep) { ok }
+    }"""
+    result = _data(_execute(_schema(), query, {"id": _public_id(discrepancy), "keep": keep.upper()}, user=admin))
+    assert result["resolveSyncDiscrepancy"]["ok"]
+    assert calls == [(discrepancy.pk, keep)]
+    invalid = _execute(_schema(), query, {"id": _public_id(discrepancy), "keep": "TYPO"}, user=admin)
+    assert invalid.errors and "ConflictKeep" in invalid.errors[0].message
+    assert len(calls) == 1
+    missing = _data(_execute(_schema(), query, {"id": _public_id(discrepancy)}, user=admin))
+    assert not missing["resolveSyncDiscrepancy"]["ok"]
+    assert len(calls) == 1

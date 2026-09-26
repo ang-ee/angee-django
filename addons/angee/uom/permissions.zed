@@ -17,7 +17,7 @@ definition uom/role {
 }
 
 // Units of measure are a shared master catalogue: every authenticated user reads
-// them (products, orders, invoices reference units). Platform admins create
+// them (items and records reference units). Platform admins create
 // catalogue rows; stored uom_admin manager bindings govern existing rows.
 definition uom/category {
     relation shared:  auth/user:*

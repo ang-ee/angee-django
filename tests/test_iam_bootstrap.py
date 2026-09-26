@@ -52,7 +52,7 @@ def _patch_command_owners(monkeypatch: Any, manager: "_Manager") -> None:
 
     _User._default_manager = manager
     monkeypatch.setattr(bootstrap_admin, "get_user_model", lambda: _User)
-    monkeypatch.setattr(bootstrap_admin.transaction, "atomic", nullcontext)
+    monkeypatch.setattr(bootstrap_admin.transaction, "atomic", lambda: nullcontext())
     monkeypatch.setattr(bootstrap_admin, "system_context", lambda *, reason: nullcontext())
     monkeypatch.setattr(
         bootstrap_admin,

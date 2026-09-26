@@ -4,6 +4,10 @@ Reads the manifest's ``[addon]`` block — the catalog facts a marketplace row n
 — into the descriptor shape the sync upserts. Mirrors ``integrate.vcs.templates``
 (the ``copier.yml`` parser): ``VcsBridge.discover`` fills ``path`` from the bearing
 directory, so this owns only the manifest block.
+
+The locked hatch-angee parser accepts paths only. Replace this parser with its
+bytes/text API when that upstream release lands; do not bridge through
+temporary files.
 """
 
 from __future__ import annotations
@@ -25,7 +29,6 @@ def parse_addon_meta(blob: bytes) -> dict[str, Any]:
     raw_depends_on = addon.get("depends_on", ())
     return {
         "name": name,
-        "label": name.rsplit(".", 1)[-1] if name else "",
         "namespace": name.split(".", 1)[0] if name else "",
         "description": str(addon.get("description", "")),
         "keywords": [str(keyword) for keyword in addon.get("keywords", ())],

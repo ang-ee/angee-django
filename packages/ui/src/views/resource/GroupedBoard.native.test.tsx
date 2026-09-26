@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
+import type { GetListParams } from "@refinedev/core";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
-import { ModelMetadataProvider, ResourceQuery, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type Row } from "@angee/metadata";
+import { ResourceQuery, type DataResourceFieldMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 
 import { ToastProvider } from "../../feedback";
 import { ListView, type ListViewNavigationScope, type ResourceListSnapshot } from "./ListView";
@@ -60,8 +60,11 @@ type Where = {
 };
 type GroupVariables = { where?: Where; group_by: { field: string }[]; limit: number; offset: number };
 const terms = (where: Where = {}): Where[] => [where, ...(where._and ?? []).flatMap(terms)];
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.splice(0).forEach((client) => client.clear()); });
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://grouped-board",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested = false, customIdentity = false, refreshAction = false }: {
   pageSize?: number;
@@ -110,10 +113,6 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
     return { data: filtered.slice(offset, offset + size).map((row) => refreshedTitle && row.id === "mail-1"
       ? { ...row, title: refreshedTitle } : row), total: filtered.length };
   });
-  const provider = { getApiUrl: () => "test://grouped-board", custom, getList, getOne: vi.fn(),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
   let view!: ResourceViewContextValue;
   const rowHref = vi.fn((row: MessageRow, _scope?: ListViewNavigationScope) => `/?record=${row.public_key ?? row.id}`);
   const onListStateChange = vi.fn((_state: ResourceListSnapshot<MessageRow>) => undefined);
@@ -129,14 +128,11 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
       view: viewKind, pageSize, groupStack: [{ field: "channel" }, ...(nested ? [{ field: "status" }] : [])], sorting: [{ id: "title", desc: true }],
     }}><Inbox /></ResourceViewProvider> });
   const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([activeResource])]} dataProvider={{ default: provider, console: provider }}
-    options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-    <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([activeResource])}>
-      <OperationDocumentsProvider documents={{ console: { groups: { "messaging.Message":
-        "query MessageGroups { messages_groups { key { channel_id channel_name } aggregate { count } } totalCount }",
-      } } }}><ToastProvider><RouterProvider router={router} /></ToastProvider></OperationDocumentsProvider>
-    </ModelMetadataProvider>
-  </Refine>);
+  render(<Provider resources={[activeResource]} dataProvider={{ custom, getList }}>
+    <OperationDocumentsProvider documents={{ console: { groups: { "messaging.Message":
+      "query MessageGroups { messages_groups { key { channel_id channel_name } aggregate { count } } totalCount }",
+    } } }}><ToastProvider><RouterProvider router={router} /></ToastProvider></OperationDocumentsProvider>
+  </Provider>);
   return { get view() { return view; }, custom, getList, rowHref, onListStateChange,
     changeTitle: (title: string) => { refreshedTitle = title; } };
 }

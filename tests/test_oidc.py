@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterator
 from datetime import timedelta
 from types import MethodType, SimpleNamespace
 from typing import Any
@@ -15,9 +14,8 @@ import pytest
 from asgiref.sync import async_to_sync, sync_to_async
 from cryptography.hazmat.primitives.asymmetric import rsa
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
-from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
 from rebac import system_context
@@ -25,7 +23,7 @@ from strawberry_django_aggregates import AggregateOp, compute_aggregation
 
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import protocol as oidc_protocol
-from angee.iam_integrate_oidc.identity import IDENTITY_RESOLUTION_FAILED
+from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED
 from angee.iam_integrate_oidc.models import OAuthClientOidc
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_account_connect
@@ -43,20 +41,14 @@ from angee.integrate.oauth.errors import (
     OAuthFlowError,
 )
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
     Credential,
     ExternalAccount,
     OAuthClient,
-    _create_missing_tables,
 )
 from tests.test_messaging import Handle as PartiesHandle
-from tests.test_messaging import Party as PartiesParty
-from tests.test_parties_graphql import PartyHandle as PartiesPartyHandle
 from tests.test_parties_graphql import Person as PartiesPerson
 
-# OIDC first login establishes the signed-in user's own Person + handle, so the
-# login-completion fixture provisions the parties tables that claim_own writes.
-_PARTIES_LOGIN_MODELS = (PartiesParty, PartiesHandle, PartiesPerson, PartiesPartyHandle)
+# OIDC first login uses the same concrete Person and handle models as parties tests.
 
 
 def test_discovery_fallback_fills_blank_authorize_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,6 +303,80 @@ def test_refresh_token_posts_refresh_grant() -> None:
     }
 
 
+@pytest.mark.parametrize("request_format", ("json", "form"))
+@pytest.mark.parametrize("grant", ("authorization_code", "refresh_token"))
+def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, grant: str) -> None:
+    """A fixed public PKCE client exchanges every grant without secret access."""
+
+    captured: dict[str, Any] = {}
+
+    class PublicClient:
+        slug = "public-client"
+        client_id = "public-client-id"
+        token_endpoint = "https://issuer.example/oauth/token"
+        token_request_format_value = request_format
+        token_param_values: dict[str, Any] = {}
+        supports_pkce = True
+        manual_redirect_uri = "https://issuer.example/oauth/code/callback"
+
+        @property
+        def client_secret(self) -> str:
+            raise ImproperlyConfigured("encrypted secret must remain unread")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["fields"] = (
+            json.loads(request.content)
+            if request_format == "json"
+            else dict(parse.parse_qsl(request.content.decode()))
+        )
+        captured["authorization"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"access_token": "synthetic-access"})
+
+    protocol = OAuthClientProtocol(PublicClient())
+    protocol._transport = httpx.MockTransport(handler)
+
+    if grant == "authorization_code":
+        result = protocol.exchange_code(
+            code="synthetic-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier="synthetic-verifier",
+            state="synthetic-state",
+        )
+        assert captured["fields"]["code_verifier"] == "synthetic-verifier"
+    else:
+        result = protocol.refresh_token(refresh_token="synthetic-refresh")
+
+    assert result["access_token"] == "synthetic-access"
+    assert captured["fields"]["client_id"] == "public-client-id"
+    assert "client_secret" not in captured["fields"]
+    assert captured["authorization"] is None
+
+
+def test_confidential_json_client_keeps_unreadable_secret_fail_closed() -> None:
+    """A confidential client still fails before exchange when its secret is unreadable."""
+
+    class ConfidentialClient:
+        slug = "confidential-client"
+        client_id = "confidential-client-id"
+        token_endpoint = "https://issuer.example/oauth/token"
+        token_request_format_value = "json"
+        token_param_values: dict[str, Any] = {}
+        supports_pkce = True
+        manual_redirect_uri = ""
+
+        @property
+        def client_secret(self) -> str:
+            raise ImproperlyConfigured("synthetic unreadable secret")
+
+    with pytest.raises(ImproperlyConfigured, match="synthetic unreadable secret"):
+        OAuthClientProtocol(ConfidentialClient()).exchange_code(
+            code="synthetic-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier="synthetic-verifier",
+            state="synthetic-state",
+        )
+
+
 def test_exchange_code_form_path_maps_non_json_error_to_oauth_flow_error() -> None:
     """A non-JSON token error on the default form path surfaces as ``OAuthFlowError``.
 
@@ -533,7 +599,7 @@ def test_jwks_fetch_uses_pinned_http_client(monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_existing_external_account_returns_owner(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """An existing external account resolves through its owner relationship."""
 
@@ -559,7 +625,7 @@ def test_resolver_existing_external_account_returns_owner(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolver_blocks_non_active_account(oidc_tables: None) -> None:
+def test_resolver_blocks_non_active_account(composed_tables: None) -> None:
     """A revoked/expired/disabled external account must not log its owner in."""
 
     user = get_user_model().objects.create_user(username="revoked-owner", email="rev@example.com")
@@ -577,7 +643,7 @@ def test_resolver_blocks_non_active_account(oidc_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_external_account_manager_coerces_status_member_names(oidc_tables: None) -> None:
+def test_external_account_manager_coerces_status_member_names(composed_tables: None) -> None:
     """External-account status normalization lives in the manager field owner."""
 
     user = get_user_model().objects.create_user(username="status-owner", email="status@example.com")
@@ -594,7 +660,7 @@ def test_external_account_manager_coerces_status_member_names(oidc_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolver_blocks_inactive_user(oidc_tables: None) -> None:
+def test_resolver_blocks_inactive_user(composed_tables: None) -> None:
     """A deactivated owner must not authenticate via OIDC (parity with the password path)."""
 
     user = get_user_model().objects.create_user(username="inactive-owner", email="ina@example.com")
@@ -609,7 +675,7 @@ def test_resolver_blocks_inactive_user(oidc_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolver_blocks_existing_external_account_with_service_owner(oidc_tables: None) -> None:
+def test_resolver_blocks_existing_external_account_with_service_owner(composed_tables: None) -> None:
     """An existing OIDC account cannot authenticate a service principal owner."""
 
     user = get_user_model().objects.create_user(
@@ -631,7 +697,7 @@ def test_resolver_blocks_existing_external_account_with_service_owner(oidc_table
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_requires_verified_email(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """Email-match login only trusts provider-verified email addresses."""
 
@@ -652,7 +718,7 @@ def test_resolver_link_on_email_match_requires_verified_email(
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_create_on_login_requires_verified_email(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """Create-on-login only provisions from provider-verified email addresses."""
 
@@ -672,7 +738,7 @@ def test_resolver_create_on_login_requires_verified_email(
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_creates_external_account(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """Email-match login links a new external account to an existing user."""
 
@@ -694,7 +760,7 @@ def test_resolver_link_on_email_match_creates_external_account(
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_skips_service_accounts(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """Email-match login must never link a service principal row."""
 
@@ -746,7 +812,7 @@ def test_oidc_email_match_fails_loud_without_people_scope(monkeypatch: pytest.Mo
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_link_on_email_match_rejects_ambiguous_email(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """Email-match login fails closed when more than one user owns the email."""
 
@@ -769,7 +835,7 @@ def test_resolver_link_on_email_match_rejects_ambiguous_email(
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_create_on_login_provisions_user_and_external_account(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """Create-on-login provisions a non-superuser user and linked account."""
 
@@ -792,7 +858,7 @@ def test_resolver_create_on_login_provisions_user_and_external_account(
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_create_on_login_sets_user_names_from_claims(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """Provisioned users receive first and last names from OIDC name claims."""
 
@@ -817,7 +883,7 @@ def test_resolver_create_on_login_sets_user_names_from_claims(
 
 @pytest.mark.django_db(transaction=True)
 def test_async_resolver_create_on_login_provisions_user_and_external_account(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """The ASGI-facing resolver path provisions through thread-sensitive sync ORM."""
 
@@ -842,7 +908,7 @@ def test_async_resolver_create_on_login_provisions_user_and_external_account(
 
 @pytest.mark.django_db(transaction=True)
 def test_resolver_disallowed_domain_raises_403(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """Domain policy blocks linking and provisioning."""
 
@@ -866,7 +932,7 @@ def test_resolver_disallowed_domain_raises_403(
 
 @pytest.mark.django_db(transaction=True)
 def test_complete_link_populates_credential_token_fields(
-    oidc_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Credential link persists token-derived expiry, scopes, and refresh telemetry."""
@@ -919,7 +985,7 @@ def test_complete_link_populates_credential_token_fields(
 
 @pytest.mark.django_db(transaction=True)
 def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(
-    oidc_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A plain OAuth connect flow resolves identity from configured userinfo claims."""
@@ -987,7 +1053,7 @@ def test_complete_account_connect_links_oauth_userinfo_claims_and_credential(
 
 @pytest.mark.django_db(transaction=True)
 def test_complete_account_connect_falls_back_to_token_response_account(
-    oidc_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Restricted tokens can resolve an account without userinfo scope."""
@@ -1053,7 +1119,7 @@ def test_complete_account_connect_falls_back_to_token_response_account(
 
 @pytest.mark.django_db(transaction=True)
 def test_complete_account_connect_rejects_missing_stable_external_id(
-    oidc_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Providers must return the configured stable account id claim."""
@@ -1091,7 +1157,7 @@ def test_complete_account_connect_rejects_missing_stable_external_id(
 
 @pytest.mark.django_db(transaction=True)
 def test_credential_upsert_reasserts_active_status(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """Re-upserting an OAuth credential reactivates a previously revoked row."""
 
@@ -1109,10 +1175,12 @@ def test_credential_upsert_reasserts_active_status(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("deferred", (False, True), ids=("loaded", "deferred"))
 def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
-    oidc_tables: None,
+    composed_tables: None,
+    deferred: bool,
 ) -> None:
-    """Explicit disconnect refuses the only sign-in method for a passwordless user."""
+    """The sign-in invariant is enforced with loaded or deferred credential fields."""
 
     user = get_user_model().objects.create_user(username="oidc-only", email="oidc-only@example.com")
     oauth_client = _oauth_client()
@@ -1131,16 +1199,99 @@ def test_credential_disconnect_guard_blocks_last_oidc_sign_in(
         external_account=account,
     )
 
-    with pytest.raises(OAuthFlowError) as exc_info:
-        Credential.objects.check_disconnect(credential)
+    if deferred:
+        credential = Credential._base_manager.only("pk").get(pk=credential.pk)
+
+    with pytest.raises(ValidationError) as exc_info:
+        Credential.objects.prepare_disconnect(credential)
 
     assert exc_info.value.code == "only_sign_in_method"
-    assert exc_info.value.http_status == 409
+    assert exc_info.value.messages == ["This is your only sign-in method."]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("other_sign_in", ["password", "oidc", "oauth_only", "local"])
+def test_credential_disconnect_preserves_other_sign_in_methods(composed_tables: None, other_sign_in: str) -> None:
+    """The model contribution permits alternatives and non-login credentials."""
+
+    user = get_user_model().objects.create_user(
+        username="disconnect-permitted",
+        password="a-password" if other_sign_in == "password" else None,
+    )
+    if other_sign_in == "local":
+        credential = Credential.objects.create_local_credential(
+            user,
+            kind="static_token",
+            name="API",
+            material={"api_key": "token"},
+        )
+    else:
+        client = _oauth_client(oidc=other_sign_in != "oauth_only")
+        account = ExternalAccount.objects.link(client, "subject", owner=user)
+        credential = Credential.objects.upsert_for_user(
+            user,
+            client,
+            "oauth",
+            {"access_token": "token"},
+            external_account=account,
+        )
+        if other_sign_in == "oidc":
+            other_client = _oauth_client(slug="other")
+            other_account = ExternalAccount.objects.link(other_client, "other-subject", owner=user)
+            Credential.objects.upsert_for_user(
+                user,
+                other_client,
+                "oauth",
+                {"access_token": "other-token"},
+                external_account=other_account,
+            )
+
+    credential.check_disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("changed_field", ["password", "login_enabled"])
+@pytest.mark.parametrize("previous", [False, True])
+def test_credential_disconnect_reads_current_sign_in_facts_despite_cached_relations(
+    composed_tables: None, changed_field: str, previous: bool
+) -> None:
+    """Password and provider-policy changes supersede the credential's cached rows."""
+
+    del composed_tables
+    user = get_user_model().objects.create_user(
+        username="disconnect-stale-cache",
+        password="old-password" if changed_field == "password" and previous else None,
+    )
+    client = _oauth_client(oidc=previous if changed_field == "login_enabled" else True)
+    account = ExternalAccount.objects.link(client, "stale-cache-subject", owner=user)
+    credential = Credential.objects.upsert_for_user(
+        user, client, "oauth", {"access_token": "token"}, external_account=account
+    )
+    with system_context(reason="test oidc cached sign-in facts"):
+        cached = Credential._base_manager.select_related("user", "oauth_client").get(pk=credential.pk)
+        if changed_field == "password":
+            assert cached.user.has_usable_password() is previous
+            user.set_password("new-password" if not previous else None)
+            user.save(update_fields=["password"])
+            permitted = not previous
+        else:
+            assert cached.oauth_client.login_enabled is previous
+            client.login_enabled = not previous
+            client.save(update_fields=["login_enabled"])
+            permitted = previous
+
+        if permitted:
+            cached.check_disconnect()
+        else:
+            with pytest.raises(ValidationError) as exc_info:
+                cached.check_disconnect()
+            assert exc_info.value.code == "only_sign_in_method"
+            assert exc_info.value.messages == ["This is your only sign-in method."]
 
 
 @pytest.mark.django_db(transaction=True)
 def test_low_level_credential_delete_does_not_run_disconnect_guard(
-    oidc_tables: None,
+    composed_tables: None,
 ) -> None:
     """The OIDC guard belongs to explicit disconnect, not model-delete signals."""
 
@@ -1170,7 +1321,7 @@ def test_low_level_credential_delete_does_not_run_disconnect_guard(
 
 @pytest.mark.django_db(transaction=True)
 def test_userinfo_claims_merge_into_login_and_link_claims(
-    oidc_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Userinfo claims enrich ID-token claims before login resolve and account link."""
@@ -1268,12 +1419,12 @@ def test_userinfo_claims_merge_into_login_and_link_claims(
 
 @pytest.mark.django_db(transaction=True)
 def test_complete_login_does_not_claim_an_unverified_email(
-    oidc_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An OIDC email becomes a parties identity claim only when explicitly verified."""
 
-    del oidc_tables
+    del composed_tables
     user = get_user_model().objects.create_user(username="unverified-login", email="unverified@example.com")
     oauth_client = _oauth_client(slug="unverified-claim")
     state_token, _record = oauth_state.issue(oauth_client, "https://app.example/callback")
@@ -1306,13 +1457,13 @@ def test_complete_login_does_not_claim_an_unverified_email(
 
 @pytest.mark.django_db(transaction=True)
 def test_complete_login_contains_parties_bookkeeping_failure(
-    oidc_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A parties bookkeeping exception is logged but never turns a verified login into failure."""
 
-    del oidc_tables
+    del composed_tables
     user = get_user_model().objects.create_user(username="bookkeeping-login", email="bookkeeping@example.com")
     oauth_client = _oauth_client(slug="bookkeeping-failure")
     state_token, _record = oauth_state.issue(oauth_client, "https://app.example/callback")
@@ -1349,7 +1500,7 @@ def test_complete_login_contains_parties_bookkeeping_failure(
 
 @pytest.mark.django_db(transaction=True)
 def test_complete_link_rejects_account_owned_by_another_user(
-    oidc_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Account linking fails when the external account belongs to another user."""
@@ -1396,7 +1547,7 @@ def test_complete_link_rejects_account_owned_by_another_user(
 
 @pytest.mark.django_db(transaction=True)
 def test_complete_link_binds_to_state_user_after_session_swap(
-    oidc_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Account linking uses the start-flow user captured in state, not a later session user."""
@@ -1520,26 +1671,6 @@ def test_state_flow_binding_rejects_cross_flow_completion() -> None:
     assert login_exc.value.code == INVALID_STATE
 
 
-@pytest.fixture()
-def oidc_tables() -> Iterator[None]:
-    """Create concrete connection + parties tables for one test.
-
-    Login completion claims the signed-in user's own handle, so the parties tables
-    (Party/Person/Handle/PartyHandle) it writes must exist alongside the connection
-    tables.
-    """
-
-    created_models = _create_missing_tables(IAM_CONNECTION_TEST_MODELS + _PARTIES_LOGIN_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
-
 def _oauth_client(slug: str = "oidc", *, oidc: bool = True, **overrides: Any) -> OAuthClient:
     """Create one enabled OAuth client, setting OIDC login fields on the same row."""
 
@@ -1638,44 +1769,37 @@ def test_oidc_group_by_login_enabled() -> None:
     ``OAuthClient.login_enabled``.
     """
 
-    created_models = _create_missing_tables()
-    try:
-        call_command("rebac", "sync", verbosity=0)
-        with system_context(reason="test oidc group-by"):
-            enabled = OAuthClient.objects.create(
-                slug="enabled-client",
-                display_name="Enabled",
-                client_id="c1",
-                is_enabled=True,
-            )
-            OAuthClient.objects.create(
-                slug="disabled-client",
-                display_name="Disabled",
-                client_id="c2",
-                is_enabled=False,
-                login_enabled=False,
-            )
-            enabled.login_enabled = True
-            enabled.save(update_fields=["login_enabled"])
-            rows = compute_aggregation(
-                OAuthClient.objects.all(),
-                group_by=[("login_enabled", None)],
-                aggregates=[(AggregateOp.COUNT, None)],
-            )
-        by_enabled = {row["login_enabled"]: row["count"] for row in rows}
-        assert by_enabled == {True: 1, False: 1}
-    finally:
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
+    call_command("rebac", "sync", verbosity=0)
+    with system_context(reason="test oidc group-by"):
+        enabled = OAuthClient.objects.create(
+            slug="enabled-client",
+            display_name="Enabled",
+            client_id="c1",
+            is_enabled=True,
+        )
+        OAuthClient.objects.create(
+            slug="disabled-client",
+            display_name="Disabled",
+            client_id="c2",
+            is_enabled=False,
+            login_enabled=False,
+        )
+        enabled.login_enabled = True
+        enabled.save(update_fields=["login_enabled"])
+        rows = compute_aggregation(
+            OAuthClient.objects.all(),
+            group_by=[("login_enabled", None)],
+            aggregates=[(AggregateOp.COUNT, None)],
+        )
+    by_enabled = {row["login_enabled"]: row["count"] for row in rows}
+    assert by_enabled == {True: 1, False: 1}
 
 
 @pytest.mark.django_db(transaction=True)
-def test_oidc_login_picker_queryset_scope(oidc_tables: None) -> None:
+def test_oidc_login_picker_queryset_scope(composed_tables: None) -> None:
     """The OIDC extension owns the public login-picker queryset predicate."""
 
-    del oidc_tables
+    del composed_tables
     _oauth_client(slug="picker-enabled", oidc=True, is_enabled=True)
     _oauth_client(slug="picker-disabled", oidc=True, is_enabled=False)
     _oauth_client(slug="picker-oauth", oidc=False, is_enabled=True)

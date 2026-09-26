@@ -5,11 +5,14 @@ from __future__ import annotations
 import copy
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Any, Self
 
+from django.core.exceptions import ValidationError
+from django.db import models
 from pydantic import (
     AwareDatetime,
     BaseModel,
@@ -22,6 +25,17 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic import ValidationError as PydanticValidationError
+
+from angee.base.serialization import canonical_json
+
+if TYPE_CHECKING:
+    from angee.workflows.graph import (
+        GraphDiagnostic,
+        GraphFreshnessReason,
+        GraphTestFixtureRequirement,
+        GraphTestOperation,
+    )
 
 
 def map_child_input(value: JsonValue) -> JsonValue:
@@ -46,6 +60,20 @@ class RecoveryMode(StrEnum):
 
     FRESH = "fresh"
     RECONCILE = "reconcile"
+
+
+class WorkflowScope(models.TextChoices):
+    """Execution closure requested for an immutable workflow test snapshot."""
+
+    WHOLE = "whole", "Whole workflow"
+    NODE = "node", "Selected node"
+
+
+class FixtureRole(models.TextChoices):
+    """How one retained test fixture participates in test execution."""
+
+    OUTPUT = "output", "Operation output"
+    MAP_ITEM = "map_item", "Current Map item"
 
 
 def workflow_result_terminal_match_error(count: int) -> str:
@@ -110,7 +138,7 @@ class ArtifactSpec:
     label: str
 
 
-class AttemptResultKind(StrEnum):
+class AttemptResultKind(models.TextChoices, StrEnum):
     """Closed result variants that the attempt owner can project."""
 
     DONE = "done"
@@ -133,7 +161,7 @@ class AttemptStatus(StrEnum):
     LATE_RESULT = "late_result"
 
 
-class LeaseRevocationReason(StrEnum):
+class LeaseRevocationReason(models.TextChoices, StrEnum):
     """Why an attempt lease stopped being eligible to mutate logical state."""
 
     CANCELED = "canceled"
@@ -165,9 +193,13 @@ class JsonPresence:
     value: Any = None
 
 
-_STRICT_JSON: TypeAdapter[JsonValue] = TypeAdapter(
-    JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False)
-)
+_STRICT_JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
+
+
+def validate_json_value[T](validator: Callable[[str], T], value: Any) -> T:
+    """Validate a finite JSON round-trip through the schema's JSON entrypoint."""
+
+    return validator(json.dumps(value, allow_nan=False))
 
 
 def validate_json_presence(value: JsonPresence, *, label: str = "JSON value") -> JsonPresence:
@@ -186,12 +218,116 @@ def validate_json_presence(value: JsonPresence, *, label: str = "JSON value") ->
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class FixtureSpec:
+    """Exact admission request for one manual or captured test fixture."""
+
+    step_key: str
+    role: FixtureRole
+    value: JsonPresence = JsonPresence()
+    item_index: int | None = None
+    outcome: str = ""
+    captured_attempt_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FixtureSourceSummary:
+    """Bounded retained-source metadata; payload values are fetched separately."""
+
+    attempt_id: str
+    run_id: str
+    workflow_id: str
+    workflow_revision: int
+    step_id: str
+    step_key: str
+    role: FixtureRole
+    item_index: int | None
+    outcome: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FixtureSource:
+    """One revalidated captured source including its exact selected payload."""
+
+    summary: FixtureSourceSummary
+    value: JsonPresence
+
+
+@dataclass(frozen=True, slots=True)
+class FixtureSourcePage:
+    """One bounded page of authorized capture summaries."""
+
+    items: tuple[FixtureSourceSummary, ...]
+    next_after: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowSetupPlan:
+    """Transport-neutral authoritative setup projection for one saved revision."""
+
+    source_step_id: str | None
+    snapshot_step_id: str | None
+    operations: tuple[GraphTestOperation, ...]
+    required_fixtures: tuple[GraphTestFixtureRequirement, ...]
+    diagnostics: tuple[GraphDiagnostic, ...]
+    requires_map_item: bool
+    freshness: tuple[GraphFreshnessReason, ...] = ()
+
+    @property
+    def is_current(self) -> bool:
+        """Return whether executable semantics still match the lineage head."""
+
+        return not self.freshness
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowRepairContext:
+    """Authorized identities and original run inputs for testing a draft repair."""
+
+    source_attempt_id: str
+    source_run_id: str
+    source_workflow_id: str
+    source_revision: int
+    draft_workflow_id: str
+    draft_revision: int
+    source_step_key: str
+    source_step_id: str
+    current_source_step_id: str | None
+    subject: object | None
+    input: JsonPresence
+    fixtures: tuple[FixtureSourceSummary, ...]
+
+
+def validate_fixture_spec(spec: FixtureSpec) -> FixtureSpec:
+    """Validate fixture scalar and exact JSON facts before graph admission."""
+
+    if not isinstance(spec, FixtureSpec) or type(spec.step_key) is not str or not spec.step_key:
+        raise ValueError("Fixture step keys must be non-empty strings.")
+    if not isinstance(spec.role, FixtureRole):
+        raise ValueError("Fixtures require a declared role.")
+    if spec.item_index is not None and (type(spec.item_index) is not int or spec.item_index < 0):
+        raise ValueError("Fixture item indexes must be non-negative integers.")
+    if spec.role == FixtureRole.MAP_ITEM and spec.item_index is None:
+        raise ValueError("Map item fixtures require an exact item index.")
+    if spec.role == FixtureRole.MAP_ITEM and spec.captured_attempt_id is None and not spec.value.present:
+        raise ValueError("Map item fixtures require a present raw item value.")
+    if type(spec.outcome) is not str:
+        raise ValueError("Fixture outcomes must be strings.")
+    if spec.captured_attempt_id is not None and (
+        type(spec.captured_attempt_id) is not str or not spec.captured_attempt_id
+    ):
+        raise ValueError("Captured fixture attempts require a non-empty identity.")
+    validate_json_presence(spec.value, label="test fixture value")
+    if spec.captured_attempt_id is not None and (spec.value.present or spec.outcome):
+        raise ValueError("Captured fixtures derive value and outcome from retained evidence.")
+    return spec
+
+
 def json_values_equal(left: Any, right: Any) -> bool:
     """Compare validated JSON values through their canonical native encoding."""
 
-    return json.dumps(
-        left, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ) == json.dumps(right, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return canonical_json(left) == canonical_json(right)
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,29 +364,6 @@ class AttemptClaim:
     newly_claimed: bool
 
 
-DecisionInputSource = Literal["attempt_input", "owned_call_input"]
-
-
-class AdmittedInputPath(BaseModel):
-    """One exact value carried by the current attempt or its owned-call input."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    source: DecisionInputSource
-    path: tuple[StrictStr | StrictInt, ...]
-    proposal_gate_path: tuple[StrictStr | StrictInt, ...] = ()
-
-    @model_validator(mode="after")
-    def complete_path(self) -> Self:
-        """Require a concrete typed path and reject empty object-field names."""
-
-        if not self.path or any(isinstance(part, str) and not part for part in self.path):
-            raise ValueError("Admitted input authority requires a nonempty typed path.")
-        if any(isinstance(part, str) and not part for part in self.proposal_gate_path):
-            raise ValueError("Proposal gate authority path cannot contain empty fields.")
-        return self
-
-
 class DecisionRecordAccess(BaseModel):
     """One exact record opened only while its owning Decision is pending."""
 
@@ -258,7 +371,6 @@ class DecisionRecordAccess(BaseModel):
 
     model: StrictStr
     id: StrictStr
-    authority_input: AdmittedInputPath | None = None
 
 
 class DecisionSpec(BaseModel):
@@ -279,10 +391,6 @@ class DecisionSpec(BaseModel):
     target_model: StrictStr = ""
     target_id: StrictStr = ""
     target_tab: StrictStr = Field(default="", max_length=100)
-    # Select an ID from this attempt's admitted input. A one-hop proposal must
-    # also declare where its producer consumed the original settled gate.
-    target_authority_path: tuple[StrictStr | StrictInt, ...] = ()
-    target_authority_gate_path: tuple[StrictStr | StrictInt, ...] = ()
     record_access: tuple[DecisionRecordAccess, ...] = ()
 
     @model_validator(mode="after")
@@ -293,10 +401,6 @@ class DecisionSpec(BaseModel):
             raise ValueError("Decision target_model and target_id must be supplied together.")
         if self.target_tab and not self.target_model:
             raise ValueError("Decision target_tab requires a related-record target.")
-        if self.target_authority_path and not self.target_model:
-            raise ValueError("Decision target authority requires a related-record target.")
-        if self.target_authority_gate_path and not self.target_authority_path:
-            raise ValueError("Decision proposal gate path requires target authority input.")
         return self
 
     @field_validator("payload", "decision_schema")
@@ -306,6 +410,22 @@ class DecisionSpec(BaseModel):
 
         json.dumps(value, allow_nan=False)
         return value
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionSubmission:
+    """One explicit human verdict and its action payload."""
+
+    verdict: str
+    payload: Any = None
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionAttemptResult:
+    """Committed Decision state, including a retained invalid-input attempt."""
+
+    decision: Any
+    validation_error: ValidationError | None = None
 
 
 class DecisionResolution(BaseModel):
@@ -329,6 +449,47 @@ class DecisionGateOutput(BaseModel):
 
     resolutions: tuple[DecisionResolution, ...]
     outcome: StrictStr
+
+
+class GateResumeState(BaseModel):
+    """Typed Decision checkpoint fields, retaining an operation's other checkpoint data.
+
+    Resume state is shared with custom suspended operations. The established
+    ``_resume_after_decisions`` and ``_decision_*`` storage keys are reserved;
+    unprefixed operation fields survive admission and settlement unchanged.
+    GateStep owns the object shape of its own retained ``state``.
+    """
+
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True, validate_by_name=True, serialize_by_alias=True)
+
+    resume_after_decisions: Annotated[bool, Field(alias="_resume_after_decisions")] = False
+    decision_ids: Annotated[list[StrictInt], Field(alias="_decision_ids")] = Field(default_factory=list)
+    decision_outcome: Annotated[StrictStr | None, Field(alias="_decision_outcome")] = None
+    decision_resolutions: Annotated[dict[StrictStr, JsonValue] | None, Field(alias="_decision_resolutions")] = None
+    decision_schemas: Annotated[dict[StrictStr, dict[StrictStr, JsonValue]], Field(alias="_decision_schemas")] = Field(
+        default_factory=dict
+    )
+    gate: JsonValue = Field(default_factory=dict)
+    state: JsonValue = Field(default_factory=dict)
+
+    @classmethod
+    def from_checkpoint(cls, state: object) -> Self:
+        """Read reserved storage keys without interpreting custom operation keys."""
+
+        try:
+            return cls.model_validate(state, by_alias=True, by_name=False)
+        except PydanticValidationError as error:
+            raise ValidationError({"gate": str(error)}) from error
+
+    @model_validator(mode="after")
+    def complete_settlement(self) -> Self:
+        """A settled resume includes its outcome, projection and exact Decision ids."""
+
+        if (self.decision_outcome is None) != (self.decision_resolutions is None):
+            raise ValueError("Resumable gate state is incomplete.")
+        if self.decision_outcome is not None and not self.decision_ids:
+            raise ValueError("Resumable gate state requires its Decision ids.")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,7 +552,7 @@ def serialize_decision_specs(specs: tuple[DecisionSpec, ...]) -> list[dict[str, 
 def deserialize_decision_specs(value: Any) -> tuple[DecisionSpec, ...]:
     """Decode retained decision declarations through their typed owner."""
 
-    return _DECISION_SPECS.validate_json(json.dumps(value, allow_nan=False))
+    return validate_json_value(_DECISION_SPECS.validate_json, value)
 
 
 @dataclass(frozen=True, slots=True)

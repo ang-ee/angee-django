@@ -1,7 +1,8 @@
 import type { ComponentType, ReactNode } from "react";
+import type { DataResourceQuery } from "@angee/metadata";
 import * as v from "valibot";
 
-import { JsonValueSchema } from "../widgets/json-value";
+import { JsonValueSchema, type JsonObject } from "../widgets/json-value";
 
 export const DASHBOARD_SCHEMA_VERSION = 1 as const;
 export const DASHBOARD_COLUMNS = 12;
@@ -72,7 +73,37 @@ export const WidgetDataSpecSchema = v.variant("shape", [
   }),
 ]);
 
-export const WidgetSpecSchema = v.strictObject({
+/** Ordered row columns use the same dotted paths as the widget source fields. */
+export const WidgetColumnsSchema = v.pipe(
+  v.array(v.strictObject({
+    path: v.pipe(v.string(), v.minLength(1)),
+    label: v.optional(v.pipe(v.string(), v.minLength(1))),
+  })),
+  v.minLength(1),
+  v.rawCheck(({ dataset, addIssue }) => {
+    if (!dataset.typed) return;
+    const paths = new Set<string>();
+    dataset.value.forEach((column, index) => {
+      if (paths.has(column.path)) {
+        addIssue({
+          message: "Row column paths must be unique.",
+          path: [
+            { type: "array", origin: "value", input: dataset.value, key: index, value: column },
+            { type: "object", origin: "value", input: column, key: "path", value: column.path },
+          ],
+        });
+      }
+      paths.add(column.path);
+    });
+  }),
+);
+
+/** Decode optional row columns without revalidating the enclosing snapshot. */
+export function widgetColumns(spec: { options: JsonObject }) {
+  return v.safeParse(v.optional(WidgetColumnsSchema), spec.options.columns);
+}
+
+export const WidgetSpecSchema = v.pipe(v.strictObject({
   schemaVersion: v.literal(DASHBOARD_SCHEMA_VERSION),
   id: v.pipe(v.string(), v.minLength(1)),
   definitionRef: v.optional(v.pipe(v.string(), v.minLength(1))),
@@ -86,7 +117,49 @@ export const WidgetSpecSchema = v.strictObject({
   w: PositiveInteger,
   h: v.pipe(PositiveInteger, v.maxValue(DASHBOARD_LIMITS.widgetHeight)),
   isArchived: v.boolean(),
-});
+}), v.rawCheck(({ dataset, addIssue }) => {
+  if (!dataset.typed) return;
+  const widget = dataset.value;
+  if (widget.isArchived || !("columns" in widget.options)) return;
+  const optionsPath: [v.ObjectPathItem, v.ObjectPathItem] = [
+    { type: "object", origin: "value", input: widget, key: "options", value: widget.options },
+    { type: "object", origin: "value", input: widget.options, key: "columns", value: widget.options.columns },
+  ];
+  if (widget.data.shape !== "rows") {
+    addIssue({ message: "options.columns is only valid for row widgets.", path: optionsPath });
+    return;
+  }
+  const columns = widgetColumns(widget);
+  if (!columns.success) {
+    for (const issue of columns.issues) {
+      addIssue({
+        input: issue.input,
+        expected: issue.expected ?? undefined,
+        received: issue.received,
+        message: issue.message,
+        path: [...optionsPath, ...(issue.path ?? [])],
+      });
+    }
+    return;
+  }
+  // Omitted source.fields selects the resource's native identity. Only the
+  // server query validator knows that resource-specific default at this boundary.
+  const fields = widget.data.source.fields;
+  const declared = columns.output;
+  if (!fields || !declared) return;
+  declared.forEach((column, index) => {
+    if (!fields.includes(column.path)) {
+      addIssue({
+        message: `Column "${column.path}" must be selected in source.fields.`,
+        path: [
+          ...optionsPath,
+          { type: "array", origin: "value", input: declared, key: index, value: column },
+          { type: "object", origin: "value", input: column, key: "path", value: column.path },
+        ],
+      });
+    }
+  });
+}));
 
 export const DashboardSnapshotSchema = v.strictObject({
   schemaVersion: v.literal(DASHBOARD_SCHEMA_VERSION),
@@ -103,6 +176,7 @@ export type DashboardRefresh = v.InferOutput<typeof DashboardRefreshSchema>;
 export type WidgetMeasure = v.InferOutput<typeof WidgetMeasureSchema>;
 export type WidgetSource = v.InferOutput<typeof WidgetSourceSchema>;
 export type WidgetDataSpec = v.InferOutput<typeof WidgetDataSpecSchema>;
+export type WidgetColumn = v.InferOutput<typeof WidgetColumnsSchema>[number];
 export type WidgetSpec = v.InferOutput<typeof WidgetSpecSchema>;
 export type DashboardSnapshot = v.InferOutput<typeof DashboardSnapshotSchema>;
 export type WidgetDataShape = Exclude<WidgetDataSpec["shape"], "none"> | "none";
@@ -198,6 +272,8 @@ export interface DashboardWidgetData {
   value: number | null;
   series: readonly { key: string; label: string; value: number }[];
   rows: readonly Record<string, unknown>[];
+  queryFields: DataResourceQuery["fields"];
+  identity: DataResourceQuery["identity"] | null;
   fetching: boolean;
   error: Error | null;
   live: boolean;
@@ -209,6 +285,7 @@ export interface DashboardWidgetRenderProps {
   spec: WidgetSpec;
   data: DashboardWidgetData;
   authored?: ReactNode;
+  titleId?: string;
 }
 
 export interface DashboardWidgetKind {

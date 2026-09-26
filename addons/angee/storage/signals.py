@@ -39,16 +39,10 @@ def connect() -> None:
     )
 
 
-def create_trash_folder(
-    sender: type[Model],
-    instance: Model,
-    created: bool,
-    raw: bool = False,
-    **kwargs: Any,
-) -> None:
+def create_trash_folder(sender: type[Model], instance: Model, created: bool, raw: bool = False, **kwargs: Any) -> None:
     """Ensure each user owns exactly one Trash smart folder."""
 
-    del sender, kwargs
+    del kwargs
     if raw or not created:
         return
     try:
@@ -59,7 +53,7 @@ def create_trash_folder(
     try:
         with system_context(reason="storage.trash_folder"):
             folder_model._base_manager.get_or_create(
-                owner=instance,
+                owner_id=instance.pk,
                 smart_kind=folder_model.SmartKind.TRASH,
                 is_virtual=True,
                 defaults={"name": "Trash"},

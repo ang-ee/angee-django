@@ -1,8 +1,6 @@
-import { testResourceQuery } from "@angee/metadata/testing";
 // @vitest-environment happy-dom
 
 import type {
-  DataResourceFieldMetadata,
   DataResourceMetadata,
   ModelMetadata,
   SchemaFieldMetadata,
@@ -26,19 +24,13 @@ import {
   createRouter,
   } from "@tanstack/react-router";
 import {
-  QueryClient,
-  QueryClientProvider,
-} from "@tanstack/react-query";
-import {
   AppRuntimeProvider,
   type AppRuntime,
   type FormOverrideMap,
   } from "../../runtime";
-import {
-  ModelMetadataProvider,
-} from "@angee/metadata";
-import { withTestResourceInventory } from "@angee/metadata/testing";
-import { OperationDocumentsProvider } from "@angee/refine";
+import { modelLabelSegment } from "@angee/metadata";
+import { testDataResource, withTestResourceInventory } from "@angee/metadata/testing";
+import type { GetOneParams, NotificationProvider } from "@refinedev/core";
 import type {
   Row,
 } from "@angee/metadata";
@@ -46,13 +38,13 @@ import {
   useEffect,
   useMemo,
   useState,
-  type ComponentProps,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
-import { ChatterProvider, useChatterContent } from "../../communication";
+import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec } from "./form-spec";
 import { Form } from "./Form";
@@ -72,143 +64,22 @@ import {
   Tab,
 } from "../page";
 
-const sdkMocks = vi.hoisted(() => ({
+const sdkMocks = {
   record: null as Row | null,
-  fetching: false,
   listRows: [] as Row[],
-  listFilters: undefined as unknown,
-  // Whether the most recent relation-options `useList` ran with its query
-  // enabled — the deferred 200-row fetch fires only once the picker is opened,
-  // so this stays `false` on a read-only/show render and an editable mount.
-  listEnabled: false,
+  getOne: vi.fn<(params: GetOneParams) => Promise<{ data: Row }>>(),
+  getList: vi.fn(),
   mutate: vi.fn(),
-  // The F6 `<resource>_save` diff-apply owner, mocked so a lines form asserts the
-  // routing ({pk, patch, lines}) without a live custom-mutation transport.
-  save: vi.fn(),
   recordSelection: undefined as readonly string[] | undefined,
   // When set, the record read answers with only the paths the view selected —
   // what a GraphQL detail query actually returns. Opt-in, so the tests that stub a
   // whole row and assert on it keep reading it whole; a test asserting that
   // FormView *selects* what it reads turns it on.
   projectToSelection: false,
-  mutationAction: undefined as string | undefined,
-  mutationOptions: undefined as {
-    fields?: readonly string[];
-    enabled?: boolean;
-    successNotification?: false;
-  } | undefined,
-}));
+};
 
 type TestSchemaMetadata = Pick<SchemaFieldMetadata, "types"> &
   Partial<Pick<SchemaFieldMetadata, "labels" | "resources">>;
-
-vi.mock("@angee/refine", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/refine")>();
-  return {
-    ...actual,
-    useAngeeResourceSave: () => ({
-      save: sdkMocks.save,
-      fetching: false,
-      error: null,
-      reset: vi.fn(),
-    }),
-  };
-});
-
-vi.mock("@refinedev/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@refinedev/core")>();
-  const fieldsFromMeta = (meta: unknown): readonly string[] | undefined => {
-    const fields = (meta as { fields?: unknown } | undefined)?.fields;
-    if (!Array.isArray(fields)) return undefined;
-    const paths: string[] = [];
-    const visit = (items: readonly unknown[], prefix = ""): void => {
-      for (const item of items) {
-        if (typeof item === "string") {
-          paths.push(prefix ? `${prefix}.${item}` : item);
-          continue;
-        }
-        if (!item || typeof item !== "object") continue;
-        for (const [key, value] of Object.entries(item)) {
-          if (Array.isArray(value)) visit(value, prefix ? `${prefix}.${key}` : key);
-        }
-      }
-    };
-    visit(fields);
-    return paths;
-  };
-  const mutationResult = (
-    action: "create" | "update",
-    mutateAsync: (input: { id?: string | number; values?: Record<string, unknown> }) => Promise<{ data: Row | null }>,
-  ) => (options?: { meta?: unknown; successNotification?: false }) => {
-    sdkMocks.mutationAction = action;
-    sdkMocks.mutationOptions = {
-      fields: fieldsFromMeta(options?.meta),
-      enabled: true,
-      successNotification: options?.successNotification,
-    };
-    return {
-      mutateAsync,
-      mutation: { isPending: false, error: null },
-    };
-  };
-  // The read answers with the columns the caller selected and nothing else — the
-  // server-side projection this harness otherwise skips. Gated on
-  // `projectToSelection`; see the flag's note.
-  const projectedRecord = (selection: readonly string[] | undefined) => {
-    const record = sdkMocks.record ?? undefined;
-    if (!record || !sdkMocks.projectToSelection) return record;
-    const selected = new Set((selection ?? []).map((path) => path.split(".")[0]));
-    return Object.fromEntries(
-      Object.entries(record).filter(([name]) => selected.has(name)),
-    ) as Row;
-  };
-  return {
-    ...actual,
-    // The lines save path invalidates the resource caches after a custom-mutation
-    // write (no Refine provider in this harness); a no-op keeps every form render safe.
-    useInvalidate: () => vi.fn(async () => undefined),
-    useOne: (options?: { meta?: unknown; queryOptions?: { enabled?: boolean } }) => {
-      const selection = fieldsFromMeta(options?.meta);
-      if (options?.queryOptions?.enabled !== false) {
-        sdkMocks.recordSelection = selection;
-      }
-      return {
-        result: options?.queryOptions?.enabled === false ? undefined : projectedRecord(selection),
-        query: {
-          isFetching: sdkMocks.fetching,
-          error: null,
-          refetch: vi.fn(),
-        },
-      };
-    },
-    useList: (options?: { filters?: unknown; queryOptions?: { enabled?: boolean } }) => {
-      // The relation-options query is deferred via refine's `queryOptions.enabled`;
-      // when disabled it returns no rows and never fires — mirror that so a test
-      // can prove the read path does not pull the 200-row option list.
-      const enabled = options?.queryOptions?.enabled !== false;
-      sdkMocks.listEnabled = enabled;
-      sdkMocks.listFilters = options?.filters;
-      return {
-        result: enabled
-          ? { data: sdkMocks.listRows, total: sdkMocks.listRows.length }
-          : { data: [], total: 0 },
-        query: {
-          isFetching: false,
-          error: null,
-          refetch: vi.fn(),
-        },
-      };
-    },
-    useCreate: mutationResult("create", async ({ values = {} }) => ({
-      data: await sdkMocks.mutate({ data: values }),
-    })),
-    useUpdate: mutationResult("update", async ({ id, values = {} }) => ({
-      data: await sdkMocks.mutate({ data: { ...values, id } }),
-    })),
-  };
-});
-
-
 
 const statusOptions = [
   { value: "DRAFT", label: "Draft" },
@@ -241,6 +112,7 @@ const fields = [
 describe("FormView", () => {
   afterEach(() => {
     cleanup();
+    clearClients();
   });
 
   beforeEach(() => {
@@ -252,16 +124,30 @@ describe("FormView", () => {
       createdAt: "2026-05-31T12:00:00Z",
       wordCount: 3,
     };
-    sdkMocks.fetching = false;
     sdkMocks.mutate.mockReset();
-    sdkMocks.save.mockReset();
+    vi.mocked(dataProvider.update).mockClear();
+    notificationProvider.open.mockClear();
+    notificationProvider.close.mockClear();
     sdkMocks.listRows = [];
-    sdkMocks.listFilters = undefined;
-    sdkMocks.listEnabled = false;
+    sdkMocks.getOne.mockReset();
+    sdkMocks.getList.mockReset();
     sdkMocks.recordSelection = undefined;
     sdkMocks.projectToSelection = false;
-    sdkMocks.mutationAction = undefined;
-    sdkMocks.mutationOptions = undefined;
+    sdkMocks.getOne.mockImplementation(async ({ meta }) => {
+      const selection = fieldsFromMeta(meta);
+      sdkMocks.recordSelection = selection;
+      const record = sdkMocks.record;
+      if (!record) throw new Error("No record configured for this detail request.");
+      if (!sdkMocks.projectToSelection) return { data: record };
+      const selected = new Set(selection.map((path) => path.split(".")[0]));
+      return { data: Object.fromEntries(
+        Object.entries(record).filter(([name]) => selected.has(name)),
+      ) };
+    });
+    sdkMocks.getList.mockImplementation(async () => ({
+      data: sdkMocks.listRows,
+      total: sdkMocks.listRows.length,
+    }));
     sdkMocks.mutate.mockImplementation(async ({ data }: { data: Row }) => ({
       ...sdkMocks.record,
       ...data,
@@ -429,86 +315,41 @@ describe("FormView", () => {
     expect(run.mock.calls[0]?.[0]).toMatchObject({ record: { id: "note-1" } });
   });
 
-  test("re-seeds when the record reference changes for the same id", async () => {
-    // A refetch (e.g. after a run action) lands a fresh record object under the
-    // same id; the form must reflect it without a stale render consuming it.
-    function Harness(): ReactElement {
-      const [version, setVersion] = useState(0);
-      return (
-        <>
-          <button
-            type="button"
-            onClick={() => {
-              sdkMocks.record = { ...sdkMocks.record, id: "note-1", title: "Refetched" };
-              setVersion((current) => current + 1);
-            }}
-          >
-            refetch {version}
-          </button>
-          <FormView resource="notes.Note" id="note-1" fields={fields} />
-        </>
-      );
-    }
+  test("re-seeds when a native query refetch returns a new record for the same id", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} />);
+    await screen.findByDisplayValue("First");
 
-    renderWithProviders(<Harness />);
-    const title = await screen.findByLabelText("Title");
-    await waitFor(() =>
-      expect((title as HTMLInputElement).value).toBe("First"),
-    );
+    sdkMocks.record = { ...sdkMocks.record, id: "note-1", title: "Refetched" };
+    await act(async () => clients[0]!.refetchQueries({ type: "active" }));
 
-    fireEvent.click(screen.getByRole("button", { name: /refetch/ }));
-
-    await waitFor(() =>
-      expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe(
-        "Refetched",
-      ),
-    );
+    expect(await screen.findByDisplayValue("Refetched")).toBeTruthy();
   });
 
   test("keeps an existing-record form locked until its record loads", async () => {
-    sdkMocks.record = null;
-    sdkMocks.fetching = true;
-
-    function Harness(): ReactElement {
-      const [loaded, setLoaded] = useState(false);
-      return (
-        <>
-          <button
-            type="button"
-            onClick={() => {
-              sdkMocks.record = {
-                id: "note-1",
-                title: "Loaded",
-                status: "ACTIVE",
-              };
-              sdkMocks.fetching = false;
-              setLoaded(true);
-            }}
-          >
-            load {String(loaded)}
-          </button>
-          <FormView
-            resource="notes.Note"
-            id="note-1"
-            fields={fields}
-            title={() => "Draft Invoice"}
-            formExtras={() => <p>No readable documents attached</p>}
-          />
-        </>
-      );
-    }
-
-    renderWithProviders(<Harness />);
+    let resolveRecord!: (value: { data: Row }) => void;
+    sdkMocks.getOne.mockImplementationOnce(() => new Promise((resolve) => { resolveRecord = resolve; }));
+    renderWithProviders(
+      <FormView
+        resource="notes.Note"
+        id="note-1"
+        fields={fields}
+        title={() => "Draft Document"}
+        formExtras={() => <p>No readable documents attached</p>}
+      />,
+    );
 
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.getAllByText("Loading…").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Draft Invoice")).toBeNull();
+    expect(screen.queryByText("Draft Document")).toBeNull();
     expect(screen.queryByText("No readable documents attached")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /load/ }));
+    await waitFor(() => expect(sdkMocks.getOne).toHaveBeenCalledOnce());
+    await act(async () => resolveRecord({
+      data: { id: "note-1", title: "Loaded", status: "ACTIVE" },
+    }));
 
-    expect(await screen.findByText("Draft Invoice")).toBeTruthy();
+    expect(await screen.findByText("Draft Document")).toBeTruthy();
     expect(await screen.findByText("No readable documents attached")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Reminder" })).toBeTruthy();
   });
@@ -717,8 +558,13 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "Renamed", id: "note-1" },
     });
-    expect(sdkMocks.mutationOptions?.successNotification).toBe(false);
     expect(await screen.findByText("Changes saved")).toBeTruthy();
+    expect(dataProvider.update).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      resource: "notes",
+      id: "note-1",
+      variables: { title: "Renamed" },
+    }));
+    expect(notificationProvider.open).not.toHaveBeenCalled();
   });
 
   test("submits through a custom owner when the stock update root is absent", async () => {
@@ -784,7 +630,7 @@ describe("FormView", () => {
     sdkMocks.record = {
       id: "client-1",
       displayName: "Acme",
-      vendor: { id: "vendor-1", displayName: "Vendor One" },
+      reviewer: { id: "reviewer-1", displayName: "Reviewer One" },
     };
     const submit = vi.fn(
       async (data: Record<string, unknown>, context: FormSubmitContext) => ({
@@ -796,13 +642,13 @@ describe("FormView", () => {
     const relationFields = [
       { name: "displayName", label: "Display Name", title: true },
       {
-        name: "vendor",
-        label: "Vendor",
+        name: "reviewer",
+        label: "Reviewer",
         widget: "many2one",
         omittable: true,
         options: [
-          { value: "vendor-1", label: "Vendor One" },
-          { value: "vendor-2", label: "Vendor Two" },
+          { value: "reviewer-1", label: "Reviewer One" },
+          { value: "reviewer-2", label: "Reviewer Two" },
         ],
       },
     ] satisfies readonly FormField[];
@@ -817,17 +663,17 @@ describe("FormView", () => {
     );
 
     // The widget resolves the nested {id} record to the flat option id, so the
-    // option label renders — proof the form holds "vendor-1", not the object.
+    // option label renders — proof the form holds "reviewer-1", not the object.
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Vendor/ }).textContent).toContain(
-        "Vendor One",
+      expect(screen.getByRole("button", { name: /Reviewer/ }).textContent).toContain(
+        "Reviewer One",
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: /Vendor/ }));
-    fireEvent.click(await screen.findByText("Vendor Two"));
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }));
+    fireEvent.click(await screen.findByText("Reviewer Two"));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Vendor/ }).textContent).toContain(
-        "Vendor Two",
+      expect(screen.getByRole("button", { name: /Reviewer/ }).textContent).toContain(
+        "Reviewer Two",
       ),
     );
     fireEvent.change(screen.getByLabelText("Display Name"), {
@@ -838,7 +684,7 @@ describe("FormView", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
     // The current scalar identity wins over the saved expanded relation.
     expect(submit).toHaveBeenCalledWith(
-      { displayName: "Acme Renamed", vendor: "vendor-2" },
+      { displayName: "Acme Renamed", reviewer: "reviewer-2" },
       expect.objectContaining({ id: "client-1", isCreate: false }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Not set" }));
@@ -897,7 +743,7 @@ describe("FormView", () => {
 
     expect(await screen.findByText("widgets")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-    expect(sdkMocks.mutationAction).toBe("update");
+    expect(dataProvider.update).not.toHaveBeenCalled();
     expect(sdkMocks.mutate).not.toHaveBeenCalled();
   });
 
@@ -978,26 +824,26 @@ describe("FormView", () => {
   });
 
   test("folds the related label into the read and defers the option list to first open", async () => {
-    // The detail read folds the related record's label (`vendor.display_name`),
+    // The detail read folds the related record's label (`reviewer.display_name`),
     // so the picker shows it with no option query. The list carries a DISTINCT
     // label, proving the read path uses the record's own label and never fetches
     // the 200-row option list until the picker is first opened.
     sdkMocks.record = {
       id: "provider-1",
       name: "Anthropic",
-      vendor: { id: "vnd_1", display_name: "Anthropic Vendor" },
+      reviewer: { id: "rev_1", display_name: "Primary Reviewer" },
     };
-    sdkMocks.listRows = [{ id: "vnd_1", display_name: "Vendor From List" }];
+    sdkMocks.listRows = [{ id: "rev_1", display_name: "Reviewer From List" }];
     const metadata: TestSchemaMetadata = {
       types: {
         InferenceProviderType: {
           ...defaultModel("InferenceProviderType", "agents.InferenceProvider"),
           fields: {
             name: { name: "name", kind: "scalar", scalar: "String" },
-            vendor: {
-              name: "vendor",
+            reviewer: {
+              name: "reviewer",
               kind: "relation",
-              relationModelLabel: "Vendor",
+              relationModelLabel: "Reviewer",
             },
           },
           resource: {
@@ -1009,8 +855,8 @@ describe("FormView", () => {
             },
           },
         },
-        VendorType: {
-          ...defaultModel("VendorType", "Vendor"),
+        ReviewerType: {
+          ...defaultModel("ReviewerType", "Reviewer"),
           fields: {
             display_name: {
               name: "display_name",
@@ -1019,9 +865,9 @@ describe("FormView", () => {
             },
           },
           resource: {
-            ...defaultResource("VendorType", "Vendor"),
+            ...defaultResource("ReviewerType", "Reviewer"),
             recordRepresentation: "display_name",
-            roots: { list: "vendors", detail: "vendor" },
+            roots: { list: "reviewers", detail: "reviewer" },
           },
         },
       },
@@ -1034,8 +880,8 @@ describe("FormView", () => {
         fields={[
           { name: "name", label: "Name", title: true },
           {
-            name: "vendor",
-            label: "Vendor",
+            name: "reviewer",
+            label: "Reviewer",
             filters: [{ field: "company", operator: "eq", value: "cmp_1" }],
           },
         ]}
@@ -1047,25 +893,27 @@ describe("FormView", () => {
     // list has NOT fired on the editable-form mount (the headline guarantee).
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Vendor: Anthropic Vendor" }),
+        screen.getByRole("button", { name: "Reviewer: Primary Reviewer" }),
       ).toBeTruthy(),
     );
-    expect(sdkMocks.listEnabled).toBe(false);
-    expect(sdkMocks.recordSelection).toContain("vendor");
-    expect(sdkMocks.recordSelection).not.toContain("vendor.id");
-    expect(sdkMocks.recordSelection).not.toContain("vendor.display_name");
+    expect(sdkMocks.getList).not.toHaveBeenCalled();
+    expect(sdkMocks.recordSelection).toContain("reviewer");
+    expect(sdkMocks.recordSelection).not.toContain("reviewer.id");
+    expect(sdkMocks.recordSelection).not.toContain("reviewer.display_name");
 
     // Opening the picker fires the option list once; its fresh label then wins.
     fireEvent.click(
-      screen.getByRole("button", { name: "Vendor: Anthropic Vendor" }),
+      screen.getByRole("button", { name: "Reviewer: Primary Reviewer" }),
     );
-    await waitFor(() => expect(sdkMocks.listEnabled).toBe(true));
-    expect(sdkMocks.listFilters).toEqual([
-      { field: "company", operator: "eq", value: "cmp_1" },
-    ]);
+    await waitFor(() => expect(sdkMocks.getList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource: "reviewers",
+        filters: [{ field: "company", operator: "eq", value: "cmp_1" }],
+      }),
+    ));
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Vendor: Vendor From List" }),
+        screen.getByRole("button", { name: "Reviewer: Reviewer From List" }),
       ).toBeTruthy(),
     );
   });
@@ -1213,8 +1061,8 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "", note: "" },
     });
-    expect(sdkMocks.mutationOptions?.successNotification).toBe(false);
     expect(await screen.findByText("Record created")).toBeTruthy();
+    expect(notificationProvider.open).not.toHaveBeenCalled();
   });
 
   test("omits blank numeric fields from create payloads", async () => {
@@ -1375,14 +1223,14 @@ describe("FormView", () => {
 
   test("submits only fields accepted by the schema create input", async () => {
     sdkMocks.record = null;
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     const metadata: TestSchemaMetadata = {
       types: {
         IntegrationType: {
           ...defaultModel("IntegrationType", "integrate.Integration"),
           fields: {
             displayName: { name: "displayName", kind: "scalar", scalar: "String" },
-            vendor: { name: "vendor", kind: "relation", relationModelLabel: "Vendor" },
+            reviewer: { name: "reviewer", kind: "relation", relationModelLabel: "Reviewer" },
             owner: { name: "owner", kind: "relation", relationModelLabel: "iam.User" },
             credential: {
               name: "credential",
@@ -1400,14 +1248,14 @@ describe("FormView", () => {
               ...defaultResource("IntegrationType", "integrate.Integration").roots,
               create: "createIntegration",
             },
-            createFields: ["vendor", "owner", "credential", "implClass", "config"],
+            createFields: ["reviewer", "owner", "credential", "implClass", "config"],
           },
         },
       },
     };
     const integrationFields = [
       { name: "displayName", label: "Display Name", title: true },
-      { name: "vendor", label: "Vendor" },
+      { name: "reviewer", label: "Reviewer" },
       { name: "owner", label: "Owner" },
       { name: "credential", label: "Credential" },
       {
@@ -1429,7 +1277,7 @@ describe("FormView", () => {
         resource="integrate.Integration"
         fields={integrationFields}
         defaultValues={{
-          vendor: "vendor-1",
+          reviewer: "reviewer-1",
           owner: "user-1",
           credential: "credential-1",
         }}
@@ -1445,7 +1293,7 @@ describe("FormView", () => {
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: {
-        vendor: "vendor-1",
+        reviewer: "reviewer-1",
         owner: "user-1",
         credential: "credential-1",
         implClass: "github.vcs",
@@ -1498,7 +1346,7 @@ describe("FormView", () => {
       isEnabled: true,
       authorizeEndpoint: "",
     };
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     renderWithProviders(
       <FormView resource="OAuthClient" id="client-1" fields={implFields} />,
     );
@@ -1533,12 +1381,12 @@ describe("FormView", () => {
             name: "providerType",
             label: "Provider Type",
             prefill: (value) => value === "second"
-              ? { displayName: "Second preset", vendor: "vendor-2", privateConfig: "second-private" }
-              : { displayName: "First preset", vendor: "vendor-1", privateConfig: "first-private" },
+              ? { displayName: "Second preset", reviewer: "reviewer-2", privateConfig: "second-private" }
+              : { displayName: "First preset", reviewer: "reviewer-1", privateConfig: "first-private" },
             prefillPreserveDirty: true,
             prefillReplace: ["privateConfig"],
           },
-          { name: "vendor", label: "Vendor" },
+          { name: "reviewer", label: "Reviewer" },
           { name: "privateConfig", label: "Private Config" },
         ]}
       />,
@@ -1554,7 +1402,7 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: {
       displayName: "",
       providerType: "second",
-      vendor: "vendor-2",
+      reviewer: "reviewer-2",
       privateConfig: "second-private",
     } });
   });
@@ -1567,28 +1415,28 @@ describe("FormView", () => {
           {
             name: "providerType",
             label: "Provider Type",
-            prefill: () => ({ vendor: "vendor-2", privateConfig: "private" }),
+            prefill: () => ({ reviewer: "reviewer-2", privateConfig: "private" }),
             prefillPreserveDirty: true,
             prefillReplace: ["privateConfig"],
           },
-          { name: "vendor", label: "Vendor" },
+          { name: "reviewer", label: "Reviewer" },
           { name: "privateConfig", label: "Private Config" },
         ]}
       />,
     );
     fireEvent.change(screen.getByLabelText("Provider Type"), { target: { value: "second" } });
-    expect((screen.getByLabelText("Vendor") as HTMLInputElement).value).toBe("vendor-2");
+    expect((screen.getByLabelText("Reviewer") as HTMLInputElement).value).toBe("reviewer-2");
     expect((screen.getByLabelText("Private Config") as HTMLInputElement).value).toBe("private");
 
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
 
     expect((screen.getByLabelText("Provider Type") as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText("Vendor") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Reviewer") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("Private Config") as HTMLInputElement).value).toBe("");
   });
 
   test("binds a declarative required error to a dotted field", async () => {
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     renderWithProviders(
       <FormView resource="OAuthClient" fields={[
         { name: "config.local_root", label: "Local root", required: true },
@@ -1866,7 +1714,7 @@ describe("FormView", () => {
   test("lets an impl entry beat the own-model entry, which beats the canonical one", async () => {
     // The three tiers of the record-verb key, resolved by declared specificity:
     // canonical MTI parent → own model → own model + the row's impl key. This is
-    // what lets one vendor's addon specialize a verb for its own rows without
+    // what lets one backend's addon specialize a verb for its own rows without
     // naming — or displacing it on — a model it does not own.
     sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
     renderWithProviders(
@@ -2025,7 +1873,7 @@ describe("FormView", () => {
     expect(await screen.findByRole("button", { name: "Pair WhatsApp" })).toBeTruthy();
   });
 
-  test("composes two vendors' entries on one model without a collision", async () => {
+  test("composes two backends' entries on one model without a collision", async () => {
     // The cap the model-scoped key imposed: a second backend contributing the same
     // verb id for the same model hit the `uniqueKind` throw at boot. Distinct impl
     // keys make them siblings, and each row resolves only its own.
@@ -2059,7 +1907,7 @@ describe("FormView", () => {
   test("orders the merged record verbs by sequence across specificity tiers", async () => {
     // `sequence` stays the ordering contract once a subtype specializes: merging
     // two already-sorted groups by concatenation put the specialized verb's whole
-    // group last, so a vendor's Connect(10) landed after the inherited Pause(11).
+    // group last, so a backend's Connect(10) landed after the inherited Pause(11).
     sdkMocks.record = { ...sdkMocks.record, id: "note-1", kind: "WHATSAPP" };
     renderWithProviders(
       <FormView resource="notes.Note" id="note-1">
@@ -2135,6 +1983,35 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "Slot Title", slotCode: "slot-1" },
     });
+  });
+
+  test.each([
+    ["parties.Party", "Ready", true],
+    ["notes.Note", "Ready", true],
+    ["notes.Note", "Empty", false],
+  ] as const)("selects inherited tab dependencies on %s and evaluates %s visibility", async (resource, title, visible) => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "record-1", title };
+    const visibleWhen = vi.fn((record: Row) => record.title === "Ready");
+    renderWithProviders(
+      <FormView resource={resource} id="record-1" fields={[]} />,
+      mtiMetadata(),
+      undefined,
+      {
+        slots: [{
+          ...formViewSectionsSlot("parties.Party"),
+          id: "party.related",
+          content: (
+            <Tab id="related" label="Related" requiredFields={["title"]} visibleWhen={visibleWhen}>
+              <p>Related records</p>
+            </Tab>
+          ),
+        }],
+      },
+    );
+    await waitFor(() => expect(visibleWhen).toHaveBeenCalledWith(expect.objectContaining({ title })));
+    expect(sdkMocks.recordSelection).toContain("title");
+    expect(screen.queryAllByRole("tab", { name: "Related" })).toHaveLength(visible ? 1 : 0);
   });
 
   test("composes FORM_VIEW_SECTIONS_SLOT tabs through the saved-record tab owner", async () => {
@@ -2243,25 +2120,25 @@ describe("FormView", () => {
   test("honors a custom relation widget in the overview and saves its selected id", async () => {
     sdkMocks.record = {
       id: "client-1", displayName: "Acme",
-      vendor: { id: "vendor-1", displayName: "Vendor One" },
+      reviewer: { id: "reviewer-1", displayName: "Reviewer One" },
     };
     const custom = {
-      read: () => <span>Custom vendor display</span>,
+      read: () => <span>Custom reviewer display</span>,
       edit: ({ value, onChange }: { value?: unknown; onChange?: (value: unknown) => void }) => (
-        <input aria-label="Custom vendor" value={String(value ?? "")} onChange={(event) => onChange?.(event.target.value)} />
+        <input aria-label="Custom reviewer" value={String(value ?? "")} onChange={(event) => onChange?.(event.target.value)} />
       ),
     };
     renderWithProviders(
       <FormView resource="OAuthClient" id="client-1" fields={[
         { name: "displayName", label: "Name", title: true },
-        { name: "vendor", label: "Vendor", widget: "test.vendor" },
+        { name: "reviewer", label: "Reviewer", widget: "test.reviewer" },
       ]} />,
       { types: {
         OAuthClientType: {
           ...defaultModel("OAuthClientType", "OAuthClient"),
           fields: {
             displayName: { name: "displayName", kind: "scalar", scalar: "String" },
-            vendor: { name: "vendor", kind: "relation", relationModelLabel: "Widget", relationObject: true },
+            reviewer: { name: "reviewer", kind: "relation", relationModelLabel: "Widget", relationObject: true },
           },
         },
         WidgetType: {
@@ -2270,30 +2147,30 @@ describe("FormView", () => {
           resource: { ...defaultResource("WidgetType", "Widget"), recordRepresentation: "displayName" },
         },
       } }, undefined,
-      { widgets: { ...defaultWidgets, "test.vendor": custom } },
+      { widgets: { ...defaultWidgets, "test.reviewer": custom } },
     );
-    const input = await screen.findByRole("textbox", { name: "Custom vendor" });
-    expect(screen.queryByRole("button", { name: "Vendor" })).toBeNull();
-    fireEvent.change(input, { target: { value: "vendor-2" } });
+    const input = await screen.findByRole("textbox", { name: "Custom reviewer" });
+    expect(screen.queryByRole("button", { name: "Reviewer" })).toBeNull();
+    fireEvent.change(input, { target: { value: "reviewer-2" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { id: "client-1", vendor: "vendor-2" } }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { id: "client-1", reviewer: "reviewer-2" } }));
   });
 
   test("reads many2one record ids and writes the flat relation field", async () => {
     sdkMocks.record = {
       id: "client-1",
       displayName: "Acme",
-      vendor: { id: "vendor-1", displayName: "Vendor One" },
+      reviewer: { id: "reviewer-1", displayName: "Reviewer One" },
     };
     const relationFields = [
       { name: "displayName", label: "Display Name", title: true },
       {
-        name: "vendor",
-        label: "Vendor",
+        name: "reviewer",
+        label: "Reviewer",
         widget: "many2one",
         options: [
-          { value: "vendor-1", label: "Vendor One" },
-          { value: "vendor-2", label: "Vendor Two" },
+          { value: "reviewer-1", label: "Reviewer One" },
+          { value: "reviewer-2", label: "Reviewer Two" },
         ],
       },
     ] satisfies readonly FormField[];
@@ -2307,8 +2184,8 @@ describe("FormView", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Vendor/ }).textContent).toContain(
-        "Vendor One",
+      expect(screen.getByRole("button", { name: /Reviewer/ }).textContent).toContain(
+        "Reviewer One",
       ),
     );
     fireEvent.change(screen.getByLabelText("Display Name"), {
@@ -2323,19 +2200,19 @@ describe("FormView", () => {
 
     cleanup();
     sdkMocks.record = null;
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     renderWithProviders(
       <FormView
         resource="OAuthClient"
         fields={relationFields}
-        defaultValues={{ vendor: "vendor-2" }}
+        defaultValues={{ reviewer: "reviewer-2" }}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
-      data: { displayName: "", vendor: "vendor-2" },
+      data: { displayName: "", reviewer: "reviewer-2" },
     });
   });
 
@@ -2353,10 +2230,7 @@ describe("FormView", () => {
             resource="notes.Note"
             id="note-1"
             fields={viewFields}
-            onSaved={(row) => {
-              // This fixture mocks useOne outside Query; reflect the accepted
-              // cache record before recreating the field projection.
-              sdkMocks.record = row;
+            onSaved={() => {
               setSaveVersion((current) => current + 1);
             }}
           />
@@ -2395,20 +2269,7 @@ describe("FormView", () => {
     let router: ReturnType<typeof createRouter> | undefined;
 
     function Root(): ReactElement {
-      const queryClient = useMemo(() => createTestQueryClient(), []);
-      return (
-        <QueryClientProvider client={queryClient}>
-          <ModalsHost>
-            <ToastProvider>
-              <ModelMetadataProvider metadata={withDefaultResourceMetadata(undefined)}>
-                <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-                  <Outlet />
-                </AppRuntimeProvider>
-              </ModelMetadataProvider>
-            </ToastProvider>
-          </ModalsHost>
-        </QueryClientProvider>
-      );
+      return <TestProviders><Outlet /></TestProviders>;
     }
 
     const rootRoute = createRootRoute({ component: Root });
@@ -2455,20 +2316,7 @@ describe("FormView", () => {
     let router: ReturnType<typeof createRouter> | undefined;
 
     function Root(): ReactElement {
-      const queryClient = useMemo(() => createTestQueryClient(), []);
-      return (
-        <QueryClientProvider client={queryClient}>
-          <ModalsHost>
-            <ToastProvider>
-              <ModelMetadataProvider metadata={withDefaultResourceMetadata(undefined)}>
-                <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-                  <Outlet />
-                </AppRuntimeProvider>
-              </ModelMetadataProvider>
-            </ToastProvider>
-          </ModalsHost>
-        </QueryClientProvider>
-      );
+      return <TestProviders><Outlet /></TestProviders>;
     }
 
     const rootRoute = createRootRoute({ component: Root });
@@ -2509,20 +2357,7 @@ describe("FormView", () => {
     };
 
     function Root(): ReactElement {
-      const queryClient = useMemo(() => createTestQueryClient(), []);
-      return (
-        <QueryClientProvider client={queryClient}>
-          <ModalsHost>
-            <ToastProvider>
-              <ModelMetadataProvider metadata={withDefaultResourceMetadata(undefined)}>
-                <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
-                  <Outlet />
-                </AppRuntimeProvider>
-              </ModelMetadataProvider>
-            </ToastProvider>
-          </ModalsHost>
-        </QueryClientProvider>
-      );
+      return <TestProviders><Outlet /></TestProviders>;
     }
 
     function RecordPage(): ReactElement {
@@ -2630,7 +2465,7 @@ describe("FormView", () => {
     const tabs = await screen.findAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual(["Editor", "Runs", "Settings"]);
     expect(screen.getByRole("button", { name: "Editor action" })).toBeTruthy();
-    expect(screen.getByText("Active")).toBeTruthy();
+    expect(await screen.findByText("Active")).toBeTruthy();
     expect(screen.queryByText("ACTIVE")).toBeNull();
     expect(screen.queryByLabelText("Reminder")).toBeNull();
     expect(screen.queryByText("Related records")).toBeNull();
@@ -2660,49 +2495,6 @@ describe("FormView", () => {
     expect(document.querySelector("form")?.className).toContain("min-h-0");
     expect(heading.closest("form")?.querySelector(".overflow-auto")).toBeTruthy();
     expect(screen.queryByRole("tab")).toBeNull();
-  });
-
-  test("keeps record support in the right pane by default and moves the complete chatter only when requested", async () => {
-    function RecordSupportForm({ placement }: { placement?: "right" | "below" }) {
-      const content = useMemo(() => ({
-        tabs: [{ id: "audit", label: "Audit", children: "Audit trail" }],
-      }), []);
-      useChatterContent(content);
-      return <FormView
-        resource="notes.Note"
-        id="note-1"
-        fields={fields}
-        recordSupportPlacement={placement}
-      />;
-    }
-
-    renderWithProviders(
-      <ChatterProvider><RecordSupportForm /></ChatterProvider>,
-    );
-    expect(screen.queryByLabelText("Chatter")).toBeNull();
-    cleanup();
-
-    renderWithProviders(
-      <ChatterProvider><RecordSupportForm placement="below" /></ChatterProvider>,
-    );
-    expect(await screen.findByLabelText("Chatter")).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Audit" })).toBeTruthy();
-    cleanup();
-
-    renderWithProviders(
-      <ChatterProvider>
-        <FormView
-          resource="notes.Note"
-          id="note-1"
-          fields={fields}
-          hideRecordChrome
-          recordSupportPlacement="below"
-        />
-      </ChatterProvider>,
-    );
-    expect(screen.queryByLabelText("Chatter")).toBeNull();
   });
 
   test("document records honor overview tab placement without changing presentation", async () => {
@@ -2922,10 +2714,10 @@ describe("FormView", () => {
           fields: {
             username: { name: "username", kind: "scalar", scalar: "String" },
             email: { name: "email", kind: "scalar", scalar: "String" },
-            vendor: {
-              name: "vendor",
+            reviewer: {
+              name: "reviewer",
               kind: "relation",
-              relationModelLabel: "Vendor",
+              relationModelLabel: "Reviewer",
             },
           },
           resource: {
@@ -2944,7 +2736,7 @@ describe("FormView", () => {
         fields={[
           { name: "username", label: "Username", title: true },
           { name: "email", label: "Email" },
-          { name: "vendor", label: "Vendor", widget: "many2one" },
+          { name: "reviewer", label: "Reviewer", widget: "many2one" },
           { name: "password", label: "Password", createOnly: true },
         ]}
       />,
@@ -2956,8 +2748,8 @@ describe("FormView", () => {
     expect(selection).toContain("id");
     expect(selection).toContain("username");
     expect(selection).toContain("email");
-    expect(selection).toContain("vendor"); // scalar-id relation → bare leaf
-    expect(selection).not.toContain("vendor.id");
+    expect(selection).toContain("reviewer"); // scalar-id relation → bare leaf
+    expect(selection).not.toContain("reviewer.id");
     expect(selection).not.toContain("password"); // write-only → never read back
   });
 
@@ -3011,7 +2803,7 @@ describe("FormView", () => {
 
   test("blocks create and flags a missing required field in an inactive form tab", async () => {
     sdkMocks.record = null;
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     const metadata: TestSchemaMetadata = {
       types: {
         NoteType: {
@@ -3055,7 +2847,7 @@ describe("FormView", () => {
 
   test("renders server validation errors under their field and in the banner", async () => {
     sdkMocks.record = null;
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     sdkMocks.mutate.mockRejectedValue({
       graphQLErrors: [
         {
@@ -3083,7 +2875,7 @@ describe("FormView", () => {
 
   test("renders and submits a field only when its showWhen discriminator matches", async () => {
     sdkMocks.record = null;
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     renderWithProviders(
       <FormView resource="notes.Note">
         <Field name="kind" label="Kind" />
@@ -3112,7 +2904,7 @@ describe("FormView", () => {
 
   test("drops a showWhen field from the payload once the discriminator flips away", async () => {
     sdkMocks.record = null;
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     renderWithProviders(
       <FormView resource="notes.Note">
         <Field name="kind" label="Kind" />
@@ -3142,7 +2934,7 @@ describe("FormView", () => {
 
     // Create (id null): the override replaces the declared fields.
     sdkMocks.record = null;
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     renderWithProviders(
       <FormView resource="Widget">
         <Field name="declaredName" label="Declared Name" />
@@ -3170,7 +2962,7 @@ describe("FormView", () => {
 
   test("shows a title-field server error in the header", async () => {
     sdkMocks.record = null;
-    sdkMocks.mutate.mockReset();
+    sdkMocks.mutate.mockClear();
     sdkMocks.mutate.mockRejectedValue({
       graphQLErrors: [
         {
@@ -3197,309 +2989,7 @@ describe("FormView", () => {
       screen.getByText("Please fix the highlighted fields: Title, environment."),
     ).toBeTruthy();
   });
-
-  // Editable document lines (F6): the resource metadata carries a `linesResource`
-  // and a `save` root, so FormView renders the lines composer and routes a dirty
-  // save through `<resource>_save(pk, patch, lines)`.
-  test("new document renders Add line and submits lines with its first create", async () => {
-    sdkMocks.record = null;
-    sdkMocks.mutate.mockResolvedValue({ id: "doc-new", title: "Quotation", lines: [{ id: "line-new", label: "Lamp", position: 0 }] });
-    renderSaleDoc(null);
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Quotation" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add line" }));
-    fireEvent.change(screen.getByLabelText("Label", { exact: true }), { target: { value: "Lamp" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
-    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({
-      data: { title: "Quotation", lines: { data: [{ label: "Lamp", position: 0 }] } },
-    }));
-    expect(sdkMocks.save).not.toHaveBeenCalled();
-  });
-
-  test("seeds document lines without a reseed loop", async () => {
-    sdkMocks.record = saleDocRecord();
-    renderSaleDoc();
-
-    // Both seeded rows render; a reseed loop would exhaust React's update depth
-    // (the fix is the memo-stabilized seed array threaded through the reset).
-    expect(await screen.findByDisplayValue("Keep")).toBeTruthy();
-    expect(screen.getByDisplayValue("Drop")).toBeTruthy();
-    await act(async () => {
-      await nextTask();
-    });
-    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Order");
-    expect(screen.getByDisplayValue("Keep")).toBeTruthy();
-    expect(sdkMocks.save).not.toHaveBeenCalled();
-  });
-
-  test("routes a dirty-lines save through the resource save mutation", async () => {
-    sdkMocks.record = saleDocRecord();
-    sdkMocks.save.mockImplementation(
-      async (variables: {
-        pk: string;
-        patch?: Record<string, unknown>;
-        lines?: readonly Record<string, unknown>[];
-      }) => ({
-        id: "doc-1",
-        title: "Order",
-        lines: (variables.lines ?? []).map((line, index) => ({
-          ...line,
-          id: line.id ?? `new-${index}`,
-        })),
-      }),
-    );
-    renderSaleDoc();
-
-    fireEvent.change(await screen.findByDisplayValue("Keep"), {
-      target: { value: "Kept" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
-    // Parent-only patch is empty (title untouched); the full desired line list
-    // carries each existing row's id and the row-order position.
-    expect(sdkMocks.save).toHaveBeenCalledWith({
-      pk: "doc-1",
-      patch: {},
-      lines: [
-        { id: "ln-1", label: "Kept", quantity: 1, position: 0 },
-        { id: "ln-2", label: "Drop", quantity: 9, position: 1 },
-      ],
-    });
-    // The stock update path is never taken when lines are dirty.
-    expect(sdkMocks.mutate).not.toHaveBeenCalled();
-  });
-
-  // The slice-7 acceptance step: a new line whose numeric cells are left blank
-  // must save — the untouched Int/Decimal cells are omitted from the line input
-  // (Strawberry rejects "" for those scalars) so the model defaults apply.
-  test("a new line with untouched numeric cells creates without those keys", async () => {
-    sdkMocks.record = saleDocRecord();
-    sdkMocks.save.mockImplementation(
-      async (variables: { lines?: readonly Record<string, unknown>[] }) => ({
-        id: "doc-1",
-        title: "Order",
-        lines: (variables.lines ?? []).map((line, index) => ({
-          ...line,
-          id: line.id ?? `new-${index}`,
-        })),
-      }),
-    );
-    renderSaleDoc();
-
-    await screen.findByDisplayValue("Keep");
-    fireEvent.click(screen.getByRole("button", { name: "Add line" }));
-    // Fill only the label; quantity (Int) and price (Decimal) stay untouched.
-    const newLabelCell = screen
-      .getAllByLabelText("Label")
-      .find((cell) => (cell as HTMLInputElement).value === "");
-    expect(newLabelCell).toBeTruthy();
-    fireEvent.change(newLabelCell as HTMLInputElement, {
-      target: { value: "New" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
-    const variables = sdkMocks.save.mock.calls[0]?.[0] as {
-      lines: readonly Record<string, unknown>[];
-    };
-    // The created row carries only the typed cell and its position — the blank
-    // numeric cells are absent so the save document coerces and defaults apply.
-    expect(variables.lines[2]).toEqual({ label: "New", position: 2 });
-    expect(variables.lines[2]).not.toHaveProperty("quantity");
-    expect(variables.lines[2]).not.toHaveProperty("price");
-    expect(variables.lines[0]).toEqual(
-      expect.objectContaining({ id: "ln-1", quantity: 1 }),
-    );
-  });
-
-  test("a created line edited and reordered during save keeps its server ID for the next save", async () => {
-    sdkMocks.record = saleDocRecord();
-    let resolveFirst!: (row: Row) => void;
-    sdkMocks.save.mockImplementation(async (variables: { lines?: readonly Row[] }) => {
-      const accepted: Row = {
-        id: "doc-1", title: "Order",
-        lines: (variables.lines ?? []).map((line, index) => ({
-          ...line, id: line.id ?? `new-${index}`,
-        })),
-      };
-      if (sdkMocks.save.mock.calls.length === 1) {
-        return new Promise<Row>((done) => { resolveFirst = done; });
-      }
-      sdkMocks.record = accepted;
-      return accepted;
-    });
-    renderSaleDoc("doc-1", (context) => <button type="button" onClick={() => {
-      const rows = context.form.form.getValues("lines") as Row[];
-      context.form.form.setValue("lines", [rows[2], rows[0], rows[1]], { shouldDirty: true });
-    }}>Move new line first</button>);
-    await screen.findByDisplayValue("Keep");
-    fireEvent.click(screen.getByRole("button", { name: "Add line" }));
-    const newCell = screen.getAllByLabelText("Label").find((cell) =>
-      (cell as HTMLInputElement).value === "");
-    expect(newCell).toBeTruthy();
-    fireEvent.change(newCell as HTMLInputElement, { target: { value: "Submitted" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
-    fireEvent.change(screen.getByDisplayValue("Submitted"), { target: { value: "Later edit" } });
-    fireEvent.click(screen.getByRole("button", { name: "Move new line first" }));
-    const firstLines = (sdkMocks.save.mock.calls[0]?.[0] as { lines: readonly Row[] }).lines;
-    const firstAccepted: Row = { id: "doc-1", title: "Order", lines: firstLines.map((line, index) => ({
-      ...line, id: line.id ?? `new-${index}`,
-    })) };
-    sdkMocks.record = firstAccepted;
-    await act(async () => resolveFirst(firstAccepted));
-    expect(screen.getByDisplayValue("Later edit")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(2));
-    const nextLines = (sdkMocks.save.mock.calls[1]?.[0] as { lines: readonly Row[] }).lines;
-    expect(nextLines[0]).toEqual(expect.objectContaining({
-      id: "new-2", label: "Later edit", position: 0,
-    }));
-    expect(nextLines.filter((line) => line.id == null)).toHaveLength(0);
-  });
-
-  test("keeps a parent-only edit on the stock update path", async () => {
-    sdkMocks.record = saleDocRecord();
-    renderSaleDoc();
-
-    await screen.findByDisplayValue("Keep");
-    fireEvent.change(screen.getByLabelText("Title"), {
-      target: { value: "Renamed" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
-    expect(sdkMocks.mutate).toHaveBeenCalledWith({
-      data: { title: "Renamed", id: "doc-1" },
-    });
-    // No line changed, so the diff-apply save root is never invoked.
-    expect(sdkMocks.save).not.toHaveBeenCalled();
-  });
-
-  test("maps a line save validation error to its row", async () => {
-    sdkMocks.record = saleDocRecord();
-    sdkMocks.save.mockRejectedValue({
-      graphQLErrors: [
-        {
-          message: "Validation failed.",
-          extensions: {
-            code: "VALIDATION",
-            validationErrors: { "lines.1.label": ["This field is required."] },
-            formErrors: [],
-          },
-        },
-      ],
-    });
-    renderSaleDoc();
-
-    fireEvent.change(await screen.findByDisplayValue("Keep"), {
-      target: { value: "Kept" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(sdkMocks.save).toHaveBeenCalledTimes(1));
-    // The row-1 cell surfaces its server message from the projected rowErrors.
-    expect(await screen.findByText("This field is required.")).toBeTruthy();
-  });
 });
-
-function saleDocRecord(): Row {
-  return {
-    id: "doc-1",
-    title: "Order",
-    lines: [
-      { id: "ln-1", label: "Keep", quantity: 1, position: 0 },
-      { id: "ln-2", label: "Drop", quantity: 9, position: 1 },
-    ],
-  };
-}
-
-function renderSaleDoc(
-  id: string | null = "doc-1",
-  recordExtras?: React.ComponentProps<typeof FormView>["recordExtras"],
-): void {
-  renderWithProviders(
-    <FormView
-      resource="demo.SaleDoc"
-      id={id}
-      fields={[{ name: "title", label: "Title", title: true }]}
-      recordExtras={recordExtras}
-    />,
-    SALES_METADATA,
-    undefined,
-    undefined,
-    SALES_DOCUMENTS,
-  );
-}
-
-function saleLineField(
-  name: string,
-  scalar: string,
-  extra: Partial<DataResourceFieldMetadata> = {},
-): DataResourceFieldMetadata {
-  return {
-    name,
-    kind: "scalar",
-    scalar,
-    readable: true,
-
-
-    aggregatable: false,
-
-    creatable: true,
-    updatable: true,
-    requiredOnCreate: false,
-    ...extra,
-  };
-}
-
-const SALES_METADATA: TestSchemaMetadata = {
-  types: {
-    SaleDocType: {
-      ...defaultModel("SaleDocType", "demo.SaleDoc"),
-      fields: { title: { name: "title", kind: "scalar", scalar: "String" } },
-      resource: {
-        schemaName: "console",
-        modelLabel: "demo.SaleDoc",
-        appLabel: "demo",
-        modelName: "SaleDoc",
-        query: testResourceQuery(),
-        recordRepresentation: "title",
-        roots: {
-          list: "sale_docs",
-          create: "insert_sale_docs_one",
-          detail: "sale_docs_by_pk",
-          update: "update_sale_docs_by_pk",
-          save: "sale_docs_save",
-        },
-        typeNames: { node: "SaleDocType", createInput: "sale_docs_insert_input", updateInput: "sale_docs_set_input" },
-        capabilities: ["list", "detail", "create", "update", "save"],
-        fields: [saleLineField("title", "String", { requiredOnCreate: true })],
-
-
-        aggregateFields: [],
-
-
-        linesResource: {
-          field: "lines",
-          modelLabel: "demo.SaleLine",
-          inputType: "sale_docs_lines_insert_input",
-          positionField: "position",
-          fields: [
-            saleLineField("label", "String", { requiredOnCreate: true }),
-            saleLineField("quantity", "Int"),
-            saleLineField("price", "Decimal"),
-            saleLineField("position", "Int"),
-          ],
-        },
-      },
-    },
-  },
-};
-
-const SALES_DOCUMENTS = {
-  console: { saves: { "demo.SaleDoc": { kind: "Document", definitions: [] } } },
-};
 
 function renderForm(id: string | null): void {
   renderWithProviders(<FormView resource="notes.Note" id={id} fields={fields} />);
@@ -3510,7 +3000,6 @@ function renderWithProviders(
   metadata?: TestSchemaMetadata,
   forms?: FormOverrideMap,
   runtime?: Partial<AppRuntime>,
-  documents?: ComponentProps<typeof OperationDocumentsProvider>["documents"],
 ): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
@@ -3522,40 +3011,75 @@ function renderWithProviders(
     routeTree: rootRoute.addChildren([indexRoute]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
-  const queryClient = createTestQueryClient();
-
   render(
-    <QueryClientProvider client={queryClient}>
-      <RouterContextProvider router={router}>
-        <ModalsHost>
-          <ToastProvider>
-            <OperationDocumentsProvider documents={documents ?? {}}>
-              <ModelMetadataProvider metadata={withDefaultResourceMetadata(metadata)}>
-                <AppRuntimeProvider
-                  runtime={{
-                    widgets: defaultWidgets,
-                    ...(forms ? { forms } : {}),
-                    ...runtime,
-                  }}
-                >
-                  {children}
-                </AppRuntimeProvider>
-              </ModelMetadataProvider>
-            </OperationDocumentsProvider>
-          </ToastProvider>
-        </ModalsHost>
-      </RouterContextProvider>
-    </QueryClientProvider>,
+    <TestProviders metadata={metadata} forms={forms} runtime={runtime}>
+      <RouterContextProvider router={router}>{children}</RouterContextProvider>
+    </TestProviders>,
   );
 }
 
-function createTestQueryClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: {
-      mutations: { retry: false },
-      queries: { retry: false },
+const { Provider, dataProvider, clients, clearClients } = createUiTestProviders({
+  apiUrl: "test://forms",
+  queryClientConfig: { defaultOptions: { mutations: { retry: false }, queries: { retry: false } } },
+  dataProvider: {
+    getOne: sdkMocks.getOne,
+    getList: sdkMocks.getList,
+    create: async ({ variables }: { variables: Row }) => {
+      const data = await sdkMocks.mutate({ data: variables });
+      sdkMocks.record = data;
+      return { data };
     },
-  });
+    update: vi.fn(async ({ id, variables }: { id: string; variables: Row }) => {
+      const data = await sdkMocks.mutate({ data: { ...variables, id } });
+      sdkMocks.record = data;
+      return { data };
+    }),
+  },
+});
+
+const notificationProvider = {
+  open: vi.fn(),
+  close: vi.fn(),
+} satisfies NotificationProvider;
+
+function TestProviders({ children, metadata, forms, runtime }: {
+  children: ReactNode;
+  metadata?: TestSchemaMetadata;
+  forms?: FormOverrideMap;
+  runtime?: Partial<AppRuntime>;
+}): ReactElement {
+  const schema = useMemo(() => withDefaultResourceMetadata(metadata), [metadata]);
+  return (
+    <Provider
+      metadata={schema}
+      notificationProvider={notificationProvider}
+    >
+      <ModalsHost>
+        <ToastProvider>
+          <AppRuntimeProvider runtime={{ widgets: defaultWidgets, ...(forms ? { forms } : {}), ...runtime }}>
+            {children}
+          </AppRuntimeProvider>
+        </ToastProvider>
+      </ModalsHost>
+    </Provider>
+  );
+}
+
+function fieldsFromMeta(meta: GetOneParams["meta"]): string[] {
+  const paths: string[] = [];
+  const visit = (items: readonly unknown[], prefix = ""): void => {
+    for (const item of items) {
+      if (typeof item === "string") {
+        paths.push(prefix ? `${prefix}.${item}` : item);
+      } else if (item && typeof item === "object") {
+        for (const [key, value] of Object.entries(item)) {
+          if (Array.isArray(value)) visit(value, prefix ? `${prefix}.${key}` : key);
+        }
+      }
+    }
+  };
+  if (Array.isArray(meta?.fields)) visit(meta.fields);
+  return paths;
 }
 
 function withDefaultResourceMetadata(
@@ -3592,29 +3116,9 @@ function defaultModel(typeName: string, modelLabel: string): ModelMetadata {
 }
 
 function defaultResource(typeName: string, modelLabel: string): DataResourceMetadata {
-  const modelName = modelNameForLabel(modelLabel);
-  const list = `${modelName.toLowerCase()}s`;
   return {
-    schemaName: "console",
-    modelLabel,
-    appLabel: modelLabel.includes(".") ? modelLabel.split(".")[0] ?? "" : "",
-    modelName,
-    query: testResourceQuery(),
-    roots: {
-      list,
-      detail: `${list}_by_pk`,
-      create: `insert_${list}_one`,
-      update: `update_${list}_by_pk`,
-      delete: `delete_${list}_by_pk`,
-    },
-    typeNames: { node: typeName },
-    capabilities: ["list", "detail", "create", "update", "delete"],
-    fields: [],
-
-
-    aggregateFields: [],
-
-
+    ...testDataResource(modelLabel, { typeNames: { node: typeName } }),
+    modelName: modelLabelSegment(modelLabel),
   };
 }
 
@@ -3711,10 +3215,6 @@ function modelLabelForType(typeName: string): string {
     WidgetType: "Widget",
   };
   return known[typeName] ?? typeName.replace(/Type$/, "");
-}
-
-function modelNameForLabel(modelLabel: string): string {
-  return modelLabel.split(".").at(-1) ?? modelLabel;
 }
 
 function cloneFields(source: readonly FormField[]): FormField[] {

@@ -46,11 +46,11 @@ def test_user_pk_get_is_not_the_session_bypass(monkeypatch: pytest.MonkeyPatch) 
             calls.append(("get", kwargs))
             return "user"
 
-    def system_context(*, reason: str) -> ScopedQuery:
+    def system_context(self: UserManager, *, reason: str) -> ScopedQuery:
         calls.append(("system_context", {"reason": reason}))
         return ScopedQuery()
 
-    monkeypatch.setattr(manager, "system_context", system_context)
+    monkeypatch.setattr(type(manager), "system_context", system_context)
 
     assert "get" not in UserManager.__dict__
     assert manager.get_for_session("usr_123") == "user"

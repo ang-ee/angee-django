@@ -1,16 +1,39 @@
 // @vitest-environment happy-dom
 
-import { describe, expect, test } from "vitest";
+import { lazyRouteComponent } from "@tanstack/react-router";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
 import {
   defineBaseAddon,
   resourcePageRoutes,
+  type BaseAddonRoute,
 } from "./define-base-addon";
+import type { LoginPage } from "./auth/LoginPage";
 import { expectValidBaseAddon } from "./testing";
 
 function Page(): null {
   return null;
 }
+
+test("route components accept optional props and retain native lazy preloading", () => {
+  function OptionalPropsPage({ title }: { title?: string }): string | null {
+    return title ?? null;
+  }
+  const LazyPage = lazyRouteComponent(async () => ({ default: Page }));
+  const addon = defineBaseAddon({
+    id: "pages",
+    routes: [
+      { name: "eager", path: "/eager", component: OptionalPropsPage },
+      { name: "lazy", path: "/lazy", component: LazyPage },
+    ],
+  });
+
+  expect(addon.routes?.[0]?.component).toBe(OptionalPropsPage);
+  expect(addon.routes?.[1]?.component?.preload).toBe(LazyPage.preload);
+  expectTypeOf<typeof LoginPage>().toExtend<NonNullable<BaseAddonRoute["component"]>>();
+  expectTypeOf<(props: { required: string }) => null>()
+    .not.toExtend<NonNullable<BaseAddonRoute["component"]>>();
+});
 
 describe("resourcePageRoutes", () => {
   test("authors the list and nested record route with console defaults", () => {
@@ -79,9 +102,18 @@ describe("expectValidBaseAddon", () => {
   test("leaves cross-addon menu route validation to full app composition", () => {
     const addon = defineBaseAddon({
       id: "notes-extension",
-      menus: [{ id: "notes.extra", label: "Extra", route: "notes.home", icon: "notes" }],
+      menus: [
+        {
+          id: "notes.extra",
+          label: "Extra",
+          route: "notes.home",
+          params: { section: "shared" },
+          icon: "notes",
+        },
+      ],
     });
 
     expect(() => expectValidBaseAddon(addon)).not.toThrow();
+    expect(addon.menus?.[0]?.params).toEqual({ section: "shared" });
   });
 });

@@ -5,43 +5,14 @@ name = "angee.workflows"
 description = "Workflow definitions, steps, edges, and triggers"
 keywords = ["workflows", "automation", "orchestration"]
 category = "Workflows"
-depends_on = ["angee.iam", "angee.jobs"]
+depends_on = ["angee.iam", "angee.jobs", "angee.resources"]
 dependencies = [
   "croniter>=6.0",
+  "jsonschema[format-nongpl]>=4.26",
+  "referencing>=0.37",
 ]
 
 [[migrations]]
-fresh_history = "baseline"
-name = "workflow_stable_key"
+name = "optional_states_nullable"
 app_label = "workflows"
-module = "runtime_migrations.workflow_stable_key"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "workflow_identity"
-app_label = "workflows"
-module = "runtime_migrations.workflow_identity"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "workflow_admitted_actor"
-app_label = "workflows"
-module = "runtime_migrations.workflow_admitted_actor"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "decision_target"
-app_label = "workflows"
-module = "runtime_migrations.decision_target"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "step_artifact_target"
-app_label = "workflows"
-module = "runtime_migrations.step_artifact_target"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "step_external_subscription"
-app_label = "workflows"
-module = "runtime_migrations.step_external_subscription"
+module = "runtime_migrations.optional_states_nullable"

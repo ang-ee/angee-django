@@ -32,14 +32,14 @@ pytest_plugins = ("tests.test_messaging_graphql",)
 
 @pytest.fixture
 def pairing_graphql(
-    messaging_graphql_tables: None,
+    composed_tables: None,
     settings: Any,
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[dict[str, Any]]:
     """Register a fake live backend and isolate its session store."""
 
-    del messaging_graphql_tables
+    del composed_tables
     settings.ANGEE_DATA_DIR = str(tmp_path / "data")
     settings.ANGEE_CHANNEL_BACKEND_CLASSES = {
         **settings.ANGEE_CHANNEL_BACKEND_CLASSES,
@@ -52,7 +52,7 @@ def pairing_graphql(
             {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
         ),
     )
-    monkeypatch.setattr("angee.integrate.tasks.bridge_models", lambda _base: (Channel,))
+    monkeypatch.setattr("angee.integrate.tasks.models_with", lambda *, base: (Channel,))
     return sent
 
 

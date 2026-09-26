@@ -25,6 +25,7 @@ from angee.integrate.schema import (
     BridgeSyncStatusMixin,
     CredentialType,
     ExternalAccountType,
+    IntegrationLabelMixin,
     VendorType,
     apply_integration_patch_fields,
     integration_create_attrs,
@@ -41,7 +42,7 @@ Template = apps.get_model("integrate_vcs", "Template")
 
 
 @strawberry_django.type(VcsBridge)
-class VcsBridgeType(BridgeSyncStatusMixin, AngeeNode):
+class VcsBridgeType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
     """Admin projection of a VCS bridge child model."""
 
     vendor: VendorType
@@ -59,12 +60,6 @@ class VcsBridgeType(BridgeSyncStatusMixin, AngeeNode):
     sync_progress: JSON
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"])
-    def display_name(self) -> str:
-        """Return a human label for the record header and relation pickers."""
-
-        return cast(Any, self).display_label
 
 
 @strawberry_django.type(Repository)
@@ -361,24 +356,35 @@ class VCSActionMutation:
         return ActionResult(ok=True, message=f"Synced {count} item(s).")
 
 
-
 _CONSOLE_TYPES: list[object] = [
-    VcsBridgeType, *_VCS_BRIDGE_RESOURCE.types,
-    RepositoryType, *_REPOSITORY_RESOURCE.types,
-    SourceType, *_SOURCE_RESOURCE.types,
-    TemplateType, *_TEMPLATE_RESOURCE.types, RepoCandidate,
+    VcsBridgeType,
+    *_VCS_BRIDGE_RESOURCE.types,
+    RepositoryType,
+    *_REPOSITORY_RESOURCE.types,
+    SourceType,
+    *_SOURCE_RESOURCE.types,
+    TemplateType,
+    *_TEMPLATE_RESOURCE.types,
+    RepoCandidate,
 ]
 
 schemas = {
     "console": {
         "query": [
-            _VCS_BRIDGE_RESOURCE.query, _REPOSITORY_RESOURCE.query,
-            _SOURCE_RESOURCE.query, _TEMPLATE_RESOURCE.query, VCSConsoleQuery,
+            _VCS_BRIDGE_RESOURCE.query,
+            _REPOSITORY_RESOURCE.query,
+            _SOURCE_RESOURCE.query,
+            _TEMPLATE_RESOURCE.query,
+            VCSConsoleQuery,
         ],
         "mutation": [
-            _VCS_BRIDGE_RESOURCE.mutation, _REPOSITORY_RESOURCE.mutation,
-            _SOURCE_RESOURCE.mutation, _TEMPLATE_RESOURCE.mutation,
-            VcsBridgeCreateMutation, VcsBridgeUpdateMutation, VCSActionMutation,
+            _VCS_BRIDGE_RESOURCE.mutation,
+            _REPOSITORY_RESOURCE.mutation,
+            _SOURCE_RESOURCE.mutation,
+            _TEMPLATE_RESOURCE.mutation,
+            VcsBridgeCreateMutation,
+            VcsBridgeUpdateMutation,
+            VCSActionMutation,
         ],
         "subscription": [changes(VcsBridge, field="vcsBridgeChanged")],
         "types": _CONSOLE_TYPES,

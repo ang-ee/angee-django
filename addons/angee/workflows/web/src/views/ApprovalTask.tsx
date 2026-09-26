@@ -2,17 +2,19 @@ import * as React from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import {
-  Badge, Button, Collapsible, ErrorBanner,
+  Badge, Button, Collapsible, ErrorBanner, fieldErrorMessages, isCompositeFieldDescriptor,
   Glyph, JsonValueView, LabeledDescriptorField, LazyBoundary, TextLink, formSpecInitialValues,
   LARGE_VIEWPORT_QUERY,
   PageAside,
-  compileDecisionActionFormSpec, deserializeFormSpec, errorMessage, jsonValueFromUnknown, normalizeFormSpecValues, statusTone, useAppRuntime, useConfirm, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
+  deserializeFormSpec, errorMessage, jsonValueFromUnknown, normalizeFormSpecValues, useStatusTone, useAppRuntime, useConfirm, useResourceRecordHrefLookup, useRouteHref, validationErrorMap,
+  optionalTranslation, useT,
   recordTargetHref, useMediaQuery, useModelSlot,
   useRecordPeek,
   type DottedPathFieldErrorMap, type FormSpecFieldDescriptor, type JsonValue, type RecordPeekOpen, type RecordPeekReference,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { decisionHref } from "../decision-navigation";
+import { compileDecisionActionFormSpec } from "../decision-action-form";
 import { DecideWorkflowDecisionDocument, type PendingWorkflowDecision } from "../documents.public";
 import { useWorkflowsT } from "../i18n";
 import { WORKFLOW_DECISION_CONTENT_SLOT } from "../slots";
@@ -21,6 +23,11 @@ import { DECISION_OBJECT_WIDGET } from "./DecisionContextWidgets";
 const DECISION_MODEL = "workflows.Decision";
 export type ApprovalVerdict = DocumentVariables<typeof DecideWorkflowDecisionDocument>["verdict"];
 export type WorkflowDecisionRecordReference = RecordPeekReference;
+export interface WorkflowDecisionActionPresentation {
+  namespace: string;
+  /** Composed namespace key prefix; each action resolves `${keyPrefix}.${action}`. */
+  keyPrefix: string;
+}
 export interface WorkflowDecisionContentProps {
   approval: PendingWorkflowDecision;
   contextFields: readonly FormSpecFieldDescriptor[];
@@ -44,6 +51,8 @@ export type WorkflowDecisionContentComponent = React.ComponentType<WorkflowDecis
   renderedInputFields?: readonly string[];
   /** The fragment places the framework-owned action picker in its review layout. */
   placesActionPicker?: boolean;
+  /** Translate labels through the addon bundle; absent keys retain the frozen schema label. */
+  actionPresentation?: WorkflowDecisionActionPresentation;
 };
 export interface ApprovalTaskProps {
   approval: PendingWorkflowDecision;
@@ -85,21 +94,24 @@ function contextFieldLabel(widget: string | undefined, t: ReturnType<typeof useW
 }
 
 /** Render one native Decision input through the shared FormSpec field owner. */
-export function DecisionField({ name, props, label }: {
+export function DecisionField({ name, props, label, widget }: {
   name: string;
   props: WorkflowDecisionContentProps;
   label?: string;
+  /** Select a registered presentation while preserving the native field contract. */
+  widget?: string;
 }): React.ReactElement | null {
   const field = props.inputFields.find((candidate) => candidate.name === name);
   if (!field) return null;
-  return <LabeledDescriptorField field={label ? { ...field, label } : field} value={props.values[name]}
+  return <LabeledDescriptorField field={{ ...field, label: label ?? field.label, widget: widget ?? field.widget }} value={props.values[name]}
     dialogValues={{ ...props.values }} readOnly={field.readOnly || props.readOnly || props.fetching}
     messages={props.messagesFor(name)} onChange={(value) => props.setValue(name, value)} />;
 }
 
 /** Open a Decision reference in the host peek, with its canonical route as fallback. */
-export function DecisionReferenceAction({ label, open, reference, target }: {
+export function DecisionReferenceAction({ label, glyph, open, reference, target }: {
   label: string;
+  glyph?: string;
   open?: (reference: RecordPeekReference) => void;
   reference: RecordPeekReference;
   target?: "_blank";
@@ -113,7 +125,7 @@ export function DecisionReferenceAction({ label, open, reference, target }: {
   const labeled = { ...reference, label: reference.label ?? label };
   if (open) {
     return <Button type="button" size="sm" variant="ghost"
-      onClick={() => open(labeled)}>{label}</Button>;
+      onClick={() => open(labeled)}>{glyph ? <Glyph decorative name={glyph} /> : null}{label}</Button>;
   }
   if (href) return <TextLink href={href} target={target}>{label}</TextLink>;
   return <span className="text-13 text-fg-muted">{label}</span>;
@@ -138,6 +150,7 @@ export function useInitialDecisionPeek(
 
 /** The workflow-owned approval task, shared by approval and run surfaces. */
 export function ApprovalTask({ approval, available = true, onBack, onResolved, reconcile, onDirtyChange, onSkip, onOpenRecord, onOpenEvidence }: ApprovalTaskProps): React.ReactElement {
+  const statusTone = useStatusTone();
   const t = useWorkflowsT();
   const openRecord = useRecordPeek();
   const active = approval.verdict === "PENDING";
@@ -348,12 +361,13 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   onOpenEvidence?: WorkflowDecisionContentProps["openEvidence"];
 }): React.ReactElement {
   const t = useWorkflowsT();
-  const { widgets } = useAppRuntime();
+  const { i18n, widgets } = useAppRuntime();
+  const locale = i18n?.language ?? "en";
   const confirm = useConfirm();
   const compiled = React.useMemo(() => {
-    try { return { form: compileDecisionActionFormSpec(approval.decision_schema, widgets), error: null }; }
+    try { return { form: compileDecisionActionFormSpec(approval.decision_schema, widgets, t, locale), error: null }; }
     catch (cause) { return { form: null, error: errorMessage(cause, t("inbox.decisionFormUnavailable")) }; }
-  }, [approval.decision_schema, t, widgets]);
+  }, [approval.decision_schema, locale, t, widgets]);
   const form = compiled.form;
   const contextFields = form?.contextFields ?? [];
   const inputFields = form?.inputFields ?? [];
@@ -380,6 +394,14 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   const contextCheck = form?.validateContext(approval.payload);
   const submitting = React.useRef(false);
   const Content = useDecisionContent(approval.action);
+  const actionPresentation = Content?.actionPresentation;
+  const actionT = useT(actionPresentation?.namespace ?? "workflows");
+  const presentedOptions = React.useMemo(() => form?.options.map((option) => ({
+    ...option,
+    label: actionPresentation
+      ? optionalTranslation(actionT, `${actionPresentation.keyPrefix}.${option.value}`) ?? option.label
+      : option.label,
+  })) ?? [], [actionPresentation, actionT, form]);
   const renderedInputFields = new Set(Content?.renderedInputFields ?? []);
   const unclaimedBranchFields = branchFields.filter((field) => !renderedInputFields.has(field.name));
   const unsupportedBranchFields = unclaimedBranchFields.filter(isOpaqueDecisionInput);
@@ -400,7 +422,7 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
         || !contextCheck?.valid || unsupportedBranchFields.length) return;
     rhf.clearErrors();
     if (!form || !selectedAction) return;
-    const option = form.options.find((entry) => entry.value === selectedAction);
+    const option = presentedOptions.find((entry) => entry.value === selectedAction);
     if (!option) return;
     const candidate = form.project(selectedAction, submitted);
     const check = form.validate(candidate);
@@ -418,7 +440,11 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
       submitting.current = false;
     }
   }
-  const messagesFor = (name: string): readonly string[] => fieldErrorMessages(errors[name]);
+  const messagesFor = (name: string): readonly string[] => {
+    const field = branchFields.find((candidate) => candidate.name === name);
+    const composite = field !== undefined && isCompositeFieldDescriptor(field);
+    return fieldErrorMessages([errors[name]], composite ? name : undefined);
+  };
   const selectAction = React.useCallback((action: string) => {
     if (!form?.options.some((option) => option.value === action)) return;
     rhf.clearErrors();
@@ -427,7 +453,7 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
   const actionPicker = form ? <section className="space-y-3">
     <h3 className="text-xs font-semibold text-fg-muted">{t("inbox.yourDecision")}</h3>
     <div className="flex flex-wrap gap-2" role="group" aria-label={t("inbox.decisionActions")}>
-      {form.options.map((option) => <Button key={option.value} type="button"
+      {presentedOptions.map((option) => <Button key={option.value} type="button"
         variant={selectedAction === option.value ? "primary" : "secondary"}
         disabled={!resolutionEditable || resolution.fetching || isSubmitting}
         aria-pressed={selectedAction === option.value}
@@ -467,11 +493,11 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
         })}</p>
       </div> : null}
       {resolutionEditable && selectedAction ? <div className="flex justify-end"><Button type="submit"
-        variant={form.options.find((option) => option.value === selectedAction)?.variant === "destructive" ? "danger" : "primary"}
+        variant={presentedOptions.find((option) => option.value === selectedAction)?.variant === "destructive" ? "danger" : "primary"}
         loading={resolution.fetching || isSubmitting}
         disabled={!contextCheck?.valid || isSubmitting || unsupportedBranchFields.length > 0}
         >
-        {form.options.find((option) => option.value === selectedAction)?.label}
+        {presentedOptions.find((option) => option.value === selectedAction)?.label}
       </Button></div> : null}
       </section>
       : null}
@@ -483,15 +509,7 @@ function FormSpecApprovalResolution({ approval, editable, onResolved, reconcile,
 
 function isOpaqueDecisionInput(field: FormSpecFieldDescriptor): boolean {
   return (field.kind === "object" || field.kind === "array" || field.kind === "any")
-    && !field.objectTemplate && !field.itemTemplate && !field.rowTemplate;
-}
-
-function fieldErrorMessages(value: unknown): readonly string[] {
-  if (!value || typeof value !== "object") return [];
-  const entries = value as Record<string, unknown>;
-  return [...(typeof entries.message === "string" ? [entries.message] : []),
-    ...Object.entries(entries).filter(([key]) => key !== "message" && key !== "type")
-      .flatMap(([, child]) => fieldErrorMessages(child))];
+    && !isCompositeFieldDescriptor(field);
 }
 
 function useApprovalResolver(onResolved: ApprovalTaskProps["onResolved"], reconcile: ReconcileApproval | undefined, onCommitted: (verdict: string) => void): {

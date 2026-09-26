@@ -40,9 +40,25 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python types | `uv run --locked python -m mypy angee addons` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
+[`tests/test_layering.py`](../tests/test_layering.py) guards framework import
+boundaries and optional state-field declarations. See the
+[Database routing rule](backend/guidelines.md#rules) for persistence checks.
+
 PostgreSQL concurrency behavior also needs the database-backed lane in
 [reusable checks](../.github/workflows/reusable-checks.yml). SQLite results do not
 substitute for that coverage; report database-dependent skips explicitly.
+
+### Source-addon Test Models
+
+Share source-addon compositions through their owning test apps:
+[`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py) and
+[`angee.integrate.testing`](../addons/angee/integrate/testing/__init__.py). Their
+package docstrings own the adoption contract. The framework-generic
+[`composed_tables`](../angee/testing/fixtures.py) fixture uses native transactional
+isolation and synchronizes REBAC after each flush; use the native `db` fixture
+when a test needs neither transaction behavior nor permission synchronization.
+Verify adopting modules individually as well as in the full suite so collection
+order cannot hide missing models.
 
 ## Agent Methodology And Documentation
 
@@ -73,8 +89,8 @@ They are distinct lifecycle operations, not a mandatory sequence for every task:
 | Purpose | Command | Prerequisite / effect |
 |---|---|---|
 | Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/compose/management/commands/angee.py) defines ordering and options |
-| Prepare explicitly reset migration history | `uv run manage.py angee provision --fresh-history` | Empty database only; after generating final-model initial leaves, records audited historical declarations and executes unmarked operational declarations before migration |
-| Build composed runtime | `uv run manage.py angee build` | Updates generated runtime and host dependency declarations and materializes pending addon migrations |
+| Build composed runtime | `uv run manage.py angee build` | Updates generated runtime, prunes obsolete generated sources, updates host dependency declarations and materializes pending addon migrations |
+| Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves migration directories and reports those belonging to removed labels |
 | Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts/dependency projection/migration history; Django bootstrap can repair runtime sources before dispatch |
 | Author schema migrations | `uv run manage.py makemigrations <app-labels>` | After composition; preserves existing migration history |
 | Apply migrations | `uv run manage.py migrate` | Operates on the selected stack database |

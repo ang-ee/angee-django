@@ -2,12 +2,12 @@
 
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
-import { ResourceQuery, ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
+import type { GetListParams } from "@refinedev/core";
+import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
 import { useGroupedResourceViewSurface, type GroupedResourceViewSurface } from "./resource-view-surface";
@@ -27,11 +27,13 @@ const resource = testDataResource("notes.Note", {
   fields: ["id", "title", "status"].map((name) => ({ name, kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
 });
-const metadata = schemaFieldMetadataFromDataResources([resource]);
 const initialState = { pageSize: 20, groupStack: [{ field: "status" }, { field: "title" }] };
 const columns = [{ field: "title", header: "Title" }, { field: "status", header: "Status" }];
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.splice(0).forEach((client) => client.clear()); });
+const { Provider, clients, clearClients } = createUiTestProviders({
+  apiUrl: "test://groups",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failedRoot?: boolean; page?: number; summaryOnly?: boolean } = {}) {
   const activeResource = summaryOnly ? { ...resource, query: { ...contract, axes: { status: {
@@ -59,10 +61,6 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
     }
     return { data: [{ id: `page-${pagination?.currentPage}`, title: "Native row", status: "active" }], total: rowTotal };
   });
-  const provider = { getApiUrl: () => "test://groups", custom, getList, getOne: vi.fn(),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
   function Surface() {
     const resourceView = useResourceView();
     surface = useGroupedResourceViewSurface({ resource: resource.modelLabel, modelMetadata: activeModel,
@@ -79,14 +77,13 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
     return visible ? <Surface /> : <span>Record form owns this region</span>;
   }
   render(
-    <Refine resources={[...refineResourcesFromDataResources([activeResource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-      <ModelMetadataProvider metadata={activeMetadata}>
-        <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
-          <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ ...initialState, page, ...(summaryOnly ? { groupStack: [{ field: "status" }] } : {}) }}><Parent /></ResourceViewProvider>
-        </OperationDocumentsProvider>
-      </ModelMetadataProvider>
-    </Refine>,
+    <Provider metadata={activeMetadata} dataProvider={{ custom, getList }}>
+      <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
+        <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ ...initialState, page, ...(summaryOnly ? { groupStack: [{ field: "status" }] } : {}) }}><Parent /></ResourceViewProvider>
+      </OperationDocumentsProvider>
+    </Provider>,
   );
+  const client = clients.at(-1)!;
   const header = (depth: number) => surface.groupedItems.filter((item) => item.kind === "groupHeader").find((item) => item.depth === depth);
   return { get view() { return view; }, get surface() { return surface; }, header, show: (visible: boolean) => show(visible),
     custom, getList, lifecycle, refreshCount: async (count: number) => { rowTotal = count; await client.invalidateQueries(); }, delay: (page: number) => { delayPage = page; }, release: () => resolvePage({ data: [{ id: "obsolete", title: "Old filter row" }], total: 120 }) };
@@ -218,20 +215,14 @@ test("a failed root group query preserves page and unknown total instead of quer
 test("the rendered ListView displays a failed root group query instead of empty records", async () => {
   const custom = vi.fn(async () => { throw new Error("Group query unavailable"); });
   const getList = vi.fn(async () => ({ data: [], total: 0 }));
-  const provider = { getApiUrl: () => "test://root-error", custom, getList, getOne: vi.fn(),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  clients.push(client);
   render(
-    <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-      <ModelMetadataProvider metadata={metadata}>
-        <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
-          <ToastProvider><ListView resource={resource.modelLabel} columns={columns} defaultGroup={{ field: "title" }}
-            scope="local" emptyContent="There are no notes" /></ToastProvider>
-        </OperationDocumentsProvider>
-      </ModelMetadataProvider>
-    </Refine>,
+    <Provider resources={[resource]} apiUrl="test://root-error" dataProvider={{ custom, getList }}
+      queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
+      <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
+        <ToastProvider><ListView resource={resource.modelLabel} columns={columns} defaultGroup={{ field: "title" }}
+          scope="local" emptyContent="There are no notes" /></ToastProvider>
+      </OperationDocumentsProvider>
+    </Provider>,
   );
   expect(await screen.findByText("Group query unavailable")).toBeTruthy();
   expect(screen.queryByText("There are no notes")).toBeNull();
@@ -241,18 +232,14 @@ test("the rendered ListView displays a failed root group query instead of empty 
 
 test("an unbound ambient view reports invalid sorting before the list can request rows", async () => {
   const getList = vi.fn(async () => ({ data: [], total: 0 }));
-  const provider = { getApiUrl: () => "test://sort-boundary", getList, getOne: vi.fn(), create: vi.fn(),
-    update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  clients.push(client);
-  render(<Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }}
-    options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-    <ModelMetadataProvider metadata={metadata}><ToastProvider>
+  render(<Provider resources={[resource]} apiUrl="test://sort-boundary" dataProvider={{ getList }}
+    queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
+    <ToastProvider>
       <ResourceViewProvider scope="local" initialState={{ sorting: [{ id: "unknown", desc: false }] }}>
         <ListView resource={resource.modelLabel} columns={columns} />
       </ResourceViewProvider>
-    </ToastProvider></ModelMetadataProvider>
-  </Refine>);
+    </ToastProvider>
+  </Provider>);
   expect(await screen.findByText('sort[0].field: field "unknown" cannot be sorted')).toBeTruthy();
   expect(screen.getByRole("button", { name: "Reset filters, sorting and grouping" })).toBeTruthy();
   expect(getList).not.toHaveBeenCalled();

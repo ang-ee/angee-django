@@ -13,7 +13,7 @@ class GraphQLConfig(AppConfig):
     name = "angee.graphql"
 
     def ready(self) -> None:
-        """Register schema checks and connect model-change publishers and receivers."""
+        """Register schema checks and connect model-change hooks."""
 
         super().ready()
         # Phase-1 AppConfig loading imports this module before schema declarations

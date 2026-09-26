@@ -7,6 +7,9 @@ import type { ResourceProps } from "@refinedev/core";
 import type { ReactNode } from "react";
 import { dataResourcesFromAngeeSchemaMetadata } from "./projection";
 
+/** Explicit resource for disabled hooks, preventing fallback to the current route. */
+export const DISABLED_RESOURCE = "__angee_disabled__";
+
 export interface AngeeRefineResource extends ResourceProps {
   name: string;
   identifier: string;
@@ -62,8 +65,9 @@ export function refineResourcesFromDataResources(
     .map((resource) => refineResourceFromDataResource(resource, options));
 }
 
-export function refineResourceName(resource: DataResourceMetadata): string {
-  return requiredRoot(resource, "list");
+/** Use the declared list root, or disable route fallback when metadata is absent. */
+export function refineResourceName(resource: DataResourceMetadata | null | undefined): string {
+  return resource ? requiredRoot(resource, "list") : DISABLED_RESOURCE;
 }
 
 /**

@@ -397,12 +397,12 @@ rows:
     is_starred: true
 - _xref: note_demo_19
   fields:
-    title: Billing workflow sketch
+    title: Review workflow sketch
     status: archived
     tags:
     - sales
     - handoff
-    body: 'Demo note 19: billing workflow sketch across the example workspace. It gives list,
+    body: 'Demo note 19: review workflow sketch across the example workspace. It gives list,
       kanban, search, filters, pagination, and date sorting enough varied data to feel real.
 
       '

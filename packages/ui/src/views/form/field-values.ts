@@ -1,5 +1,10 @@
 import type { FieldDescriptor } from "../page";
 
+/** Normalize scalar text without interpreting domain-specific objects. */
+export function textValue(value: unknown): string {
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+}
+
 /** Return the native empty value for one descriptor field. */
 export function emptyValueForField(field: Pick<FieldDescriptor, "widget" | "kind">): unknown {
   if (field.kind === "array" || field.widget === "tagInput") return [];
@@ -79,4 +84,12 @@ export function isStructuredPresenceField(field: FieldDescriptor): boolean {
     || field.minimum !== undefined || field.maximum !== undefined
     || field.minItems !== undefined || field.maxItems !== undefined
   );
+}
+
+/** Update one structured value without dropping retained sibling fields. */
+export function updatedRecord(value: Readonly<Record<string, unknown>>, key: string, next: unknown): Record<string, unknown> {
+  if (next !== undefined) return { ...value, [key]: next };
+  const updated = { ...value };
+  delete updated[key];
+  return updated;
 }

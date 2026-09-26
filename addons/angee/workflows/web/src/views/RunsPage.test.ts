@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { attemptStateLabel, inspectionSelectionSearch, mapItemLabel, runCollectionFilter, runOriginLabel, waitLabel } from "./RunsPage";
+import { attemptStateLabel, mapItemLabel, runCollectionFilter, runOriginLabel, waitLabel } from "./RunInspection";
 
 const labels: Record<string, string> = {
   "runs.waitScheduled": "Scheduled",
@@ -30,10 +30,10 @@ describe("RunsPage presentation", () => {
   });
 
   test.each([
-    ["scheduled", "Scheduled"],
-    ["approval", "Needs approval"],
-    ["external", "Waiting for input"],
-    ["children", "Waiting for steps"],
+    ["SCHEDULED", "Scheduled"],
+    ["APPROVAL", "Needs approval"],
+    ["EXTERNAL", "Waiting for input"],
+    ["CHILDREN", "Waiting for steps"],
     ["", "Waiting"],
     [null, "Waiting"],
   ])("labels a waiting run with kind %s", (kind, expected) => {
@@ -41,8 +41,8 @@ describe("RunsPage presentation", () => {
   });
 
   test("does not surface stale wait metadata after a run leaves WAITING", () => {
-    expect(waitLabel("scheduled", "SUCCEEDED", t)).toBeNull();
-    expect(waitLabel("external", "RUNNING", t)).toBeNull();
+    expect(waitLabel("SCHEDULED", "SUCCEEDED", t)).toBeNull();
+    expect(waitLabel("EXTERNAL", "RUNNING", t)).toBeNull();
   });
 
   test("identifies test runs without presenting version zero as a publication", () => {
@@ -55,16 +55,6 @@ describe("RunsPage presentation", () => {
     expect(mapItemLabel(null, t)).toBe("—");
     expect(mapItemLabel(0, t)).toBe("Item 0");
     expect(mapItemLabel(2, t)).toBe("Item 2");
-  });
-
-  test("keeps execution and attempt selection in stable run URL state", () => {
-    expect(inspectionSelectionSearch({ tab: "automations", page: 3, filters: ["mine"], execution: "old", attempt: "attempt-1" }, {
-      execution: "execution-2",
-      attempt: null,
-    })).toEqual({ tab: "automations", page: 3, filters: ["mine"], execution: "execution-2" });
-    expect(inspectionSelectionSearch({ tab: "automations", execution: "execution-2" }, {
-      attempt: "attempt-2",
-    })).toEqual({ tab: "automations", execution: "execution-2", attempt: "attempt-2" });
   });
 
   test("distinguishes returned, unapplied and revoked physical attempts from successful outcomes", () => {

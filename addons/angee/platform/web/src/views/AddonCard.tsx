@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
-  Badge, Button, Chip, Glyph, errorMessage, statusTone, textRoleVariants, useAuthoredResourceMutation, useToast, type CardActionContext, type Tone } from "@angee/ui";
+  Badge, Button, Chip, Glyph, errorMessage, useStatusTone, textRoleVariants, useAuthoredResourceMutation, useToast, type CardActionContext, type Tone } from "@angee/ui";
 import { useAuthoredQuery } from "@angee/refine";
 
 import {
@@ -20,6 +20,7 @@ export const ADDON_MODEL = "platform.Addon";
 // snake fields, fetched + grouped client-side by the board's client row model.
 export interface AddonResourceRow extends Record<string, unknown> {
   id: string;
+  name: string;
   label: string;
   namespace: string;
   category: string;
@@ -41,7 +42,7 @@ const MAX_CARD_KEYWORDS = 5;
 
 // The reflection enums color the same way wherever they render (card body + list
 // columns), so the override maps live here once and both surfaces import them: the
-// shared `statusTone` vocabulary owns the mechanism (`disabled` is already neutral
+// shared `useStatusTone` vocabulary owns the mechanism (`disabled` is already neutral
 // there), with these platform-specific values supplied as the override.
 export const STATE_TONES: Record<string, Tone> = {
   enabled: "success",
@@ -58,8 +59,9 @@ export const SOURCE_TONES: Record<string, Tone> = {
  * frame owns the open-detail click and the footer owns the lifecycle actions.
  */
 export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
+  const statusTone = useStatusTone();
   const t = usePlatformT();
-  // The JSON scalar may arrive null (a rollup whose keywords are unset) — guard the
+  // The JSON scalar may arrive null (a catalogue row whose keywords are unset) — guard the
   // boundary, and dedupe so the chip `key` stays unique.
   const keywords = [...new Set(row.keywords ?? [])].slice(0, MAX_CARD_KEYWORDS);
   return (

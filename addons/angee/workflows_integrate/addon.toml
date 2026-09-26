@@ -1,8 +1,8 @@
-# Angee addon manifest. The declarative contract hatch-angee compiles into
-# the package's [project] + entry points; see hatch-angee's native AddonManifest.
 [addon]
 name = "angee.workflows_integrate"
-description = "Archive extraction workflow steps for integration-owned ingest surfaces"
-keywords = ["workflows", "integrate", "archives"]
+description = "Archive extraction and bounded bridge cycles composed over workflows"
+keywords = ["workflows", "integrations", "archives", "sync"]
 category = "Workflows"
-depends_on = ["angee.workflows", "angee.storage"]
+depends_on = ["angee.workflows", "angee.integrate", "angee.storage"]
+
+[web]

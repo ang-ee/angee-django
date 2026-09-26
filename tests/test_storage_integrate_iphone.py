@@ -13,30 +13,13 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.management import call_command
-from django.db import connection
 from django.utils import timezone
 from rebac import system_context
 
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate_iphone.connect import create_iphone_backup_mount
 from angee.storage_integrate_iphone.mounts import IphoneBackupMountBackend
-from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
-    STORAGE_INTEGRATE_TEST_MODELS,
-    STORAGE_TEST_MODELS,
-    Backend,
-    Drive,
-    File,
-    Folder,
-    MimeType,
-    Mount,
-    Vendor,
-    _clear_model_tables,
-    _create_missing_tables,
-    addon_schema,
-    execute_schema,
-)
+from tests.conftest import Backend, Drive, File, Folder, MimeType, Mount, Vendor, addon_schema, execute_schema
 from tests.test_integrate_iphone import (
     BASE_MTIME_NS,
     CAMERA_BYTES,
@@ -54,31 +37,18 @@ storage_integrate_iphone_schema = importlib.import_module(
 )
 storage_integrate_schema = importlib.import_module("angee.storage_integrate.schema")
 
-IPHONE_TEST_MODELS = (
-    IAM_CONNECTION_TEST_MODELS
-    + INTEGRATE_TEST_MODELS
-    + STORAGE_TEST_MODELS
-    + STORAGE_INTEGRATE_TEST_MODELS
-)
-
 
 @pytest.fixture()
 def iphone_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the integration, storage, and Mount tables used by this addon."""
+    """Reset storage instances and synchronize permissions around each test."""
 
     del transactional_db
     Backend._storage_cache.clear()
-    created = _create_missing_tables(IPHONE_TEST_MODELS)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
         Backend._storage_cache.clear()
-        _clear_model_tables(IPHONE_TEST_MODELS)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
 
 
 @pytest.fixture()

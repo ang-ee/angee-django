@@ -135,13 +135,13 @@ describe("shared record access chrome", () => {
   test("opens the same access adapter from an external record action", () => {
     const onOpenChange = vi.fn();
     const { rerender } = render(<ShareAccessDialog
-      resource="notes.Note" targetIds={["note-1"]} label="AP folder"
+      resource="notes.Note" targetIds={["note-1"]} label="Review folder"
       open onOpenChange={onOpenChange} trigger={null}
     />);
 
     expect(mocks.queryOptions).toMatchObject({ enabled: true });
     expect(mocks.queryVariables).toEqual({ targetType: "notes/note", targetIds: ["note-1"] });
-    expect(mocks.dialogProps).toMatchObject({ open: true, label: "AP folder", trigger: null, onOpenChange });
+    expect(mocks.dialogProps).toMatchObject({ open: true, label: "Review folder", trigger: null, onOpenChange });
 
     rerender(<ShareAccessDialog
       resource="notes.Note" targetIds={["note-1"]}

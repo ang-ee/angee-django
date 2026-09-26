@@ -3,7 +3,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -46,14 +45,9 @@ export interface ChatterContextValue {
   setInitialActiveTab: (tab: ChatterTabId) => void;
   content: ChatterContent | null;
   setContent: (owner: symbol, content: ChatterContent | null) => void;
-  /** A record can place this same chatter below its form and reserve the aside for a native peek. */
-  recordSupportKey: string | null;
-  setRecordSupportKey: (owner: symbol, key: string | null) => void;
-  recordPreview: ReactNode | null;
-  setRecordPreview: (owner: symbol, key: string, node: ReactNode | null) => void;
   /**
-   * Cross-tree collapse bridge for the shell's secondary pane (chatter or
-   * record preview). The Workbench owns size and persistence; standalone hosts
+   * Cross-tree collapse bridge for the shell's Chatter pane. The Workbench owns
+   * size and persistence; standalone hosts
    * fall back to a local `collapsed` flag. Pass `null` on unmount.
    */
   registerSecondaryController: (controller: ChatterPaneController | null) => void;
@@ -74,10 +68,6 @@ const ChatterContext = createContext<ChatterContextValue>({
   setInitialActiveTab: () => undefined,
   content: null,
   setContent: () => undefined,
-  recordSupportKey: null,
-  setRecordSupportKey: () => undefined,
-  recordPreview: null,
-  setRecordPreview: () => undefined,
   registerSecondaryController: () => undefined,
 });
 
@@ -112,20 +102,6 @@ export function ChatterProvider({
   const [contentState, setContentState] = useState<
     readonly (ChatterContent & { owner: symbol })[]
   >([]);
-  const [support, setSupport] = useState<{ owner: symbol; key: string } | null>(null);
-  const [preview, setPreview] = useState<{ owner: symbol; key: string; node: ReactNode } | null>(null);
-  const setRecordSupportKey = useCallback((owner: symbol, key: string | null) => {
-    setSupport((current) => key === null
-      ? current?.owner === owner ? null : current
-      : current?.owner === owner && current.key === key ? current : { owner, key });
-  }, []);
-  const setRecordPreview = useCallback((owner: symbol, key: string, node: ReactNode | null) => {
-    setPreview((current) => node === null
-      ? current?.owner === owner ? null : current
-      : current?.owner === owner && current.key === key && Object.is(current.node, node)
-        ? current
-        : { owner, key, node });
-  }, []);
 
   const registerSecondaryController = useCallback(
     (controller: ChatterPaneController | null) => {
@@ -205,38 +181,27 @@ export function ChatterProvider({
   }, [contentState]);
 
   const collapsed = controllerCollapsed ?? localCollapsed;
-  const recordSupportKey = support?.key ?? null;
-  // Never show the preceding record's source while the next record mounts.
-  const recordPreview = preview?.key === recordSupportKey ? preview.node : null;
   const value = useMemo<ChatterContextValue>(
     () => ({
       activeTab,
       collapsed,
       content,
-      recordSupportKey,
-      recordPreview,
       registerSecondaryController,
       setActiveTab,
       setInitialActiveTab,
       setCollapsed,
       setContent,
-      setRecordSupportKey,
-      setRecordPreview,
       toggleCollapsed,
     }),
     [
       activeTab,
       collapsed,
       content,
-      recordSupportKey,
-      recordPreview,
       registerSecondaryController,
       setActiveTab,
       setCollapsed,
       setContent,
       setInitialActiveTab,
-      setRecordSupportKey,
-      setRecordPreview,
       toggleCollapsed,
     ],
   );
@@ -249,18 +214,6 @@ export function ChatterProvider({
 
 export function useChatter(): ChatterContextValue {
   return useContext(ChatterContext);
-}
-
-/** Select below-form support for one mounted record. Pass null for nested/read-only peeks. */
-export function useRecordSupportPlacement(recordKey: string | null): void {
-  const ownerRef = useRef<symbol | null>(null);
-  if (ownerRef.current === null) ownerRef.current = Symbol("record-support");
-  const owner = ownerRef.current;
-  const { setRecordSupportKey } = useChatter();
-  useLayoutEffect(() => {
-    setRecordSupportKey(owner, recordKey);
-    return () => setRecordSupportKey(owner, null);
-  }, [owner, recordKey, setRecordSupportKey]);
 }
 
 /**

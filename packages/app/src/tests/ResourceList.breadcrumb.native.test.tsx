@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
+import type { GetListParams } from "@refinedev/core";
 import { createMemoryHistory, createRootRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { refineResourcesFromDataResources } from "@angee/metadata";
 import { testDataResource, testResourceQuery, testQueryField, testQueryAxis } from "@angee/metadata/testing";
 import { OperationDocumentsProvider, tanStackRouterProvider } from "@angee/refine";
 import { Breadcrumb, BreadcrumbLabelProvider } from "@angee/ui/chrome/index";
@@ -28,8 +29,11 @@ const resource = testDataResource("notes.Note", {
 
 });
 const rows = Array.from({ length: 292 }, (_, index) => ({ id: `note-${index + 1}`, title: `Note ${index + 1}`, updated_at: "2021-01-12T00:00:00Z" }));
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.splice(0).forEach((client) => client.clear()); });
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://notes",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 async function fixture() {
   const lifecycle = { mounts: 0, unmounts: 0 };
@@ -37,29 +41,24 @@ async function fixture() {
     const offset = ((pagination?.currentPage ?? 1) - 1) * (pagination?.pageSize ?? 20);
     return { data: rows.slice(offset, offset + (pagination?.pageSize ?? 20)), total: rows.length };
   });
-  const provider = { getApiUrl: () => "test://notes", getList,
+  const provider = { getList,
     getOne: vi.fn(async ({ id }: { id: string }) => ({ data: rows.find((row) => row.id === id)! })),
     custom: vi.fn(async () => ({ data: { notes_groups: [{ key: { updated_at_month: "2021-01-01T00:00:00Z",
       updated_at_month_range: { from: "2021-01-01T00:00:00Z", to: "2021-02-01T00:00:00Z" } }, aggregate: { count: rows.length } }], totalCount: 1 } })),
-    create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
+  } satisfies RefineTestDataProvider;
   function NotesPage() {
     React.useEffect(() => { lifecycle.mounts++; return () => { lifecycle.unmounts++; }; }, []);
     return <ResourceList resource="notes.Note" routed placement="inline" hideCreate
       defaultGroups={{ list: { field: "updated_at", granularity: "month" } }}
       columns={[{ field: "title" }, { field: "updated_at" }]} formFields={[{ name: "title", widget: "text", title: true }]} />;
   }
-  const root = createRootRoute({ component: () => <Refine routerProvider={tanStackRouterProvider}
-    resources={refineResourcesFromDataResources([resource]).map((entry) => ({ ...entry, list: "/notes", show: "/notes/:id", meta: { ...entry.meta, label: "Notes" } }))}
-    dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-    <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
-      <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
-        <ModalsHost><ToastProvider><BreadcrumbLabelProvider><Breadcrumb /><Outlet /></BreadcrumbLabelProvider></ToastProvider></ModalsHost>
-      </OperationDocumentsProvider>
-    </ModelMetadataProvider>
-  </Refine> });
+  const root = createRootRoute({ component: () => <Provider resources={[resource]} routerProvider={tanStackRouterProvider}
+    refineResources={refineResourcesFromDataResources([resource]).map((entry) => ({ ...entry, list: "/notes", show: "/notes/:id", meta: { ...entry.meta, label: "Notes" } }))}
+    dataProvider={provider}>
+    <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
+      <ModalsHost><ToastProvider><BreadcrumbLabelProvider><Breadcrumb /><Outlet /></BreadcrumbLabelProvider></ToastProvider></ModalsHost>
+    </OperationDocumentsProvider>
+  </Provider> });
   const routes: BaseAddonRoute[] = [{ name: "notes", path: "/notes", component: NotesPage }, { name: "notes.record", parent: "notes", path: "/notes/$id" }];
   createAddonRouteNodes({ routes, routesByName: new Map(routes.map((route) => [route.name, route])), layoutRoutes: new Map([["console", root]]) });
   const history = createMemoryHistory({ initialEntries: [`/notes?pageSize=20&sort=updated_at%3Adesc&keep=external&filter=${encodeURIComponent(JSON.stringify({ title: { iContains: "Note" } }))}`] });

@@ -1,29 +1,26 @@
-"""Provider-neutral document acquisition and recognition helpers."""
+"""Provider-neutral document acquisition helpers."""
 
 from __future__ import annotations
 
 import hashlib
 import io
-import time
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
-from typing import Any
 
 import pypdfium2 as pdfium
 from PIL import Image
 
-from angee.workflows_extraction.engines import (
+from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,
     DocumentSource,
-    ExtractionEngine,
     ExtractionPartKind,
     PageImage,
 )
-from angee.workflows_extraction.structured import extract_structured_sources
+from angee.workflows_extraction.profiles import ExtractionProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +43,7 @@ class AcquiredPage:
 def acquire_native_parts(
     sources: Sequence[DocumentSource],
     *,
+    profile: ExtractionProfile,
     dpi: int = 200,
     max_edge: int = 3500,
     max_pages: int = 10,
@@ -56,6 +54,7 @@ def acquire_native_parts(
     try:
         return _acquire_native_parts(
             sources,
+            profile=profile,
             dpi=dpi,
             max_edge=max_edge,
             max_pages=max_pages,
@@ -70,6 +69,7 @@ def acquire_native_parts(
 def _acquire_native_parts(
     sources: Sequence[DocumentSource],
     *,
+    profile: ExtractionProfile,
     dpi: int,
     max_edge: int,
     max_pages: int,
@@ -91,30 +91,9 @@ def _acquire_native_parts(
             content = source.content
             if not isinstance(content, bytes):
                 raise ValueError("File sources require a byte snapshot.")
-            filename = str(getattr(source.file, "filename", "") or getattr(source.file, "name", ""))
-            structured = extract_structured_sources(
-                content, media_type=source.mime_type, filename=filename, source_position=source.source_position
-            )
-            if structured:
-                for item in structured:
-                    value = {
-                        "facts": [asdict(fact) for fact in item.facts],
-                        "evidence": asdict(item.evidence),
-                        "review_reasons": list(item.review_reasons),
-                        "carrier": item.carrier,
-                        "name": item.name,
-                    }
-                    parts.append(
-                        DocumentPart(
-                            source.source_position,
-                            None,
-                            item.media_type,
-                            ExtractionPartKind.STRUCTURED,
-                            value,
-                            f"structured:{item.kind}",
-                            item.content_sha256,
-                        )
-                    )
+            carriers = profile.detect_carriers(source)
+            if carriers:
+                parts.extend(carriers)
                 continue
             declared_type = source.mime_type.lower().split(";", 1)[0]
             if declared_type in {"text/plain", "text/html"}:
@@ -126,7 +105,7 @@ def _acquire_native_parts(
                 continue
             if declared_type == "message/rfc822" or (
                 declared_type in {"", "application/octet-stream"}
-                and filename.lower().endswith(".eml")
+                and source.filename.lower().endswith(".eml")
             ):
                 text = _rfc822_text(content)
                 text_bytes = _bounded_text_size(text, text_bytes, max_text_bytes)
@@ -178,60 +157,6 @@ def _acquire_native_parts(
             for source_position, page_position in keys
         ),
     )
-
-
-def recognize_pages(
-    pages: Sequence[PageImage],
-    *,
-    engine: ExtractionEngine,
-    model: Any | None,
-    config: dict[str, Any],
-    timeout: float,
-    acquired_parts: Sequence[DocumentPart] = (),
-) -> tuple[DocumentPart, ...]:
-    """Recognize exactly the supplied scanned pages and retain their plain text."""
-
-    if pages and model is None:
-        raise DocumentPipelineError(
-            "Scanned pages require a recognition model.", parts=acquired_parts,
-            stage="recognition_config", code="model_missing",
-        )
-    started = time.monotonic()
-    parts: list[DocumentPart] = []
-    for page in pages:
-        remaining = timeout - (time.monotonic() - started)
-        if remaining <= 0:
-            raise DocumentPipelineError(
-                "Text recognition timed out.", parts=(*acquired_parts, *parts),
-                stage="recognition_request", code="timeout",
-            )
-        try:
-            result = engine.recognize_page(page, model=model, config=config, timeout=remaining)
-        except DocumentPipelineError:
-            raise
-        except (RuntimeError, TimeoutError, ValueError) as error:
-            raise DocumentPipelineError(
-                f"Text recognition failed ({type(error).__name__}).", parts=(*acquired_parts, *parts),
-                stage="recognition_request", code=type(error).__name__,
-            ) from None
-        text = result.text.strip()
-        parts.append(
-            DocumentPart(
-                page.source_position,
-                page.page_position,
-                "text/plain",
-                ExtractionPartKind.RECOGNIZED_TEXT,
-                text,
-                f"{engine.key}:text_recognition",
-                hashlib.sha256(text.encode()).hexdigest(),
-                page.width,
-                page.height,
-                page.dpi,
-                result.duration_ms,
-                result.engine_metadata,
-            )
-        )
-    return tuple(parts)
 
 
 def _message_text(source: DocumentSource) -> str:

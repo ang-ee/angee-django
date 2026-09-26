@@ -4,6 +4,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import { boundedGraphQLTransportError } from "@angee/refine";
 import { errorFromUnknown } from "../../data/errors";
+import { fieldErrorMessages } from "./form-view-model";
 
 import {
   directDottedPathMessages,
@@ -11,6 +12,7 @@ import {
   messagesForDottedPath,
   useDottedPathFieldErrors,
   validationErrorMap,
+  validationErrorMessages,
   validationErrorsFromError,
 } from "./validation-errors";
 
@@ -58,6 +60,30 @@ describe("dotted path message scoping", () => {
       ),
     ).toEqual(["Rows are invalid"]);
   });
+
+  test("RHF scoped messages keep exact errors bare and route nested descendants", () => {
+    const errors = Object.assign(
+      [{ lines: [{ label: { message: "Enter a label" } }] }],
+      {
+        message: "Documents are invalid",
+        type: "validate",
+        types: { maxItems: "Documents are invalid" },
+        ref: { message: "DOM input details are not validation." },
+      },
+    );
+    const scoped = fieldErrorMessages([errors], "documents");
+
+    expect(scoped).toEqual([
+      "Documents are invalid",
+      "documents.0.lines.0.label: Enter a label",
+    ]);
+    expect(directDottedPathMessages(scoped, "documents")).toEqual([
+      "Documents are invalid",
+    ]);
+    expect(messagesForDottedPath(scoped, "documents.0.lines.0.label")).toEqual([
+      "Enter a label",
+    ]);
+  });
 });
 
 describe("validationErrorMap", () => {
@@ -75,6 +101,22 @@ describe("validationErrorMap", () => {
 
   test("rejects a malformed JSON error map", () => {
     expect(validationErrorMap({ title: "Required" })).toBeNull();
+  });
+});
+
+describe("validationErrorMessages", () => {
+  test("formats every translated field message through the canonical map", () => {
+    expect(
+      validationErrorMessages({
+        "config.mode": ["Choose a supported mode."],
+        timeout: ["Must be positive.", "Must be finite."],
+      }),
+    ).toEqual([
+      "config.mode: Choose a supported mode.",
+      "timeout: Must be positive.",
+      "timeout: Must be finite.",
+    ]);
+    expect(validationErrorMessages({ timeout: "Must be positive." })).toEqual([]);
   });
 });
 

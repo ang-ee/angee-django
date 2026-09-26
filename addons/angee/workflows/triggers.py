@@ -15,6 +15,7 @@ from django.utils import timezone
 from rebac import system_context
 
 from angee.base.identity import instance_from_public_id
+from angee.base.scoping import system_queryset
 from angee.graphql.events import ChangePayload
 from angee.graphql.publishing import change_published
 from angee.workflows.models import TriggerKind
@@ -107,7 +108,7 @@ def _on_change_published(
     if model_label not in _enabled_event_model_labels():
         return
     with system_context(reason="workflows.event_triggers.subject"):
-        instance = instance_from_public_id(sender, payload.id)
+        instance = instance_from_public_id(sender, payload.id, queryset=system_queryset(sender))
     if instance is None:
         return
 
@@ -148,9 +149,11 @@ def _enabled_event_model_labels() -> frozenset[str]:
     """Return enabled event model labels with a short in-process cache."""
 
     global _event_trigger_label_cache
+
     now = time.monotonic()
-    if _event_trigger_label_cache is not None:
-        expires_at, labels = _event_trigger_label_cache
+    cached = _event_trigger_label_cache
+    if cached is not None:
+        expires_at, labels = cached
         if expires_at > now:
             return labels
     try:
@@ -185,6 +188,7 @@ def _clear_event_trigger_label_cache() -> None:
     """Clear the process-local enabled event-label cache."""
 
     global _event_trigger_label_cache
+
     _event_trigger_label_cache = None
 
 

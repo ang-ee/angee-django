@@ -86,25 +86,27 @@ class Group(SqidMixin, AngeeModel):
 
         if not self.has_access("write"):
             raise PermissionDenied("Write access to the IAM group is required.")
-        grant_membership(
-            subject=self.member_subject(subject),
-            container=self,
-            caveat_name=caveat_name,
-            caveat_context=caveat_context,
-        )
+        with transaction.atomic():
+            grant_membership(
+                subject=self.member_subject(subject),
+                container=self,
+                caveat_name=caveat_name,
+                caveat_context=caveat_context,
+            )
 
     def remove_member(self, subject: str, *, caveat_name: str = "") -> bool:
         """Revoke an exact direct membership, allowing a stale user subject."""
 
         if not self.has_access("write"):
             raise PermissionDenied("Write access to the IAM group is required.")
-        return bool(
-            revoke_membership(
-                subject=self.member_subject(subject, require_existing=False),
-                container=self,
-                caveat_name=caveat_name,
+        with transaction.atomic():
+            return bool(
+                revoke_membership(
+                    subject=self.member_subject(subject, require_existing=False),
+                    container=self,
+                    caveat_name=caveat_name,
+                )
             )
-        )
 
 
 class UserKind(models.TextChoices):
@@ -203,6 +205,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
 
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
+
         return self._create_user(username, email, password, **extra_fields)
 
     def create_superuser(
@@ -220,6 +223,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
             raise ValueError("Superuser must have is_staff=True.")
         if extra_fields.get("is_superuser") is not True:
             raise ValueError("Superuser must have is_superuser=True.")
+
         return self._create_user(username, email, password, **extra_fields)
 
     def _create_user(
@@ -241,7 +245,7 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         user.set_password(password)
         actor = current_actor()
         user.sudo(reason="iam.user.create")
-        user.save(using=self._db)
+        user.save()
         if actor is not None:
             user.with_actor(actor)
         else:
@@ -355,6 +359,7 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
 
         if not isinstance(preferences, Mapping):
             raise ValueError("preferences must be a JSON object")
+
         with system_context(reason="iam.preferences.update"), transaction.atomic():
             self.preferences = dict(preferences)
             self.save(update_fields=["preferences"])

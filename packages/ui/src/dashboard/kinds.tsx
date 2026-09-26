@@ -1,14 +1,18 @@
 import * as React from "react";
+import { rowPublicId } from "@angee/metadata";
+import * as v from "valibot";
 import { MetricTile } from "../fragments/MetricStrip";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { InlineEmpty } from "../fragments/InlineEmpty";
 import { LoadingPanel } from "../fragments/LoadingPanel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
-import type { DashboardWidgetKind, DashboardWidgetRenderProps } from "./headless";
+import { widgetColumns, type DashboardWidgetKind, type DashboardWidgetRenderProps, type WidgetColumn } from "./headless";
 import { DashboardBars, DashboardDonut } from "./charts";
 import { useDashboardT } from "./i18n";
-import { formatDateTime } from "../widgets/date-format";
 import { titleCase } from "../lib/titleCase";
+import { useUiT } from "../i18n";
+import type { ColumnDescriptor } from "../views/page";
+import { cellContent } from "../views/resource/list-body/cell-utils";
 
 function DataState({ data, children }: DashboardWidgetRenderProps & { children: React.ReactNode }): React.ReactElement {
   const t = useDashboardT();
@@ -48,23 +52,39 @@ function DonutWidget(props: DashboardWidgetRenderProps): React.ReactElement {
 
 function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   const t = useDashboardT();
-  const columns = React.useMemo(() => {
-    const first = props.data.rows[0];
-    if (!first) return [];
-    const keys = new Set(Object.keys(first));
-    return [...keys].filter((key) => key !== "id" && !(key.endsWith("_label") && keys.has(key.slice(0, -6))));
-  }, [props.data.rows]);
+  const uiT = useUiT();
+  const identityField = props.data.identity?.field;
+  const defaultColumns = React.useMemo<WidgetColumn[]>(() => {
+    const fields = props.spec.data.shape === "rows"
+      ? props.spec.data.source.fields ?? (identityField ? [identityField] : [])
+      : [];
+    return fields
+      .filter((field) => field !== identityField && props.data.queryFields[field]?.row)
+      .map((path) => ({ path }));
+  }, [props.spec.data, props.data.queryFields, identityField]);
+  const { columns, error } = React.useMemo(() => {
+    const parsed = widgetColumns({ options: props.spec.options });
+    if (!parsed.success) return { columns: [], error: new v.ValiError(parsed.issues) };
+    const columns = (parsed.output ?? defaultColumns).map(({ path, label }) => {
+      const queryField = props.data.queryFields[path];
+      const column: ColumnDescriptor = { field: queryField?.row?.path ?? path, header: label ?? titleCase(path), queryField };
+      return { path, column };
+    });
+    return { columns, error: null };
+  }, [defaultColumns, props.spec.options, props.data.queryFields]);
+  const resource = props.data.identity ? { query: { identity: props.data.identity } } : null;
   return (
-    <DataState {...props}>
+    <DataState {...props} data={{ ...props.data, error: props.data.error ?? error }}>
       {props.data.rows.length === 0 ? <InlineEmpty label={t("widget.noRows")} /> : (
-        <Table density="compact" className="table-fixed">
-          <TableHeader><TableRow>{columns.map((column) => <TableHead key={column} className="max-w-64">{titleCase(column)}</TableHead>)}</TableRow></TableHeader>
+        <Table density="compact" className="table-fixed" aria-labelledby={props.titleId} aria-label={props.titleId ? undefined : props.spec.title}>
+          <TableHeader><TableRow>{columns.map(({ path, column }) => <TableHead key={path} className="max-w-64">{column.header}</TableHead>)}</TableRow></TableHeader>
           <TableBody>
             {props.data.rows.map((row, index) => (
-              <TableRow key={String(row.id ?? index)}>{columns.map((column) => {
-                const value = cellText(row, column);
-                return <TableCell key={column} className="max-w-64 truncate" title={value}>{value}</TableCell>;
-              })}</TableRow>
+              <TableRow key={rowPublicId(row, resource) ?? index}>{columns.map(({ path, column }) => (
+                <TableCell key={path} className="max-w-64 truncate">
+                  {cellContent(column, row, uiT)}
+                </TableCell>
+              ))}</TableRow>
             ))}
           </TableBody>
         </Table>
@@ -76,23 +96,6 @@ function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
 function AuthoredWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   const t = useDashboardT();
   return <>{props.authored ?? <InlineEmpty label={t("widget.authoredUnavailable")} />}</>;
-}
-
-function cellText(row: Record<string, unknown>, column: string): string {
-  const labelledValue = row[`${column}_label`];
-  const value = labelledValue ?? row[column];
-  if (value == null) return "—";
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "string") {
-    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)) {
-      const formatted = formatDateTime(value);
-      if (formatted) return formatted;
-    }
-    return value;
-  }
-  if (typeof value !== "object") return String(value);
-  const record = value as Record<string, unknown>;
-  return String(record.name ?? record.label ?? record.title ?? record.id ?? "—");
 }
 
 export const BUILTIN_DASHBOARD_WIDGET_KINDS: readonly DashboardWidgetKind[] = [

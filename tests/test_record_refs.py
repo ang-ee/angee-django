@@ -23,7 +23,6 @@ from angee.base.refs import (
     canonical_record_target,
     record_ref_for,
 )
-from tests.conftest import _clear_model_tables, _create_missing_tables
 from tests.mtidemo.models import (
     MtiChild,
     MtiChildProxy,
@@ -31,6 +30,7 @@ from tests.mtidemo.models import (
     MtiParentProxy,
     MtiTwoParent,
 )
+from tests.tables import model_tables
 
 
 class RecordRefTypedTarget(SqidMixin, AngeeModel):
@@ -118,14 +118,8 @@ def record_ref_tables(transactional_db: Any) -> Any:
     """Create the concrete test tables."""
 
     del transactional_db
-    created_models = _create_missing_tables(RECORD_REF_TEST_MODELS)
-    try:
+    with model_tables(RECORD_REF_TEST_MODELS):
         yield
-    finally:
-        _clear_model_tables(RECORD_REF_TEST_MODELS)
-        with connection.schema_editor() as schema_editor:
-            for model in reversed(created_models):
-                schema_editor.delete_model(model)
 
 
 def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tables: None) -> None:

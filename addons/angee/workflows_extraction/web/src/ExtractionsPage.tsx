@@ -9,7 +9,7 @@ export function ExtractionsPage(): React.ReactElement {
       <Column field="revision" />
       <Column field="status" />
       <Column field="schema_id" />
-      <Column field="engine" />
+      <Column field="profile" />
       <Column field="created_at" />
     </List>
     <Form resource={EXTRACTION_MODEL}>
@@ -18,7 +18,7 @@ export function ExtractionsPage(): React.ReactElement {
       <Field name="error_code" readOnly />
       <Field name="schema_id" readOnly />
       <Field name="schema_digest" readOnly />
-      <Field name="engine" readOnly />
+      <Field name="profile" readOnly />
       <Field name="model" readOnly />
       <Field name="recognition_model" readOnly />
       <Field name="created_at" readOnly />

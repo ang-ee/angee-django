@@ -10,7 +10,6 @@ from graphlib import CycleError, TopologicalSorter
 from typing import Any, Literal, TypeAlias, cast
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from jsonschema import Draft202012Validator
 from pydantic import ValidationError as PydanticValidationError
 
 from angee.workflows.attempts import json_values_equal
@@ -19,6 +18,9 @@ from angee.workflows.data_contracts import (
     DataContract,
     DataContractNode,
     NumericRange,
+    StringLengthRange,
+    check_json_schema,
+    json_schema_validator,
     model_data_contract,
     schema_data_contract,
 )
@@ -285,7 +287,7 @@ class WorkflowGraph:
         map_targets, _ = self._maps()
         eligible: set[GraphIdentity] = set()
         include_map_item = False
-        owners = map_targets.get(target.identity, ())
+        owners = map_targets.get(target.identity, [])
         if (
             len(owners) == 1
             and owners[0].identity != target.identity
@@ -321,11 +323,45 @@ class WorkflowGraph:
             sources.append(
                 GraphInputSource(
                     "map_item",
-                    model_data_contract(None, mode="serialization"),
+                    self._map_item_contract(owners[0]),
                     label="Current Map item",
                 )
             )
         return tuple(sources)
+
+    def _map_item_contract(self, owner: GraphNode) -> DataContract:
+        """Project a Map's input binding and items path through declared source catalogues."""
+
+        unknown = model_data_contract(None, mode="serialization")
+        path = owner.impl.map_input_path(owner.config) if owner.impl else None
+        if path is None or owner.input_binding is None:
+            return unknown
+        try:
+            binding = parse_binding(owner.input_binding)
+        except PydanticValidationError:
+            return unknown
+        sources = self.input_sources(owner.identity)
+        for visit in binding.visits():
+            reference = visit.binding.source_reference()
+            if reference is None or tuple(path[:len(visit.target_path)]) != visit.target_path:
+                continue
+            source = next(
+                (
+                    source for source in sources
+                    if source.kind == reference.kind and source.step_key == reference.step_key
+                ),
+                None,
+            )
+            if source is None:
+                continue
+            contract = source.contract.catalogue.at_path(reference.path)
+            if contract is None:
+                continue
+            relative_path = contract.resolve_path(path[len(visit.target_path):])
+            array = None if relative_path is None else contract.at_path(relative_path)
+            if array is not None and array.kind == "array" and array.item is not None:
+                return DataContract(raw_schema=None, catalogue=array.item.contract)
+        return unknown
 
     def map_body_candidates(
         self,
@@ -886,9 +922,9 @@ class WorkflowGraph:
                 continue
             sources = self.input_sources(node.identity)
             by_step_key: dict[str | None, list[GraphInputSource]] = defaultdict(list)
-            for source in sources:
-                if source.kind == "step_output":
-                    by_step_key[source.step_key].append(source)
+            for input_source in sources:
+                if input_source.kind == "step_output":
+                    by_step_key[input_source.step_key].append(input_source)
             by_kind = {source.kind: source for source in sources if source.kind != "step_output"}
             for visit in binding.visits():
                 reference = visit.binding.source_reference()
@@ -942,7 +978,8 @@ class WorkflowGraph:
             )
             return result
         try:
-            Draft202012Validator.check_schema(self.input_schema)
+            check_json_schema(self.input_schema)
+            input_accepts_null = json_schema_validator(self.input_schema).is_valid(None)
         except Exception:  # noqa: BLE001 - preserve one authoring diagnostic for native schema errors.
             result.append(
                 self._workflow(
@@ -957,7 +994,7 @@ class WorkflowGraph:
                 self._workflow("output_schema_invalid", "Workflow output schema must be an object.", "output_schema")
             ]
         try:
-            Draft202012Validator.check_schema(schema)
+            check_json_schema(schema)
         except Exception:  # noqa: BLE001 - preserve one authoring diagnostic for native schema errors.
             result.append(
                 self._workflow(
@@ -1090,7 +1127,7 @@ class WorkflowGraph:
                             )
                         )
                     elif reference.kind == "workflow_input" and (
-                        Draft202012Validator(self.input_schema).is_valid(None)
+                        input_accepts_null
                         or not workflow_input_contract.guarantees_path(reference.path)
                     ):
                         result.append(
@@ -1148,7 +1185,7 @@ class WorkflowGraph:
         for edge in self.edges:
             outgoing[edge.source_identity].append(edge)
         paths: dict[GraphIdentity, list[dict[GraphIdentity, str]]] = defaultdict(list)
-        pending = [(entries[0].identity, {})]
+        pending: list[tuple[GraphIdentity, dict[GraphIdentity, str]]] = [(entries[0].identity, {})]
         while pending:
             identity, choices = pending.pop()
             paths[identity].append(choices)
@@ -1263,7 +1300,7 @@ def _result_binding_compatible(
     kind = getattr(binding, "kind", None)
     if kind == "constant":
         try:
-            return Draft202012Validator(target_schema).is_valid(binding.value)
+            return json_schema_validator(target_schema).is_valid(binding.value)
         except Exception:  # noqa: BLE001 - unsupported local refs remain a publication diagnostic.
             return False
     variants = target_schema.get("oneOf", target_schema.get("anyOf"))
@@ -1287,12 +1324,16 @@ def _result_binding_compatible(
         if kind == "step_output" and binding.step_key != producer_key:
             return False
         source = workflow_input if kind == "workflow_input" else producer_output
+        # A whole-value reference satisfies a target schema identical to its own.
+        if not binding.path and source.raw_schema is not None and json_values_equal(source.raw_schema, target_schema):
+            return True
         source_node = source.catalogue.at_path(binding.path)
         return source_node is not None and _catalogue_node_compatible(
             source_node,
             target_schema,
             literal_values=source.literal_values_at_path(binding.path),
             numeric_ranges=source.numeric_ranges_at_path(binding.path),
+            string_length_ranges=source.string_length_ranges_at_path(binding.path),
         )
     if kind == "object":
         if set(target_schema) - {
@@ -1355,23 +1396,48 @@ def _result_binding_compatible(
 
 
 def _tagged_one_of_choice(binding: Any, variants: list[Any]) -> dict[str, Any] | None:
-    """Select a disjoint object branch only when every variant requires one literal tag."""
+    """Select a disjoint object branch only when every variant requires one finite tag."""
 
     if getattr(binding, "kind", None) != "object" or not variants:
         return None
     tag_field: str | None = None
-    tag_values: list[Any] = []
+    tag_value_sets: list[tuple[Any, ...]] = []
     for variant in variants:
         if not isinstance(variant, dict) or variant.get("type") != "object":
             return None
         required, properties = variant.get("required"), variant.get("properties")
         if not isinstance(required, list) or not isinstance(properties, dict):
             return None
-        candidates = {
-            key: properties[key]["const"]
-            for key in required
-            if key in properties and isinstance(properties[key], dict) and "const" in properties[key]
-        }
+        candidates: dict[str, tuple[Any, ...]] = {}
+        for key in required:
+            property_schema = properties.get(key)
+            if not isinstance(property_schema, dict):
+                continue
+            if "const" in property_schema:
+                values = (property_schema["const"],)
+                if "enum" in property_schema:
+                    enum = property_schema["enum"]
+                    if not isinstance(enum, list) or not enum:
+                        continue
+                    values = tuple(
+                        value
+                        for value in values
+                        if any(json_values_equal(value, enum_value) for enum_value in enum)
+                    )
+            elif "enum" in property_schema:
+                enum = property_schema["enum"]
+                if not isinstance(enum, list) or not enum:
+                    continue
+                values = tuple(enum)
+            else:
+                continue
+            if not values or any(
+                json_values_equal(value, prior)
+                for index, value in enumerate(values)
+                for prior in values[:index]
+            ):
+                continue
+            candidates[key] = values
         if tag_field is None:
             matches = [key for key in candidates if getattr(binding.fields.get(key), "kind", None) == "constant"]
             if len(matches) != 1:
@@ -1379,14 +1445,29 @@ def _tagged_one_of_choice(binding: Any, variants: list[Any]) -> dict[str, Any] |
             tag_field = matches[0]
         if tag_field not in candidates:
             return None
-        value = candidates[tag_field]
-        if any(value == prior for prior in tag_values):
+        values = candidates[tag_field]
+        if any(
+            json_values_equal(value, prior)
+            for value in values
+            for prior_values in tag_value_sets
+            for prior in prior_values
+        ):
             return None
-        tag_values.append(value)
+        tag_value_sets.append(values)
     assert tag_field is not None
     bound_value = binding.fields[tag_field].value
-    matches = [variant for variant, value in zip(variants, tag_values, strict=True) if bound_value == value]
-    return matches[0] if len(matches) == 1 else None
+    selected: list[dict[str, Any]] = [
+        variant
+        for variant, values in zip(variants, tag_value_sets, strict=True)
+        if any(json_values_equal(bound_value, value) for value in values)
+    ]
+    return selected[0] if len(selected) == 1 else None
+
+
+# JSON Schema annotation keywords describe a value without constraining it.
+_ANNOTATION_KEYWORDS = frozenset(
+    {"title", "description", "default", "examples", "deprecated", "readOnly", "writeOnly", "$comment"}
+)
 
 
 def _catalogue_node_compatible(
@@ -1395,13 +1476,12 @@ def _catalogue_node_compatible(
     *,
     literal_values: tuple[Any, ...] | None = None,
     numeric_ranges: tuple[NumericRange, ...] | None = None,
+    string_length_ranges: tuple[StringLengthRange, ...] | None = None,
 ) -> bool:
     if not target_schema:
         return True
-    if set(target_schema) - {
+    if set(target_schema) - _ANNOTATION_KEYWORDS - {
         "type",
-        "title",
-        "description",
         "$defs",
         "items",
         "enum",
@@ -1410,6 +1490,8 @@ def _catalogue_node_compatible(
         "exclusiveMinimum",
         "maximum",
         "exclusiveMaximum",
+        "minLength",
+        "maxLength",
     }:
         return False
     target_type = target_schema.get("type")
@@ -1422,6 +1504,7 @@ def _catalogue_node_compatible(
     has_numeric_constraint = any(
         keyword in target_schema for keyword in ("minimum", "exclusiveMinimum", "maximum", "exclusiveMaximum")
     )
+    has_string_length_constraint = "minLength" in target_schema or "maxLength" in target_schema
     if has_literal_constraint and source.kind != "scalar":
         return False
     if source.kind == "scalar":
@@ -1430,11 +1513,16 @@ def _catalogue_node_compatible(
             return False
         if has_literal_constraint:
             return literal_values is not None and all(
-                Draft202012Validator(target_schema).is_valid(value) for value in literal_values
+                json_schema_validator(target_schema).is_valid(value) for value in literal_values
             )
         if has_numeric_constraint:
             return numeric_ranges is not None and all(
                 _numeric_range_compatible(numeric_range, target_schema) for numeric_range in numeric_ranges
+            )
+        if has_string_length_constraint:
+            return string_length_ranges is not None and all(
+                _string_length_range_compatible(length_range, target_schema)
+                for length_range in string_length_ranges
             )
         return True
     if source.kind == "object":
@@ -1490,6 +1578,21 @@ def _numeric_range_compatible(
             or source_maximum > maximum
             or (source_maximum == maximum and not source_maximum_exclusive)
         ):
+            return False
+    return True
+
+
+def _string_length_range_compatible(source: StringLengthRange, target: dict[str, Any]) -> bool:
+    """Prove one declared source string-length interval is contained by target bounds."""
+
+    source_minimum, source_maximum = source
+    if "minLength" in target:
+        minimum = target["minLength"]
+        if type(minimum) is not int or source_minimum is None or source_minimum < minimum:
+            return False
+    if "maxLength" in target:
+        maximum = target["maxLength"]
+        if type(maximum) is not int or source_maximum is None or source_maximum > maximum:
             return False
     return True
 

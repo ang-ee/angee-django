@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildSchema, executeSync, print, type DocumentNode } from "graphql";
 
 import { afterEach, describe, expect, test } from "vitest";
 import type { DataResourceFieldMetadata } from "@angee/metadata";
@@ -38,11 +39,52 @@ describe("group operation codegen", () => {
     expect(generated).toContain('"value": "accepted"');
   });
 
-  test("leaves optional and defaulted ActionResult mutations authored", () => {
+  test("derives optional enum arguments and preserves schema defaults and nullability", () => {
+    const generated = generateActions(METADATA);
+    const schema = buildSchema(SDL);
+    expect(print(generatedAction(generated, "defaulted_action"))).toContain('$note: String! = ""');
+    expect(print(generatedAction(generated, "resolveSyncDiscrepancy"))).toContain("$keep: ConflictKeep = null");
+    for (const [field, variables, expected] of [
+      ["optional_action", { id: "record_1" }, { id: "record_1" }],
+      ["resolveSyncDiscrepancy", { id: "record_1" }, { id: "record_1", keep: null }],
+      ["resolveSyncDiscrepancy", { id: "record_1", keep: "REMOTE" }, { id: "record_1", keep: "REMOTE" }],
+      ["resolveSyncDiscrepancy", { id: "record_1", keep: null }, { id: "record_1", keep: null }],
+      ["defaulted_action", { id: "record_1" }, { id: "record_1", note: "" }],
+      ["defaulted_action", { id: "record_1", note: "value" }, { id: "record_1", note: "value" }],
+    ] as const) {
+      const result = executeSync({
+        schema,
+        document: generatedAction(generated, field),
+        variableValues: variables,
+        rootValue: { [field]: (args: unknown) => ({ ok: true, message: JSON.stringify(args) }) },
+      });
+      expect(result.errors).toBeUndefined();
+      expect(result.data?.[field]).toMatchObject({ ok: true, message: JSON.stringify(expected) });
+    }
+    for (const [field, variables] of [
+      ["resolveSyncDiscrepancy", { id: "record_1", keep: "typo" }],
+      ["defaulted_action", { id: "record_1", note: null }],
+      ["resolveSyncDiscrepancy", {}],
+    ] as const) {
+      expect(executeSync({
+        schema, document: generatedAction(generated, field), variableValues: variables,
+      }).errors).toHaveLength(1);
+    }
+  });
+
+  test("keeps optional actions outside the required id target contract authored", () => {
     const generated = generateActions(METADATA);
 
-    expect(generated).not.toContain('"optional_action"');
-    expect(generated).not.toContain('"defaulted_action"');
+    expect(generated).toContain(
+      'export type ActionFieldName = "close_round" | "defaulted_action" | "optional_action" | "resolveSyncDiscrepancy" | "submit_channel_password";',
+    );
+    for (const field of [
+      "install", "disable", "start_workflow_run", "start_workflow_recovery",
+      "optional_id", "defaulted_id", "string_id", "list_id", "extra_required_arg",
+      "optional_only", "no_arguments",
+    ]) {
+      expect(() => generatedAction(generated, field)).toThrow(`Missing generated action: ${field}`);
+    }
   });
 
   test("selects the exact count root with matching having", () => {
@@ -86,7 +128,7 @@ describe("group operation codegen", () => {
     const generated = generateActions(SAVE_METADATA);
 
     expect(generated).toMatch(
-      /"value": "product"[\s\S]{0,2000}"value": "id"[\s\S]{0,2000}"value": "name"/,
+      /"value": "item"[\s\S]{0,2000}"value": "id"[\s\S]{0,2000}"value": "name"/,
     );
   });
 
@@ -109,6 +151,12 @@ describe("group operation codegen", () => {
     );
   });
 });
+
+function generatedAction(generated: string, field: string): DocumentNode {
+  const match = generated.match(new RegExp(`  "${field}": (\\{[\\s\\S]*?\\}) as ActionDocument<"${field}">`));
+  if (!match?.[1]) throw new Error(`Missing generated action: ${field}`);
+  return JSON.parse(match[1]) as DocumentNode;
+}
 
 function generateActions(metadata: unknown): string {
   const root = mkdtempSync(path.join(tmpdir(), "angee-group-codegen-"));
@@ -150,11 +198,25 @@ const SDL = `
   type Mutation {
     submit_channel_password(id: ID!, password: String!): ActionResult!
     close_round(round: ID!, outcome: RoundOutcome!, accepted: [ID!]!): ActionResult!
-    optional_action(id: ID!, note: String): ActionResult!
+    resolveSyncDiscrepancy(id: ID!, keep: ConflictKeep = null): ActionResult!
+    optional_action(id: ID!, keep: ConflictKeep): ActionResult!
     defaulted_action(id: ID!, note: String! = ""): ActionResult!
-    order_save(pk: ID!, lines: [OrderLineInput!]): OrderType!
+    install(addon: String!, revision: String = null): ActionResult!
+    disable(addon: String!, revision: String = null): ActionResult!
+    start_workflow_run(workflow: ID!, subject: WorkflowObjectRefInput = null): ActionResult!
+    start_workflow_recovery(source_attempt: ID!, request_key: String!, acknowledge_uncertain_external: Boolean! = false, prior_recovery: ID = null): ActionResult!
+    optional_id(id: ID, keep: ConflictKeep): ActionResult!
+    defaulted_id(id: ID! = "record_1", keep: ConflictKeep): ActionResult!
+    string_id(id: String!, keep: ConflictKeep): ActionResult!
+    list_id(id: [ID!]!, keep: ConflictKeep): ActionResult!
+    extra_required_arg(id: ID!, password: String!, keep: ConflictKeep): ActionResult!
+    optional_only(keep: ConflictKeep): ActionResult!
+    no_arguments: ActionResult!
+    document_save(pk: ID!, lines: [DocumentLineInput!]): DocumentType!
   }
+  input WorkflowObjectRefInput { model: String!, id: ID! }
   enum RoundOutcome { AWARDED NO_AWARD }
+  enum ConflictKeep { REMOTE LOCAL }
   type ActionResult {
     ok: Boolean!
     message: String!
@@ -184,10 +246,10 @@ const SDL = `
   type notes_group { key: NoteGroupKey!, aggregate: NoteAggregate! }
   type NoteGroupKey { status: String }
   type NoteAggregate { count: Int! }
-  input OrderLineInput { product: ID }
-  type ProductType { id: ID!, name: String! }
-  type OrderLineType { id: ID!, product: ProductType! }
-  type OrderType { id: ID!, owner: ID, lines: [OrderLineType!]! }
+  input DocumentLineInput { item: ID }
+  type ItemType { id: ID!, name: String! }
+  type DocumentLineType { id: ID!, item: ItemType! }
+  type DocumentType { id: ID!, owner: ID, lines: [DocumentLineType!]! }
 `;
 
 const METADATA = {
@@ -217,11 +279,11 @@ const METADATA = {
 const SAVE_METADATA = {
   angee: {
     resources: [
-      testDataResource("sales.Order", {
+      testDataResource("example.Document", {
         query: testResourceQuery({ identity: { field: "id" }, fields: { "owner": testQueryField("owner", { scalar: "ID", kind: "relation", filter: null, relation: { model: "accounts.User", identityPath: "owner" }, row: { path: "owner", paths: ["owner"] } }),
                 "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
 
-        roots: { save: "order_save" },
+        roots: { save: "document_save" },
         fields: [
           resourceField({
             name: "owner",
@@ -234,20 +296,20 @@ const SAVE_METADATA = {
 
         linesResource: {
           field: "lines",
-          modelLabel: "sales.OrderLine",
-          inputType: "OrderLineInput",
+          modelLabel: "example.DocumentLine",
+          inputType: "DocumentLineInput",
           fields: [
             resourceField({
-              name: "product",
+              name: "item",
               kind: "relation",
               readable: true,
-              relationModelLabel: "catalog.Product",
+              relationModelLabel: "example.Item",
               relationObject: true,
             }),
           ],
         },
       }),
-      testDataResource("catalog.Product", {
+      testDataResource("example.Item", {
         recordRepresentation: "name",
         roots: {},
         fields: [

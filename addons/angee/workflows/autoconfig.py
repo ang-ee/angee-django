@@ -29,12 +29,14 @@ SETTINGS = {
     # data. Product addons contribute their own StepImpl subclasses under their
     # own keys through this same setting.
     "ANGEE_WORKFLOW_STEP_CLASSES": {
-        "handler": "angee.workflows.steps.HandlerStep",
         "wait": "angee.workflows.steps.WaitStep",
         "gate": "angee.workflows.steps.GateStep",
         "map": "angee.workflows.steps.MapStep",
         "call_workflow": "angee.workflows.steps.CallWorkflow",
+        "join_continuation": "angee.workflows.steps.JoinContinuation",
+        "emit": "angee.workflows.steps.EmitStep",
     },
     "ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT": 300,
+    "ANGEE_WORKFLOW_SUBJECT_SETTLERS": {},
 }
 """Django settings contributed when the workflows addon is installed."""

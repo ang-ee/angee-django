@@ -35,9 +35,11 @@ def generate_cycles(timestamp: int | None = None) -> int:
     cycle_model = apps.get_model("work", "Cycle")
     generated = 0
     with system_context(reason="work.tasks.generate_cycles"):
-        queues = queue_model.objects.sudo(reason="work.tasks.generate_cycles.queues").filter(
-            cycles_enabled=True
-        ).order_by("pk")
+        queues = (
+            queue_model.objects.sudo(reason="work.tasks.generate_cycles.queues")
+            .filter(cycles_enabled=True)
+            .order_by("pk")
+        )
         for queue in queues:
             before = cycle_model._base_manager.filter(queue=queue).count()
             cycle_model.objects.generate_for_queue(queue, as_of=as_of, completed_at=now)

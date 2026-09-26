@@ -7,23 +7,17 @@ nothing here is PostgreSQL-marked.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from decimal import Decimal
-from importlib import import_module
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.db import IntegrityError, connection, models, transaction
-from django.db.migrations.state import ModelState, ProjectState
+from django.db import IntegrityError, transaction
 from rebac import system_context, to_object_ref
 from rebac.models import active_relationship_model
 
 from angee.uom.models import Uom as AbstractUom
 from angee.uom.models import UomCategory as AbstractUomCategory
-from tests.conftest import _clear_model_tables, _create_missing_tables
 
 
 class UomCategory(AbstractUomCategory):
@@ -48,27 +42,6 @@ class Uom(AbstractUom):
         app_label = "uom"
         db_table = "test_uom_uom"
         rebac_resource_type = "uom/uom"
-
-
-UOM_TEST_MODELS = (UomCategory, Uom)
-"""Concrete uom models created on demand by uom test fixtures."""
-
-
-@pytest.fixture()
-def uom_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the concrete uom tables for the duration of one test."""
-
-    del transactional_db
-    created_models = _create_missing_tables(UOM_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(UOM_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
 
 
 def _make_category(**fields: Any) -> Any:
@@ -96,11 +69,11 @@ def _shared_reader_exists(row: Any) -> bool:
 
 
 def test_native_categories_and_units_receive_per_record_shared_readers(
-    uom_tables: None,
+    composed_tables: None,
 ) -> None:
     """Native catalogue rows opt in explicitly to the wildcard relation."""
 
-    del uom_tables
+    del composed_tables
     category = _make_category(name="Native catalogue")
     unit = _make_uom(
         category=category,
@@ -113,29 +86,11 @@ def test_native_categories_and_units_receive_per_record_shared_readers(
     assert _shared_reader_exists(unit)
 
 
-def test_native_reader_backfill_applies_only_to_exact_unextended_shapes() -> None:
-    """A composed visibility donor must own its own persisted-row classification."""
-
-    module = import_module(
-        "angee.uom.runtime_migrations.native_catalogue_shared_readers"
-    )
-    state = ProjectState()
-    state.add_model(ModelState.from_model(UomCategory))
-    state.add_model(ModelState.from_model(Uom))
-    assert module.applies(state)
-
-    extended = state.clone()
-    extended.models["uom", "uom"].fields["source_company"] = models.IntegerField(
-        null=True
-    )
-    assert not module.applies(extended)
-
-
 @pytest.fixture()
-def units(uom_tables: None) -> SimpleNamespace:
+def units(composed_tables: None) -> SimpleNamespace:
     """Seed a weight, a count, and a volume category with a few units."""
 
-    del uom_tables
+    del composed_tables
     weight = _make_category(name="Weight")
     kilogram = _make_uom(
         category=weight,
@@ -211,10 +166,10 @@ def test_conversion_quantizes_to_destination_rounding(units: SimpleNamespace) ->
     assert units.each.convert(Decimal(1), units.dozen) == Decimal("0.08")
 
 
-def test_one_reference_per_category_is_rejected(uom_tables: None) -> None:
+def test_one_reference_per_category_is_rejected(composed_tables: None) -> None:
     """A second is_reference unit in the same category violates the constraint."""
 
-    del uom_tables
+    del composed_tables
     weight = _make_category(name="Weight")
     _make_uom(
         category=weight,
@@ -233,10 +188,10 @@ def test_one_reference_per_category_is_rejected(uom_tables: None) -> None:
         )
 
 
-def test_multiple_non_reference_units_coexist(uom_tables: None) -> None:
+def test_multiple_non_reference_units_coexist(composed_tables: None) -> None:
     """The partial constraint leaves non-reference units unconstrained."""
 
-    del uom_tables
+    del composed_tables
     weight = _make_category(name="Weight")
     gram = _make_uom(
         category=weight,
@@ -254,10 +209,10 @@ def test_multiple_non_reference_units_coexist(uom_tables: None) -> None:
     assert tonne.pk is not None
 
 
-def test_same_reference_flag_across_categories_is_allowed(uom_tables: None) -> None:
+def test_same_reference_flag_across_categories_is_allowed(composed_tables: None) -> None:
     """The constraint is per category — each category keeps its own reference."""
 
-    del uom_tables
+    del composed_tables
     weight = _make_category(name="Weight")
     volume = _make_category(name="Volume")
     kilogram = _make_uom(
@@ -279,10 +234,10 @@ def test_same_reference_flag_across_categories_is_allowed(uom_tables: None) -> N
 
 
 @pytest.fixture()
-def temperatures(uom_tables: None) -> SimpleNamespace:
+def temperatures(composed_tables: None) -> SimpleNamespace:
     """Kelvin-referenced temperature units exercising the affine offset."""
 
-    del uom_tables
+    del composed_tables
     temperature = _make_category(name="Temperature")
     kelvin = _make_uom(
         category=temperature,
@@ -330,7 +285,7 @@ def test_multiplicative_units_keep_zero_offset_math(units: SimpleNamespace) -> N
     assert units.gram.convert(Decimal(500), units.kilogram) == Decimal("0.5")
 
 
-def test_reference_with_offset_is_rejected(uom_tables: None) -> None:
+def test_reference_with_offset_is_rejected(composed_tables: None) -> None:
     """A reference unit must be the identity map: ratio 1, offset 0."""
 
     temperature = _make_category(name="Temperature (constraint)")
@@ -342,108 +297,4 @@ def test_reference_with_offset_is_rejected(uom_tables: None) -> None:
             offset=Decimal("273.15"),
             rounding=Decimal("0.01"),
             is_reference=True,
-        )
-
-
-def test_reference_projection_corrects_categories_and_units_without_growth(
-    uom_tables: None,
-) -> None:
-    """Exact correction keeps both native identities and rejects a stale CAS."""
-
-    del uom_tables
-    with system_context(reason="uom reference projection"):
-        category = UomCategory.objects.apply_reference_projection(
-            None,
-            UomCategory(name="Weight"),
-        )
-        unit = Uom.objects.apply_reference_projection(
-            None,
-            Uom(
-                category=category,
-                name="Kilogram",
-                ratio=Decimal(1),
-                rounding=Decimal("0.001"),
-                is_reference=True,
-            ),
-        )
-        observed = Uom.objects.get(pk=unit.pk)
-        corrected = Uom.objects.apply_reference_projection(
-            observed,
-            Uom(
-                category=category,
-                name="kg",
-                ratio=Decimal(1),
-                rounding=Decimal("0.001"),
-                is_reference=True,
-            ),
-        )
-        same = Uom.objects.apply_reference_projection(
-            corrected,
-            Uom(
-                category=category,
-                name="kg",
-                ratio=Decimal(1),
-                rounding=Decimal("0.001"),
-                is_reference=True,
-            ),
-        )
-        with pytest.raises(ValidationError):
-            Uom.objects.apply_reference_projection(
-                observed,
-                Uom(
-                    category=category,
-                    name="Kilogram stale",
-                    ratio=Decimal(1),
-                    rounding=Decimal("0.001"),
-                    is_reference=True,
-                ),
-            )
-        other_category = UomCategory.objects.apply_reference_projection(
-            None,
-            UomCategory(name="Volume"),
-        )
-        with pytest.raises(ValidationError):
-            Uom.objects.apply_reference_projection(
-                corrected,
-                Uom(
-                    category=other_category,
-                    name="kg",
-                    ratio=Decimal(1),
-                    rounding=Decimal("0.001"),
-                    is_reference=True,
-                ),
-            )
-    assert corrected.pk == unit.pk == same.pk
-    with system_context(reason="uom reference projection count"):
-        assert UomCategory.objects.count() == 2
-        assert Uom.objects.count() == 1
-
-
-def test_reference_projection_refuses_non_decimal_rounding(uom_tables: None) -> None:
-    """Projection cannot persist a step that the native quantize owner misreads."""
-
-    del uom_tables
-    category = _make_category(name="Packaging")
-    with system_context(reason="uom tens rounding"):
-        tens = Uom.objects.apply_reference_projection(
-            None,
-            Uom(
-                category=category,
-                name="Ten pack",
-                ratio=Decimal(1),
-                rounding=Decimal("10"),
-                is_reference=True,
-            ),
-        )
-    assert tens.quantize(Decimal("14")) == Decimal("1E+1")
-    with system_context(reason="uom unsupported rounding"), pytest.raises(ValidationError):
-        Uom.objects.apply_reference_projection(
-            None,
-            Uom(
-                category=category,
-                name="Half pack",
-                ratio=Decimal(1),
-                rounding=Decimal("0.5"),
-                is_reference=True,
-            ),
         )

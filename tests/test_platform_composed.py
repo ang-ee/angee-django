@@ -1,9 +1,10 @@
-"""Focused contracts for native platform model and field projections."""
+"""Focused contracts for native platform model, field, and implementation projections."""
 
 from __future__ import annotations
 
 from typing import Any, NoReturn
 
+import pytest
 from django.apps import apps
 
 from angee.platform import composed
@@ -47,7 +48,7 @@ def test_field_rows_project_directly_without_model_rows(monkeypatch: Any) -> Non
 def test_native_relation_cardinality_and_target_survive_projection() -> None:
     """Many-to-many relation fields preserve exact graph semantics and IDs."""
 
-    line = apps.get_model("linesdemo", "SaleLine")
+    line = apps.get_model("linesdemo", "DocumentLine")
     tags = line._meta.get_field("tags")
 
     row = composed.PlatformFieldRow.from_field(line, tags)
@@ -89,6 +90,39 @@ def test_implementation_rows_use_registered_field_owners_without_reading_source(
     assert rows == sorted(rows, key=lambda row: row.id)
     assert all(row.id == f"{row.model}.{row.field}:{row.key}" for row in rows)
     assert all(row.registry_setting and row.class_path and row.base_class_path for row in rows)
+
+
+@pytest.mark.parametrize("installed", [True, False])
+def test_implementation_row_factory_retains_field_choice_and_optional_addon(
+    monkeypatch: Any,
+    installed: bool,
+) -> None:
+    """The factory preserves registered identity and metadata for later detail reads."""
+
+    model = apps.get_model("storage", "Backend")
+    field = model._meta.get_field("backend_class")
+    choice = next(choice for choice in field.impl_choices() if choice.key == "local")
+    configs = [apps.get_app_config("storage")] if installed else []
+    with monkeypatch.context() as patch:
+        patch.setattr(composed.inspect, "getsourcelines", _unexpected)
+        patch.setattr(composed.inspect, "getsourcefile", _unexpected)
+        row = composed.PlatformImplementationRow.from_field(model, field, "local", choice, configs)
+
+    assert row.id == "storage.Backend.backend_class:local"
+    assert row.model == "storage.Backend"
+    assert row.field == "backend_class"
+    assert row.key == "local"
+    assert (row.label, row.category, row.icon) == (choice.label, choice.category, choice.icon)
+    assert row.registry_setting == "ANGEE_STORAGE_BACKEND_CLASSES"
+    assert row.class_path == "angee.storage.backends.LocalBackend"
+    assert row.base_class_path == "angee.storage.backends.StorageBackend"
+    assert row.addon_id == ("angee.storage" if installed else "")
+    assert row.addon_label == ("storage" if installed else "")
+    detail = row.detail()
+    assert detail.defaults == choice.defaults
+    assert detail.config_schema == choice.config_schema
+    assert detail.source is not None
+    assert "class LocalBackend(" in detail.source
 
 
 def test_implementation_detail_only_resolves_registered_ids() -> None:

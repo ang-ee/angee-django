@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from django.db import models
@@ -25,7 +26,7 @@ class WorkflowPurpose(models.TextChoices):
     AGENT_SESSION = "agent_session", "Agent session"
 
 
-class RunOrigin(models.TextChoices):
+class RunOrigin(models.TextChoices, StrEnum):
     """Caller that created a workflow run."""
 
     UNKNOWN = "unknown", "Unknown"
@@ -97,7 +98,7 @@ class StepRunStatus(models.TextChoices):
     SKIPPED = "skipped", "Skipped"
 
 
-class Verdict(models.TextChoices):
+class Verdict(models.TextChoices, StrEnum):
     """Resolution lifecycle for one awaited decision slot."""
 
     PENDING = "pending", "Pending"
@@ -123,10 +124,22 @@ class DecisionGate:
     def is_sequential(self) -> bool:
         return self.policy == "sequential"
 
+    def settled_decisions(self, decisions: Collection[Any]) -> tuple[Any, ...]:
+        """Select the exact terminal evidence used by this ordered gate policy.
+
+        Callers pass decisions in seat order, ``(priority, pk)``; a one_done
+        gate retains the first terminal seat in that order even when a
+        lifecycle command expires several seats together. Other policies need
+        the full terminal collection to derive their outcome.
+        """
+
+        terminal = tuple(decision for decision in decisions if decision.verdict in Verdict.TERMINAL)
+        return terminal[:1] if self.policy == "one_done" else terminal
+
     def outcome(self, decisions: Collection[Any]) -> str | None:
         """Derive the authoritative result from a complete declared decision set."""
 
-        terminal = [decision for decision in decisions if decision.verdict in Verdict.TERMINAL]
+        terminal = self.settled_decisions(decisions)
         if not decisions or not terminal:
             return None
         if self.policy == "one_done":
@@ -163,4 +176,5 @@ StepRunStatus.TERMINAL = frozenset(
 )
 StepRunStatus.ACTIVE = frozenset({StepRunStatus.SCHEDULED, StepRunStatus.STARTED, StepRunStatus.WAITING})
 Verdict.TERMINAL = frozenset({Verdict.COMPLETED, Verdict.REJECTED, Verdict.ESCALATED, Verdict.EXPIRED})
+# An archived publication supersedes older published versions and retires the lineage.
 CURRENT_PUBLICATION_STATUSES = (WorkflowStatus.PUBLISHED, WorkflowStatus.ARCHIVED)

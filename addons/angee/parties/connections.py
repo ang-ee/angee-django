@@ -95,7 +95,11 @@ def ingest_connections(parsed_connections: Iterable[ParsedConnection], *, create
         ]
 
 
-def ingest_connection(parsed: ParsedConnection, *, created_by_id: Any) -> Any:
+def ingest_connection(
+    parsed: ParsedConnection,
+    *,
+    created_by_id: Any,
+) -> Any:
     """Idempotently land one parsed connection and return its Person."""
 
     return ingest_connections([parsed], created_by_id=created_by_id)[0]
@@ -225,9 +229,7 @@ def _relationship_kind(kind_model: Any, slug: str, kinds: dict[str, Any]) -> Any
     try:
         kinds[slug] = kind_model.objects.get(slug=slug)
     except kind_model.DoesNotExist as error:
-        raise ValidationError(
-            f"Social connection import requires the {slug!r} RelationshipKind master row."
-        ) from error
+        raise ValidationError(f"Social connection import requires the {slug!r} RelationshipKind master row.") from error
     return kinds[slug]
 
 

@@ -34,7 +34,7 @@ def resume_channel_pairing(channel: Any) -> None:
 
     _live_impl(channel)
     with system_context(reason="messaging.resume_channel_pairing"):
-        channel.refresh_from_db()
+        channel.refresh_from_db(from_queryset=type(channel)._base_manager.select_related("credential"))
         channel.set_lifecycle(IntegrationLifecycle.CONNECTED)
         channel.report_status(IntegrationRuntimeStatus.OK)
         channel.start_live()
@@ -48,7 +48,7 @@ def submit_channel_password(channel: Any, password: str) -> None:
     if not password:
         raise PairingActionError("A channel password is required.")
     with system_context(reason="messaging.submit_channel_password"):
-        channel.refresh_from_db()
+        channel.refresh_from_db(from_queryset=type(channel)._base_manager.select_related("credential"))
         material_key = armed_material_key(channel.subscription_state)
         if not material_key:
             raise PairingActionError("This channel is not awaiting a password.")
@@ -65,7 +65,7 @@ def skip_channel_password(channel: Any) -> None:
 
     impl = _live_impl(channel)
     with system_context(reason="messaging.skip_channel_password"):
-        channel.refresh_from_db()
+        channel.refresh_from_db(from_queryset=type(channel)._base_manager.select_related("credential"))
         material_key = armed_material_key(channel.subscription_state)
         if not material_key:
             raise PairingActionError("This channel is not awaiting a password.")
@@ -83,14 +83,10 @@ def reset_channel_pairing(channel: Any) -> None:
         try:
             await_session_exit(channel)
         except TimeoutError as error:
-            raise PairingActionError(
-                "The channel is still shutting down; try again shortly."
-            ) from error
+            raise PairingActionError("The channel is still shutting down; try again shortly.") from error
         except ImproperlyConfigured as error:
-            raise PairingActionError(
-                "Resetting this channel requires a cross-process task lock backend."
-            ) from error
-        channel.refresh_from_db(fields=["credential"])
+            raise PairingActionError("Resetting this channel requires a cross-process task lock backend.") from error
+        channel.refresh_from_db(from_queryset=type(channel)._base_manager.select_related("credential"))
         if channel.credential is not None:
             channel.credential.update_material(
                 **dict.fromkeys(impl.transient_material_keys),

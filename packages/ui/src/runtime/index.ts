@@ -5,6 +5,7 @@
 // the provider and builds addon manifests against these contracts.
 
 export { makeContext, type ContextBinding } from "./make-context";
+export { createAngeeI18nInstance } from "./i18n";
 export {
   usePreferenceSlice,
   type PreferenceSliceState,

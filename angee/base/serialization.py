@@ -1,14 +1,33 @@
-"""JSON-safe value coercion shared by Angee runtime subsystems."""
+"""Canonical JSON serialization and JSON-safe coercion for runtime subsystems."""
 
 from __future__ import annotations
 
 import base64
 import datetime
+import hashlib
 import json
 import math
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
+
+
+def canonical_json(value: Any) -> str:
+    """Serialize one JSON value with Angee's deterministic wire spelling."""
+
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def canonical_json_sha256(value: Any) -> str:
+    """Return the lowercase SHA-256 digest of :func:`canonical_json`."""
+
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def json_safe(value: Any) -> Any:
@@ -34,7 +53,11 @@ def json_safe(value: Any) -> Any:
 
 
 def _json_sort_key(value: Any) -> str:
-    """Return a deterministic ordering key for unordered JSON-safe values."""
+    """Preserve escaped-Unicode ordering for unordered JSON-safe values.
+
+    ``canonical_json`` emits Unicode directly, which would put ``"é"`` after
+    ``"z"`` instead of before it and change the resulting array order.
+    """
 
     return json.dumps(
         json_safe(value),

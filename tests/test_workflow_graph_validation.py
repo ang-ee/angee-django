@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -18,11 +19,16 @@ from angee.workflows.graph import (
     WorkflowGraph,
     _choice_sets_coapplicable,
     _result_binding_compatible,
+    _tagged_one_of_choice,
 )
-from angee.workflows.steps import GateStep, HandlerStep, MapStep, StepImpl, StepResult, WaitStep
+from angee.workflows.steps import GateStep, MapStep, StepImpl, StepResult, WaitStep
 from angee.workflows_agents.steps import AgentSessionStepImpl
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, DedupeGateStepImpl, DedupeScanStepImpl
 from example.notes.steps import NotePublishStep, NoteValidateForPublicationStep
+
+
+class UnimplementedStep(StepImpl):
+    """Local non-executable declaration used to exercise readiness diagnostics."""
 
 
 class LegacyOutcomeStep(StepImpl):
@@ -76,6 +82,22 @@ class SupersetLiteralOutput(BaseModel):
 
 class UnboundedStringOutput(BaseModel):
     status: str
+
+
+class NonemptyStringOutput(BaseModel):
+    status: str = Field(min_length=1)
+
+
+class BoundedStringOutput(BaseModel):
+    status: str = Field(min_length=2, max_length=10)
+
+
+class NestedNonemptyStringOutput(BaseModel):
+    result: NonemptyStringOutput
+
+
+class MixedStringVariantOutput(BaseModel):
+    result: NonemptyStringOutput | UnboundedStringOutput
 
 
 class BooleanLiteralOutput(BaseModel):
@@ -169,6 +191,8 @@ def graph(
     *,
     max_steps: int = 100,
     subject_declaration: str = "",
+    output_schema: dict[str, Any] | None = None,
+    result_rules: list[dict[str, Any]] | None = None,
 ) -> WorkflowGraph:
     return WorkflowGraph(
         GraphIdentity(client_key="workflow-1"),
@@ -177,13 +201,36 @@ def graph(
         tuple(edges or []),
         subject_declaration,
         {"type": "object", "properties": {}},
-        {"type": "object", "properties": {}, "additionalProperties": False},
-        [],
+        output_schema or {"type": "object", "properties": {}, "additionalProperties": False},
+        result_rules or [],
     )
 
 
 def codes(value: WorkflowGraph) -> set[str]:
     return {diagnostic.code for diagnostic in value.diagnostics()}
+
+
+@pytest.mark.parametrize("field", ["input_schema", "output_schema"])
+@pytest.mark.parametrize("reference", ["https://example.invalid/schema", "other.json"])
+def test_graph_rejects_nonlocal_schema_references(field: str, reference: str) -> None:
+    value = replace(graph([]), **{field: {"type": "object", "properties": {"value": {"$ref": reference}}}})
+    assert f"{field}_invalid" in codes(value)
+
+
+def test_graph_reports_unresolvable_input_references_for_root_bindings() -> None:
+    value = replace(
+        graph(
+            [node("producer", LegacyOutcomeStep, entry=True)],
+            result_rules=[{
+                "outcome": "completed",
+                "producer": "producer",
+                "when_outcome": "",
+                "binding": {"kind": "workflow_input", "path": []},
+            }],
+        ),
+        input_schema={"$ref": "#/$defs/missing"},
+    )
+    assert "input_schema_invalid" in codes(value)
 
 
 def test_result_exclusivity_proof_avoids_terminal_path_cartesian_product() -> None:
@@ -221,6 +268,46 @@ def test_result_binding_proves_only_bounded_literal_subsets(
     assert compatible is expected
 
 
+class DefaultedCodeOutput(BaseModel):
+    code: str = ""
+
+
+def test_result_binding_ignores_schema_annotations() -> None:
+    """A ``default`` annotates a field; it never blocks the field's proof."""
+
+    binding = parse_binding({
+        "kind": "step_output", "step_key": "producer", "path": ["code"],
+    })
+
+    assert _result_binding_compatible(
+        binding,
+        {"type": "string", "default": "", "title": "Code"},
+        schema_data_contract({"type": "object", "properties": {}}),
+        model_data_contract(DefaultedCodeOutput, mode="serialization"),
+        "producer",
+    )
+
+
+def test_whole_output_reference_proves_an_identical_object_schema() -> None:
+    schema = DefaultedCodeOutput.model_json_schema(mode="serialization")
+    binding = parse_binding({"kind": "step_output", "step_key": "producer", "path": []})
+
+    assert _result_binding_compatible(
+        binding,
+        schema,
+        schema_data_contract({"type": "object", "properties": {}}),
+        schema_data_contract(schema),
+        "producer",
+    )
+    assert not _result_binding_compatible(
+        binding,
+        {**schema, "required": ["code"]},
+        schema_data_contract({"type": "object", "properties": {}}),
+        schema_data_contract(schema),
+        "producer",
+    )
+
+
 def test_result_binding_literal_subset_uses_json_type_semantics() -> None:
     binding = parse_binding({
         "kind": "step_output", "step_key": "producer", "path": ["status"],
@@ -233,6 +320,40 @@ def test_result_binding_literal_subset_uses_json_type_semantics() -> None:
         model_data_contract(BooleanLiteralOutput, mode="serialization"),
         "producer",
     )
+
+
+@pytest.mark.parametrize(
+    ("source_model", "target_schema", "expected"),
+    [
+        (NonemptyStringOutput, {"type": "string", "minLength": 1}, True),
+        (UnboundedStringOutput, {"type": "string", "minLength": 1}, False),
+        (BoundedStringOutput, {"type": "string", "minLength": 1, "maxLength": 10}, True),
+        (BoundedStringOutput, {"type": "string", "minLength": 3}, False),
+        (BoundedStringOutput, {"type": "string", "maxLength": 9}, False),
+        (NestedNonemptyStringOutput, {"type": "string", "minLength": 1}, True),
+        (MixedStringVariantOutput, {"type": "string", "minLength": 1}, False),
+        (NonemptyStringOutput, {"type": "string", "pattern": ".+"}, False),
+    ],
+)
+def test_result_binding_proves_only_contained_string_length_ranges(
+    source_model: type[BaseModel], target_schema: dict[str, Any], expected: bool,
+) -> None:
+    path = ["result", "status"] if source_model in {
+        NestedNonemptyStringOutput, MixedStringVariantOutput,
+    } else ["status"]
+    binding = parse_binding({
+        "kind": "step_output", "step_key": "producer", "path": path,
+    })
+
+    compatible = _result_binding_compatible(
+        binding,
+        target_schema,
+        schema_data_contract({"type": "object", "properties": {}}),
+        model_data_contract(source_model, mode="serialization"),
+        "producer",
+    )
+
+    assert compatible is expected
 
 
 @pytest.mark.parametrize(
@@ -329,6 +450,154 @@ def test_result_binding_rejects_unbounded_container_literals(
     )
 
 
+def tagged_result_schema(*tag_schemas: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {"status": tag_schema},
+                "required": ["status"],
+                "additionalProperties": False,
+            }
+            for tag_schema in tag_schemas
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    ("schema", "status", "selected_index"),
+    [
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "completed_with_warnings"]},
+                {"type": "string", "enum": ["failed", "blocked"]},
+            ),
+            "completed_with_warnings",
+            0,
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "const": "completed"},
+                {"type": "string", "enum": ["failed", "blocked"]},
+            ),
+            "blocked",
+            1,
+        ),
+    ],
+)
+def test_tagged_one_of_selects_disjoint_enum_and_const_branches(
+    schema: dict[str, Any], status: str, selected_index: int,
+) -> None:
+    binding = parse_binding({
+        "kind": "object",
+        "fields": {"status": {"kind": "constant", "value": status}},
+    })
+
+    assert _tagged_one_of_choice(binding, schema["oneOf"]) is schema["oneOf"][selected_index]
+
+
+@pytest.mark.parametrize(
+    ("schema", "status"),
+    [
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "shared"]},
+                {"type": "string", "enum": ["shared", "failed"]},
+            ),
+            "completed",
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "completed_with_warnings"]},
+                {"type": "string", "const": "failed"},
+            ),
+            "unknown",
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": []},
+                {"type": "string", "const": "failed"},
+            ),
+            "failed",
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "const": "completed", "enum": ["failed"]},
+                {"type": "string", "const": "failed"},
+            ),
+            "failed",
+        ),
+    ],
+)
+def test_tagged_one_of_refuses_overlapping_sets_and_unknown_values(
+    schema: dict[str, Any], status: str,
+) -> None:
+    binding = parse_binding({
+        "kind": "object",
+        "fields": {"status": {"kind": "constant", "value": status}},
+    })
+
+    assert _tagged_one_of_choice(binding, schema["oneOf"]) is None
+
+
+@pytest.mark.parametrize(
+    ("schema", "status", "expected"),
+    [
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "completed_with_warnings"]},
+                {"type": "string", "enum": ["failed", "blocked"]},
+            ),
+            "completed",
+            True,
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "const": "completed"},
+                {"type": "string", "enum": ["failed", "blocked"]},
+            ),
+            "failed",
+            True,
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "shared"]},
+                {"type": "string", "enum": ["shared", "failed"]},
+            ),
+            "completed",
+            False,
+        ),
+        (
+            tagged_result_schema(
+                {"type": "string", "enum": ["completed", "completed_with_warnings"]},
+                {"type": "string", "const": "failed"},
+            ),
+            "unknown",
+            False,
+        ),
+    ],
+)
+def test_result_publication_requires_one_disjoint_tagged_branch(
+    schema: dict[str, Any], status: str, expected: bool,
+) -> None:
+    binding = {
+        "kind": "object",
+        "fields": {"status": {"kind": "constant", "value": status}},
+    }
+    value = graph(
+        [node("producer", LegacyOutcomeStep, entry=True)],
+        output_schema=schema,
+        result_rules=[{
+            "outcome": "completed",
+            "producer": "producer",
+            "when_outcome": "",
+            "binding": binding,
+        }],
+    )
+
+    assert ("result_binding_schema" not in codes(value)) is expected
+
+
 def test_map_body_candidates_use_graph_ownership_and_explain_exclusions() -> None:
     """Map authoring exposes only unattached ordinary steps without guessing from keys."""
 
@@ -405,7 +674,7 @@ def test_representative_note_party_and_internal_agent_graphs_are_ready() -> None
 
 def test_entry_executability_config_and_outcome_diagnostics_keep_exact_locations() -> None:
     value = graph(
-        [node("abstract", HandlerStep, entry=True), node("wait", WaitStep)],
+        [node("abstract", UnimplementedStep, entry=True), node("wait", WaitStep)],
         [edge("abstract", "wait", "anything"), edge("wait", "abstract", "unexpected")],
     )
 
@@ -552,6 +821,47 @@ def test_map_binding_sources_are_owned_by_the_map_role() -> None:
         item.code == "binding_source_unavailable" and item.location.key.client_key == "node-after"
         for item in value.diagnostics()
     )
+
+
+@pytest.mark.parametrize("constructed_input", [False, True])
+def test_map_item_paths_follow_the_declared_input_source(constructed_input: bool) -> None:
+    class CollectionOutput(BaseModel):
+        items: list[DeclaredInput]
+
+    class CollectionStep(LegacyOutcomeStep):
+        key = "collection"
+        output_model = CollectionOutput
+
+    selected: dict[str, Any] = {"kind": "step_output", "step_key": "before", "path": []}
+    if constructed_input:
+        selected = {
+            "kind": "object",
+            "fields": {"items": {**selected, "path": ["items"]}},
+        }
+    value = graph(
+        [
+            node("before", CollectionStep, entry=True),
+            node("map", MapStep, {"target_step": "body", "items": "input.items"}, binding=selected),
+            node(
+                "body", TargetStep,
+                binding={
+                    "kind": "object",
+                    "fields": {
+                        "title": {"kind": "map_item", "path": ["title"]},
+                        "invalid": {"kind": "map_item", "path": ["undeclared"]},
+                    },
+                },
+            ),
+        ],
+        [edge("before", "map")],
+    )
+    sources = value.input_sources(GraphIdentity(client_key="node-body"))
+    contract = next(source.contract for source in sources if source.kind == "map_item")
+    assert contract.matches_path(("title",))
+    assert not contract.matches_path(("undeclared",))
+    diagnostics = [item for item in value.diagnostics() if item.location.field == "input_binding"]
+    assert len(diagnostics) == 1
+    assert diagnostics[0].location.detail_path == ("fields", "invalid", "path")
 
 
 def test_source_catalogue_never_selects_self_or_collapses_duplicate_keys() -> None:

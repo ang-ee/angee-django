@@ -5,10 +5,10 @@ import { beforeEach, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ navigate: vi.fn(), settle: vi.fn() }));
 
-vi.mock("@angee/ui", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/ui")>()),
-  useActionResultRun: () => mocks.settle,
-}));
+vi.mock("@angee/ui", async (importOriginal) => {
+  const { createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, { useActionResultRun: () => mocks.settle });
+});
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 
 import { useWorkflowSubjectActionResult } from "./useWorkflowSubjectActionResult";

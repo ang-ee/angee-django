@@ -54,7 +54,7 @@ def test_page_resource_emits_nested_word_count_subtitle_fact() -> None:
     assert wire["subtitle"]["wordCount"] == "markdown.word_count"
 
 
-def test_create_vault_and_page_flow(knowledge_tables: None) -> None:
+def test_create_vault_and_page_flow(composed_tables: None) -> None:
     """The Hasura insert mutations persist through Knowledge-owned factories."""
 
     alice = create_user("alice")
@@ -96,7 +96,7 @@ def test_create_vault_and_page_flow(knowledge_tables: None) -> None:
     assert page["parent"] is None
 
 
-def test_anonymous_create_vault_is_denied_with_a_code(knowledge_tables: None) -> None:
+def test_anonymous_create_vault_is_denied_with_a_code(composed_tables: None) -> None:
     """Anonymous mutation calls surface the standard permission code."""
 
     result = execute_schema(
@@ -108,7 +108,7 @@ def test_anonymous_create_vault_is_denied_with_a_code(knowledge_tables: None) ->
     assert result.errors[0].extensions["code"] == "PERMISSION_DENIED"
 
 
-def test_pages_query_is_actor_scoped_and_vault_filtered(knowledge_tables: None) -> None:
+def test_pages_query_is_actor_scoped_and_vault_filtered(composed_tables: None) -> None:
     """The pages connection narrows to the actor's scope and one vault."""
 
     alice = create_user("alice")
@@ -139,7 +139,7 @@ def test_pages_query_is_actor_scoped_and_vault_filtered(knowledge_tables: None) 
     assert [row["title"] for row in filtered] == ["Reading list"]
 
 
-def test_detail_query_resolves_raw_sqid(knowledge_tables: None) -> None:
+def test_detail_query_resolves_raw_sqid(composed_tables: None) -> None:
     """Typed detail fields refetch a public object by raw sqid."""
 
     alice = create_user("alice")
@@ -164,7 +164,7 @@ def test_detail_query_resolves_raw_sqid(knowledge_tables: None) -> None:
     assert data["vaults_by_pk"] == {"id": str(vault.sqid), "name": "Node vault"}
 
 
-def test_update_page_body_round_trip_and_stale_guard(knowledge_tables: None) -> None:
+def test_update_page_body_round_trip_and_stale_guard(composed_tables: None) -> None:
     """Body writes return the sidecar facts and reject stale hashes."""
 
     alice = create_user("alice")
@@ -225,7 +225,7 @@ def test_update_page_body_round_trip_and_stale_guard(knowledge_tables: None) -> 
     assert detail["markdown"]["word_count"] == 3
 
 
-def test_update_page_body_reports_unsupported_kind(knowledge_tables: None) -> None:
+def test_update_page_body_reports_unsupported_kind(composed_tables: None) -> None:
     """Bodyless kinds surface a typed error code, not a server fault."""
 
     alice = create_user("alice")
@@ -249,7 +249,7 @@ def test_update_page_body_reports_unsupported_kind(knowledge_tables: None) -> No
     assert payload["error_code"] == "UNSUPPORTED_KIND"
 
 
-def test_markdown_outline_field_lists_headings(knowledge_tables: None) -> None:
+def test_markdown_outline_field_lists_headings(composed_tables: None) -> None:
     """The markdown sidecar exposes its body's ATX heading outline."""
 
     alice = create_user("alice")
@@ -278,7 +278,7 @@ def test_markdown_outline_field_lists_headings(knowledge_tables: None) -> None:
     ]
 
 
-def test_patch_page_section_round_trip_and_guards(knowledge_tables: None) -> None:
+def test_patch_page_section_round_trip_and_guards(composed_tables: None) -> None:
     """Section patch splices the body, honours CAS, and fails fast on a miss."""
 
     alice = create_user("alice")
@@ -346,7 +346,7 @@ def test_patch_page_section_round_trip_and_guards(knowledge_tables: None) -> Non
     assert missing["error_code"] == "SECTION_NOT_FOUND"
 
 
-def test_search_pages_matches_title_and_body_actor_scoped(knowledge_tables: None) -> None:
+def test_search_pages_matches_title_and_body_actor_scoped(composed_tables: None) -> None:
     """search_pages spans title + body and only returns actor-visible pages."""
 
     alice = create_user("alice")
@@ -387,7 +387,7 @@ def test_search_pages_matches_title_and_body_actor_scoped(knowledge_tables: None
     assert denied.errors is not None
 
 
-def test_page_backlinks_list_resolved_sources(knowledge_tables: None) -> None:
+def test_page_backlinks_list_resolved_sources(composed_tables: None) -> None:
     """The page detail surface exposes resolved incoming wikilinks."""
 
     alice = create_user("alice")
@@ -412,7 +412,7 @@ def test_page_backlinks_list_resolved_sources(knowledge_tables: None) -> None:
     assert detail["backlinks"] == [{"title": "Linker", "display_text": "see target"}]
 
 
-def test_crud_update_is_row_scoped(knowledge_tables: None) -> None:
+def test_crud_update_is_row_scoped(composed_tables: None) -> None:
     """The generated update mutation denies actors outside the row scope."""
 
     alice = create_user("alice")
@@ -447,7 +447,7 @@ def test_crud_update_is_row_scoped(knowledge_tables: None) -> None:
     assert renamed["name"] == "Lab notes"
 
 
-def test_delete_vault_previews_blast_radius(knowledge_tables: None) -> None:
+def test_delete_vault_previews_blast_radius(composed_tables: None) -> None:
     """Vault deletion previews the cascade before a confirmed delete."""
 
     alice = create_user("alice")
@@ -491,7 +491,7 @@ def test_delete_vault_previews_blast_radius(knowledge_tables: None) -> None:
     assert not Vault.objects.as_user(alice).exists()
 
 
-def test_schema_exposes_revisions_and_subscriptions(knowledge_tables: None) -> None:
+def test_schema_exposes_revisions_and_subscriptions(composed_tables: None) -> None:
     """The SDL carries the revision query and console change subscriptions."""
 
     public_sdl = _schema("public").as_str()

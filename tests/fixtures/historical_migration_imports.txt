@@ -1,0 +1,67 @@
+# Import census of materialized runtime migrations from real deployments.
+# Names only: no migration bodies, data, or deployment identities.
+# Import compatibility only: this census does not validate migration dependencies.
+# AST imports include deferred imports; multi-name headers are split by name.
+# Dotted attribute references include their parent chains and expand import aliases.
+# The optional Telegram module is an origin supplement recorded by a materialized
+# messaging migration's angee_origin, not a direct import.
+angee.base
+angee.base.fields
+angee.base.fields.EncryptedField
+angee.base.fields.FractionalRankField
+angee.base.fields.ImplClassField
+angee.base.fields.StateField
+angee.base.impl
+angee.base.impl.ImplClassField
+angee.base.indexes
+angee.base.indexes.PatternOpsIndex
+angee.iam
+angee.iam.models
+angee.iam.models.UserManager
+angee.integrate
+angee.integrate.net
+angee.integrate.net.validate_public_url
+angee.messaging
+angee.messaging.webforms
+angee.messaging.webforms.default_webform_schema
+angee.money
+angee.money.fields
+angee.money.fields.MoneyField
+angee.parties
+angee.parties.fields
+angee.parties.fields.CountryCodeField
+angee.scheduling
+angee.scheduling.fields
+angee.scheduling.fields.RecurrenceField
+angee.workflows
+angee.workflows.attempts
+angee.workflows.attempts.AttemptCause
+angee.workflows.attempts.AttemptResultKind
+angee.workflows.dispatch
+angee.workflows.dispatch.WorkflowDispatchKind
+angee.workflows.models
+angee.workflows.models._empty_workflow_output_schema
+from angee.base.fields import SqidField
+from angee.base.fields import StateField
+from angee.base.historical_relationships import delete_historical_relationships
+from angee.base.historical_relationships import ensure_historical_relationships
+from angee.base.historical_relationships import retarget_historical_resource
+from angee.base.identity import SqidPublicIdentity
+from angee.base.indexes import PatternOpsIndex
+from angee.integrate.models import integration_status_axes
+from angee.money.fields import MoneyField
+from angee.parties.fields import CountryCodeField
+from angee.storage.uploads import fallback_attachment_name
+import angee.base.fields
+import angee.base.impl
+import angee.base.indexes
+import angee.iam.models
+import angee.integrate.net
+import angee.messaging.webforms
+import angee.messaging_integrate_telegram
+import angee.money.fields
+import angee.parties.fields
+import angee.scheduling.fields
+import angee.workflows.attempts
+import angee.workflows.dispatch
+import angee.workflows.models

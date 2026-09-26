@@ -24,9 +24,9 @@ rollback releases the row lock and never burns a number, and concurrent posts
 serialize on the lock.
 
 **Backend scope of the gapless guarantee.** Gaplessness is a PostgreSQL fact,
-resting on ``SELECT … FOR UPDATE``. ``lock_if_supported`` is a no-op on backends
-without row locks (the SQLite dev floor), so the same code runs there *without*
-the lock and the invariant is **not** guaranteed. The concurrency test is
+resting on ``SELECT … FOR UPDATE``. ``lock_if_supported`` declares write intent;
+Django omits row-lock SQL on backends without row locks (the SQLite dev floor),
+so the invariant is **not** guaranteed there. The concurrency test is
 PostgreSQL-marked accordingly.
 """
 
@@ -174,16 +174,17 @@ class SequenceCounterManager(AngeeManager):
         re-read under the lock — landing on the one row and serializing there.
         """
 
-        row = self.lock_if_supported().filter(sequence=sequence, period=period).first()
+        counters = self.all()
+        row = counters.lock_if_supported().filter(sequence=sequence, period=period).first()
         if row is None:
-            self.bulk_create(
-                [self.model(sequence=sequence, period=period, value=0)],
+            counters.bulk_create(
+                [self.model(sequence_id=sequence.pk, period=period, value=0)],
                 ignore_conflicts=True,
             )
             # Post-insert the row is guaranteed; ``locked_get`` re-locks it and
             # fails loudly if the invariant is ever violated (a deleted counter
             # mid-draw), rather than silently returning None.
-            row = self.locked_get(sequence=sequence, period=period)
+            row = counters.locked_get(sequence=sequence, period=period)
         row.value += 1
         row.save(update_fields=["value", "updated_at"])
         return row.value

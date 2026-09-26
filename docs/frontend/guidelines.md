@@ -52,8 +52,12 @@ depend on addons or a composed project's generated schema.
 - Dialect data hooks live in `@angee/refine` as metadata-free hooks. Callers
   resolve `resourceOperationTarget` at the metadata edge and pass the root as
   `{ root }`.
-- Runtime i18n has one app-owned i18next instance. Addon bundles are
-  namespace-relative, and the rendered binding namespace is `ui`.
+- The app owns the composed, active i18next instance. `@angee/ui` keeps an empty
+  instance without resources only to resolve provider-less defaults. Addon
+  bundles are namespace-relative, and the rendered binding namespace is `ui`.
+  The shared `createAngeeI18nInstance` initializer in `@angee/ui/runtime`
+  configures that instance and the provider-less binding's English defaults;
+  i18next owns plural selection and interpolation in both cases.
 - Record display representation is a backend-emitted metadata fact in the
   `angee.resources` artifact. Frontend code reads that field and keeps only the
   `id` floor; it does not probe candidate display fields.
@@ -118,9 +122,12 @@ history uses native Query pages with domain-owned
   valibot schema (`safeParse`), never asserted into an application shape; a
   recursive shape a declarative schema cannot express may wrap its type guard
   in `v.custom`, keeping the parse boundary in the schema.
-- **ActionResult mutations with required arguments are derived, not authored.**
-  Codegen owns eligibility in `packages/app/bin/angee-web-codegen.mjs`: every
-  argument must be non-null without a default. Call
+- **Eligible ActionResult mutations are derived, not authored.** Codegen in
+  `packages/app/bin/angee-web-codegen.mjs` derives mutations with at least one
+  argument when every argument is required (non-null without a default), or
+  when `id: ID!` is the sole required argument and all others are optional or
+  defaulted. Other shapes stay authored. Generated documents preserve the
+  schema's argument types and defaults. Call
   `useActionMutation<ActionFieldName>("field")` from `@angee/ui` in headless
   rendered-view code, or
   `useRecordActionMutation<ActionFieldName>("field")` for a rendered
@@ -192,6 +199,13 @@ history uses native Query pages with domain-owned
   register or mutate a module-global at runtime. `usePreviews`/`useWidget`/
   `useSlot` read the composed `AppRuntime`; menu declarations project into refine
   resources and chrome renders refine `useMenu`.
+- **Custom resource widget keys use `namespace.addon.widgetName`.** Keep namespace
+  segments lowercase (digits and underscores are allowed); use camelCase for a
+  multiword terminal widget name, matching the web widget registry. Backend field
+  metadata and the owning addon's `widgets` contribution use the identical key,
+  for example `angee.integrate.integrationSyncCursor`. The validator in
+  [`angee.data.field_classification`](../../angee/data/field_classification.py)
+  also accepts existing underscore names; unknown bare names remain errors.
 - **A resource registry key is the emitted canonical `modelLabel`** (for example
   `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
   lowercase spelling only because `createApp` canonicalizes it fail-fast against
@@ -213,11 +227,9 @@ history uses native Query pages with domain-owned
   lazily when first visited and then remain mounted for that record, so a shared
   `useRecordPeek` Records tab can open evidence without discarding draft input
   in another panel; unmounting the temporary peek must leave other publishers'
-  tabs and composer intact. Chatter stays in the shell's right pane by default.
-  `Form` / `FormView` may opt into `recordSupportPlacement="below"`; the shared
-  form owner moves the same complete chatter surface. Consumers do not mount
-  their own chatter or filter its contributed tabs to change placement. Embedded
-  forms with `hideRecordChrome` leave the parent page's placement alone.
+  tabs and composer intact. Chatter stays in the shell's right pane. Consumers
+  do not mount their own chatter or filter its contributed tabs to change
+  placement.
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
   paging, record selection, and URL state. The workflows Decision inbox keeps
   `ApprovalTask` as the sole form and mutation owner and specializes only its
@@ -232,8 +244,13 @@ history uses native Query pages with domain-owned
   indeterminate `LoadingPanel`), which wraps every non-root match in Suspense
   inside its layout's `<Outlet/>`, so the chrome stays mounted. Do not hand-roll
   `React.lazy` + a manual `<Suspense>`
-  around a route's `<Outlet/>`. Split only routed pages — lighter manifest content
-  (slot/section content, forms, glyphs) stays eager. A transport or context shared
+  around a route's `<Outlet/>`. Lighter manifest content (slot/section content,
+  forms, glyphs) stays eager. A heavy optional surface may use `React.lazy` inside
+  the shared `LazyBoundary` when its dependency tree otherwise enters the boot
+  bundle. The [agents chat](../../addons/angee/agents/web/src/views/AgentChatterPane.tsx)
+  and its transport slots defer assistant-ui, streamdown and its code renderer
+  until chat opens; their slot declarations and context remain eager so addon
+  composition stays synchronous. A transport or context shared
   by pages and shell contributions declares
   `layoutProviders` on `defineBaseAddon`, keyed by layout and contribution id.
   The layout mounts these providers once inside its authenticated schema context,
@@ -270,12 +287,17 @@ history uses native Query pages with domain-owned
   (`solid`/`soft`/`surface`/`outline`/`ghost`). Drive recipe color through
   `toneClass(tone, fill)`; never hand-type a soft/solid tone triple, and never use
   the retired `default`/`error` names (they are `neutral`/`danger`).
-- **Status → tone is owned once** by the shared `STATUS_TONES` vocabulary
-  (`widgets/status-tones.ts`, the domain layer over the domain-free `lib/tones.ts`).
-  The `statusBadge` (pill) and `colorDot` (dot) widgets and every console status
-  surface (`StateTag`) resolve a value through `statusTone(value, override?)`: an
-  explicit `<Column tone>` map wins, then the shared convention, else `brand`. Never
-  add a private status→tone map (the operator console kept one and drifted). A run
+- **Status → tone is owned once** by
+  [`statusTone`](../../packages/ui/src/widgets/status-tones.ts). Framework defaults
+  contain only neutral vocabulary. Addons contribute product values through
+  `defineAddon({ statusTones })`; composition normalizes keys and rejects duplicate
+  claims, including claims on framework defaults. Every React surface resolves
+  tones with [`useStatusTone()`](../../packages/ui/src/widgets/use-status-tone.ts),
+  which reads the current app's runtime; custom surfaces use the same hook as
+  `statusBadge`, `colorDot`, and form headers.
+  The pure `statusTone` resolver remains for non-React transforms with explicit
+  vocabulary. An explicit `<Column tone>` map wins, then addon tones, then the shared
+  convention, else `brand`. A run
   state — stopped/running/error/warning — renders as `colorDot` (grey/green/red/amber);
   a value the vocabulary doesn't know takes an explicit `<Column tone>` (e.g. a task's
   `blocked`→`danger`). Keep the run state a separate field from a lifecycle/state enum
@@ -284,11 +306,12 @@ history uses native Query pages with domain-owned
   `use<Addon>T()` in an addon (created with `createNamespaceT(ns, fallback)`),
   with namespace-relative English keys in the namespace bundle. A prop whose default is a
   label defaults to `undefined` and resolves `?? t("key")` in the body — never call
-  `t()` in a default parameter. No hardcoded copy in a component. Three boundaries
+  `t()` in a default parameter. No hardcoded copy in a component. Four boundaries
   stay plain English: an addon's declarative manifest menu/route `label:` and
   chatter/drawer contribution labels (chrome data, not in-component copy — none
-  are routed), and a form registered via `forms:` (a statically parsed element,
-  never rendered as a component, so a hook cannot reach its `<Field label>`).
+  are routed), a form registered via `forms:` (a statically parsed element,
+  never rendered as a component, so a hook cannot reach its `<Field label>`),
+  and a dashboard widget row-column `label` (authored resource data).
 - Every icon is a registered glyph rendered via `<Glyph name="…">` (or the
   `renderGlyph(icon)` slot adapter). A component never imports `lucide-react`
   directly: base glyphs live in `chrome/icon-registry.ts`; an addon contributes its
@@ -405,6 +428,16 @@ history uses native Query pages with domain-owned
   ungrouped fields stay above the tab strip. It is per-form — existing stacked forms
   are untouched — and reuses the same `<Group>` declarations, so no field metadata is
   duplicated. Group your fields for the stacked layout and tabbing is one prop away.
+- **Contribute a saved-record tab from the data view** through
+  `formViewSectionsSlot(resource)` with a direct `<Tab>` declaration. Canonical
+  parent sections are inherited by concrete child forms; contribute once at the
+  owning model. Declare `requiredFields` for the tab's `visibleWhen` predicate,
+  which evaluates the loaded record; fields omitted by a child projection are
+  read from the canonical resource. Use `useRecordChromeContext()` inside
+  the panel to scope an embedded `ListView` with resource filters. The model's
+  Hasura resource owns filter/order/group/facet capabilities; the list owns
+  controls, paging and `rowActions`, including confirmations for generated action
+  callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
@@ -468,7 +501,10 @@ history uses native Query pages with domain-owned
 - Authored mutation result envelopes are decoded at the hook boundary. Pass
   `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
   hook throws before invalidating, so pages do not repeat result-error checks or
-  accidentally refresh failed writes.
+  accidentally refresh failed writes. Its native pending lifecycle includes
+  result validation and awaited invalidation. Clear settled failures through
+  the hook's `reset`; resetting a pending mutation detaches its observer without
+  cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
 - No Python view DSL, no frontend metadata hidden in backend decorators.
 
@@ -489,7 +525,7 @@ clears the dirty state, including the editable lines.
 Hard-won traps — the wise learn from others' mistakes
 ([Development Guidelines](../guidelines.md)).
 
-- **Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` applies the same `Intl.PluralRules` selection in provider-less renders.
+- **Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` supplies the declared native plural defaults, including in provider-less renders. A missing category falls back to `_other`; zero uses the locale's category unless the bundle explicitly declares `_zero`.
 - **Server preference writes are live but not transactional across tabs:** each delivered `changes()` event rebases later patches immediately, while whole-document writes already in flight can still be accepted in server order and the last accepted write wins.
 - **Effect cleanup must not permanently kill a memoized resource:** StrictMode's simulated mount → cleanup → remount leaves it dead; own the resource inside the effect or explicitly re-arm it on mount, as the preference patch queue does.
 - **A render callback may only read fields some column declares or the `ListView fields={[…]}` extras name:** the selection owner (`requestedFieldPaths`) fetches column-declared paths plus those extras and nothing else — an undeclared read is `undefined` on every row (a link built from it throws, a caption silently blanks). Still null-guard values a row may legitimately lack.
@@ -507,6 +543,11 @@ Hard-won traps — the wise learn from others' mistakes
   [Checks](../checks.md) owns the command order and working directories. Addon
   fragments resolve the composed stack's generated documents first. The
   repository-local `.angee/runtime` fallback may be stale in a workspace slot.
+- **Optional operations travel with their owning addon.** Keep documents and their
+  transport UI in the addon contributing the schema fields; a base fragment must
+  codegen without optional dependents. Runtime-specific agent chat composes the
+  [agents chat slot](../../addons/angee/agents/web/src/chat-slot.ts) from the
+  [workflow session fragment](../../addons/angee/workflows_agents/web/src/index.tsx).
 - **Relation widgets follow the SDL field kind** — a nested object FK
   (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:
@@ -547,19 +588,20 @@ Hard-won traps — the wise learn from others' mistakes
   on an existing row (the honest "cleared" value); only a String-scalar cell's
   `""` is a real wire value and ships verbatim.
 - **An M2M line cell is a relation multi-select, not a `tagInput`** — a `kind:"list"`
-  child field that carries a relation target (an M2M, e.g. a line's `taxes`) renders
+  child field that carries a relation target (an M2M, e.g. a line's `tags`) renders
   through `relationListFieldInfo` + `RelationMultiFieldWidget` (fetched options,
   chips) and reads/writes an array of public sqids; the diff serializes it via
   `relationIdList`. A `kind:"list"` field with *no* relation target (a plain string
   array) stays the `tagInput`. This mirrors the to-one `relationFieldInfo` +
   `RelationFieldWidget` cell — compose those, never hand-roll a lines cell.
-- **A server-backed typeahead is not a `RelationField`** — `RelationField`/
-  `RelationPicker` own their query state and filter a fixed `options` list
-  client-side, so they cannot drive a remote search. For one (e.g. a host repo
-  search), build a thin control on the dialog/`Input` primitives whose debounced
-  query feeds `@angee/refine`'s `useAuthoredQuery`, and run the write
-  through `useAuthoredMutation(..., { invalidateModels: [...] })` or the
-  matching refine invalidation owner after the write.
+- **Resource relation pickers support server-backed search.** Compose
+  `RelationFieldWidget`; its
+  [relation-options owner](../../packages/ui/src/views/relation/relation-options.ts)
+  handles lazy reads, debouncing, and selected-label resolution against
+  `ResourceQuery`'s executable text fields. `RelationField`/`RelationPicker`
+  expose remote search through `onSearchChange` and `searchState`. Non-resource
+  searches, such as host repository candidates, keep their authored-operation
+  adapter with the owning addon and use Refine's query/mutation lifecycle.
 - **A FormView create dialog under the console layout** needs
   `<ControlBandProvider host={undefined}>` to keep its Save band inline instead of
   portaling into the layout's band.
@@ -664,6 +706,11 @@ Hard-won traps — the wise learn from others' mistakes
   item's id) or the chrome derivation throws "referenced by multiple menu items" —
   or make the root route-less so it inherits its target through a descendant and the
   leaf is the route's sole reference.
+- **Keep the navigation accordion and selectable ARIA tree distinct.**
+  `AppRailTree` owns app-chrome parent activation, expansion, routing, and
+  temporary-drawer behavior. `ui/tree.tsx` owns selectable-tree keyboard
+  semantics and selection state. Keep both; never replace either with a private
+  approximation of the other.
 - **A group names the resource's canonical query axis.** `ResourceQuery` owns
   the translation from that axis to relation identity, label selections, server
   inputs and bucket keys. Never derive those transport names from casing or
@@ -739,6 +786,10 @@ Hard-won traps — the wise learn from others' mistakes
 - **One keyset feed hook.** Compose `useAuthoredKeysetFeed` from `@angee/refine`;
   domain adapters supply documents, scopes, live interests and presentation order.
   Native Query pages own loaded history; do not introduce a second row cache.
+  Live feeds supply retained-ID revalidation; explicit remote snapshots can omit
+  it and configure native freshness/refetch options on the same owner. Use its
+  restart operation for a fresh snapshot, rather than remount keys or manual page
+  accumulation. See the [IMAP sample preview](../../addons/angee/messaging_integrate_imap/README.md).
 - **Enum casing is decided once.** `useEnumOptions` owns read/write casing; a
   caller that re-uppercases option values is working around the owner. Select its
   casing option for authored enum actions and retain lowercase CRUD inputs.

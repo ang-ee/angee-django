@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -10,7 +11,6 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.management import call_command
-from django.db import connection
 from rebac import (
     ObjectRef,
     RelationshipTuple,
@@ -24,6 +24,7 @@ from rebac.models import active_relationship_model
 
 from angee.resources.models import Resource
 from tests.conftest import addon_schema, execute_schema, graphql_request, result_data
+from tests.tables import model_tables
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -93,19 +94,11 @@ def _grant_directory(subject: Any = _EVERYONE) -> None:
     )
 
 
-@pytest.fixture
-def iam_directory_schema(transactional_db: Any) -> None:
-    """Load the current REBAC schema before directory grants are written."""
-
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-
-
 @pytest.mark.django_db(transaction=True)
-def test_seeded_wildcard_directory_reader_exposes_active_human_directory(iam_directory_schema: None) -> None:
+def test_seeded_wildcard_directory_reader_exposes_active_human_directory(composed_tables: None) -> None:
     """The shipped singleton wildcard posture opens user reads for non-admin actors."""
 
-    del iam_directory_schema
+    del composed_tables
     actor = User.objects.create_user(username="actor", email="actor@example.com")
     User.objects.create_user(username="peer", email="peer@example.com")
     User.objects.create_user(
@@ -132,10 +125,10 @@ def test_seeded_wildcard_directory_reader_exposes_active_human_directory(iam_dir
 
 
 @pytest.mark.django_db(transaction=True)
-def test_absent_wildcard_directory_seed_leaves_only_directly_authorized_rows(iam_directory_schema: None) -> None:
+def test_absent_wildcard_directory_seed_leaves_only_directly_authorized_rows(composed_tables: None) -> None:
     """Without the wildcard seed, a member sees only rows with direct grants."""
 
-    del iam_directory_schema
+    del composed_tables
     actor = User.objects.create_user(username="actor", email="actor@example.com")
     granted = User.objects.create_user(username="granted", email="granted@example.com")
     hidden = User.objects.create_user(username="hidden", email="hidden@example.com")
@@ -156,10 +149,10 @@ def test_absent_wildcard_directory_seed_leaves_only_directly_authorized_rows(iam
 
 
 @pytest.mark.django_db(transaction=True)
-def test_search_ordering_and_limit_are_user_collection_mechanics(iam_directory_schema: None) -> None:
+def test_search_ordering_and_limit_are_user_collection_mechanics(composed_tables: None) -> None:
     """Search, deterministic ordering, and caps layer over actor-scoped rows."""
 
-    del iam_directory_schema
+    del composed_tables
     actor = User.objects.create_user(username="search-actor", email="sa@example.com")
     User.objects.create_user(
         username="grace",
@@ -180,10 +173,10 @@ def test_search_ordering_and_limit_are_user_collection_mechanics(iam_directory_s
 
 
 @pytest.mark.django_db(transaction=True)
-def test_visible_person_from_public_id_uses_actor_scoped_queryset(iam_directory_schema: None) -> None:
+def test_visible_person_from_public_id_uses_actor_scoped_queryset(composed_tables: None) -> None:
     """Actions resolving a selected person cannot drift from the picker."""
 
-    del iam_directory_schema
+    del composed_tables
     actor = User.objects.create_user(username="actor", email="actor@example.com")
     visible = User.objects.create_user(username="visible", email="visible@example.com")
     hidden = User.objects.create_user(username="hidden", email="hidden@example.com")
@@ -206,17 +199,12 @@ class IamDemoResourceLedger(Resource):
 
 
 @pytest.fixture
-def iam_demo_resource_ledger(transactional_db: Any) -> None:
+def iam_demo_resource_ledger(transactional_db: Any) -> Iterator[None]:
     """Create the resource ledger table used by IAM demo load tests."""
 
     del transactional_db
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(IamDemoResourceLedger)
-    try:
+    with model_tables((IamDemoResourceLedger,)):
         yield
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(IamDemoResourceLedger)
 
 
 def _load_iam_demo_resources() -> None:
@@ -298,10 +286,10 @@ def test_iam_demo_directory_includes_user_created_after_resource_load(iam_demo_r
 
 
 @pytest.mark.django_db(transaction=True)
-def test_anonymous_actor_is_denied(iam_directory_schema: None) -> None:
+def test_anonymous_actor_is_denied(composed_tables: None) -> None:
     """``colleagues`` requires a signed-in actor."""
 
-    del iam_directory_schema
+    del composed_tables
     result = execute_schema(
         _console_schema(),
         _COLLEAGUES,

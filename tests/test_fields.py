@@ -6,11 +6,14 @@ import math
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldError, ImproperlyConfigured, ValidationError
 from django.db import connection, models
+from django.db.migrations.state import ModelState, ProjectState
 from django.db.models import F, Value
 from django.db.models.functions import Concat
+from django.test.utils import isolate_apps
 
 from angee.base.fields import (
     EncryptedField,
@@ -21,6 +24,7 @@ from angee.base.fields import (
     _derive_fernet,
 )
 from angee.base.mixins import SqidMixin
+from tests.tables import model_tables
 
 
 @pytest.mark.django_db(transaction=True)
@@ -37,17 +41,12 @@ def test_encrypted_field_round_trips_plaintext() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldRoundTrip)
-    try:
+    with model_tables((FieldRoundTrip,)):
         instance = FieldRoundTrip.objects.create(secret="open sesame")
 
         reloaded = FieldRoundTrip.objects.get(pk=instance.pk)
 
         assert reloaded.secret == "open sesame"
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldRoundTrip)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -64,9 +63,7 @@ def test_encrypted_field_stores_ciphertext_at_rest() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldCiphertext)
-    try:
+    with model_tables((FieldCiphertext,)):
         instance = FieldCiphertext.objects.create(secret="stored secret")
         table = connection.ops.quote_name(FieldCiphertext._meta.db_table)
         column = connection.ops.quote_name("secret")
@@ -81,9 +78,6 @@ def test_encrypted_field_stores_ciphertext_at_rest() -> None:
         label = f"{FieldCiphertext._meta.label_lower}.secret"
         assert stored != "stored secret"
         assert _derive_fernet(label).decrypt(stored.encode()).decode() == "stored secret"
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldCiphertext)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -100,17 +94,12 @@ def test_encrypted_field_preserves_none() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldOptional)
-    try:
+    with model_tables((FieldOptional,)):
         instance = FieldOptional.objects.create(secret=None)
 
         reloaded = FieldOptional.objects.get(pk=instance.pk)
 
         assert reloaded.secret is None
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldOptional)
 
 
 def test_encrypted_field_deconstruct_is_stable_and_value_free() -> None:
@@ -188,9 +177,7 @@ def test_encrypted_field_rejects_expression_writes() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldExpression)
-    try:
+    with model_tables((FieldExpression,)):
         instance = FieldExpression.objects.create(
             secret="initial",
             other_text_field="other",
@@ -204,9 +191,6 @@ def test_encrypted_field_rejects_expression_writes() -> None:
             FieldExpression.objects.filter(pk=instance.pk).update(
                 secret=Concat("other_text_field", Value("-suffix")),
             )
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldExpression)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -223,17 +207,12 @@ def test_encrypted_field_rejects_bulk_update() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldBulkUpdate)
-    try:
+    with model_tables((FieldBulkUpdate,)):
         instance = FieldBulkUpdate.objects.create(secret="initial")
         instance.secret = "updated"
 
         with pytest.raises(FieldError, match="bulk_update"):
             FieldBulkUpdate.objects.bulk_update([instance], ["secret"])
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldBulkUpdate)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -250,18 +229,13 @@ def test_encrypted_field_refresh_from_db_reads_literal_update() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldRefresh)
-    try:
+    with model_tables((FieldRefresh,)):
         instance = FieldRefresh.objects.create(secret="old")
 
         FieldRefresh.objects.filter(pk=instance.pk).update(secret="new")
         instance.refresh_from_db()
 
         assert instance.secret == "new"
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldRefresh)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -278,9 +252,7 @@ def test_encrypted_field_double_save_round_trips_plaintext() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldDoubleSave)
-    try:
+    with model_tables((FieldDoubleSave,)):
         instance = FieldDoubleSave.objects.create(secret="stable")
         reloaded = FieldDoubleSave.objects.get(pk=instance.pk)
 
@@ -288,9 +260,6 @@ def test_encrypted_field_double_save_round_trips_plaintext() -> None:
         saved_again = FieldDoubleSave.objects.get(pk=instance.pk)
 
         assert saved_again.secret == "stable"
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldDoubleSave)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -307,9 +276,7 @@ def test_encrypted_field_literal_update_stores_ciphertext() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldLiteralUpdate)
-    try:
+    with model_tables((FieldLiteralUpdate,)):
         instance = FieldLiteralUpdate.objects.create(secret="initial")
         FieldLiteralUpdate.objects.filter(pk=instance.pk).update(secret="updated")
         table = connection.ops.quote_name(FieldLiteralUpdate._meta.db_table)
@@ -325,9 +292,6 @@ def test_encrypted_field_literal_update_stores_ciphertext() -> None:
         label = f"{FieldLiteralUpdate._meta.label_lower}.secret"
         assert stored != "updated"
         assert _derive_fernet(label).decrypt(stored.encode()).decode() == "updated"
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldLiteralUpdate)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -344,18 +308,13 @@ def test_encrypted_field_filter_by_value_is_loud_but_isnull_works() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldFilter)
-    try:
+    with model_tables((FieldFilter,)):
         instance = FieldFilter.objects.create(secret="x")
 
         with pytest.raises(FieldError, match="not queryable by value"):
             FieldFilter.objects.filter(secret="x").exists()
 
         assert FieldFilter.objects.filter(secret__isnull=False).get() == instance
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldFilter)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -372,9 +331,7 @@ def test_encrypted_field_wraps_invalid_ciphertext_errors() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldInvalidCiphertext)
-    try:
+    with model_tables((FieldInvalidCiphertext,)):
         instance = FieldInvalidCiphertext.objects.create(secret="valid")
         table = connection.ops.quote_name(FieldInvalidCiphertext._meta.db_table)
         column = connection.ops.quote_name("secret")
@@ -392,9 +349,6 @@ def test_encrypted_field_wraps_invalid_ciphertext_errors() -> None:
             match=f"Cannot decrypt {FieldInvalidCiphertext._meta.label_lower}",
         ):
             reloaded.secret
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldInvalidCiphertext)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -411,9 +365,7 @@ def test_encrypted_field_corrupt_row_does_not_break_queryset() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldCorruptRow)
-    try:
+    with model_tables((FieldCorruptRow,)):
         valid = FieldCorruptRow.objects.create(secret="valid")
         corrupt = FieldCorruptRow.objects.create(secret="corrupt")
         table = connection.ops.quote_name(FieldCorruptRow._meta.db_table)
@@ -432,41 +384,99 @@ def test_encrypted_field_corrupt_row_does_not_break_queryset() -> None:
         assert rows[1].pk == corrupt.pk
         with pytest.raises(ImproperlyConfigured, match=f"Cannot decrypt {FieldCorruptRow._meta.label_lower}"):
             rows[1].secret
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldCorruptRow)
+
+
+@pytest.mark.parametrize("db_index", [True, False])
+def test_state_field_deconstruct_and_clone_preserve_index_choice(db_index: bool) -> None:
+    """Migration state cloning must not introduce an index on an opted-out column."""
+
+    class Status(models.TextChoices):
+        ENABLED = "enabled", "Enabled"
+
+    field = StateField(choices_enum=Status, db_index=db_index)
+    declaration = field.deconstruct()
+
+    assert declaration[3]["db_index"] is db_index
+    cloned = field.clone()
+    assert cloned.db_index is db_index
+    assert cloned.deconstruct() == declaration
+
+
+def test_active_model_state_fields_pass_checks() -> None:
+    """Concrete composed fields satisfy the optional-state declaration rule."""
+
+    errors = [
+        error
+        for model in apps.get_models()
+        for field in model._meta.get_fields()
+        if isinstance(field, StateField)
+        for error in field.check()
+    ]
+    assert not errors
+
+
+@pytest.mark.parametrize(
+    ("blank", "nullable", "is_abstract", "default", "expected_errors"),
+    [
+        (True, False, False, "", ["angee.E019"]),
+        (True, False, False, "enabled", ["angee.E019"]),
+        (True, True, False, None, []),
+        (False, False, False, "enabled", []),
+        (True, False, True, "", []),
+    ],
+)
+@isolate_apps()
+def test_state_field_check_requires_null_for_concrete_optional_states(
+    blank: bool,
+    nullable: bool,
+    is_abstract: bool,
+    default: str | None,
+    expected_errors: list[str],
+) -> None:
+    """Model checks reject optional-state sentinels, including real defaults."""
+
+    class OptionalKind(models.TextChoices):
+        ENABLED = "enabled", "Enabled"
+
+    class CheckedState(models.Model):
+        state = StateField(choices_enum=OptionalKind, blank=blank, null=nullable, default=default)
+
+        class Meta:
+            app_label = "tests"
+            abstract = is_abstract
+
+    field = CheckedState._meta.get_field("state")
+    errors = field.check()
+    assert [error.id for error in errors] == expected_errors
+    if errors:
+        assert errors[0].obj is field
+        assert "migrate stored empty strings to NULL" in errors[0].hint
+        assert any(error.id == "angee.E019" for error in CheckedState.check())
 
 
 @pytest.mark.django_db(transaction=True)
-def test_state_field_supports_blank_string_states() -> None:
-    """StateField owns nullable-free blank-string state columns."""
+def test_historical_state_field_supports_blank_string_rows() -> None:
+    """Retained migration states can still reconstruct and read legacy rows."""
 
-    class OptionalKind(models.TextChoices):
-        """Finite states for blank-compatible state-field tests."""
+    state = ProjectState()
+    state.add_model(
+        ModelState(
+            "auth",
+            "FieldBlankState",
+            fields=[
+                ("id", models.AutoField(primary_key=True)),
+                ("state", StateField(choices=[("enabled", "Enabled")], default="", blank=True)),
+            ],
+        )
+    )
+    FieldBlankState = state.apps.get_model("auth", "FieldBlankState")
 
-        ENABLED = "enabled", "Enabled"
-
-    class FieldBlankState(models.Model):
-        """Concrete model used for blank-compatible state tests."""
-
-        state = StateField(choices_enum=OptionalKind, default="", blank=True)
-
-        class Meta:
-            """Django model options for the test model."""
-
-            app_label = "auth"
-
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(FieldBlankState)
-    try:
+    with model_tables((FieldBlankState,)):
         blank = FieldBlankState.objects.create()
-        enabled = FieldBlankState.objects.create(state="ENABLED")
+        enabled = FieldBlankState.objects.create(state="enabled")
 
         assert FieldBlankState.objects.get(pk=blank.pk).state == ""
-        assert FieldBlankState.objects.get(pk=enabled.pk).state == OptionalKind.ENABLED
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(FieldBlankState)
+        assert FieldBlankState.objects.get(pk=enabled.pk).state == "enabled"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -489,9 +499,7 @@ def test_sqid_field_passes_null_joins_through() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(SqidNode)
-    try:
+    with model_tables((SqidNode,)):
         root = SqidNode.objects.create()
         child = SqidNode.objects.create(parent=root)
 
@@ -500,9 +508,6 @@ def test_sqid_field_passes_null_joins_through() -> None:
         assert values[root.pk] is None
         assert values[child.pk] == root.sqid
         assert str(root.sqid).startswith("tst_")
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(SqidNode)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -519,18 +524,13 @@ def test_sqid_field_canonical_prefix_uses_separator() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(BarePrefixNode)
-    try:
+    with model_tables((BarePrefixNode,)):
         node = BarePrefixNode.objects.create()
 
         assert BarePrefixNode._meta.get_field("sqid").prefix == "bare_"
         assert str(node.sqid).startswith("bare_")
         assert BarePrefixNode.objects.get(sqid=node.sqid) == node
         assert BarePrefixNode.objects.filter(sqid=str(node.sqid).replace("bare_", "bare", 1)).first() is None
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(BarePrefixNode)
 
 
 def test_sqid_field_deconstruct_preserves_public_id_contract() -> None:
@@ -559,16 +559,11 @@ def test_sqid_mixin_resolves_prefix_from_sqid_prefix_attr() -> None:
 
             app_label = "auth"
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PrefixedThing)
-    try:
+    with model_tables((PrefixedThing,)):
         thing = PrefixedThing.objects.create()
 
         assert PrefixedThing._meta.get_field("sqid").prefix == "abc_"
         assert str(thing.sqid).startswith("abc_")
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PrefixedThing)
 
 
 def test_sqid_field_rejects_non_string_prefix() -> None:
@@ -605,9 +600,7 @@ def test_fractional_rank_appends_within_its_unique_context() -> None:
                 models.UniqueConstraint(fields=("lane", "rank"), name="ranked_item_lane_rank"),
             )
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(RankedItem)
-    try:
+    with model_tables((RankedItem,)):
         first = RankedItem.objects.create(lane="a")
         second = RankedItem.objects.create(lane="a")
         other_lane = RankedItem.objects.create(lane="b")
@@ -619,9 +612,6 @@ def test_fractional_rank_appends_within_its_unique_context() -> None:
         assert explicit.rank == 512.0
         after_explicit = RankedItem.objects.create(lane="a")
         assert after_explicit.rank == second.rank + FractionalRankField.STEP
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(RankedItem)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -642,18 +632,13 @@ def test_fractional_rank_full_clean_allows_the_pending_none() -> None:
                 models.UniqueConstraint(fields=("lane", "rank"), name="ranked_pending_lane_rank"),
             )
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(RankedPending)
-    try:
+    with model_tables((RankedPending,)):
         instance = RankedPending(lane="a")
 
         instance.full_clean()
         instance.save()
 
         assert instance.rank == FractionalRankField.STEP
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(RankedPending)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -686,10 +671,7 @@ def test_fractional_rank_requires_exactly_one_unique_context() -> None:
                 models.UniqueConstraint(fields=("tier", "rank"), name="ranked_over_tier_rank"),
             )
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(RankedUnconstrained)
-        schema_editor.create_model(RankedOverconstrained)
-    try:
+    with model_tables((RankedUnconstrained, RankedOverconstrained)):
         with pytest.raises(ImproperlyConfigured, match="exactly one"):
             RankedUnconstrained.objects.create()
         with pytest.raises(ImproperlyConfigured, match="exactly one"):
@@ -697,10 +679,6 @@ def test_fractional_rank_requires_exactly_one_unique_context() -> None:
 
         explicit = RankedUnconstrained.objects.create(rank=64.0)
         assert explicit.rank == 64.0
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(RankedOverconstrained)
-            schema_editor.delete_model(RankedUnconstrained)
 
 
 def test_fractional_rank_has_default_exposes_the_server_allocator() -> None:
@@ -770,9 +748,7 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
                 models.UniqueConstraint(fields=("lane", "rank"), name="ranked_rebalance_lane_rank"),
             )
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(RankedRebalance)
-    try:
+    with model_tables((RankedRebalance,)):
         RankedRebalance.objects.create(lane="a", rank=0.25)
         RankedRebalance.objects.create(lane="a", rank=0.5)
         RankedRebalance.objects.create(lane="a", rank=9000.0)
@@ -802,9 +778,6 @@ def test_fractional_rank_rebalance_rewrites_a_clean_spread() -> None:
             RankedRebalance.objects.filter(lane="c").order_by("rank").values_list("rank", flat=True)
         )
         assert crowded == [step, step * 2, step * 3]
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(RankedRebalance)
 
 
 def test_fractional_rank_rebalance_rejects_traversal_context_keys() -> None:
@@ -856,16 +829,9 @@ def test_fractional_rank_rebalance_accepts_a_relation_attname_context() -> None:
                 models.UniqueConstraint(fields=("owner", "rank"), name="ranked_rel_owner_rank"),
             )
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(RankOwner)
-        schema_editor.create_model(RankedRelationContext)
-    try:
+    with model_tables((RankOwner, RankedRelationContext)):
         field = RankedRelationContext._meta.get_field("rank")
         # Django resolves the column attname to the relation field itself, so
         # both spellings address the same exact-match context.
         assert field.rebalance(context={"owner": None}) == 0
         assert field.rebalance(context={"owner_id": None}) == 0
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(RankedRelationContext)
-            schema_editor.delete_model(RankOwner)

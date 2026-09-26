@@ -28,18 +28,16 @@ from rebac import (
 )
 
 from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin, HierarchyMixin
+from angee.base.mixins import AuditMixin, ConditionalSharedReaderMixin, ConditionalSharedReaderQuerySet, HierarchyMixin
 from angee.base.models import (
     AngeeDataModel,
     AngeeManager,
+    AngeeQuerySet,
     role_anchor,
 )
 from angee.base.refs import RecordRefMixin, canonical_record_target
 from angee.base.scoping import bind_actor
 from angee.resources.mixins import ResourceLoadMixin
-
-_EVERYONE = SubjectRef.of("auth/user", "*")
-"""The wildcard subject used by the workspace-visible portfolio posture."""
 
 
 class ProductLifecycle(models.TextChoices):
@@ -98,36 +96,31 @@ class ReleaseStatus(models.TextChoices):
     DROPPED = "dropped", "Dropped"
 
 
-class WorkspaceVisibleMixin(models.Model):
-    """Persist the R11 wildcard-reader tuple for a portfolio row.
+class WorkspaceVisibleQuerySet(ConditionalSharedReaderQuerySet[Any], AngeeQuerySet[Any]):
+    """Keep workspace reader creation on the shared reconciliation owner."""
 
-    Workspace visibility is posture data, so every one of the addon's five
-    persisted resource definitions carries an explicit ``reader@auth/user:*``
-    tuple. Deployments may replace that tuple strategy without changing schema.
-    """
+
+class WorkspaceVisibleManager(AngeeManager.from_queryset(WorkspaceVisibleQuerySet)):  # type: ignore[misc]
+    """Share the guarded workspace queryset across portfolio factories."""
+
+
+class WorkspaceVisibleMixin(ConditionalSharedReaderMixin):
+    """Make portfolio rows readable across the workspace through shared readers."""
+
+    shared_reader_relation = "reader"
+    objects = WorkspaceVisibleManager()
 
     class Meta:
-        """Django options for the tuple-reconciliation mixin."""
-
         abstract = True
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the row and idempotently reconcile its wildcard reader."""
+    @property
+    def shared_reader_eligible(self) -> bool:
+        """Portfolio rows are readable by every authenticated actor."""
 
-        with transaction.atomic():
-            super().save(*args, **kwargs)
-            write_relationships(
-                [
-                    RelationshipTuple(
-                        resource=to_object_ref(self),
-                        relation="reader",
-                        subject=_EVERYONE,
-                    )
-                ]
-            )
+        return True
 
 
-class ProductManager(AngeeManager):
+class ProductManager(WorkspaceVisibleManager):
     """Own the idempotent Project-to-Product maturation write."""
 
     def from_project(self, project: models.Model) -> models.Model:
@@ -372,10 +365,9 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
         if self.initiative_id is None or self.project_id is None:
             return
         with system_context(reason="portfolio.initiative_project.validate_ancestry"):
+            # A retained relation may predate a reparenting; validate the current path.
             initiative_model = self._meta.get_field("initiative").related_model
-            initiative = initiative_model.objects.filter(pk=self.initiative_id).first()
-            if initiative is None:
-                return
+            initiative = initiative_model._base_manager.get(pk=self.initiative_id)
             placements = type(self).objects.filter(project_id=self.project_id).exclude(pk=self.pk)
             if lock:
                 project_model = self._meta.get_field("project").related_model
@@ -410,8 +402,16 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
         update_model = apps.get_model("portfolio", "Update")
         for placement in sorted(instances, key=lambda instance: instance.pk or 0):
             targets = (
-                (placement.initiative, "at_risk", "Scope is clear; delivery sequencing needs attention."),
-                (placement.project, "on_track", "The current push is progressing as planned."),
+                (
+                    placement.initiative,
+                    "at_risk",
+                    "Scope is clear; delivery sequencing needs attention.",
+                ),
+                (
+                    placement.project,
+                    "on_track",
+                    "The current push is progressing as planned.",
+                ),
             )
             for target, health, body in targets:
                 canonical = canonical_record_target(target)
@@ -431,7 +431,7 @@ class InitiativeProject(ResourceLoadMixin, WorkspaceVisibleMixin, AuditMixin, An
                 report.sudo(reason="portfolio.demo.report").save()
 
 
-class UpdateManager(AngeeManager):
+class UpdateManager(WorkspaceVisibleManager):
     """Own target validation, authorization, and health-report creation."""
 
     TARGET_RELATIONS = {

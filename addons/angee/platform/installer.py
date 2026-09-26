@@ -33,17 +33,16 @@ import io
 from collections.abc import Mapping, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 from django.conf import settings
 from django.core.checks import CheckMessage, Error, register
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files import locks
-from django.utils.module_loading import import_string
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from angee.base.impl import resolve_impl_class
+from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
 from angee.fs import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
@@ -52,15 +51,13 @@ _BACKEND_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND"
 _REGISTRY_SETTING = "ANGEE_ADDON_INSTALLER_BACKEND_CLASSES"
 
 
-class AddonInstallerBackend:
+class AddonInstallerBackend(ImplBase):
     """Pure transport for the ``settings.yaml`` that lists ``INSTALLED_APPS``.
 
     The :class:`AddonInstaller` owns all YAML logic; a backend only moves the settings
     bytes. Subclasses register a short :attr:`key` selected by
     ``settings.ANGEE_ADDON_INSTALLER_BACKEND``.
     """
-
-    key: ClassVar[str] = ""
 
     def read_settings_text(self) -> str:
         """Return the current ``settings.yaml`` text (``FileNotFoundError`` if absent)."""
@@ -411,24 +408,23 @@ def _check_installer_backends(app_configs: Any, **kwargs: Any) -> list[CheckMess
                 id="angee.platform.E001",
             )
         ]
-    for key, dotted in registry.items():
-        try:
-            backend_cls = import_string(str(dotted))
-        except ImportError as error:
-            errors.append(
-                Error(
-                    f"settings.{_REGISTRY_SETTING}[{key!r}] = {dotted!r} does not import: {error}",
-                    id="angee.platform.E002",
-                )
+    resolution_errors: list[Exception] = []
+    resolve_all_impl_classes(
+        _REGISTRY_SETTING,
+        AddonInstallerBackend,
+        on_error=resolution_errors.append,
+    )
+    for error in resolution_errors:
+        errors.append(
+            Error(
+                str(error),
+                id=(
+                    "angee.platform.E002"
+                    if isinstance(error, ImportError)
+                    else "angee.platform.E003"
+                ),
             )
-            continue
-        if not (isinstance(backend_cls, type) and issubclass(backend_cls, AddonInstallerBackend)):
-            errors.append(
-                Error(
-                    f"settings.{_REGISTRY_SETTING}[{key!r}] = {dotted!r} is not an AddonInstallerBackend subclass.",
-                    id="angee.platform.E003",
-                )
-            )
+        )
     selected = getattr(settings, _BACKEND_SETTING, "local")
     if selected not in registry:
         errors.append(

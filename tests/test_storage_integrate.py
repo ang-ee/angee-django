@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import importlib
 import os
-from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,8 +13,7 @@ from typing import Any
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.db import DataError, connection
+from django.db import DataError
 from django.utils import timezone
 from rebac import system_context
 
@@ -27,10 +25,6 @@ from angee.storage_integrate.mounts import (
     browse_mount_source,
 )
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
-    STORAGE_INTEGRATE_TEST_MODELS,
-    STORAGE_TEST_MODELS,
     Backend,
     Drive,
     File,
@@ -38,8 +32,6 @@ from tests.conftest import (
     MimeType,
     Mount,
     Vendor,
-    _clear_model_tables,
-    _create_missing_tables,
     addon_schema,
     create_platform_admin,
     execute_schema,
@@ -50,37 +42,14 @@ from tests.conftest import (
 storage_integrate_connect = importlib.import_module("angee.storage_integrate.connect")
 storage_integrate_schema = importlib.import_module("angee.storage_integrate.schema")
 
-MOUNT_TEST_MODELS = (
-    IAM_CONNECTION_TEST_MODELS
-    + INTEGRATE_TEST_MODELS
-    + STORAGE_TEST_MODELS
-    + STORAGE_INTEGRATE_TEST_MODELS
-)
 BASE_MTIME_NS = 1_700_000_000_000_000_000
 
 
 @pytest.fixture()
-def mount_tables(transactional_db: Any) -> Iterator[None]:
-    """Create concrete integration, storage, and Mount tables with REBAC wiring."""
-
-    del transactional_db
-    created = _create_missing_tables(MOUNT_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(MOUNT_TEST_MODELS)
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
-@pytest.fixture()
-def mount_env(tmp_path: Path, mount_tables: None) -> SimpleNamespace:
+def mount_env(tmp_path: Path, composed_tables: None) -> SimpleNamespace:
     """Seed the local vendor and managed default drive used by Mount tests."""
 
-    del mount_tables
+    del composed_tables
     managed_root = tmp_path / "managed"
     managed_root.mkdir()
     owner = create_platform_admin(
@@ -613,15 +582,15 @@ def test_reference_entry_data_error_is_contained_and_counted(
     mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Data error")
     del queued_mounts
 
-    manager = File.objects
-    original_index_external = manager.index_external
+    manager_type = type(File.objects)
+    original_index_external = manager_type.index_external
 
-    def index_external(**kwargs: Any) -> Any:
+    def index_external(manager: Any, **kwargs: Any) -> Any:
         if kwargs["filename"] == long_name:
             raise DataError("value too long for storage filename")
-        return original_index_external(**kwargs)
+        return original_index_external(manager, **kwargs)
 
-    monkeypatch.setattr(manager, "index_external", index_external)
+    monkeypatch.setattr(manager_type, "index_external", index_external)
     assert _run_sync(mount) == 1
     assert mount.last_sync_status == "ok"
     assert _details(mount)["errors"] == 1

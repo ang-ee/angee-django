@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
@@ -20,26 +19,25 @@ from django.db import close_old_connections, connection, connections, models, tr
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
 from rebac import actor_context, system_context
-from rebac.actors import to_subject_ref
+from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.roles import grant
 
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
+from angee.base.refs import canonical_record_target
 from angee.data.field_classification import is_archive_field
 from angee.storage import exceptions
+from angee.storage import models as storage_models
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
 from tests.conftest import (
-    STORAGE_TEST_MODELS,
     Backend,
     Drive,
     File,
     FileAttachment,
     Folder,
     MimeType,
-    _clear_model_tables,
-    _create_missing_tables,
     addon_schema,
     create_platform_admin,
     execute_schema,
@@ -132,9 +130,7 @@ def test_archive_column_is_marked_archivable_in_resource_metadata() -> None:
     """
 
     schema = addon_schema(storage_schema.schemas, "public")
-    resource = next(
-        item for item in schema.angee_resources if item.model_label == Drive._meta.label
-    )
+    resource = next(item for item in schema.angee_resources if item.model_label == Drive._meta.label)
     fields = {field.name: field for field in resource.fields}
     assert fields["is_archived"].archivable is True
     assert fields["slug"].archivable is False
@@ -183,25 +179,10 @@ def test_fallback_attachment_name_derives_extension_from_mime() -> None:
 
 
 @pytest.fixture
-def storage_tables() -> Iterator[None]:
-    """Provide the concrete storage tables for one test."""
-
-    created_models = _create_missing_tables(STORAGE_TEST_MODELS)
-    try:
-        yield
-    finally:
-        _clear_model_tables(STORAGE_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
-
-@pytest.fixture
-def drive(tmp_path: Path, storage_tables: None) -> Any:
+def drive(tmp_path: Path, transactional_db: None) -> Any:
     """Provide a local-backend drive owned by the ``alice`` test user."""
 
-    del storage_tables
+    del transactional_db
     call_command("rebac", "sync", verbosity=0)
     alice = get_user_model().objects.create_user(username="storage-alice", email="alice@example.com")
     with system_context(reason="test storage setup"):
@@ -222,6 +203,44 @@ def drive(tmp_path: Path, storage_tables: None) -> Any:
         )
     row.alice = alice
     return row
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("cached_drive", [False, True])
+@pytest.mark.parametrize("system", [False, True])
+def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
+    drive: Any, django_assert_num_queries: Any, cached_drive: bool, system: bool
+) -> None:
+    """Fetch missing relations once and keep cached access free of audit writes."""
+
+    if cached_drive:
+        Drive._meta.get_field("backend").delete_cached_value(drive)
+    row = File(drive=drive) if cached_drive else File(drive_id=drive.pk)
+    with system_context(reason="test storage resolution") if system else actor_context(drive.alice):
+        # Native contexts audit each entry, including nested system contexts.
+        with django_assert_num_queries(2):
+            backend = row.storage
+            assert row.drive.backend.pk == drive.backend_id
+        with django_assert_num_queries(0):
+            assert row.storage is backend
+            assert backend is row.drive.storage
+        assert current_sudo_reason() == ("test storage resolution" if system else None)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("system", [False, True])
+def test_drive_storage_fetches_only_an_uncached_backend(
+    drive: Any, django_assert_num_queries: Any, system: bool
+) -> None:
+    """Reuse cached backend rows and restore the caller's system context."""
+
+    Drive._meta.get_field("backend").delete_cached_value(drive)
+    with system_context(reason="test storage resolution") if system else actor_context(drive.alice):
+        with django_assert_num_queries(2):
+            backend = drive.storage
+        with django_assert_num_queries(0):
+            assert backend is drive.storage
+        assert current_sudo_reason() == ("test storage resolution" if system else None)
 
 
 def _proxy_upload(drive: Any, payload: bytes, **draft_kwargs: Any) -> Any:
@@ -672,9 +691,7 @@ def test_storage_admin_role_reaches_manager_gated_rows_tuple_free(drive: Any) ->
 
     from rebac.models import active_relationship_model
 
-    manager_user = get_user_model().objects.create_user(
-        username="storage-manager", email="storage-manager@example.com"
-    )
+    manager_user = get_user_model().objects.create_user(username="storage-manager", email="storage-manager@example.com")
 
     with actor_context(manager_user):
         assert not drive.backend.has_access("read")
@@ -690,9 +707,7 @@ def test_storage_admin_role_reaches_manager_gated_rows_tuple_free(drive: Any) ->
     # Tuple-free: the grant wrote a role membership, never a backend/drive tuple.
     with system_context(reason="probe manager reach is tuple-free"):
         assert not (
-            active_relationship_model()
-            .objects.filter(resource_type__in=["storage/backend", "storage/drive"])
-            .exists()
+            active_relationship_model().objects.filter(resource_type__in=["storage/backend", "storage/drive"]).exists()
         )
 
 
@@ -934,10 +949,10 @@ def _header_values(value: str) -> set[str]:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_users_get_a_trash_smart_folder(storage_tables: None) -> None:
+def test_users_get_a_trash_smart_folder(transactional_db: None) -> None:
     """Creating a user creates exactly one owned Trash smart folder."""
 
-    del storage_tables
+    del transactional_db
     user = get_user_model().objects.create_user(username="storage-carol", email="carol@example.com")
     folders = Folder._base_manager.filter(owner=user, is_virtual=True)
     assert [folder.smart_kind for folder in folders] == [Folder.SmartKind.TRASH]
@@ -945,14 +960,32 @@ def test_users_get_a_trash_smart_folder(storage_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("schema_name", ["public", "console"])
+def test_folder_kind_projects_native_null_and_enum(drive: Any, schema_name: str) -> None:
+    """Real folders persist absence as NULL and smart folders expose their enum."""
+
+    with system_context(reason="test.storage.folder.kind"):
+        real = Folder.objects.create(drive=drive, name="Reports", created_by=drive.alice)
+        trash = Folder.objects.get(owner=drive.alice, smart_kind=Folder.SmartKind.TRASH)
+        assert Folder.objects.filter(pk=real.pk, smart_kind__isnull=True).exists()
+
+    schema = addon_schema(storage_schema.schemas, schema_name)
+    query = "query FolderKind($id: String!) { folders_by_pk(id: $id) { smart_kind } }"
+    for folder, kind in ((real, None), (trash, "TRASH")):
+        assert result_data(execute_schema(schema, query, {"id": str(folder.sqid)}, user=drive.alice)) == {
+            "folders_by_pk": {"smart_kind": kind},
+        }
+
+
+@pytest.mark.django_db(transaction=True)
 def test_backend_storage_cache_tracks_resolved_env_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    storage_tables: None,
+    transactional_db: None,
 ) -> None:
     """Environment-backed backend config changes produce a new storage instance."""
 
-    del storage_tables
+    del transactional_db
     Backend._storage_cache.clear()
     monkeypatch.setenv("ANGEE_TEST_STORAGE_ROOT", str(tmp_path / "one"))
     with system_context(reason="test storage setup"):
@@ -976,12 +1009,11 @@ def test_backend_storage_cache_tracks_resolved_env_config(
 def test_backend_storage_cache_is_bounded(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    storage_tables: None,
+    transactional_db: None,
 ) -> None:
     """The process cache evicts old resolved backend instances."""
 
-    del storage_tables
-    from angee.storage import models as storage_models
+    del transactional_db
 
     monkeypatch.setattr(storage_models, "_STORAGE_CACHE_MAX_SIZE", 2)
     Backend._storage_cache.clear()
@@ -1295,3 +1327,114 @@ def test_local_folder_backend_rejects_traversal_keys(tmp_path: Path) -> None:
 
     with pytest.raises(SuspiciousFileOperation):
         backend.open("../outside.txt", "rb")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_finalize_publishes_once_after_commit_and_refreshes_stale_rows(drive: Any) -> None:
+    """A stale finalize observes READY, and one callback sees the committed row."""
+
+    with actor_context(drive.alice):
+        draft = File.objects.draft(filename="publish.png", drive_id=str(drive.sqid))
+        token = draft.issue_upload_token()
+        File.objects.for_upload_token(token).receive_bytes(BytesIO(PNG_BYTES))
+    row = File._base_manager.get(pk=draft.pk)
+    stale = File._base_manager.get(pk=draft.pk)
+    committed: list[str] = []
+
+    def capture(sender: Any, instance: Any, **kwargs: Any) -> None:
+        del kwargs
+        stored = sender._base_manager.get(pk=instance.pk)
+        committed.append(stored.upload_state)
+
+    file_finalized.connect(capture, sender=File)
+    try:
+        with system_context(reason="storage publish"):
+            with transaction.atomic():
+                row.finalize(expected_hash=PNG_SHA256)
+                stale.finalize(expected_hash=PNG_SHA256)
+                assert committed == []
+            assert committed == [UploadState.READY]
+    finally:
+        file_finalized.disconnect(capture, sender=File)
+    assert stale.upload_state == UploadState.READY
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ingest_dedup_restores_and_merges_metadata(drive: Any) -> None:
+    """A READY dedup hit restores its row and preserves the supplied metadata."""
+
+    row = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="storage dedup setup"):
+        row.delete()
+    with system_context(reason="storage dedup"):
+        result = File.objects.ingest_stream(
+            BytesIO(PNG_BYTES),
+            filename="same.png",
+            content_hash=PNG_SHA256,
+            size_bytes=len(PNG_BYTES),
+            drive_id=str(drive.sqid),
+            owner_id=drive.alice.pk,
+            metadata={"source": {"indexed": True}},
+        )
+    stored = File._base_manager.get(pk=row.pk)
+    assert result.pk == row.pk
+    assert stored.is_trashed is False
+    assert stored.metadata == {"source": {"indexed": True}}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_upload_consumes_nonce_and_persists_failure(drive: Any, settings: Any) -> None:
+    """An oversized admitted upload spends its token and records its failure."""
+
+    with actor_context(drive.alice):
+        row = File.objects.draft(filename="too-large.png", drive_id=str(drive.sqid))
+    settings.ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES = 1
+    with actor_context(drive.alice):
+        token = row.issue_upload_token()
+        admitted = File.objects.for_upload_token(token)
+        with pytest.raises(exceptions.UploadTooLarge):
+            admitted.receive_bytes(BytesIO(PNG_BYTES))
+    stored = File._base_manager.get(pk=row.pk)
+    assert stored.upload_envelope["used"] is True
+    assert stored.upload_envelope["failure_reason"] == "too_large"
+    assert stored.upload_state == UploadState.FAILED
+
+
+@pytest.mark.django_db(transaction=True)
+def test_folder_tree_validation_saves_valid_parent(drive: Any) -> None:
+    """Save validates the parent chain before persisting the new tree edge."""
+
+    with system_context(reason="storage tree setup"):
+        parent = Folder._base_manager.create(drive=drive, name="Parent")
+        child = Folder._base_manager.create(drive=drive, name="Child")
+    child.parent_id = parent.pk
+    with system_context(reason="storage tree"):
+        child.save()
+    assert Folder._base_manager.get(pk=child.pk).parent_id == parent.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_attachment_locks_canonical_target_and_file_before_creation(
+    drive: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Attachment locks the canonical target, then the file, before its insert."""
+
+    row = _proxy_upload(drive, PNG_BYTES)
+    with system_context(reason="storage attachment setup"):
+        target = MtiChild.objects.create(title="Attached", detail="target")
+    canonical = canonical_record_target(target)
+    locks: list[type[models.Model]] = []
+    select_for_update = models.QuerySet.select_for_update
+
+    def capture_lock(queryset: Any, **kwargs: Any) -> Any:
+        locks.append(queryset.model)
+        return select_for_update(queryset, **kwargs)
+
+    with monkeypatch.context() as patch, system_context(reason="storage attachment"):
+        patch.setattr(models.QuerySet, "select_for_update", capture_lock)
+        attachment = FileAttachment.objects.attach(row, target)
+    assert locks == [MtiParent, File]
+    stored = FileAttachment._base_manager.get(pk=attachment.pk)
+    assert stored.file_id == row.pk
+    assert stored.object_id == target.pk
+    assert stored.content_type_id == canonical.content_type.pk

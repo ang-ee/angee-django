@@ -19,6 +19,7 @@ export const enAgentsMessages: Record<string, string> = {
 
   // AgentChat — the live ACP chat surface (header, composer, settings cog).
   "chat.title": "Agent",
+  "chat.unavailable": "Chat is unavailable for this agent.",
   "chat.resolving": "Connecting to your agent…",
   "chat.empty": "Ask the agent about what you're looking at — it has the notes tools.",
   "chat.placeholder": "Message the agent…",
@@ -49,9 +50,7 @@ export const enAgentsMessages: Record<string, string> = {
   "chat.status.ready": "Ready",
   "chat.status.error": "Error",
   "chat.status.closed": "Disconnected",
-  "chat.startFailed": "Failed to start the agent session.",
   "chat.connectFailed": "Failed to connect to the agent.",
-  "chat.messageRejected": "The agent did not accept the message.",
   "chat.responseFailed": "The agent did not respond.",
 
   // AgentSessionsPage — the full-page sessions view (left rail + conversation).

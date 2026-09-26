@@ -17,7 +17,7 @@ interface Event extends Record<string, unknown> {
 const ROWS: Event[] = [
   { id: "1", who: "Mira", body: "Tagged it", at: "2026-05-27T10:00:00Z" },
   { id: "2", who: "Sam", body: "Approved", at: "2026-05-26T09:00:00Z" },
-  { id: "3", who: "Alexis", body: "Created", at: "2026-05-27T08:00:00Z" },
+  { id: "3", who: "Alex", body: "Created", at: "2026-05-27T08:00:00Z" },
 ];
 
 describe("TimelineView", () => {

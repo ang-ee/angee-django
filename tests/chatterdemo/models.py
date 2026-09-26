@@ -1,6 +1,6 @@
 """A REBAC-gated threaded record for the F-v messaging tests.
 
-``ChatterDoc`` stands in for an arp document that composes
+``ChatterDoc`` is a document that composes
 :class:`~angee.messaging.models.ThreadedModelMixin`: a real REBAC resource whose
 ``read``/``write``/``post`` permissions diverge, so the messaging tests can drive
 the surface-isolation scenarios that ``ThreadedTicket`` (ungated — ``can_post``

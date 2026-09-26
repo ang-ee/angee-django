@@ -1,13 +1,22 @@
 // @vitest-environment happy-dom
 
 import type { ReactNode } from "react";
+import { createAngeeI18nRuntime } from "@angee/app";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider, createRouteHref, defaultWidgets, type JsonValue } from "@angee/ui";
+import {
+  AppRuntimeProvider,
+  createRouteHref,
+  defaultWidgets,
+  directDottedPathMessages,
+  messagesForDottedPath,
+  type JsonValue,
+} from "@angee/ui";
 import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 
 const mocks = vi.hoisted(() => ({
+  confirm: vi.fn(async () => true),
   decide: vi.fn(async (): Promise<unknown> => ({
     decide: {
       decision: {
@@ -28,11 +37,16 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 vi.mock("../documents.public", () => ({ DecideWorkflowDecisionDocument: { kind: "Document", name: "DecideWorkflowDecision" } }));
 
 vi.mock("@angee/ui", async (importOriginal) => {
+  const { createUiTestModule } = await import("@angee/ui/testing");
   const actual = await importOriginal<typeof import("@angee/ui")>();
-  return { ...actual, useConfirm: () => async () => true };
+  return {
+    ...await createUiTestModule(importOriginal, { useConfirm: () => mocks.confirm }),
+    messagesForDottedPath: actual.messagesForDottedPath,
+  };
 });
 
 import type { PendingWorkflowDecision } from "../documents.public";
+import { enWorkflowsMessages } from "../i18n";
 import { WORKFLOW_DECISION_CONTENT_SLOT } from "../slots";
 import { ApprovalTask, DecisionField, type WorkflowDecisionContentProps } from "./ApprovalTask";
 
@@ -70,7 +84,7 @@ const titleActionSchema: JsonValue = {
     title: { type: "string", label: "Title" },
   },
   oneOf: [{ type: "object", required: ["action", "title"], properties: {
-    action: { const: "record" }, title: { type: "string" },
+    action: { const: "record" }, title: { type: "string", label: "Title" },
   }, additionalProperties: false }],
 };
 const authoredApproval: PendingWorkflowDecision = {
@@ -108,28 +122,30 @@ const correctionActionSchema: JsonValue = {
       { value: "reject", label: "Reject document", verdict: "REJECT" },
     ] },
     note: { type: "string", label: "Review explanation", minLength: 1 },
-    currency: { type: ["string", "null"], label: "Invoice currency", omittable: true },
-    invoice_date: { type: ["string", "null"], label: "Invoice date", widget: "date", omittable: true },
-    vendor_name: { type: ["string", "null"], label: "Supplier name", omittable: true },
+    currency: { type: ["string", "null"], label: "Document currency", omittable: true },
+    document_date: { type: ["string", "null"], label: "Document date", widget: "date", omittable: true },
+    counterparty_name: { type: ["string", "null"], label: "Counterparty name", omittable: true },
   },
   oneOf: [
     { type: "object", required: ["action", "note"], properties: {
-      action: { const: "correct" }, note: { type: "string", minLength: 1 },
-      currency: { type: ["string", "null"] }, invoice_date: { type: ["string", "null"] },
-      vendor_name: { type: ["string", "null"] },
+      action: { const: "correct" }, note: { type: "string", label: "Review explanation", minLength: 1 },
+      currency: { type: ["string", "null"], label: "Document currency", omittable: true },
+      document_date: { type: ["string", "null"], label: "Document date", widget: "date", omittable: true },
+      counterparty_name: { type: ["string", "null"], label: "Counterparty name", omittable: true },
     }, anyOf: [
       { required: ["currency"], properties: { currency: { type: "string", minLength: 1 } } },
-      { required: ["invoice_date"], properties: { invoice_date: { type: "string", minLength: 1 } } },
-      { required: ["vendor_name"], properties: { vendor_name: { type: "string", minLength: 1 } } },
+      { required: ["document_date"], properties: { document_date: { type: "string", minLength: 1 } } },
+      { required: ["counterparty_name"], properties: { counterparty_name: { type: "string", minLength: 1 } } },
     ], additionalProperties: false },
     { type: "object", required: ["action", "note"], properties: {
-      action: { const: "reject" }, note: { type: "string", minLength: 1 },
+      action: { const: "reject" }, note: { type: "string", label: "Review explanation", minLength: 1 },
     }, additionalProperties: false },
   ],
 };
 
 afterEach(() => {
   cleanup();
+  mocks.confirm.mockClear();
   mocks.decide.mockClear();
   mocks.decide.mockResolvedValue({
     decide: {
@@ -145,6 +161,63 @@ afterEach(() => {
 });
 
 describe("ApprovalTask", () => {
+  test.each([true, false])("composed action labels retain frozen submission semantics (namespace available: %s)", async (composed) => {
+    const schema: JsonValue = {
+      type: "object",
+      required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["record", "reject"], options: [{
+          value: "record", label: "Record decision", verdict: "COMPLETE", confirm: "Keep this confirmation body.",
+        }, { value: "reject", label: "Keep declared rejection", verdict: "REJECT" }] },
+        title: { type: "string", label: "Title" },
+      },
+      oneOf: [{ type: "object", required: ["action", "title"], properties: {
+        action: { const: "record" }, title: { type: "string", label: "Title" },
+      }, additionalProperties: false }, {
+        type: "object", required: ["action"], properties: { action: { const: "reject" } }, additionalProperties: false,
+      }],
+    };
+    function Specialized({ actionPicker }: WorkflowDecisionContentProps) {
+      return <>{actionPicker}</>;
+    }
+    Object.assign(Specialized, {
+      placesActionPicker: true,
+      actionPresentation: {
+        namespace: "approval-test",
+        keyPrefix: "action",
+      },
+    });
+    const label = composed ? "Confirm publication" : "Record decision";
+    const i18n = createAngeeI18nRuntime(composed ? {
+      "approval-test": { "action.record": "Confirm publication" },
+    } : {}).instance;
+    render(<AppRuntimeProvider runtime={{ i18n, widgets: defaultWidgets, slots: [{
+      slot: WORKFLOW_DECISION_CONTENT_SLOT,
+      model: "workflows.Decision",
+      impl: "review",
+      id: "test.action-presentation",
+      content: Specialized,
+    }] }}><ApprovalTask approval={{ ...authoredApproval, decision_schema: schema }} onResolved={() => undefined} />
+    </AppRuntimeProvider>);
+
+    expect(screen.queryByRole("button", { name: composed ? "Record decision" : "Confirm publication" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Keep declared rejection" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    fireEvent.click(screen.getAllByRole("button", { name: label })[1]!);
+
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith({
+      title: label,
+      body: "Keep this confirmation body.",
+      confirm: label,
+      danger: false,
+    }));
+    await waitFor(() => expect(mocks.decide).toHaveBeenCalledExactlyOnceWith({
+      decision: approval.id,
+      verdict: "COMPLETE",
+      payload: { action: "record", title: "Original" },
+    }));
+  });
+
   test("fails closed before collapsed processing details when no action schema was authored", () => {
     render(<ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([
       testDataResource("notes.Note"),
@@ -250,7 +323,7 @@ describe("ApprovalTask", () => {
     expect(action.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  test("shows the native compile error without invoking contributed content", () => {
+  test("shows the translated generic schema error without invoking contributed content", () => {
     const rendered = vi.fn();
     function Specialized() {
       rendered();
@@ -270,7 +343,7 @@ describe("ApprovalTask", () => {
     }] }}><ApprovalTask approval={{ ...approval, decision_schema: invalidSchema }}
       onResolved={() => undefined} /></AppRuntimeProvider>);
 
-    expect(screen.getByText(/Invalid action\.options\.0\.label/)).toBeTruthy();
+    expect(screen.getByText(enWorkflowsMessages["inbox.validation.invalidSchema"]!)).toBeTruthy();
     expect(screen.queryByText("Frozen Decision context is unavailable.")).toBeNull();
     expect(rendered).not.toHaveBeenCalled();
   });
@@ -304,6 +377,94 @@ describe("ApprovalTask", () => {
       verdict: "COMPLETE",
       payload: { action: "record", title: "Edited" },
     });
+  });
+
+  test.each([
+    { source: "server", label: "Paper", message: "Choose a line description.", parentMessage: "" },
+    { source: "client", label: "", message: "label must contain at least 1 character.", parentMessage: "" },
+    { source: "client with a parent error", label: "", message: "label must contain at least 1 character.",
+      parentMessage: "Documents has an invalid value." },
+  ])("scopes nested composite $source validation errors to the matching authored control", async ({ source, label, message, parentMessage }) => {
+    if (source === "server") mocks.decide.mockResolvedValueOnce({
+      decide: {
+        validation_errors: {
+          "documents.0.lines.0.label": [message],
+        },
+      },
+    });
+    const documents: JsonValue = {
+      type: "array", widget: "rows", label: "Documents", ...(parentMessage ? { maxItems: 0 } : {}), items: {
+        type: "object", widget: "object", properties: {
+          party_name: { type: "string", label: "Counterparty name" },
+          lines: { type: "array", widget: "list", items: {
+            type: "object", widget: "object", properties: {
+              label: { type: "string", label: "Description", minLength: 1 },
+            },
+          } },
+        },
+      },
+    };
+    const schema: JsonValue = {
+      type: "object",
+      required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["correct"], options: [
+          { value: "correct", label: "Correct source facts", verdict: "COMPLETE" },
+        ] },
+        documents,
+      },
+      oneOf: [{
+        type: "object", required: ["action", "documents"], additionalProperties: false,
+        properties: {
+          action: { const: "correct" },
+          documents,
+        },
+      }],
+    };
+    function Specialized(props: WorkflowDecisionContentProps) {
+      const messages = props.messagesFor("documents");
+      const lineMessages = messagesForDottedPath(messages, "documents.0.lines");
+      return <>
+        {props.actionPicker}
+        <span data-testid="documents-errors">
+          {directDottedPathMessages(messages, "documents").join(" ")}
+        </span>
+        <span data-testid="line-errors">
+          {lineMessages.join(" ")}
+        </span>
+        <span data-testid="line-label-errors">
+          {messagesForDottedPath(lineMessages, "documents.0.lines.0.label").join(" ")}
+        </span>
+        <span data-testid="counterparty-errors">
+          {messagesForDottedPath(messages, "documents.0.party_name").join(" ")}
+        </span>
+      </>;
+    }
+    Object.assign(Specialized, {
+      renderedInputFields: ["documents"],
+      placesActionPicker: true,
+    });
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets, slots: [{
+      slot: WORKFLOW_DECISION_CONTENT_SLOT,
+      model: "workflows.Decision",
+      impl: "review",
+      id: "test.nested-composite-errors",
+      content: Specialized,
+    }] }}><ApprovalTask approval={{
+      ...approval,
+      payload: { documents: [{ party_name: "Northstar", lines: [{ label }] }] },
+      decision_schema: schema,
+    }} onResolved={() => undefined} /></AppRuntimeProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Correct source facts" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Correct source facts" })[1]!);
+
+    await waitFor(() => expect(screen.getByTestId("line-errors").textContent)
+      .toBe(`documents.0.lines.0.label: ${message}`));
+    expect(screen.getByTestId("line-label-errors").textContent).toBe(message);
+    expect(screen.getByTestId("documents-errors").textContent).toBe(parentMessage);
+    expect(screen.getByTestId("counterparty-errors").textContent).toBe("");
+    expect(mocks.decide).toHaveBeenCalledTimes(source === "server" ? 1 : 0);
   });
 
   test("keeps dirty action fields across a same-decision refetch and submits through the form", async () => {
@@ -356,7 +517,7 @@ describe("ApprovalTask", () => {
       oneOf: [
         { type: "object", required: ["action"], properties: { action: { const: "approve" } }, additionalProperties: false },
         { type: "object", required: ["action", "note"], properties: {
-          action: { const: "reject" }, note: { type: "string", minLength: 1 },
+          action: { const: "reject" }, note: { type: "string", label: "Review note", minLength: 1 },
         }, additionalProperties: false },
       ],
     };
@@ -369,11 +530,11 @@ describe("ApprovalTask", () => {
       slot: WORKFLOW_DECISION_CONTENT_SLOT, model: "workflows.Decision", impl: "review",
       id: "test.context-only-fragment", content: Specialized,
     }] }}><ApprovalTask approval={{ ...approval,
-      payload: { record: { model: "storage.File", id: "fil_source", label: "Frozen invoice A" } },
+      payload: { record: { model: "storage.File", id: "fil_source", label: "Frozen document A" } },
       decision_schema: schema,
     }} onResolved={() => undefined} /></AppRuntimeProvider>);
 
-    expect(await screen.findByText("Frozen invoice A")).toBeTruthy();
+    expect(await screen.findByText("Frozen document A")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Reject source" }));
     fireEvent.change(screen.getByLabelText("Review note"), { target: { value: "Wrong source" } });
     fireEvent.click((await screen.findAllByRole("button", { name: "Reject source" }))[1]!);
@@ -388,20 +549,20 @@ describe("ApprovalTask", () => {
     }} onResolved={() => undefined} /></AppRuntimeProvider>);
 
     fireEvent.click(screen.getByRole("button", { name: "Correct source facts" }));
-    expect(screen.getByLabelText("Invoice currency")).toBeTruthy();
-    expect(screen.getByLabelText("Invoice date")).toBeTruthy();
-    expect(screen.getByLabelText("Supplier name")).toBeTruthy();
+    expect(screen.getByLabelText("Document currency")).toBeTruthy();
+    expect(screen.getByLabelText("Document date")).toBeTruthy();
+    expect(screen.getByLabelText("Counterparty name")).toBeTruthy();
     expect(screen.queryByText("Set value")).toBeNull();
     expect(screen.queryByText("Not set")).toBeNull();
     fireEvent.click(screen.getAllByRole("button", { name: "Correct source facts" })[1]!);
     expect(await screen.findByText("Review explanation must contain at least 1 character.")).toBeTruthy();
-    expect(screen.getByText("Complete at least one of: Invoice currency, Invoice date, or Supplier name.")).toBeTruthy();
+    expect(screen.getByText("Complete at least one of: Document currency, Document date, or Counterparty name.")).toBeTruthy();
     expect(mocks.decide).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText("Review explanation"), { target: { value: "Browser form validation only." } });
     fireEvent.click(screen.getAllByRole("button", { name: "Correct source facts" })[1]!);
     expect(screen.queryByText("Review explanation must contain at least 1 character.")).toBeNull();
-    expect(screen.getByText("Complete at least one of: Invoice currency, Invoice date, or Supplier name.")).toBeTruthy();
+    expect(screen.getByText("Complete at least one of: Document currency, Document date, or Counterparty name.")).toBeTruthy();
     expect(mocks.decide).not.toHaveBeenCalled();
   });
 
@@ -562,14 +723,14 @@ describe("ApprovalTask", () => {
       ...approval,
       verdict: "COMPLETED",
       resolved_by: "workflows/cancel",
-      payload: { review_context: { label: "Retained supplier context" } },
+      payload: { review_context: { label: "Retained counterparty context" } },
       resolution: { action: "record", title: "Retained history" },
       decision_schema: obsoleteHistoricalSchema,
     }} onResolved={() => undefined} /></AppRuntimeProvider>);
 
-    expect(screen.getByText("Retained supplier context · record · Retained history")).toBeTruthy();
+    expect(screen.getByText("Retained counterparty context · record · Retained history")).toBeTruthy();
     expect(screen.queryByText("Default title")).toBeNull();
-    expect(screen.queryByText(/Invalid Decision schema/)).toBeNull();
+    expect(screen.queryByText(enWorkflowsMessages["inbox.validation.invalidSchema"]!)).toBeNull();
     expect(screen.queryByRole("button", { name: "Record decision" })).toBeNull();
   });
 
@@ -586,7 +747,7 @@ describe("ApprovalTask", () => {
     render(<TestRuntime><ApprovalTask approval={{ ...approval, decision_schema: obsoleteHistoricalSchema }}
       onResolved={() => undefined} /></TestRuntime>);
 
-    expect(screen.getByText(/enum must have non-empty array/)).toBeTruthy();
+    expect(screen.getByText(enWorkflowsMessages["inbox.validation.invalidSchema"]!)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Record decision" })).toBeNull();
   });
 

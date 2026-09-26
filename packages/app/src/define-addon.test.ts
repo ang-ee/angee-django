@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { STATUS_TONES } from "@angee/ui/widgets/status-tones";
 
 import { composeAddons, defineAddon } from "./define-addon";
 
@@ -17,6 +18,22 @@ describe("defineAddon", () => {
 });
 
 describe("composeAddons", () => {
+  test("composes normalized status vocabulary and rejects duplicate claims", () => {
+    const a = defineAddon({ id: "a", statusTones: { " REVIEWED ": "success" } });
+    const b = defineAddon({ id: "b", statusTones: { queued: "warning" } });
+    expect(composeAddons([a, b], IDENTITY_CANONICALIZER).statusTones).toEqual({ reviewed: "success", queued: "warning" });
+    expect(() => composeAddons([a, { id: "collision", statusTones: { reviewed: "success" } }], IDENTITY_CANONICALIZER))
+      .toThrow(/status tone "reviewed"/);
+    expect(() => composeAddons([{ id: "bad", statusTones: { " ": "neutral" } }], IDENTITY_CANONICALIZER))
+      .toThrow(/empty status tone key/);
+  });
+
+  test.each(Object.values(STATUS_TONES).flat())("rejects a claim on framework status %s", (value) => {
+    const addon = defineAddon({ id: "collision", statusTones: { [` ${value.toUpperCase()} `]: "accent" } });
+    expect(() => composeAddons([addon], IDENTITY_CANONICALIZER))
+      .toThrow(`redefines framework status tone "${value}"`);
+  });
+
   test("composes addon record detail keys in deterministic order", () => {
     const a = defineAddon({ id: "a", recordSearchKeys: ["detailA"] });
     const b = defineAddon({ id: "b", recordSearchKeys: ["detailB"] });
@@ -84,6 +101,31 @@ describe("composeAddons", () => {
         defineAddon({ id: "b", menus: [{ id: "shared.route" }] }),
       ], IDENTITY_CANONICALIZER),
     ).toThrow(/menu item id "shared.route"/);
+  });
+
+  test("preserves route params while composing cross-addon menu targets", () => {
+    const composed = composeAddons(
+      [
+        defineAddon({
+          id: "document-review",
+          menus: [
+            {
+              route: "dashboards.addon",
+              params: { key: "example.document_review.overview" },
+            },
+          ],
+        }),
+      ],
+      IDENTITY_CANONICALIZER,
+    );
+
+    expect(composed.menus).toEqual([
+      {
+        id: "dashboards.addon",
+        route: "dashboards.addon",
+        params: { key: "example.document_review.overview" },
+      },
+    ]);
   });
 
   test("requires a menu id when no route can own the default", () => {

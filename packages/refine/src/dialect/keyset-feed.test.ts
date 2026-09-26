@@ -15,6 +15,95 @@ const message = (position: number, values: { id?: string; body?: string; visible
   ...values,
 });
 
+test("feeds without revalidation retain empty continuations and use fresh native cursors on refetch", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  let rows = [5, 4, 3, 2, 1].map(position => message(position));
+  const options = keysetFeedOptions(client, {
+    queryKey: ["snapshot"], pageSize: 2,
+    async window(before, through, limit) {
+      expect(through).toBeNull();
+      const selected = rows.filter(row => before === null || row.position < Number(before)).slice(0, limit);
+      return {
+        rows: selected, count: rows.length, older_cursor: selected.at(-1)?.position.toString() ?? null,
+        has_older: selected.length === limit, has_more_in_window: false, has_older_than_through: false,
+      };
+    },
+  });
+  const observer = new InfiniteQueryObserver(client, options);
+  const stop = observer.subscribe(() => {});
+  const positions = () => orderedRows(observer.getCurrentResult().data).map(row => row.position);
+  try {
+    await observer.refetch();
+    await observer.fetchNextPage();
+    rows = rows.slice(0, 4);
+    await observer.fetchNextPage();
+    expect(positions()).toEqual([5, 4, 3, 2]);
+    expect(observer.getCurrentResult().hasNextPage).toBe(false);
+    await observer.refetch();
+    expect(positions()).toEqual([5, 4, 3, 2]);
+    rows = [message(6), ...rows];
+    await observer.refetch();
+    expect(positions()).toEqual([6, 5, 4, 3, 2]);
+    expect(observer.getCurrentResult().data?.pageParams).toEqual([{ start: true }, "5", "3"]);
+  } finally { stop(); client.clear(); }
+});
+
+test("revalidation reuses the retained page when cursor object keys are reordered", async () => {
+  const client = new QueryClient();
+  const queryKey = ["cursor-order"];
+  const row = message(8);
+  const cachedCursor = { after: "opaque:7", scope: "fixture" };
+  const requestedCursor = { scope: "fixture", after: "opaque:7" };
+  const window = vi.fn(async () => ({
+    rows: [], count: 1, older_cursor: "opaque:8",
+    has_older: false, has_more_in_window: false, has_older_than_through: false,
+  }));
+  const revalidate = vi.fn(async () => ({ rows: [row], absent_ids: [] }));
+  const options = keysetFeedOptions(client, { queryKey, pageSize: 2, window, revalidate });
+  client.setQueryData(queryKey, {
+    pages: [{ rows: [row], through: "opaque:8", before: "opaque:9", hasOlder: false, count: 1 }],
+    pageParams: [cachedCursor],
+  });
+  try {
+    if (typeof options.queryFn !== "function") throw new Error("Expected a keyset query function.");
+    const context = {
+      client, queryKey, pageParam: requestedCursor, signal: new AbortController().signal,
+      direction: "forward" as const, meta: undefined,
+    };
+    const page = await options.queryFn(context);
+    expect(window).toHaveBeenCalledWith("opaque:9", "opaque:8", 2, context);
+    expect(revalidate).toHaveBeenCalledWith([row.id], context);
+    expect(page.rows).toEqual([row]);
+    expect(page.through).toBe("opaque:8");
+  } finally { client.clear(); }
+});
+
+test.each([false, true])("page metadata survives an empty window and refresh (revalidation=%s)", async (revalidate) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  let revision = 1;
+  const options = keysetFeedOptions(client, {
+    queryKey: ["snapshot-metadata", revalidate], pageSize: 2,
+    async window() {
+      return {
+        rows: [] as { id: string }[], count: 0, older_cursor: "opaque-snapshot",
+        has_older: false, has_more_in_window: false, has_older_than_through: false,
+        metadata: { revision },
+      };
+    },
+    revalidate: revalidate ? async () => ({ rows: [], absent_ids: [] }) : undefined,
+  });
+  const observer = new InfiniteQueryObserver(client, options);
+  const stop = observer.subscribe(() => {});
+  try {
+    await observer.refetch();
+    expect(observer.getCurrentResult().data?.pages[0]?.metadata?.revision).toBe(1);
+    revision = 2;
+    await observer.refetch();
+    expect(observer.getCurrentResult().data?.pages[0]?.metadata?.revision).toBe(2);
+    expect(observer.getCurrentResult().data?.pages[0]?.rows).toEqual([]);
+  } finally { stop(); client.clear(); }
+});
+
 test("an anchored native feed grows both ways and revalidates newer windows", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   let rows = [1, 2, 3, 4, 5, 6].map(position => message(position));

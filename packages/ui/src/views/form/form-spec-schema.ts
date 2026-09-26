@@ -44,45 +44,51 @@ const RelationSchema = v.object({
     title: v.optional(NonEmptyString),
   })),
 });
-const FieldBaseSchema = v.object({
+const FieldKeywordSchema = v.object({
   type: v.optional(JsonFieldTypeSchema),
   required: v.optional(v.array(v.string())),
-  propertyOrder: v.optional(v.array(NonEmptyString)),
-  widget: v.optional(NonEmptyString),
-  label: v.optional(NonEmptyString),
-  addLabel: v.optional(NonEmptyString),
-  removeLabel: v.optional(NonEmptyString),
   description: v.optional(NonEmptyString),
-  placeholder: v.optional(NonEmptyString),
   readOnly: v.optional(v.boolean()),
-  layout: v.optional(FieldLayoutSchema),
   nullable: v.optional(v.boolean()),
-  omittable: v.optional(v.boolean()),
-  presenceRequired: v.optional(v.boolean()),
   minimum: v.optional(v.pipe(v.number(), v.finite())),
   maximum: v.optional(v.pipe(v.number(), v.finite())),
   minLength: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
   maxLength: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
   minItems: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
   maxItems: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
-  defaultValue: v.optional(JsonValueSchema),
   default: v.optional(JsonValueSchema),
   const: v.optional(JsonValueSchema),
   format: v.optional(NonEmptyString),
   pattern: v.optional(v.string()),
   enum: v.optional(v.array(v.string("form-spec select values must be strings."))),
-  options: v.optional(v.array(v.object({
+});
+const FieldAnnotationSchema = v.object({
+  propertyOrder: v.optional(v.array(NonEmptyString)),
+  widget: v.optional(NonEmptyString),
+  label: v.optional(NonEmptyString),
+  addLabel: v.optional(NonEmptyString),
+  removeLabel: v.optional(NonEmptyString),
+  placeholder: v.optional(NonEmptyString),
+  hidden: v.optional(v.boolean()),
+  layout: v.optional(FieldLayoutSchema),
+  omittable: v.optional(v.boolean()),
+  presenceRequired: v.optional(v.boolean()),
+  defaultValue: v.optional(JsonValueSchema),
+  // Option annotations are an extension seam. The generic form owner consumes
+  // only value/label/disabled and preserves domain annotations for its caller.
+  options: v.optional(v.array(v.looseObject({
     // JSON Pointer uses the empty string for the root document. It is a valid
     // authored choice value even though human-facing option labels stay
     // non-empty.
     value: v.string(),
     label: NonEmptyString,
     disabled: v.optional(v.boolean()),
-    verdict: v.optional(v.picklist(["COMPLETE", "REJECT", "ESCALATE"])),
-    variant: v.optional(v.picklist(["primary", "secondary", "destructive", "ghost"])),
-    confirm: v.optional(v.string()),
   }))),
   relation: v.optional(RelationSchema),
+});
+const FieldBaseSchema = v.object({
+  ...FieldKeywordSchema.entries,
+  ...FieldAnnotationSchema.entries,
 });
 /** Only recursive edges need an annotation; scalar facts are inferred. */
 export type FormSpecWire = v.InferOutput<typeof FieldBaseSchema> & {
@@ -96,6 +102,7 @@ export type FormSpecWire = v.InferOutput<typeof FieldBaseSchema> & {
   else?: FormSpecWire;
   not?: FormSpecWire;
   $defs?: Record<string, FormSpecWire>;
+  definitions?: Record<string, FormSpecWire>;
   $ref?: string;
   additionalProperties?: boolean | FormSpecWire;
 };
@@ -111,6 +118,7 @@ const FieldSchema: v.GenericSchema<unknown, FormSpecWire> = v.lazy(() => v.objec
   else: v.optional(FieldSchema),
   not: v.optional(FieldSchema),
   $defs: v.optional(v.record(v.string(), FieldSchema)),
+  definitions: v.optional(v.record(v.string(), FieldSchema)),
   $ref: v.optional(v.string()),
   additionalProperties: v.optional(v.union([v.boolean(), FieldSchema])),
 }));
@@ -133,3 +141,6 @@ export function parseFormSpecPayload(payload: unknown): Record<string, unknown> 
   const result = v.safeParse(v.record(v.string(), v.unknown()), payload);
   return result.success ? result.output : {};
 }
+
+/** Every non-standard field entry is an annotation for full JSON Schema validators. */
+export const FORM_SPEC_ANNOTATIONS: readonly string[] = Object.keys(FieldAnnotationSchema.entries);

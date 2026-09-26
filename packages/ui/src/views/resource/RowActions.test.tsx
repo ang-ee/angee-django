@@ -226,6 +226,31 @@ describe("declared row actions", () => {
     expect(container.children).toHaveLength(0);
   });
 
+  test.each([true, false])("confirms callback row verbs before dispatch (accepted=%s)", async (accepted) => {
+    mocks.confirm.mockResolvedValue(accepted);
+    const onSelect = vi.fn();
+    renderActions(defineRowAction<TestRow>({
+      kind: "page",
+      id: "resync",
+      label: "Resync",
+      variant: "ghost",
+      pendingPolicy: "active-row",
+      confirm: {
+        title: (row) => `Resync ${row.name}?`,
+        body: () => "Start a baseline on the next cycle.",
+        confirm: () => "Resync",
+      },
+      onSelect,
+    }));
+    const button = withinRow("row-a") as HTMLButtonElement;
+    fireEvent.click(button);
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ title: "Resync Alpha?" })));
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(onSelect).toHaveBeenCalledTimes(accepted ? 1 : 0);
+    if (accepted) expect(onSelect).toHaveBeenCalledWith(ROWS[0]);
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+
   test("runs page-owned entries through the same cross-row pending controller", async () => {
     let resolveSelection: (() => void) | undefined;
     const onSelect = vi.fn(

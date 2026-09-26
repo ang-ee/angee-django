@@ -52,7 +52,7 @@ def queue_message_delivery(message: Any) -> bool:
             lambda: enqueue_task(
                 DELIVER_MESSAGE_TASK,
                 kwargs={"model_label": model_label, "pk": pk, "external_id": external_id},
-            )
+            ),
         )
     message.status = message.MessageStatus.QUEUED
     return True
@@ -90,9 +90,7 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
             _record_status(model, pk, external_id, status="failed")
             if _is_transient(error):
                 logger.exception("Transient outbound delivery failure for %s:%s.", model_label, pk)
-                raise TransientDeliveryError(
-                    f"Transient outbound delivery failure for {model_label}:{pk}."
-                ) from error
+                raise TransientDeliveryError(f"Transient outbound delivery failure for {model_label}:{pk}.") from error
             logger.exception("Permanent outbound delivery failure for %s:%s.", model_label, pk)
             return {
                 "ok": False,

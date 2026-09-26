@@ -194,7 +194,7 @@ class RepositoryManager(AngeeManager):
         """Create or update one repository row from a host descriptor."""
 
         repository, _created = self.update_or_create(
-            vcs_bridge=vcs_bridge,
+            vcs_bridge_id=vcs_bridge.pk,
             name=descriptor.name,
             defaults={
                 "org": descriptor.org,
@@ -213,7 +213,7 @@ class RepositoryManager(AngeeManager):
         """Return an unsaved repository row projected from one host descriptor."""
 
         return self.model(
-            vcs_bridge=vcs_bridge,
+            vcs_bridge_id=vcs_bridge.pk,
             name=descriptor.name,
             org=descriptor.org,
             remote=descriptor.remote,
@@ -363,7 +363,8 @@ class TemplateManager(AngeeManager):
     def sync_from_source(self, source: Any) -> int:
         """Walk the source for ``copier.yml`` and upsert/prune ``Template`` rows."""
 
-        vcs_bridge = source.repository.vcs_bridge
+        repository: Any = source.repository
+        vcs_bridge = repository.vcs_bridge
         descriptors = vcs_bridge.discover(source, marker="copier.yml", parse=parse_template_meta)
         descriptors_by_path = {str(descriptor.get("path", "")): descriptor for descriptor in descriptors}
         now = timezone.now()
@@ -383,7 +384,7 @@ class TemplateManager(AngeeManager):
         """Return an unsaved template row projected from one discovered descriptor."""
 
         return self.model(
-            source=source,
+            source_id=source.pk,
             path=str(descriptor.get("path", "")),
             name=str(descriptor.get("name", "")),
             kind=str(descriptor.get("kind", "")),

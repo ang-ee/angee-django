@@ -1,5 +1,10 @@
 export { DialogForm, type DialogFormProps } from "./DialogForm";
 export {
+  ComparisonRows,
+  type ComparisonRow,
+  type ComparisonRowsProps,
+} from "./ComparisonRows";
+export {
   DetailSection,
   DetailSurface,
   detailSurfaceVariants,

@@ -8,12 +8,6 @@ from django.db import models
 _Model = type[models.Model]
 
 
-def bridge_models(base: _Model) -> tuple[_Model, ...]:
-    """Return loaded concrete ``Bridge`` subclasses in deterministic order."""
-
-    return models_with(base=base)
-
-
 def models_with(
     *,
     base: _Model | None = None,

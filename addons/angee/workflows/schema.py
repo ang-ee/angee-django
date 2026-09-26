@@ -37,13 +37,22 @@ from angee.graphql.data import (
 from angee.graphql.ids import PublicID, instance_for_id, to_public_id
 from angee.graphql.impl import ImplChoice as GraphQLImplChoice
 from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
+from angee.graphql.writes import instance_for_write
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import read_resource_queryset, request_from_info, session_user
 from angee.iam.schema import UserType
 from angee.workflows import engine
-from angee.workflows.attempts import JsonPresence, deserialize_decision_specs
+from angee.workflows.attempts import (
+    DecisionAttemptResult,
+    FixtureRole,
+    FixtureSpec,
+    JsonPresence,
+    WorkflowScope,
+    deserialize_decision_specs,
+)
 from angee.workflows.data_contracts import DataContract, FlatDataContractEdge, FlatDataContractNode
 from angee.workflows.definitions import (
     DefinitionEdit,
@@ -59,9 +68,8 @@ from angee.workflows.definitions import (
     StaleDefinitionError,
 )
 from angee.workflows.graph import GraphDiagnostic, GraphIdentity, GraphLocation
-from angee.workflows.models import TriggerKind
+from angee.workflows.models import TriggerKind, WaitingKind
 from angee.workflows.steps import StepEffect, StepImpl, StepOperation
-from angee.workflows.testing import FixtureRole, FixtureSpec, WorkflowScope
 from angee.workflows.trigger_conditions import EventConditionCatalogue, EventConditionClause
 from angee.workflows.trigger_declarations import (
     EventTriggerConfig,
@@ -93,14 +101,6 @@ StepAttempt = apps.get_model("workflows", "StepAttempt")
 StepArtifact = apps.get_model("workflows", "StepArtifact")
 Decision = apps.get_model("workflows", "Decision")
 
-_PROJECTED_STEP_ID = "_workflows_step_id"
-_PROJECTED_STEP_WORKFLOW_NAME = "_workflows_step_workflow_name"
-_PROJECTED_RUN_WORKFLOW_NAME = "_workflows_run_workflow_name"
-_PROJECTED_STEP_NAME = "_workflows_step_name"
-_PROJECTED_STEP_KEY = "_workflows_step_key"
-_PROJECTED_SYSTEM_KIND = "_workflows_system_kind"
-_PROJECTED_STEP_RUN_ID = "_workflows_step_run_id"
-
 
 def _artifact_queryset_for_actor(actor: Any) -> models.QuerySet[Any]:
     """Scope artifact summaries through the actor's readable attempts."""
@@ -115,6 +115,13 @@ def _artifact_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
     """Scope artifact summaries through their independently readable attempts."""
 
     return _artifact_queryset_for_actor(session_user(info))
+
+
+def _actionable_decision_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+    """Project console decisions through the viewer's REBAC ``act`` seats."""
+
+    scoped = read_scoped_queryset(Decision, session_user(info), action="act")
+    return Decision.objects.none() if scoped is None else scoped
 
 
 def _decision_schema(root: Any) -> JSON | None:
@@ -904,10 +911,10 @@ class WorkflowRunType(AngeeNode):
     updated_at: auto
 
     @strawberry_django.field(annotate=cast(Any, WorkflowRun).waiting_projection_annotation())
-    def waiting_kind(self) -> str | None:
+    def waiting_kind(self) -> WaitingKind | None:
         """Return the declared runtime wait reason, when one is known."""
 
-        return cast(str, cast(Any, self)._workflow_waiting_kind) or None
+        return cast(WaitingKind | None, cast(Any, self)._workflow_waiting_kind)
 
     @strawberry_django.field(annotate=cast(Any, WorkflowRun).waiting_projection_annotation())
     def next_wake_at(self) -> datetime | None:
@@ -939,17 +946,12 @@ class StepRunType(AngeeNode):
     attempt: auto
     current_attempt: "StepAttemptType | None"
     wait_until: auto
+    waiting_kind: auto
     heartbeat_at: auto
     error: auto
     stacktrace: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["waiting_kind"])
-    def waiting_kind(self) -> str | None:
-        """Return a declared wait reason, or null for legacy/nonwaiting rows."""
-
-        return str(cast(Any, self).waiting_kind) or None
 
 
 @strawberry_django.type(StepAttempt)
@@ -1123,9 +1125,73 @@ class StepArtifactType(AngeeNode):
         )
 
 
+@strawberry.type
+class DecisionContextFields:
+    """Context labels visible with the enclosing Decision's read or act scope.
+
+    Strawberry-Django optimizes querysets using the complete model projection.
+    Producers returning evaluated lists must call ``with_context_projection``
+    before evaluation; single mutation results use ``_decision_projection``.
+    These scalar labels grant no independent journal access.
+    """
+
+    @strawberry_django.field(
+        only=["id"],
+        annotate=cast(Any, Decision).context_projection_annotation(),
+    )
+    def workflow_key(self) -> str:
+        """Return the run's stable workflow lineage key."""
+
+        return str(_decision_projection(self)._decision_workflow_key)
+
+    @strawberry_django.field(
+        only=["id"],
+        annotate=cast(Any, Decision).context_projection_annotation(),
+    )
+    def workflow_name(self) -> str:
+        """Return the run's workflow display name, matching ``workflow_key``."""
+
+        return str(_decision_projection(self)._decision_workflow_name)
+
+    @strawberry_django.field(
+        only=["id"],
+        annotate=cast(Any, Decision).context_projection_annotation(),
+    )
+    def step_key(self) -> str | None:
+        """Return the declared step key, or null for a system-injected event."""
+
+        return cast(str | None, _decision_projection(self)._decision_step_key)
+
+    @strawberry_django.field(
+        only=["id"],
+        annotate=cast(Any, Decision).context_projection_annotation(),
+    )
+    def step_name(self) -> str:
+        """Return the step display name without exposing the StepRun journal."""
+
+        return str(_decision_projection(self)._decision_step_name)
+
+
+def _decision_projection(value: Any) -> Any:
+    """Supply model-owned labels for one authorized, unoptimized mutation result.
+
+    Normal queryset reads carry the complete optimizer annotation. This fallback
+    performs one exact-row system read, copies only its label annotations, and
+    grants no journal relation access. Evaluated list producers must annotate
+    through ``DecisionQuerySet.with_context_projection`` before evaluation.
+    """
+
+    if hasattr(value, "_decision_workflow_key"):
+        return value
+    projected = Decision.system_queryset().with_context_projection().only("id").get(pk=value.pk)
+    for name in Decision.context_projection_annotation():
+        setattr(value, name, getattr(projected, name))
+    return value
+
+
 @strawberry_django.type(Decision)
-class DecisionType(DecisionTargetFields, AngeeNode):
-    """Admin projection of one awaited workflow decision."""
+class DecisionType(DecisionContextFields, DecisionTargetFields, AngeeNode):
+    """Console projection of one actionable workflow decision."""
 
     priority: auto
     action: auto
@@ -1141,19 +1207,11 @@ class DecisionType(DecisionTargetFields, AngeeNode):
 
     decision_schema: JSON | None = _decision_schema_field()
 
-    @strawberry_django.field(only=["step_run_id"])
-    def step_run(self, info: strawberry.Info) -> StepRunType | None:
-        """Return the journal row only when it is independently readable."""
-
-        step_run_id = cast(Any, self).step_run_id
-        scoped = read_scoped_queryset(StepRun, session_user(info), action="read")
-        if scoped is None:
-            return None
-        return cast(StepRunType | None, scoped.filter(pk=step_run_id).first())
+    step_run: StepRunType | None = actor_scoped_to_one("step_run")
 
 
 @strawberry_django.type(Decision, name="DecisionType")
-class PublicDecisionType(DecisionTargetFields, AngeeNode):
+class PublicDecisionType(DecisionContextFields, DecisionTargetFields, AngeeNode):
     """Public projection of one awaited workflow decision."""
 
     priority: auto
@@ -1202,38 +1260,6 @@ class PublicDecisionType(DecisionTargetFields, AngeeNode):
             return None
         return to_public_id(StepAttempt, attempt_id)
 
-    @strawberry_django.field(
-        only=["id"],
-        annotate={
-            _PROJECTED_STEP_ID: models.F("step_run__step_id"),
-            _PROJECTED_STEP_WORKFLOW_NAME: models.F("step_run__step__workflow__name"),
-            _PROJECTED_RUN_WORKFLOW_NAME: models.F("step_run__run__workflow__name"),
-        },
-    )
-    def workflow_name(self) -> str:
-        """Return the workflow display name without exposing the StepRun journal."""
-
-        if getattr(self, _PROJECTED_STEP_ID) is not None:
-            return str(getattr(self, _PROJECTED_STEP_WORKFLOW_NAME))
-        return str(getattr(self, _PROJECTED_RUN_WORKFLOW_NAME))
-
-    @strawberry_django.field(
-        only=["id"],
-        annotate={
-            _PROJECTED_STEP_ID: models.F("step_run__step_id"),
-            _PROJECTED_STEP_NAME: models.F("step_run__step__name"),
-            _PROJECTED_STEP_KEY: models.F("step_run__step__key"),
-            _PROJECTED_SYSTEM_KIND: models.F("step_run__system_kind"),
-            _PROJECTED_STEP_RUN_ID: models.F("step_run_id"),
-        },
-    )
-    def step_name(self) -> str:
-        """Return the step display name without exposing the StepRun journal."""
-
-        if getattr(self, _PROJECTED_STEP_ID) is not None:
-            return str(getattr(self, _PROJECTED_STEP_NAME) or getattr(self, _PROJECTED_STEP_KEY))
-        return str(getattr(self, _PROJECTED_SYSTEM_KIND) or getattr(self, _PROJECTED_STEP_RUN_ID))
-
 
 @strawberry.type(name="DecisionResolutionPayload")
 class PublicDecisionResolutionPayload:
@@ -1243,7 +1269,7 @@ class PublicDecisionResolutionPayload:
     validation_errors: JSON | None = None
 
     @classmethod
-    def from_result(cls, result: engine.DecisionAttemptResult) -> PublicDecisionResolutionPayload:
+    def from_result(cls, result: DecisionAttemptResult) -> PublicDecisionResolutionPayload:
         """Return the public payload for an engine-owned decision attempt."""
 
         return cls(
@@ -1263,7 +1289,7 @@ class ConsoleDecisionResolutionPayload:
     validation_errors: JSON | None = None
 
     @classmethod
-    def from_result(cls, result: engine.DecisionAttemptResult) -> ConsoleDecisionResolutionPayload:
+    def from_result(cls, result: DecisionAttemptResult) -> ConsoleDecisionResolutionPayload:
         """Return the console payload for an engine-owned decision attempt."""
 
         return cls(
@@ -1645,6 +1671,7 @@ _WORKFLOW_RUN_RESOURCE = hasura_model_resource(
     filterable=[
         "id",
         "workflow",
+        "workflow__key",
         "workflow__purpose",
         "workflow__published_from",
         "trigger",
@@ -1756,9 +1783,11 @@ _DECISION_RESOURCE = hasura_model_resource(
         "id",
         "step_run",
         "step_run__step",
+        "step_run__step__key",
         "step_run__step__name",
         "step_run__run",
         "step_run__run__workflow",
+        "step_run__run__workflow__key",
         "step_run__run__workflow__name",
         "suspension_attempt",
         "priority",
@@ -1774,6 +1803,7 @@ _DECISION_RESOURCE = hasura_model_resource(
     sortable=[
         "step_run",
         "step_run__step",
+        "step_run__step__key",
         "step_run__step__name",
         "priority",
         "action",
@@ -1783,18 +1813,24 @@ _DECISION_RESOURCE = hasura_model_resource(
         "created_at",
         "updated_at",
         "step_run__run__workflow",
+        "step_run__run__workflow__key",
         "step_run__run__workflow__name",
     ],
     aggregatable=["id", "priority", "attempts"],
     groupable=[
-        "step_run", "step_run__step", "step_run__step__name",
-        "step_run__run__workflow", "step_run__run__workflow__name",
-        "action", "verdict", "updated_at",
+        "step_run",
+        "step_run__step",
+        "step_run__step__name",
+        "step_run__run__workflow",
+        "step_run__run__workflow__name",
+        "action",
+        "verdict",
+        "updated_at",
     ],
     insert=False,
     update=False,
     delete=False,
-    get_queryset=read_resource_queryset(Decision),
+    get_queryset=_actionable_decision_queryset,
     field_id_decode={
         "step_run": public_pk_decoder(StepRun),
         "step_run__step": public_pk_decoder(Step),
@@ -1841,9 +1877,13 @@ _PUBLIC_DECISION_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id", "priority", "attempts"],
     groupable=[
-        "step_run__step", "step_run__step__name",
-        "step_run__run__workflow", "step_run__run__workflow__name",
-        "action", "verdict", "updated_at",
+        "step_run__step",
+        "step_run__step__name",
+        "step_run__run__workflow",
+        "step_run__run__workflow__name",
+        "action",
+        "verdict",
+        "updated_at",
     ],
     insert=False,
     update=False,
@@ -1901,7 +1941,7 @@ class WorkflowSubjectDeclarationQuery:
         children = read_scoped_queryset(WorkflowRun, session_user(info), action="read")
         child_candidates = [] if children is None else list(
             children.filter(parent_step_run__run_id__in=models.Subquery(runs.order_by().values("pk")))
-            .select_related("workflow", "parent_step_run__run").order_by("created_at", "pk")[:201]
+            .rebac_select_related("workflow", "parent_step_run__run").order_by("created_at", "pk")[:201]
         )
         child_rows = child_candidates[:200]
         failure_scope = read_scoped_queryset(StepRun, session_user(info), action="read")
@@ -1909,7 +1949,7 @@ class WorkflowSubjectDeclarationQuery:
             failure_scope.filter(
                 run_id__in=models.Subquery(runs.order_by().values("pk")),
                 status="failed",
-            ).select_related("run", "step", "current_attempt").order_by("-updated_at", "-pk")[:201]
+            ).rebac_select_related("run", "step", "current_attempt").order_by("-updated_at", "-pk")[:201]
         )
         failures = failure_candidates[:200]
         artifacts, artifacts_truncated = _artifact_queryset(info).history_page(runs, limit=200)
@@ -1991,9 +2031,7 @@ def _workflow_subject_history(
         ).distinct().order_by("-created_at", "-pk")
         run_ids = list(candidates.values_list("pk", flat=True)[:101])
         truncated = len(run_ids) > 100
-        runs = readable_runs.filter(pk__in=run_ids[:100]).select_related("workflow").order_by(
-            "-created_at", "-pk",
-        )
+        runs = readable_runs.filter(pk__in=run_ids[:100]).order_by("-created_at", "-pk")
     if readable_decisions is None:
         return runs, empty_decisions, truncated, False
     canonical_model = artifact_content_type.model_class()
@@ -2008,9 +2046,7 @@ def _workflow_subject_history(
         decision_relation |= models.Q(
             step_run__run_id__in=models.Subquery(runs.order_by().values("pk")),
         )
-    decision_scope = readable_decisions.filter(decision_relation).distinct().select_related(
-        "step_run__run", "suspension_attempt",
-    ).order_by(
+    decision_scope = readable_decisions.filter(decision_relation).distinct().order_by(
         models.Case(
             models.When(verdict="pending", then=models.Value(0)),
             default=models.Value(1),
@@ -2102,7 +2138,9 @@ class WorkflowActionMutation:
 
         target = authorized_action_target(info, Workflow, workflow, "write")
         try:
-            result = Workflow.objects.publish_definition(target, expected_revision=expected_revision)
+            result = Workflow.objects.publish_definition(
+                target, expected_revision=expected_revision
+            )
         except StaleDefinitionError as error:
             return WorkflowDefinitionPayload(
                 status=WorkflowDefinitionStatus.STALE,
@@ -2285,10 +2323,11 @@ def _definition_edit(workflow: Any, value: WorkflowDefinitionEditInput) -> Defin
 
     workflow_fields = _set_fields(value.workflow)
     if "error_workflow" in workflow_fields and workflow_fields["error_workflow"] is not None:
+        queryset = Workflow.objects.with_action("read")
         related = instance_for_id(
             Workflow,
             workflow_fields["error_workflow"],
-            queryset=Workflow.objects.with_action("read"),
+            queryset=queryset,
         )
         if related is None:
             raise DefinitionEditError(
@@ -2664,7 +2703,9 @@ class WorkflowRunActionMutation:
         record = _resolve_subject(subject, actor=actor, action="read")
         if record is None:
             raise ValidationError({"subject": "An event-trigger subject is required."})
-        run = Trigger.objects.fire_event(target, subject=record, actor=actor, request_key=request_key)
+        run = Trigger.objects.fire_event(
+            target, subject=record, actor=actor, request_key=request_key
+        )
         return ActionResult(ok=True, message=f"Started workflow run {run.sqid}.", id=run.sqid)
 
     @strawberry.mutation
@@ -2676,7 +2717,9 @@ class WorkflowRunActionMutation:
 
         actor = session_user(info)
         source = authorized_action_target(info, WorkflowRun, run, "write")
-        result = WorkflowRun.objects.reprocess(source, actor=actor, request_key=request_key)
+        result = WorkflowRun.objects.reprocess(
+            source, actor=actor, request_key=request_key
+        )
         return ActionResult(ok=True, message=f"Started workflow run {result.sqid}.", id=result.sqid)
 
     @strawberry.mutation
@@ -2698,9 +2741,14 @@ class WorkflowRunActionMutation:
 
         actor = session_user(info)
         target = authorized_action_target(info, Workflow, workflow, "write")
-        selected = instance_for_id(Step, source_step) if source_step is not None else None
+        selected = (
+            instance_for_id(Step, source_step, queryset=Step._default_manager.all())
+            if source_step is not None else None
+        )
         repair_source = (
-            instance_for_id(StepAttempt, repair_source_attempt)
+            instance_for_id(
+                StepAttempt, repair_source_attempt, queryset=StepAttempt._default_manager.all()
+            )
             if repair_source_attempt is not None
             else None
         )
@@ -2732,10 +2780,13 @@ class WorkflowRunActionMutation:
     ) -> ActionResult:
         """Start or recover one idempotent run from exact retained failure evidence."""
 
-        attempt = instance_for_id(StepAttempt, source_attempt)
+        attempt = instance_for_write(StepAttempt, source_attempt)
         if attempt is None:
             raise ValidationError({"source_attempt": "Recovery source evidence is unavailable."})
-        prior = instance_for_id(WorkflowRun, prior_recovery) if prior_recovery is not None else None
+        prior = (
+            instance_for_id(WorkflowRun, prior_recovery, queryset=WorkflowRun._default_manager.all())
+            if prior_recovery is not None else None
+        )
         if prior_recovery is not None and prior is None:
             raise ValidationError({"prior_recovery": "Prior recovery is unavailable."})
         run = WorkflowRun.objects.start_recovery(
@@ -2748,11 +2799,11 @@ class WorkflowRunActionMutation:
         return ActionResult(ok=True, message=f"Started workflow recovery {run.sqid}.", id=run.sqid)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def cancel_workflow_run(self, run: PublicID) -> ActionResult:
+    def cancel_workflow_run(self, info: strawberry.Info, run: PublicID) -> ActionResult:
         """Cancel a workflow run and its active journal rows."""
 
         with action_target(WorkflowRun, run, reason="workflows.graphql.cancel_workflow_run") as target:
-            engine.cancel(target)
+            WorkflowRun.objects.cancel(target, actor=session_user(info))
         return ActionResult(ok=True, message="Workflow run canceled.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -2762,7 +2813,10 @@ class WorkflowRunActionMutation:
         actor = session_user(info)
         target = resolve_action_target(WorkflowRun, run, reason="workflows.graphql.override_run")
         steps = [
-            resolve_action_target(Step, step_id, reason="workflows.graphql.override_run.step") for step_id in next_steps
+            resolve_action_target(
+                Step, step_id, reason="workflows.graphql.override_run.step"
+            )
+            for step_id in next_steps
         ]
         override = engine.override_run(target, steps, actor=actor)
         return ActionResult(ok=True, message=f"Override recorded as {override.sqid}.")
@@ -2901,9 +2955,7 @@ schemas = {
 """GraphQL contributions installed by the workflows addon."""
 
 
-def _resolve_subject(
-    ref: WorkflowObjectRefInput | None, *, actor: Any, action: str = "write",
-) -> models.Model | None:
+def _resolve_subject(ref: WorkflowObjectRefInput | None, *, actor: Any, action: str = "write") -> models.Model | None:
     """Resolve an optional run subject through the requested actor scope.
 
     Manual workflow starts use the default ``write`` action because steps may

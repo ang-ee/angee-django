@@ -16,7 +16,7 @@ from rebac import system_context
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.integrate.models import Bridge
-from angee.integrate.sync import current_bridge_progress
+from angee.integrate.sync import SyncDispatch, current_bridge_progress
 from angee.storage import exceptions
 from angee.storage_integrate.mounts import MountBackend, MountEntry
 
@@ -92,9 +92,15 @@ class Mount(Bridge):
             return None
         return super()._next_sync_at(now=now)
 
-    def sync(self) -> int:
+    def sync(self) -> int | SyncDispatch:
         """Reconcile the external source into this mount's storage drive."""
 
+        dispatched = self.dispatch_sync()
+        if dispatched is not None:
+            return dispatched
+        drive = self.drive
+        if drive is None:
+            raise ValidationError({"drive": "The mount requires a storage drive."})
         backend = self.backend
         backend.check_source()
         file_model = apps.get_model("storage", "File")
@@ -116,7 +122,9 @@ class Mount(Bridge):
             "scanned": 0,
         }
 
-        self._mirror_directories(backend, folder_model=folder_model, cache=folder_cache, counts=counts)
+        self._mirror_directories(
+            backend, drive=drive, folder_model=folder_model, cache=folder_cache, counts=counts
+        )
 
         for entry in backend.iter_entries():
             counts["scanned"] += 1
@@ -132,12 +140,13 @@ class Mount(Bridge):
                 digest = backend.entry_hash(entry)
                 folder = self._entry_folder(
                     entry,
+                    drive=drive,
                     folder_model=folder_model,
                     cache=folder_cache,
                 )
                 if self.mode == MountMode.REFERENCE:
                     file_model.objects.index_external(
-                        drive=self.drive,
+                        drive=drive,
                         storage_path=entry.path,
                         filename=PurePosixPath(entry.path).name,
                         content_hash=digest,
@@ -163,7 +172,7 @@ class Mount(Bridge):
                                 }
                             },
                             owner_id=self.owner_id,
-                            drive_id=str(self.drive.public_id),
+                            drive_id=str(drive.public_id),
                             folder_id=str(folder.public_id) if folder is not None else "",
                         )
                 counts["changed"] += 1
@@ -186,11 +195,11 @@ class Mount(Bridge):
         counts["vanished"] = len(previous_present.difference(seen_paths))
         if self.mode == MountMode.REFERENCE:
             counts["trashed"] = file_model.objects.trash_missing_external(
-                self.drive,
+                drive,
                 seen_paths,
             )
             folder_model.objects.prune_missing(
-                self.drive,
+                drive,
                 [parts for parts in folder_cache if parts],
             )
         self._report_progress(counts, complete=True)
@@ -202,7 +211,8 @@ class Mount(Bridge):
         freshness: dict[str, _MountFileState] = {}
         with system_context(reason="storage_integrate.mount.freshness"):
             rows = (
-                file_model.objects.filter(drive_id=self.drive_id)
+                file_model.objects
+                .filter(drive_id=self.drive_id)
                 .order_by("pk")
                 .values_list(
                     "pk",
@@ -252,6 +262,7 @@ class Mount(Bridge):
         self,
         backend: MountBackend,
         *,
+        drive: Any,
         folder_model: Any,
         cache: dict[tuple[str, ...], Any | None],
         counts: dict[str, int],
@@ -272,7 +283,7 @@ class Mount(Bridge):
         for directory in backend.iter_directories():
             try:
                 folder_model.objects.ensure_path(
-                    self.drive,
+                    drive,
                     PurePosixPath(directory).parts,
                     cache=cache,
                 )
@@ -283,17 +294,13 @@ class Mount(Bridge):
                 continue
 
     def _entry_folder(
-        self,
-        entry: MountEntry,
-        *,
-        folder_model: Any,
-        cache: dict[tuple[str, ...], Any | None],
+        self, entry: MountEntry, *, drive: Any, folder_model: Any, cache: dict[tuple[str, ...], Any | None]
     ) -> Any | None:
         """Return the cached storage folder mirroring ``entry``'s parent path."""
 
         parts = tuple(PurePosixPath(entry.path).parts[:-1])
         if parts not in cache:
-            cache[parts] = folder_model.objects.ensure_path(self.drive, parts, cache=cache)
+            cache[parts] = folder_model.objects.ensure_path(drive, parts, cache=cache)
         return cache[parts]
 
     def _report_batch(self, counts: dict[str, int]) -> None:

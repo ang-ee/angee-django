@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, ClassVar
 
 from django.db import models
 
-
-@dataclass(frozen=True, slots=True)
-class ResourceWritePreparation:
-    """Model-owned targets to prepare before a resource transaction writes rows."""
-
-    owner: Any
-    targets: frozenset[Any]
+if TYPE_CHECKING:
+    from angee.resources.loader import AngeeResource
 
 
 class ResourceLoadMixin(models.Model):
@@ -26,17 +20,17 @@ class ResourceLoadMixin(models.Model):
     Python invoke each participant once on the final concrete model.
     """
 
+    resource_class: ClassVar[type[AngeeResource] | None] = None
+    """Optional native import adapter, validated by build_resource before loading.
+
+    None uses AngeeResource. Custom adapters and batch lock hooks require this
+    mixin, so the loader and its lock preflight consume the same declaration.
+    """
+
     class Meta:
         """Keep the hook protocol abstract and tableless."""
 
         abstract = True
-
-    @classmethod
-    def resource_write_preparation(cls, resource: Any, dataset: Any) -> ResourceWritePreparation | None:
-        """Return optional model-owned write targets needed before importing a batch."""
-
-        del resource, dataset
-        return None
 
     @classmethod
     def after_resource_load(

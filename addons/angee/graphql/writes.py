@@ -12,8 +12,8 @@ from angee.graphql.ids import PublicID, instance_for_id
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
-def write_queryset(model: type[models.Model]) -> models.QuerySet[models.Model]:
-    """Return a write-target queryset with row scope and full field values.
+def write_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
+    """Return a write-scoped target queryset with row scope and full field values.
 
     Both mutation apply steps and delete-preview history need to load the
     in-memory instance with field-read redaction disabled while preserving

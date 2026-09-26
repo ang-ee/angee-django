@@ -159,15 +159,6 @@ export function Chatter({
   );
 }
 
-/** Render the one shell Chatter below the current record's form. */
-export function RecordSupport({ recordKey }: { recordKey: string }): React.ReactElement | null {
-  const { recordSupportKey } = useChatter();
-  if (recordSupportKey !== recordKey) return null;
-  return <div className="h-80 min-w-0 overflow-hidden rounded-6 border border-border-subtle bg-sheet-2">
-    <Chatter />
-  </div>;
-}
-
 /** Visit lazily, then retain this record's draft input while peeking at sources. */
 function ChatterPanels({ tabs, active }: { tabs: readonly ChatterTab[]; active: string }): React.ReactElement {
   const [visited, setVisited] = React.useState<readonly string[]>([active]);

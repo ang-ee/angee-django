@@ -1,20 +1,18 @@
-"""Slack channel backend: serial, bounded polling over ``slack_sdk``.
+"""Slack event-feed partitions: serial, bounded polling over ``slack_sdk``.
 
-The bridge stores a timestamp watermark and any in-progress history page cursor
-per Slack conversation, plus a bounded per-thread reply watermark::
+Each conversation's ``SyncStream.cursor`` retains a history watermark/page
+cursor and a bounded per-thread reply watermark::
 
     {
-        "conversations": {
-            "C123": {
-                "last_ts": "1784700000.000100",
-                "history": {
-                    "cursor": "next-page",
-                    "oldest": "1784700000.000100",
-                    "last_ts": "1784700010.000100",
-                },
-            }
+        "conversation": {
+            "last_ts": "1784700000.000100",
+            "history": {
+                "cursor": "next-page",
+                "oldest": "1784700000.000100",
+                "last_ts": "1784700010.000100",
+            },
         },
-        "threads": {"C123": {"1784700000.000100": "1784700005.000100"}},
+        "threads": {"1784700000.000100": "1784700005.000100"},
     }
 
 ``conversations.history`` is newest-first, so a page cursor is persisted before
@@ -28,19 +26,27 @@ pruned, which bounds the independent late-reply rescan.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import monotonic, sleep
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from slack_sdk.http_retry import (
+    HttpRequest,
+    HttpResponse,
+    RateLimitErrorRetryHandler,
+    RetryState,
+    default_retry_handlers,
+)
 
+from angee.integrate.streams import CursorInvalid, StreamDefinition, StreamPage
 from angee.messaging.backends import ChannelBackend, MediaItem, ParsedMessage
 from angee.messaging_integrate_slack.identity import parsed_message, response_data
-
-_T = TypeVar("_T")
 
 _CONVERSATION_TYPES = "public_channel,private_channel,mpim,im"
 _PAGE_LIMIT = 200
@@ -48,12 +54,76 @@ _DEFAULT_BATCH_SIZE = 200
 _DEFAULT_BACKFILL_DAYS = 90
 _DEFAULT_MAX_MEDIA_BYTES = 50_000_000
 _DEFAULT_MAX_BATCH_BYTES = 64_000_000
-_MAX_RATE_LIMIT_RETRIES = 5
+_MAX_REQUEST_RETRIES = 5
 _MAX_RATE_LIMIT_SLEEP_SECONDS = 60.0
 
 
 class SlackRateLimitError(TimeoutError):
     """Slack kept this poll rate-limited beyond its bounded retry/time budget."""
+
+
+class _RateLimitRetryHandler(RateLimitErrorRetryHandler):
+    """Extend SDK retries with a request-scoped deadline for this serial poll.
+
+    The SDK's shared ``RetryState`` intentionally counts connection and rate-limit
+    retries together. A connection retry consumes one of the five retries allowed
+    here; any retry exhausts the default connection handler's one-retry budget.
+    Every new Web API request starts with a fresh SDK state.
+    """
+
+    _deadline: float | None = None
+
+    @contextmanager
+    def deadline(self, deadline: float | None) -> Iterator[None]:
+        """Scope one SDK request's deadline and translate exhausted rate limits."""
+
+        previous = self._deadline
+        self._deadline = deadline
+        try:
+            yield
+        except SlackApiError as error:
+            if error.response.status_code == 429:
+                raise SlackRateLimitError(
+                    "Slack rate-limit retry budget exhausted; resume on the next poll."
+                ) from error
+            raise
+        finally:
+            self._deadline = previous
+
+    def prepare_for_next_attempt(
+        self,
+        *,
+        state: RetryState,
+        request: HttpRequest,
+        response: HttpResponse | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        """Respect Retry-After within the poll's sleep cap and deadline.
+
+        slack-sdk 3.43's rate-limit handler ignores ``interval_calculator``, so
+        this native hook owns the bounded delay; ``can_retry`` remains inherited.
+        The SDK invokes this hook from its HTTPError handler, where deadline
+        exceptions abort the request without entering connection-error retries.
+        """
+
+        if response is None:
+            raise ValueError("A rate-limit retry requires a Slack response.")
+        raw_delay = next((value for key, value in response.headers.items() if key.lower() == "retry-after"), ["1"])
+        try:
+            delay = min(_MAX_RATE_LIMIT_SLEEP_SECONDS, max(0.0, float(raw_delay[0])))
+        except TypeError, ValueError:
+            delay = 1.0
+        if self._deadline is not None and delay >= self._deadline - monotonic():
+            raise SlackRateLimitError(
+                "Slack sync time budget exhausted while rate limited; resume next poll."
+            ) from error
+        sleep(delay)
+        if self._deadline is not None and monotonic() >= self._deadline:
+            raise SlackRateLimitError(
+                "Slack sync time budget exhausted while rate limited; resume next poll."
+            ) from error
+        state.next_attempt_requested = True
+        state.increment_current_attempt()
 
 
 @dataclass
@@ -64,6 +134,8 @@ class _HistoryPage:
     next_cursor: str
     last_ts: str
     oldest: str = ""
+    cursor: str = ""
+    after_ts: str = ""
 
 
 @dataclass
@@ -96,7 +168,7 @@ class SlackChannelBackend(ChannelBackend):
     conversation list and user list again, turning N conversations into O(N²)
     API work. Slack also applies one shared HTTP-429 budget to the installation,
     so parallel callers do not buy throughput. One serial backend discovers once
-    and reuses its conversation plan, user cache, and rate-limit budget.
+    and reuses its conversation plan, user cache, and retry policy.
 
     ``config`` accepts ``backfill_days``, ``batch_size``, ``max_batch_bytes``,
     ``max_media_bytes``, and ``media_timeout_seconds``.
@@ -107,6 +179,7 @@ class SlackChannelBackend(ChannelBackend):
     icon = "message-square"
     defaults = {"vendor": "slack"}
     quote_edges: ClassVar[bool] = False
+    sync_parallelism = 1
 
     client_class: ClassVar[type[WebClient]] = WebClient
     """Official protocol client factory; tests substitute an in-memory client."""
@@ -116,80 +189,96 @@ class SlackChannelBackend(ChannelBackend):
 
         super().__init__(integration)
         self._client: WebClient | None = None
+        self._rate_limit_retry = _RateLimitRetryHandler(max_retry_count=_MAX_REQUEST_RETRIES)
         self._work: deque[_ConversationWork] | None = None
         self._users: dict[str, dict[str, Any]] | None = None
+        self._conversations: dict[str, dict[str, Any]] = {}
+        self._stream_identity: tuple[str, int] | None = None
+        self._cursor: dict[str, Any] = {}
+        self._page_bound = _PAGE_LIMIT
+        self._credential: Any = None
 
-    def fetch_messages(self) -> list[ParsedMessage]:
-        """Return one bounded history/reply slice; empty once all work is drained.
+    def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
+        """Discover conversations once for this serial backend."""
 
-        History page cursors and final timestamps advance only after every raw
-        item in the page has been consumed. Reply timestamps advance item by item
-        because Slack returns replies earliest-first. The generic channel drain
-        persists these cursor changes after each non-empty returned slice; a
-        successful empty completion is persisted by ``Bridge.record_sync``.
-        """
+        self._conversations = self._discover_conversations(deadline=deadline)
+        return tuple(StreamDefinition(key="messages", partition=key) for key in sorted(self._conversations))
 
-        if self._work is None:
-            self._work = deque(self._conversation_work(item) for item in self._discover_conversations())
+    def seed_cursor(self, stream: Any, legacy_cursor: dict[str, Any]) -> dict[str, Any] | None:
+        """Translate one retained conversation and its thread watermarks once."""
+
+        conversation = (legacy_cursor.get("conversations") or {}).get(stream.partition)
+        threads = (legacy_cursor.get("threads") or {}).get(stream.partition)
+        if not conversation and not threads:
+            return None
+        return {"conversation": deepcopy(conversation or {}), "threads": deepcopy(threads or {})}
+
+    def extract(self, stream: Any, page_bound: int, *, deadline: float | None = None) -> StreamPage:
+        """Read one conversation page; its cursor commits with the ingested messages."""
+
+        self._load_credentials()
+        identity = (stream.partition, stream.generation)
+        if self._stream_identity != identity:
+            if stream.partition not in self._conversations:
+                self._conversations = self._discover_conversations(deadline=deadline)
+            self._stream_identity = identity
+            self._cursor = deepcopy(stream.cursor)
+            self._work = deque([self._conversation_work(self._conversations[stream.partition])])
+        self._page_bound = max(1, page_bound)
         while self._work:
             work = self._work[0]
             if not work.history_done:
-                batch = self._history_batch(work)
+                batch = self._history_batch(work, deadline=deadline)
                 if batch:
-                    return batch
+                    return StreamPage(records=batch, cursor=deepcopy(self._cursor), exhausted=False)
                 if not work.history_done:
                     continue
-            batch = self._reply_batch(work)
+            batch = self._reply_batch(work, deadline=deadline)
             if batch:
-                return batch
+                return StreamPage(records=batch, cursor=deepcopy(self._cursor), exhausted=False)
             if work.replies:
                 continue
             self._work.popleft()
-        return []
-
-    def sync_partitions(self) -> tuple[str, ...]:
-        """Keep Slack on the single-instance serial drain documented by this class."""
-
-        return ()
+        return StreamPage(records=(), cursor=deepcopy(self._cursor), exhausted=True)
 
     def _conversation_work(self, conversation: dict[str, Any]) -> _ConversationWork:
         """Build one conversation plan, including its bounded active-thread set."""
 
         work = _ConversationWork(conversation=conversation)
-        channel_id = str(conversation["id"])
-        threads = self._active_threads(channel_id)
+        threads = self._active_threads()
         for parent_ts in sorted(threads, key=_timestamp_text_key):
             self._queue_reply(work, parent_ts, threads[parent_ts])
         return work
 
-    def _discover_conversations(self) -> list[dict[str, Any]]:
+    def _discover_conversations(self, *, deadline: float | None = None) -> dict[str, dict[str, Any]]:
         """List all visible conversations once for this serial backend instance."""
 
-        conversations: list[dict[str, Any]] = []
+        self._load_credentials()
+        conversations: dict[str, dict[str, Any]] = {}
         cursor = ""
         while True:
-            response = self._api_call(
-                self._client_or_create().users_conversations,
-                user=self._own_id(),
-                types=_CONVERSATION_TYPES,
-                exclude_archived=True,
-                limit=_PAGE_LIMIT,
-                cursor=cursor or None,
-            )
+            with self._rate_limit_retry.deadline(deadline):
+                response = self._client_or_create().users_conversations(
+                    user=self._own_id(),
+                    types=_CONVERSATION_TYPES,
+                    exclude_archived=True,
+                    limit=_PAGE_LIMIT,
+                    cursor=cursor or None,
+                )
             data = response_data(response)
             for raw in data.get("channels") or ():
                 if isinstance(raw, Mapping) and raw.get("id"):
-                    conversations.append(dict(raw))
+                    conversations[str(raw["id"])] = dict(raw)
             cursor = _next_cursor(data)
             if not cursor:
                 break
         return conversations
 
-    def _history_batch(self, work: _ConversationWork) -> list[ParsedMessage]:
+    def _history_batch(self, work: _ConversationWork, *, deadline: float | None) -> list[ParsedMessage]:
         """Consume at most one configured slice from the current history page."""
 
         if work.history_page is None:
-            work.history_page = self._history_page(work)
+            work.history_page = self._history_page(work, deadline=deadline)
             if not work.history_page.messages:
                 self._finish_history_page(work)
                 return []
@@ -198,7 +287,7 @@ class SlackChannelBackend(ChannelBackend):
         used_bytes = 0
         while page.messages and len(batch) < self._batch_size():
             raw = page.messages[0]
-            message = self._parse_without_media(raw, work.conversation)
+            message = self._parse_without_media(raw, work.conversation, deadline=deadline)
             if (
                 message is not None
                 and batch
@@ -206,6 +295,7 @@ class SlackChannelBackend(ChannelBackend):
             ):
                 break
             page.messages.popleft()
+            page.after_ts = _timestamp(raw)
             self._remember_thread(work, raw)
             if message is None:
                 continue
@@ -214,51 +304,67 @@ class SlackChannelBackend(ChannelBackend):
             used_bytes += downloaded
         if not page.messages:
             self._finish_history_page(work)
+        else:
+            self._conversation_cursor()["history"] = {
+                "cursor": page.cursor,
+                "after_ts": page.after_ts,
+                "oldest": page.oldest,
+                "last_ts": page.last_ts,
+            }
         return batch
 
-    def _history_page(self, work: _ConversationWork) -> _HistoryPage:
+    def _history_page(self, work: _ConversationWork, *, deadline: float | None) -> _HistoryPage:
         """Fetch one newest-first history page from its durable resume point."""
 
         channel_id = str(work.conversation["id"])
-        entry = self._conversation_cursor(channel_id)
+        entry = self._conversation_cursor()
         scan = entry.get("history")
         scan_values: Mapping[str, Any] = scan if isinstance(scan, Mapping) else {}
         cursor = str(scan_values.get("cursor") or "")
         last_ts = str(scan_values.get("last_ts") or "")
-        oldest = str(scan_values.get("oldest") or self._oldest(channel_id))
+        oldest = str(scan_values.get("oldest") or self._oldest())
+        after_ts = str(scan_values.get("after_ts") or "")
         try:
-            data = self._history_response(channel_id, oldest=oldest, cursor=cursor)
+            data = self._history_response(
+                channel_id, oldest=oldest, cursor=cursor, latest=last_ts if after_ts else "", deadline=deadline
+            )
         except SlackApiError as error:
             if not cursor or str(response_data(error.response).get("error") or "") != "invalid_cursor":
                 raise
-            # Slack cursors can expire. Restarting from the saved timestamp only
-            # replays idempotent pages; retaining the bad cursor would deadlock the
-            # conversation forever.
-            entry.pop("history", None)
-            cursor = ""
-            last_ts = ""
-            oldest = self._oldest(channel_id)
-            data = self._history_response(channel_id, oldest=oldest, cursor="")
+            # Only the history pagination state expired; conversation and
+            # thread watermarks remain valid in the successor generation.
+            retained = deepcopy(self._cursor)
+            retained["conversation"].pop("history", None)
+            raise CursorInvalid(cursor=retained) from error
         messages = [dict(raw) for raw in data.get("messages") or () if isinstance(raw, Mapping)]
         target = _latest_timestamp(messages, floor=last_ts)
         return _HistoryPage(
-            messages=deque(sorted(messages, key=_timestamp_key)),
+            messages=deque(
+                raw
+                for raw in sorted(messages, key=_timestamp_key)
+                if not after_ts or _timestamp_key(raw) > _timestamp_text_key(after_ts)
+            ),
             next_cursor=_next_cursor(data),
             last_ts=target,
             oldest=oldest,
+            cursor=cursor,
+            after_ts=after_ts,
         )
 
-    def _history_response(self, channel_id: str, *, oldest: str, cursor: str) -> Mapping[str, Any]:
+    def _history_response(
+        self, channel_id: str, *, oldest: str, cursor: str, latest: str = "", deadline: float | None
+    ) -> Mapping[str, Any]:
         """Call one bounded Slack history page."""
 
-        response = self._api_call(
-            self._client_or_create().conversations_history,
-            channel=channel_id,
-            oldest=oldest,
-            inclusive=False,
-            limit=min(_PAGE_LIMIT, self._batch_size()),
-            cursor=cursor or None,
-        )
+        with self._rate_limit_retry.deadline(deadline):
+            response = self._client_or_create().conversations_history(
+                channel=channel_id,
+                oldest=oldest,
+                inclusive=bool(latest),
+                latest=latest or None,
+                limit=min(_PAGE_LIMIT, self._batch_size()),
+                cursor=cursor or None,
+            )
         return response_data(response)
 
     def _finish_history_page(self, work: _ConversationWork) -> None:
@@ -267,8 +373,7 @@ class SlackChannelBackend(ChannelBackend):
         page = work.history_page
         if page is None:
             return
-        channel_id = str(work.conversation["id"])
-        entry = self._conversation_cursor(channel_id)
+        entry = self._conversation_cursor()
         if page.next_cursor:
             entry["history"] = {"cursor": page.next_cursor, "oldest": page.oldest, "last_ts": page.last_ts}
         else:
@@ -278,22 +383,22 @@ class SlackChannelBackend(ChannelBackend):
             work.history_done = True
         work.history_page = None
 
-    def _reply_batch(self, conversation: _ConversationWork) -> list[ParsedMessage]:
+    def _reply_batch(self, conversation: _ConversationWork, *, deadline: float | None) -> list[ParsedMessage]:
         """Return one earliest-first slice from an active thread reply rescan."""
 
         channel_id = str(conversation.conversation["id"])
         while conversation.replies:
             work = conversation.replies[0]
             if work.page is None:
-                response = self._api_call(
-                    self._client_or_create().conversations_replies,
-                    channel=channel_id,
-                    ts=work.parent_ts,
-                    oldest=work.oldest,
-                    inclusive=False,
-                    limit=min(_PAGE_LIMIT, self._batch_size() + 1),
-                    cursor=work.cursor or None,
-                )
+                with self._rate_limit_retry.deadline(deadline):
+                    response = self._client_or_create().conversations_replies(
+                        channel=channel_id,
+                        ts=work.parent_ts,
+                        oldest=work.oldest,
+                        inclusive=False,
+                        limit=min(_PAGE_LIMIT, self._batch_size() + 1),
+                        cursor=work.cursor or None,
+                    )
                 data = response_data(response)
                 messages = [dict(raw) for raw in data.get("messages") or () if isinstance(raw, Mapping)]
                 work.page = _HistoryPage(
@@ -314,7 +419,7 @@ class SlackChannelBackend(ChannelBackend):
                 ):
                     page.messages.popleft()
                     continue
-                message = self._parse_without_media(raw, conversation.conversation)
+                message = self._parse_without_media(raw, conversation.conversation, deadline=deadline)
                 if (
                     message is not None
                     and batch
@@ -322,7 +427,7 @@ class SlackChannelBackend(ChannelBackend):
                 ):
                     break
                 page.messages.popleft()
-                self._advance_thread_cursor(channel_id, work.parent_ts, timestamp)
+                self._advance_thread_cursor(work.parent_ts, timestamp)
                 if message is None:
                     continue
                 media, downloaded = self._media(raw, byte_budget=max(0, self._max_batch_bytes() - used_bytes))
@@ -343,8 +448,7 @@ class SlackChannelBackend(ChannelBackend):
         if not _thread_parent(raw):
             return
         parent_ts = _timestamp(raw)
-        channel_id = str(work.conversation["id"])
-        threads = self._cursor_threads(channel_id)
+        threads = self._cursor_threads()
         oldest = _thread_watermark(threads.get(parent_ts), parent_ts)
         threads[parent_ts] = oldest
         self._queue_reply(work, parent_ts, oldest)
@@ -358,14 +462,10 @@ class SlackChannelBackend(ChannelBackend):
         work.reply_ids.add(parent_ts)
         work.replies.append(_ReplyWork(parent_ts=parent_ts, oldest=oldest))
 
-    def _active_threads(self, channel_id: str) -> dict[str, str]:
+    def _active_threads(self) -> dict[str, str]:
         """Prune and return thread parents active inside the configured backfill window."""
 
-        cursor = self.bridge.cursor if isinstance(self.bridge.cursor, dict) else {}
-        raw_threads = cursor.get("threads")
-        if not isinstance(raw_threads, dict):
-            return {}
-        threads = raw_threads.get(channel_id)
+        threads = self._cursor.get("threads")
         if not isinstance(threads, dict):
             return {}
         floor = self._backfill_floor()
@@ -377,10 +477,10 @@ class SlackChannelBackend(ChannelBackend):
                 threads[parent_ts] = watermark
         return threads
 
-    def _advance_thread_cursor(self, channel_id: str, parent_ts: str, timestamp: str) -> None:
+    def _advance_thread_cursor(self, parent_ts: str, timestamp: str) -> None:
         """Advance one earliest-first thread reply watermark."""
 
-        threads = self._cursor_threads(channel_id)
+        threads = self._cursor_threads()
         current = _thread_watermark(threads.get(parent_ts), parent_ts)
         if _timestamp_text_key(timestamp) > _timestamp_text_key(current):
             threads[parent_ts] = timestamp
@@ -389,6 +489,8 @@ class SlackChannelBackend(ChannelBackend):
         self,
         raw: Mapping[str, Any],
         conversation: Mapping[str, Any],
+        *,
+        deadline: float | None,
     ) -> ParsedMessage | None:
         """Reject transport noise before resolving any attachment bytes."""
 
@@ -397,10 +499,10 @@ class SlackChannelBackend(ChannelBackend):
             conversation=conversation,
             team_id=self._team_id(),
             own_id=self._own_id(),
-            users=self._user_cache(),
+            users=self._user_cache(deadline=deadline),
         )
 
-    def _user_cache(self) -> dict[str, dict[str, Any]]:
+    def _user_cache(self, *, deadline: float | None) -> dict[str, dict[str, Any]]:
         """Return this serial backend instance's paginated ``users.list`` cache."""
 
         if self._users is not None:
@@ -408,11 +510,11 @@ class SlackChannelBackend(ChannelBackend):
         users: dict[str, dict[str, Any]] = {}
         cursor = ""
         while True:
-            response = self._api_call(
-                self._client_or_create().users_list,
-                limit=_PAGE_LIMIT,
-                cursor=cursor or None,
-            )
+            with self._rate_limit_retry.deadline(deadline):
+                response = self._client_or_create().users_list(
+                    limit=_PAGE_LIMIT,
+                    cursor=cursor or None,
+                )
             data = response_data(response)
             for raw in data.get("members") or ():
                 if isinstance(raw, Mapping) and raw.get("id"):
@@ -476,10 +578,10 @@ class SlackChannelBackend(ChannelBackend):
         except Exception:  # noqa: BLE001 — a failed attachment stays visible as a marker.
             return None
 
-    def _oldest(self, channel_id: str) -> str:
+    def _oldest(self) -> str:
         """Return the saved watermark, or the configured bounded-backfill floor."""
 
-        entry = self._cursor_conversations().get(channel_id)
+        entry = self._cursor.get("conversation")
         if isinstance(entry, Mapping) and entry.get("last_ts"):
             return str(entry["last_ts"])
         return self._backfill_floor()
@@ -494,7 +596,7 @@ class SlackChannelBackend(ChannelBackend):
     def _batch_size(self) -> int:
         """Return the bounded number of parsed messages emitted per call."""
 
-        return max(1, min(_PAGE_LIMIT, int(self._config().get("batch_size") or _DEFAULT_BATCH_SIZE)))
+        return max(1, min(self._page_bound, _PAGE_LIMIT, int(self._config().get("batch_size") or _DEFAULT_BATCH_SIZE)))
 
     def _max_media_bytes(self) -> int:
         """Return the per-file download cap."""
@@ -506,58 +608,44 @@ class SlackChannelBackend(ChannelBackend):
 
         return max(1, int(self._config().get("max_batch_bytes") or _DEFAULT_MAX_BATCH_BYTES))
 
-    def _conversation_cursor(self, channel_id: str) -> dict[str, Any]:
+    def _conversation_cursor(self) -> dict[str, Any]:
         """Return one mutable conversation cursor entry."""
 
-        conversations = self._cursor_conversations()
-        entry = conversations.get(channel_id)
+        entry = self._cursor.get("conversation")
         if not isinstance(entry, dict):
             entry = {}
-            conversations[channel_id] = entry
+            self._cursor["conversation"] = entry
         return entry
 
-    def _cursor_conversations(self) -> dict[str, Any]:
-        """Return the mutable conversation cursor map, repairing malformed bridge state."""
-
-        cursor = self._cursor_root()
-        raw = cursor.setdefault("conversations", {})
-        if not isinstance(raw, dict):
-            raw = {}
-            cursor["conversations"] = raw
-        return raw
-
-    def _cursor_threads(self, channel_id: str) -> dict[str, Any]:
+    def _cursor_threads(self) -> dict[str, Any]:
         """Return one conversation's mutable thread-reply watermark map."""
 
-        cursor = self._cursor_root()
-        raw_threads = cursor.setdefault("threads", {})
-        if not isinstance(raw_threads, dict):
-            raw_threads = {}
-            cursor["threads"] = raw_threads
-        raw_channel = raw_threads.get(channel_id)
-        if not isinstance(raw_channel, dict):
-            raw_channel = {}
-            raw_threads[channel_id] = raw_channel
-        return raw_channel
+        threads = self._cursor.get("threads")
+        if not isinstance(threads, dict):
+            threads = {}
+            self._cursor["threads"] = threads
+        return threads
 
-    def _cursor_root(self) -> dict[str, Any]:
-        """Return the mutable cursor root, repairing a malformed bridge value."""
+    def _load_credentials(self) -> None:
+        """Reload authentication and update the reused client before each page."""
 
-        if not isinstance(self.bridge.cursor, dict):
-            self.bridge.cursor = {}
-        return self.bridge.cursor
+        self._credential = self.bridge.fresh_credential()
+        if self._client is not None:
+            self._client.token = self._token()
 
     def _client_or_create(self) -> WebClient:
-        """Return the token-authenticated official Slack client."""
+        """Return the reused token-authenticated SDK client without changing policy."""
 
         if self._client is None:
-            self._client = self.client_class(token=self._token())
+            self._client = self.client_class(
+                token=self._token(), retry_handlers=[*default_retry_handlers(), self._rate_limit_retry]
+            )
         return self._client
 
     def _token(self) -> str:
         """Return the channel's static user OAuth token."""
 
-        credential = self.bridge.credential
+        credential = self._credential
         if credential is None:
             raise ValueError("A Slack channel requires a credential.")
         token = str(credential.secret_value()).strip()
@@ -582,38 +670,6 @@ class SlackChannelBackend(ChannelBackend):
     def _config(self) -> dict[str, Any]:
         config = self.bridge.config
         return config if isinstance(config, dict) else {}
-
-    def _api_call(self, operation: Callable[..., _T], **kwargs: Any) -> _T:
-        """Call Slack with bounded, deadline-aware HTTP-429 retries."""
-
-        retries = 0
-        while True:
-            try:
-                return operation(**kwargs)
-            except SlackApiError as error:
-                response = error.response
-                if int(getattr(response, "status_code", 0) or 0) != 429:
-                    raise
-                retries += 1
-                if retries > _MAX_RATE_LIMIT_RETRIES:
-                    raise SlackRateLimitError(
-                        "Slack rate-limit retry budget exhausted; resume on the next poll."
-                    ) from error
-                headers = getattr(response, "headers", {}) or {}
-                raw_delay = headers.get("Retry-After") or headers.get("retry-after") or "1"
-                try:
-                    delay = min(_MAX_RATE_LIMIT_SLEEP_SECONDS, max(0.0, float(raw_delay)))
-                except TypeError, ValueError:
-                    delay = 1.0
-                if self.sync_deadline is not None and delay >= self.sync_deadline - monotonic():
-                    raise SlackRateLimitError(
-                        "Slack sync time budget exhausted while rate limited; resume next poll."
-                    ) from error
-                sleep(delay)
-                if self.sync_deadline is not None and monotonic() >= self.sync_deadline:
-                    raise SlackRateLimitError(
-                        "Slack sync time budget exhausted while rate limited; resume next poll."
-                    ) from error
 
 
 def _next_cursor(data: Mapping[str, Any]) -> str:

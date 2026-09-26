@@ -76,29 +76,29 @@ test("local rows keep curated group shortcuts separate from complete query capab
 
 test("drops a curated date shortcut when its granularity is no longer supported", async () => {
   const query = ResourceQuery.fromContract(testResourceQuery({
-    fields: { invoice_date: testQueryField("invoice_date", { scalar: "Date" }) },
+    fields: { document_date: testQueryField("document_date", { scalar: "Date" }) },
     axes: {
-      invoice_date: testQueryAxis("invoice_date", {
+      document_date: testQueryAxis("document_date", {
         kind: "date",
-        extractions: [{ name: "month", input: "MONTH", key: "invoice_date_month" }],
+        extractions: [{ name: "month", input: "MONTH", key: "document_date_month" }],
       }),
     },
   }));
   render(<ToastProvider><ResourceViewProvider scope="local">
     <RowsListView
       query={query}
-      rows={[{ id: "1", invoice_date: "2026-09-19" }]}
-      columns={[{ field: "invoice_date", header: "Invoice date" }]}
+      rows={[{ id: "1", document_date: "2026-09-19" }]}
+      columns={[{ field: "document_date", header: "Document date" }]}
       groupOptions={[{
-        id: "invoice-date-day",
-        label: "Invoice date by day",
-        group: { field: "invoice_date", granularity: "day" },
+        id: "document-date-day",
+        label: "Document date by day",
+        group: { field: "document_date", granularity: "day" },
       }]}
     />
   </ResourceViewProvider></ToastProvider>);
 
   fireEvent.click(screen.getByLabelText("Filter and group"));
-  expect(screen.queryByRole("button", { name: "Invoice date by day" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Document date by day" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
   expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
 });

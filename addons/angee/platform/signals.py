@@ -1,9 +1,9 @@
 """Post-migrate reconcile of the platform ``Addon`` reflection table.
 
 Mirrors Django's content-type / permission sync (``create_contenttypes``): a thin
-``post_migrate`` receiver that delegates the work to ``AddonManager``, honoring the
-DB alias + the migration router + the not-yet-created table exactly as that pattern
-does. (Angee's other derived facts use explicit post-migrate commands; this one
+``post_migrate`` receiver that delegates the work to ``AddonManager`` after
+checking Django's migration router and whether the table has been created.
+(Angee's other derived facts use explicit post-migrate commands; this one
 follows Django's signal pattern because it reflects the same kind of
 composer-derived metadata content types do.)
 """
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from django.apps import apps
 from django.db import connections, router
+from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.signals import post_migrate
 from rebac import system_context
 
@@ -31,17 +32,19 @@ def _reconcile_addons(*, app_config: object, using: str, **kwargs: object) -> No
         addon_model = apps.get_model("platform", "Addon")
     except LookupError:
         return
+    # This signal describes one migration connection; reconcile only its routed model.
+    if using != router.db_for_write(addon_model):
+        return
     if not router.allow_migrate_model(using, addon_model):
         return
-    if not _table_exists(using, addon_model._meta.db_table):
+    if not _table_exists(connections[using], addon_model._meta.db_table):
         return  # not yet created (e.g. migrating back past the Addon migration)
     with system_context(reason="platform.reconcile_addons"):
-        addon_model.objects.reconcile_loaded_registry(using)
+        addon_model.objects.reconcile_loaded_registry()
 
 
-def _table_exists(using: str, table_name: str) -> bool:
+def _table_exists(connection: BaseDatabaseWrapper, table_name: str) -> bool:
     """Return whether one database currently has ``table_name``."""
 
-    connection = connections[using]
     with connection.cursor() as cursor:
         return table_name in connection.introspection.table_names(cursor)

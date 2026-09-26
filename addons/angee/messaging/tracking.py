@@ -61,12 +61,7 @@ class FieldTracker:
         fields = self._fields(update_fields)
         if not fields:
             return ()
-        row = (
-            type(instance)
-            ._base_manager.filter(pk=instance.pk)
-            .values(*(field.attname for field in fields))
-            .first()
-        )
+        row = type(instance)._base_manager.filter(pk=instance.pk).values(*(field.attname for field in fields)).first()
         if row is None:
             return ()
         return tuple(

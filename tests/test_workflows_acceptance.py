@@ -10,34 +10,26 @@ from rebac import system_context, to_subject_ref
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from angee.workflows.steps import DecisionSpec, HandlerStep, StepResult
-from tests.workflows import (
-    Decision,
-    Edge,
-    Step,
-    StepRun,
-    Workflow,
-    advance_once,
-    execute_started,
-    start_run,
-    step_run_for,
-)
+from angee.workflows.steps import DecisionSpec, StepResult
+from angee.workflows.testing.drivers import advance_once, execute_started, step_run_for
+from angee.workflows.testing.models import Decision, Edge, Step, StepRun, Workflow
+from tests.workflows import FixtureStep, start_run
 
 User = get_user_model()
 
 
 def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A run resumes from decisions, records the journal DAG, and succeeds."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     assignee = User.objects.create_user(username="workflow-decision-assignee")
     assignee_ref = str(to_subject_ref(assignee))
 
-    def run_handler(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run_fixture(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         if step_run.step.key == "entry":
             return StepResult.suspend(
@@ -80,7 +72,7 @@ def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
             )
         return StepResult.done(output={}, outcome="done")
 
-    monkeypatch.setattr(HandlerStep, "run", run_handler)
+    monkeypatch.setattr(FixtureStep, "run", run_fixture)
     workflow = _workflow_for_acceptance(assignee_ref)
 
     run = start_run(workflow, actor=assignee)
@@ -152,8 +144,19 @@ def test_run_reopens_invalid_decision_then_completes_gate_and_journal(
 def _workflow_for_acceptance(assignee_ref: str) -> Workflow:
     with system_context(reason="test workflow acceptance definition"):
         draft = Workflow.objects.create(name="Decision acceptance")
-        entry = Step.objects.create(workflow=draft, key="entry", name="Entry", is_entry=True)
-        produce = Step.objects.create(workflow=draft, key="produce", name="Produce")
+        entry = Step.objects.create(
+            workflow=draft,
+            key="entry",
+            name="Entry",
+            step_class="fixture",
+            is_entry=True,
+        )
+        produce = Step.objects.create(
+            workflow=draft,
+            key="produce",
+            name="Produce",
+            step_class="fixture",
+        )
         review = Step.objects.create(
             workflow=draft,
             key="review",
@@ -163,29 +166,11 @@ def _workflow_for_acceptance(assignee_ref: str) -> Workflow:
                 "policy": "one_done",
                 "action": "review-output",
                 "slots": [{"assignee": assignee_ref}],
-                "decision_schema": {
-                    "type": "object",
-                    "required": ["action", "approved"],
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "enum": ["complete"],
-                            "options": [{
-                                "value": "complete", "label": "Complete", "verdict": "COMPLETE",
-                            }],
-                        },
-                        "approved": {"type": "boolean"},
-                    },
-                    "oneOf": [{
-                        "type": "object",
-                        "required": ["action", "approved"],
-                        "properties": {
-                            "action": {"const": "complete"},
-                            "approved": {"type": "boolean"},
-                        },
-                        "additionalProperties": False,
-                    }],
-                },
+                "actions": [{
+                    "value": "complete", "label": "Complete", "verdict": "COMPLETE",
+                    "fields": ["approved"], "required": ["approved"],
+                }],
+                "properties": {"approved": {"type": "boolean"}},
             },
             join_rule=workflow_models.JoinRule.ALL_SUCCESS,
         )

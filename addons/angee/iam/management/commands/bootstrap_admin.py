@@ -51,6 +51,7 @@ class Command(BaseCommand):
         )
 
         User = get_user_model()
+
         manager = User._default_manager
         lookup_manager = _system_lookup_manager(User)
         username_field = User.USERNAME_FIELD

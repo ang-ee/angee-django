@@ -38,6 +38,7 @@ import {
 } from "@angee/ui/views/resource-view-model";
 import type { DataResourceMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
+import { statusBadgeWidget } from "@angee/ui/widgets/statusBadge";
 
 afterEach(() => cleanup());
 
@@ -892,6 +893,51 @@ describe("createApp route menu refs", () => {
     ).toThrow(/Menu item "records\.open" cannot resolve its route.*missing params: id/);
   });
 
+  test("resolves a menu route with its declared params", async () => {
+    const captured = await captureChrome({
+      path: "/dashboards/addon/example.document_review.overview",
+      addons: [
+        {
+          id: "dashboard-menu",
+          routes: [
+            {
+              name: "dashboards.addon",
+              path: "/dashboards/addon/$key",
+              layout: "console",
+              component: EmptyPage,
+            },
+          ],
+          menus: [
+            {
+              id: "review-queue",
+              route: "dashboards.addon",
+              params: { key: "example.document_review.overview" },
+            },
+          ],
+        },
+      ],
+    });
+
+    try {
+      expect(captured.props().menus[0]?.to).toBe(
+        "/dashboards/addon/example.document_review.overview",
+      );
+    } finally {
+      captured.cleanup();
+    }
+  });
+
+  test("rejects internal literal menu targets", () => {
+    expect(() =>
+      createApp(testAppInput([
+        {
+          id: "literal-menu",
+          menus: [{ id: "literal", to: "/dashboards/addon/literal" }],
+        },
+      ])),
+    ).toThrow(/declares internal target.*use route and params/);
+  });
+
   test("rejects a route that references an unknown menu item", () => {
     expect(() =>
       createAppWithResources([
@@ -1082,6 +1128,27 @@ describe("createApp resource route index", () => {
 });
 
 describe("createApp route tree", () => {
+  test("renders addon-contributed status tones through the app runtime", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    history.replaceState(null, "", "/review");
+    const app = createApp(testAppInput([{
+      id: "review",
+      statusTones: { reviewed: "accent" },
+      routes: [{
+        name: "review", path: "/review",
+        component: () => createElement(statusBadgeWidget.read, { value: "REVIEWED" }),
+      }],
+    }]));
+    const root = app.mount(host);
+    try {
+      await waitFor(() => expect(host.querySelector(".bg-accent-soft")?.textContent).toBe("REVIEWED"));
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+
   test("keeps a contributed layout provider mounted when changing pages", async () => {
     const host = document.createElement("div");
     document.body.append(host);

@@ -7,37 +7,34 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
-from django.db import connection
 from django.utils import timezone
 from rebac import system_context
 
 from angee.integrate.live import PairingState
 from angee.integrate.locks import bridge_advisory_lock
-from angee.integrate.models import IntegrationRuntimeStatus
+from angee.integrate.models import Bridge, IntegrationRuntimeStatus
 from angee.integrate.session import PASSWORD_SKIPPED, LiveSession, PasswordSkipped
 from angee.jobs.locks import task_lock_is_held
 from angee.messaging.backends import LiveChannelBackend, ParsedMessage, ParsedPart, ParsedThread
-from tests.conftest import _clear_model_tables, _create_missing_tables, make_integration
-from tests.test_messaging import MESSAGING_TEST_MODELS, Message
+from tests.conftest import make_integration
+from tests.test_messaging import Message
 from tests.test_messaging_graphql import Channel
-
-LIVE_TEST_MODELS = (*MESSAGING_TEST_MODELS, Channel)
 
 
 @pytest.mark.django_db
 def test_run_bridge_session_skips_actual_periodic_vcs_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     """A stale live-session delivery for a periodic VCS bridge exits cleanly."""
 
-    from angee.integrate import session_runner
     from angee.integrate import tasks as tasks_module
     from tests.conftest import VcsBridge
 
-    monkeypatch.setattr(session_runner, "_bridge", lambda *_: VcsBridge())
+    monkeypatch.setattr(type(VcsBridge._default_manager.all()), "first", lambda _queryset: VcsBridge())
 
     assert tasks_module.run_bridge_session("integrate_vcs.vcsbridge", 1) == {
         "ok": True,
@@ -167,25 +164,16 @@ class _QueuedLiveMessage:
 
 
 @pytest.fixture
-def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Create concrete messaging tables and register the fake live backend."""
+def live_tables(settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register the fake live backend and sync its policy."""
 
     settings.ANGEE_DATA_DIR = str(tmp_path / "data")
     settings.ANGEE_CHANNEL_BACKEND_CLASSES = {
         **settings.ANGEE_CHANNEL_BACKEND_CLASSES,
         "fake_live": "tests.test_integrate_live.FakeLiveChannelBackend",
     }
-    monkeypatch.setattr("angee.integrate.tasks.bridge_models", lambda _base: (Channel,))
-    created_models = _create_missing_tables(LIVE_TEST_MODELS)
+    monkeypatch.setattr("angee.integrate.tasks.models_with", lambda *, base: (Channel,))
     call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(LIVE_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
 
 
 def _live_channel(slug: str = "fake-live") -> Any:
@@ -828,15 +816,15 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
     from angee.integrate import tasks as tasks_module
     from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
     from angee.integrate.models import Bridge
-    from angee.integrate.registry import bridge_models
+    from angee.integrate.registry import models_with
     from tests.conftest import VcsBridge
 
-    discovered = bridge_models(Bridge)
+    discovered = models_with(base=Bridge)
     assert VcsBridge in discovered
     assert Channel in discovered
     assert VcsBridge.live_implementation_field() is None
     assert Channel.live_implementation_field() is Channel._meta.get_field("backend_class")
-    monkeypatch.setattr(tasks_module, "bridge_models", bridge_models)
+    monkeypatch.setattr(tasks_module, "models_with", models_with)
 
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -1395,3 +1383,18 @@ def test_reconciler_warns_about_crashed_startup(
     monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
     assert "active stage with no running session" in caplog.text
+
+
+def test_transport_only_live_session_accepts_report_only_reporter() -> None:
+    """Transport setup and reporting require no model state or reporter database API."""
+
+    reports: list[tuple[str, Any]] = []
+    bridge = SimpleNamespace(
+        live_impl=SimpleNamespace(state_identity_key="own_id"),
+        subscription_state={},
+        SyncStage=Bridge.SyncStage,
+    )
+    reporter = SimpleNamespace(report=lambda stage, *, details: reports.append((stage, details)))
+    session = LiveSession(bridge, reporter=reporter, stop_event=threading.Event())
+    session._report(PairingState.STARTING)
+    assert reports == [(Bridge.SyncStage.DISCOVERING, {"pairing": {"state": PairingState.STARTING}})]

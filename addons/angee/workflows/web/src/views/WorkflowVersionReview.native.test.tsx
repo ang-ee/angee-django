@@ -25,9 +25,9 @@ vi.mock("@angee/refine", async (importOriginal) => ({
   useAuthoredMutation: () => [restore, { fetching: false, error: null }],
 }));
 vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
-  return { ...actual, GraphView: ({ nodes }: { nodes: Array<{ id: string; selected?: boolean }> }) =>
-    <div aria-label="comparison graph">{nodes.map((node) => <span key={node.id} data-selected={node.selected}>{node.id}</span>)}</div> };
+  const { createUiTestModule } = await import("@angee/ui/testing");
+  return createUiTestModule(importOriginal, { GraphView: ({ nodes }: { nodes: Array<{ id: string; selected?: boolean }> }) =>
+    <div aria-label="comparison graph">{nodes.map((node) => <span key={node.id} data-selected={node.selected}>{node.id}</span>)}</div> });
 });
 
 import { WorkflowVersionReview } from "./WorkflowVersionReview";
@@ -37,8 +37,8 @@ const comparison = {
   draft_id: "draft-1", draft_revision: 4,
   counts: { steps_added: 0, steps_removed: 0, steps_changed: 1, connections_added: 0, connections_removed: 0, settings_changed: 0 },
   changes: [{ kind: "step", change: "changed", key: "send", field: "config", before: { channel: "email" }, after: { channel: "chat" }, presentation_only: false }],
-  source_nodes: [{ key: "send", name: "Send", step_class: "handler", is_entry: true }], source_edges: [],
-  draft_nodes: [{ key: "send", name: "Send", step_class: "handler", is_entry: true }], draft_edges: [],
+  source_nodes: [{ key: "send", name: "Send", step_class: "wait", is_entry: true }], source_edges: [],
+  draft_nodes: [{ key: "send", name: "Send", step_class: "wait", is_entry: true }], draft_edges: [],
 };
 
 afterEach(() => { cleanup(); restore.mockReset(); refetchComparison.mockReset(); refetchDraft.mockReset(); setQueryData.mockReset(); queryState.draftRevision = 4; });

@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { type GetListParams } from "@refinedev/core";
 import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import { parseRecordNavigationScope, type ListViewNavigationScope } from "@angee/ui";
 import { createRouteHref } from "@angee/ui/runtime";
@@ -316,9 +317,7 @@ const fileResource = testDataResource("storage.File", {
   typeNames: { filter: "files_bool_exp", order: "files_order_by" },
   roots: { aggregate: "files_aggregate" },
 });
-const metadata = schemaFieldMetadataFromDataResources([fileResource]);
 const provider = {
-  getApiUrl: () => "test://files",
   getList: async ({ meta, pagination }: GetListParams) => {
     const where = meta?.gqlVariables?.where;
     const rows = storageData.files.filter((row) => matchesNativeWhere(row, where))
@@ -327,8 +326,7 @@ const provider = {
     const start = ((pagination?.currentPage ?? 1) - 1) * size;
     return { data: rows.slice(start, start + size), total: rows.length };
   },
-  getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-} as DataProvider;
+} satisfies RefineTestDataProvider;
 
 function matchesNativeWhere(row: Record<string, unknown>, where: unknown): boolean {
   if (!where || typeof where !== "object" || Array.isArray(where)) return true;
@@ -343,15 +341,13 @@ function matchesNativeWhere(row: Record<string, unknown>, where: unknown): boole
 }
 function pageTree() {
   return (
-    <Refine resources={[...refineResourcesFromDataResources([fileResource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
-      <ModelMetadataProvider metadata={metadata}>
-        <ShellPageTestProviders>
-          <StoragePage />
-          <PrimaryPaneTestHost />
-          <ChatterTabsTestHost />
-        </ShellPageTestProviders>
-      </ModelMetadataProvider>
-    </Refine>
+    <Provider resources={[fileResource]} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 } } } } }}>
+      <ShellPageTestProviders>
+        <StoragePage />
+        <PrimaryPaneTestHost />
+        <ChatterTabsTestHost />
+      </ShellPageTestProviders>
+    </Provider>
   );
 }
 
@@ -426,8 +422,10 @@ beforeEach(() => {
   });
 });
 
+const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://files" });
 afterEach(() => {
   cleanup();
+  clearClients();
 });
 
 describe("StoragePage explorer wiring", () => {

@@ -1,10 +1,13 @@
 import { describe, expect, test } from "vitest";
 
 import type { FieldDescriptor } from "../page";
+import type { FormSpecFieldDescriptor } from "./form-spec";
 import {
   emptyDraft,
   addFieldSelection,
+  fieldErrorMessages,
   formViewFieldLayout,
+  isCompositeFieldDescriptor,
   missingRequiredFieldNames,
   mutationData,
   recordToValues,
@@ -17,6 +20,61 @@ const fields: readonly FieldDescriptor[] = [
   { name: "config.local_name", widget: "text" },
 ];
 
+test.each<{ field: FormSpecFieldDescriptor; composite: boolean }>([
+  { field: { name: "title", widget: "text" }, composite: false },
+  { field: { name: "config", widget: "json" }, composite: false },
+  { field: { name: "config", objectTemplate: [] }, composite: true },
+  { field: { name: "tags", itemTemplate: { name: "item", widget: "text" } }, composite: true },
+  { field: { name: "rows", rowTemplate: [] }, composite: true },
+  { field: { name: "rows", rowTemplate: undefined }, composite: false },
+])("descriptor $field owns composite controls: $composite", ({ field, composite }) => {
+  expect(isCompositeFieldDescriptor(field)).toBe(composite);
+});
+
+test("field errors retain parent and nested messages while excluding RHF metadata", () => {
+  expect(fieldErrorMessages([{
+    message: "Choose another title.",
+    type: "validate",
+    types: { minLength: "Choose another title." },
+    ref: { message: "DOM input details are not validation." },
+    nested: { message: "Choose a valid relation." },
+  }])).toEqual(["Choose another title.", "Choose a valid relation."]);
+  expect(fieldErrorMessages([{
+    nested: { message: "Choose a valid relation.", ref: { current: null } },
+  }])).toEqual(["Choose a valid relation."]);
+});
+
+test("absent field errors leave untouched controls valid and retain actual nested errors", () => {
+  expect(fieldErrorMessages([undefined, null])).toEqual([]);
+  expect(fieldErrorMessages([{ lines: [undefined, null, {
+    quantity: { message: "Enter a quantity." },
+  }] }], "document")).toEqual(["document.lines.2.quantity: Enter a quantity."]);
+  expect(fieldErrorMessages(["Required", { message: 0 }])).toEqual(["Required", "0"]);
+});
+
+test("structured errors preserve child fields named message and types", () => {
+  expect(fieldErrorMessages([{
+    message: { message: "Enter a message.", type: "validate" },
+    types: { message: "Choose a type.", types: { required: "Choose a type." } },
+  }], "config")).toEqual([
+    "config.message: Enter a message.",
+    "config.types: Choose a type.",
+  ]);
+});
+
+test("structured field errors retain explicit root paths through objects and arrays", () => {
+  const errors = [{
+    tasks: [{
+      relation: {
+        message: "Choose a valid relation.",
+        ref: { message: "DOM input details are not validation." },
+      },
+    }],
+  }];
+  expect(fieldErrorMessages(errors, "config")).toEqual(["config.tasks.0.relation: Choose a valid relation."]);
+  expect(fieldErrorMessages(errors, "")).toEqual(["tasks.0.relation: Choose a valid relation."]);
+});
+
 test("titleText preserves string and numeric scalar titles", () => {
   expect(titleText("Daily briefing", "Untitled")).toBe("Daily briefing");
   expect(titleText(42, "Untitled")).toBe("42");
@@ -24,13 +82,13 @@ test("titleText preserves string and numeric scalar titles", () => {
 
 test("dynamic resolution cannot unlock a field already locked by form mode", () => {
   const locked: FieldDescriptor = {
-    name: "journal",
+    name: "collection",
     readOnly: true,
-    resolve: () => ({ name: "journal", readOnly: false }),
+    resolve: () => ({ name: "collection", readOnly: false }),
   };
-  expect(resolveField(locked, {})).toMatchObject({ name: "journal", readOnly: true });
+  expect(resolveField(locked, {})).toMatchObject({ name: "collection", readOnly: true });
   expect(resolveField({ ...locked, readOnly: false }, {})).toMatchObject({
-    name: "journal", readOnly: false,
+    name: "collection", readOnly: false,
   });
 });
 

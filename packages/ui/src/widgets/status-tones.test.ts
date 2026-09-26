@@ -32,6 +32,15 @@ describe("statusTone", () => {
     ).toBe("info");
   });
 
+  test("resolves contributed vocabulary while preserving explicit overrides", () => {
+    const options = { statusTones: { reviewed: "accent", queued: "brand" }, unknownTone: "neutral" } as const;
+    expect(statusTone(" REVIEWED ", undefined, options)).toBe("accent");
+    expect(statusTone("ready", undefined, options)).toBe("success");
+    expect(statusTone("queued", undefined, options)).toBe("brand");
+    expect(statusTone("REVIEWED", { REVIEWED: "danger" }, options)).toBe("danger");
+    expect(statusTone("reviewed")).toBe("brand");
+  });
+
   test("keeps pairing lifecycle states on the shared vocabulary", () => {
     const pairingOverrides = {
       PAIRED: "success",

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-import json
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -14,22 +14,26 @@ from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
 from angee.base.actors import actor_user_id
-from angee.base.impl import resolve_impl_class
 from angee.base.refs import canonical_record_target
+from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import (
     ArtifactSpec,
-    DecisionGateOutput,
     ExternalOperationPolicy,
     RecoveryCapability,
     RecoveryMode,
 )
 from angee.workflows.engine import external_operation_request
-from angee.workflows.steps import StepEffect, StepExecutionMode, StepImpl, StepOutcome, StepResult
-from angee.workflows_extraction.engines import (
+from angee.workflows.steps import (
+    StepEffect,
+    StepExecutionMode,
+    StepImpl,
+    StepOutcome,
+    StepResult,
+)
+from angee.workflows_extraction.contracts import DocumentPipelineError, PageImage
+from angee.workflows_extraction.inference import (
     RETAINED_CARRIER_UNAVAILABLE,
-    DocumentPipelineError,
-    ExtractionEngine,
-    PageImage,
+    recognize_page,
 )
 from angee.workflows_extraction.service import (
     SupersededInference,
@@ -37,22 +41,32 @@ from angee.workflows_extraction.service import (
     infer,
     prepare_pages,
     process,
-    require_approved_model_deployment,
     restore_prepared_pages,
-    revise,
 )
 
-EngineConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
+ProfileConfig = Annotated[dict[str, Any], Field(json_schema_extra={"widget": "json"})]
 
 
-class ExtractionInput(BaseModel):
-    """Stable public references needed to perform extraction."""
+class ExtractionConfigInput(BaseModel):
+    """Per-invocation document profile and inference configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+    profile_config: ProfileConfig = Field(default_factory=dict)
+
+
+class ExtractionPolicyInput(ExtractionConfigInput):
+    """Per-invocation schema and profile policy for evidence processing."""
+
+    schema_: dict[str, Any] = Field(alias="schema", json_schema_extra={"widget": "json"})
+    profile: str = Field(min_length=1)
+
+
+class ExtractionSourceInput(BaseModel):
+    """Stable public source and target references needed to perform extraction."""
 
     model_config = ConfigDict(extra="forbid")
     files: list[str] = Field(default_factory=list)
     message_parts: list[str] = Field(default_factory=list)
-    model: str | None = None
-    recognition_model: str | None = None
     target_model: str
     target_id: str
 
@@ -65,24 +79,34 @@ class ExtractionOutput(BaseModel):
     revision: int
 
 
-class ExtractionConfig(BaseModel):
-    """Schema and engine policy stored on the workflow definition."""
+class PreparePagesInput(ExtractionConfigInput, ExtractionSourceInput):
+    """The original source/target refs; provider work happens later."""
+
+    profile: str = Field(default="none", min_length=1)
+    model: str | None = None
+    recognition_model: str | None = None
+
+
+class RecognitionPageInput(BaseModel):
+    """Retained page carrier and frozen policy passed through the Map boundary."""
 
     model_config = ConfigDict(extra="forbid")
-    schema_: dict[str, Any] = Field(alias="schema", json_schema_extra={"widget": "json"})
-    engine: str
-    engine_config: EngineConfig = Field(default_factory=dict)
-    retained_failure_outcome: Literal["failed", "retained_failure"] = "failed"
-
-
-class PreparePagesInput(ExtractionInput):
-    """The original source/target refs; provider work happens later."""
+    source_position: int = Field(ge=0)
+    page_position: int = Field(ge=0)
+    image_file_id: str
+    image_digest: str
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    dpi: int = Field(gt=0)
+    model_id: str
+    config_digest: str
 
 
 class PreparePagesOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    profile: str = Field(default="none", min_length=1)
     manifest: dict[str, Any]
-    recognition_pages: list[dict[str, Any]]
+    recognition_pages: list[RecognitionPageInput]
     recognition_model_id: str
     mapping_model_id: str
     recognition_config_digest: str
@@ -100,39 +124,32 @@ class PreparePagesStepImpl(StepImpl):
     effect_description = "Stores bounded native and raster carriers as READY Files."
     input_model = PreparePagesInput
     output_model = PreparePagesOutput
-    config_model = ExtractionConfig
     outcomes = (StepOutcome("prepared", "Prepared"),)
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        run: Any = step_run.run
         del now
         value = self.validate_input(step_run.input)
-        options = ExtractionConfig.model_validate(step_run.step.config).engine_config
-        actor = step_run.run.admission_actor()
+        options = value.profile_config
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page preparation requires the workflow actor.")
         with actor_context(actor):
             files, parts, target = _resolve_sources(value)
+            profile_field = apps.get_model("workflows_extraction", "Extraction").impl_field("profile")
             prepared = prepare_pages(
                 files=files, message_parts=parts, authorized_target=target, config=options,
+                profile=profile_field.resolve_class(value.profile)(),
             )
         model_id = value.recognition_model or ""
         recognition_options = dict(options.get("recognition_config") or {})
-        config_digest = _json_digest(recognition_options)
+        config_digest = canonical_json_sha256(recognition_options)
         recognition_pages = [
-            {
-                "source_position": page.source_position,
-                "page_position": page.page_position,
-                "image_file_id": str(page.recognition_file.sqid),
-                "image_digest": str(page.recognition_file.content_hash),
-                "width": page.recognition_image.width,
-                "height": page.recognition_image.height,
-                "dpi": page.recognition_image.dpi,
-                "model_id": model_id,
-                "config_digest": config_digest,
-            }
+            page.recognition_input(model_id=model_id, config_digest=config_digest)
             for page in prepared.recognition_pages
         ]
         return StepResult.done(output={
+            "profile": value.profile,
             "manifest": prepared.manifest,
             "recognition_pages": recognition_pages,
             "recognition_model_id": model_id,
@@ -143,17 +160,9 @@ class PreparePagesStepImpl(StepImpl):
         }, outcome="prepared")
 
 
-class RecognizePageInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    source_position: int = Field(ge=0)
-    page_position: int = Field(ge=0)
-    image_file_id: str
-    image_digest: str
-    width: int = Field(gt=0)
-    height: int = Field(gt=0)
-    dpi: int = Field(gt=0)
-    model_id: str
-    config_digest: str
+class RecognizePageInput(RecognitionPageInput):
+    profile_config: ProfileConfig = Field(default_factory=dict)
+    timeout: int = Field(default=60, gt=0, description="Provider timeout in whole seconds.")
 
 
 class RecognizePageOutput(BaseModel):
@@ -169,13 +178,6 @@ class RecognizePageOutput(BaseModel):
     duration_ms: int = Field(ge=0)
 
 
-class RecognizePageConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    engine: str = "glm"
-    engine_config: EngineConfig = Field(default_factory=dict)
-    timeout: int = Field(default=60, gt=0, description="Provider timeout in whole seconds.")
-
-
 class RecognizePageStepImpl(StepImpl):
     """One admitted WF external request for exactly one text-poor page."""
 
@@ -189,7 +191,6 @@ class RecognizePageStepImpl(StepImpl):
     effect_description = "Requests one provider recognition and stores a READY text carrier."
     input_model = RecognizePageInput
     output_model = RecognizePageOutput
-    config_model = RecognizePageConfig
     outcomes = (StepOutcome("recognized", "Recognized"),)
 
     @classmethod
@@ -219,39 +220,44 @@ class RecognizePageStepImpl(StepImpl):
         return self._recognize(step_run)
 
     def _recognize(self, step_run: Any) -> StepResult:
+        run: Any = step_run.run
         request = external_operation_request(step_run)
         value = self.validate_input(request.input)
-        config = RecognizePageConfig.model_validate(step_run.step.config)
-        if value.config_digest != _json_digest(config.engine_config):
-            raise ValidationError({"recognition": "The page item names a different published recognizer config."})
-        actor = step_run.run.admission_actor()
+        if value.config_digest != canonical_json_sha256(value.profile_config):
+            raise ValidationError({"recognition": "The page item names a different admitted recognizer config."})
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Page recognition requires the workflow actor.")
+        actor_subject = run.admission_actor_subject()
+        if actor_subject is None:
+            raise PermissionDenied("Page recognition requires the workflow actor subject.")
         with actor_context(actor):
             file_model = apps.get_model("storage", "File")
             model_model = apps.get_model("agents", "InferenceModel")
-            image_file = file_model.objects.get(sqid=value.image_file_id)
+            image_file = file_model.objects.select_related("drive").get(sqid=value.image_file_id)
             if not image_file.with_actor(actor).has_access("read") or str(image_file.upload_state) != "ready":
                 raise PermissionDenied("Read access to the READY page carrier is required.")
             if str(image_file.content_hash) != value.image_digest:
                 raise ValidationError({"recognition": "The page carrier digest changed."})
             model = model_model.objects.get(sqid=value.model_id)
-            if not model.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Read access to the recognition model is required.")
-            require_approved_model_deployment(model, role="recognition")
             with image_file.open_stream() as stream:
                 image_bytes = stream.read()
             if hashlib.sha256(image_bytes).hexdigest() != value.image_digest:
                 raise ValidationError({"recognition": "The stored page image bytes changed."})
-            engine_class = resolve_impl_class(
-                "ANGEE_EXTRACTION_ENGINE_CLASSES", config.engine, base_class=ExtractionEngine,
-            )
-            engine = engine_class()
-            engine.validate_model(model, role="recognition")
-            response = engine.recognize_page(
-                PageImage(value.source_position, value.page_position, "image/jpeg", image_bytes,
-                          value.width, value.height, value.dpi),
-                model=model, config=config.engine_config, timeout=config.timeout,
+            response = recognize_page(
+                PageImage(
+                    value.source_position,
+                    value.page_position,
+                    "image/jpeg",
+                    image_bytes,
+                    value.width,
+                    value.height,
+                    value.dpi,
+                ),
+                step_run=step_run,
+                model=model,
+                config=value.profile_config,
+                timeout=value.timeout,
             )
             if not isinstance(response.text, str) or "\x00" in response.text:
                 raise ValidationError({"recognition": "The recognizer did not return valid text."})
@@ -265,20 +271,28 @@ class RecognizePageStepImpl(StepImpl):
             }
             text_file = file_model.objects.ingest_stream(
                 ContentFile(text), filename=f"recognized-page-{value.source_position}-{value.page_position}.txt",
-                content_hash=digest, size_bytes=len(text), owner_id=actor_user_id(actor),
+                content_hash=digest, size_bytes=len(text), owner_id=actor_user_id(actor_subject),
                 drive_id=str(image_file.drive.sqid),
                 metadata={"workflows_extraction": {"recognitions": {request.request_key: facts}}},
             )
-        return StepResult.done(output={
-            "source_position": value.source_position, "page_position": value.page_position,
-            "image_file_id": value.image_file_id, "text_file_id": str(text_file.sqid),
-            "model_id": value.model_id, "config_digest": value.config_digest,
-            "request_key": request.request_key,
-            "method": f"{config.engine}:text_recognition", "duration_ms": max(response.duration_ms, 0),
-        }, outcome="recognized", artifacts=(ArtifactSpec(text_file, "Recognized page text"),))
+        return StepResult.done(
+            output={
+                "source_position": value.source_position,
+                "page_position": value.page_position,
+                "image_file_id": value.image_file_id,
+                "text_file_id": str(text_file.sqid),
+                "model_id": value.model_id,
+                "config_digest": value.config_digest,
+                "request_key": request.request_key,
+                "method": "inference:text_recognition",
+                "duration_ms": max(response.duration_ms, 0),
+            },
+            outcome="recognized",
+            artifacts=(ArtifactSpec(text_file, "Recognized page text"),),
+        )
 
 
-class CollectCarriersInput(BaseModel):
+class CollectCarriersInput(ExtractionConfigInput):
     model_config = ConfigDict(extra="forbid")
     prepared: dict[str, Any]
     recognition: dict[str, Any]
@@ -301,20 +315,23 @@ class CollectCarriersStepImpl(StepImpl):
     effect = StepEffect.READ
     input_model = CollectCarriersInput
     output_model = CollectCarriersOutput
-    config_model = ExtractionConfig
     outcomes = (StepOutcome("collected", "Collected"), StepOutcome("source_hold", "Source hold"))
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        run: Any = step_run.run
         del now
         value = self.validate_input(step_run.input)
-        options = ExtractionConfig.model_validate(step_run.step.config).engine_config
-        actor = step_run.run.admission_actor()
+        options = value.profile_config
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Carrier collection requires the workflow actor.")
         with actor_context(actor):
             prepared, manifest = _restore_prepared(value.prepared, options)
-            if _json_digest(dict(options.get("recognition_config") or {})) != manifest.recognition_config_digest:
-                raise ValidationError({"recognition": "The published recognizer configuration changed."})
+            if (
+                canonical_json_sha256(dict(options.get("recognition_config") or {}))
+                != manifest.recognition_config_digest
+            ):
+                raise ValidationError({"recognition": "The admitted recognizer configuration changed."})
             results = value.recognition.get("results")
             if not isinstance(results, list):
                 raise ValidationError({"recognition": "Map did not retain ordered page results."})
@@ -329,7 +346,7 @@ class CollectCarriersStepImpl(StepImpl):
         }, outcome="source_hold" if collected.hold_reasons else "collected")
 
 
-class ProcessEvidenceInput(CollectCarriersOutput):
+class ProcessEvidenceInput(ExtractionPolicyInput, CollectCarriersOutput):
     """Reference-only carrier collection passed from the native Map boundary."""
 
     identity_mapping: dict[str, str] = Field(default_factory=dict)
@@ -355,18 +372,26 @@ class ProcessEvidenceStepImpl(StepImpl):
     execution_mode = StepExecutionMode.DATABASE_COMMAND
     input_model = ProcessEvidenceInput
     output_model = ProcessEvidenceOutput
-    config_model = ExtractionConfig
     outcomes = (StepOutcome("processed", "Processed"), StepOutcome("source_hold", "Source hold"))
 
+    @classmethod
+    def recovery_capability(cls, *, attempt: Any) -> RecoveryCapability:
+        """Keep evidence retention non-replayable until its write set is reconcilable."""
+
+        del attempt
+        return RecoveryCapability(None, "Processed evidence retention has no recovery reconciliation contract.")
+
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        run: Any = step_run.run
         del now
         value = self.validate_input(step_run.input)
-        config = ExtractionConfig.model_validate(step_run.step.config)
-        actor = step_run.run.admission_actor()
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Evidence processing requires the workflow actor.")
         with actor_context(actor):
-            prepared, manifest = _restore_prepared(value.prepared, config.engine_config)
+            prepared, manifest = _restore_prepared(value.prepared, value.profile_config)
+            if manifest.profile != value.profile:
+                raise ValidationError({"profile": "The selected profile differs from the prepared profile."})
             collected = collect_carriers(
                 prepared, value.recognition_results,
                 recognition_model_id=manifest.recognition_model_id,
@@ -385,8 +410,8 @@ class ProcessEvidenceStepImpl(StepImpl):
                 if manifest.recognition_model_id else None
             )
             evidence = process(
-                prepared, value.recognition_results, schema=config.schema_, authorized_target=target,
-                engine=config.engine, config=config.engine_config,
+                prepared, value.recognition_results, schema=value.schema_, authorized_target=target,
+                profile=value.profile, config=value.profile_config,
                 model=mapping_model, recognition_model=recognition_model,
                 identity_mapping=value.identity_mapping,
                 retired_identities=value.retired_identities,
@@ -467,13 +492,18 @@ class InferEvidenceStepImpl(StepImpl):
         return self._infer(step_run)
 
     def _infer(self, step_run: Any) -> StepResult:
+        run: Any = step_run.run
         request = external_operation_request(step_run)
         value = self.validate_input(request.input)
-        actor = step_run.run.admission_actor()
+        actor = run.admission_actor()
         if actor is None:
             raise PermissionDenied("Bound inference requires the workflow actor.")
         with actor_context(actor):
-            base = apps.get_model("workflows_extraction", "Extraction").objects.get(sqid=value.base_extraction_id)
+            base = (
+                apps.get_model("workflows_extraction", "Extraction")
+                .objects
+                .get(sqid=value.base_extraction_id)
+            )
             if base.revision != value.base_revision:
                 raise ValidationError({"base_revision": "The retained extraction revision differs."})
             target = apps.get_model(value.target_model).objects.get(sqid=value.target_id)
@@ -491,12 +521,14 @@ class InferEvidenceStepImpl(StepImpl):
                 current = type(base).objects.inference_current_head(base, actor=actor)
                 if current.pk != base.pk:
                     if (
-                        current.status == "failed"
-                        and current.error_code
-                        == "source_hold:identity_correspondence_required"
-                        and type(base).objects.inference_authority_base(
-                            current, actor=actor,
-                        ).pk
+                        current.awaiting_correspondence
+                        and type(base)
+                        .objects
+                        .inference_authority_base(
+                            current,
+                            actor=actor,
+                        )
+                        .pk
                         == base.pk
                     ):
                         return _retained_inference_result(
@@ -516,42 +548,30 @@ class InferEvidenceStepImpl(StepImpl):
                 )
             current = type(base).objects.inference_current_head(base, actor=actor)
             if current.pk != base.pk:
-                if (
-                    current.status == "failed"
-                    and current.error_code
-                    == "source_hold:identity_correspondence_required"
-                ):
+                if current.awaiting_correspondence:
                     return _retained_inference_result(
                         current,
                         actor=actor,
                         success_outcome="correspondence_required",
                         artifact_label="Current extraction evidence",
                     )
-                return StepResult.done(
-                    output={**_inference_output(current), "superseded_by": str(current.sqid)},
-                    outcome="superseded",
-                    artifacts=(ArtifactSpec(current, "Current extraction evidence"),),
-                )
-            profile = resolve_impl_class(
-                "ANGEE_EXTRACTION_ENGINE_CLASSES",
-                str(base.engine),
-                base_class=ExtractionEngine,
-            )()
-            unchanged = (
-                base.status == "succeeded"
-                and (
-                    bool(base.corrections)
-                    or not profile.inference_required(
-                        base.result, base.unresolved_reasons
+            else:
+                profile = base.resolve_impl("profile")()
+                unchanged = (
+                    base.status == "succeeded"
+                    and (
+                        bool(base.corrections)
+                        or not profile.inference_required(
+                            base.result, base.unresolved_reasons
+                        )
+                        or "mapping" in base.provenance.get("used_model_roles", ())
                     )
-                    or "mapping" in base.provenance.get("used_model_roles", ())
                 )
-            )
-            if unchanged:
-                return StepResult.done(
-                    output=_inference_output(base), outcome="unchanged",
-                    artifacts=(ArtifactSpec(base, "Retained extraction evidence"),),
-                )
+                if unchanged:
+                    return StepResult.done(
+                        output=_inference_output(base), outcome="unchanged",
+                        artifacts=(ArtifactSpec(base, "Retained extraction evidence"),),
+                    )
             if value.model_id is None:
                 raise ValidationError({"model_id": "An admitted mapping model is required."})
             model = apps.get_model("agents", "InferenceModel").objects.get(sqid=value.model_id)
@@ -597,27 +617,61 @@ class InferEvidenceStepImpl(StepImpl):
                 current = apps.get_model("workflows_extraction", "Extraction").objects.get(
                     sqid=outcome.current_extraction_id,
                 )
+            if current.status == "failed":
+                retained = _retained_inference_result(
+                    current,
+                    actor=actor,
+                    success_outcome="superseded",
+                    artifact_label="Current extraction evidence",
+                )
+                return StepResult.done(
+                    output={
+                        **retained.output,
+                        "superseded_by": outcome.current_extraction_id,
+                    },
+                    outcome=retained.outcome,
+                    artifacts=retained.artifacts,
+                )
             return StepResult.done(
                 output={**_inference_output(current), "superseded_by": outcome.current_extraction_id},
                 outcome="superseded", artifacts=(ArtifactSpec(current, "Current extraction evidence"),),
             )
         return _retained_inference_result(
-            outcome,
+            outcome.extraction,
             actor=actor,
             success_outcome="inferred",
             artifact_label="Inferred extraction evidence",
         )
 
 
-def _inference_failure(error: DocumentPipelineError) -> dict[str, str]:
-    """Project one bounded provider or retained-carrier failure into the journal."""
+def _inference_failure(source: DocumentPipelineError | Mapping[str, Any]) -> dict[str, str]:
+    """Project a live error or persisted stage provenance into bounded journal facts."""
 
-    return {
-        "type": type(error).__name__,
-        "message": str(error),
-        "stage": str(error.stage or ""),
-        "code": str(error.code or ""),
+    if isinstance(source, DocumentPipelineError):
+        details: Mapping[str, Any] = {
+            "type": type(source).__name__,
+            "stage": source.stage,
+            "code": source.code,
+        }
+        message = str(source)
+        metadata = source.metadata
+    else:
+        details = source.get("failure", {})
+        message = str(details.get("message") or "Inference failed.")
+        # Processing stores diagnostics beside failure; retained inference stores
+        # them inside failure.metadata, which takes precedence over inherited facts.
+        metadata = details.get("metadata", source)
+
+    failure = {
+        "type": str(details.get("type") or "DocumentPipelineError"),
+        "message": message,
+        "stage": str(details.get("stage") or ""),
+        "code": str(details.get("code") or ""),
     }
+    for key in ("provider_response_id", "finish_reason", "output_text_length", "output_text_sha256"):
+        if key in metadata:
+            failure[key] = str(metadata[key])
+    return failure
 
 
 def _inference_output(extraction: Any) -> dict[str, Any]:
@@ -637,11 +691,16 @@ def _retained_inference_result(
 ) -> StepResult:
     """Route one exact retained result without inventing correspondence choices."""
 
-    if not (
-        extraction.status == "failed"
-        and extraction.error_code
-        == "source_hold:identity_correspondence_required"
-    ):
+    if extraction.status == "failed" and not extraction.awaiting_correspondence:
+        return StepResult.done(
+            output={
+                **_inference_output(extraction),
+                "inference_failure": _inference_failure(extraction.stage_provenance),
+            },
+            outcome="inference_failed",
+            artifacts=(ArtifactSpec(extraction, "Failed inferred extraction evidence"),),
+        )
+    if not extraction.awaiting_correspondence:
         return StepResult.done(
             output=_inference_output(extraction),
             outcome=success_outcome,
@@ -658,12 +717,11 @@ def _retained_inference_result(
     return StepResult.done(
         output={
             **_inference_output(authority),
-            "inference_failure": {
-                "type": "DocumentPipelineError",
-                "message": "The retained correspondence candidate is empty.",
-                "stage": "correspondence",
-                "code": "empty_correspondence_candidate",
-            },
+            "inference_failure": _inference_failure(DocumentPipelineError(
+                "The retained correspondence candidate is empty.",
+                stage="correspondence",
+                code="empty_correspondence_candidate",
+            )),
         },
         outcome="inference_failed",
         artifacts=(
@@ -673,129 +731,44 @@ def _retained_inference_result(
     )
 
 
-class ReviseEvidenceInput(BaseModel):
-    """Exact retained base, corrected value, and admitted native gate projection."""
-
-    model_config = ConfigDict(extra="forbid")
-    base_extraction_id: str
-    base_revision: int = Field(ge=1)
-    expected_target_id: str
-    review: DecisionGateOutput
-
-
-class GenericEvidenceCorrection(BaseModel):
-    """Policy-free changed or explicitly confirmed facts from the exact Decision."""
-
-    model_config = ConfigDict(extra="forbid")
-    result: dict[str, Any]
-    identity_mapping: dict[str, str] | None = None
-    retired_identities: dict[str, str] = Field(default_factory=dict)
-    confirmed_paths: list[str] = Field(default_factory=list)
-
-
-class ReviseEvidenceConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    expected_action: str = Field(min_length=1)
-    expected_target_model: str = Field(min_length=1)
-
-
-class ReviseEvidenceStepImpl(StepImpl):
-    """Retain a generic correction from one exact local native Decision gate."""
-
-    key = "revise_evidence"
-    label = "Retain corrected evidence"
-    category = "Activity"
-    deterministic = False
-    idempotent = True
-    effect = StepEffect.WRITE
-    execution_mode = StepExecutionMode.DATABASE_COMMAND
-    effect_description = "Consumes one exact Decision resolution and clones immutable evidence once."
-    input_model = ReviseEvidenceInput
-    output_model = ProcessEvidenceOutput
-    config_model = ReviseEvidenceConfig
-    outcomes = (StepOutcome("revised", "Revised"),)
-
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        del now
-        value = self.validate_input(step_run.input)
-        config = ReviseEvidenceConfig.model_validate(step_run.step.config)
-        if len(value.review.resolutions) != 1:
-            raise ValidationError({"review": "Generic evidence correction requires one resolution."})
-        correction = GenericEvidenceCorrection.model_validate_json(
-            json.dumps(value.review.resolutions[0].resolution, allow_nan=False),
-        )
-        actor = step_run.run.admission_actor()
-        if actor is None:
-            raise PermissionDenied("Evidence correction requires the workflow actor.")
-        with actor_context(actor):
-            extraction = apps.get_model("workflows_extraction", "Extraction").objects.get(
-                sqid=value.base_extraction_id,
-            )
-            if extraction.revision != value.base_revision:
-                raise ValidationError({"base_revision": "The retained extraction revision differs."})
-            decision = apps.get_model("workflows", "Decision").objects.get(
-                sqid=value.review.resolutions[0].decision_id,
-            )
-            corrected = revise(
-                extraction,
-                decision=decision,
-                result=correction.result,
-                operation_step_run=step_run,
-                resolution_path=("review", "resolutions", 0),
-                input_source="attempt_input",
-                expected_action=config.expected_action,
-                expected_target=(config.expected_target_model, value.expected_target_id),
-                identity_mapping=correction.identity_mapping,
-                retired_identities=correction.retired_identities,
-                confirmed_paths=correction.confirmed_paths,
-            )
-        return StepResult.done(
-            output=_inference_output(corrected), outcome="revised",
-            artifacts=(ArtifactSpec(corrected, "Corrected extraction evidence"),),
-        )
-
-
 def _restore_prepared(
-    value: dict[str, Any], options: dict[str, Any],
-) -> tuple[Any, PreparePagesOutput]:
+    value: dict[str, Any], options: dict[str, Any]) -> tuple[Any, PreparePagesOutput]:
     manifest = PreparePagesOutput.model_validate(value)
     sources = manifest.manifest.get("sources")
     if not isinstance(sources, list):
         raise ValidationError({"pages": "The prepared source manifest is invalid."})
     file_ids = [str(item["file"]) for item in sources if isinstance(item, dict) and "file" in item]
     part_ids = [str(item["message_part"]) for item in sources if isinstance(item, dict) and "message_part" in item]
-    input_refs = ExtractionInput(
+    input_refs = ExtractionSourceInput(
         files=file_ids, message_parts=part_ids, target_model=manifest.target_model,
         target_id=manifest.target_id,
     )
     files, parts, target = _resolve_sources(input_refs)
+    profile_field = apps.get_model("workflows_extraction", "Extraction").impl_field("profile")
     prepared = restore_prepared_pages(
         manifest.manifest, files=files, message_parts=parts,
         authorized_target=target, config=options,
+        profile=profile_field.resolve_class(manifest.profile)(),
     )
     if [
-        {"source_position": page.source_position, "page_position": page.page_position,
-         "image_file_id": str(page.recognition_file.sqid),
-         "image_digest": str(page.recognition_file.content_hash),
-         "width": page.recognition_image.width, "height": page.recognition_image.height,
-         "dpi": page.recognition_image.dpi, "model_id": manifest.recognition_model_id,
-         "config_digest": manifest.recognition_config_digest}
+        RecognitionPageInput.model_validate(
+            page.recognition_input(
+                model_id=manifest.recognition_model_id,
+                config_digest=manifest.recognition_config_digest,
+            )
+        )
         for page in prepared.recognition_pages
     ] != manifest.recognition_pages:
         raise ValidationError({"pages": "The recognition subset changed after preparation."})
     return prepared, manifest
 
 
-def _json_digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
-    ).encode()).hexdigest()
-
-
-def _resolve_sources(value: ExtractionInput) -> tuple[list[Any], list[Any], Any]:
+def _resolve_sources(value: ExtractionSourceInput) -> tuple[list[Any], list[Any], Any]:
     file_model = apps.get_model("storage", "File")
     part_model = apps.get_model("messaging", "Part")
-    requested_files = list(file_model.objects.filter(sqid__in=value.files))
+    requested_files = list(
+        file_model.objects.select_related("mime_type", "drive").filter(sqid__in=value.files)
+    )
     files_by_id = {str(file.sqid): file for file in requested_files}
     if any(file_id not in files_by_id for file_id in value.files):
         raise ValidationError({"files": "One or more source Files are unavailable."})

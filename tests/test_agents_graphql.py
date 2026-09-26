@@ -14,14 +14,11 @@ from __future__ import annotations
 import base64
 import importlib
 import json
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.core.management import call_command
-from django.db import connection
 from django.test import RequestFactory, override_settings
 from rebac import system_context
 
@@ -37,23 +34,19 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.operator.daemon import OperatorDaemonError, OperatorDaemonNotFound
 from tests.conftest import (
-    IAM_CONNECTION_TEST_MODELS,
-    INTEGRATE_TEST_MODELS,
     Credential,
     ExternalAccount,
     Integration,
     OAuthClient,
     SchemaAddon,
     Vendor,
-    _clear_model_tables,
     execute_schema,
     make_integration,
 )
-from tests.conftest import _create_missing_tables as _create_tables
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
 from tests.test_agents import InferenceModel, InferenceProvider, Skill, _provider
-from tests.test_integrate_vcs import REPOS, VCS_TEST_MODELS, Repository, Source, Template, _vcs_bridge
+from tests.test_integrate_vcs import REPOS, Repository, Source, Template, _vcs_bridge
 
 User = get_user_model()
 
@@ -124,18 +117,6 @@ class AgentTurn(AbstractAgentTurn):
         rebac_resource_type = "agents/turn"
 
 
-# Order: leaf models before `Agent`, whose M2M through-tables reference them.
-AGENTS_GRAPHQL_MODELS = (
-    Skill,
-    MCPServer,
-    MCPTool,
-    InferenceProvider,
-    InferenceModel,
-    Agent,
-    AgentSession,
-    AgentTurn,
-)
-
 # Imported only now that every agents concrete is registered.
 agents_provisioning = importlib.import_module("angee.agents.provisioning")
 agents_schema = importlib.import_module("angee.agents.schema")
@@ -143,28 +124,7 @@ iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
 
 
-@pytest.fixture()
-def agents_console_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the iam/integrate/VCS/agents console tables and sync REBAC."""
-
-    del transactional_db
-    created = _create_tables(
-        IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + VCS_TEST_MODELS + AGENTS_GRAPHQL_MODELS
-    )
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(
-            IAM_CONNECTION_TEST_MODELS + INTEGRATE_TEST_MODELS + VCS_TEST_MODELS + AGENTS_GRAPHQL_MODELS
-        )
-        if created:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created):
-                    schema_editor.delete_model(model)
-
-
-def test_agent_hasura_insert_accepts_enum_member_names(agents_console_tables: None) -> None:
+def test_agent_hasura_insert_accepts_enum_member_names(composed_tables: None) -> None:
     """A console read→write round-trip posts choices columns by member NAME.
 
     Reads project ``TextChoices`` enums serialized by name (``"PYDANTIC"``)
@@ -188,6 +148,7 @@ def test_agent_hasura_insert_accepts_enum_member_names(agents_console_tables: No
               ) {
                 id
                 runtime_class
+                expects_service
                 lifecycle
               }
             }
@@ -197,6 +158,7 @@ def test_agent_hasura_insert_accepts_enum_member_names(agents_console_tables: No
         )
     )["insert_agents_one"]
     assert created["runtime_class"] == "PYDANTIC"
+    assert created["expects_service"] is False
     assert created["lifecycle"] == "DRAFT"
     with system_context(reason="test.agents.enum_wire.verify"):
         row = Agent.objects.get(name="InProcess")
@@ -204,7 +166,30 @@ def test_agent_hasura_insert_accepts_enum_member_names(agents_console_tables: No
         assert row.lifecycle == "draft"
 
 
-def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> None:
+@pytest.mark.parametrize(
+    ("runtime_class", "runtime_status", "service", "expected", "expects_service"),
+    [
+        ("claude_code", "running", "", False, True),
+        ("claude_code", "running", "agent-service", True, True),
+        ("opencode", "running", "", False, True),
+        ("opencode", "running", "agent-service", True, True),
+        ("pydantic", "running", "", True, False),
+        ("pydantic", "stopped", "", False, False),
+        ("claude_code", "stopped", "agent-service", False, True),
+        ("none", "running", "", False, False),
+    ],
+)
+def test_agent_chat_readiness_requires_its_runtime_transport(
+    runtime_class: str, runtime_status: str, service: str, expected: bool, expects_service: bool
+) -> None:
+    """Only in-process runtimes may chat without a rendered operator service."""
+
+    agent = Agent(runtime_class=runtime_class, runtime_status=runtime_status, service=service)
+    assert agent.can_chat is expected
+    assert agent.expects_service is expects_service
+
+
+def test_agent_hasura_insert_update_and_delete(composed_tables: None) -> None:
     """Agent row writes use the generated Hasura mutation roots."""
 
     admin = _platform_admin("agt-hasura-admin")
@@ -220,6 +205,8 @@ def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> N
                 name
                 lifecycle
                 is_template
+                can_chat
+                expects_service
                 can_provision
                 can_deprovision
                 can_delete
@@ -236,6 +223,8 @@ def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> N
         "name": "Composer",
         "lifecycle": "DRAFT",
         "is_template": False,
+        "can_chat": False,
+        "expects_service": False,
         "can_provision": True,
         "can_deprovision": False,
         "can_delete": True,
@@ -285,7 +274,7 @@ def test_agent_hasura_insert_update_and_delete(agents_console_tables: None) -> N
         assert not Agent.objects.filter(sqid=created["id"]).exists()
 
 
-def test_agent_hasura_delete_blocks_rendered_agents(agents_console_tables: None) -> None:
+def test_agent_hasura_delete_blocks_rendered_agents(composed_tables: None) -> None:
     """Agent delete policy is enforced by the backend write owner, not only the UI."""
 
     admin = _platform_admin("agt-delete-block-admin")
@@ -316,7 +305,7 @@ def test_agent_hasura_delete_blocks_rendered_agents(agents_console_tables: None)
         assert Agent.objects.filter(pk=agent.pk).exists()
 
 
-def test_agent_hasura_update_sets_many_to_many_skills(agents_console_tables: None) -> None:
+def test_agent_hasura_update_sets_many_to_many_skills(composed_tables: None) -> None:
     """Generated Hasura updates replace agent skill membership through relation arrays."""
 
     admin = _platform_admin("agt-m2m-admin")
@@ -363,7 +352,7 @@ def test_agent_hasura_update_sets_many_to_many_skills(agents_console_tables: Non
         assert agent.skills.count() == 0
 
 
-def test_agent_update_is_platform_admin_gated(agents_console_tables: None) -> None:
+def test_agent_update_is_platform_admin_gated(composed_tables: None) -> None:
     """Updating an agent through the console is platform-admin gated."""
 
     admin = _platform_admin("agt-crud-admin")
@@ -382,7 +371,7 @@ def test_agent_update_is_platform_admin_gated(agents_console_tables: None) -> No
     assert renamed == {"name": "Renamed"}
 
 
-def test_refresh_provider_models_is_admin_gated(agents_console_tables: None) -> None:
+def test_refresh_provider_models_is_admin_gated(composed_tables: None) -> None:
     """The `refreshProviderModels` action is platform-admin gated."""
 
     admin = _platform_admin("agt-refresh-admin")
@@ -396,7 +385,7 @@ def test_refresh_provider_models_is_admin_gated(agents_console_tables: None) -> 
     assert result["ok"] is True
 
 
-def test_inference_models_query_accepts_provider_sqid_filter(agents_console_tables: None) -> None:
+def test_inference_models_query_accepts_provider_sqid_filter(composed_tables: None) -> None:
     """The model catalogue list supports native provider relation filters."""
 
     admin = _platform_admin("agt-model-filter-admin")
@@ -428,7 +417,7 @@ def test_inference_models_query_accepts_provider_sqid_filter(agents_console_tabl
 
 
 def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
-    agents_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """The model catalogue exposes grouped buckets for list/board views."""
 
@@ -493,7 +482,7 @@ def test_inference_model_groups_aggregate_runs_for_provider_and_capability(
     }
 
 
-def test_create_inference_provider_creates_child_row(agents_console_tables: None) -> None:
+def test_create_inference_provider_creates_child_row(composed_tables: None) -> None:
     """InferenceProvider create writes the provider child row directly."""
 
     admin = _platform_admin("agt-provider-create-admin")
@@ -545,7 +534,7 @@ def test_create_inference_provider_creates_child_row(agents_console_tables: None
         assert provider.backend_class == "manual"
 
 
-def test_update_inference_provider_merges_config_and_removes_null_keys(agents_console_tables: None) -> None:
+def test_update_inference_provider_merges_config_and_removes_null_keys(composed_tables: None) -> None:
     """Untyped provider patches preserve unsent keys and delete explicit null values."""
 
     provider = _provider(
@@ -572,7 +561,7 @@ def test_update_inference_provider_merges_config_and_removes_null_keys(agents_co
         assert provider.config == expected
 
 
-def test_update_inference_provider_backend_is_create_only(agents_console_tables: None) -> None:
+def test_update_inference_provider_backend_is_create_only(composed_tables: None) -> None:
     """A saved provider cannot switch implementation or absorb another backend's defaults."""
 
     admin = _platform_admin("agt-provider-update-admin")
@@ -626,10 +615,10 @@ def test_update_inference_provider_backend_is_create_only(agents_console_tables:
     assert provider.account_id == original_account_id
 
 
-def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_console_tables: None) -> None:
+def test_connect_inference_provider_uses_provider_backend_oauth_client(composed_tables: None) -> None:
     """Provider connect resolves OAuth from provider.backend."""
 
-    del agents_console_tables
+    del composed_tables
     provider = _provider("agt-provider-connect", backend_class="anthropic", name="Anthropic")
     provider_id = _public_id(provider.sqid)
     with system_context(reason="test.agents.provider_connect.seed"):
@@ -671,11 +660,11 @@ def test_connect_inference_provider_uses_provider_backend_oauth_client(agents_co
 
 
 def test_connect_inference_provider_uses_shared_oauth_client_error_code(
-    agents_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """Provider connect reports the shared OAuth-client lookup error code."""
 
-    del agents_console_tables
+    del composed_tables
     provider = _provider("agt-provider-missing-oauth", backend_class="anthropic", name="Anthropic")
     mutation = """
         mutation ConnectProvider($id: ID!) {
@@ -698,7 +687,7 @@ def test_connect_inference_provider_uses_shared_oauth_client_error_code(
     }
 
 
-def test_create_mcp_server_keeps_defaults_for_omitted_optionals(agents_console_tables: None) -> None:
+def test_create_mcp_server_keeps_defaults_for_omitted_optionals(composed_tables: None) -> None:
     """A create omitting optional non-null fields leaves them at the model default.
 
     Locks the `strawberry.UNSET` input contract: an omitted `config`/`placement` must
@@ -717,7 +706,7 @@ def test_create_mcp_server_keeps_defaults_for_omitted_optionals(agents_console_t
     assert created == {"name": "Local MCP", "placement": "EXTERNAL", "config": {}}
 
 
-def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_tables: None, monkeypatch: Any) -> None:
+def test_provision_agent_renders_via_daemon_and_is_admin_gated(composed_tables: None, monkeypatch: Any) -> None:
     """`provisionAgent` syncs secrets, drives the daemon render, and records names.
 
     The daemon is mocked. Asserts the credential secret is synced, the workspace and
@@ -843,7 +832,7 @@ def test_provision_agent_renders_via_daemon_and_is_admin_gated(agents_console_ta
     assert ("destroy", "ws-bot") in calls
 
 
-def test_mark_provisioning_can_reenter_provisioning(agents_console_tables: None) -> None:
+def test_mark_provisioning_can_reenter_provisioning(composed_tables: None) -> None:
     """Crash recovery can re-enter the provisioning target without a new graph edge."""
 
     admin = _platform_admin("agt-reenter-admin")
@@ -865,7 +854,7 @@ def test_mark_provisioning_can_reenter_provisioning(agents_console_tables: None)
     assert agent.last_error == ""
 
 
-def test_provision_agent_reenters_existing_provisioning_row(agents_console_tables: None, monkeypatch: Any) -> None:
+def test_provision_agent_reenters_existing_provisioning_row(composed_tables: None, monkeypatch: Any) -> None:
     """A repeated provision request for a stuck PROVISIONING row resumes the render flow."""
 
     admin = _platform_admin("agt-double-provision-admin")
@@ -921,7 +910,7 @@ def test_provision_agent_reenters_existing_provisioning_row(agents_console_table
 
 
 def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(
-    agents_console_tables: None, monkeypatch: Any
+    composed_tables: None, monkeypatch: Any
 ) -> None:
     """A teardown retry for a stuck PROVISIONING row with no daemon names clears locally."""
 
@@ -966,7 +955,7 @@ def test_deprovision_agent_from_empty_provisioning_row_is_idempotent(
 
 
 def test_provision_agent_reports_racing_deprovision_without_clobbering_state(
-    agents_console_tables: None, monkeypatch: Any
+    composed_tables: None, monkeypatch: Any
 ) -> None:
     """If teardown advances the row before final record, provision reports failure and leaves it."""
 
@@ -999,7 +988,7 @@ def test_provision_agent_reports_racing_deprovision_without_clobbering_state(
 
 
 def test_provision_agent_failure_tears_down_service_then_workspace_and_records_error(
-    agents_console_tables: None, monkeypatch: Any
+    composed_tables: None, monkeypatch: Any
 ) -> None:
     """A service-start failure removes its persisted entry before the workspace."""
 
@@ -1081,7 +1070,7 @@ def test_provision_agent_failure_tears_down_service_then_workspace_and_records_e
 
 
 def test_deprovision_agent_treats_missing_operator_instances_as_gone(
-    agents_console_tables: None, monkeypatch: Any
+    composed_tables: None, monkeypatch: Any
 ) -> None:
     """A deprovision retry clears stale names when the daemon says they are already gone."""
 
@@ -1137,7 +1126,7 @@ def test_deprovision_agent_treats_missing_operator_instances_as_gone(
 
 
 def test_provision_agent_records_error_when_plan_resolution_fails(
-    agents_console_tables: None, monkeypatch: Any
+    composed_tables: None, monkeypatch: Any
 ) -> None:
     """A plan-resolution failure records ERROR — the agent never strands in PROVISIONING.
 
@@ -1175,9 +1164,7 @@ def test_provision_agent_records_error_when_plan_resolution_fails(
         assert "credential is unreadable" in agent.last_error
 
 
-def test_reprovision_agent_tolerates_already_destroyed_service(
-    agents_console_tables: None, monkeypatch: Any
-) -> None:
+def test_reprovision_agent_tolerates_already_destroyed_service(composed_tables: None, monkeypatch: Any) -> None:
     """A 404 from the old service's destroy means it is already gone — recreate anyway."""
 
     admin = _platform_admin("agt-reprov404-admin")
@@ -1229,7 +1216,7 @@ def test_reprovision_agent_tolerates_already_destroyed_service(
 
 
 def test_reprovision_agent_recreates_service_over_existing_workspace(
-    agents_console_tables: None, monkeypatch: Any
+    composed_tables: None, monkeypatch: Any
 ) -> None:
     """`reprovisionAgent` destroys the old service and recreates it over the kept workspace."""
 
@@ -1293,7 +1280,7 @@ def test_reprovision_agent_recreates_service_over_existing_workspace(
 
 
 def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
-    agents_console_tables: None, monkeypatch: Any
+    composed_tables: None, monkeypatch: Any
 ) -> None:
     """When the old service is destroyed but the recreate fails, the stale name is cleared.
 
@@ -1357,7 +1344,7 @@ def test_reprovision_agent_failure_clears_destroyed_service_but_keeps_workspace(
 
 
 def test_provision_agent_refuses_when_inference_credential_has_no_secret(
-    agents_console_tables: None, monkeypatch: Any
+    composed_tables: None, monkeypatch: Any
 ) -> None:
     """A model-backed agent whose credential yields no secret is refused before any render.
 
@@ -1404,7 +1391,7 @@ def test_provision_agent_refuses_when_inference_credential_has_no_secret(
         assert (agent.workspace, agent.service) == ("", "")
 
 
-def test_agent_inference_credential_override_wins_over_model_chain(agents_console_tables: None) -> None:
+def test_agent_inference_credential_override_wins_over_model_chain(composed_tables: None) -> None:
     """A per-agent ``inference_credential`` overrides the model's integration credential.
 
     Pointing the agent at a connected OAuth credential makes inference authenticate with that
@@ -1445,7 +1432,7 @@ def test_agent_inference_credential_override_wins_over_model_chain(agents_consol
 
 
 def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
-    agents_console_tables: None, monkeypatch: Any
+    composed_tables: None, monkeypatch: Any
 ) -> None:
     """`agentChatEndpoint` returns the routed url + per-actor route token + mcpServers.
 
@@ -1515,7 +1502,7 @@ def test_agent_chat_endpoint_mints_route_token_and_is_admin_gated(
     assert actor.startswith("auth/user:") and service == "svc-chat" and ttl == "2h"
 
 
-def test_agent_chat_endpoint_errors_when_agent_not_running(agents_console_tables: None) -> None:
+def test_agent_chat_endpoint_errors_when_agent_not_running(composed_tables: None) -> None:
     """`agentChatEndpoint` errors when the agent has no rendered `service`."""
 
     admin = _platform_admin("agt-chat-stopped-admin")
@@ -1532,7 +1519,7 @@ def test_agent_chat_endpoint_errors_when_agent_not_running(agents_console_tables
 
 
 def test_resolve_session_for_view_resolves_the_actors_running_agent(
-    agents_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """`resolveSessionForView` resolves the actor's running agent for the side chatter.
 
@@ -1587,7 +1574,7 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     assert viewer_session is None
 
 
-def test_provision_workspace_inputs_from_agent_fields(agents_console_tables: None) -> None:
+def test_provision_workspace_inputs_from_agent_fields(composed_tables: None) -> None:
     """The workspace inputs come from the agent's structured fields (not raw JSON)."""
 
     owner = User.objects.create_user(username="agt-wsi-owner", email="wsi@example.com")
@@ -1605,7 +1592,7 @@ def test_provision_workspace_inputs_from_agent_fields(agents_console_tables: Non
 
 
 def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
-    agents_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """`renderAgentPrompt` returns a ``<system_context>`` block for the open view.
 
@@ -1638,7 +1625,7 @@ def test_render_agent_prompt_builds_system_context_and_is_admin_gated(
     assert empty == ""
 
 
-def test_render_view_context_never_previews_encrypted_secret(agents_console_tables: None) -> None:
+def test_render_view_context_never_previews_encrypted_secret(composed_tables: None) -> None:
     """A view of a secret-bearing model previews the row but never its EncryptedField.
 
     The block is sent to a third-party LLM, so a column whose Python value decrypts to a
@@ -1664,7 +1651,7 @@ def test_render_view_context_never_previews_encrypted_secret(agents_console_tabl
 
 
 def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
-    agents_console_tables: None,
+    composed_tables: None,
 ) -> None:
     """A credentialed MCP server renders a ``${<env>}`` Authorization header.
 
@@ -1700,7 +1687,7 @@ def test_mcp_config_emits_secret_ref_auth_header_for_credentialed_server(
     assert secrets == {secret_name: "tok-notes"}  # synced server-side, never in the file
 
 
-def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(agents_console_tables: None) -> None:
+def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(composed_tables: None) -> None:
     """An internal server syncs the per-agent derived bearer, not the raw credential secret."""
 
     owner = User.objects.create_user(username="agt-mcpint-owner", email="mcpint@example.com")
@@ -1726,7 +1713,7 @@ def test_mcp_secrets_derive_per_agent_bearer_for_internal_server(agents_console_
 
 
 def test_mcp_config_resolves_builtin_server_from_settings(
-    agents_console_tables: None,
+    composed_tables: None,
     settings: Any,
 ) -> None:
     """The built-in Angee MCP server is selected by model config, not seeded URL."""
@@ -1752,7 +1739,7 @@ def test_mcp_config_resolves_builtin_server_from_settings(
     }
 
 
-def test_provision_service_inputs_credential_drives_auth_env(agents_console_tables: None) -> None:
+def test_provision_service_inputs_credential_drives_auth_env(composed_tables: None) -> None:
     """The provider backend maps credential kind to service auth env."""
 
     owner = User.objects.create_user(username="agt-svci-owner", email="svci@example.com")
@@ -1785,7 +1772,7 @@ def test_provision_service_inputs_credential_drives_auth_env(agents_console_tabl
     assert oauth_inputs["model"] == "claude-opus-4-8"
 
 
-def test_provision_service_inputs_allow_an_unauthenticated_backend(agents_console_tables: None) -> None:
+def test_provision_service_inputs_allow_an_unauthenticated_backend(composed_tables: None) -> None:
     """Only an in-process runtime is ready for a no-auth backend."""
 
     owner = User.objects.create_user(username="agt-svc-ollama-agent", email="ollama@example.com")
@@ -1803,7 +1790,7 @@ def test_provision_service_inputs_allow_an_unauthenticated_backend(agents_consol
         assert service_agent.inference_credential_ready() is False
 
 
-def test_provision_service_inputs_opencode_refuses_oauth_credential(agents_console_tables: None) -> None:
+def test_provision_service_inputs_opencode_refuses_oauth_credential(composed_tables: None) -> None:
     """OpenCode OAuth is off by default (no plugin in the image), so the pairing is refused."""
 
     oauth_provider = _provider("agt-oc-oauth", backend_class="anthropic", kind=CredentialKind.OAUTH, name="O")
@@ -1817,7 +1804,7 @@ def test_provision_service_inputs_opencode_refuses_oauth_credential(agents_conso
 
 
 @override_settings(ANGEE_OPENCODE_OAUTH_ENABLED=True)
-def test_provision_service_inputs_opencode_oauth_when_enabled(agents_console_tables: None) -> None:
+def test_provision_service_inputs_opencode_oauth_when_enabled(composed_tables: None) -> None:
     """With the opt-in on, OpenCode OAuth syncs a base64 auth.json and the decode env var."""
 
     oauth_provider = _provider(
@@ -1843,7 +1830,7 @@ def test_provision_service_inputs_opencode_oauth_when_enabled(agents_console_tab
 
 
 @override_settings(ANGEE_OPENCODE_OAUTH_ENABLED=True)
-def test_provision_service_inputs_opencode_oauth_requires_refresh_token(agents_console_tables: None) -> None:
+def test_provision_service_inputs_opencode_oauth_requires_refresh_token(composed_tables: None) -> None:
     """An OAuth credential with no refresh token can't be refreshed in-container, so it's refused."""
 
     oauth_provider = _provider(
@@ -1862,7 +1849,7 @@ def test_provision_service_inputs_opencode_oauth_requires_refresh_token(agents_c
             agent.provision_service_inputs()
 
 
-def test_provision_service_inputs_workspace_only_runtime_skips_service_auth(agents_console_tables: None) -> None:
+def test_provision_service_inputs_workspace_only_runtime_skips_service_auth(composed_tables: None) -> None:
     """A model-backed workspace-only (``none``) agent is ready and renders no service auth.
 
     The readiness gate allows a workspace-only runtime regardless of credential kind, so the
@@ -1884,7 +1871,7 @@ def test_provision_service_inputs_workspace_only_runtime_skips_service_auth(agen
     assert "auth_env" not in inputs
 
 
-def test_claude_code_service_inputs_use_provider_model_name(agents_console_tables: None) -> None:
+def test_claude_code_service_inputs_use_provider_model_name(composed_tables: None) -> None:
     """Claude Code talks to Anthropic directly, so broker aliases render as provider ids."""
 
     owner = User.objects.create_user(username="agt-cc-model-agent-owner", email="cc-model@example.com")
@@ -1906,7 +1893,7 @@ def test_claude_code_service_inputs_use_provider_model_name(agents_console_table
         assert agent.provision_service_inputs()["model"] == "claude-opus-4-8"
 
 
-def test_opencode_service_inputs_keep_selected_broker_model(agents_console_tables: None) -> None:
+def test_opencode_service_inputs_keep_selected_broker_model(composed_tables: None) -> None:
     """OpenCode expects the provider/model handle, so the selected catalogue row renders as-is."""
 
     owner = User.objects.create_user(username="agt-oc-model-agent-owner", email="oc-model@example.com")
@@ -1984,8 +1971,6 @@ def _request(user: Any) -> Any:
     request = RequestFactory().post("/graphql/console/")
     request.user = user
     return request
-
-
 
 
 def _public_id(sqid: str) -> str:

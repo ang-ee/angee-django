@@ -23,17 +23,17 @@ import type { ActionFieldName } from "@angee/gql/console/actions";
 import { usePrincipalAccessRecordTab } from "@angee/iam";
 
 import { useAgentsT } from "../i18n";
-import { agentRuntime, booleanField, stringField } from "./agent-record";
+import { booleanField, stringField } from "./agent-record";
 import { AgentChat } from "./AgentChat";
 import { AgentProvisioning } from "./AgentProvisioning";
 import { type AgentChatView } from "../documents";
 
 const MODEL = "agents.Agent";
 
-// Just what the chat gate needs: a running service-backed or in-process agent gets the chat panel.
+// The selected runtime's addon contributes the chat transport for a running agent.
 // (`sqid` is not a GraphQL field — the agent's public id is carried by `id` for
 // the view envelope; see below.)
-const CHAT_FIELDS = ["id", "runtime_status", "runtime_class", "service"] as const;
+const CHAT_FIELDS = ["id", "can_chat", "runtime_class"] as const;
 
 function canProvisionAgent(record: Row | null): boolean {
   return booleanField(record, "can_provision");
@@ -48,8 +48,7 @@ function canDeleteAgent(record: Row): boolean {
 }
 
 /**
- * The agent detail's Chat tab. A running in-process runtime uses the persisted
- * session transport; a running container runtime still requires its routed service.
+ * The agent detail's Chat tab. AgentChat resolves the composed runtime surface.
  */
 function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
   const t = useAgentsT();
@@ -60,7 +59,7 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
     [],
   );
   const run = useOne<RowRecord, HttpError>({
-    resource: resource ? refineResourceName(resource) : "__angee_disabled__",
+    resource: refineResourceName(resource),
     id: agentId,
     dataProviderName: resource?.schemaName,
     meta: { fields },
@@ -70,10 +69,7 @@ function AgentChatPanel({ agentId }: { agentId: string }): React.ReactElement {
   });
   const record = (run.result as Row | undefined) ?? null;
   const runtimeClass = stringField(record, "runtime_class");
-  const running =
-    agentRuntime(record) === "RUNNING" &&
-    (runtimeClass === "PYDANTIC" || stringField(record, "service") !== "");
-  if (!running) {
+  if (!booleanField(record, "can_chat")) {
     return (
       <Card>
         <CardContent>

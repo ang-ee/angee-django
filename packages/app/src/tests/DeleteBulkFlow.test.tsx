@@ -59,8 +59,8 @@ import { ListView, type ListColumn } from "@angee/ui/views/ListView";
 
 const sdkMocks = vi.hoisted(() => ({
   rows: [
-    { id: "sale-1", title: "First sale" },
-    { id: "sale-2", title: "Second sale" },
+    { id: "record-1", title: "First record" },
+    { id: "record-2", title: "Second record" },
   ] satisfies Row[],
   mutate: vi.fn(),
 }));
@@ -82,7 +82,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
     }),
     useCustomMutation: () => ({
       mutateAsync: async ({ values }: { values?: { id?: string; confirm?: boolean } }) => ({
-        data: { deleteSalePreview: await sdkMocks.mutate(values ?? {}) },
+        data: { deleteRecordPreview: await sdkMocks.mutate(values ?? {}) },
       }),
       mutation: { isPending: false, error: null, reset: vi.fn() },
     }),
@@ -113,11 +113,11 @@ describe("bulk delete flow", () => {
   });
 
   test("SelectionBar shows Delete when rows are selected", async () => {
-    sdkMocks.mutate.mockResolvedValue(previewFor("sale-1", "First sale"));
+    sdkMocks.mutate.mockResolvedValue(previewFor("record-1", "First record"));
 
     render(
       <TestUrlState>
-        <ListView resource="sales.Sale" columns={columns} />
+        <ListView resource="example.Record" columns={columns} />
       </TestUrlState>,
     );
 
@@ -133,7 +133,7 @@ describe("bulk delete flow", () => {
     render(
       <TestUrlState>
         <NoDeleteMetadata>
-          <ListView resource="sales.Sale" columns={columns} />
+          <ListView resource="example.Record" columns={columns} />
         </NoDeleteMetadata>
       </TestUrlState>,
     );
@@ -146,11 +146,11 @@ describe("bulk delete flow", () => {
   });
 
   test("clicking Delete runs dry-run preview and opens the tree dialog", async () => {
-    sdkMocks.mutate.mockResolvedValue(previewFor("sale-1", "First sale"));
+    sdkMocks.mutate.mockResolvedValue(previewFor("record-1", "First record"));
 
     render(
       <TestUrlState>
-        <ListView resource="sales.Sale" columns={columns} />
+        <ListView resource="example.Record" columns={columns} />
       </TestUrlState>,
     );
 
@@ -158,24 +158,24 @@ describe("bulk delete flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     await waitFor(() =>
-      expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "sale-1", confirm: false }),
+      expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "record-1", confirm: false }),
     );
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Delete 1 records?")).toBeTruthy();
     expect(
       within(dialog).getByRole("button", { name: "Delete" }).querySelector("svg"),
     ).toBeTruthy();
-    expect(within(dialog).getByText("First sale")).toBeTruthy();
+    expect(within(dialog).getByText("First record")).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "2 line items" })).toBeTruthy();
     expect(within(dialog).getByText("Line 1")).toBeTruthy();
   });
 
   test("confirming deletes and clears selection", async () => {
-    sdkMocks.mutate.mockResolvedValue(previewFor("sale-1", "First sale"));
+    sdkMocks.mutate.mockResolvedValue(previewFor("record-1", "First record"));
 
     render(
       <TestUrlState>
-        <ListView resource="sales.Sale" columns={columns} />
+        <ListView resource="example.Record" columns={columns} />
       </TestUrlState>,
     );
 
@@ -186,7 +186,7 @@ describe("bulk delete flow", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     await waitFor(() =>
-      expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "sale-1", confirm: true }),
+      expect(sdkMocks.mutate).toHaveBeenCalledWith({ id: "record-1", confirm: true }),
     );
     await waitFor(() => expect(screen.queryByText("1 selected")).toBeNull());
   });
@@ -197,8 +197,8 @@ describe("bulk delete flow", () => {
         <DeletePreviewTree
           nodes={[
             extractDeletePreview(
-              { sale: previewFor("sale-1", "First sale") },
-              "sale",
+              { record: previewFor("record-1", "First record") },
+              "record",
             )!.root,
           ]}
         />
@@ -224,13 +224,13 @@ function previewFor(id: string, objectLabel: string) {
     total_deleted_count: 3,
     has_blockers: false,
     deleted: [
-      { label: "sales", count: 1 },
+      { label: "records", count: 1 },
       { label: "line items", count: 2 },
     ],
     updated: [],
     blocked: [],
     root: {
-      label: "sale",
+      label: "record",
       object_label: objectLabel,
       object_id: id,
       children: [
@@ -310,8 +310,8 @@ function TestLayout({ children }: { children: ReactNode }): ReactElement {
   return (
     <AppRuntimeProvider runtime={{ icons: baseIcons }}>
       <QueryClientProvider client={queryClient}>
-        <OperationDocumentsProvider documents={SALE_OPERATION_DOCUMENTS}>
-          <ModelMetadataProvider metadata={SALE_METADATA}>
+        <OperationDocumentsProvider documents={RECORD_OPERATION_DOCUMENTS}>
+          <ModelMetadataProvider metadata={RECORD_METADATA}>
             <ToastProvider>{children}</ToastProvider>
           </ModelMetadataProvider>
         </OperationDocumentsProvider>
@@ -325,7 +325,7 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
     <ModelMetadataProvider
       metadata={withTestResourceInventory({
         types: {
-          SaleType: {
+          RecordType: {
             fields: {
               title: { name: "title", kind: "scalar", scalar: "String" },
             },
@@ -334,20 +334,20 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
                       "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
 
               schemaName: "console",
-              modelLabel: "sales.Sale",
-              appLabel: "sales",
-              modelName: "Sale",
+              modelLabel: "example.Record",
+              appLabel: "example",
+              modelName: "Record",
 
               roots: {
-                list: "sales",
-                detail: "sale",
-                aggregate: "saleAggregate",
+                list: "records",
+                detail: "record",
+                aggregate: "recordAggregate",
               },
               typeNames: {
-                node: "SaleType",
-                filter: "SaleFilter",
-                order: "SaleOrder",
-                aggregate: "SaleAggregate",
+                node: "RecordType",
+                filter: "RecordFilter",
+                order: "RecordOrder",
+                aggregate: "RecordAggregate",
               },
               capabilities: ["list", "aggregate"],
 
@@ -363,9 +363,9 @@ function NoDeleteMetadata({ children }: { children: ReactNode }): ReactElement {
   );
 }
 
-const SALE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
+const RECORD_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   types: {
-    SaleType: {
+    RecordType: {
       fields: {
         title: { name: "title", kind: "scalar", scalar: "String" },
       },
@@ -374,23 +374,23 @@ const SALE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
                 "id": testQueryField("id", { scalar: "ID", filter: null }) }, axes: {}, sort: { default: [] } }),
 
         schemaName: "console",
-        modelLabel: "sales.Sale",
-        appLabel: "sales",
-        modelName: "Sale",
+        modelLabel: "example.Record",
+        appLabel: "example",
+        modelName: "Record",
 
         roots: {
-          list: "sales",
-          detail: "sale",
-          aggregate: "saleAggregate",
-          delete: "deleteSale",
-          deletePreview: "deleteSalePreview",
+          list: "records",
+          detail: "record",
+          aggregate: "recordAggregate",
+          delete: "deleteRecord",
+          deletePreview: "deleteRecordPreview",
         },
         typeNames: {
-          node: "SaleType",
-          filter: "SaleFilter",
-          order: "SaleOrder",
-          aggregate: "SaleAggregate",
-          deletePayload: "SaleDeletePreview",
+          node: "RecordType",
+          filter: "RecordFilter",
+          order: "RecordOrder",
+          aggregate: "RecordAggregate",
+          deletePayload: "RecordDeletePreview",
         },
         capabilities: ["list", "aggregate", "delete"],
 
@@ -401,10 +401,10 @@ const SALE_METADATA: SchemaFieldMetadata = withTestResourceInventory({
   },
 });
 
-const SALE_OPERATION_DOCUMENTS = {
+const RECORD_OPERATION_DOCUMENTS = {
   console: {
     deletePreviews: {
-      "sales.Sale": { kind: "Document", definitions: [] },
+      "example.Record": { kind: "Document", definitions: [] },
     },
   },
 };

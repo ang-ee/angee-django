@@ -30,20 +30,20 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
-import { ActionFormDialog } from "./ActionFormDialog";
+import { ActionFormDialog, serializeActionArgValues } from "./ActionFormDialog";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from "../page";
 
 // cmdk scrolls the active option into view; happy-dom has no layout engine.
 Element.prototype.scrollIntoView = vi.fn();
 
 const listRows = vi.hoisted(() => ({
-  journals: [
-    { id: "jnl-bank", name: "Bank Journal" },
-    { id: "jnl-cash", name: "Cash Journal" },
+  collections: [
+    { id: "col-primary", name: "Primary Collection" },
+    { id: "col-secondary", name: "Secondary Collection" },
   ] as Row[],
-  invoices: [
-    { id: "inv-1", number: "INV-1" },
-    { id: "inv-2", number: "INV-2" },
+  documents: [
+    { id: "doc-1", number: "DOC-1" },
+    { id: "doc-2", number: "DOC-2" },
   ] as Row[],
 }));
 
@@ -82,10 +82,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       listOptions.push(options);
       const enabled = options?.queryOptions?.enabled !== false;
       const rows =
-        options?.resource === "journals"
-          ? listRows.journals
-          : options?.resource === "invoices"
-            ? listRows.invoices
+        options?.resource === "collections"
+          ? listRows.collections
+          : options?.resource === "documents"
+            ? listRows.documents
             : [];
       return {
         result: enabled
@@ -114,29 +114,29 @@ function resourceMetadata(
 }
 
 const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
-  resourceMetadata("JournalType", "Journal", "journals", "name"),
+  resourceMetadata("CollectionType", "Collection", "collections", "name"),
   resourceMetadata(
-      "InvoiceType",
-      "Invoice",
-      "invoices",
+      "DocumentType",
+      "Document",
+      "documents",
       "number",
   ),
 ]);
 
-const registerPaymentArgs: readonly ActionArg[] = [
+const registerReviewArgs: readonly ActionArg[] = [
   {
-    name: "invoiceIds",
+    name: "documentIds",
     argKind: "relationList",
-    resource: "Invoice",
-    label: "Invoices",
+    resource: "Document",
+    label: "Documents",
     filters: [{ field: "status", operator: "eq", value: "submitted" }],
   },
   {
-    name: "journal",
+    name: "collection",
     argKind: "relation",
-    resource: "Journal",
-    label: "Journal",
-    filters: [{ field: "kind", operator: "eq", value: "bank" }],
+    resource: "Collection",
+    label: "Collection",
+    filters: [{ field: "kind", operator: "eq", value: "primary" }],
   },
   {
     name: "date",
@@ -147,20 +147,20 @@ const registerPaymentArgs: readonly ActionArg[] = [
   { name: "amount", widget: "text", label: "Amount", optional: true },
 ];
 
-function registerPaymentAction(
+function registerReviewAction(
   submit: ActionDescriptor["submit"],
 ): ActionDescriptor {
   return {
-    id: "register-payment",
-    label: "Register payment",
-    args: registerPaymentArgs,
+    id: "register-review",
+    label: "Register review",
+    args: registerReviewArgs,
     submit,
   };
 }
 
 const context: ActionFormContext = {
-  record: { id: "inv-1", amount_total: "1234.56", journal: { id: "jnl-cash", name: "Cash Journal" } },
-  selectedIds: ["inv-1", "inv-2"],
+  record: { id: "doc-1", amount_total: "1234.56", collection: { id: "col-secondary", name: "Secondary Collection" } },
+  selectedIds: ["doc-1", "doc-2"],
 };
 
 function Harness({ action, onSucceeded }: {
@@ -179,9 +179,9 @@ function Harness({ action, onSucceeded }: {
   );
 }
 
-/** Open the journal relation picker and select an option by its label. */
-async function pickJournal(label: string): Promise<void> {
-  fireEvent.click(screen.getByRole("button", { name: "Journal" }));
+/** Open the collection relation picker and select an option by its label. */
+async function pickCollection(label: string): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: "Collection" }));
   fireEvent.click(await screen.findByText(label));
 }
 
@@ -219,7 +219,71 @@ function renderDialog(
   );
 }
 
+describe("serializeActionArgValues", () => {
+  const args: readonly ActionArg[] = [
+    { name: "documentIds", argKind: "relationList", resource: "Document" },
+  ];
+
+  test("normalizes mixed relation values to ordered unique string ids without mutating the draft", () => {
+    const documentIds = Object.freeze([
+      "doc-2", { id: "doc-1", number: "DOC-1" }, 7, { id: 7 }, "doc-2", 0,
+      "", null, undefined, false, {}, { id: "" }, { id: false }, ["doc-3"],
+    ]);
+    const values = Object.freeze({ documentIds });
+
+    expect(serializeActionArgValues(args, values)).toEqual({
+      documentIds: ["doc-2", "doc-1", "7", "0"],
+    });
+  });
+
+  test.each([
+    { documentIds: undefined }, { documentIds: null }, { documentIds: "doc-1" },
+    { documentIds: 7 }, { documentIds: { id: "doc-1" } }, { documentIds: [] },
+  ])(
+    "submits an empty relation list for %j",
+    ({ documentIds }) => {
+      expect(serializeActionArgValues(args, { documentIds })).toEqual({ documentIds: [] });
+    },
+  );
+
+  test("preserves non-list arguments and undeclared values", () => {
+    const values = {
+      documentIds: ["doc-1", "doc-1"],
+      tags: ["same", "same", ""],
+      collection: { id: "col-primary" },
+      amount: "001.00",
+      extra: [1, 1],
+    };
+
+    expect(serializeActionArgValues([
+      ...args,
+      { name: "tags", argKind: "scalar", widget: "tagInput" },
+      { name: "collection", argKind: "relation", resource: "Collection" },
+      { name: "amount", widget: "text" },
+    ], values)).toEqual({ ...values, documentIds: ["doc-1"] });
+  });
+});
+
 describe("ActionFormDialog", () => {
+  test("passes normalized relation-list values to a custom submit", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Done." });
+    renderDialog({
+      id: "collect",
+      label: "Collect",
+      args: [{
+        name: "documentIds", argKind: "relationList", resource: "Document",
+        fromContext: () => ["doc-2", "doc-1", "doc-2"],
+      }],
+      submit,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(
+      { documentIds: ["doc-2", "doc-1"] }, context,
+    ));
+  });
+
   test("does not submit its parent record form through the dialog portal", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: false, message: "Fix the amount." });
     const parentSubmit = vi.fn();
@@ -244,12 +308,12 @@ describe("ActionFormDialog", () => {
     renderDialog({
       id: "collect", label: "Collect", submit,
       args: [{
-        name: "journal", argKind: "relation", resource: "Journal", label: "Journal",
-        defaultValue: "jnl-bank", fromContext: ({ record }) => record?.journal,
+        name: "collection", argKind: "relation", resource: "Collection", label: "Collection",
+        defaultValue: "col-primary", fromContext: ({ record }) => record?.collection,
       }],
     });
     fireEvent.click(screen.getByRole("button", { name: "Collect" }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith({ journal: "jnl-cash" }, context));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ collection: "col-secondary" }, context));
   });
 
   test("prefills scalar args from the invoking record and submits user edits", async () => {
@@ -308,15 +372,15 @@ describe("ActionFormDialog", () => {
   });
 
   test("prefills the relation list from context and renders every arg", async () => {
-    renderDialog(registerPaymentAction(vi.fn()));
+    renderDialog(registerReviewAction(vi.fn()));
 
     // The relation list is seeded from the invoking selection (labels from options).
-    expect(await screen.findByText("INV-1")).toBeTruthy();
-    expect(screen.getByText("INV-2")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Remove INV-1" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Remove INV-2" })).toBeTruthy();
+    expect(await screen.findByText("DOC-1")).toBeTruthy();
+    expect(screen.getByText("DOC-2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove DOC-1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove DOC-2" })).toBeTruthy();
     // The single relation composes the relation picker.
-    expect(screen.getByRole("button", { name: "Journal" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Collection" })).toBeTruthy();
     // The scalars render editable inputs.
     expect(screen.getByRole("textbox", { name: "Date" })).toBeTruthy();
     expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Date" }).value)
@@ -325,26 +389,26 @@ describe("ActionFormDialog", () => {
   });
 
   test("forwards a relation argument's declared filters to its option query", async () => {
-    renderDialog(registerPaymentAction(vi.fn()));
+    renderDialog(registerReviewAction(vi.fn()));
 
-    await pickJournal("Bank Journal");
+    await pickCollection("Primary Collection");
 
     expect(listOptions).toContainEqual(
       expect.objectContaining({
-        resource: "journals",
-        filters: [{ field: "kind", operator: "eq", value: "bank" }],
+        resource: "collections",
+        filters: [{ field: "kind", operator: "eq", value: "primary" }],
       }),
     );
   });
 
   test("forwards a relation-list argument's declared filters to its option query", async () => {
-    renderDialog(registerPaymentAction(vi.fn()));
+    renderDialog(registerReviewAction(vi.fn()));
 
-    await screen.findByText("INV-1");
+    await screen.findByText("DOC-1");
 
     expect(listOptions).toContainEqual(
       expect.objectContaining({
-        resource: "invoices",
+        resource: "documents",
         filters: [{ field: "status", operator: "eq", value: "submitted" }],
       }),
     );
@@ -356,66 +420,66 @@ describe("ActionFormDialog", () => {
       .mockResolvedValueOnce({
         ok: false,
         message: "Fix the amount.",
-        validationErrors: { amount: ["Amount exceeds the balance."] },
+        validationErrors: { amount: ["Amount exceeds the limit."] },
       })
-      .mockResolvedValueOnce({ ok: true, message: "Payment registered." });
-    renderDialog(registerPaymentAction(submit));
+      .mockResolvedValueOnce({ ok: true, message: "Review registered." });
+    renderDialog(registerReviewAction(submit));
 
-    await screen.findByText("INV-1");
-    await pickJournal("Cash Journal");
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
     fireEvent.change(screen.getByRole("textbox", { name: "Date" }), {
       target: { value: "2026-07-05" },
     });
     fireEvent.change(screen.getByRole("textbox", { name: "Amount" }), {
       target: { value: "500" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Register payment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
 
     // The relation pick + context selection reach the mutation as typed variables.
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
     expect(submit.mock.calls[0]?.[0]).toMatchObject({
-      invoiceIds: ["inv-1", "inv-2"],
-      journal: "jnl-cash",
+      documentIds: ["doc-1", "doc-2"],
+      collection: "col-secondary",
       date: "2026-07-05",
       amount: "500",
     });
 
     // The domain failure binds inline and the dialog stays open.
-    expect(await screen.findByText("Amount exceeds the balance.")).toBeTruthy();
+    expect(await screen.findByText("Amount exceeds the limit.")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Register payment" }),
+      screen.getByRole("button", { name: "Register review" }),
     ).toBeTruthy();
 
     // Editing the flagged field clears its bound error, and a second submit succeeds.
     fireEvent.change(screen.getByRole("textbox", { name: "Amount" }), {
       target: { value: "250" },
     });
-    expect(screen.queryByText("Amount exceeds the balance.")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Register payment" }));
+    expect(screen.queryByText("Amount exceeds the limit.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
     // Success toasts the message and closes the dialog.
-    expect(await screen.findByText("Payment registered.")).toBeTruthy();
+    expect(await screen.findByText("Review registered.")).toBeTruthy();
     await waitFor(() =>
       expect(
-        screen.queryByRole("button", { name: "Register payment" }),
+        screen.queryByRole("button", { name: "Register review" }),
       ).toBeNull(),
     );
   });
 
   test("an explicit relation-list edit wins over the context prefill", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Done." });
-    renderDialog(registerPaymentAction(submit));
+    renderDialog(registerReviewAction(submit));
 
     // Full forms keep explicit per-chip removal.
-    fireEvent.click(await screen.findByRole("button", { name: "Remove INV-1" }));
-    await pickJournal("Cash Journal");
+    fireEvent.click(await screen.findByRole("button", { name: "Remove DOC-1" }));
+    await pickCollection("Secondary Collection");
     fireEvent.change(screen.getByRole("textbox", { name: "Date" }), {
       target: { value: "2026-07-05" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Register payment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
 
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
-    expect(submit.mock.calls[0]?.[0]).toMatchObject({ invoiceIds: ["inv-2"] });
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({ documentIds: ["doc-2"] });
   });
 });

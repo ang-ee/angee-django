@@ -20,16 +20,21 @@ import type {
   WidgetMap,
 } from "./contracts";
 import { makeContext } from "./make-context";
+import { createAngeeI18nInstance } from "./i18n";
 import {
   createRouteHref,
   type RouteHref,
 } from "./route-href";
 import type { DashboardRegistry } from "../dashboard/headless";
 import type { ThemeContribution } from "../theme";
+import type { StatusToneMap } from "../widgets/status-tones";
 
 export const DEFAULT_LOGIN_PATH = "/login";
 export const HOME_PATH_PREFERENCE_KEY = "homePath";
 export const ROUTE_SHORTCUTS_PREFERENCE_KEY = "chrome.routeShortcuts";
+
+const FALLBACK_I18N = createAngeeI18nInstance({});
+const PLURAL_SUFFIXES = ["zero", "one", "two", "few", "many", "other"] as const;
 
 export interface RuntimeRouteShortcut {
   id: string;
@@ -85,6 +90,7 @@ export type ResourceRecordHrefLookup = (
  */
 export interface AppRuntime {
   widgets: WidgetMap;
+  statusTones: StatusToneMap;
   i18n: RuntimeI18n | null;
   auth: RuntimeAuthState;
   logoutAction: RuntimeLogoutAction;
@@ -113,7 +119,7 @@ export interface AppRuntime {
 export interface RuntimeI18n {
   language?: string;
   getFixedT: (
-    lng: string | readonly string[] | null | undefined,
+    lng: string | readonly string[] | null,
     ns: string,
   ) => (key: string, options?: RuntimeTOptions) => unknown;
 }
@@ -163,6 +169,7 @@ const EMPTY_USER_PREFERENCES: RuntimeUserPreferences = {};
 
 const EMPTY_RUNTIME: AppRuntime = {
   widgets: {},
+  statusTones: {},
   i18n: null,
   auth: ANONYMOUS_RUNTIME_AUTH,
   logoutAction: {
@@ -394,9 +401,10 @@ export function useDrawers(
 export function useT(namespace: string): (key: string, vars?: MessageVars) => string {
   const { i18n } = useAppRuntime();
   return useMemo(() => {
-    const fixedT = i18n?.getFixedT(null, namespace);
+    const fixedT: ReturnType<RuntimeI18n["getFixedT"]> = i18n
+      ? i18n.getFixedT(null, namespace)
+      : FALLBACK_I18N.getFixedT(null, namespace);
     return (key: string, vars: MessageVars = {}) => {
-      if (!fixedT) return key;
       const result = fixedT(key, vars);
       return typeof result === "string" ? result : String(result);
     };
@@ -405,8 +413,11 @@ export function useT(namespace: string): (key: string, vars?: MessageVars) => st
 
 /**
  * A namespaced translator with a bundled-English `fallback`: resolves a key
- * against the host runtime's merged i18n for `namespace`, then falls back to
- * `fallback`, then the key. The one owner of the translate-with-fallback pattern
+ * against the host runtime's merged i18n for `namespace`, with native plural
+ * defaults declared in `fallback`, then the key. For counted keys, `_other`
+ * supplies the default when the bundle omits the locale's selected category;
+ * zero gets a special default only when `_zero` is declared.
+ * The translate-with-fallback owner
  * — the UI namespace hook and each addon's `useXT` build on it — so a
  * component renders its English even before its runtime bundle is mounted
  * (unit tests, storybook, provider-less embeds). Stable identity (memoized on
@@ -419,33 +430,16 @@ export function useNamespaceT(
   const t = useT(namespace);
   return useCallback(
     (key: string, vars: MessageVars = {}) => {
-      const defaultValue = fallbackTemplate(key, fallback, vars);
-      const result = t(key, { ...vars, defaultValue });
-      return result === key ? interpolateFallback(defaultValue, vars) : result;
+      const defaultValue = (typeof vars.count === "number" ? fallback[`${key}_other`] : undefined)
+        ?? fallback[key] ?? key;
+      const pluralDefaults = Object.fromEntries(
+        PLURAL_SUFFIXES.flatMap((suffix) => {
+          const value = fallback[`${key}_${suffix}`];
+          return value === undefined ? [] : [[`defaultValue_${suffix}`, value]];
+        }),
+      );
+      return t(key, { ...vars, defaultValue, ...pluralDefaults });
     },
     [t, fallback],
   );
-}
-
-const ENGLISH_PLURAL_RULES = new Intl.PluralRules("en");
-
-function fallbackTemplate(
-  key: string,
-  fallback: MessageResources,
-  vars: MessageVars,
-): string {
-  const count = vars.count;
-  if (typeof count === "number" && Number.isFinite(count)) {
-    const category = ENGLISH_PLURAL_RULES.select(count);
-    const plural = fallback[`${key}_${category}`] ?? fallback[`${key}_other`];
-    if (plural !== undefined) return plural;
-  }
-  return fallback[key] ?? key;
-}
-
-function interpolateFallback(template: string, vars: MessageVars): string {
-  return template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name: string) => {
-    const value = vars[name];
-    return value === undefined ? match : String(value);
-  });
 }

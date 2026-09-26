@@ -1,4 +1,4 @@
-"""Disk-resolved REBAC declarations shared by runtime framework layers."""
+"""REBAC declarations and authorization boundaries shared by framework layers."""
 
 from __future__ import annotations
 

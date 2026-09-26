@@ -32,9 +32,9 @@ from tests.test_messaging import (
     ThreadAttachment,
     ThreadedTicket,
 )
-from tests.test_nexus import _grant, _schema, nexus_tables  # noqa: F401
+from tests.test_nexus import _grant, _schema
 
-pytestmark = pytest.mark.usefixtures("nexus_tables")
+pytestmark = pytest.mark.usefixtures("composed_tables")
 
 T0 = datetime(2026, 1, 10, 12, tzinfo=UTC)
 User = get_user_model()

@@ -29,13 +29,15 @@ RESOURCE_FIELD_WIDGETS = frozenset(
 def is_resource_field_widget(value: str) -> bool:
     """Accept built-ins or an addon-qualified registry key (namespace.addon.widget).
 
-    The addon contributes the same key to its web widget registry. Bare unknown
-    names remain errors so typos in the built-in vocabulary fail at schema build.
+    Namespace segments stay lowercase; the terminal widget name also accepts
+    camelCase, matching web registry names. The addon contributes that same key
+    to its web registry. Bare unknown names remain errors so built-in typos fail
+    at schema build.
     """
 
     return (
         value in RESOURCE_FIELD_WIDGETS
-        or re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){2,}", value) is not None
+        or re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+\.[a-z][a-zA-Z0-9_]*", value) is not None
     )
 
 
@@ -90,6 +92,9 @@ def model_field_scalar(field: models.Field[Any, Any]) -> str | None:
     declared = _declared_projection_fact(field, None, "angee_scalar_hint")
     if declared is not None:
         return declared
+    if isinstance(field, models.GeneratedField):
+        # A generated column projects as its declared output field.
+        return model_field_scalar(field.output_field)
     if isinstance(field, models.BooleanField):
         return "Boolean"
     if isinstance(field, models.IntegerField):
@@ -144,7 +149,7 @@ def money_currency_field(
 ) -> str | None:
     """Return the currency path a field declares for money metadata, if any."""
 
-    return _declared_projection_fact(field, metadata, "angee_currency_field")
+    return _declared_projection_fact(field, metadata, MONEY_CURRENCY_FIELD_METADATA_KEY)
 
 
 def resource_field_widget(
@@ -191,6 +196,10 @@ def resource_field_widget(
     if isinstance(field, models.JSONField):
         return "json"
     return None
+
+
+MONEY_CURRENCY_FIELD_METADATA_KEY = "angee_currency_field"
+"""Field-metadata key naming a money projection's currency path."""
 
 
 def _declared_projection_fact(

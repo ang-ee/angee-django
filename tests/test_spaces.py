@@ -9,8 +9,10 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, transaction
+from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.models import SchemaRelation, active_relationship_model
@@ -27,10 +29,10 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests import test_messaging_graphql
 from tests.conftest import (
     SchemaAddon,
-    _clear_model_tables,
-    _create_missing_tables,
     assert_private_hasura_insert_access,
     create_user,
+    execute_schema,
+    result_data,
 )
 from tests.spaces_models import Group, Membership
 from tests.test_messaging import Party, Person, Thread
@@ -40,12 +42,11 @@ from tests.test_messaging import Party, Person, Thread
 # cached ``related_model`` while the source models were inspected during setup.
 Membership._meta.get_field("party").__dict__.pop("related_model", None)
 spaces_schema = importlib.import_module("angee.spaces.schema")
-SPACES_TEST_MODELS = (Party, Person, Group, Membership, Thread)
 
 
 @pytest.fixture()
 def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
-    """Create concrete tables and load the composed spaces/messaging REBAC schema."""
+    """Load the composed spaces/messaging REBAC schema for native test tables."""
 
     del transactional_db
     app_configs = list(apps.get_app_configs())
@@ -59,16 +60,10 @@ def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
     original_schema = getattr(messaging, "rebac_schema", sentinel)
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)
 
-    created_models = _create_missing_tables(SPACES_TEST_MODELS)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
-        _clear_model_tables(SPACES_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
         if original_schema is sentinel:
             if hasattr(messaging, "rebac_schema"):
                 delattr(messaging, "rebac_schema")
@@ -140,6 +135,26 @@ def _schema() -> Any:
         for module in modules
     ]
     return GraphQLSchemas(addons).build("console")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("rebac_storage", ("denormalized", "registry"))
+def test_group_create_ignores_roster_backings_unused_by_create(spaces_tables: None, rebac_storage: str) -> None:
+    """The authenticated create arm needs none of the filtered reverse roster paths."""
+
+    del spaces_tables
+    actor = create_user("spaces-unused-roster")
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=rebac_storage):
+        call_command("rebac", "sync", verbosity=0)
+        result = execute_schema(
+            _schema(),
+            'mutation { insert_space_groups_one(object: {name: "No roster"}) { id } }',
+            user=actor,
+        )
+        public_id = result_data(result)["insert_space_groups_one"]["id"]
+    group = Group._base_manager.get(sqid=public_id)
+    assert group.created_by_id == actor.pk
+    assert not Membership._base_manager.filter(group=group).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -465,6 +480,30 @@ def test_public_visibility_reconciles_the_wildcard_reader(spaces_tables: None) -
         group.visibility = Group.GroupVisibility.PRIVATE
         group.save(update_fields=["visibility", "updated_at"])
         assert not _wildcard_reader_exists(group)
+
+
+def test_visibility_reads_persisted_facts_and_rejects_bulk_bypasses(spaces_tables: None) -> None:
+    """Dirty or deferred visibility cannot leak access outside its native save."""
+
+    with system_context(reason="spaces visibility persisted policy"):
+        group = Group.objects.create(name="Community", visibility=Group.GroupVisibility.PUBLIC)
+        group.visibility = Group.GroupVisibility.PRIVATE
+        group.description = "Only content changed"
+        group.save(update_fields=["description"])
+        assert _wildcard_reader_exists(group)
+
+        group = Group.objects.defer("visibility").get(pk=group.pk)
+        group.description = "Deferred policy"
+        group.save(update_fields=["description"])
+        assert _wildcard_reader_exists(group)
+        group.visibility = Group.GroupVisibility.PRIVATE
+        group.save(update_fields=["visibility"])
+        assert not _wildcard_reader_exists(group)
+
+        with pytest.raises(ValidationError, match="eligibility"):
+            Group.objects.filter(pk=group.pk).update(visibility=Group.GroupVisibility.PUBLIC)
+        with pytest.raises(ValidationError, match="native owner"):
+            Group.objects.bulk_create([Group(name="Bypass", slug="bypass")])
 
 
 def test_visibility_double_flip_is_idempotent(spaces_tables: None) -> None:

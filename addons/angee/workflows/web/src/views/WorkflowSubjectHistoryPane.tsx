@@ -2,7 +2,7 @@ import * as React from "react";
 import { useAssignmentSubjects } from "@angee/iam";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Alert, Badge, EmptyState, ErrorBanner, LoadingPanel, TextLink, errorMessage,
+  Alert, Badge, Collapsible, EmptyState, ErrorBanner, LoadingPanel, TextLink, errorMessage,
   recordTargetHref, routeSearchParam, useResourceRecordHrefLookup, useRouteHref, useRouteSearch,
 } from "@angee/ui";
 
@@ -18,11 +18,33 @@ import { WorkflowSubjectHistoryPaneDocument } from "../documents.console";
 import { useWorkflowsT } from "../i18n";
 import { WorkflowApprovals } from "./WorkflowApprovals";
 
-export function WorkflowSubjectHistoryPane({ subjectDeclaration, subjectId, actionContent }: {
+export interface WorkflowSubjectHistoryPaneProps {
   subjectDeclaration: string;
   subjectId: string;
   actionContent?: React.ReactNode;
-}): React.ReactElement {
+  presentation?: "plain" | "collapsible";
+}
+
+export function WorkflowSubjectHistoryPane({
+  presentation = "plain",
+  ...props
+}: WorkflowSubjectHistoryPaneProps): React.ReactElement {
+  const t = useWorkflowsT();
+  const content = <WorkflowSubjectHistoryContent {...props} />;
+  if (presentation === "plain") return content;
+  return <Collapsible variant="section" defaultOpen className="min-h-0 flex-none border-t border-border-subtle bg-sheet-1 px-3 py-1">
+    <Collapsible.Trigger><Collapsible.Icon />{t("inbox.title")}</Collapsible.Trigger>
+    <Collapsible.Panel className="max-h-[45dvh] min-h-0 overflow-auto pb-2">
+      <div className="h-80 max-h-[42dvh] min-h-48">{content}</div>
+    </Collapsible.Panel>
+  </Collapsible>;
+}
+
+function WorkflowSubjectHistoryContent({
+  subjectDeclaration,
+  subjectId,
+  actionContent,
+}: Omit<WorkflowSubjectHistoryPaneProps, "presentation">): React.ReactElement {
   const t = useWorkflowsT();
   const routeHref = useRouteHref();
   const recordHref = useResourceRecordHrefLookup();

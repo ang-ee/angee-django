@@ -66,12 +66,9 @@ def _refresh_handle_suggestions(lookback_hours: float | None) -> int:
             message__sender__party__isnull=False,
         )
         if lookback_hours is not None:
-            signature_parts = signature_parts.filter(
-                created_at__gte=timezone.now() - timedelta(hours=lookback_hours)
-            )
+            signature_parts = signature_parts.filter(created_at__gte=timezone.now() - timedelta(hours=lookback_hours))
         rows = (
-            signature_parts
-            .order_by(
+            signature_parts.order_by(
                 "message__sender__party__created_by_id",
                 "fragment_id",
                 "message__sender__party_id",

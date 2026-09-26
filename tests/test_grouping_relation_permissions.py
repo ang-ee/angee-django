@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 import strawberry_django
-from django.db import connection, models
+from django.db import models
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -28,11 +28,10 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import (
     SchemaAddon,
-    _clear_model_tables,
-    _create_missing_tables,
     execute_schema,
     result_data,
 )
+from tests.tables import model_tables
 
 
 class GroupLabel(AngeeDataModel):
@@ -145,169 +144,164 @@ def relation_grouping_case(transactional_db: None):
         )
     )
     models_in_order = (GroupLabel, GroupMiddle, PlainGroupLabel, GroupParent)
-    created = _create_missing_tables(models_in_order)
-    try:
-        alice = SubjectRef.of("auth/user", "alice")
-        bob = SubjectRef.of("auth/user", "bob")
-        resource = hasura_model_resource(
-            GroupParentType,
-            model=GroupParent,
-            name="group_parents",
-            filterable=["kind"],
-            sortable=["kind"],
-            aggregatable=["amount"],
-            groupable=[
-                "target",
-                "metric_target",
-                "metric_target__rank",
-                "middle",
-                "middle__target__display_name",
-                "plain",
-            ],
-            insert=False,
-            update=False,
-            delete=False,
-        )
-        schema = GraphQLSchemas(
-            [
-                SchemaAddon(
-                    {
-                        "public": {
-                            "query": [resource.query],
-                            "types": [GroupParentType, *resource.types],
+    with model_tables(models_in_order):
+        try:
+            alice = SubjectRef.of("auth/user", "alice")
+            bob = SubjectRef.of("auth/user", "bob")
+            resource = hasura_model_resource(
+                GroupParentType,
+                model=GroupParent,
+                name="group_parents",
+                filterable=["kind"],
+                sortable=["kind"],
+                aggregatable=["amount"],
+                groupable=[
+                    "target",
+                    "metric_target",
+                    "metric_target__rank",
+                    "middle",
+                    "middle__target__display_name",
+                    "plain",
+                ],
+                insert=False,
+                update=False,
+                delete=False,
+            )
+            schema = GraphQLSchemas(
+                [
+                    SchemaAddon(
+                        {
+                            "public": {
+                                "query": [resource.query],
+                                "types": [GroupParentType, *resource.types],
+                            }
                         }
-                    }
-                )
-            ]
-        ).build("public")
-        pinned_resource = hasura_model_resource(
-            GroupParentType,
-            model=GroupParent,
-            name="pinned_group_parents",
-            filterable=["kind"],
-            sortable=["kind"],
-            aggregatable=["amount"],
-            groupable=["target"],
-            get_queryset=lambda info: GroupParent.objects.with_actor(alice),
-            insert=False,
-            update=False,
-            delete=False,
-        )
-        pinned_schema = GraphQLSchemas(
-            [
-                SchemaAddon(
-                    {
-                        "public": {
-                            "query": [pinned_resource.query],
-                            "types": [
-                                GroupParentType,
-                                *pinned_resource.types,
-                            ],
+                    )
+                ]
+            ).build("public")
+            pinned_resource = hasura_model_resource(
+                GroupParentType,
+                model=GroupParent,
+                name="pinned_group_parents",
+                filterable=["kind"],
+                sortable=["kind"],
+                aggregatable=["amount"],
+                groupable=["target"],
+                get_queryset=lambda info: GroupParent.objects.with_actor(alice),
+                insert=False,
+                update=False,
+                delete=False,
+            )
+            pinned_schema = GraphQLSchemas(
+                [
+                    SchemaAddon(
+                        {
+                            "public": {
+                                "query": [pinned_resource.query],
+                                "types": [
+                                    GroupParentType,
+                                    *pinned_resource.types,
+                                ],
+                            }
                         }
-                    }
+                    )
+                ]
+            ).build("public")
+            with system_context(reason="test.grouping.relation_permissions.seed"):
+                alpha = GroupLabel.objects.create(
+                    external_key="alpha-key",
+                    display_name="Alpha",
+                    rank=10,
                 )
-            ]
-        ).build("public")
-        with system_context(reason="test.grouping.relation_permissions.seed"):
-            alpha = GroupLabel.objects.create(
-                external_key="alpha-key",
-                display_name="Alpha",
-                rank=10,
+                beta = GroupLabel.objects.create(
+                    external_key="beta-key",
+                    display_name="Beta",
+                    rank=20,
+                )
+                duplicate_one = GroupLabel.objects.create(
+                    external_key="duplicate-one-key",
+                    display_name="Duplicate",
+                    rank=30,
+                )
+                duplicate_two = GroupLabel.objects.create(
+                    external_key="duplicate-two-key",
+                    display_name="Duplicate",
+                    rank=40,
+                )
+                alpha_middle = GroupMiddle.objects.create(target=alpha)
+                beta_middle = GroupMiddle.objects.create(target=beta)
+                hidden_middle = GroupMiddle.objects.create(target=duplicate_one)
+                plain = PlainGroupLabel.objects.create(display_name="Plain")
+                parents = [
+                    GroupParent.objects.create(
+                        kind="target",
+                        target=alpha,
+                        metric_target=alpha,
+                    ),
+                    GroupParent.objects.create(
+                        kind="target",
+                        target=alpha,
+                        metric_target=alpha,
+                    ),
+                    GroupParent.objects.create(
+                        kind="target",
+                        target=beta,
+                        metric_target=beta,
+                    ),
+                    GroupParent.objects.create(
+                        kind="target",
+                        target=duplicate_one,
+                        metric_target=duplicate_one,
+                    ),
+                    GroupParent.objects.create(
+                        kind="target",
+                        target=duplicate_two,
+                        metric_target=duplicate_two,
+                    ),
+                    GroupParent.objects.create(kind="target"),
+                    GroupParent.objects.create(kind="nested", middle=alpha_middle),
+                    GroupParent.objects.create(kind="nested", middle=beta_middle),
+                    GroupParent.objects.create(kind="nested", middle=hidden_middle),
+                    GroupParent.objects.create(kind="plain", plain=plain),
+                ]
+            write_relationships(
+                [
+                    *(
+                        RelationshipTuple(to_object_ref(parent), "reader", actor)
+                        for parent in parents
+                        for actor in (alice, bob)
+                    ),
+                    RelationshipTuple(to_object_ref(alpha), "reader", alice),
+                    RelationshipTuple(to_object_ref(beta), "reader", bob),
+                    *(
+                        RelationshipTuple(to_object_ref(label), "reader", actor)
+                        for label in (duplicate_one, duplicate_two)
+                        for actor in (alice, bob)
+                    ),
+                    *(
+                        RelationshipTuple(to_object_ref(middle), "reader", actor)
+                        for middle in (alpha_middle, beta_middle)
+                        for actor in (alice, bob)
+                    ),
+                    RelationshipTuple(to_object_ref(hidden_middle), "reader", bob),
+                ]
             )
-            beta = GroupLabel.objects.create(
-                external_key="beta-key",
-                display_name="Beta",
-                rank=20,
+            yield SimpleNamespace(
+                schema=schema,
+                pinned_schema=pinned_schema,
+                alice=alice,
+                bob=bob,
+                alpha=alpha,
+                beta=beta,
+                duplicate_one=duplicate_one,
+                duplicate_two=duplicate_two,
+                alpha_middle=alpha_middle,
+                beta_middle=beta_middle,
+                hidden_middle=hidden_middle,
+                plain=plain,
             )
-            duplicate_one = GroupLabel.objects.create(
-                external_key="duplicate-one-key",
-                display_name="Duplicate",
-                rank=30,
-            )
-            duplicate_two = GroupLabel.objects.create(
-                external_key="duplicate-two-key",
-                display_name="Duplicate",
-                rank=40,
-            )
-            alpha_middle = GroupMiddle.objects.create(target=alpha)
-            beta_middle = GroupMiddle.objects.create(target=beta)
-            hidden_middle = GroupMiddle.objects.create(target=duplicate_one)
-            plain = PlainGroupLabel.objects.create(display_name="Plain")
-            parents = [
-                GroupParent.objects.create(
-                    kind="target",
-                    target=alpha,
-                    metric_target=alpha,
-                ),
-                GroupParent.objects.create(
-                    kind="target",
-                    target=alpha,
-                    metric_target=alpha,
-                ),
-                GroupParent.objects.create(
-                    kind="target",
-                    target=beta,
-                    metric_target=beta,
-                ),
-                GroupParent.objects.create(
-                    kind="target",
-                    target=duplicate_one,
-                    metric_target=duplicate_one,
-                ),
-                GroupParent.objects.create(
-                    kind="target",
-                    target=duplicate_two,
-                    metric_target=duplicate_two,
-                ),
-                GroupParent.objects.create(kind="target"),
-                GroupParent.objects.create(kind="nested", middle=alpha_middle),
-                GroupParent.objects.create(kind="nested", middle=beta_middle),
-                GroupParent.objects.create(kind="nested", middle=hidden_middle),
-                GroupParent.objects.create(kind="plain", plain=plain),
-            ]
-        write_relationships(
-            [
-                *(
-                    RelationshipTuple(to_object_ref(parent), "reader", actor)
-                    for parent in parents
-                    for actor in (alice, bob)
-                ),
-                RelationshipTuple(to_object_ref(alpha), "reader", alice),
-                RelationshipTuple(to_object_ref(beta), "reader", bob),
-                *(
-                    RelationshipTuple(to_object_ref(label), "reader", actor)
-                    for label in (duplicate_one, duplicate_two)
-                    for actor in (alice, bob)
-                ),
-                *(
-                    RelationshipTuple(to_object_ref(middle), "reader", actor)
-                    for middle in (alpha_middle, beta_middle)
-                    for actor in (alice, bob)
-                ),
-                RelationshipTuple(to_object_ref(hidden_middle), "reader", bob),
-            ]
-        )
-        yield SimpleNamespace(
-            schema=schema,
-            pinned_schema=pinned_schema,
-            alice=alice,
-            bob=bob,
-            alpha=alpha,
-            beta=beta,
-            duplicate_one=duplicate_one,
-            duplicate_two=duplicate_two,
-            alpha_middle=alpha_middle,
-            beta_middle=beta_middle,
-            hidden_middle=hidden_middle,
-            plain=plain,
-        )
-    finally:
-        _clear_model_tables(models_in_order)
-        if created:
-            with connection.schema_editor() as editor:
-                for model in reversed(created):
-                    editor.delete_model(model)
-        reset_backend()
+        finally:
+            reset_backend()
 
 
 def _query(case: Any, actor: SubjectRef, document: str) -> dict[str, Any]:

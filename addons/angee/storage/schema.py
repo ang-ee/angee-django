@@ -29,7 +29,6 @@ from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.permissions import RolePermission
 from angee.storage import exceptions
-from angee.storage.models import Folder as FolderModel
 from angee.storage.models import UploadState
 
 Backend = apps.get_model("storage", "Backend")
@@ -91,15 +90,9 @@ class FolderType(AngeeNode):
     name: auto
     description: auto
     is_virtual: auto
+    smart_kind: auto
     created_at: auto
     updated_at: auto
-
-    @strawberry_django.field(only=["smart_kind"])
-    def smart_kind(self) -> FolderModel.SmartKind | None:
-        """Return the smart-folder kind; real folders have no kind."""
-
-        value = cast(Any, self).smart_kind
-        return FolderModel.SmartKind(value) if value else None
 
     @strawberry_django.field(only=["drive_id"])
     def drive(self) -> strawberry.ID | None:
@@ -377,7 +370,9 @@ class StorageMutation:
     def restore_file(self, id: PublicID) -> FileType | None:
         """Pull one file out of the Trash smart folder."""
 
-        row = require_instance_for_id(File, id, queryset=File.objects.all(), not_found="file not found")
+        row = require_instance_for_id(
+            File, id, queryset=File.objects.all(), not_found="file not found"
+        )
         row.restore()
         return cast(FileType, row)
 
@@ -389,7 +384,7 @@ class StorageMutation:
             File,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(File),
+            queryset=write_queryset(File).all(),
         )
 
     @strawberry.mutation(name="delete_folder")
@@ -400,7 +395,7 @@ class StorageMutation:
             Folder,
             str(id),
             confirm=confirm,
-            queryset=write_queryset(Folder),
+            queryset=write_queryset(Folder).all(),
         )
 
 

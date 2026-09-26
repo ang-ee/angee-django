@@ -2,7 +2,7 @@
 
 A :class:`~angee.messaging.models.Channel` (an ``integrate.Integration`` child +
 ``Bridge``) selects one ``ChannelBackend`` by registry key. The backend does the
-per-source *transport* + *parse* — ``fetch_messages`` returns neutral
+per-source *transport* + *parse* — ``extract`` returns neutral
 :class:`ParsedMessage` rows (a recursive :class:`ParsedPart` body, sender/recipient
 :class:`ParsedHandle`\\s, RFC-5322 threading hints). The *map* onto messaging —
 thread resolution, the idempotent channel-scoped external-id upsert, the Part /
@@ -17,12 +17,16 @@ installed.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, ClassVar
 
+from django.apps import apps
+
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl, LiveBridgeImpl
+from angee.integrate.streams import ApplyResult, SemanticError, StreamDefinition, StreamPage
 
 INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
@@ -187,7 +191,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
 
     ``self.bridge`` is the ``Channel`` row — its ``config`` carries the source
     settings and ``self.bridge.credential`` authenticates — and ``self.http`` is the
-    shared SSRF-pinned client. Incremental state lives on ``self.bridge.cursor``.
+    shared SSRF-pinned client. Incremental state lives on each ``SyncStream``.
     """
 
     category = "channel"
@@ -200,35 +204,28 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     quote_edges: ClassVar[bool] = True
     """Whether ingest should build the email shared-fragment quotation graph."""
 
-    partition: str | None = None
-    """When set, this instance drains only the named partition (see :meth:`sync_partitions`)."""
-
-    sync_deadline: float | None = None
-    """Monotonic drain deadline, bound by ``Channel._drain`` for transport retries."""
-
-    def sync_partitions(self) -> tuple[str, ...]:
-        """Return this source's independently drainable partition keys, or ``()``.
-
-        A backend whose source splits into units with *independent cursor state*
-        — IMAP mailboxes, each with its own UID watermark — returns their keys.
-        ``Channel.sync`` then drains each partition on its own backend instance
-        (its own transport connection) in parallel threads, persisting each
-        partition's cursor slice separately so one partition's crash never skips
-        another's mail. The default ``()`` keeps the serial single-drain contract.
-        """
+    def streams(self, *, deadline: float | None = None) -> tuple[StreamDefinition, ...]:
+        """Declare pull streams; manual, live and outbound-only channels have none."""
 
         return ()
 
-    def partition_cursor_slice(self, partition: str) -> tuple[tuple[str, ...], Any]:
-        """Return ``(path, value)`` — one partition's fragment of ``bridge.cursor``.
+    def apply_record(self, stream: Any, record: ParsedMessage) -> ApplyResult:
+        """Compose messaging's idempotent ingest inside the driver's page transaction."""
 
-        ``path`` addresses the nested cursor location this partition owns and
-        ``value`` is its current in-memory state; ``Channel`` merges exactly that
-        slice into the persisted cursor under a row lock, so parallel partitions
-        never clobber each other and never persist a sibling's pre-ingest advance.
-        """
+        if not record.external_id:
+            raise SemanticError("missing_external_id")
+        (message,) = apps.get_model("messaging", "Message").objects.ingest(
+            [record], channel=self.bridge, quote_edges=False
+        )
+        return ApplyResult(target=message)
 
-        raise NotImplementedError("Partitioned backends must implement partition_cursor_slice().")
+    def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:
+        """Resolve email quotation links after the whole applied page is visible."""
+
+        if self.quote_edges:
+            apps.get_model("messaging", "Message").objects.resolve_ingest_edges(
+                [outcome.bound_target for outcome in outcomes if outcome.bound_target is not None],
+            )
 
     def test_connection(self) -> str:
         """Prove this backend can reach its source; return the operator message.
@@ -241,19 +238,6 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         """
 
         return self.bridge.probe_credential()
-
-    def fetch_messages(self) -> list[ParsedMessage]:
-        """Return the next batch of new messages since the bridge cursor.
-
-        ``Channel.sync`` drains the backend — it calls this repeatedly on one
-        instance until an empty list says the source is exhausted. A single-shot
-        backend may return everything in its first batch; a paging backend keeps
-        its position on the instance and advances its in-memory ``bridge.cursor``
-        past each returned batch, so a large backfill streams with bounded memory
-        and an interrupted run resumes from the last *persisted* cursor.
-        """
-
-        raise NotImplementedError("ChannelBackend subclasses must implement fetch_messages().")
 
     def deliver(self, message: Any) -> bool:
         """Deliver one outbound message; return whether a transport accepted it.
@@ -269,14 +253,6 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
             getattr(message, "pk", None),
         )
         return False
-
-    def close(self) -> None:
-        """Release any transport this backend holds; called when the drain ends.
-
-        ``Channel.sync`` calls this in ``finally``, so a run that fails mid-drain
-        does not leak an authenticated connection. The default is a no-op for
-        connectionless backends.
-        """
 
     def start_live(self) -> None:
         """Dispatch this source's live ingest (start a session, renew a subscription).
@@ -309,11 +285,6 @@ class LiveChannelBackend(LiveBridgeImpl, ChannelBackend):
     media_item_class: ClassVar[type[MediaItem]] = MediaItem
     """DTO class used to attach downloaded media to a queued live message."""
 
-    def fetch_messages(self) -> list[ParsedMessage]:
-        """Return nothing — a live channel ingests from its session, never a poll."""
-
-        return []
-
     def parse_live_message(self, message: Any) -> ParsedMessage:
         """Map one queued live message DTO onto the neutral messaging seam."""
 
@@ -331,11 +302,6 @@ class ManualChannelBackend(ChannelBackend):
     key = "manual"
     label = "Manual"
 
-    def fetch_messages(self) -> list[ParsedMessage]:
-        """Return no messages — a manual channel is populated by hand."""
-
-        return []
-
 
 class WebformChannelBackend(ChannelBackend):
     """Vendor-free public-form channel populated only by its curated HTTP view."""
@@ -343,8 +309,3 @@ class WebformChannelBackend(ChannelBackend):
     key = "webform"
     label = "Public Webform"
     quote_edges = False
-
-    def fetch_messages(self) -> list[ParsedMessage]:
-        """Return no polled messages; form POSTs call the shared ingest owner."""
-
-        return []

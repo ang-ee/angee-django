@@ -12,7 +12,7 @@ def connect() -> None:
     post_migrate.connect(_sync_integration_kinds, dispatch_uid="angee.integrate.sync_integration_kinds")
 
 
-def _sync_integration_kinds(*, app_config: object, using: str, **kwargs: object) -> None:
+def _sync_integration_kinds(*, app_config: object, **kwargs: object) -> None:
     """Backfill Integration.kind after migrations create or alter the parent table."""
 
     label = getattr(app_config, "label", "")
@@ -22,4 +22,4 @@ def _sync_integration_kinds(*, app_config: object, using: str, **kwargs: object)
         integration_model = apps.get_model("integrate", "Integration")
     except LookupError:
         return
-    integration_model.objects.db_manager(using).sync_kinds()
+    integration_model.objects.sync_kinds()

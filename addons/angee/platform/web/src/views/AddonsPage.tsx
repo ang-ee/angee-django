@@ -1,7 +1,7 @@
 import { type ReactElement } from "react";
 
 import {
-  Badge, Chip, ListView, SlotOutlet, statusTone, textRoleVariants, useRouteHref, useSlot, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
+  Badge, Chip, ListView, SlotOutlet, useStatusTone, textRoleVariants, useRouteHref, useSlot, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import {
@@ -14,15 +14,14 @@ import {
 } from "./AddonCard";
 import { PLATFORM_ADDON_TOOLBAR_SLOT } from "../slots";
 
-// Board-card data not shown as a list column: the description/keywords the card
-// renders and the forced/pending flags the lifecycle actions branch on. Fetched
-// alongside the column fields by the one client row-model query.
-const CARD_FIELDS = ["description", "keywords", "forced", "pending"] as const;
+// The name column owns sort/search; label and card-only values are selected
+// alongside column fields through the shared resource query.
+const CARD_FIELDS = ["label", "description", "keywords", "forced", "pending"] as const;
 
-function columns(t: (key: string) => string): readonly ListColumn<AddonResourceRow>[] {
+function columns(t: (key: string) => string, statusTone: ReturnType<typeof useStatusTone>): readonly ListColumn<AddonResourceRow>[] {
   return [
     {
-      field: "label",
+      field: "name",
       header: t("col.addon"),
       render: (row) => (
         <span className="flex min-w-0 flex-col">
@@ -82,14 +81,17 @@ function groupOptions(t: (key: string) => string): readonly ResourceToolbarGroup
  * Install/Disable actions; the toolbar grows and rescans the VCS marketplace.
  */
 export function AddonsPage(): ReactElement {
+  const statusTone = useStatusTone();
   const t = usePlatformT();
   const routeHref = useRouteHref();
   const toolbarEntries = useSlot(PLATFORM_ADDON_TOOLBAR_SLOT);
   return (
     <ListView<AddonResourceRow>
       resource={ADDON_MODEL}
-      columns={columns(t)}
+      columns={columns(t, statusTone)}
       fields={CARD_FIELDS}
+      textFilterField="name"
+      order={{ name: "ASC" }}
       groupOptions={groupOptions(t)}
       defaultView="board"
       defaultGroup={{ field: "category" }}

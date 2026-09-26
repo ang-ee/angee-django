@@ -172,6 +172,7 @@ class AgentRuntime(ImplBase):
 class NoRuntime(AgentRuntime):
     """Null-object runtime for a workspace-only agent — renders no service."""
 
+    key = "none"
     label = "None"
     service_template_name = ""
 
@@ -196,6 +197,7 @@ class OpenCodeRuntime(AgentRuntime):
     the plugin would silently drop Anthropic from the model list.
     """
 
+    key = "opencode"
     label = "OpenCode"
     icon = "opencode"
     service_template_name = "opencode"
@@ -268,6 +270,7 @@ class ClaudeCodeRuntime(AgentRuntime):
     provider's native model name (Claude Code talks to Anthropic directly).
     """
 
+    key = "claude_code"
     label = "Claude Code"
     icon = "anthropic"
     service_template_name = "claude-code"

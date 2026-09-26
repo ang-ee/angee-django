@@ -64,13 +64,15 @@ def _registered_tools() -> dict[str, Any]:
     return {tool.name: tool for tool in asyncio.run(server.list_tools())}
 
 
-def test_all_knowledge_tools_compile_and_register(knowledge_discovery: None) -> None:
+@pytest.mark.usefixtures("knowledge_discovery")
+def test_all_knowledge_tools_compile_and_register() -> None:
     """Every declared knowledge spec compiles and registers under its expected name."""
 
     assert set(_registered_tools()) == _EXPECTED_TOOLS
 
 
-def test_read_page_projects_outline_and_backlinks(knowledge_discovery: None) -> None:
+@pytest.mark.usefixtures("knowledge_discovery")
+def test_read_page_projects_outline_and_backlinks() -> None:
     """read_page reads one page by sqid with a nested markdown/outline + backlinks projection."""
 
     tool = _registered_tools()["read_page"]
@@ -95,7 +97,8 @@ def test_read_page_projects_outline_and_backlinks(knowledge_discovery: None) -> 
     assert set(backlinks["items"]["properties"]) == {"page", "title", "display_text"}
 
 
-def test_search_pages_passes_named_arguments(knowledge_discovery: None) -> None:
+@pytest.mark.usefixtures("knowledge_discovery")
+def test_search_pages_passes_named_arguments() -> None:
     """search_pages threads vault/query/first through as top-level tool arguments."""
 
     tool = _registered_tools()["search_pages"]
@@ -110,6 +113,7 @@ def test_search_pages_passes_named_arguments(knowledge_discovery: None) -> None:
     assert set(tool.output_schema["properties"]) == {"result"}
 
 
+@pytest.mark.usefixtures("knowledge_discovery")
 @pytest.mark.parametrize(
     ("name", "args", "required"),
     [
@@ -123,7 +127,7 @@ def test_search_pages_passes_named_arguments(knowledge_discovery: None) -> None:
     ],
 )
 def test_body_write_tools_project_the_payload(
-    knowledge_discovery: None, name: str, args: set[str], required: list[str]
+    name: str, args: set[str], required: list[str]
 ) -> None:
     """Each body-write tool takes bare arguments and projects the shared PageBodyPayload."""
 
@@ -136,7 +140,8 @@ def test_body_write_tools_project_the_payload(
     assert tool.output_schema["properties"]["markdown"]["properties"] == {"body_hash": {"type": "string"}}
 
 
-def test_patch_page_section_advertises_enum_and_list_inputs(knowledge_discovery: None) -> None:
+@pytest.mark.usefixtures("knowledge_discovery")
+def test_patch_page_section_advertises_enum_and_list_inputs() -> None:
     """The section op is advertised as an enum and the heading path as a string array."""
 
     tool = _registered_tools()["patch_page_section"]
@@ -145,7 +150,8 @@ def test_patch_page_section_advertises_enum_and_list_inputs(knowledge_discovery:
     assert tool.parameters["properties"]["heading_path"] == {"type": "array", "items": {"type": "string"}}
 
 
-def test_page_backlinks_projects_only_backlinks(knowledge_discovery: None) -> None:
+@pytest.mark.usefixtures("knowledge_discovery")
+def test_page_backlinks_projects_only_backlinks() -> None:
     """page_backlinks is a read-only convenience that projects the backlink list."""
 
     tool = _registered_tools()["page_backlinks"]

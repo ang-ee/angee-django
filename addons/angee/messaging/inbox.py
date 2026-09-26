@@ -168,9 +168,7 @@ class MessageInbox:
     def parts_for(self, messages: Any) -> Any:
         """Readable parts of an already authorized eligible message population."""
 
-        return self.collection("messaging", "Part").filter(
-            message_id__in=Subquery(messages.order_by().values("pk"))
-        )
+        return self.collection("messaging", "Part").filter(message_id__in=Subquery(messages.order_by().values("pk")))
 
     def accounts(self) -> Any:
         """Readable accounts projected from eligible messages without full-row deduplication."""
@@ -222,8 +220,7 @@ class MessageInbox:
         # earlier sender/circle predicates when an exact-handle filter is added.
         authored = self.messages.filter(sender_id__in=Subquery(ids)).order_by().values("pk")
         addressed = (
-            self.messages.filter(pk__in=Subquery(recipients.order_by().values("message_id")))
-            .order_by().values("pk")
+            self.messages.filter(pk__in=Subquery(recipients.order_by().values("message_id"))).order_by().values("pk")
         )
         return rows.filter(pk__in=Subquery(authored.union(addressed)))
 

@@ -43,9 +43,7 @@ def tool_grant_ref(server_sqid: str, tool_name: str) -> ObjectRef:
     try:
         grant_id = grant_ids[tool_name]
     except KeyError as error:
-        raise tool_model.DoesNotExist(
-            f"No MCP tool {tool_name!r} exists for server {server_sqid!r}."
-        ) from error
+        raise tool_model.DoesNotExist(f"No MCP tool {tool_name!r} exists for server {server_sqid!r}.") from error
     return ObjectRef(TOOL_GRANT_RESOURCE_TYPE, grant_id)
 
 
@@ -54,10 +52,7 @@ def tool_grant_ids(server_sqid: str, tool_names: Iterable[str]) -> dict[str, str
 
     tool_model = apps.get_model("agents", "MCPTool")
     server_model = apps.get_model("agents", "MCPServer")
-    server_lookup = {
-        f"server__{field}": value
-        for field, value in server_model.public_id_lookup(server_sqid).items()
-    }
+    server_lookup = {f"server__{field}": value for field, value in server_model.public_id_lookup(server_sqid).items()}
     return {
         str(name): str(pk)
         for name, pk in tool_model._base_manager.filter(
@@ -73,15 +68,10 @@ def builtin_mcp_server() -> Any:
     from angee.agents.models import BUILTIN_MCP_ANGEE
 
     server_model = apps.get_model("agents", "MCPServer")
-    servers = [
-        server
-        for server in server_model._base_manager.order_by("pk")
-        if server.builtin == BUILTIN_MCP_ANGEE
-    ]
+    servers = [server for server in server_model._base_manager.order_by("pk") if server.builtin == BUILTIN_MCP_ANGEE]
     if len(servers) != 1:
         raise ImproperlyConfigured(
-            "Exactly one agents.MCPServer row must declare config.builtin='angee' "
-            f"(found {len(servers)})."
+            f"Exactly one agents.MCPServer row must declare config.builtin='angee' (found {len(servers)})."
         )
     return servers[0]
 
@@ -102,7 +92,7 @@ def sync_builtin_tool_catalogue() -> int:
         server = builtin_mcp_server()
         for tool in registered:
             tool_model._base_manager.update_or_create(
-                server=server,
+                server_id=server.pk,
                 name=tool.name,
                 defaults={
                     "description": str(tool.description or ""),
@@ -135,9 +125,7 @@ def _sync_resource_reader_grants(server: Any, registered: list[Any]) -> None:
             optional_subject_relation=subject.optional_relation,
         )
     )
-    reader_names = tuple(
-        tool.name for tool in registered if RESOURCE_READER_TOOL_TAG in tool.tags
-    )
+    reader_names = tuple(tool.name for tool in registered if RESOURCE_READER_TOOL_TAG in tool.tags)
     grant_ids = tool_grant_ids(str(server.sqid), reader_names)
     writes = [
         RelationshipTuple(
@@ -162,10 +150,7 @@ def resync_tool_grants() -> int:
 
     agent_model = apps.get_model("agents", "Agent")
     with system_context(reason="agents.tool_grants.resync"), transaction.atomic():
-        agents = list(
-            agent_model._base_manager.select_related("user")
-            .order_by("pk")
-        )
+        agents = list(agent_model._base_manager.select_related("user").order_by("pk"))
         for agent in agents:
             if agent.user_id is None:
                 agent.user = agent_model.objects.sync_service_user(agent)
@@ -207,11 +192,7 @@ def _migrate_agent_principal_memberships(agents: list[Any]) -> int:
         )
     )
     legacy_subject_ids = {str(row.subject_id) for row in legacy + legacy_groups}
-    agents_by_sqid = {
-        str(agent.sqid): agent
-        for agent in agents
-        if str(agent.sqid) in legacy_subject_ids
-    }
+    agents_by_sqid = {str(agent.sqid): agent for agent in agents if str(agent.sqid) in legacy_subject_ids}
     migrated: list[RelationshipTuple] = []
     for row in legacy + legacy_groups:
         agent = agents_by_sqid.get(str(row.subject_id))

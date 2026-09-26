@@ -23,7 +23,7 @@ from angee.workflows.attempts import (
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus, Verdict
 from angee.workflows.steps import StepImpl, StepResult
-from tests.workflows import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
+from angee.workflows.testing.models import Decision, Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -70,7 +70,7 @@ def _claimed_execution(monkeypatch: pytest.MonkeyPatch, impl: type[Any]) -> tupl
 
 
 def test_cancel_fences_result_after_physical_invocation(
-    workflow_engine_tables: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     invoked = Event()
     release = Event()
@@ -91,7 +91,7 @@ def test_cancel_fences_result_after_physical_invocation(
             lambda: engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token),
         )
         assert invoked.wait(timeout=5)
-        engine.cancel(run)
+        engine.cancel(run, actor=run.admission_actor())
         release.set()
         assert executing.result(timeout=10) == {"executed": 1}
 
@@ -116,7 +116,7 @@ def test_cancel_fences_result_after_physical_invocation(
 
 
 def test_override_fences_old_result_and_advances_generation(
-    workflow_engine_tables: None, monkeypatch: pytest.MonkeyPatch
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     invoked = Event()
     release = Event()
@@ -163,13 +163,19 @@ def test_override_fences_old_result_and_advances_generation(
 
 
 def test_reap_records_revocation_without_fabricating_physical_result(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     now = timezone.now()
     stale_at = now - timedelta(days=1)
     with system_context(reason="runtime timeout setup"):
         workflow = Workflow.objects.create(name="Runtime timeout")
-        step = Step.objects.create(workflow=workflow, key="start", name="Start", is_entry=True)
+        step = Step.objects.create(
+            workflow=workflow,
+            key="start",
+            name="Start",
+            step_class="fixture",
+            is_entry=True,
+        )
         run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
         step_run = StepRun.objects.create(run=run, step=step, status=StepRunStatus.SCHEDULED)
     attempt = StepAttempt.objects.claim(step_run, claimed_at=stale_at).attempt
@@ -187,7 +193,7 @@ def test_reap_records_revocation_without_fabricating_physical_result(
         ).count()
     assert attempt.lease_revocation_reason == str(LeaseRevocationReason.HEARTBEAT_LOST)
     assert attempt.result_recorded_at is None
-    assert attempt.result_kind == ""
+    assert attempt.result_kind is None
     assert attempt.output_present is False
     assert attempt.output is None
     assert attempt.applied_at is None
@@ -196,13 +202,19 @@ def test_reap_records_revocation_without_fabricating_physical_result(
 
 
 def test_decision_timer_waits_on_run_before_locking_decision(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     now = timezone.now()
     actor = get_user_model().objects.create_user(username="decision-lock-order-owner")
     with system_context(reason="decision lock order setup"):
         workflow = Workflow.objects.create(name="Decision lock order")
-        step = Step.objects.create(workflow=workflow, key="gate", name="Gate", is_entry=True)
+        step = Step.objects.create(
+            workflow=workflow,
+            key="gate",
+            name="Gate",
+            step_class="fixture",
+            is_entry=True,
+        )
         run = WorkflowRun.objects.create(
             workflow=workflow,
             status=RunStatus.RUNNING,
@@ -239,7 +251,7 @@ def test_decision_timer_waits_on_run_before_locking_decision(
             return execute(sql, params, many, context)
 
         with connection.execute_wrapper(observe_run_lock):
-            return engine.expire_decision_dispatch(dispatch.pk, now=now)
+            return WorkflowDispatch.objects.deliver(dispatch.pk, now=now)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with system_context(reason="decision lock order holder"), transaction.atomic():
@@ -253,13 +265,19 @@ def test_decision_timer_waits_on_run_before_locking_decision(
 
 
 def test_due_decision_timers_serialize_to_one_policy_projection(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     now = timezone.now()
     actor = get_user_model().objects.create_user(username="decision-timer-race-owner")
     with system_context(reason="decision timer race setup"):
         workflow = Workflow.objects.create(name="Decision timer race")
-        step = Step.objects.create(workflow=workflow, key="gate", name="Gate", is_entry=True)
+        step = Step.objects.create(
+            workflow=workflow,
+            key="gate",
+            name="Gate",
+            step_class="fixture",
+            is_entry=True,
+        )
         run = WorkflowRun.objects.create(
             workflow=workflow,
             status=RunStatus.RUNNING,
@@ -297,11 +315,11 @@ def test_due_decision_timers_serialize_to_one_policy_projection(
 
     def escalate_due() -> dict[str, int]:
         starting.wait(timeout=5)
-        return engine.escalate_decision_dispatch(escalate.pk, now=now)
+        return WorkflowDispatch.objects.deliver(escalate.pk, now=now)
 
     def expire_due() -> dict[str, int]:
         starting.wait(timeout=5)
-        return engine.expire_decision_dispatch(expire.pk, now=now)
+        return WorkflowDispatch.objects.deliver(expire.pk, now=now)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = (

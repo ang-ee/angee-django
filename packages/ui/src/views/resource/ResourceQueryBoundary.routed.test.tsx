@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
+import type { GetListParams } from "@refinedev/core";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
-import { ModelMetadataProvider, ResourceQuery, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { ResourceQuery } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 import { ToastProvider } from "../../feedback";
 import { ListView } from "./ListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
@@ -19,16 +19,16 @@ const resource = testDataResource("notes.Note", {
   fields: ["id", "title"].map((name) => ({ name, kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
 });
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.splice(0).forEach((client) => client.clear()); });
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://query",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 function fixture({ rowModel = "server" }: { rowModel?: "server" | "client" } = {}) {
   const activeResource = { ...resource, rowModel };
   const getList = vi.fn(async (_params: GetListParams) => ({ data: [{ id: "1", title: "Kept note" }], total: 1 }));
-  const provider = { getApiUrl: () => "test://query", getList, getOne: vi.fn(), create: vi.fn(),
-    update: vi.fn(), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
+  const dataProvider = { getList };
   let view!: ResourceViewContextValue;
   function Records() {
     view = useResourceView();
@@ -38,12 +38,11 @@ function fixture({ rowModel = "server" }: { rowModel?: "server" | "client" } = {
   const route = createRoute({ getParentRoute: () => root, path: "/", component: () =>
     <ResourceViewProvider resource={resource.modelLabel}><Records /></ResourceViewProvider> });
   const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  render(<Refine resources={[...refineResourcesFromDataResources([activeResource])]} dataProvider={{ default: provider, console: provider }}
-    options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-    <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([activeResource])}><ToastProvider>
+  render(<Provider resources={[activeResource]} dataProvider={dataProvider}>
+    <ToastProvider>
       <RouterProvider router={router} />
-    </ToastProvider></ModelMetadataProvider>
-  </Refine>);
+    </ToastProvider>
+  </Provider>);
   return { get view() { return view; }, getList, router };
 }
 

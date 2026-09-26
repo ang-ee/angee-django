@@ -9,7 +9,7 @@ import { Button } from "../../ui/button";
 import { FieldDescription, FieldLabel, FieldRoot } from "../../ui/field";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
-import { relationValueId } from "../../widgets/types";
+import { relationIdList, relationValueId } from "../../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import {
   emptyDialogValue,
@@ -332,14 +332,16 @@ function ActionRelationListControl({
 
 const EMPTY_ARGS: readonly ActionArg[] = [];
 
-/** Serialize scalar values whose GraphQL wire type is stricter than the control value. */
-function serializeActionArgValues(
+/** Normalize relation lists and scalar values for an action's custom submit. */
+export function serializeActionArgValues(
   args: readonly ActionArg[],
   values: ArgValues,
 ): ArgValues {
   const serialized = { ...values };
   for (const arg of args) {
-    if (
+    if (arg.argKind === "relationList") {
+      serialized[arg.name] = relationIdList(values[arg.name]);
+    } else if (
       (arg.argKind === undefined || arg.argKind === "scalar") &&
       (arg.kind === "datetime" || arg.widget === "datetime")
     ) {

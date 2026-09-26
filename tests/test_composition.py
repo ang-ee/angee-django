@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 import reversion
 from django.apps import apps
-from django.db import connection, models
+from django.db import models
 from rebac import MissingActorError, RebacMixin, SubjectRef, system_context
 
 from angee.base import identity as identity_module
@@ -24,6 +24,7 @@ from angee.base.models import (
     AngeeDataModel,
     AngeeModel,
 )
+from tests.tables import model_tables
 
 
 class PublicIdThing(AngeeDataModel):
@@ -141,11 +142,7 @@ def test_subject_identity_converts_only_at_the_public_boundary(
 def test_public_id_helpers_support_angee_and_plain_django_models() -> None:
     """ID helpers use Angee public IDs for Angee models and PKs otherwise."""
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PublicIdThing)
-        schema_editor.create_model(PlainPublicIdThing)
-
-    try:
+    with model_tables((PublicIdThing, PlainPublicIdThing)):
         with system_context(reason="test public-id setup"):
             angee_instance = PublicIdThing.objects.create(name="angee")
         plain_instance = PlainPublicIdThing.objects.create(name="plain")
@@ -173,42 +170,34 @@ def test_public_id_helpers_support_angee_and_plain_django_models() -> None:
         with pytest.raises(MissingActorError):
             PublicIdThing.from_public_id(angee_instance.public_id)
         assert instance_from_public_id(PlainPublicIdThing, "0") is None
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PlainPublicIdThing)
-            schema_editor.delete_model(PublicIdThing)
 
 
 @pytest.mark.django_db(transaction=True)
 def test_revision_mixin_restores_declared_fields_from_versions() -> None:
     """Revision helpers expose newest-first versions and restore fields."""
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(RevisionThing)
+    with model_tables((RevisionThing,)):
+        reversion.register(RevisionThing, fields=RevisionThing.revisioned_fields)
 
-    reversion.register(RevisionThing, fields=RevisionThing.revisioned_fields)
+        try:
+            instance = RevisionThing.objects.create(title="Draft", body="v0")
+            with reversion.create_revision():
+                instance.body = "v1"
+                instance.save()
+            with reversion.create_revision():
+                instance.title = "Final"
+                instance.body = "v2"
+                instance.save()
 
-    try:
-        instance = RevisionThing.objects.create(title="Draft", body="v0")
-        with reversion.create_revision():
-            instance.body = "v1"
-            instance.save()
-        with reversion.create_revision():
-            instance.title = "Final"
-            instance.body = "v2"
-            instance.save()
+            assert instance.revisions.count() == 2
+            assert instance.revisions.first().field_dict["body"] == "v2"
+            instance.title = "Unsaved stale title"
+            instance.revert_to(instance.revisions.last())
+            instance.refresh_from_db()
 
-        assert instance.revisions.count() == 2
-        assert instance.revisions.first().field_dict["body"] == "v2"
-        instance.title = "Unsaved stale title"
-        instance.revert_to(instance.revisions.last())
-        instance.refresh_from_db()
-
-        assert instance.title == "Final"
-        assert instance.body == "v1"
-        assert instance.revisions.count() == 3
-        assert instance.revisions.first().revision.comment.startswith("Reverted to revision ")
-    finally:
-        reversion.unregister(RevisionThing)
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(RevisionThing)
+            assert instance.title == "Final"
+            assert instance.body == "v1"
+            assert instance.revisions.count() == 3
+            assert instance.revisions.first().revision.comment.startswith("Reverted to revision ")
+        finally:
+            reversion.unregister(RevisionThing)

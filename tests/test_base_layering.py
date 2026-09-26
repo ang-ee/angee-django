@@ -6,6 +6,8 @@ import ast
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 BASE_SPEC = importlib.util.find_spec("angee.base")
 assert BASE_SPEC is not None and BASE_SPEC.origin is not None
@@ -14,7 +16,8 @@ BASE = ANGEE / "base"
 GRAPHQL = ROOT / "addons" / "angee" / "graphql"
 COMPOSE = ANGEE / "compose"
 RESOURCES = ROOT / "addons" / "angee" / "resources"  # resources is a base addon
-SOURCE_ROOTS = (ANGEE.parent, ROOT / "addons")
+# Resolve the nested addon import root before its enclosing repository root.
+SOURCE_ROOTS = (ROOT / "addons", ANGEE.parent)
 ADDON_ROOTS = (ROOT / "addons" / "angee",)
 
 # Derived from the source tree so a new base addon is guarded automatically.
@@ -37,9 +40,8 @@ def _module_imports(path: Path) -> set[str]:
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.level:
-                package = module.split(".") if path.name == "__init__.py" else module.split(".")[:-1]
-                prefix = package[: len(package) - node.level + 1]
-                imported = ".".join((*prefix, *(node.module or "").split(".")))
+                package = module if path.name == "__init__.py" else module.rpartition(".")[0]
+                imported = importlib.util.resolve_name("." * node.level + (node.module or ""), package)
             else:
                 imported = node.module or ""
             if imported:
@@ -72,12 +74,84 @@ def _tree_imports(root: Path) -> set[str]:
     return names
 
 
+@pytest.mark.parametrize(
+    ("source_path", "source", "expected"),
+    [
+        (
+            "angee/base/models.py",
+            "from . import historical_relationships",
+            {"angee.base", "angee.base.historical_relationships"},
+        ),
+        (
+            "addons/angee/example/models.py",
+            "from ..base import historical_relationships as history",
+            {"angee.base", "angee.base.historical_relationships"},
+        ),
+        (
+            "addons/angee/example/__init__.py",
+            "from ..base.historical_relationships import ensure_historical_relationships",
+            {
+                "angee.base.historical_relationships",
+                "angee.base.historical_relationships.ensure_historical_relationships",
+            },
+        ),
+    ],
+)
+def test_relative_imports_resolve_against_the_source_import_root(
+    monkeypatch: pytest.MonkeyPatch, source_path: str, source: str, expected: set[str]
+) -> None:
+    """Core and addon relative imports cannot bypass dependency guards."""
+
+    monkeypatch.setattr(Path, "read_text", lambda self, **kwargs: source)
+    assert _module_imports(ROOT / source_path) == expected
+
+
 def test_base_is_the_model_layer_below_all_siblings() -> None:
     """base (the model toolkit) imports no sibling subsystem or addon."""
 
     imports = _tree_imports(BASE)
     forbidden = ("angee.compose", "angee.graphql", *_ADDON_PACKAGES)
     assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
+
+
+def test_core_does_not_import_folder_addons() -> None:
+    """The core wheel remains importable without folder-addon sources."""
+
+    violations = {
+        str(path.relative_to(ROOT)): forbidden
+        for path in sorted(ANGEE.rglob("*.py"))
+        if (
+            forbidden := sorted(
+                name
+                for name in _module_imports(path)
+                if any(name == addon or name.startswith(f"{addon}.") for addon in _ADDON_PACKAGES)
+            )
+        )
+    }
+    assert not violations
+
+
+def test_production_sources_do_not_import_test_support() -> None:
+    """Addon test compositions and generic fixtures stay test-only."""
+
+    testing_packages = ("tests", "angee.testing", *(f"{addon}.testing" for addon in _ADDON_PACKAGES))
+    violations = {}
+    for root in (ANGEE, ROOT / "addons"):
+        for path in sorted(root.rglob("*.py")):
+            if (
+                {"testing", "tests"}.intersection(path.relative_to(ROOT).parts)
+                or path.name in {"conftest.py", "tests.py"}
+                or path.name.startswith(("test_", "tests_"))
+            ):
+                continue
+            forbidden = sorted(
+                name
+                for name in _module_imports(path)
+                if any(name == package or name.startswith(f"{package}.") for package in testing_packages)
+            )
+            if forbidden:
+                violations[str(path.relative_to(ROOT))] = forbidden
+    assert not violations
 
 
 def test_no_shared_addon_config_base_module() -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from django.db import models, router, transaction
+from django.db import models, transaction
 
 
 class DecisionReadableParty(models.Model):
@@ -47,7 +47,6 @@ class PartyHandle(models.Model):
 
         from angee.workflows import engine
 
-        alias = self._state.db or router.db_for_write(type(self), instance=self)
-        with transaction.atomic(using=alias):
+        with transaction.atomic():
             super()._resolve_link()
             engine.schedule_artifact_delivery(self)

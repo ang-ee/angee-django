@@ -11,8 +11,9 @@
  * from EditableLines' metadata-derived relation-cell path is tracked for later
  * reconciliation outside this fixed-N contract.
  */
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
+import { DetailSection } from "../../fragments/DetailSurface";
 import {
   Table,
   TableBody,
@@ -29,6 +30,8 @@ import type {
 } from "../../widgets/types";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
+import { updatedRecord } from "./field-values";
+import { isCompositeFieldDescriptor, isFieldVisible } from "./form-view-model";
 import { messagesForDottedPath } from "./validation-errors";
 
 export type RowsValue = readonly Record<string, unknown>[];
@@ -45,7 +48,11 @@ function RowsRead(props: WidgetRenderProps<RowsValue>): ReactElement {
   return <RowsField {...props} readOnly />;
 }
 
-/** Render the fixed-N rows value as its descriptor-driven edit/read table. */
+/**
+ * Render fixed-N object rows as a table, or titled sections with rowTitle.
+ * Both layouts evaluate showWhen against each row. Tables retain empty cells
+ * for hidden fields so the remaining values stay under their column headers.
+ */
 export function RowsField({
   value,
   field,
@@ -54,11 +61,54 @@ export function RowsField({
   onChange,
   onCommit,
   controlRef,
-}: WidgetRenderProps<RowsValue>): ReactElement {
+  rowTitle,
+}: WidgetRenderProps<RowsValue> & {
+  rowTitle?: (row: Readonly<Record<string, unknown>>, index: number) => ReactNode;
+}): ReactElement {
   const rows = rowsValue(value);
   const fieldName = rowsFieldName(field);
-  const columns = rowTemplate(field);
-  const focusColumn = columns.find((column) => !column.readOnly);
+  const columns = rowTemplate(field).filter((column) =>
+    !column.hidden && (!rows.length || rows.some((row) => isFieldVisible(column, row))),
+  );
+  const rowFields = (row: Record<string, unknown>, rowIndex: number) => {
+    const visibleColumns = columns.filter((column) => isFieldVisible(column, row));
+    const focusColumn = visibleColumns.find((column) => !column.readOnly);
+    return (rowTitle ? visibleColumns : columns).map((column) => {
+      const cellPath = `${fieldName}.${rowIndex}.${column.name}`;
+      const control = visibleColumns.includes(column) ? <LabeledDescriptorField
+        field={{ ...column, name: cellPath, label: column.label ?? column.name }}
+        value={row[column.name]}
+        dialogValues={row}
+        messages={messagesForDottedPath(messages, cellPath)}
+        readOnly={readOnly || column.readOnly}
+        showLabel={Boolean(rowTitle)}
+        showDescription={Boolean(rowTitle)}
+        onChange={(next) => onChange?.(rows.map((current, currentIndex) =>
+          currentIndex === rowIndex ? updatedRecord(current, column.name, next) : current,
+        ))}
+        onCommit={onCommit}
+        controlRef={rowIndex === 0 && column === focusColumn ? controlRef : undefined}
+      /> : null;
+      return rowTitle
+        ? <div key={column.name} className={isCompositeFieldDescriptor(column) ? "md:col-span-2" : undefined}>{control}</div>
+        : <TableCell key={column.name} className={readOnly ? "min-w-32 align-top" : "min-w-48 align-top"}>{control}</TableCell>;
+    });
+  };
+
+  if (rowTitle) {
+    return <div
+      role="group"
+      id={field?.controlProps?.id}
+      aria-labelledby={field?.controlProps?.["aria-labelledby"]}
+      aria-label={field?.controlProps?.["aria-labelledby"] ? undefined : typeof field?.label === "string" ? field.label : fieldName}
+      aria-describedby={field?.controlProps?.["aria-describedby"]}
+      className="space-y-4"
+    >
+      {rows.map((row, rowIndex) => <DetailSection key={rowIndex} title={rowTitle(row, rowIndex)} density="sm">
+        <div className="grid gap-4 md:grid-cols-2">{rowFields(row, rowIndex)}</div>
+      </DetailSection>)}
+    </div>;
+  }
 
   return (
     <div className="overflow-x-auto rounded-6 border border-border">
@@ -94,77 +144,12 @@ export function RowsField({
             // The server fixes N in v1, so the index is a stable row identity:
             // rows are edited in place and are never inserted, removed, or sorted.
             <TableRow key={rowIndex}>
-              {columns.map((column) => (
-                <RowsCell
-                  key={column.name}
-                  column={column}
-                  fieldName={fieldName}
-                  messages={messages}
-                  readOnly={readOnly}
-                  row={row}
-                  rowIndex={rowIndex}
-                  onChange={(next) => {
-                    if (!onChange) return;
-                    onChange(
-                      rows.map((current, currentIndex) =>
-                        currentIndex === rowIndex
-                          ? { ...current, [column.name]: next }
-                          : current,
-                      ),
-                    );
-                  }}
-                  onCommit={onCommit}
-                  controlRef={rowIndex === 0 && column === focusColumn ? controlRef : undefined}
-                />
-              ))}
+              {rowFields(row, rowIndex)}
             </TableRow>
           ))}
         </TableBody>
       </Table>
     </div>
-  );
-}
-
-function RowsCell({
-  column,
-  fieldName,
-  messages,
-  readOnly,
-  row,
-  rowIndex,
-  onChange,
-  onCommit,
-  controlRef,
-}: {
-  column: FormSpecFieldDescriptor;
-  fieldName: string;
-  messages: readonly string[];
-  readOnly: boolean;
-  row: Record<string, unknown>;
-  rowIndex: number;
-  onChange: (value: unknown) => void;
-  onCommit?: () => void;
-  controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
-}): ReactElement {
-  const cellPath = `${fieldName}.${rowIndex}.${column.name}`;
-  return (
-    <TableCell className={readOnly ? "min-w-32 align-top" : "min-w-48 align-top"}>
-      <LabeledDescriptorField
-        field={{
-          ...column,
-          name: cellPath,
-          label: column.label ?? column.name,
-        }}
-        value={row[column.name]}
-        messages={messagesForDottedPath(messages, cellPath)}
-        readOnly={readOnly || column.readOnly}
-        showLabel={false}
-        showDescription={false}
-        onChange={onChange}
-        onCommit={onCommit}
-        controlRef={controlRef}
-      />
-    </TableCell>
   );
 }
 

@@ -25,7 +25,7 @@ _CHANGE_BROADCAST_DISPATCH_UID = "angee.graphql.change_broadcast"
 change_published = Signal()
 """Sent robustly after commit when a model change should be observed.
 
-Receivers are called with ``sender`` set to the model class and a ``payload``
+Receivers are called with ``sender`` set to the model class, a ``payload``
 keyword containing the already-built :class:`ChangePayload`. Delivery uses
 ``send_robust``: receiver exceptions are logged by the publisher and are not
 propagated to the save/delete caller or allowed to starve later receivers.
@@ -212,6 +212,7 @@ def publish_change(
     if callable(broadcasts) and not broadcasts():
         return
     model = type(instance)
+
     payload = ChangePayload.from_instance(
         instance,
         action=action,

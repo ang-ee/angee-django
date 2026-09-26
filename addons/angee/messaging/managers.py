@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Callable, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -35,7 +36,7 @@ from zoneinfo import ZoneInfo
 from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.core.exceptions import ImproperlyConfigured
-from django.db import IntegrityError, connection, models, transaction
+from django.db import IntegrityError, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.utils import timezone
 from rebac import PermissionDenied, current_actor, system_context
@@ -54,7 +55,7 @@ from angee.storage.uploads import attachment_extension, fallback_attachment_name
 
 if TYPE_CHECKING:
     from angee.messaging.backends import ParsedMessage, ParsedPart, ParsedThread
-    from angee.messaging.models import Message
+    from angee.messaging.models import Message, Part
 
 # A fragment quoted by more than this many messages is boilerplate (a disclaimer or
 # repeated signature); quote-linking it would join the whole corpus, so skip it.
@@ -198,8 +199,8 @@ class ChannelManager(IntegrationManager):
 
         vendor_model = apps.get_model("integrate", "Vendor")
         return self.create(
-            vendor=vendor_model.objects.seeded(backend_class),
-            owner=user,
+            vendor_id=vendor_model.objects.seeded(backend_class).pk,
+            owner_id=user.pk,
             backend_class=backend_class,
             display_name=name,
             lifecycle=IntegrationLifecycle.DISCONNECTED,
@@ -486,7 +487,7 @@ class FragmentManager(AngeeManager):
                 hash=digest,
                 defaults={"text": text, "kind": kind, "created_by_id": owner_id},
             )
-            if created and connection.vendor == "postgresql":
+            if created and connections[fragment._state.db].vendor == "postgresql":
                 # tsvector is a Postgres type; on other vendors (the SQLite test
                 # backend) the column stays NULL and full-text search is unavailable.
                 # Postgres rejects to_tsvector input over 1MiB ("string is too long
@@ -620,8 +621,8 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                 platform=platform,
                 external_id=f"chat:{scope}:{thread.external_id}",
                 defaults={
-                    "channel": channel,
-                    "title": title,
+                    "channel_id": channel.pk if channel is not None else None,
+                    "title_id": title.pk if title is not None else None,
                     "modality": thread.modality or modality or self.model.Modality.DIRECT,
                     "visibility": thread.visibility or visibility or self.model.Visibility.PRIVATE,
                     "metadata": thread.metadata,
@@ -678,8 +679,8 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                 platform=platform,
                 external_id=deterministic_id,
                 defaults={
-                    "channel": channel,
-                    "title": title,
+                    "channel_id": channel.pk if channel is not None else None,
+                    "title_id": title.pk if title is not None else None,
                     "modality": modality or self.model.Modality.EMAIL_THREAD,
                     "visibility": visibility or self.model.Visibility.PRIVATE,
                     "created_by_id": owner_id,
@@ -688,7 +689,11 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             return thread
 
     def get_or_create_by_external_id(
-        self, *, platform: str, external_id: str, defaults: dict[str, Any]
+        self,
+        *,
+        platform: str,
+        external_id: str,
+        defaults: dict[str, Any],
     ) -> tuple[Any, bool]:
         """Get-or-create a thread on its ``(platform, external_id)`` identity, indexed.
 
@@ -826,7 +831,11 @@ class ThreadAttachmentManager(AngeeManager):
             target_model._base_manager.select_for_update().get(pk=object_id)
             thread = type(thread)._base_manager.select_for_update().get(pk=thread.pk)
             attachment, _created = self.model._base_manager.get_or_create(
-                thread=thread, content_type=content_type, object_id=object_id, role="source", defaults=values
+                thread_id=thread.pk,
+                content_type_id=content_type.pk,
+                object_id=object_id,
+                role="source",
+                defaults=values,
             )
         return attachment
 
@@ -882,7 +891,7 @@ class ThreadAttachmentManager(AngeeManager):
                 platform=thread_model._meta.get_field("platform").choices_enum.OTHER,
                 external_id=external_id,
                 defaults={
-                    "title": title_fragment,
+                    "title_id": title_fragment.pk if title_fragment is not None else None,
                     "modality": thread_model.Modality.GROUP,
                     "visibility": thread_model.Visibility.PRIVATE,
                     "host_broadcasts_changes": host_broadcasts,
@@ -890,11 +899,11 @@ class ThreadAttachmentManager(AngeeManager):
             )
             self._reconcile_broadcast_state(thread, host_broadcasts=host_broadcasts)
             attachment, _created = self.model._base_manager.get_or_create(
-                content_type=content_type,
+                content_type_id=content_type.pk,
                 object_id=object_id,
                 role=role,
                 defaults={
-                    "thread": thread,
+                    "thread_id": thread.pk,
                     "label": strip_null_bytes(str(record)),
                 },
             )
@@ -1040,10 +1049,10 @@ class ThreadFollowerManager(AngeeManager.from_queryset(ThreadFollowerQuerySet)):
         )
         with transaction.atomic():
             follower, created = self.get_or_create(
-                thread=attachment.thread,
+                thread_id=attachment.thread.pk,
                 user_id=resolved_user_id,
                 defaults={
-                    "attachment": attachment,
+                    "attachment_id": attachment.pk,
                     "notification_policy": "inbox" if notification_policy is None else notification_policy,
                     "subtype_keys": [] if subtype_keys is None else list(subtype_keys),
                     "created_by_id": resolved_user_id,
@@ -1456,11 +1465,11 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
             queued.add(follower.user_id)
             new_rows.append(
                 self.model(
-                    message=message,
+                    message_id=message.pk,
                     user_id=follower.user_id,
                     thread_id=message.thread_id,
-                    attachment=follower.attachment,
-                    follower=follower,
+                    attachment_id=follower.attachment.pk if follower.attachment is not None else None,
+                    follower_id=follower.pk,
                     notification_type=self.model.NotificationType.EMAIL,
                     notification_status=self.model.NotificationStatus.READY,
                     created_by_id=owner_id,
@@ -1478,10 +1487,10 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
             queued.add(user_id)
             new_rows.append(
                 self.model(
-                    message=message,
+                    message_id=message.pk,
                     user_id=user_id,
                     thread_id=message.thread_id,
-                    attachment=attachment,
+                    attachment_id=attachment.pk if attachment is not None else None,
                     notification_type=self.model.NotificationType.INBOX,
                     notification_status=self.model.NotificationStatus.READY,
                     created_by_id=owner_id,
@@ -1589,8 +1598,8 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             title=_record_thread_title(record),
         )
         return self.create(
-            thread=attachment.thread,
-            attachment=attachment,
+            thread_id=attachment.thread.pk,
+            attachment_id=attachment.pk if attachment is not None else None,
             user_id=resolved_user_id,
             activity_type=strip_null_bytes(activity_type or "todo"),
             summary=summary,
@@ -1622,13 +1631,17 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             body = activity.completion_message()
             if feedback:
                 body = f"{body}\n\n{feedback}"
-            model_class = activity.attachment.content_type.model_class()
+            attachment_field = activity._meta.get_field("attachment")
+            attachment = attachment_field.related_model._base_manager.select_related(
+                "content_type", "thread"
+            ).get(pk=activity.attachment_id)
+            model_class = attachment.content_type.model_class()
             message_model = apps.get_model("messaging", "Message")
             message_model.objects.post_to_thread(
-                activity.thread,
+                attachment.thread,
                 body=body,
                 owner_id=owner_id,
-                attachment=activity.attachment,
+                attachment=attachment,
                 message_type=message_model.MessageKind.AUTO_COMMENT,
                 subtype_key="activity_done",
                 subtype_model_label=model_class._meta.label if model_class is not None else "",
@@ -1726,7 +1739,7 @@ def _normalise_user_ids(user_ids: tuple[Any, ...]) -> tuple[Any, ...]:
 def _file_mime_type(file: Any) -> str:
     """Return the MIME type string for a storage file part."""
 
-    mime = getattr(file, "mime_type", None)
+    mime = file.mime_type
     value = getattr(mime, "mime_type", "")
     return value or "application/octet-stream"
 
@@ -1898,7 +1911,7 @@ class MessageStarManager(AngeeManager):
             next_starred = not bool(star) if starred is None else bool(starred)
             if next_starred and star is None:
                 self.model._base_manager.create(
-                    message=message,
+                    message_id=message.pk,
                     user_id=user_id,
                     created_by_id=user_id,
                 )
@@ -1938,8 +1951,8 @@ class ReactionManager(AngeeManager):
 
         rows = [
             self.model(
-                message=message,
-                handle=handle,
+                message_id=message.pk,
+                handle_id=handle.pk,
                 reaction=self.model.clean_reaction(reaction),
                 created_by_id=owner_id,
             )
@@ -2234,7 +2247,20 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             self.sudo(reason="messaging.message.for_record")
             .for_thread(attachment.thread)
             .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
-            .prefetch_related("parts__fragment", "parts__file", "tracking_values", "reactions__handle", "stars")
+            .prefetch_related(
+                models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.all()),
+                models.Prefetch(
+                    "parts__fragment", queryset=apps.get_model("messaging", "Fragment")._base_manager.all()
+                ),
+                models.Prefetch(
+                    "parts__file",
+                    queryset=apps.get_model("storage", "File")._base_manager.select_related("mime_type"),
+                ),
+                models.Prefetch("tracking_values", queryset=apps.get_model("messaging", "TrackingValue").objects.all()),
+                models.Prefetch("reactions", queryset=apps.get_model("messaging", "Reaction").objects.all()),
+                models.Prefetch("reactions__handle", queryset=apps.get_model("parties", "Handle")._base_manager.all()),
+                models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.all()),
+            )
             .annotate(_order_at=MessageQuerySet.chronological_time())
         )
         kinds = {
@@ -2327,13 +2353,13 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 owner_id=owner_id,
             )
             message = self.create(
-                thread=thread,
+                thread_id=thread.pk,
                 platform=thread.platform,
                 direction=self.model.Direction.INTERNAL,
                 status=self.model.MessageStatus.SENT,
                 message_type=strip_null_bytes(message_type or self.model.MessageKind.COMMENT),
-                subtype=subtype,
-                parent=parent,
+                subtype_id=subtype.pk if subtype is not None else None,
+                parent_id=parent.pk if parent is not None else None,
                 preview=body[:280] if body else _tracking_preview(tracking_values),
                 sent_at=sent_at,
                 created_by_id=owner_id,
@@ -2344,30 +2370,30 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     text=body, kind=fragment_model.FragmentKind.PARAGRAPH, owner_id=owner_id
                 )
                 part_model.objects.create(
-                    message=message,
+                    message_id=message.pk,
                     position=position,
                     type="text/plain",
                     disposition=part_model.Disposition.INLINE,
                     role=part_model.PartRole.BODY,
-                    fragment=fragment,
+                    fragment_id=fragment.pk if fragment is not None else None,
                     created_by_id=owner_id,
                 )
                 position += 1
             for file in attachments:
                 part_model.objects.create(
-                    message=message,
+                    message_id=message.pk,
                     position=position,
                     type=_file_mime_type(file),
                     disposition=part_model.Disposition.ATTACHMENT,
                     role=part_model.PartRole.BODY,
                     name=getattr(file, "filename", "") or "attachment",
-                    file=file,
+                    file_id=file.pk if file is not None else None,
                     created_by_id=owner_id,
                 )
                 position += 1
             for row in tracking_rows:
                 tracking_model.objects.create(
-                    message=message,
+                    message_id=message.pk,
                     created_by_id=owner_id,
                     **row,
                 )
@@ -2382,6 +2408,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     thread, user_id=owner_id, message=message
                 )
             self._advance_thread(thread, sent_at)
+            message._meta.get_field("thread").set_cached_value(message, thread)
             message_ingested.send(sender=self.model, instance=message)
         return message
 
@@ -2405,8 +2432,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             should_add = action == "add" or (action == "toggle" and not exists)
             if should_add and not exists:
                 reaction_model._base_manager.create(
-                    message=message,
-                    handle=handle,
+                    message_id=message.pk,
+                    handle_id=handle.pk,
                     reaction=reaction,
                     created_by_id=user.pk,
                 )
@@ -2453,12 +2480,12 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             else:
                 part_model._base_manager.filter(message=message).update(position=models.F("position") + 1)
                 part_model._base_manager.create(
-                    message=message,
+                    message_id=message.pk,
                     position=0,
                     type="text/plain",
                     disposition=part_model.Disposition.INLINE,
                     role=part_model.PartRole.BODY,
-                    fragment=fragment,
+                    fragment_id=fragment.pk if fragment is not None else None,
                     created_by_id=owner_id,
                 )
             message.edit_history = [
@@ -2646,9 +2673,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         # one in the same batch still links (an inline pass would miss it). It is the
         # email graph, so a non-email producer skips it via ``quote_edges=False``.
         if quote_edges:
-            edges = apps.get_model("messaging", "MessageEdge").objects
-            for message in ingested:
-                edges.create_for_message(message)
+            self.resolve_ingest_edges(ingested)
         # Revisit unresolved envelopes after each committed batch so later directory
         # evidence can resolve an older sender without coupling it to first contact.
         if unresolved_handles and not historical:
@@ -2673,6 +2698,13 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             transaction.on_commit(suggest_parties)
         return ingested
 
+    def resolve_ingest_edges(self, messages: Sequence[Any]) -> None:
+        """Resolve quotation edges after every successful message in a page has landed."""
+
+        edges = apps.get_model("messaging", "MessageEdge").objects
+        for message in messages:
+            edges.create_for_message(message)
+
     def expand_retained_part(self, part: Any, children: tuple[ParsedPart, ...]) -> tuple[Any, ...]:
         """Append parsed descendants beneath one retained byte-backed Part.
 
@@ -2692,9 +2724,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 raise ValueError("Part expansion requires a retained byte-backed messaging Part.")
             if not retained.message.has_access("write"):
                 raise PermissionDenied("Denied: cannot expand the retained Message part")
-            existing = tuple(
-                part_model._base_manager.filter(parent=retained).order_by("position", "sqid")
-            )
+            existing = tuple(part_model._base_manager.filter(parent=retained).order_by("position", "sqid"))
             if existing:
                 return existing
             if not children:
@@ -2711,9 +2741,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     owner_id=retained.created_by_id,
                     nameless=nameless,
                 )
-            return tuple(
-                part_model._base_manager.filter(parent=retained).order_by("position", "sqid")
-            )
+            return tuple(part_model._base_manager.filter(parent=retained).order_by("position", "sqid"))
 
     def _ingest_one(
         self,
@@ -2790,11 +2818,12 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     message.save(update_fields=("parent", "updated_at"))
             return message, ()
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
+        parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
         defaults = {
-            "thread": thread,
-            "channel": channel,
-            "sender": sender,
-            "parent": self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread),
+            "thread_id": thread.pk,
+            "channel_id": channel.pk if channel is not None else None,
+            "sender_id": sender.pk if sender is not None else None,
+            "parent_id": parent.pk if parent is not None else None,
             "platform": parsed.platform,
             "direction": parsed.direction,
             "status": self.model.MessageStatus.SYNCED,
@@ -2928,11 +2957,11 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if subject:
             fragment = fragment_model.objects.upsert(text=subject, owner_id=owner_id)
             part_model.objects.create(
-                message=message,
+                message_id=message.pk,
                 position=position,
                 type="text/plain",
                 role=part_model.PartRole.TITLE,
-                fragment=fragment,
+                fragment_id=fragment.pk if fragment is not None else None,
                 created_by_id=owner_id,
             )
             position += 1
@@ -2945,12 +2974,12 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 text=value, kind=fragment_model.FragmentKind.HEADER, owner_id=owner_id
             )
             part_model.objects.create(
-                message=message,
+                message_id=message.pk,
                 position=position,
                 type="text/plain",
                 role=part_model.PartRole.HEADER,
                 name=name,
-                fragment=fragment,
+                fragment_id=fragment.pk if fragment is not None else None,
                 created_by_id=owner_id,
             )
             position += 1
@@ -3005,16 +3034,16 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 owner_id=owner_id,
             )
         part = part_model.objects.create(
-            message=message,
-            parent=parent,
+            message_id=message.pk,
+            parent_id=parent.pk if parent is not None else None,
             position=position,
             type=parsed.type,
             disposition=parsed.disposition,
             role=parsed.role,
             cid=parsed.cid,
             name=part_name,
-            fragment=fragment,
-            file=file_ref,
+            fragment_id=fragment.pk if fragment is not None else None,
+            file_id=file_ref.pk if file_ref is not None else None,
             created_by_id=owner_id,
         )
         for index, child in enumerate(parsed.children):
@@ -3057,9 +3086,9 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if sender is not None:
             seen.add((sender.pk, str(participant_model.ParticipantRole.FROM)))
             participant_model.objects.create(
-                message=message,
-                thread=thread,
-                handle=sender,
+                message_id=message.pk,
+                thread_id=thread.pk,
+                handle_id=sender.pk,
                 role=participant_model.ParticipantRole.FROM,
                 created_by_id=owner_id,
             )
@@ -3080,7 +3109,11 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 continue
             seen.add(key)
             participant_model.objects.create(
-                message=message, thread=thread, handle=handle, role=recipient.role, created_by_id=owner_id
+                message_id=message.pk,
+                thread_id=thread.pk,
+                handle_id=handle.pk,
+                role=recipient.role,
+                created_by_id=owner_id,
             )
             handles.append(handle)
         return handles
@@ -3109,59 +3142,164 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
 
 class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[misc]
-    """Owns the recursive body-part rows; reads compose the ``PartQuerySet`` scopes."""
+    """Owns message-scoped navigation over the recursive body-part rows.
 
-    def reading_order_for_message(self, message: Any) -> list[Any]:
+    Tree reads use the base manager: callers must authorize the parent Message,
+    including record-scoped chatter projections. Each operation loads that
+    message's parts once, with fragment/file/MIME joins, or reuses its native
+    ``parts`` prefetch when its parts and related rows are fully loaded.
+    Incomplete caches fall back to that single joined read. Prefetch the relation with
+    those joins for repeated queries without SQL; no separate tree cache is kept.
+    """
+
+    def reading_order_for_message(self, message: Message) -> list[Part]:
         """Return ``message`` parts flattened in depth-first reading order.
 
-        ``Part.position`` is per parent, so the model's flat ordering is correct for
-        the structural resource table but not for transcript rendering. The message
-        projection needs the MIME tree order: roots by position, then each node's
-        children by position recursively. The parent message read is the gate; this
-        child walk uses the base manager so record-scoped chatter parts stay reachable
-        through the already-authorized ``record_thread`` projection.
+        Roots and siblings sort by ``(position, str(sqid))``. Unreachable
+        orphan/cycle components follow in ``(parent_id, position, str(sqid))``
+        order, visiting each row once. See the manager's read/cache contract.
         """
 
-        cache = getattr(message, "_prefetched_objects_cache", None)
-        if cache is not None and "parts" in cache:
-            parts = list(message.parts.all())
-        else:
-            parts = list(
-                self.model._base_manager.filter(message=message)
-                .select_related("fragment", "file", "file__mime_type")
-                .order_by("parent_id", "position", "sqid")
-            )
-        siblings: dict[Any | None, list[Any]] = {}
-        for part in parts:
-            siblings.setdefault(part.parent_id, []).append(part)
-        for rows in siblings.values():
-            rows.sort(key=lambda part: (part.position, str(part.sqid)))
-
-        ordered: list[Any] = []
-        seen: set[Any] = set()
-
-        def visit(parent_id: Any | None) -> None:
-            for part in siblings.get(parent_id, []):
-                if part.pk in seen:
-                    continue
-                seen.add(part.pk)
-                ordered.append(part)
-                visit(part.pk)
-
-        visit(None)
-        for part in sorted(
-            parts,
+        by_id, siblings = self._parts_for_message(message)
+        roots = sorted(
+            by_id.values(),
             key=lambda part: (
                 -1 if part.parent_id is None else part.parent_id,
                 part.position,
                 str(part.sqid),
             ),
-        ):
-            if part.pk in seen:
-                continue
+        )
+        return self._walk_parts(roots, siblings, seen=set())
+
+    def children_for_message(self, message: Message, parent_id: Any | None) -> list[Part]:
+        """Return direct children in sibling order; ``parent_id=None`` selects roots.
+
+        IDs are Part primary keys within ``message``; an unknown or foreign
+        parent returns an empty list. See the manager's read/cache contract.
+        """
+
+        by_id, siblings = self._parts_for_message(message)
+        if parent_id is not None and parent_id not in by_id:
+            return []
+        return siblings.get(parent_id, [])
+
+    def ancestors_for_message(
+        self,
+        message: Message,
+        part_id: Any,
+        *,
+        stop_at: Callable[[Part], bool] | None = None,
+    ) -> list[Part]:
+        """Return strict ancestors of a Part primary key, nearest parent first.
+
+        Stay within ``message``; unknown IDs return an empty list and missing
+        parents or cycles end the walk without returning the starting part.
+        A row matching ``stop_at`` is included, but its ancestors are skipped.
+        Callers apply kind, content, or membership predicates to the returned
+        rows. See the manager's read/cache contract.
+        """
+
+        by_id, _siblings = self._parts_for_message(message)
+        part = by_id.get(part_id)
+        ancestors: list[Part] = []
+        seen = {part_id}
+        while part is not None:
+            part = by_id.get(part.parent_id)
+            if part is None or part.pk in seen:
+                break
             seen.add(part.pk)
-            ordered.append(part)
-            visit(part.pk)
+            ancestors.append(part)
+            if stop_at is not None and stop_at(part):
+                break
+        return ancestors
+
+    def descendants_for_message(
+        self,
+        message: Message,
+        part_id: Any,
+        *,
+        stop_at: Callable[[Part], bool] | None = None,
+    ) -> list[Part]:
+        """Return strict descendants of a Part primary key in depth-first reading order.
+
+        Stay within ``message``; unknown IDs return an empty list. Visit each
+        row once and exclude the starting part, including in cycles. A row
+        matching ``stop_at`` is included, but its descendants are skipped;
+        the starting part is not tested. Callers apply content/existence
+        predicates to these rows. See the manager's read/cache contract.
+        """
+
+        by_id, siblings = self._parts_for_message(message)
+        if part_id not in by_id:
+            return []
+        return self._walk_parts(siblings.get(part_id, []), siblings, seen={part_id}, stop_at=stop_at)
+
+    def _parts_for_message(self, message: Message) -> tuple[dict[Any, Part], dict[Any | None, list[Part]]]:
+        """Index one message read by primary key and ordered siblings.
+
+        Foreign parents remain absent from the index, so navigation never
+        follows a forward FK descriptor onto another message.
+        """
+
+        parts: list[Part] | None = None
+        cache = getattr(message, "_prefetched_objects_cache", None)
+        if cache is not None and "parts" in cache:
+            # Native prefetch already materialized these rows under the caller's
+            # authorization. Re-evaluating its queryset would re-enter REBAC
+            # before this owner can reject incomplete rows.
+            parts = cache["parts"]._result_cache
+            fragment_field = self.model._meta.get_field("fragment")
+            file_field = self.model._meta.get_field("file")
+            mime_field = file_field.remote_field.model._meta.get_field("mime_type")
+            for part in parts if parts is not None else ():
+                fragment = fragment_field.get_cached_value(part, default=None)
+                file = file_field.get_cached_value(part, default=None)
+                mime_type = mime_field.get_cached_value(file, default=None) if file is not None else None
+                if (
+                    # Reject incomplete prefetches so the fallback batches all navigation reads.
+                    any(row.get_deferred_fields() for row in (part, fragment, file, mime_type) if row is not None)
+                    or (part.fragment_id is not None and fragment is None)
+                    or (part.file_id is not None and file is None)
+                    or (file is not None and file.mime_type_id is not None and mime_type is None)
+                ):
+                    parts = None
+                    break
+        if parts is None:
+            parts = list(
+                self.model._base_manager.filter(message=message)
+                .select_related("fragment", "file", "file__mime_type")
+                .order_by("parent_id", "position", "sqid")
+            )
+        by_id: dict[Any, Part] = {}
+        siblings: dict[Any | None, list[Part]] = {}
+        for part in parts:
+            by_id[part.pk] = part
+            siblings.setdefault(part.parent_id, []).append(part)
+        for rows in siblings.values():
+            rows.sort(key=lambda part: (part.position, str(part.sqid)))
+        return by_id, siblings
+
+    @staticmethod
+    def _walk_parts(
+        roots: Sequence[Part],
+        siblings: dict[Any | None, list[Part]],
+        *,
+        seen: set[Any],
+        stop_at: Callable[[Part], bool] | None = None,
+    ) -> list[Part]:
+        """Flatten ordered branches once, pruning below caller-selected boundaries."""
+
+        ordered: list[Part] = []
+        for root in roots:
+            pending = [root]
+            while pending:
+                part = pending.pop()
+                if part.pk in seen:
+                    continue
+                seen.add(part.pk)
+                ordered.append(part)
+                if stop_at is None or not stop_at(part):
+                    pending.extend(reversed(siblings.get(part.pk, [])))
         return ordered
 
 

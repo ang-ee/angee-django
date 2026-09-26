@@ -4,15 +4,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from contextlib import ExitStack
 from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, models, router, transaction
+from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import system_context
-from rebac.models import active_relationship_model
 
 from angee.base.models import AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.resources.entries import (
@@ -32,7 +30,7 @@ from angee.resources.loader import (
     DryRunRollback,
     build_resource,
 )
-from angee.resources.mixins import ResourceWritePreparation
+from angee.resources.mixins import ResourceLoadMixin
 
 
 class ResourceQuerySet(AngeeUnscopedQuerySet[Any]):
@@ -127,159 +125,63 @@ class ResourceManager(AngeeUnscopedManager.from_queryset(ResourceQuerySet)):  # 
         loaded_groups = [
             (
                 group,
-                build_resource(group.model, group.entry, ledger_model=self.model, addon_aliases=addon_aliases),
+                build_resource(
+                    group.model, group.entry, ledger_model=self.model, addon_aliases=addon_aliases,
+                ),
             )
             for group in row_groups
         ]
-        write_models = [self.model, *(group.model for group in row_groups)]
-        write_models.extend(
-            field.remote_field.through
-            for group in row_groups
-            for field in group.model._meta.many_to_many
-            if field.name in group.dataset.headers
-        )
-        if grant_groups:
-            write_models.append(active_relationship_model())
-        aliases = {
-            self.db,
-            *(router.db_for_write(model) for model in write_models),
-            *(resource.get_db_connection_name() for _group, resource in loaded_groups),
-        }
-        if aliases != {DEFAULT_DB_ALIAS}:
-            raise ResourceLoadError(
-                "Resource rows, ledger and grants must use the default database to share the resource load transaction."
-            )
         rows_by_entry: dict[EntryKey, list[tuple[ResourceGroup, Any]]] = defaultdict(list)
         for group, resource in loaded_groups:
             rows_by_entry[group.entry.key].append((group, resource))
-        owned_groups: dict[str, tuple[type[models.Model], list[tuple[ResourceGroup, Any]]]] = {}
-        consumed: dict[int, str] = {}
-        for group, resource in loaded_groups:
-            owner_hook = getattr(group.model, "resource_import_owner", None)
-            owner = owner_hook() if callable(owner_hook) else None
-            if owner is None:
-                continue
-            if not isinstance(owner, type) or not issubclass(owner, models.Model):
-                raise ResourceLoadError(f"{group.entry.display}: invalid resource import owner")
-            key = f"{owner._meta.label_lower}:{group.entry.addon.name}"
-            previous = owned_groups.setdefault(key, (owner, []))
-            if previous[0] is not owner:
-                raise ResourceLoadError(f"{group.entry.display}: conflicting resource import owners")
-            previous[1].append((group, resource))
-            if id(group) in consumed:
-                raise ResourceLoadError(f"{group.entry.display}: resource group has conflicting consumers")
-            consumed[id(group)] = key
-        entry_positions = {entry.key: index for index, entry in enumerate(entries)}
-        entries_by_key = {entry.key: entry for entry in entries}
-
-        def depends_on_owner(key: EntryKey, owner_entries: set[EntryKey], seen: set[EntryKey]) -> bool:
-            if key in seen:
-                return False
-            seen.add(key)
-            declaration = entries_by_key.get(key)
-            if declaration is None:
-                return False
-            for source in declaration.depends_on:
-                dependency = (declaration.addon.name, source)
-                if dependency in owner_entries or depends_on_owner(dependency, owner_entries, seen):
-                    return True
-            return False
-
-        for owner_key, (_owner, declaration_groups) in owned_groups.items():
-            last_position = max(entry_positions[group.entry.key] for group, _resource in declaration_groups)
-            owner_entries = {group.entry.key for group, _resource in declaration_groups}
-            for entry in entries[:last_position]:
-                if entry.key in owner_entries:
-                    continue
-                if depends_on_owner(entry.key, owner_entries, set()):
-                    raise ResourceLoadError(
-                        f"{entry.display}: dependent rows precede their resource import owner {owner_key}"
-                    )
         grants_by_entry = {group.entry.key: group for group in grant_groups}
         load_result = LoadResult(created=0, updated=0, skipped=0)
         try:
             reason = "resources.validate" if dry_run else "resources.load"
             with system_context(reason=reason), transaction.atomic():
-                with ExitStack() as preparations:
-                    for plan in self._write_preparations(loaded_groups):
-                        preparations.enter_context(plan.owner.prepare_resource_writes(plan.targets))
-                    imported_groups: list[tuple[ResourceGroup, Any]] = []
-                    installed_owners: set[str] = set()
-                    for entry in entries:
-                        if entry.kind == GRANT_KIND:
-                            created, skipped = materialize_grant_groups(
-                                (grants_by_entry[entry.key],),
-                                ledger_model=self.model,
-                                addon_aliases=addon_aliases,
+                resource_classes = {
+                    group.model.resource_class
+                    for group, _ in loaded_groups
+                    if issubclass(group.model, ResourceLoadMixin) and group.model.resource_class is not None
+                }
+                for resource_class in sorted(resource_classes, key=lambda cls: (cls.__module__, cls.__qualname__)):
+                    resource_class.lock_imports(loaded_groups)
+                for entry in entries:
+                    if entry.kind == GRANT_KIND:
+                        created, skipped = materialize_grant_groups(
+                            (grants_by_entry[entry.key],),
+                            ledger_model=self.model,
+                            addon_aliases=addon_aliases,
+                        )
+                        load_result = LoadResult(
+                            created=load_result.created + created,
+                            updated=load_result.updated,
+                            skipped=load_result.skipped + skipped,
+                        )
+                        continue
+                    for group, resource in rows_by_entry[entry.key]:
+                        try:
+                            result = resource.import_data(
+                                group.dataset,
+                                dry_run=False,
+                                raise_errors=True,
+                                rollback_on_validation_errors=True,
+                                use_transactions=False,
                             )
-                            load_result = LoadResult(
-                                created=load_result.created + created,
-                                updated=load_result.updated,
-                                skipped=load_result.skipped + skipped,
-                            )
-                            continue
-                        for group, resource in rows_by_entry[entry.key]:
-                            owner_key = consumed.get(id(group))
-                            if owner_key is not None:
-                                owner, declaration_groups = owned_groups[owner_key]
-                                if owner_key not in installed_owners and group is declaration_groups[-1][0]:
-                                    install = getattr(owner, "import_resource_groups", None)
-                                    if not callable(install):
-                                        raise ResourceLoadError(f"{entry.display}: resource import owner lacks import_resource_groups")
-                                    installed = install(
-                                        tuple(declaration_groups), ledger_model=self.model, addon_aliases=addon_aliases
-                                    )
-                                    load_result = LoadResult(
-                                        created=load_result.created + installed.created,
-                                        updated=load_result.updated + installed.updated,
-                                        skipped=load_result.skipped + installed.skipped,
-                                    )
-                                    imported_groups.extend(declaration_groups)
-                                    installed_owners.add(owner_key)
-                                continue
-                            try:
-                                result = resource.import_data(
-                                    group.dataset,
-                                    dry_run=False,
-                                    raise_errors=True,
-                                    rollback_on_validation_errors=True,
-                                    use_transactions=False,
-                                )
-                            except ResourceImportError as error:
-                                if error.number is not None:
-                                    error.number = group.source_rows[error.number - 1]
-                                raise ResourceLoadError(f"{group.entry.display}: {error}") from error
-                            except IntegrityError as error:
-                                raise ResourceLoadError(f"{group.entry.display}: {error}") from error
-                            load_result = load_result.with_result(result)
-                            imported_groups.append((group, resource))
-                    if not dry_run:
-                        self._run_post_load_hooks(imported_groups)
-                    if dry_run:
-                        raise DryRunRollback()
+                        except ResourceImportError as error:
+                            if error.number is not None:
+                                error.number = group.source_rows[error.number - 1]
+                            raise ResourceLoadError(f"{group.entry.display}: {error}") from error
+                        except IntegrityError as error:
+                            raise ResourceLoadError(f"{group.entry.display}: {error}") from error
+                        load_result = load_result.with_result(result)
+                if not dry_run:
+                    self._run_post_load_hooks(loaded_groups)
+                if dry_run:
+                    raise DryRunRollback()
         except DryRunRollback:
             pass
         return load_result
-
-    @staticmethod
-    def _write_preparations(
-        loaded_groups: list[tuple[ResourceGroup, Any]],
-    ) -> tuple[ResourceWritePreparation, ...]:
-        """Merge model-declared targets so each owner prepares once in stable order."""
-
-        grouped: dict[str, tuple[Any, set[Any]]] = {}
-        for group, resource in loaded_groups:
-            hook = getattr(group.model, "resource_write_preparation", None)
-            plan = hook(resource, group.dataset) if callable(hook) else None
-            if plan is None:
-                continue
-            key = plan.owner._meta.label_lower
-            owner, targets = grouped.setdefault(key, (plan.owner, set()))
-            targets.update(plan.targets)
-        return tuple(
-            ResourceWritePreparation(owner=owner, targets=frozenset(targets))
-            for _key, (owner, targets) in sorted(grouped.items())
-        )
 
     def _run_post_load_hooks(
         self,

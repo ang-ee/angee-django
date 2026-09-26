@@ -36,7 +36,7 @@ describe("the explorer control contract", () => {
       platform: { inList: ["email", "telegram"] },
       account: { exact: "acc_one" },
       role: { exact: "quoted" },
-      text: { iContains: 'invoice "next week"' },
+      text: { iContains: 'document "next week"' },
     });
     expect(value.coverage("Europe/Prague")).toMatchObject({
       platforms: ["email", "telegram"],
@@ -44,7 +44,7 @@ describe("the explorer control contract", () => {
       timezone: "Europe/Prague",
     });
     expect(value.search()).toMatchObject({
-      text: 'invoice "next week"',
+      text: 'document "next week"',
       quoted: false,
     });
     expect(value.values("role")).toEqual(["quoted"]);

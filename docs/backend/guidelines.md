@@ -79,6 +79,8 @@ Before adding backend structure, pass the Django architecture gate:
 The framework wheel and the GraphQL folder addon have a one-way dependency rule
 that layering tests enforce:
 
+- Core modules under `angee/` never import folder addons, including test support.
+  Reusable addon test compositions live in the owning addon.
 - `angee.base` is the model foundation (models, fields, mixins, managers,
   querysets, and native tracking mixins). It must not import `angee.compose`,
   `angee.graphql`, or addon packages.
@@ -110,10 +112,10 @@ Use these owners instead of maintaining another contract in an addon:
 | Migration history and cleanup | [Addon-owned runtime migrations](../composer.md#addon-owned-runtime-migrations) and [migration pitfalls](#migrations-and-runtime) distinguish generated sources from durable history. |
 | Resource load hooks | [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. |
 
-- **Addon discovery is a Django app-registry concern**, not a build-only
-  concern: serving code such as schema building enumerates Django's installed
-  app configs and consumes the native manifest through the capability owner.
-  Serving code never imports `angee.compose` just to list addons.
+- **Compose addon discovery through its native owners.** Follow the
+  [discovery flow](../composer.md#addon-discovery) for available candidates,
+  Django identity, and persisted catalogue state. Serving code never imports
+  `angee.compose` just to list addons.
 - **The resource ledger is owned by the resource addon.** The composer discovers
   `angee.resources.models.Resource` as a normal addon source model and emits it
   under the `resources` label. `angee.base` must not import `angee.resources`.
@@ -127,25 +129,31 @@ Use these owners instead of maintaining another contract in an addon:
 - Manager/QuerySet canon: chainable read scopes live on a `*QuerySet` exposed
   through `Manager.from_queryset(...)`. Factories and mutations stay on the
   manager that owns the write.
+- **Do not add a write API without a consumer.** Delete uncalled write commands;
+  keep required writes on their owning manager/queryset, as
+  [`DecisionManager.decide`](../../addons/angee/workflows/managers.py) does.
 - Model methods own instance invariants, state transitions, validation, and
   side-effect boundaries tied to one row. Managers own factories, upserts,
   reconcile/load flows, and writes that begin from a model class. QuerySets own
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
   promote it to a model or manager method.
+- **Database routing:** Django routers own database selection, including the
+  native fallback to an instance's `_state.db`. Do not thread database aliases
+  through Angee methods or hooks. Use native relation access, `refresh_from_db`
+  when deferred or stale fields need reloading, and ordinary `atomic` and
+  `on_commit` boundaries while preserving locks and batching. A declared
+  read-only external import source may select its database explicitly.
+  Multi-database support extends Django with a router for static model placement;
+  add operation scoping only for a concrete need. REBAC-managed models must write
+  to the default database, together with the relationship and resource stores; the
+  [base system check](../../angee/base/checks.py) validates configured routers
+  against that requirement.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
   owner and `system_context` reason. Platform install, agent provisioning, OAuth
   flows, and resources loading all follow this two-phase shape.
-- **Manager-only writes share one transaction-bound lifetime primitive.** Use
-  `angee.base.authority.TransactionBoundAuthority` when a model/queryset guard
-  must recognize an exact manager-owned mutation inside an already-open outer
-  transaction. Keep the manager's domain payload and validation at that owner;
-  the shared primitive owns only alias, connection, outer-atomic, thread,
-  copied-context revocation, and non-nesting lifetime fences. It is not actor authority,
-  does not open a transaction, and does not replace one-use workflow invocation
-  capabilities.
 - Cross-addon and generated-model references go through Django's app registry
   (`apps.get_model`, `apps.get_app_config`, `apps.get_app_configs`) and `_meta`.
   Never import generated `runtime/` modules or rediscover model/app facts by
@@ -214,9 +222,9 @@ Use these owners instead of maintaining another contract in an addon:
   compatibility surface. Keep typing-only imports under `TYPE_CHECKING`.
   Comment the actual reason and the point at which the import becomes safe;
   a deferral does not permit a forbidden dependency. Use the native submodule
-  discovery owner (or `importlib.util.find_spec`, checking parents first) to
-  distinguish absent optional/generated modules from broken imports, and retain
-  errors raised by modules that exist.
+  discovery owner to distinguish absent optional/generated modules from broken
+  imports, and retain errors raised by modules that exist. The
+  [addon discovery flow](../composer.md#addon-discovery) owns import boundaries.
 - A pure renderer may remain a function when it transforms explicit values
   without interpreting another object's internal policy. If it decides what an
   object means or how its state behaves, move that decision to the owner. Field
@@ -238,16 +246,16 @@ Use these owners instead of maintaining another contract in an addon:
 - Field classes own data-resource classification declarations. Field authors set
   `angee_widget`, `angee_scalar_hint`, and `angee_currency_field` on the field;
   `angee.data.field_classification` reads those declarations and does
-  not special-case addon-owned field classes. Custom widget keys use
-  `namespace.addon.widget` (lowercase segments with digits/underscores); the
-  owning web addon registers the identical key. Unknown bare built-in names
-  remain schema errors.
+  not special-case addon-owned field classes. Custom widget keys follow the
+  [frontend registry naming rule](../frontend/guidelines.md#rules); the owning
+  web addon registers the identical key. Unknown bare built-in names remain
+  schema errors.
 - A computed GraphQL field may declare presentation facts through
   `strawberry_django.field(metadata=...)`. The shared classifiers in
   `angee.data.field_classification` own resolution: surface metadata first,
   Django field declarations second, then the ordinary type fallback. Money
-  projections use `MONEY_CURRENCY_FIELD_METADATA_KEY` from `angee.money.fields`
-  instead of repeating its metadata key. Presentation metadata alone grants no
+  projections use `MONEY_CURRENCY_FIELD_METADATA_KEY` from its owner
+  `angee.data.field_classification` instead of repeating its metadata key. Presentation metadata alone grants no
   ORM write or aggregation capability; those still come from a real model field
   or explicit resource input policy.
 - Manually ordered rows use `FractionalRankField` (NOT NULL) plus a database
@@ -289,7 +297,7 @@ Use these owners instead of maintaining another contract in an addon:
     **explicit per-row** choice, **never** derived from a vendor slug (a vendor
     can have several impls/accounts).
   - *Only behaviour differs, closed framework-known set* → a `StateField` + an
-    eager **handler registry** (`integrate.credentials.register_handler`/`handler_for`).
+    **enum-owned handler mapping** (`integrate.credentials.CredentialKind.handler`).
     The row stores the enum value; the kind projects as a GraphQL enum.
 - **Enum-backed fields use `StateField`, never `CharField(choices=…)`.**
   `StateField` wraps django-choices-field's `TextChoicesField`, so strawberry-django
@@ -303,6 +311,12 @@ Use these owners instead of maintaining another contract in an addon:
   `kind` column. Reach for a child model, not a `StateField`, when the kinds carry
   their own fields (e.g. a `Person` linking to an `iam.User` that an `Organization`
   never has).
+  Optional states declare `null=True, blank=True`; absence is `None` in Python
+  and NULL in storage, so native Strawberry-Django `auto` emits a nullable enum.
+  Do not add blank-string sentinels or per-field GraphQL coercion. The legacy
+  non-null blank constructor remains available for historical migration fields;
+  [`StateField.check()`](../../angee/base/fields.py) rejects that declaration on
+  concrete models, and `tests/test_layering.py` guards active source declarations.
 - **Reference codes with upstream labels remain string fields.** A country code
   identifies external ISO reference data; it is not a row lifecycle state.
   `angee.parties.fields.CountryCodeField` therefore retains the GraphQL/string
@@ -524,7 +538,7 @@ data through REBAC, never a queryset bypass.
   table) plus that const admin, and keep an `| angee/role:admin#member` arm in
   `member` or `rebac.W004` fires.
 - **Const-backing is the one canon for tuple-free role reach.** A resource that
-  grants a *named* role (e.g. `storage_admin`, `accounting_admin`) declares a
+  grants a *named* role (e.g. `storage_admin`, `<consumer>_reviewer`) declares a
   const-backed relation to the role namespace and arrows through
   `effective_member`: `relation manager: storage/role // rebac:const=storage_admin`
   with `permission … = manager->effective_member` (mirror of `admin->member`).
@@ -560,7 +574,7 @@ data through REBAC, never a queryset bypass.
   addon (`@rebac_schema_revision` in its fragment, echoed into the merged file's
   `@rebac_extended_by`), so the base addon does **not** bump its revision for an
   additive extension. **Editing a framework/base-addon `permissions.zed` to name
-  a domain role (`accountant`, `salesperson`, …) is a bug** — the vocabulary
+  a domain role (for example, `<consumer>_reviewer`) is a bug** — the vocabulary
   belongs in the consumer addon that owns the concern.
 - There is no `rebac_roles` command. Grant writable role memberships through
   `rebac.memberships`; change derived membership at its model field. Bulk-created
@@ -615,6 +629,20 @@ and current contracts before applying a historical example to a new deployment.
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.
+- **Django owns static test-table lifecycle.** Register concrete models before
+  database setup in installed, unmigrated apps, and use pytest-django's native
+  setup and transactional flush. Share source compositions through the owning
+  [`workflows`](../../addons/angee/workflows/testing/__init__.py) and
+  [`integrate`](../../addons/angee/integrate/testing/__init__.py) test apps.
+  Framework probes declared after setup, in isolated registries, unmanaged, or
+  under uninstalled or migrated
+  labels use the single [`model_tables`](../../tests/tables.py) helper. It drops only
+  tables it created; it never clears existing tables. Keep production code
+  independent of test support.
+- **Patch inherited Django manager methods on the manager class.** Pytest's
+  `monkeypatch` can restore an instance patch as a bound instance attribute;
+  Django's `db_manager()` copies then retain the original manager and lose their
+  binding. Patch `type(manager)` and accept the manager argument in the spy.
 - **A relocated virtualenv can retain stale launcher shebangs.** Diagnose the
   interpreter and environment owner when a console script cannot spawn; do not
   assume an application failure. [Checks](../checks.md) owns the supported
@@ -657,6 +685,20 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Migrations and runtime
 
+- **Review local-only rows before upgrading pull-only record sync.** The
+  [record-sync driver](../../addons/angee/integrate/README.md) may create them
+  remotely as soon as the first baseline completes. Remove rows that must remain
+  local from the synchronized scope before enabling two-way sync.
+- [`HistoryMixin`](../../angee/base/mixins.py) excludes `GeneratedField` and its
+  subclasses from historical models because their expressions belong to the live
+  row. Base autoconfig enables the native
+  `SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD` setting, so simple-history
+  allocates a separate nullable text change-reason field for each historical
+  model; inherited tracking must never share mutable field instances across models.
+  This is an intentional project-wide default, including consumer and third-party
+  `HistoricalRecords` declarations. Existing histories that used the default
+  `CharField(max_length=100)` need a schema migration to `TextField`; declarations
+  with an explicit `history_change_reason_field` retain their chosen field.
 - **Domain renames need an explicit upgrade path.** When persisted references or
   permission namespaces change, describe which old state needs data migration
   and which reconciliation follows it. Keep those operations out of startup.
@@ -664,6 +706,32 @@ and current contracts before applying a historical example to a new deployment.
   a planned transition to `posts/*`; verify their actual data and migration state
   before selecting the migration and `reconcile_permissions` steps. A fresh
   installation does not inherit an old deployment's repair procedure.
+- **Drain retained extraction inputs before the profile cutover.** Before
+  upgrading a stack from extraction engines to profiles, inventory active durable
+  extraction runs, including suspended runs and retained recognition-page items,
+  for frozen inputs containing `engine`, `engine_config`, `recognition_engine`,
+  or `mapping_engine`. Stop admission and drain or cancel affected runs through
+  the workflow owner before deploying the new input contracts; no permanent
+  compatibility shim accepts the superseded engine inputs. Retained
+  `prepare_pages` outputs without `profile` restore under `none` and must still
+  match their source carriers. Runs that need a domain carrier profile must
+  prepare again: processing rejects a profile that differs from preparation.
+  Rehearse this inventory and drain/cancel
+  check against a restored database copy before the real upgrade, then verify
+  that no affected active runs remain in the deployment. Retain the stack's
+  runtime migration history throughout the rehearsal and upgrade.
+- **Convert optional-state sentinels when upgrading existing databases.**
+  The declared [workflow transition](../../addons/angee/workflows/runtime_migrations/optional_states_nullable.py)
+  and [storage transition](../../addons/angee/storage/runtime_migrations/smart_kind_nullable.py)
+  remove affected checks, make the columns nullable, convert empty strings to
+  NULL, and restore the frozen target constraints. Build materializes these guarded,
+  reversible migrations before downstream schema autodetection. A partial
+  nullable transition retaining legacy checks is rejected: complete or reverse
+  that transition through the consumer's migration history before upgrading.
+  Preserve retained rows and historical migration bodies; a generated schema
+  alteration alone does not perform the data conversion. Regenerate SDL and client types after
+  migration: workflow wait reasons use the `WaitingKind` enum's uppercase member
+  names on the wire.
 - **A structural marker consumed after runtime emission must be emitted too.**
   A non-inherited `__dict__` source-model marker stops at the abstract source unless
   the composer carries it into the concrete runtime class body.
@@ -678,18 +746,31 @@ and current contracts before applying a historical example to a new deployment.
   released/applied migration imports with a narrow compatibility alias where
   needed; [`angee.base.fields`](../../angee/base/fields.py) preserves the historical
   `ImplClassField` path this way. New migrations use the new canonical path.
+  [`angee.base.historical_relationships`](../../angee/base/historical_relationships.py)
+  is frozen compatibility code for materialized historical migrations only;
+  production callers must use current owners.
   Only unreleased, unapplied migrations whose consumers are known may be edited
   as part of the move. Rebuilding generated model sources does not authorize
   rewriting or deleting a deployment's migration history.
-- **Regenerating migration history can orphan an existing database.** Gitignored
-  migrations can still be the applied history of a live development database.
-  Recreating their names or numbering may cause Django to apply existing schema
-  again. Preserve the files and investigate the recorded graph first. A reset is
-  appropriate only for a deliberately disposable database with understood data
-  ownership and a recoverable backup; resolve its configured location rather
-  than assuming a `.angee/data/db.sqlite3` path. For durable deployments, retain
-  and version the migration history with the deployment artifacts. Do not use
-  blanket migration deletion or `--fake` to hide a graph mismatch.
+- **Framework runtime-migration history is carried forward.** Existing stacks
+  must first build and migrate at the upgrade floor: django-angee source revision
+  [`0a55a6fb6c249106d2f5d1407cd82865bb3175f8`](https://github.com/ang-ee/angee-django/commit/0a55a6fb6c249106d2f5d1407cd82865bb3175f8),
+  which still carries the 42 retired addon migration declarations. This ensures
+  applicable declarations have been materialized and applied before upgrading.
+  Preserve those files and generate incremental migrations after the next build;
+  [`RuntimeMigrations`](../../angee/compose/migrations.py) preserves existing
+  materialized bodies when their declarations are removed.
+  Stacks whose migration graph depends on `workflows_ocr` must stop at this floor:
+  the history-only app is absent from newer code. Resolving historical imports
+  alone does not validate dependency labels or establish a forward upgrade path.
+- **Never empty `runtime/*/migrations` on a stack whose database is carried forward.**
+  Gitignored migrations can still be applied history; recreating their names or
+  numbering can cause Django to apply existing schema again. Durable deployments
+  retain and version runtime migration history with their deployment artifacts.
+  Investigate the recorded graph before recovery; blanket migration deletion and
+  `--fake` must not hide a mismatch. A consumer repository must explicitly
+  authorize any reset of its own labels on a rebuilt database; framework upgrades
+  do not authorize a reset.
 - **Data migrations access REBAC-scoped models through `_base_manager`, and
   backfills need a rows-present proof.** A manager with `use_in_migrations = True`
   (iam's `UserManager`, inherited from Django's) rides into the historical model,
@@ -748,23 +829,83 @@ and current contracts before applying a historical example to a new deployment.
   A subclass that needs REBAC side effects overrides the transition; never add
   REBAC writes to the shared mixin.
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
+  [`StateTransitions`](../../angee/base/transitions.py) owns one transaction around
+  the body and success hook, including `save_state`; consumer outer transactions
+  compose through Django savepoints. Since the body runs inside that transaction, follow the
+  [two-phase side-effect rule](#rules): defer non-database effects to
+  `transaction.on_commit(...)` or a post-commit phase.
+  Save guards use `get_transition_save_field(instance)` to read the active save
+  field's attname, or `None`, through the public contract.
+  Compose a custom final save through `persist(instance, *, update_fields)`;
+  the success hook must explicitly forward it to `save_state`, which retains the
+  concurrency guard and transaction.
 - **Integration children use the ordinary emitted Django MRO.** The composer
   emits donors, the child's abstract source, then its concrete parent, so child
   behavior can override parent behavior and cooperative methods delegate with
   `super()`. A verb starting from an `Integration` parent row must still resolve
   the concrete child before dispatch because Django does not downcast multi-table
   parent instances automatically (`sync_integration` is the precedent). Walking
-  `bridge_models` fans a query across every installed bridge table, so it is not
+  `models_with(base=Bridge)` fans a query across every installed bridge table, so it is not
   free.
 - **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
   Lifecycle side effects that must survive those paths belong on Django signals; Agent's
   service-user deactivation is a `post_delete` receiver for this reason.
-- **Business rules belong to Django owners, not database trigger functions.**
-  Cover instance, queryset, bulk, cascade and relation writes in the owning
-  models/managers/querysets, with explicit Django signals where relation writes
-  bypass those owners. Keep declarative constraints and portable row locks.
-  Raw SQL is not a supported business-write path. Retire existing triggers with
-  append-only migrations rather than rewriting materialized history.
+- **Never a database trigger or function.** Business rules, immutability and
+  ownership guards belong to Django owners: cover instance, queryset, bulk,
+  cascade and relation writes in the owning models/managers/querysets, with
+  explicit Django signals where relation writes bypass those owners. Keep
+  declarative constraints (`UniqueConstraint`, `CheckConstraint`) and portable
+  row locks. Forbidden: `CREATE TRIGGER`, `CREATE FUNCTION`, plpgsql, `RunSQL`
+  that installs them, per-backend mirrors of them, and system or deploy checks
+  that verify a trigger exists instead of the rule holding. A trigger is a
+  second, invisible owner of a rule that the ORM cannot see, test, or migrate
+  from models. Raw SQL is not a supported business-write path. On encountering
+  existing trigger machinery, delete it and move the rule to its Django owner
+  in the same change.
+- **Write rules use their Django owners.** Keep persistence policy at the
+  level that owns the invariant; do not add a framework-wide operation,
+  payload, token, or consumption protocol.
+
+  | Concern | Owner |
+  |---|---|
+  | Aggregates and multi-row writes | Explicit domain manager methods |
+  | Row invariants and transitions | Model methods |
+  | Atomicity and concurrency | `transaction.atomic()`, `select_for_update()`, and conditional updates |
+  | Uniqueness and row consistency | Database constraints on the model |
+  | Forbidden bulk operations | Explicit overrides on that domain's queryset |
+  | Retention and deletion | Deliberate FK policies and Django's deletion lifecycle |
+
+  Use `PROTECT`/`RESTRICT` for retained rows. Collector writes bypass model hooks,
+  and Django may apply an unevaluated `SET_NULL` or `SET_DEFAULT` field-update
+  queryset through its public `QuerySet.update()` path. Queryset and
+  instance deletion overrides do not protect against every collector path; choose
+  FK policies deliberately, including generic relations that can cascade into
+  retained rows. This is a modelling rule, not a mechanical system check. Shared
+  retained collections compose [`AppendOnlyQuerySet`](../../angee/base/mixins.py),
+  which rejects generic updates and deletion with a model-labelled `ValidationError`.
+  Its `validate_insert` seam narrows all generic insert entrypoints. Retention
+  commands insert validated batches through `owner_bulk_create`; lease state
+  machines expose exact conditional writes through domain queryset methods using
+  `owner_update`. These public, framework-protected APIs skip only the declaring
+  owner's guard and retain downstream authorization and queryset guards. Each
+  owner supplies its validated predicates and allowed fields. `HierarchyQuerySet`
+  exposes the same `owner_update` contract for derived path maintenance. They do
+  not reopen generic mutations or replace model/FK invariants. `AuditMixin` uses its serializable
+  `audit_set_null` FK policy to materialize the collector selection and schedule
+  Django's native `UpdateQuery.update_batch` path for actor deletion.
+  Never replace these rules with a database trigger or function.
+- **Resource imports use the native import-export lifecycle.** Models composing
+  [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) may declare
+  an `AngeeResource` subclass through `resource_class`; [`build_resource`](../../addons/angee/resources/loader.py)
+  composes it with native identity loading, validation, row results and the single
+  ledger hook. Domain adapters may defer persistence to a manager without
+  inventing another importer or ledger API. A batch preflight may acquire only
+  the complete ordered domain lock set; it must not consume groups or write rows.
+  `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
+  through the same native instance loader; preflights compose this public owner.
+  [`WorkflowDefinitionResource`](../../addons/angee/workflows/resources.py) is the
+  facet-reconciliation example. Source omission and explicit null must remain
+  distinguishable through dataset normalization.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.
@@ -778,19 +919,22 @@ and current contracts before applying a historical example to a new deployment.
   re-declare the column. The field is NULL-safe by design, because a sqid can be
   selected through a nullable join where `django_sqids.SqidsField` crashes on a
   NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
-- **Row locks must keep the SQLite floor.** Wrap `select_for_update()` through the
-  owning queryset/manager's feature-gated helper (`AngeeQuerySet.lock_if_supported`);
-  SQLite is a supported backend and Django 6 silently drops plain `FOR UPDATE`
-  there, so the helper is the greppable contract that keeps lock intent explicit and
-  backend-gated. `HierarchyMixin` path maintenance and `save_state`'s transition
-  guard both route their lock through it.
+- **Row locks must keep the SQLite floor.** `angee.base.scoping.lock_if_supported()`
+  names lock intent for both native querysets and the Angee queryset/manager
+  method, delegating to `select_for_update(of=...)`. Django owns write routing
+  and backend feature checks: SQLite emits no lock SQL, including when `of` is requested. Backends
+  supporting row locks still enforce their supported lock options. Do not set
+  private queryset write state or duplicate Django's feature checks.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
   by column name.** A subtree that must stay inside a tenant or other scope
   declares `hierarchy_scope_fields = ("scope",)` (a `ClassVar` tuple; FKs compare
   by stored id); the mixin rejects a reparent or create under a parent that differs
   on any listed field. It is generic and iam-free — there is no scope-field-name
   fallback, so a scoped tree that omits the declaration silently accepts a parent
-  outside its scope. `StateField` transitions guarded by `save_state` get an
+  outside its scope. Compose `HierarchyQuerySet` before every other queryset
+  guard, including on secondary managers; the base `angee.E021` check rejects
+  ordering or `update` overrides that path maintenance would bypass.
+  `StateField` transitions guarded by `save_state` get an
   optimistic-concurrency guard for free: the committed source is re-read under the
   same lock before the write, so a lost race raises `TransitionNotAllowed` instead
   of double-applying (e.g. double-posting a ledger).
@@ -827,6 +971,12 @@ and current contracts before applying a historical example to a new deployment.
 - **Implementation subclasses must replace every inherited semantic default that changes.**
   See `ImplBase.effective_defaults()` for the merge contract. An OpenAI-compatible
   backend that omits its own `name` and `vendor` silently creates an OpenAI provider row.
+- **Pydantic declarations own implementation config defaults.**
+  [`ImplBase.config_defaults()`](../../angee/base/impl.py) reads static input
+  suggestions from Pydantic's validation JSON Schema independently of FormSpec
+  support; forms project the same declaration downstream. Dynamic factories
+  resolve through `normalize_config()`
+  during runtime validation, keeping generated choice metadata deterministic.
 - **Actor-scoped scalar subqueries and keyset cursors belong to `angee/base`.**
   The `Coalesce(Subquery(related.with_actor().scoped().filter(pk=OuterRef).values(v)[:1]), "")`
   shape and the signed `(order_at, pk)` cursor pager are framework primitives;
@@ -837,8 +987,15 @@ and current contracts before applying a historical example to a new deployment.
 - **GraphQL authorization tests include a non-admin reader.** Admin-only tests
   neither pin deny-hard-fail behavior nor expose a leaked `sudo()` scope.
 - **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
-  The Hasura model-resource create path builds a dummy instance from the input and calls
-  `full_clean()` before saving — two traps follow. (1) A `JSONField(default=dict)`
+  Strawberry prepares one instance, calls `full_clean()`, and passes that same
+  instance to the manager's `insert()` (or native insert-only save when absent).
+  Factory invariants needed by both ORM and GraphQL creation belong on the
+  queryset's cooperative `insert()`, which ordinary `create()` also composes.
+  Model-owned defaults belong in `clean()` and `save()`; see
+  [`Cadence`](../../addons/angee/nexus/models.py). A required field defaulted by
+  `clean()` uses `blank=True` so Django's preceding field validation can defer
+  the missing value to that owner; the database column remains non-null.
+  Two input traps follow. (1) A `JSONField(default=dict)`
   (or `default=list`) needs `blank=True`: Django counts `{}`/`[]` as blank, so a
   `blank=False` container default fails `full_clean` ("cannot be blank") on every
   create. (2) An optional create-input field over a **non-null** column must
@@ -932,10 +1089,16 @@ and current contracts before applying a historical example to a new deployment.
   existing Hasura/Pydantic resource and authored-root helpers; do not construct
   partial resource descriptions for later reconciliation.
 - **Metadata callers consume the built schema's finalized descriptions.**
-  [`GraphQLSchemas`](../../addons/angee/graphql/schema.py) owns resource metadata
-  access and serialization. Do not restore a separate snapshot/merge pipeline
-  that reconstructs partial resource descriptions or validates selections
-  independently of the composed schema.
+  [`GraphQLSchemas`](../../addons/angee/graphql/schema.py) owns schema lookup and
+  attaching the finalized payload;
+  [`angee.data.metadata`](../../angee/data/metadata.py) owns the transport-neutral
+  declarations. Declare aliases and exclusions through Pydantic and compose its
+  JSON serializer (`as_wire` dumps with `mode="json"`, so non-JSON leaves in
+  `Any`-typed fields become strings or lists at build time and an
+  unserializable leaf fails at schema build, not at encoding); do not maintain
+  a recursive metadata serializer or turn descriptions into persistent models. Do not restore a separate snapshot/merge
+  pipeline that reconstructs partial resource descriptions or validates
+  selections independently of the composed schema.
 - **A custom model value field registers its GraphQL wire type when its field
   module imports.** Call `angee.graphql.field_types.register_field_type()` beside
   the field declaration. `GraphQLConfig.ready()` imports schema declarations to
@@ -967,6 +1130,111 @@ and current contracts before applying a historical example to a new deployment.
   `require_instance_for_id` for required reads with the original queryset.
   `resolve_action_target` and IAM's `user_from_public_id` elevate lookup and are
   not interchangeable with readable queries.
+
+### Record sync
+
+[`angee.integrate`](../../addons/angee/integrate/README.md) owns the shared record
+protocol. Backends declare independently ordered stream partitions; domain
+managers retain identity and ingest policy. Event feeds are append-only and
+idempotent by domain identity, so they never create replica links. Mutable record
+replicas retain a remote and local comparison base on each link.
+Replica hashes come from adapters; event feeds deduplicate through domain
+identity and are never payload-hashed. Cursors contain plain finite JSON,
+validated at the driver boundary.
+
+- **The cursor commits with the records it covers.** Extract outside the database
+  transaction; commit the applied page, its quarantine and the stream cursor in
+  one transaction. Semantic record failures use
+  savepoints so later records continue. Infrastructure failures roll back the
+  page. Conditional remote writes happen outside database transactions and are
+  reflected only after their response; no cross-system atomicity is implied.
+- **Compare both sides with their last applied bases.** Unchanged pairs do
+  nothing, remote-only changes apply, and local-only changes may write back with
+  the expected remote version. Both changed, including a remote tombstone against
+  a local edit, is an unresolved conflict: never silently choose a winner. The
+  adapter locks and revalidates its local projection before applying. An origin
+  stamp plus the returned version/hash makes a successful write-back recognizable
+  on its next pull.
+- **Applied evidence has one promoter.** Adapters return the actual mapped
+  payload, mapping version and dependency digest in `ApplyResult`; the driver
+  alone promotes the primary link. Mapping or dependency changes count as remote
+  changes. Intermediate adapter promotion is refused and rolled back. Explicit
+  `target=None` withdraws a binding; omission preserves it.
+- **Prepare the entire page before singleton application.** The optional
+  `prepare_page` hook acquires compound identities and targets in canonical order
+  inside the page transaction, before record savepoints. It does database work
+  only; all remote facts belong to extraction. Optional `on_revalidated` and
+  `on_absent` hooks restore or withdraw native projection visibility in the same
+  transaction as the corresponding link status. Absence hooks run only for actual
+  status transitions, never repeated observations of an already-unavailable row.
+- **A cursor belongs to an epoch.** An invalid/expired cursor or explicit resync
+  request creates the next baseline generation. Retain links and revision
+  history; reverify links through their generation marker. A stale peer beyond
+  tombstone retention requires a baseline. Complete inventory sweeps count
+  absences before confirming tombstones and preserve existing quarantine.
+- **Inventory is a resumable import.** `reconcile_stream` consumes one bounded
+  iterator page per pulse, reading and applying enumerated keys before absence.
+  The driver retains its checkpoint in `SyncStream.reconcile_state`; adapters
+  seek exclusively after the committed key in their own deterministic ordering.
+  Without `supports_identity_reads`, a bounded extraction baseline precedes
+  enumeration.
+  Callers pulse until the checkpoint is empty; only then is reconciliation
+  complete. Root and child absence passes are bounded too.
+- **Compound children belong to one aggregate.** A link's optional immutable
+  `parent` is a root link in the same stream. Enumerate aggregate keys only:
+  children cannot independently become absent, and child retries read and
+  reapply the parent's key. The aggregate adapter owns successful child evidence
+  and discrepancy resolution; a successful parent alone does not resolve them.
+- **Quarantine is not a work queue.** Stream-cycle rescan re-reads due replica
+  identities through `BridgeImpl.read_keys` when `supports_identity_reads` is
+  declared, including tombstones for missing remote keys. It composes the same
+  transactional apply path while preserving the cursor. Only adapters without
+  this operation fall back to a baseline, with that fallback recorded in
+  discrepancy details. Event feeds skip rescan. Semantic failures back off
+  between attempts; conflicts await explicit resolution and never auto-retry.
+  The shared driver owns budgets, repeated-page detection and partition
+  concurrency.
+  Workflow execution, decisions and durable scheduling stay with their existing
+  owners; integrate must not import workflows.
+
+### Bridge cycles as workflow runs
+
+[`angee.workflows_integrate`](../../addons/angee/workflows_integrate/README.md)
+composes workflow execution over integrate's data protocol. The dependency points
+from the composition addon to both owners; integrate never imports workflows.
+
+- **Admission retains one cycle.** Use `admit_bridge_cycle` with the concrete
+  Bridge subject, its queued cadence token and active Integration owner. The
+  native start manager owns publication/input validation and exact deduplication;
+  Deferred input invokes an optional database-only `prepare()` after the
+  workflow and retained Run locks, then locks Bridge before constructing its
+  input. Input construction can lock downstream scope rows. `validate_new`
+  rejects another active cycle under that Bridge lock. The
+  run's dedup key is the only cycle identity. Declare `sync_workflow_key` on the
+  Bridge and immutable facts through `sync_workflow_input`; no secondary schedule.
+- **Stream stages are STANDARD.** Delegate one page to `advance_stream` outside
+  the workflow finalization transaction. The driver atomically commits records,
+  discrepancies and cursor. Retrying a crash between the
+  page commit and workflow finalization reads that cursor. Renew the retained
+  lease during long pages. Resume state retains stream correlation and the sum
+  of reported page counts; the terminal output carries that stage total. It must
+  never duplicate the cursor or reconstruct counts from it. Use stage branches,
+  never a per-record Map.
+- **Coverage keeps data truth authoritative.** OPEN/RETRY discrepancies prevent
+  acceptance. Only the composition addon's coverage gate turns CONFLICT rows
+  into native workflow Decisions; a review does not itself resolve a discrepancy.
+  Coverage is STANDARD: waiting pulses re-drive one bounded stream's due
+  identities outside the workflow transaction, rotating through partitions.
+  Baseline fallback must exhaust before acceptance. Admission continues to bar
+  a competing cycle. Consumer stages use the public `bridge_for_step` resolver
+  to enforce the admitted subject identity.
+- **Terminal delivery uses expected-run CAS.** A terminal run transition retains
+  `RUN_SETTLE` only for a subject with an explicitly registered settler. The Bridge
+  handler delegates to `Bridge.settle_dispatch`, which locks the row and compares
+  `sync_run_id` plus its busy stage before composing `record_sync` or
+  `record_sync_error`. Direct cancel and retry exhaustion therefore clear syncing,
+  and old delivery cannot overwrite
+  a newer cycle. Keep the run pointer for the shared inspection link.
 
 ### Integrations and workers
 
@@ -1066,6 +1334,11 @@ and current contracts before applying a historical example to a new deployment.
   baked into the opencode image (the `OPENCODE_ANTHROPIC_AUTH_PLUGIN` build arg) and using a
   Pro/Max token there violates Anthropic's ToS — enabling it without the plugin silently drops
   Anthropic from OpenCode's model list.
+- **One-shot inference steps compose the shared workflow inference owner.**
+  [`call_inference`](../../addons/angee/workflows_agents/inference.py) combines
+  model-owned access, approval and capability checks with backend request/error
+  policy and workflow budget accounting. Prompt construction belongs to the
+  invoking domain; agents owns native requests, structured decoding and usage.
 - **Task locks are advisory, row locks are authoritative.** Celery task bodies may
   use `angee.jobs.locks.task_lock()` to prevent duplicate workers from doing the
   same external work, but persisted state transitions still use model/queryset row
@@ -1103,6 +1376,51 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Workflow execution
 
+- **Every human review uses the built-in `GateStep`.** Static declarations and
+  dynamic input-bound slots, payloads, action schemas, targets, record access,
+  `clean` predicates, `all_done`, and same-step
+  resumption are variants of one gate contract, not reasons to create an addon
+  gate or call `StepResult.suspend()` directly. Bind upstream values into the
+  step's admitted input before the gate evaluates them.
+- **Decision action branches have one authoring owner.** Call
+  `build_decision_action()` with `ReviewAction` plus the typed review context
+  models. Do not write a consumer-local `oneOf`, serialize fact dictionaries by
+  hand, or call the compiler. `DecisionManager.create_for_suspension()` is the
+  only compiler and admission boundary.
+- **Static gates declare actions, not schemas.** Put fixed action metadata in
+  `GateConfig.actions` and optional editable field schemas in `properties`.
+  Decision admission delegates to `build_decision_action()` and freezes its
+  tagged schema. A hand-written static or slot-local `oneOf` is invalid; dynamic
+  gates may bind a complete schema built by that same owner upstream.
+- **A reviewed mutation subclasses `DecisionApplyStep`.** The dispatcher loads
+  the predecessor Decision identity and resolver. `DecisionManager.locked_resolution`
+  owns retained binding, actor, verdict and current-consumer validation while
+  locking workflow ancestry and the Decision. The bridge then calls a public
+  domain verb with plain values and the actor; that verb owns record locks,
+  permission, expected state and idempotence. Base domain addons never import
+  workflows. An addon that already depends on workflows may expose a domain
+  command accepting the Decision identity, as extraction does. Keep this whole
+  database command in one transaction, with workflow ancestry before Decision
+  before domain rows. Return the domain outcome through the declared `StepResult`.
+- **Decisions bind record references and the resolver, never domain snapshots.**
+  Use [`DecisionApplyStep`](../../addons/angee/workflows/steps.py) and
+  [`DecisionManager.locked_resolution`](../../addons/angee/workflows/managers.py);
+  readers may decode `Decision.payload` into read-only projections but must not
+  persist those projections.
+- **Workflow persistence uses Django owners.** Manager verbs complete aggregate
+  operations; model methods own narrow transitions and keep generic protected
+  writes closed. Conditional updates on retained leases, generations, deadlines
+  and empty settlement facts check their affected row count. Constraints own
+  uniqueness and consistency; append-only querysets and `PROTECT` own retention.
+  Explicit definition sessions carry locked lineage rows through nested edits
+  and bump the draft revision once. No ambient capability authorizes a save,
+  and a transaction is never evidence of caller provenance.
+- **Action admission and engine persistence have distinct principals.** Start,
+  cancel and decide check the pinned initiating actor inside their owning verb.
+  Engine-owned rows persist under a named `system_context(reason=...)`; their
+  generic saves stay closed even to reentrant signals. `DecisionManager.decide`
+  commits resolution, gate settlement, pending-grant removal and durable dispatch
+  together. Callers never complete a separate resolution handshake.
 - **A gate whose assignee is the run owner must not also set that owner as
   requester.** The decision `act` permission is `(assignee − requester) +
   admin` (separation of duties), so `requester == assignee` locks the owner
@@ -1111,20 +1429,30 @@ and current contracts before applying a historical example to a new deployment.
 - **Workflow step implementations persist continuation state in `resume_state`.**
   Pre-suspend side effects must be idempotent because resume replays from the
   journal row, not process memory.
+- **Every workflow Step declares its operation key.** `step_class` has no
+  framework fallback. Register a concrete operation at composition time and
+  name it on every model, resource, and test fixture; never register an abstract
+  catch-all operation to make incomplete declarations executable.
 - **Database-only steps declare `StepImpl.execution_mode = StepExecutionMode.DATABASE_COMMAND`.**
   This runtime contract is separate from the step's `StepEffect` authoring label.
   The retained-attempt engine fences the run, step, and attempt before mutation,
   then commits the domain write, result, artifacts, and continuation dispatch
   together. Keep provider and blob I/O outside this mode.
+- **Replay eligibility is explicit per operation.** The execution mode does not
+  imply recovery safety. Declare `replay_mode = RecoveryMode.FRESH` only when
+  the operation owns that proof, or override `recovery_capability()` from the
+  provider's native idempotency or reconciliation contract. An undeclared
+  operation is not replayable, and the engine rechecks the declaration when it
+  invokes an admitted recovery.
 - **A fenced database command retires another Workflow run through `RUN_CANCEL`.**
   Retain the cancellation intent and target `WorkflowRun` artifact with an
   external wait in the command transaction. The dispatcher cancels the target
-  outside the attempt-write session, retains artifact delivery, and consumes the
+  outside the originating command, retains artifact delivery, and consumes the
   intent together. Continue only after the target is terminal; keep a bounded
   timer on the wait to reconcile a missed or racing delivery.
 - **External domain waits subscribe before reading their predicate.** A retained
-  standard invocation calls `engine.subscribe_external(step_run, record)` for one
-  target per attempt, lets that attempt-row write commit, then re-reads the domain
+  standard invocation calls `engine.subscribe_external(step_run, records)` for its
+  complete target set, lets that attempt-row write commit, then re-reads the domain
   record before deciding whether to wait. A database command held in its atomic
   transaction cannot subscribe this way.
   The native domain transition saves an artifact delivery intent
@@ -1133,19 +1461,22 @@ and current contracts before applying a historical example to a new deployment.
   A delivery while the step runs increments the run generation, so finalization
   makes a subsequent wait due; a delivery after finalization wakes its exact
   external wait. Keep a bounded reconciliation timer for missed integrations.
+- **Continuation joins compose retained admission and delivery; they do not
+  re-prove child identity.** See the
+  [workflow operation contract](../../addons/angee/workflows/README.md).
+- **`emit` owns declared projection and artifact binding.** See the
+  [workflow operation contract](../../addons/angee/workflows/README.md).
 - **Workflow joins count rows, not broker messages.** `join_rule` is evaluated
   over sibling `StepRun` rows.
+- **Steps with multiple mutually exclusive predecessors declare `join_rule: one_success`.**
+  The default `ALL_SUCCESS` can stall waiting for a missing predecessor in
+  [`_join_decision`](../../addons/angee/workflows/engine.py);
+  [`Workflow.graph_diagnostics`](../../addons/angee/workflows/models.py) does not
+  detect this stall.
 - **Never trust a workflow step to self-limit.** The engine owns `max_steps` and
   budget enforcement.
 - **Invalid decision resolution re-opens the decision.** It increments the
   attempt audit and leaves journal history immutable.
-- **Terminal Decision delegation is consumed only by the current fenced
-  invocation.** A database-command consumer may pass its complete locked record
-  basis to `consume_decision_resolution()`. The active human resolver must
-  either retain ordinary read access to every record or the Decision's protected
-  record delegation must exactly cover that basis for the same resource types.
-  Consumption does not restore preview access, persist a capability, or create
-  continuing grants after the Decision settles.
 - **Workflow event triggers consume the declared change feed.** A trigger's
   target model must declare `changes()`; otherwise validation tells the addon to
   declare `changes()` for the model to join the change feed.

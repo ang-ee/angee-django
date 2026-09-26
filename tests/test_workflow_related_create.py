@@ -8,7 +8,7 @@ from django.core.management import call_command
 from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
 
-from tests.workflows import Edge, Step, Trigger, Workflow
+from angee.workflows.testing.models import Edge, Step, Trigger, Workflow
 
 User = get_user_model()
 
@@ -16,12 +16,12 @@ User = get_user_model()
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("storage", ("denormalized", "registry"))
 def test_workflow_children_preflight_the_proposed_parent_relation(
-    workflow_tables: None,
+    composed_tables: None,
     storage: str,
 ) -> None:
     """The workflow writer may create children; an unrelated actor may not."""
 
-    del workflow_tables
+    del composed_tables
     with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
         call_command("rebac", "sync", verbosity=0)
         writer = User.objects.create_user(username=f"workflow-writer-{storage}")
@@ -34,18 +34,18 @@ def test_workflow_children_preflight_the_proposed_parent_relation(
             )
 
         with actor_context(writer):
-            source = Step.objects.create(workflow=workflow, key="source", name="Source", is_entry=True)
-            target = Step.objects.create(workflow=workflow, key="target", name="Target")
+            source = Step.objects.create(
+                workflow=workflow, key="source", name="Source", step_class="fixture", is_entry=True
+            )
+            target = Step.objects.create(workflow=workflow, key="target", name="Target", step_class="fixture")
             edge = Edge.objects.create(workflow=workflow, source=source, target=target)
             trigger = Trigger.objects.create(workflow=workflow)
 
-        assert {source.created_by_id, target.created_by_id, edge.created_by_id, trigger.created_by_id} == {
-            writer.pk
-        }
+        assert {source.created_by_id, target.created_by_id, edge.created_by_id, trigger.created_by_id} == {writer.pk}
 
         with actor_context(outsider):
             with pytest.raises(PermissionDenied):
-                Step.objects.create(workflow=workflow, key="denied", name="Denied")
+                Step.objects.create(workflow=workflow, key="denied", name="Denied", step_class="fixture")
             with pytest.raises(PermissionDenied):
                 Edge.objects.create(workflow=workflow, source=source, target=target)
             with pytest.raises(PermissionDenied):

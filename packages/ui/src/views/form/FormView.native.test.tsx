@@ -2,15 +2,15 @@
 
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useForm } from "react-hook-form";
-import { ModelMetadataProvider, refineResourcesFromDataResources, schemaFieldMetadataFromDataResources, type ModelMetadata, type Row } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
+import { createUiTestProviders } from "../../testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { defaultWidgets } from "../../widgets";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
@@ -56,8 +56,8 @@ const resource = testDataResource("notes.Note", {
   })),
 });
 const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).labels["notes.Note"]!;
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+const { Provider, createClient, clearClients } = createUiTestProviders({ resources: [resource], apiUrl: "test://notes" });
+afterEach(() => { cleanup(); clearClients(); });
 
 test("a domain controlled value uses FormView interaction ownership and remounts by full name", () => {
   const start = vi.fn(); const commit = vi.fn();
@@ -147,9 +147,8 @@ async function fixture(options: {
     record = { ...record, ...(variables as Row) };
     return { data: record };
   });
-  const provider = { getApiUrl: () => "test://notes", getOne, update, create: update, getList: vi.fn(async () => ({ data: [], total: 0 })), deleteOne: vi.fn() } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  clients.push(client);
+  const provider = { getOne, update, create: update, getList: vi.fn(async () => ({ data: [], total: 0 })) } satisfies RefineTestDataProvider;
+  const client = createClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   let surface!: FormViewSaveSurface;
   let acknowledgedSource = options.acknowledgedSource;
@@ -170,8 +169,8 @@ async function fixture(options: {
     ))}</>;
   }
   function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
-    return <Refine resources={[...refineResourcesFromDataResources([resource])]} dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-      <RouterContextProvider router={router}><ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    return <Provider dataProvider={provider} queryClient={client}>
+      <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
         {options.publicView ? (
           <FormView
             resource="notes.Note"
@@ -192,8 +191,8 @@ async function fixture(options: {
         ) : (
           <Probe key={recordId ?? "create"} recordId={recordId} mountedFields={mountedFields} viewFields={viewFields} boundFields={boundFields} />
         )}
-      </AppRuntimeProvider></ToastProvider></ModalsHost></ModelMetadataProvider></RouterContextProvider>
-    </Refine>;
+      </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+    </Provider>;
   }
   const view = render(<Tree />);
   if (!options.publicView && id !== null && options.acknowledgedSource?.values !== null) {

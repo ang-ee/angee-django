@@ -43,6 +43,7 @@ from angee.integrate.schema import (
     ConnectIntegrationResult,
     CredentialType,
     ExternalAccountType,
+    IntegrationLabelMixin,
     VendorType,
     apply_integration_patch_fields,
     connect_integration_target,
@@ -72,7 +73,7 @@ User = get_user_model()
 
 
 @strawberry_django.type(InferenceProvider)
-class InferenceProviderType(AngeeNode):
+class InferenceProviderType(IntegrationLabelMixin, AngeeNode):
     """Admin projection of an inference provider child model."""
 
     vendor: VendorType
@@ -195,6 +196,8 @@ class AgentType(AngeeNode):
     lifecycle: auto
     runtime_status: auto
     last_error: auto
+    expects_service: bool = strawberry_django.field(only=["runtime_class"])
+    can_chat: bool = strawberry_django.field(only=["runtime_status", "runtime_class", "service"])
     can_provision: bool
     can_deprovision: bool
     can_delete: bool
@@ -519,7 +522,7 @@ class InferenceProviderCreateMutation:
             ),
         }
         if data.account is strawberry.UNSET and (credential := attrs.get("credential")) is not None:
-            attrs["account"] = getattr(credential, "external_account", None)
+            attrs["account"] = credential.external_account
         if data.name:
             attrs["name"] = data.name
         if data.base_url:
@@ -550,6 +553,7 @@ class InferenceProviderConnectMutation:
                 InferenceProvider,
                 id,
                 reason="agents.graphql.connect_inference_provider",
+                queryset=InferenceProvider._default_manager.select_related("vendor"),
             )
             return connect_integration_target(
                 info,
@@ -637,9 +641,10 @@ def _mint_session(agent: Any) -> dict[str, Any]:
 def _agent_for_view(view: dict[str, Any]) -> Any:
     """Return the running agent that serves ``view`` for the current actor, or ``None``.
 
-    v1 routes every view to the **actor's own** running, service-backed agent (the most
-    recently updated). ``view["type"]`` is the routing seam — a later slice dispatches on
-    it to pick a view-specialised agent — so it is read here even though v1 ignores it.
+    v1 routes every view to the **actor's own** running agent with an available chat
+    transport (the most recently updated). ``view["type"]`` is the routing seam — a
+    later slice dispatches on it to pick a view-specialised agent — so it is read
+    here even though v1 ignores it.
     """
 
     del view  # routing seam: a later slice dispatches on ``view["type"]``; v1 ignores it
@@ -653,10 +658,7 @@ def _agent_for_view(view: dict[str, Any]) -> Any:
             .select_related("model")
             .order_by("-updated_at")
         )
-        return next(
-            (agent for agent in candidates if agent.runtime_backend.runs_in_process or bool(agent.service)),
-            None,
-        )
+        return next((agent for agent in candidates if agent.can_chat), None)
 
 
 @strawberry.type
@@ -705,7 +707,12 @@ class InferenceActionMutation:
     def refresh_provider_models(self, id: PublicID) -> ActionResult:
         """Re-list one provider's models into the catalogue now."""
 
-        with action_target(InferenceProvider, id, reason="agents.graphql.refresh_provider_models") as provider:
+        with action_target(
+            InferenceProvider,
+            id,
+            reason="agents.graphql.refresh_provider_models",
+            queryset=InferenceProvider._default_manager.select_related("credential__oauth_client", "vendor"),
+        ) as provider:
             try:
                 count = provider.refresh_models()
             except Exception as error:  # noqa: BLE001 — backend failure is the result, not a 500

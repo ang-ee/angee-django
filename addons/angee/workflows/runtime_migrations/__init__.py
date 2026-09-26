@@ -1,1 +1,1 @@
-"""Addon-owned runtime migrations for workflow definitions."""
+"""Self-contained upgrade transitions copied into composed runtime history."""

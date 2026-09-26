@@ -1,18 +1,13 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import {
-  ModelMetadataProvider,
-  refineResourcesFromDataResources,
-  schemaFieldMetadataFromDataResources,
-} from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { type TypedDocumentNode } from "@angee/refine";
-import { Refine, type DataProvider, useList, useOne } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
+import { useList, useOne } from "@refinedev/core";
 import gql from "graphql-tag";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 
@@ -30,12 +25,14 @@ const DECIDE = gql`
   }
 ` as TypedDocumentNode<DecideResult, DecideVariables>;
 
-const clients: QueryClient[] = [];
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://query",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } },
+});
 
 afterEach(() => {
   cleanup();
-  clients.forEach((client) => client.clear());
-  clients.length = 0;
+  clearClients();
 });
 
 test("an authored resource mutation refreshes the declared resource's list and real-id detail only", async () => {
@@ -56,36 +53,9 @@ test("an authored resource mutation refreshes the declared resource's list and r
   }));
   const resource = testDataResource("parties.PartyHandle");
   const unrelated = testDataResource("notes.Note");
-  const metadata = schemaFieldMetadataFromDataResources([resource, unrelated]);
-  const client = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, staleTime: Infinity },
-      mutations: { retry: false },
-    },
-  });
-  clients.push(client);
-  const provider = {
-    getApiUrl: () => "test://query",
-    getList,
-    getOne,
-    create: vi.fn(),
-    update: vi.fn(),
-    deleteOne: vi.fn(),
-    custom,
-  } as unknown as DataProvider;
-
+  const dataProvider = { getList, getOne, custom };
   function Providers({ children }: { children: ReactNode }) {
-    return (
-      <Refine
-        resources={[...refineResourcesFromDataResources([resource, unrelated])]}
-        dataProvider={{ default: provider, console: provider }}
-        options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}
-      >
-        <ModelMetadataProvider metadata={metadata}>
-          {children}
-        </ModelMetadataProvider>
-      </Refine>
-    );
+    return <Provider resources={[resource, unrelated]} dataProvider={dataProvider}>{children}</Provider>;
   }
 
   const { result } = renderHook(() => {

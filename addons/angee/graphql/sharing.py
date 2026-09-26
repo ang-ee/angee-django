@@ -109,8 +109,12 @@ class RecordAccessMutation:
         if not target_ids:
             raise ValueError("Granting record access requires at least one target id.")
         permission = model.record_access_permission(relation)
+
         with transaction.atomic():
-            targets = [authorized_permission_target(info, model, target_id, permission) for target_id in target_ids]
+            targets = [
+                authorized_permission_target(info, model, target_id, permission)
+                for target_id in target_ids
+            ]
             subject_ref = _grant_subject(subject)
             for target in targets:
                 target.grant_record_access(relation, subject_ref)
@@ -133,8 +137,12 @@ class RecordAccessMutation:
             raise ValueError("Revoking record access requires at least one target id.")
         permission = model.record_access_permission(relation)
         subject_ref = canonical_subject_ref(subject)
+
         with transaction.atomic():
-            targets = [authorized_permission_target(info, model, target_id, permission) for target_id in target_ids]
+            targets = [
+                authorized_permission_target(info, model, target_id, permission)
+                for target_id in target_ids
+            ]
             for target in targets:
                 target.revoke_record_access(relation, subject_ref)
         return ActionResult(ok=True, message="Record access revoked.")

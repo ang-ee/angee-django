@@ -12,6 +12,7 @@ from rebac import system_context
 
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge
+from angee.integrate.sync import SyncDispatch
 
 
 def run_bridge_sync_job(
@@ -37,6 +38,8 @@ def run_bridge_sync_job(
                 bridge.release_sync_queue(now=now)
                 return {"ok": True, "items": 0, "skipped": True}
             items = bridge.run_sync(now=now)
+    if items is SyncDispatch.DISPATCHED:
+        return {"ok": True, "items": 0, "skipped": False, "dispatched": True}
     return {"ok": True, "items": items, "skipped": False}
 
 

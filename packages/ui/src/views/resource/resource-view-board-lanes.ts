@@ -129,9 +129,7 @@ export function useBoardLaneState<TRow extends Row>({
   }, [laneResult.options, laneResult.rows, source?.foldField]);
   const dataResource = modelMetadata?.resource ?? null;
   const update = useUpdate<RowRecord, HttpError, Record<string, unknown>>({
-    resource: source && dataResource
-      ? refineResourceName(dataResource)
-      : "__angee_disabled__",
+    resource: refineResourceName(source ? dataResource : null),
     dataProviderName: source ? dataResource?.schemaName : undefined,
     invalidates: ["list", "many", "detail"],
     successNotification: false,

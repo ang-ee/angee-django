@@ -11,11 +11,85 @@ import { deserializeFormSpec, formSpecInitialValues, normalizeFormSpecValues } f
 import { LabeledDescriptorField } from "./MutationDialog";
 import { listWidget, objectWidget } from "./StructuredField";
 import { structuredFieldErrorPaths } from "./field-values";
+import type { WidgetRenderProps } from "../../widgets/types";
+import { RowsField, type RowsValue } from "./RowsField";
 
 const metadata = schemaFieldMetadataFromDataResources([]);
 
 describe("structured FormSpec widgets", () => {
   afterEach(cleanup);
+
+  test("edits titled fixed rows and nested lists without losing hidden retained values", async () => {
+    const [field] = sectionedFields();
+    const changes = vi.fn();
+    const focusRef = vi.fn<(target: { focus(): void } | null) => void>();
+    const retainedRow = { identity: "row-1", title: "First", lines: [
+      { identity: "line-1", fingerprint: "fingerprint-1", description: "Original" },
+    ] };
+    const secondRow = { identity: "row-2", title: "Second", lines: [] };
+    function Harness() {
+      const [value, setValue] = React.useState<RowsValue>([retainedRow, secondRow]);
+      return <ModelMetadataProvider metadata={metadata}><AppRuntimeProvider runtime={{ widgets: sectionedWidgets }}>
+        <LabeledDescriptorField
+          field={{ ...field!, widget: "sectionedRows" }}
+          value={value}
+          messages={["Review the records.", "records.0.lines.0.description: Correct this description."]}
+          controlRef={focusRef}
+          onChange={(next) => { changes(next); setValue(next as RowsValue); }}
+        />
+      </AppRuntimeProvider></ModelMetadataProvider>;
+    }
+    render(<Harness />);
+
+    expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
+    expect(screen.queryByText("Identity")).toBeNull();
+    expect(screen.queryByText("Fingerprint")).toBeNull();
+    const title = screen.getAllByRole("textbox", { name: "Title" })[0]!;
+    const description = await screen.findByRole("textbox", { name: "Description" });
+    const message = screen.getByText("Correct this description.");
+    expect(description.getAttribute("aria-describedby")?.split(" ")).toContain(message.id);
+    const group = screen.getByRole("group", { name: "Records" });
+    expect(group.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText("Review the records.").id);
+    expect(screen.queryByText(/records:/)).toBeNull();
+    const listLabel = screen.getAllByText("Lines")[0]!;
+    expect(listLabel.parentElement?.parentElement?.className).toContain("md:col-span-2");
+
+    focusRef.mock.calls.at(-1)?.[0]?.focus();
+    expect(document.activeElement).toBe(title);
+    fireEvent.change(title, { target: { value: "Revised" } });
+    expect(screen.getByRole("heading", { name: "Revised" })).toBeTruthy();
+    expect(document.activeElement).toBe(title);
+    fireEvent.change(description, { target: { value: "Corrected" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Add item" })[0]!);
+
+    const next = changes.mock.calls.at(-1)?.[0] as RowsValue;
+    expect(next).toEqual([
+      { ...retainedRow, title: "Revised", lines: [
+        { ...retainedRow.lines[0], description: "Corrected" },
+        { description: "" },
+      ] },
+      secondRow,
+    ]);
+    expect(next[1]).toBe(secondRow);
+    expect(retainedRow.title).toBe("First");
+  });
+
+  test("renders titled rows read-only through the same widget without hidden controls", async () => {
+    const [field] = sectionedFields();
+    render(<AppRuntimeProvider runtime={{ widgets: sectionedWidgets }}>
+      <LabeledDescriptorField field={{ ...field!, widget: "sectionedRows" }}
+        value={[{ identity: "row-1", title: "Retained", lines: [
+          { identity: "line-1", fingerprint: "fingerprint-1", description: "Retained line" },
+        ] }]} readOnly onChange={vi.fn()} />
+    </AppRuntimeProvider>);
+
+    expect(await screen.findByRole("heading", { name: "Retained" })).toBeTruthy();
+    expect(await screen.findByText("Retained line")).toBeTruthy();
+    expect(screen.queryByText("Identity")).toBeNull();
+    expect(screen.queryByText("Fingerprint")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
 
   test("edits nested fields and scalar/object lists through the native registry", async () => {
     const fields = structuredFields();
@@ -187,6 +261,36 @@ describe("structured FormSpec widgets", () => {
     expect((await screen.findByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("Unsaved");
   });
 });
+
+function SectionedEdit(props: WidgetRenderProps<RowsValue>) {
+  return <RowsField {...props} rowTitle={(row) => String(row.title)} />;
+}
+
+const sectionedWidgets = {
+  ...defaultWidgets,
+  sectionedRows: {
+    edit: SectionedEdit,
+    read: (props: WidgetRenderProps<RowsValue>) => <SectionedEdit {...props} readOnly />,
+  },
+};
+
+function sectionedFields() {
+  return deserializeFormSpec({ properties: {
+    records: { type: "array", label: "Records", widget: "rows", items: {
+      type: "object", properties: {
+        identity: { type: "string", label: "Identity", hidden: true },
+        title: { type: "string", label: "Title" },
+        lines: { type: "array", label: "Lines", widget: "list", items: {
+          type: "object", widget: "object", properties: {
+            identity: { type: "string", label: "Identity", hidden: true, omittable: true },
+            fingerprint: { type: "string", label: "Fingerprint", hidden: true, omittable: true },
+            description: { type: "string", label: "Description" },
+          },
+        } },
+      },
+    } },
+  } }, defaultWidgets);
+}
 
 function structuredFields() {
   return deserializeFormSpec({

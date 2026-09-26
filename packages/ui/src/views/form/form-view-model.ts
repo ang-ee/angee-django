@@ -22,7 +22,7 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import { isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
+import { isStructuredPresenceField, structuredFieldErrorPaths, textValue } from "./field-values";
 
 export type FormValues = Record<string, unknown>;
 const MISSING_DOTTED_VALUE = Symbol("missing-dotted-value");
@@ -183,19 +183,13 @@ export function recordRepresentationValue(
   const values = record as Record<string, unknown>;
   const representation = metadata.resource.recordRepresentation;
   const value = representation ? values[representation] : undefined;
-  if (scalarTitleText(value)) return value;
+  if (textValue(value)) return value;
   return values[metadata.resource.query.identity.field];
 }
 
 export function titleText(value: unknown, fallback: string): string {
-  const text = scalarTitleText(value);
+  const text = textValue(value);
   return text || fallback;
-}
-
-function scalarTitleText(value: unknown): string {
-  return typeof value === "string" || typeof value === "number"
-    ? String(value).trim()
-    : "";
 }
 
 export function addFieldSelection(
@@ -528,21 +522,36 @@ export function gridFieldClass(field: FieldDescriptor): string | undefined {
   return fieldWidgetId(field) === "tagInput" ? "col-span-full" : undefined;
 }
 
-export function fieldErrorMessages(errors: readonly unknown[], path?: string): string[] {
-  return errors.flatMap((error) => nestedFieldErrorMessages(error, path));
+/** Whether a descriptor owns structured child controls through a template. */
+export function isCompositeFieldDescriptor(field: FieldDescriptor): boolean {
+  return Boolean(field.objectTemplate || field.itemTemplate || ("rowTemplate" in field && field.rowTemplate));
 }
 
-function nestedFieldErrorMessages(error: unknown, path?: string): string[] {
-  if (error && typeof error === "object" && "message" in error
-    && (typeof error.message === "string" || typeof error.message === "number")) {
+/**
+ * Exact-field messages stay bare. With a root path, descendants keep their full
+ * dotted paths for nested routing; an empty root produces relative paths.
+ * Omit the root to leave every message unprefixed.
+ */
+export function fieldErrorMessages(errors: readonly unknown[], path?: string): string[] {
+  return errors.flatMap((error) => nestedFieldErrorMessages(error, path, path));
+}
+
+function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: string): string[] {
+  if (error == null) return [];
+  if (typeof error !== "object") return [String(error)];
+  const messages: string[] = [];
+  const hasMessage = "message" in error
+    && (typeof error.message === "string" || typeof error.message === "number");
+  if (hasMessage) {
     const message = String(error.message);
-    return path ? [`${path}: ${message}`] : [message];
+    messages.push(path && path !== rootPath ? `${path}: ${message}` : message);
   }
-  if (!error || typeof error !== "object") return [fieldErrorMessage(error)];
-  return Object.entries(error).flatMap(([name, child]) => {
-    if (name === "ref" || name === "type" || child === undefined) return [];
-    return nestedFieldErrorMessages(child, path ? `${path}.${name}` : name);
-  });
+  return messages.concat(Object.entries(error).flatMap(([name, child]) => {
+    if (name === "ref" || name === "type" || child === undefined
+      || (hasMessage && (name === "message" || name === "types"))) return [];
+    const childPath = path === undefined ? undefined : path ? `${path}.${name}` : name;
+    return nestedFieldErrorMessages(child, childPath, rootPath);
+  }));
 }
 
 export function fieldValidationSummary(
@@ -556,19 +565,6 @@ export function fieldValidationSummary(
   return fields.length > 0
     ? t("form.fixHighlightedFieldsNamed", { fields: fields.join(", ") })
     : t("form.fixHighlightedFields");
-}
-
-function fieldErrorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (
-    error &&
-    typeof error === "object" &&
-    "message" in error &&
-    (typeof error.message === "string" || typeof error.message === "number")
-  ) {
-    return String(error.message);
-  }
-  return String(error);
 }
 
 export function recordSubtitleParts(

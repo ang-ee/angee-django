@@ -17,16 +17,26 @@ import {
 import { enWorkflowsMessages } from "./i18n";
 import { RunWorkflowMenu } from "./RunWorkflowMenu";
 import { decisionContextWidgets } from "./views/DecisionContextWidgets";
+export { decisionReviewFact } from "./views/DecisionContextWidgets";
 import { WorkflowImplementationDetails } from "./views/WorkflowImplementationDetails";
-export { WORKFLOW_DECISION_CONTENT_SLOT, WORKFLOW_TRIGGER_FORM_FIELDS_SLOT } from "./slots";
+export {
+  WORKFLOW_DECISION_CONTENT_SLOT,
+  WORKFLOW_TRIGGER_FORM_FIELDS_SLOT,
+} from "./slots";
+export {
+  compileDecisionActionFormSpec,
+  type DecisionActionFormSpec,
+  type DecisionFormActionOption,
+  type DecisionFormValidation,
+} from "./decision-action-form";
 
 import { CHATTER_TAB_SEARCH_KEY } from "@angee/ui";
 import { DECISION_SEARCH_KEY, WORKFLOW_RUN_SEARCH_KEY } from "./decision-navigation";
 export {
   DECISION_SEARCH_KEY,
   decisionHref,
-  decisionSearch,
-  workflowSubjectActionSearch,
+  decisionSearchPatch,
+  workflowSubjectActionSearchPatch,
 } from "./decision-navigation";
 
 const WORKFLOWS_ID = "workflows";
@@ -143,9 +153,24 @@ export {
   useInitialDecisionPeek,
 } from "./views/ApprovalTask";
 export type { ApprovalTaskProps, ApprovalVerdict, WorkflowDecisionContentComponent, WorkflowDecisionContentProps, WorkflowDecisionRecordReference } from "./views/ApprovalTask";
+export {
+  DecisionContextUnavailable,
+  WorkflowDecisionScaffold,
+  NativeWorkflowDecisionScaffold,
+} from "./views/WorkflowDecisionScaffold";
+export type {
+  NativeWorkflowDecisionScaffoldProps,
+  WorkflowDecisionContext,
+  WorkflowDecisionContextDetails,
+  WorkflowDecisionHeader,
+  WorkflowDecisionReference,
+  WorkflowDecisionScaffoldProps,
+  WorkflowDecisionWarning,
+} from "./views/WorkflowDecisionScaffold";
 export { WorkflowApprovals } from "./views/WorkflowApprovals";
 export type { WorkflowApprovalsProps } from "./views/WorkflowApprovals";
 export { useWorkflowsT } from "./i18n";
 export { workflowTriggerAssignmentForm } from "./views/WorkflowTriggersPanel";
 export { WorkflowSubjectHistoryPane } from "./views/WorkflowSubjectHistoryPane";
+export type { WorkflowSubjectHistoryPaneProps } from "./views/WorkflowSubjectHistoryPane";
 export { useWorkflowSubjectActionResult } from "./useWorkflowSubjectActionResult";

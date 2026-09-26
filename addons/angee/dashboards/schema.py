@@ -13,9 +13,8 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from django.db.models import Q
-from rebac import PermissionDenied, system_context
+from rebac import PermissionDenied
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -187,29 +186,6 @@ def _summary_offset(user: Any, version: str, cursor: str | None) -> int:
     return offset
 
 
-def _snapshot(dashboard: Any) -> dict[str, Any]:
-    widgets = []
-    for widget in dashboard.widgets.all().order_by("sequence", "sqid"):
-        widgets.append(
-            {
-                "schemaVersion": widget.spec_version,
-                "id": widget.widget_key,
-                **({"definitionRef": widget.definition_ref} if widget.definition_ref else {}),
-                "kind": widget.kind,
-                "kindVersion": widget.kind_version,
-                "title": widget.title,
-                "data": widget.data,
-                "options": widget.options,
-                "x": widget.x,
-                "y": widget.y,
-                "w": widget.w,
-                "h": widget.h,
-                "isArchived": widget.is_archived,
-            }
-        )
-    return {"schemaVersion": dashboard.spec_version, "columns": dashboard.columns, "widgets": widgets}
-
-
 def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
     return DashboardPayload(
         status=status,
@@ -217,7 +193,7 @@ def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
         revision=dashboard.revision,
         name=dashboard.name,
         description=dashboard.description,
-        snapshot=cast(JSON, _snapshot(dashboard)),
+        snapshot=cast(JSON, dashboard.snapshot()),
         can_edit=dashboard.has_access("write"),
         can_reset=dashboard.scope != "personal" and dashboard.has_access("reset"),
         can_archive=dashboard.scope == "personal" and dashboard.has_access("archive"),
@@ -233,7 +209,7 @@ def _resolve_target(info: strawberry.Info, target: DashboardTargetInput) -> Any 
         return row if row is not None and row.scope == "personal" else None
     if not target.key:
         raise ValidationError({"target": "A scoped dashboard key is required."})
-    return Dashboard.objects.filter(owner=user, scope=target.scope.value, scope_key=target.key).first()
+    return Dashboard.objects.for_target(user, target.scope.value, target.key)
 
 
 def _target_parts(target: DashboardTargetInput, existing: Any | None) -> tuple[str, str | None]:
@@ -267,7 +243,7 @@ class DashboardQuery:
         if not 1 <= limit <= 100:
             raise ValidationError({"limit": "Dashboard summary pages contain from 1 to 100 items."})
         rows = list(
-            Dashboard.objects.filter(Q(scope="personal") | Q(owner=user))
+            Dashboard.objects.filter(Q(scope="personal") | Q(owner=user) | Q(owner__isnull=True))
             .select_related("owner")
             .prefetch_related("widgets")
             .order_by("sqid")[:5_001]
@@ -291,6 +267,7 @@ class DashboardQuery:
             total=len(items),
             items=page,
         )
+
 
 @strawberry.type
 class DashboardMutation:
@@ -390,17 +367,13 @@ class DashboardMutation:
         row = instance_from_public_id(Dashboard, str(id))
         if row is None or row.scope != "personal":
             return DashboardPayload(status="unavailable")
-        if not row.has_access("archive"):
-            return DashboardPayload(status="error", message="You cannot archive this dashboard.")
-        with transaction.atomic(), system_context(reason="dashboards.archive"):
-            locked = Dashboard.system_queryset(lock=("self",)).get(pk=row.pk)
-            if locked.revision != expected_revision:
-                return DashboardPayload(status="conflict", current_revision=locked.revision)
-            if locked.is_archived != archived:
-                locked.is_archived = archived
-                locked.revision += 1
-                locked.sudo(reason="dashboards.archive").save(update_fields=["is_archived", "revision"])
-        return _payload(locked.with_actor(row.actor()))
+        try:
+            locked = row.set_personal_archived(archived=archived, expected_revision=expected_revision)
+        except DashboardConflictError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current_revision)
+        except PermissionDenied as error:
+            return DashboardPayload(status="error", message=str(error))
+        return _payload(locked)
 
     @strawberry.mutation
     def duplicate_dashboard(
@@ -419,7 +392,7 @@ class DashboardMutation:
             name=name,
             client_creation_key=client_creation_key,
         )
-        snapshot = _snapshot(source)
+        snapshot = source.snapshot()
         duplicated_widgets = []
         for index, widget in enumerate(snapshot["widgets"]):
             if widget["isArchived"]:

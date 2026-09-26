@@ -1,0 +1,8 @@
+{
+  "criticalExports": [
+    {
+      "name": "compileDecisionActionFormSpec",
+      "ownerFile": "src/decision-action-form.ts"
+    }
+  ]
+}

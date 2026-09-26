@@ -12,11 +12,6 @@ from django.db import models
 
 from angee.graphql.field_types import register_field_type
 
-__all__ = ("MONEY_CURRENCY_FIELD_METADATA_KEY", "MoneyField")
-
-MONEY_CURRENCY_FIELD_METADATA_KEY = "angee_currency_field"
-"""Strawberry field-metadata key naming a money projection's currency path."""
-
 
 class MoneyField(models.DecimalField):
     """A decimal amount paired with the currency its row is denominated in.
@@ -114,8 +109,7 @@ class MoneyField(models.DecimalField):
             field = model._meta.get_field(field_name)
         except FieldDoesNotExist:
             return checks.Error(
-                f"MoneyField currency_field={self.currency_field!r}: "
-                f"{model._meta.label} has no field {field_name!r}.",
+                f"MoneyField currency_field={self.currency_field!r}: {model._meta.label} has no field {field_name!r}.",
                 obj=self,
                 id="angee.E011",
             )

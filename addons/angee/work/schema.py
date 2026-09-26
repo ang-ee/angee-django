@@ -157,9 +157,7 @@ class WorkActionMutation:
         """Accept one writable triage task into its selected/default stage."""
 
         target = authorized_action_target(info, Task, task, "write")
-        target_stage = (
-            None if stage is None else authorized_action_target(info, Stage, stage, "read")
-        )
+        target_stage = None if stage is None else authorized_action_target(info, Stage, stage, "read")
         target.accept(target_stage)
         return ActionResult(ok=True, message="Task accepted.", id=target.sqid)
 

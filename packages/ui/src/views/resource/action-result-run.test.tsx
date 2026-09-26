@@ -33,21 +33,21 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return (
     <ModelMetadataProvider
       metadata={schemaFieldMetadataFromDataResources([
-          testDataResource("inventory.Transfer"),
-          testDataResource("accounting.Invoice"),
+          testDataResource("example.Item"),
+          testDataResource("example.Document"),
       ])}
     >
       <AppRuntimeProvider
         runtime={{
           routesByResource: {
-            "inventory.Transfer": {
-              collection: "inventory.transfers",
-              record: { name: "inventory.transfer", param: "id" },
+            "example.Item": {
+              collection: "example.items",
+              record: { name: "example.item", param: "id" },
             },
           },
           routeHref: createRouteHref([
-            { name: "inventory.transfers", path: "/inventory/transfers" },
-            { name: "inventory.transfer", path: "/inventory/transfers/$id" },
+            { name: "example.items", path: "/example/items" },
+            { name: "example.item", path: "/example/items/$id" },
           ]),
         }}
       >
@@ -66,55 +66,55 @@ beforeEach(() => {
 describe("useActionResultRun", () => {
   test("toasts success and deep-links to the created record", async () => {
     const { result } = renderHook(
-      () => useActionResultRun({ linkTo: "inventory.Transfer" }),
+      () => useActionResultRun({ linkTo: "example.Item" }),
       { wrapper },
     );
 
     await act(async () => {
       const outcome = await result.current(async () => ({
         ok: true,
-        message: "Delivery WH/OUT/1 generated.",
-        id: "tr_9",
+        message: "Item created.",
+        id: "item_9",
       }));
       expect(outcome).toEqual({
         ok: true,
-        message: "Delivery WH/OUT/1 generated.",
-        id: "tr_9",
+        message: "Item created.",
+        id: "item_9",
       });
     });
 
     expect(mocks.toast.success).toHaveBeenCalledWith({
-      title: "Delivery WH/OUT/1 generated.",
+      title: "Item created.",
     });
-    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/inventory/transfers/tr_9" });
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/example/items/item_9" });
     expect(mocks.toast.danger).not.toHaveBeenCalled();
   });
 
   test("an id-less success (an exhausted idempotent verb) only toasts", async () => {
     const { result } = renderHook(
-      () => useActionResultRun({ linkTo: "inventory.Transfer" }),
+      () => useActionResultRun({ linkTo: "example.Item" }),
       { wrapper },
     );
 
     await act(async () => {
-      await result.current(async () => ({ ok: true, message: "Nothing to deliver." }));
+      await result.current(async () => ({ ok: true, message: "Nothing to create." }));
     });
 
-    expect(mocks.toast.success).toHaveBeenCalledWith({ title: "Nothing to deliver." });
+    expect(mocks.toast.success).toHaveBeenCalledWith({ title: "Nothing to create." });
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
   test("a resource without a routed page never navigates", async () => {
     const { result } = renderHook(
-      () => useActionResultRun({ linkTo: "accounting.Invoice" }),
+      () => useActionResultRun({ linkTo: "example.Document" }),
       { wrapper },
     );
 
     await act(async () => {
-      await result.current(async () => ({ ok: true, message: "Billed.", id: "inv_1" }));
+      await result.current(async () => ({ ok: true, message: "Recorded.", id: "doc_1" }));
     });
 
-    expect(mocks.toast.success).toHaveBeenCalledWith({ title: "Billed." });
+    expect(mocks.toast.success).toHaveBeenCalledWith({ title: "Recorded." });
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
@@ -124,14 +124,14 @@ describe("useActionResultRun", () => {
       <AppRuntimeProvider
         runtime={{
           routesByResource: {
-            "inventory.Transfer": {
-              collection: "inventory.transfers",
-              record: { name: "inventory.transfer", param: "id" },
+            "example.Item": {
+              collection: "example.items",
+              record: { name: "example.item", param: "id" },
             },
           },
           routeHref: createRouteHref([
-            { name: "inventory.transfers", path: "/inventory/transfers" },
-            { name: "inventory.transfer", path: "/inventory/transfers/$id" },
+            { name: "example.items", path: "/example/items" },
+            { name: "example.item", path: "/example/items/$id" },
           ]),
         }}
       >
@@ -139,12 +139,12 @@ describe("useActionResultRun", () => {
       </AppRuntimeProvider>
     );
     const { result } = renderHook(
-      () => useActionResultRun({ linkTo: "inventory.Transfer" }),
+      () => useActionResultRun({ linkTo: "example.Item" }),
       { wrapper: noMetadataWrapper },
     );
 
     await act(async () => {
-      await result.current(async () => ({ ok: true, message: "Created.", id: "tr_9" }));
+      await result.current(async () => ({ ok: true, message: "Created.", id: "item_9" }));
     });
 
     expect(mocks.toast.success).toHaveBeenCalledWith({ title: "Created." });
@@ -163,7 +163,7 @@ describe("useActionResultRun", () => {
         ok: false,
         message: "Confirm failed.",
         validationErrors: {
-          __all__: ["You are not allowed to modify this order."],
+          __all__: ["You are not allowed to modify this record."],
         },
       }));
       expect(outcome?.ok).toBe(false);
@@ -171,7 +171,7 @@ describe("useActionResultRun", () => {
 
     expect(mocks.toast.danger).toHaveBeenCalledWith({
       title: "Confirm failed.",
-      description: "You are not allowed to modify this order.",
+      description: "You are not allowed to modify this record.",
     });
     expect(mocks.navigate).not.toHaveBeenCalled();
   });

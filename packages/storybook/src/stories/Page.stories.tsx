@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Badge, Button, Glyph, Page, PageAside, PageBody, PageFooter, PageHeader, PageToolbar, SearchInput, SectionNav, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Toolbar, STATUS_TONES, stateToneFromValue, type SectionNavItem } from "@angee/ui";
+import { Badge, Button, Glyph, Page, PageAside, PageBody, PageFooter, PageHeader, PageToolbar, SearchInput, SectionNav, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Toolbar, useStatusTone, type SectionNavItem } from "@angee/ui";
 
 import { ConsoleContentStoryShell, PageStoryShell } from "./chrome-fixtures";
 
@@ -11,7 +11,7 @@ const navItems: readonly SectionNavItem[] = [
 
 const records = [
   ["Q3 review brief", "Active", "Sofia", "2,840", "Today"],
-  ["Clinic rollout notes", "Draft", "Alexis", "1,260", "Yesterday"],
+  ["Clinic rollout notes", "Draft", "Alex", "1,260", "Yesterday"],
   ["Access audit outline", "Active", "Mara", "980", "May 28"],
   ["Storage policy memo", "Archived", "Eoin", "3,420", "May 21"],
 ] as const;
@@ -29,7 +29,9 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Frame: Story = {
-  render: () => (
+  render: function Render() {
+    const statusTone = useStatusTone();
+    return (
     <PageStoryShell>
       <Page className="h-full overflow-hidden rounded-6 border border-border-subtle">
         <PageHeader
@@ -100,7 +102,7 @@ export const Frame: Story = {
                   <TableRow key={title} interactive>
                     <TableCell className="font-medium">{title}</TableCell>
                     <TableCell>
-                      <Badge tone={stateToneFromValue(status, STATUS_TONES)}>{status}</Badge>
+                      <Badge tone={statusTone(status)}>{status}</Badge>
                     </TableCell>
                     <TableCell>{owner}</TableCell>
                     <TableCell className="text-right tabular-nums">
@@ -130,12 +132,15 @@ export const Frame: Story = {
         </PageFooter>
       </Page>
     </PageStoryShell>
-  ),
+    );
+  },
 };
 
 export const InContentRegion: Story = {
   name: "In Content Region",
-  render: () => (
+  render: function Render() {
+    const statusTone = useStatusTone();
+    return (
     // Page is layout-agnostic: mounted inside the console content region, that
     // region owns the scroll and canvas background, so Page runs height="auto"
     // / overflow="visible" and never opens a second scroller.
@@ -170,7 +175,7 @@ export const InContentRegion: Story = {
                 <TableRow key={title} interactive>
                   <TableCell className="font-medium">{title}</TableCell>
                   <TableCell>
-                    <Badge tone={stateToneFromValue(status, STATUS_TONES)}>{status}</Badge>
+                    <Badge tone={statusTone(status)}>{status}</Badge>
                   </TableCell>
                   <TableCell>{owner}</TableCell>
                   <TableCell className="text-right tabular-nums">
@@ -184,5 +189,6 @@ export const InContentRegion: Story = {
         </PageBody>
       </Page>
     </ConsoleContentStoryShell>
-  ),
+    );
+  },
 };

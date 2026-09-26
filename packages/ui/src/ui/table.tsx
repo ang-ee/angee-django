@@ -135,10 +135,10 @@ export type TableHeadProps = React.ThHTMLAttributes<HTMLTableCellElement> &
 export const TableHead = React.forwardRef<
   HTMLTableCellElement,
   TableHeadProps
->(function TableHead({ className, sticky = false, ...props }, ref) {
+>(function TableHead({ className, sticky = false, scope = "col", ...props }, ref) {
   const density = React.useContext(TableDensityContext);
   const styles = tableVariants({ sticky, density });
-  return <th ref={ref} className={styles.head({ className })} {...props} />;
+  return <th ref={ref} scope={scope} className={styles.head({ className })} {...props} />;
 });
 TableHead.displayName = "TableHead";
 

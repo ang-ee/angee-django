@@ -1,8 +1,4 @@
 import * as React from "react";
-import * as v from "valibot";
-import Ajv2020 from "ajv/dist/2020.js";
-import type { ErrorObject, ValidateFunction } from "ajv";
-import addFormats from "ajv-formats";
 
 import { useAppRuntime, type WidgetMap } from "../../runtime";
 import {
@@ -11,283 +7,9 @@ import {
 } from "../../widgets";
 import type { MutationDialogField } from "./MutationDialog";
 import { emptyValueForField } from "./field-values";
-import { JsonValueSchema } from "../../widgets/json-value";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
 import { parseFormSpec, parseFormSpecPayload, type FormSpecWire, type FormSpecFieldType } from "./form-spec-schema";
 export type { FormSpecFieldType } from "./form-spec-schema";
-
-export interface DecisionFormActionOption {
-  value: string;
-  label: string;
-  verdict: "COMPLETE" | "REJECT" | "ESCALATE";
-  variant?: "primary" | "secondary" | "destructive" | "ghost";
-  confirm?: string;
-}
-
-export interface DecisionFormValidation {
-  valid: boolean;
-  messages: Readonly<Record<string, readonly string[]>>;
-}
-
-/** One frozen native Decision schema, with Ajv owning every branch constraint. */
-export interface DecisionActionFormSpec {
-  readonly options: readonly DecisionFormActionOption[];
-  readonly inputFields: readonly FormSpecFieldDescriptor[];
-  readonly contextFields: readonly FormSpecFieldDescriptor[];
-  fieldsFor(action: string): readonly FormSpecFieldDescriptor[];
-  project(action: string, values: Readonly<Record<string, unknown>>): Record<string, unknown>;
-  validate(candidate: unknown): DecisionFormValidation;
-  validateContext(payload: unknown): DecisionFormValidation;
-}
-
-const DECISION_CONTEXT_WIDGETS = new Set(["record", "facts", "differences", "reasons", "object"]);
-const FORM_ANNOTATIONS = [
-  "widget", "label", "addLabel", "removeLabel", "placeholder", "layout", "defaultValue", "propertyOrder",
-  "omittable", "presenceRequired", "options", "relation",
-] as const;
-
-/** Compile the original Draft 2020-12 schema; presentation parsing never strips validation rules. */
-export function compileDecisionActionFormSpec(value: unknown, widgets: WidgetMap): DecisionActionFormSpec {
-  const presented = parseFormSpec(value);
-  const checkedJson = v.safeParse(JsonValueSchema, value);
-  if (!checkedJson.success || checkedJson.output === null || Array.isArray(checkedJson.output)
-      || typeof checkedJson.output !== "object") {
-    throw new Error("Decision schema must be a JSON object.");
-  }
-  const action = presented.properties?.action;
-  const values = action?.enum;
-  const options = action?.options;
-  if (action?.type !== "string" || !presented.required?.includes("action")
-      || !values?.length || !options || options.length !== values.length
-      || new Set(values).size !== values.length) {
-    throw new Error("Decision schema needs one required action enum and matching options.");
-  }
-  const byValue = new Map<string, DecisionFormActionOption>();
-  for (const option of options) {
-    if (!option.verdict || !values.includes(option.value) || byValue.has(option.value)) {
-      throw new Error("Decision action options must name a unique enum value and native verdict.");
-    }
-    byValue.set(option.value, option as DecisionFormActionOption);
-  }
-  const branches = presented.oneOf;
-  if (!branches || branches.length !== values.length) {
-    throw new Error("Decision schema needs one closed oneOf branch per action.");
-  }
-  const contextNames = new Set(Object.entries(presented.properties ?? {})
-    .filter(([, field]) => field.layout === "context")
-    .map(([name, field]) => {
-      if (!DECISION_CONTEXT_WIDGETS.has(field.widget ?? "")) {
-        throw new Error(`Decision context ${name} needs a typed shared widget.`);
-      }
-      return name;
-    }));
-  const byBranch = new Map<string, Set<string>>();
-  const branchIndex = new Map<string, number>();
-  for (const [index, branch] of branches.entries()) {
-    const selected = branch.properties?.action?.const;
-    const names = new Set(Object.keys(branch.properties ?? {}));
-    if (branch.type !== "object" || branch.additionalProperties !== false
-        || !Array.isArray(branch.required) || !branch.required.includes("action")
-        || typeof selected !== "string" || !values.includes(selected)
-        || byBranch.has(selected) || !names.has("action")
-        || [...names].some((name) => !Object.hasOwn(presented.properties ?? {}, name) || contextNames.has(name))
-        || branch.required.some((name) => !names.has(name))) {
-      throw new Error("Decision branches need distinct closed action input scopes.");
-    }
-    byBranch.set(selected, names);
-    branchIndex.set(selected, index);
-  }
-  if (byBranch.size !== values.length || contextNames.has("action")
-      || [...contextNames].some((name) => presented.required?.includes(name))) {
-    throw new Error("Decision action/context scopes do not cover the declared schema.");
-  }
-
-  const ajv = new Ajv2020({
-    allErrors: true, strict: true, coerceTypes: false, useDefaults: false, removeAdditional: false,
-  });
-  addFormats(ajv, { mode: "full" });
-  for (const keyword of FORM_ANNOTATIONS) {
-    if (!ajv.getKeyword(keyword)) ajv.addKeyword(keyword);
-  }
-  let validate: ValidateFunction;
-  try {
-    validate = ajv.compile(checkedJson.output);
-  } catch (cause) {
-    throw new Error(`Invalid Decision schema: ${String(cause)}`);
-  }
-  const fields = deserializeObjectFields(presented, widgets, "form spec");
-  const contextFields = fields.filter((field) => contextNames.has(field.name));
-  const inputFields = fields.filter((field) => field.name !== "action" && !contextNames.has(field.name));
-  const contextValidators = Object.fromEntries([...contextNames].map((name) => {
-    const root = checkedJson.output as Record<string, unknown>;
-    const raw = root.properties;
-    const properties = raw && typeof raw === "object" && !Array.isArray(raw)
-      ? raw as Record<string, unknown> : {};
-    const fieldSchema = properties[name];
-    if (!fieldSchema || typeof fieldSchema !== "object" || Array.isArray(fieldSchema)) {
-      throw new Error(`Decision context ${name} needs a JSON schema object.`);
-    }
-    return [name, ajv.compile({ ...fieldSchema, ...(root.$defs ? { $defs: root.$defs } : {}) })];
-  })) as Record<string, ValidateFunction>;
-
-  return {
-    options: values.map((selected) => byValue.get(selected)!), inputFields, contextFields,
-    fieldsFor(selected) {
-      const names = byBranch.get(selected);
-      if (!names) throw new Error("Choose a declared Decision action.");
-      return inputFields.filter((field) => names.has(field.name));
-    },
-    project(selected, current) {
-      return { ...normalizeFormSpecValues(this.fieldsFor(selected), current), action: selected };
-    },
-    validate(candidate) {
-      const valid = Boolean(validate(candidate));
-      const selected = candidate && typeof candidate === "object" && !Array.isArray(candidate)
-        ? (candidate as Record<string, unknown>).action : undefined;
-      return {
-        valid,
-        messages: ajvErrorMessages(
-          validate.errors,
-          candidate,
-          typeof selected === "string" ? branchIndex.get(selected) : undefined,
-          inputFields,
-        ),
-      };
-    },
-    validateContext(payload) {
-      const seeds = parseFormSpecPayload(payload);
-      const messages: Record<string, string[]> = {};
-      for (const name of contextNames) {
-        if (!Object.hasOwn(seeds, name)) {
-          messages[name] = ["Frozen Decision context is missing."];
-          continue;
-        }
-        const checker = contextValidators[name];
-        if (!checker || !checker(seeds[name])) messages[name] = ["Frozen Decision context is invalid."];
-      }
-      return { valid: Object.keys(messages).length === 0, messages };
-    },
-  };
-}
-
-function ajvErrorMessages(
-  errors: readonly ErrorObject[] | null | undefined,
-  candidate: unknown,
-  selectedBranch: number | undefined,
-  fields: readonly FormSpecFieldDescriptor[],
-): Record<string, string[]> {
-  const messages: Record<string, string[]> = {};
-  const labels = new Map<string, string>(fields.map((field) => [
-    field.name,
-    typeof field.label === "string" ? field.label : field.name,
-  ]));
-  const relevant = (errors ?? []).filter((error) => {
-    if (error.keyword === "oneOf" && error.schemaPath === "#/oneOf") return false;
-    const branch = /^#\/oneOf\/(\d+)(?:\/|$)/.exec(error.schemaPath);
-    return !branch || selectedBranch === undefined || Number(branch[1]) === selectedBranch;
-  });
-  const alternatives = relevant.filter((error) => error.keyword === "anyOf");
-  const discarded = new Set<ErrorObject>();
-  const synthetic: Array<{ name: string; message: string }> = [];
-  for (const alternative of alternatives) {
-    const prefix = `${alternative.schemaPath}/`;
-    const children = relevant.filter((error) => error !== alternative && error.schemaPath.startsWith(prefix));
-    const active = children.filter((error) => {
-      const pointer = error.keyword === "required" && typeof error.params.missingProperty === "string"
-        ? `${error.instancePath}/${escapeJsonPointer(error.params.missingProperty)}`
-        : error.instancePath;
-      return hasMeaningfulValue(candidate, pointer);
-    });
-    discarded.add(alternative);
-    for (const child of children) {
-      if (!active.includes(child)) discarded.add(child);
-    }
-    if (active.length === 0) {
-      const names = [...new Set(children.map((error) => error.keyword === "required"
-        && typeof error.params.missingProperty === "string"
-        ? error.params.missingProperty : jsonPointerSegments(error.instancePath).at(-1) ?? "")
-        .filter(Boolean))];
-      const alternativesLabel = formatList(names.map((name) => labels.get(name) ?? name));
-      synthetic.push({
-        name: jsonPointerName(alternative.instancePath) || "root",
-        message: alternativesLabel
-          ? `Complete at least one of: ${alternativesLabel}.`
-          : "Complete at least one of the available fields.",
-      });
-    }
-  }
-  const seen = new Set<string>();
-  for (const error of relevant) {
-    if (discarded.has(error)) continue;
-    const missing = error.keyword === "required" && typeof error.params.missingProperty === "string"
-      ? error.params.missingProperty : "";
-    const path = jsonPointerName(error.instancePath);
-    const fullPath = [path, missing].filter(Boolean).join(".");
-    const name = fullPath.split(".")[0] || "root";
-    const leaf = fullPath.split(".").at(-1) || name;
-    const label = labels.get(leaf) ?? leaf;
-    const detail = decisionValidationMessage(error, label);
-    const message = fullPath && fullPath !== name ? `${fullPath}: ${detail}` : detail;
-    const key = `${name}\u0000${message}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      (messages[name] ??= []).push(message);
-    }
-  }
-  for (const entry of synthetic) {
-    const key = `${entry.name}\u0000${entry.message}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      (messages[entry.name] ??= []).push(entry.message);
-    }
-  }
-  return messages;
-}
-
-function decisionValidationMessage(error: ErrorObject, label: string): string {
-  if (error.keyword === "required") return `${label} is required.`;
-  if (error.keyword === "minLength" && typeof error.params.limit === "number") {
-    const count = error.params.limit;
-    return `${label} must contain at least ${count} character${count === 1 ? "" : "s"}.`;
-  }
-  if (error.keyword === "maxLength" && typeof error.params.limit === "number") {
-    const count = error.params.limit;
-    return `${label} must contain at most ${count} character${count === 1 ? "" : "s"}.`;
-  }
-  if (error.keyword === "format") return `${label} has an invalid format.`;
-  if (error.keyword === "pattern" || error.keyword === "type" || error.keyword === "enum"
-      || error.keyword === "const") return `${label} has an invalid value.`;
-  return `${label}: ${error.message ?? "value does not satisfy this Decision action."}`;
-}
-
-function jsonPointerSegments(pointer: string): string[] {
-  return pointer.split("/").slice(1).map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"));
-}
-
-function jsonPointerName(pointer: string): string {
-  return jsonPointerSegments(pointer).join(".");
-}
-
-function escapeJsonPointer(value: string): string {
-  return value.replace(/~/g, "~0").replace(/\//g, "~1");
-}
-
-function hasMeaningfulValue(value: unknown, pointer: string): boolean {
-  let current = value;
-  for (const part of jsonPointerSegments(pointer)) {
-    if (!current || typeof current !== "object" || Array.isArray(current) || !Object.hasOwn(current, part)) {
-      return false;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current !== null && current !== undefined && current !== "";
-}
-
-function formatList(values: readonly string[]): string {
-  if (values.length < 2) return values[0] ?? "";
-  if (values.length === 2) return `${values[0]} or ${values[1]}`;
-  return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
-}
 
 export type FormSpecRelationCreate = Pick<
   RelationCreateConfig,
@@ -302,11 +24,13 @@ export type FormSpecRelationCreate = Pick<
  * `type`/`properties`/`required`/`items`/`enum`/`const` are the recursive schema
  * vocabulary. Presentation extensions live on each property: string-only
  * `widget`/`label`/`description`/`placeholder`, list `addLabel`/`removeLabel`,
- * `readOnly`, JSON `defaultValue`
+ * `readOnly`, `hidden` (retained in values without a control), JSON `defaultValue`
  * (overriding the standard schema `default` when both are supplied),
  * string-labelled `options`, and the pure-data `relation` config. A property's
  * key becomes the descriptor's `name`; no function-valued extension is admitted.
  * Arrays of objects resolve to the registered fixed-N `rows` view composer.
+ * Properties and items may reference root-local `$defs` or `definitions`;
+ * reference siblings override presentation metadata on the referenced schema.
  */
 export interface FormSpecFieldDescriptor extends MutationDialogField {
   /** Approval layout intent; ordinary forms and unspecified fields remain inputs. */
@@ -336,7 +60,8 @@ export function deserializeFormSpec(
   value: unknown,
   widgets: WidgetMap,
 ): readonly FormSpecFieldDescriptor[] {
-  return deserializeObjectFields(parseFormSpec(value), widgets, "form spec");
+  const schema = parseFormSpec(value);
+  return deserializeObjectFields(schema, widgets, "form spec", schema, []);
 }
 
 /** Resolve a form spec against the current app's build-time widget registry. */
@@ -443,11 +168,43 @@ export function normalizeFormSpecValues(
   }));
 }
 
+/** Resolve only projected nodes: opaque context schemas need no finite template. */
+function resolveFieldReferences(
+  field: FormSpecWire,
+  root: FormSpecWire,
+  path: string,
+  references: readonly FormSpecWire[],
+): { field: FormSpecWire; references: readonly FormSpecWire[] } {
+  const chain: FormSpecWire[] = [];
+  while (field.$ref !== undefined) {
+    const { $ref, ...siblings } = field;
+    const match = /^#\/(\$defs|definitions)\/([^/]+)$/.exec($ref);
+    if (!match) throw new Error(`Invalid ${path}: unsupported reference "${$ref}".`);
+    const definitions = match[1] === "$defs" ? root.$defs : root.definitions;
+    const name = decodeURIComponent(match[2]!).replace(/~1/g, "/").replace(/~0/g, "~");
+    const target = definitions && Object.hasOwn(definitions, name) ? definitions[name] : undefined;
+    if (!target) throw new Error(`Invalid ${path}: missing reference "${$ref}".`);
+    if (chain.includes(target)) throw new Error(`Invalid ${path}: cyclic reference "${$ref}".`);
+    chain.push(target);
+    field = { ...target, ...siblings };
+  }
+  return { field, references: [...references, ...chain] };
+}
+
+function assertFiniteTemplate(references: readonly FormSpecWire[], path: string): void {
+  if (new Set(references).size !== references.length) {
+    throw new Error(`Invalid ${path}: cyclic reference requires an infinite form template.`);
+  }
+}
+
 function deserializeObjectFields(
   schema: FormSpecWire,
   widgets: WidgetMap,
   path: string,
+  root: FormSpecWire,
+  references: readonly FormSpecWire[],
 ): readonly FormSpecFieldDescriptor[] {
+  assertFiniteTemplate(references, path);
   const required = new Set(schema.required ?? []);
   const properties = schema.properties ?? {};
   const names = schema.propertyOrder ?? Object.keys(properties);
@@ -457,38 +214,44 @@ function deserializeObjectFields(
     throw new Error(`Invalid ${path}.propertyOrder: every property must be named exactly once.`);
   }
   return names.map((name) =>
-    deserializeField(name, properties[name]!, required.has(name), widgets, path),
+    deserializeField(name, properties[name]!, required.has(name), widgets, path, root, references),
   );
 }
 
 function deserializeField(
   name: string,
-  field: FormSpecWire,
+  schema: FormSpecWire,
   required: boolean,
   widgets: WidgetMap,
   parentPath: string,
+  root: FormSpecWire,
+  ancestors: readonly FormSpecWire[],
 ): FormSpecFieldDescriptor {
   const path = parentPath === "form spec" ? name : `${parentPath}.${name}`;
+  const { field, references } = resolveFieldReferences(schema, root, path, ancestors);
   const type = formSpecFieldType(field.type, field.anyOf);
   const nullable = field.nullable
     || field.type === "null"
     || (Array.isArray(field.type) && field.type.includes("null"))
     || field.anyOf?.some((alternative) => alternative.type === "null");
   const variableList = type === "array" && field.widget === "list";
-  const rowTemplate = type === "array" && field.items
-    && formSpecFieldType(field.items.type, field.items.anyOf) === "object"
-    && field.layout !== "context" && !variableList
-    ? deserializeObjectFields(field.items, widgets, path)
+  const items = type === "array" && field.items && field.layout !== "context"
+    ? resolveFieldReferences(field.items, root, `${path}[]`, references)
+    : undefined;
+  const rowTemplate = items && !variableList
+    && formSpecFieldType(items.field.type, items.field.anyOf) === "object"
+    ? deserializeObjectFields(items.field, widgets, path, root, items.references)
     : undefined;
   const objectTemplate = type === "object" && field.widget === "object" && field.layout !== "context"
-    ? deserializeObjectFields(field, widgets, path)
+    ? deserializeObjectFields(field, widgets, path, root, references)
     : undefined;
-  const itemTemplate = variableList && field.items
-    ? deserializeField("item", field.items, true, widgets, `${path}[]`)
+  if (variableList && items) assertFiniteTemplate(references, path);
+  const itemTemplate = variableList && items
+    ? deserializeField("item", items.field, true, widgets, `${path}[]`, root, items.references)
     : undefined;
   const {
     relation, widget: authoredWidget, label, addLabel, removeLabel,
-    description, placeholder, readOnly, layout,
+    description, placeholder, readOnly, hidden, layout,
   } = field;
   const options = optionsFrom(field);
   if (rowTemplate && authoredWidget && authoredWidget !== "rows") {
@@ -524,6 +287,7 @@ function deserializeField(
     ...(field.minItems !== undefined ? { minItems: field.minItems } : {}),
     ...(field.maxItems !== undefined ? { maxItems: field.maxItems } : {}),
     ...(readOnly ? { readOnly: true } : {}),
+    ...(hidden ? { hidden: true } : {}),
     ...(layout ? { layout } : {}),
     ...(Object.hasOwn(field, "defaultValue") ? { defaultValue: field.defaultValue, hasDefault: true }
       : Object.hasOwn(field, "default") ? { defaultValue: field.default, hasDefault: true } : {}),

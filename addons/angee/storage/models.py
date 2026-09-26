@@ -46,7 +46,7 @@ from django.core.exceptions import (
 )
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, connections, models, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.signals import post_save
 from django.urls import reverse
@@ -68,8 +68,9 @@ from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, role_anchor
 from angee.base.refs import RecordRefMixin, canonical_record_target
+from angee.base.scoping import system_queryset
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
 from angee.storage.signals import file_finalized
@@ -220,11 +221,13 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
     prefix = models.CharField(max_length=512, blank=True)
 
     objects = StorageMasterManager()
+    unscoped_objects = AngeeUnscopedManager()
 
     class Meta:
         """Django model options for drives."""
 
         abstract = True
+        base_manager_name = "unscoped_objects"
         ordering = ("slug",)
         rebac_resource_type = "storage/drive"
         constraints = (
@@ -247,9 +250,12 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
 
         Backend rows are admin-gated infrastructure; the fetch runs elevated
         so any actor allowed to use the drive can perform storage IO without
-        read access to the backend row itself.
+        read access to the backend row itself. Cached relations need no
+        additional elevation or audit event.
         """
 
+        if self._meta.get_field("backend").is_cached(self):
+            return self.backend.storage
         with system_context(reason="storage.drive.storage"):
             return self.backend.storage
 
@@ -271,14 +277,7 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
 class FolderManager(AngeeManager):
     """Manager owning gated folder creation."""
 
-    def create_in_drive(
-        self,
-        *,
-        drive_id: str,
-        name: str,
-        parent_id: str = "",
-        description: str = "",
-    ) -> Any:
+    def create_in_drive(self, *, drive_id: str, name: str, parent_id: str = "", description: str = "") -> Any:
         """Create a real folder after checking ``write`` on its drive.
 
         The drive-write check is the create gate — a per-row REBAC ``create``
@@ -301,7 +300,9 @@ class FolderManager(AngeeManager):
             if parent is None or parent.is_virtual:
                 raise exceptions.UploadTargetNotFound("parent folder not found")
         actor = current_actor()
-        folder = self.model(drive=drive, parent=parent, name=name, description=description)
+        folder = self.model(
+            drive_id=drive.pk, parent_id=parent.pk if parent is not None else None, name=name, description=description
+        )
         try:
             folder.full_clean()
         except ValidationError as error:
@@ -313,11 +314,7 @@ class FolderManager(AngeeManager):
         return folder
 
     def ensure_path(
-        self,
-        drive: Any,
-        parts: Sequence[str],
-        *,
-        cache: dict[tuple[str, ...], Any | None] | None = None,
+        self, drive: Any, parts: Sequence[str], *, cache: dict[tuple[str, ...], Any | None] | None = None
     ) -> Any | None:
         """Return the real folder at ``parts``, creating missing segments.
 
@@ -341,8 +338,8 @@ class FolderManager(AngeeManager):
                     parent = prefixes[prefix]
                     continue
                 parent, _created = self.get_or_create(
-                    drive=drive,
-                    parent=parent,
+                    drive_id=drive.pk,
+                    parent_id=parent.pk if parent is not None else None,
                     name=name,
                     defaults={"is_virtual": False},
                 )
@@ -369,14 +366,17 @@ class FolderManager(AngeeManager):
         present_paths = {tuple(parts) for parts in present}
         file_model = self.model._meta.get_field("files").related_model
         with system_context(reason="storage.folder.prune_missing"):
-            rows = list(self.filter(drive=drive, is_virtual=False).values_list("pk", "parent_id", "name"))
+            rows = list(
+                self.filter(drive=drive, is_virtual=False).values_list("pk", "parent_id", "name")
+            )
             parents: dict[Any, tuple[Any, str]] = {pk: (parent_id, name) for pk, parent_id, name in rows}
             child_counts: dict[Any, int] = {}
             for _pk, parent_id, _name in rows:
                 if parent_id is not None:
                     child_counts[parent_id] = child_counts.get(parent_id, 0) + 1
             folders_with_files = set(
-                file_model._default_manager.filter(drive=drive, folder__isnull=False)
+                file_model._default_manager
+                .filter(drive=drive, folder__isnull=False)
                 .order_by()  # a distinct values_list must clear Meta.ordering
                 .values_list("folder_id", flat=True)
                 .distinct()
@@ -453,7 +453,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
     is_virtual = models.BooleanField(default=False, db_index=True, editable=False)
     smart_kind = StateField(
         choices_enum=SmartKind,
-        default="",
+        null=True,
         blank=True,
         editable=False,
     )
@@ -479,7 +479,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
             ),
             models.UniqueConstraint(
                 fields=("owner", "smart_kind"),
-                condition=Q(is_virtual=True) & ~Q(smart_kind=""),
+                condition=Q(is_virtual=True, smart_kind__isnull=False),
                 name="uniq_storage_folder_owner_smart_kind",
             ),
             models.CheckConstraint(
@@ -519,9 +519,7 @@ class Folder(SqidMixin, AuditMixin, AngeeModel):
             raise ValidationError({"drive": "A folder requires a drive."})
         if not self.parent_id:
             return
-        queryset = type(self)._base_manager
-        if lock and connections[queryset.db].features.has_select_for_update:
-            queryset = queryset.select_for_update()
+        queryset = system_queryset(type(self), lock=("self",) if lock else None)
         ancestor_id = self.parent_id
         visited: set[Any] = {self.pk} if self.pk is not None else set()
         while ancestor_id is not None:
@@ -649,11 +647,15 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
 
         digest = _normalized_hash(content_hash) if content_hash else ""
         if digest:
-            existing = self.filter(
-                drive_id=drive.pk,
-                content_hash=digest,
-                upload_state=UploadState.READY,
-            ).first()
+            existing = (
+                self
+                .filter(
+                    drive_id=drive.pk,
+                    content_hash=digest,
+                    upload_state=UploadState.READY,
+                )
+                .first()
+            )
             if existing is not None:
                 # A trashed hit would be purge-doomed and would block the
                 # re-upload through the dedup constraint — bring it back.
@@ -663,11 +665,12 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
 
         placeholder = secrets.token_hex(32)
         actor = current_actor()
+        mime = _mime_row(self.model, mime_type)
         row = self.model(
-            drive=drive,
-            folder=folder,
+            drive_id=drive.pk,
+            folder_id=folder.pk if folder is not None else None,
             filename=filename,
-            mime_type=_mime_row(self.model, mime_type),
+            mime_type_id=mime.pk if mime is not None else None,
             size_bytes=max(int(size_bytes or 0), 0),
             content_hash=placeholder,
             storage_path=drive.object_key(digest or placeholder, filename),
@@ -769,11 +772,15 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             except exceptions.UploadConflict:
                 # A concurrent ingest of identical bytes won the dedup race; the
                 # winner is READY, so resolve to it instead of failing the sync.
-                winner = self.filter(
-                    drive_id=row.drive_id,
-                    content_hash=digest,
-                    upload_state=UploadState.READY,
-                ).first()
+                winner = (
+                    self
+                    .filter(
+                        drive_id=row.drive_id,
+                        content_hash=digest,
+                        upload_state=UploadState.READY,
+                    )
+                    .first()
+                )
                 if winner is not None:
                     self._grant_dedup_reach(winner, owner_id)
                     result = winner
@@ -818,11 +825,15 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 row = self.filter(drive=drive, storage_path=path).first()
 
             if row is None:
-                duplicate = self.filter(
-                    drive=drive,
-                    content_hash=digest,
-                    upload_state=UploadState.READY,
-                ).first()
+                duplicate = (
+                    self
+                    .filter(
+                        drive=drive,
+                        content_hash=digest,
+                        upload_state=UploadState.READY,
+                    )
+                    .first()
+                )
                 if duplicate is not None:
                     if not duplicate.is_trashed:
                         self._raise_external_duplicate(duplicate)
@@ -832,12 +843,12 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
 
             if row is None:
                 row = self.model(
-                    drive=drive,
-                    folder=folder,
+                    drive_id=drive.pk,
+                    folder_id=folder.pk if folder is not None else None,
                     filename=filename,
                     content_hash=digest,
                     size_bytes=max(int(size_bytes), 0),
-                    mime_type=mime,
+                    mime_type_id=mime.pk if mime is not None else None,
                     storage_path=path,
                     metadata=self._merged_metadata({}, metadata_patch),
                     upload_state=UploadState.READY,
@@ -851,11 +862,15 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                     with transaction.atomic():
                         row.save()
                 except IntegrityError as error:
-                    duplicate = self.filter(
-                        drive=drive,
-                        content_hash=digest,
-                        upload_state=UploadState.READY,
-                    ).first()
+                    duplicate = (
+                        self
+                        .filter(
+                            drive=drive,
+                            content_hash=digest,
+                            upload_state=UploadState.READY,
+                        )
+                        .first()
+                    )
                     if duplicate is not None:
                         self._raise_external_duplicate(duplicate, cause=error)
                     raise
@@ -865,7 +880,8 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             content_changed = row.content_hash != digest
             if content_changed:
                 duplicate = (
-                    self.filter(
+                    self
+                    .filter(
                         drive=drive,
                         content_hash=digest,
                         upload_state=UploadState.READY,
@@ -906,7 +922,8 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                         row.save(update_fields=[*updates, "updated_at"])
                 except IntegrityError as error:
                     duplicate = (
-                        self.filter(
+                        self
+                        .filter(
                             drive=drive,
                             content_hash=digest,
                             upload_state=UploadState.READY,
@@ -927,27 +944,22 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         present = {str(path) for path in present_paths}
         with system_context(reason="storage.file.trash_missing_external"):
             rows = self.filter(drive=drive, is_trashed=False).values_list("pk", "storage_path")
-            missing = [
-                pk
-                for pk, storage_path in rows.iterator(chunk_size=2000)
-                if str(storage_path) not in present
-            ]
+            missing = [pk for pk, storage_path in rows.iterator(chunk_size=2000) if str(storage_path) not in present]
             if not missing:
                 return 0
             now = timezone.now()
-            return self.filter(pk__in=missing).update(
-                is_trashed=True,
-                trashed_at=now,
-                trashed_by_id=actor_user_id(current_actor()),
-                updated_at=now,
+            return (
+                self
+                .filter(pk__in=missing)
+                .update(
+                    is_trashed=True,
+                    trashed_at=now,
+                    trashed_by_id=actor_user_id(current_actor()),
+                    updated_at=now,
+                )
             )
 
-    def _cached_mime_row(
-        self,
-        mime_type: str,
-        *,
-        cache: dict[str, Any | None] | None,
-    ) -> Any | None:
+    def _cached_mime_row(self, mime_type: str, *, cache: dict[str, Any | None] | None) -> Any | None:
         """Resolve one MIME taxonomy row, caching distinct values for a sync run."""
 
         key = str(mime_type or "").strip().lower() or FALLBACK_MIME
@@ -1007,9 +1019,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
     ) -> NoReturn:
         """Raise the canonical collision for a live row at another path."""
 
-        raise exceptions.ExternalDuplicate(
-            f"identical external bytes already exist: {duplicate.sqid}"
-        ) from cause
+        raise exceptions.ExternalDuplicate(f"identical external bytes already exist: {duplicate.sqid}") from cause
 
     def for_upload_token(self, token: str) -> Any:
         """Return the DRAFT row a signed proxy upload token addresses.
@@ -1031,7 +1041,13 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         nonce = str(payload.get("nonce") or "")
         if not file_id or not nonce:
             raise exceptions.UploadDenied("invalid upload token")
-        row = self.system_context(reason="storage.upload.proxy").select_related("drive").filter(sqid=file_id).first()
+        row = (
+            self
+            .system_context(reason="storage.upload.proxy")
+            .select_related("drive")
+            .filter(sqid=file_id)
+            .first()
+        )
         if row is None:
             raise exceptions.UploadTargetNotFound("file not found")
         if row.upload_state != UploadState.DRAFT:
@@ -1177,11 +1193,13 @@ class File(SqidMixin, AuditMixin, AngeeModel):
     )
 
     objects = FileManager()
+    unscoped_objects = AngeeUnscopedManager()
 
     class Meta:
         """Django model options for files."""
 
         abstract = True
+        base_manager_name = "unscoped_objects"
         ordering = ("-updated_at", "filename", "sqid")
         rebac_resource_type = "storage/file"
         constraints = (
@@ -1203,7 +1221,12 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         super().clean()
         if self.folder_id:
             folder_model = type(self)._meta.get_field("folder").related_model
-            folder = folder_model._base_manager.filter(pk=self.folder_id).values("drive_id", "is_virtual").first()
+            folder = (
+                folder_model._base_manager
+                .filter(pk=self.folder_id)
+                .values("drive_id", "is_virtual")
+                .first()
+            )
             if folder is None or folder["is_virtual"] or folder["drive_id"] != self.drive_id:
                 raise ValidationError({"folder": "Folder must be a real folder in this file's drive."})
 
@@ -1211,14 +1234,20 @@ class File(SqidMixin, AuditMixin, AngeeModel):
     def storage(self) -> StorageBackend:
         """Return the resolved backend for this row's drive.
 
-        One elevated query joins drive and backend; the instance itself comes
-        from the per-``(row, config)`` backend cache.
+        Resolve an uncached drive and its backend in one query under the native
+        system context. Cached relations need no elevation; the backend instance
+        comes from the per-``(row, config)`` cache.
         """
 
-        drive_model = type(self)._meta.get_field("drive").related_model
+        drive_field = self._meta.get_field("drive")
+        if drive_field.is_cached(self):
+            return self.drive.storage
         with system_context(reason="storage.file.storage"):
-            drive = drive_model._base_manager.select_related("backend").get(pk=self.drive_id)
-            return drive.storage
+            drive_field.set_cached_value(
+                self,
+                drive_field.related_model._base_manager.select_related("backend").get(pk=self.drive_id),
+            )
+            return self.drive.backend.storage
 
     def local_path(self) -> Path | None:
         """Return this file's real on-disk path when its backend exposes one.
@@ -1235,7 +1264,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
             return None
         try:
             return Path(path_fn(self.storage_path))
-        except (NotImplementedError, ValueError):
+        except NotImplementedError, ValueError:
             return None
 
     @property
@@ -1363,7 +1392,8 @@ class File(SqidMixin, AuditMixin, AngeeModel):
 
         duplicate = (
             type(self)
-            ._base_manager.filter(drive_id=self.drive_id, content_hash=actual_hash, upload_state=UploadState.READY)
+            ._base_manager
+            .filter(drive_id=self.drive_id, content_hash=actual_hash, upload_state=UploadState.READY)
             .exclude(pk=self.pk)
             .first()
         )
@@ -1372,14 +1402,17 @@ class File(SqidMixin, AuditMixin, AngeeModel):
 
         self.content_hash = actual_hash
         self.size_bytes = actual_size
-        self.mime_type = _mime_row(type(self), detect_mime(head, self.filename)) or _mime_row(type(self), FALLBACK_MIME)
+        self.mime_type = _mime_row(type(self), detect_mime(head, self.filename)) or _mime_row(
+            type(self), FALLBACK_MIME
+        )
         self.upload_state = cast(UploadState, UploadState.READY)
         updated_at = timezone.now()
         try:
             with transaction.atomic():
                 claimed = (
                     type(self)
-                    ._base_manager.filter(pk=self.pk, upload_state=UploadState.DRAFT)
+                    ._base_manager
+                    .filter(pk=self.pk, upload_state=UploadState.DRAFT)
                     .update(
                         content_hash=self.content_hash,
                         size_bytes=self.size_bytes,
@@ -1392,7 +1425,8 @@ class File(SqidMixin, AuditMixin, AngeeModel):
             # A concurrent finalize for the same bytes won the dedup constraint.
             winner = (
                 type(self)
-                ._base_manager.filter(drive_id=self.drive_id, content_hash=actual_hash)
+                ._base_manager
+                .filter(drive_id=self.drive_id, content_hash=actual_hash)
                 .exclude(pk=self.pk)
                 .first()
             )
@@ -1423,7 +1457,8 @@ class File(SqidMixin, AuditMixin, AngeeModel):
             raise exceptions.UploadDenied("an authenticated user is required")
         if str(self.created_by_id or "") == str(user_id):
             return
-        allowed = rebac_backend().check_access(subject=actor, action="write", resource=to_object_ref(self.drive))
+        drive = self.drive
+        allowed = rebac_backend().check_access(subject=actor, action="write", resource=to_object_ref(drive))
         if not allowed.allowed:
             raise exceptions.UploadDenied("only the uploader may push bytes")
 
@@ -1468,7 +1503,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         self._fail(reason="duplicate")
         raise exceptions.UploadConflict(f"identical bytes already exist: {duplicate.sqid}")
 
-    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+    def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
         """Soft-delete into the Trash smart folder; backend bytes stay.
 
         :meth:`purge` (or the ``storage_prune`` command after the trash TTL)
@@ -1477,7 +1512,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         to keep the zed ``delete`` permission live.
         """
 
-        del args, kwargs
+        del keep_parents
         if self.is_trashed:
             return (0, {})
         if not self.has_access("delete"):
@@ -1485,7 +1520,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         self.is_trashed = True
         self.trashed_at = timezone.now()
         self.trashed_by_id = actor_user_id(current_actor())
-        self.save(update_fields=["is_trashed", "trashed_at", "trashed_by", "updated_at"])
+        self.save(using=using, update_fields=["is_trashed", "trashed_at", "trashed_by", "updated_at"])
         return (1, {self._meta.label: 1})
 
     def restore(self) -> None:
@@ -1563,12 +1598,12 @@ class FileAttachmentManager(AngeeManager):
         target_model = target.content_type.model_class()
         if target_model is None:
             raise ValueError("File attachment target model is unavailable.")
-        with system_context(reason="storage.file_attachment.attach"), transaction.atomic(using=self.db):
-            target_model._base_manager.using(self.db).select_for_update().get(pk=target.object_id)
-            file = type(file)._base_manager.using(self.db).select_for_update().get(pk=file.pk)
+        with system_context(reason="storage.file_attachment.attach"), transaction.atomic():
+            target_model._base_manager.select_for_update().get(pk=target.object_id)
+            file = type(file)._base_manager.select_for_update().get(pk=file.pk)
             attachment, _created = self.get_or_create(
-                file=file,
-                content_type=target.content_type,
+                file_id=file.pk,
+                content_type_id=target.content_type.pk,
                 object_id=target.object_id,
                 defaults={"label": label},
             )

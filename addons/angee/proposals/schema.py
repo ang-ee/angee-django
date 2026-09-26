@@ -53,7 +53,12 @@ def _user_id(value: Any | None) -> strawberry.ID | None:
     return cast("strawberry.ID | None", optional_public_id(user_public_id(value)))
 
 
-def _permission_target(model: type[models.Model], value: PublicID, permission: str, reason: str) -> Any:
+def _permission_target(
+    model: type[models.Model],
+    value: PublicID,
+    permission: str,
+    reason: str,
+) -> Any:
     """Resolve a non-write lifecycle target and enforce its explicit permission."""
 
     target: Any = resolve_action_target(model, value, reason=reason)

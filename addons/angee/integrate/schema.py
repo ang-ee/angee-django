@@ -11,21 +11,31 @@ from __future__ import annotations
 
 import enum
 import logging
+from functools import partial
 from typing import Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Count, Q
 from django.utils import timezone
+from django.utils.translation import gettext as _
 from rebac import MissingActorError, PermissionDenied, system_context
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
 from angee.base.identity import public_id_of
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.graphql.actions import (
+    ActionResult,
+    action_guard,
+    action_target,
+    authorized_action_target,
+    resolve_action_target,
+)
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -38,7 +48,7 @@ from angee.graphql.impl import ImplChoice
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.graphql.writes import instance_for_write
+from angee.graphql.writes import instance_for_write, write_queryset
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -46,13 +56,14 @@ from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
-from angee.integrate.credentials import handler_for
+from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
 from angee.integrate.models import Bridge, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.queue import queue_bridge_sync
-from angee.integrate.registry import bridge_models
+from angee.integrate.registry import models_with
+from angee.integrate.states import ConflictKeep
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +73,10 @@ OAuthClient = apps.get_model("integrate", "OAuthClient")
 ExternalAccount = apps.get_model("integrate", "ExternalAccount")
 Credential = apps.get_model("integrate", "Credential")
 WebhookSubscription = apps.get_model("integrate", "WebhookSubscription")
+SyncStream = apps.get_model("integrate", "SyncStream")
+RecordLink = apps.get_model("integrate", "RecordLink")
+RecordRevision = apps.get_model("integrate", "RecordRevision")
+SyncDiscrepancy = apps.get_model("integrate", "SyncDiscrepancy")
 User = get_user_model()
 
 
@@ -500,17 +515,6 @@ def _console_credentials(info: strawberry.Info) -> Any:
     return cast(Any, Credential.objects).console_credentials()
 
 
-def _console_integrations(info: strawberry.Info) -> Any:
-    """Return admin-visible integrations with authorized concrete children batched."""
-
-    actor = _session_user(info)
-    exposed = _exposed_model_labels(info)
-    return Integration.objects.all().with_concrete_children(
-        actor=actor,
-        exposed_model_labels=exposed,
-    )
-
-
 def _exposed_model_labels(info: strawberry.Info) -> set[str]:
     """Return model resources carried by this exact composed GraphQL schema."""
 
@@ -667,7 +671,7 @@ def _credential_material(data: CredentialInput) -> dict[str, str]:
     """Read the secret(s) the kind's handler names out of the discriminated input."""
 
     material: dict[str, str] = {}
-    for field in handler_for(data.kind).input_material_fields():
+    for field in CredentialKind(data.kind).handler.input_material_fields():
         if not hasattr(data, field):
             raise ValueError(f"Cannot create a credential of kind {data.kind!r}.")
         material[field] = getattr(data, field)
@@ -684,11 +688,7 @@ def integration_create_attrs(
     credential = (
         None
         if data.credential is None
-        else resolve_action_target(
-            Credential,
-            data.credential,
-            reason=f"{reason}.credential",
-        )
+        else resolve_action_target(Credential, data.credential, reason=f"{reason}.credential")
     )
     account = (
         strawberry.UNSET
@@ -696,11 +696,7 @@ def integration_create_attrs(
         else (
             None
             if data.account is None
-            else resolve_action_target(
-                ExternalAccount,
-                data.account,
-                reason=f"{reason}.account",
-            )
+            else resolve_action_target(ExternalAccount, data.account, reason=f"{reason}.account")
         )
     )
     attrs: dict[str, Any] = {
@@ -790,12 +786,7 @@ def _concrete_integration_target(info: strawberry.Info, user: Any, resource: str
     return target
 
 
-def _attach_completed_integration(
-    info: strawberry.Info,
-    integration_sqid: str,
-    user: Any,
-    credential: Any,
-) -> None:
+def _attach_completed_integration(info: strawberry.Info, integration_sqid: str, user: Any, credential: Any) -> None:
     """Attach a freshly connected credential to the integration named in OAuth state."""
 
     if not integration_sqid:
@@ -807,10 +798,7 @@ def _attach_completed_integration(
     if credential.user_id != user.pk:
         raise PermissionDenied("Credential does not belong to the current user.")
     exposed = _exposed_model_labels(info)
-    integrity, _authorized = integration.concrete_children(
-        actor=user,
-        exposed_model_labels=exposed,
-    )
+    integrity, _authorized = integration.concrete_children(actor=user, exposed_model_labels=exposed)
     if len(integrity) != 1:
         raise OAuthFlowError(INVALID_STATE, 400)
     child = integrity[0]
@@ -899,11 +887,7 @@ class ConnectionMutation:
             integration = _concrete_integration_target(info, user, resource, id)
             oauth_client = integration.capability_impl.connect_oauth_client(integration.integration_kind_value())
             return connect_integration_target(
-                info,
-                integration,
-                oauth_client,
-                redirect_uri=redirect_uri,
-                next_path=next,
+                info, integration, oauth_client, redirect_uri=redirect_uri, next_path=next
             )
         except OAuthFlowError as error:
             return ConnectIntegrationResult(error=error.public_message, error_code=error.code)
@@ -984,10 +968,7 @@ class ConnectionMutation:
         try:
             oauth_client = flow.remembered_oauth_client(request, state)
             result = _connect.complete_account_connect(
-                oauth_client,
-                code=code,
-                state_token=state,
-                redirect_uri=redirect_uri,
+                oauth_client, code=code, state_token=state, redirect_uri=redirect_uri
             )
             _attach_completed_integration(info, result.integration_id, result.user, result.credential)
         except OAuthFlowError as error:
@@ -1008,10 +989,10 @@ class ConnectionMutation:
     ) -> UnlinkAccountResult:
         """Remove this session user's credential link to an external account.
 
-        ``Credential.objects.check_disconnect`` runs installed guards before the
-        credential is deleted; the login addon, when installed, vetoes removing a
-        user's last sign-in account by raising an :class:`OAuthFlowError`, surfaced
-        here as a typed error rather than a 500.
+        ``Credential.check_disconnect()`` validates the model invariant before
+        deletion. The login addon's model contribution vetoes removing a user's
+        last sign-in account by raising a coded :class:`ValidationError`, surfaced here
+        as a typed error rather than a 500.
         """
 
         user = _session_user(info)
@@ -1030,8 +1011,8 @@ class ConnectionMutation:
                 ExternalAccount.objects.revoke_owner(external_account, user)
                 deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
-        except OAuthFlowError as error:
-            return UnlinkAccountResult(ok=False, error=error.public_message, error_code=error.code)
+        except ValidationError as error:
+            return UnlinkAccountResult(ok=False, error="; ".join(error.messages), error_code=error.code)
 
 
 @strawberry.type
@@ -1064,13 +1045,15 @@ class IntegrateExternalAccountMutation:
             if owner is not None:
                 ExternalAccount.objects.revoke_owner(account, owner)
 
-        return delete_by_public_id(
-            ExternalAccount,
-            str(id),
-            reason="integrate.graphql.external_account.delete",
-            confirm=confirm,
-            before_delete=revoke,
-        )
+        with transaction.atomic():
+            return delete_by_public_id(
+                ExternalAccount,
+                str(id),
+                reason="integrate.graphql.external_account.delete",
+                confirm=confirm,
+                before_delete=revoke,
+                queryset=write_queryset(ExternalAccount),
+            )
 
 
 @strawberry.type
@@ -1127,10 +1110,7 @@ class IntegrateCredentialMutation:
 
         user = _session_user(info) if data.user is None else _user_from_public_id(data.user)
         credential = Credential.objects.create_local_credential(
-            user,
-            kind=data.kind,
-            name=data.name,
-            material=_credential_material(data),
+            user, kind=data.kind, name=data.name, material=_credential_material(data)
         )
         return cast(CredentialType, credential)
 
@@ -1141,13 +1121,15 @@ class IntegrateCredentialMutation:
         def prepare_delete(credential: Any) -> None:
             Credential.objects.prepare_disconnect(credential)
 
-        return delete_by_public_id(
-            Credential,
-            str(id),
-            reason="integrate.graphql.credential.delete",
-            confirm=confirm,
-            before_delete=prepare_delete,
-        )
+        with transaction.atomic():
+            return delete_by_public_id(
+                Credential,
+                str(id),
+                reason="integrate.graphql.credential.delete",
+                confirm=confirm,
+                before_delete=prepare_delete,
+                queryset=write_queryset(Credential),
+            )
 
 
 attach_delete_preview_metadata(
@@ -1179,16 +1161,16 @@ class VendorType(AngeeNode):
 
 @strawberry.type
 class IntegrationLabelMixin:
-    """Project ``Integration.display_label`` as the ``display_name`` field for a type.
+    """Project Integration identity, credential health and saved-stream visibility.
 
     Compose alongside the node base, e.g. ``class ChannelType(IntegrationLabelMixin,
     AngeeNode)``, to surface the operator label (falling back to ``Vendor
-    (lifecycle)``) on every ``Integration`` child type without re-declaring the
-    resolver. A ``@strawberry.type`` (not an interface): merges the field into the
-    concrete type without adding a GraphQL interface to the SDL.
+    (lifecycle)``) and annotated ``stream_count`` on every ``Integration`` child
+    type. A ``@strawberry.type`` (not an interface): merges fields into the concrete
+    type without adding a GraphQL interface to the SDL.
     """
 
-    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"])
+    @strawberry_django.field(only=["display_name", "vendor", "lifecycle"], prefetch_related=["vendor"])
     def display_name(self) -> str:
         """Return the operator label, falling back to the vendor-derived one."""
 
@@ -1199,6 +1181,12 @@ class IntegrationLabelMixin:
         """Return the attached credential's status, or ``""`` when none is attached."""
 
         return str(cast(Any, self).credential_status)
+
+    @strawberry_django.field(annotate=Count("sync_streams", distinct=True))
+    def stream_count(self) -> int:
+        """Count retained streams through the same Integration permission owner."""
+
+        return cast(int, cast(Any, self).stream_count)
 
 
 @strawberry.type
@@ -1211,14 +1199,9 @@ class BridgeSyncStatusMixin:
 
         return bool(cast(Any, self).is_syncing)
 
-    @strawberry_django.field(name="sync_stage", only=["id", "sync_stage"])
+    @strawberry_django.field(name="sync_stage", only=["id", "sync_stage", "sync_run_id"])
     def sync_stage(self) -> str:
-        """Return the sync stage reconciled against the live lock.
-
-        The raw column is a progress report a crashed worker leaves stale; the
-        model's ``effective_sync_stage`` trusts the advisory lock instead, so a
-        dead run reads ``failed`` — never a phantom ``syncing``.
-        """
+        """Reconcile direct workers against their lock; retained runs settle durably."""
 
         return str(cast(Any, self).effective_sync_stage)
 
@@ -1265,6 +1248,15 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
     last_error: auto
     created_at: auto
     updated_at: auto
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: strawberry.Info) -> Any:
+        """Batch authorized concrete children for root and nested projections."""
+
+        return queryset.with_concrete_children(
+            actor=_session_user(info),
+            exposed_model_labels=_exposed_model_labels(info),
+        )
 
     @strawberry.field
     def concrete_target(self, info: strawberry.Info) -> ConcreteIntegrationTarget:
@@ -1338,6 +1330,249 @@ _VENDOR_RESOURCE = hasura_model_resource(
     insertable=["display_name", "slug", "website_url", "icon", "description"],
     updatable=["slug", "display_name", "website_url", "icon", "description"],
 )
+
+
+@strawberry_django.type(SyncStream)
+class SyncStreamType(AngeeNode):
+    """Read-only inspection of a bridge partition's retained epoch."""
+
+    integration: IntegrationType
+    key: auto
+    partition: auto
+    kind: auto
+    direction: auto
+    generation: auto
+    phase: auto
+    cursor: JSON = strawberry_django.field(metadata={"angee_widget": "angee.integrate.integrationSyncCursor"})
+    cursor_expires_at: auto
+    resync_required: auto
+    last_advanced_at: auto
+    last_reconciled_at: auto
+    absence_threshold: auto
+    created_at: auto
+    updated_at: auto
+
+    @strawberry_django.field(
+        annotate=Count(
+            "discrepancies",
+            filter=Q(discrepancies__is_open=True),
+            distinct=True,
+        )
+    )
+    def open_discrepancy_count(self) -> int:
+        """Count unresolved quarantine, including requested retries, in the row query."""
+
+        return cast(int, cast(Any, self).open_discrepancy_count)
+
+    @strawberry_django.field(annotate=Count("links", distinct=True))
+    def link_count(self) -> int:
+        """Count replica identities without multiplying the discrepancy join."""
+
+        return cast(int, cast(Any, self).link_count)
+
+
+@strawberry_django.type(RecordLink)
+class RecordLinkType(AngeeNode):
+    """Read-only identity, comparison bases and deletion evidence."""
+
+    stream: SyncStreamType
+    external_key: auto
+    status: auto
+    remote_version: auto
+    remote_base_hash: auto
+    local_base_hash: auto
+    origin: auto
+    last_seen_at: auto
+    last_verified_generation: auto
+    absence_count: auto
+    metadata: JSON
+    tombstoned_at: auto
+    created_at: auto
+    updated_at: auto
+
+    @strawberry_django.field(only=["target_ct_id", "target_id"])
+    def model_label(self) -> str:
+        """Project target identity through the shared record-reference owner."""
+
+        return cast(Any, self).record_model_label
+
+    @strawberry_django.field(only=["target_ct_id", "target_id"])
+    def record_id(self) -> PublicID:
+        """Return the target public id; navigation rechecks the target's read policy."""
+
+        return PublicID(cast(Any, self).record_public_id)
+
+
+@strawberry_django.type(RecordRevision)
+class RecordRevisionType(AngeeNode):
+    """Read-only immutable observed and applied revision."""
+
+    link: RecordLinkType
+    number: auto
+    source_payload: JSON
+    source_hash: auto
+    mapping_version: auto
+    mapped_payload: JSON
+    dependency_digest: auto
+    applied_at: auto
+    created_at: auto
+
+
+@strawberry_django.type(SyncDiscrepancy)
+class SyncDiscrepancyType(AngeeNode):
+    """Read-only record quarantine; operator transitions use manager-backed actions."""
+
+    stream: SyncStreamType
+    link: RecordLinkType | None
+    kind: auto
+    code: auto
+    source_hash: auto
+    mapping_version: auto
+    details: JSON
+    status: auto
+    is_open: auto
+    attempts: auto
+    retry_at: auto
+    resolved_at: auto
+    created_at: auto
+    updated_at: auto
+
+
+_SYNC_STREAM_RESOURCE = hasura_model_resource(
+    SyncStreamType,
+    model=SyncStream,
+    name="sync_streams",
+    filterable=[
+        "id",
+        "integration",
+        "key",
+        "partition",
+        "kind",
+        "direction",
+        "phase",
+        "generation",
+        "resync_required",
+        "last_advanced_at",
+        "last_reconciled_at",
+    ],
+    sortable=[
+        "key",
+        "partition",
+        "kind",
+        "direction",
+        "phase",
+        "generation",
+        "last_advanced_at",
+        "last_reconciled_at",
+    ],
+    aggregatable=["id"],
+    groupable=["key", "partition", "kind", "direction", "phase", "resync_required"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"integration": public_pk_decoder(Integration)},
+)
+_RECORD_LINK_RESOURCE = hasura_model_resource(
+    RecordLinkType,
+    model=RecordLink,
+    name="record_links",
+    filterable=[
+        "id",
+        "stream",
+        "stream__integration",
+        "external_key",
+        "status",
+        "origin",
+        "remote_version",
+        "last_seen_at",
+    ],
+    sortable=["external_key", "last_seen_at", "status", "origin", "remote_version"],
+    aggregatable=["id"],
+    groupable=["status", "origin"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"stream": public_pk_decoder(SyncStream)},
+)
+_RECORD_REVISION_RESOURCE = hasura_model_resource(
+    RecordRevisionType,
+    model=RecordRevision,
+    name="record_revisions",
+    filterable=["id", "link", "number", "source_hash", "mapping_version"],
+    sortable=["number", "applied_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"link": public_pk_decoder(RecordLink)},
+)
+_SYNC_DISCREPANCY_RESOURCE = hasura_model_resource(
+    SyncDiscrepancyType,
+    model=SyncDiscrepancy,
+    name="sync_discrepancies",
+    filterable=[
+        "id",
+        "stream",
+        "stream__integration",
+        "link",
+        "kind",
+        "code",
+        "status",
+        "is_open",
+        "retry_at",
+        "created_at",
+    ],
+    sortable=["kind", "status", "retry_at", "created_at"],
+    aggregatable=["id"],
+    groupable=["kind", "code", "status"],
+    insert=False,
+    update=False,
+    delete=False,
+    field_id_decode={"stream": public_pk_decoder(SyncStream), "link": public_pk_decoder(RecordLink)},
+)
+
+
+strawberry.enum(cast(Any, ConflictKeep))
+
+
+@strawberry.type
+class SyncRecordActionMutation:
+    """Admin-gated operational transitions on the bridge-owned record protocol."""
+
+    @strawberry.mutation(name="resolveSyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not resolve the discrepancy.")
+    def resolve_sync_discrepancy(
+        self, info: strawberry.Info, id: PublicID, keep: ConflictKeep | None = None
+    ) -> ActionResult:
+        """Dispatch resolution through the discrepancy manager after row authorization."""
+
+        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write")
+        manager = SyncDiscrepancy.objects
+        if keep is None:
+            manager.resolve(discrepancy)
+        else:
+            manager.resolve_conflict(discrepancy, keep=keep)
+        return ActionResult(ok=True, message=_("Discrepancy resolved."))
+
+    @strawberry.mutation(name="retrySyncDiscrepancy", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not retry the discrepancy.")
+    def retry_sync_discrepancy(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Make quarantine due now through its retained-history owner."""
+
+        discrepancy = authorized_action_target(info, SyncDiscrepancy, id, "write")
+        SyncDiscrepancy.objects.retry(discrepancy)
+        return ActionResult(ok=True, message=_("Discrepancy retry requested."))
+
+    @strawberry.mutation(name="resyncSyncStream", permission_classes=_ADMIN_PERMISSION_CLASSES)
+    @action_guard("Could not request a stream resync.")
+    def resync_sync_stream(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Request the driver-owned baseline transition without running a cycle."""
+
+        stream = authorized_action_target(info, SyncStream, id, "write")
+        SyncStream.objects.request_resync(stream)
+        return ActionResult(ok=True, message=_("Stream resync requested."))
+
+
 _INTEGRATION_RESOURCE = hasura_model_resource(
     IntegrationType,
     model=Integration,
@@ -1362,7 +1597,7 @@ _INTEGRATION_RESOURCE = hasura_model_resource(
         "credential": public_pk_decoder(Credential),
         "account": public_pk_decoder(ExternalAccount),
     },
-    get_queryset=_console_integrations,
+    get_queryset=partial(IntegrationType.get_queryset, Integration.objects),
     write_backend=AngeeHasuraWriteBackend(
         Integration,
         public_id_fields=("vendor", "owner", "credential", "account"),
@@ -1410,16 +1645,6 @@ class RotatedSecret:
 
     ok: bool
     secret: str
-
-
-def _vendor_by_slug(slug: str) -> Any:
-    """Return a vendor catalogue row by slug, or raise."""
-
-    with system_context(reason="integrate.graphql.vendor_slug"):
-        vendor = Vendor.objects.filter(slug=slug).first()
-    if vendor is None:
-        raise ValueError(f"Vendor {slug!r} was not found.")
-    return vendor
 
 
 @strawberry.type
@@ -1494,7 +1719,7 @@ class IntegrationActionMutation:
         queued = 0
         with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
             now = timezone.now()
-            for model in bridge_models(Bridge):
+            for model in models_with(base=Bridge):
                 for bridge in model._default_manager.filter(pk=integration.pk).order_by("pk"):
                     queue_bridge_sync(bridge, now=now)
                     queued += 1
@@ -1558,6 +1783,14 @@ class WebhookActionMutation:
 # invariance check; ``list[type]`` widens it. (iam's inline lists are heterogeneous,
 # so they don't hit this.)
 _CONSOLE_TYPES: list[object] = [
+    SyncStreamType,
+    RecordLinkType,
+    RecordRevisionType,
+    SyncDiscrepancyType,
+    *_SYNC_STREAM_RESOURCE.types,
+    *_RECORD_LINK_RESOURCE.types,
+    *_RECORD_REVISION_RESOURCE.types,
+    *_SYNC_DISCREPANCY_RESOURCE.types,
     OAuthClientType,
     CredentialOAuthClientType,
     ExternalAccountType,
@@ -1612,6 +1845,10 @@ schemas = {
             _VENDOR_RESOURCE.query,
             _INTEGRATION_RESOURCE.query,
             _WEBHOOK_SUBSCRIPTION_RESOURCE.query,
+            _SYNC_STREAM_RESOURCE.query,
+            _RECORD_LINK_RESOURCE.query,
+            _RECORD_REVISION_RESOURCE.query,
+            _SYNC_DISCREPANCY_RESOURCE.query,
         ],
         "mutation": [
             _OAUTH_CLIENT_RESOURCE.mutation,
@@ -1626,6 +1863,7 @@ schemas = {
             IntegrationCredentialMutation,
             IntegrationActionMutation,
             WebhookActionMutation,
+            SyncRecordActionMutation,
         ],
         "subscription": [
             changes(Integration, field="integrationChanged"),

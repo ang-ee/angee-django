@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Filter } from "./filter";
 import { ResourceQuery, QueryParseError } from "./query";
 import type { QueryAxis, QueryField, QueryDrill, FilterOperator } from "./query-schema";
-import { testDataResource, testResourceQuery } from "./testing";
+import { testDataResource, testQueryField, testResourceQuery } from "./testing";
 
 const channel: QueryAxis = {
   field: "channel", kind: "relation", identityPath: "channel.id", labelPath: "channel.display_name",
@@ -27,6 +27,104 @@ describe("ResourceQuery", () => {
   test("builds once per immutable resource", () => {
     const metadata = resource();
     expect(ResourceQuery.from(metadata)).toBe(ResourceQuery.from(metadata));
+  });
+  test("resolves resource text-search declarations against executable capabilities", () => {
+    const metadata = testDataResource("money.Currency", {
+      recordRepresentation: "display_name",
+      recordSearchFields: ["code", "unsupported", "missing", "name"],
+      query: testResourceQuery({
+        fields: {
+          display_name: field("display_name", "String", ["exact", "iContains"]),
+          code: field("code", "String", ["exact", "iContains"]),
+          name: field("name", "String", ["exact", "iContains"]),
+          unsupported: field("unsupported", "String", ["exact"]),
+        },
+      }),
+    });
+    const query = ResourceQuery.from(metadata);
+
+    expect(query.textSearchFields()).toEqual(["code", "name"]);
+    expect(query.textSearchFields(["name", "unsupported", "code"])).toEqual([
+      "name",
+      "code",
+    ]);
+    expect(ResourceQuery.from({ resource: metadata, fields: {} })).toBe(query);
+  });
+  test("uses a searchable representation when no search field is declared", () => {
+    const query = ResourceQuery.from(testDataResource("example.Reviewer", {
+      recordRepresentation: "display_name",
+      recordSearchFields: [],
+      query: testResourceQuery({
+        fields: {
+          display_name: field("display_name", "String", ["exact", "iContains"]),
+          hidden: field("hidden", "String", ["exact", "iContains"]),
+        },
+      }),
+    }));
+    expect(query.textSearchFields()).toEqual(["display_name"]);
+
+    const invalidDeclaration = ResourceQuery.from(testDataResource("integrate.Credential", {
+      recordRepresentation: "display_name",
+      recordSearchFields: ["unsupported"],
+      query: testResourceQuery({
+        fields: {
+          display_name: field("display_name", "String", ["exact", "iContains"]),
+          unsupported: field("unsupported", "String", ["exact"]),
+        },
+      }),
+    }));
+    expect(invalidDeclaration.textSearchFields()).toEqual(["display_name"]);
+
+    const unsupportedRepresentation = ResourceQuery.from(testDataResource("iam.ServiceAccount", {
+      recordRepresentation: "display_name",
+      query: testResourceQuery({
+        fields: {
+          display_name: field("display_name", "String", ["exact"]),
+          name: field("name", "String", ["exact", "iContains"]),
+          hidden: field("hidden", "String", ["exact", "iContains"]),
+        },
+      }),
+    }));
+    expect(unsupportedRepresentation.textSearchFields()).toEqual([]);
+    expect(unsupportedRepresentation.textSearchFields(["display_name"])).toEqual([]);
+  });
+  test("never guesses a search field when none is declared or representable", () => {
+    const query = ResourceQuery.from(testDataResource("example.Reviewer", {
+      recordRepresentation: null,
+      recordSearchFields: [],
+      query: testResourceQuery({
+        fields: {
+          count: field("count", "Int", ["exact"]),
+          code: field("code", "String", ["exact", "iContains"]),
+          name: field("name", "String", ["exact", "iContains"]),
+        },
+      }),
+    }));
+    expect(query.textSearchFields()).toEqual([]);
+    expect(query.textSearchFields(["code"])).toEqual(["code"]);
+  });
+  test("validates explicit text-search fields for contract and local-row queries", () => {
+    const contract = testResourceQuery({
+      fields: {
+        name: testQueryField("name", {
+          filter: { field: "name", scalar: "String", values: [], operators: ["exact", "iContains"] },
+        }),
+        count: testQueryField("count", {
+          scalar: "Int",
+          filter: { field: "count", scalar: "Int", values: [], operators: ["exact"] },
+        }),
+      },
+    });
+    const authored = ResourceQuery.fromContract(contract);
+    expect(authored.textSearchFields()).toEqual([]);
+    expect(authored.textSearchFields(["count", "name", "missing"])).toEqual(["name"]);
+
+    const rows = ResourceQuery.forRows({ fields: {
+      count: { scalar: "Int" },
+      name: { scalar: "String" },
+    } });
+    expect(rows.textSearchFields()).toEqual([]);
+    expect(rows.textSearchFields(["count", "name"])).toEqual(["name"]);
   });
   test("separates identity, label, selected row paths and server bucket names", () => {
     const query = ResourceQuery.from(resource());
@@ -158,11 +256,11 @@ describe("ResourceQuery", () => {
   test("encodes text without overwriting comparisons sharing a wire operator", () => {
     const query = ResourceQuery.from(resource());
     expect(
-      query.toWhere({ body: { contains: "50%_\\", startsWith: "Sale" } }),
+      query.toWhere({ body: { contains: "50%_\\", startsWith: "Record" } }),
     ).toEqual({
       _and: [
         { body: { _like: "%50\\%\\_\\\\%" } },
-        { body: { _like: "Sale%" } },
+        { body: { _like: "Record%" } },
       ],
     });
     expect(query.toWhere({ body: { iLike: "ab_%" } })).toEqual({
@@ -607,11 +705,11 @@ test("decimal predicates and client text sorting preserve their intended orderin
 test("compound presets replace their own fields and keep unrelated predicates", () => {
   const preset = { kind: { inList: ["direct", "mail"] } };
   expect(Filter.facetFromFilter(preset)).toBeNull();
-  const initial = { kind: { exact: "group" }, text: { iContains: "invoice" } };
+  const initial = { kind: { exact: "group" }, text: { iContains: "document" } };
   const chosen = Filter.from(initial).togglePreset(preset);
   expect(chosen).toEqual({
     kind: { inList: ["direct", "mail"] },
-    text: { iContains: "invoice" },
+    text: { iContains: "document" },
   });
   expect(Filter.from(chosen).hasPreset(preset)).toBe(true);
   const one = Filter.from(chosen).toggleFacet({
@@ -620,23 +718,23 @@ test("compound presets replace their own fields and keep unrelated predicates", 
   });
   expect(one).toEqual({
     kind: { exact: "mail" },
-    text: { iContains: "invoice" },
+    text: { iContains: "document" },
   });
   expect(Filter.from(one).hasPreset(preset)).toBe(false);
   expect(Filter.from(chosen).togglePreset(preset)).toEqual({
-    text: { iContains: "invoice" },
+    text: { iContains: "document" },
   });
 });
 
 test("field-scoped clear and change detection traverse AND branches", () => {
   const filter = Filter.from({
-    AND: [{ account: { exact: "one" } }, { text: { iContains: "invoice" } }],
+    AND: [{ account: { exact: "one" } }, { text: { iContains: "document" } }],
   });
   expect(Filter.from(filter.onlyFields(["account"])).conjunctions()).toEqual([
     { field: "account", operator: "exact", value: "one" },
   ]);
   expect(Filter.from(filter.withoutFields(["account"])).conjunctions()).toEqual(
-    [{ field: "text", operator: "iContains", value: "invoice" }],
+    [{ field: "text", operator: "iContains", value: "document" }],
   );
   expect(filter.withoutFields(["account", "text"])).toEqual({});
   expect(() =>

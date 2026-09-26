@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
-from django.core.exceptions import FieldError
+from django.core.exceptions import FieldError, ValidationError
 from django.db import connection, models, transaction
 from django.db.models import OuterRef
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import RebacMixin
 
-from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, AngeeUnscopedQuerySet
 from angee.base.scoping import system_queryset
+from angee.workflows.managers import StepAttemptQuerySet
+from angee.workflows.testing.models import StepAttempt, StepRun
+from tests.conftest import Drive, File, Integration
+from tests.tables import model_tables
 
 POSTGRESQL_ONLY = pytest.mark.skipif(
     connection.vendor != "postgresql",
@@ -82,32 +87,65 @@ class ThirdPartySystemQueryThing(RebacMixin):
         base_manager_name = "objects"
 
 
+@pytest.mark.parametrize("model", [Drive, File, Integration, StepRun, StepAttempt])
+def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model: type[models.Model]) -> None:
+    """Native base managers expose backend-gated locks without replacing actor managers."""
+
+    manager = model._base_manager
+    assert model._default_manager is model.objects
+    assert callable(manager.lock_if_supported)
+    queryset = manager.db_manager("default").lock_if_supported(of=("self",))
+    assert queryset.model is model
+    assert queryset._db == "default"
+    assert queryset.query.select_for_update is True
+    assert queryset.query.select_for_update_of == ("self",)
+    if model is StepAttempt:
+        assert manager is model.system_objects
+        assert isinstance(queryset, StepAttemptQuerySet)
+        with pytest.raises(ValidationError, match="StepAttempt rows cannot be edited"):
+            queryset.update(status="bypassed")
+    else:
+        assert isinstance(manager, AngeeUnscopedManager)
+        assert isinstance(queryset, AngeeUnscopedQuerySet)
+
+
+@pytest.mark.parametrize("queryset_class", [AngeeQuerySet, AngeeUnscopedQuerySet])
+def test_lock_preserves_queryset_policy_and_declares_native_write_intent(queryset_class: Any) -> None:
+    """Lock intent preserves the queryset and hints without mutating the original."""
+
+    instance = SystemQueryThing(name="pending")
+    original = queryset_class(model=SystemQueryThing, hints={"instance": instance}).filter(name="pending")
+    locked = original.lock_if_supported(of=("self",))
+
+    assert type(locked) is queryset_class
+    assert locked is not original
+    assert locked.query.where == original.query.where
+    assert locked._hints == original._hints
+    assert original._for_write is False
+    assert original.query.select_for_update is False
+    assert locked._for_write is True
+    assert locked.query.select_for_update is True
+    assert locked.query.select_for_update_of == ("self",)
+
+
 @pytest.fixture
 def system_query_tables() -> Iterator[None]:
     """Create the concrete system-query test tables."""
 
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(SystemQueryThing)
-        schema_editor.create_model(GuardedSystemQueryThing)
-        schema_editor.create_model(ThirdPartySystemQueryThing)
-    try:
+    with model_tables((SystemQueryThing, GuardedSystemQueryThing, ThirdPartySystemQueryThing)):
         yield
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(ThirdPartySystemQueryThing)
-            schema_editor.delete_model(GuardedSystemQueryThing)
-            schema_editor.delete_model(SystemQueryThing)
 
 
 @POSTGRESQL_ONLY
 @pytest.mark.django_db(transaction=True)
-def test_system_queryset_emits_for_update_on_postgresql(system_query_tables: None) -> None:
+@pytest.mark.parametrize("model", [SystemQueryThing, ThirdPartySystemQueryThing])
+def test_system_queryset_emits_for_update_on_postgresql(system_query_tables: None, model: type[models.Model]) -> None:
     """A requested system lock reaches PostgreSQL as ``FOR UPDATE`` SQL."""
 
-    instance = SystemQueryThing._base_manager.create(name="locked")
+    instance = system_queryset(model).create(name="locked")
 
     with transaction.atomic(), CaptureQueriesContext(connection) as captured:
-        rows = list(SystemQueryThing.system_queryset(lock=()).filter(pk=instance.pk))
+        rows = list(system_queryset(model, lock=("self",)).filter(pk=instance.pk))
 
     assert rows == [instance]
     assert any("FOR UPDATE" in query["sql"].upper() for query in captured.captured_queries)
@@ -143,6 +181,24 @@ def test_system_querysets_preserve_domain_queryset_and_manager_policy(system_que
 
 
 @pytest.mark.django_db(transaction=True)
+def test_unscoped_locks_keep_native_base_manager_visibility(system_query_tables: None) -> None:
+    """Adding locks must not hide rows excluded by the default manager's policy."""
+
+    selected = GuardedSystemQueryThing._base_manager.create(name="selected", selected=True)
+    excluded = GuardedSystemQueryThing._base_manager.create(name="excluded", selected=False)
+    manager = AngeeUnscopedManager()
+    manager.model = GuardedSystemQueryThing
+
+    with transaction.atomic():
+        queryset = manager.db_manager("default").lock_if_supported()
+        assert set(queryset.values_list("pk", flat=True)) == {selected.pk, excluded.pk}
+        assert manager.db_manager("default").locked_get(pk=excluded.pk) == excluded
+
+    assert type(GuardedSystemQueryThing._base_manager) is models.Manager
+    assert list(GuardedSystemQueryThing.system_queryset()) == [selected]
+
+
+@pytest.mark.django_db(transaction=True)
 def test_readable_scalar_subquery_infers_fallback_type(system_query_tables: None) -> None:
     """A fallback keeps the selected field type even when its Python value differs."""
 
@@ -172,13 +228,14 @@ def test_readable_scalar_subquery_keeps_denied_empty_string(system_query_tables:
 
 @SQLITE_ONLY
 @pytest.mark.django_db(transaction=True)
-def test_system_queryset_keeps_sqlite_unlocked(system_query_tables: None) -> None:
+@pytest.mark.parametrize("model", [SystemQueryThing, ThirdPartySystemQueryThing])
+def test_system_queryset_keeps_sqlite_unlocked(system_query_tables: None, model: type[models.Model]) -> None:
     """SQLite evaluates a requested system lock without emitting lock SQL."""
 
-    instance = SystemQueryThing._base_manager.create(name="unlocked")
+    instance = system_queryset(model).create(name="unlocked")
 
     with CaptureQueriesContext(connection) as captured:
-        rows = list(SystemQueryThing.system_queryset(lock=()).filter(pk=instance.pk))
+        rows = list(system_queryset(model, lock=("self",)).filter(pk=instance.pk))
 
     assert rows == [instance]
     assert all("FOR UPDATE" not in query["sql"].upper() for query in captured.captured_queries)

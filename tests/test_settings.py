@@ -16,6 +16,7 @@ from django.core.exceptions import ImproperlyConfigured
 from angee.compose.composer import Composer
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
 
+BASE_APP = "angee.base.apps.BaseConfig"
 GRAPHQL_APP = "angee.graphql.apps.GraphQLConfig"
 
 
@@ -97,8 +98,7 @@ def test_base_is_installed_exactly_once(tmp_path: Path) -> None:
 
     settings = _compose(tmp_path)
     installed = _installed_paths(settings["INSTALLED_APPS"])
-    base_app = "angee.base"
-    assert installed.count(base_app) == 1
+    assert installed.count(BASE_APP) == 1
 
 
 def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
@@ -112,7 +112,7 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
     compose_at = installed.index("angee.compose.apps.ComposeConfig")
-    base_at = installed.index("angee.base")
+    base_at = installed.index(BASE_APP)
     resources_at = installed.index("angee.resources")
 
     assert compose_at < base_at < resources_at
@@ -128,7 +128,7 @@ def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
     assert "angee.compose.apps.ComposeConfig" in installed
-    assert "angee.base" in installed
+    assert BASE_APP in installed
     assert GRAPHQL_APP in installed
     assert "angee.resources" in installed
     assert settings["AUTH_USER_MODEL"] == "iam.User"
@@ -214,7 +214,7 @@ def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
     compose_at = installed.index("angee.compose.apps.ComposeConfig")
-    base_at = installed.index("angee.base")
+    base_at = installed.index(BASE_APP)
     graphql_at = installed.index(GRAPHQL_APP)
     iam_at = installed.index("angee.iam.apps.IAMConfig")
     resources_at = installed.index("angee.resources")
@@ -238,7 +238,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         "rebac.apps.RebacConfig",
         "reversion.apps.ReversionConfig",
         "simple_history",
-        "angee.base",
+        BASE_APP,
         # Core apps are an always-on prefix rather than addon dependencies.
         "angee.jobs",
         "channels.apps.ChannelsConfig",
@@ -279,11 +279,11 @@ def test_one_app_set_orders_compose_before_adopters(
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
     assert installed.count("angee.compose.apps.ComposeConfig") == 1
-    assert installed.count("angee.base") == 1
+    assert installed.count(BASE_APP) == 1
     assert installed.count(GRAPHQL_APP) == 1
     assert installed.count("angee.resources") == 1
     compose_at = installed.index("angee.compose.apps.ComposeConfig")
-    base_at = installed.index("angee.base")
+    base_at = installed.index(BASE_APP)
     notes_at = installed.index("example.notes")
     assert compose_at < base_at < notes_at
     assert "ANGEE_BUILD" not in settings
@@ -1636,6 +1636,25 @@ def test_autoconfig_reuses_native_module_and_preserves_incremental_values(tmp_pa
     assert namespace["ITEMS"] == ["project", "first", "second"]
     assert len(modules) == 2 and modules[0] is modules[1]
     assert namespace["_YAMLCONF_ATTRIBUTES"]
+
+
+def test_autoconfig_nested_contributions_do_not_mutate_addon_defaults(tmp_path, monkeypatch):
+    """A composed registry belongs to its host; imported declarations remain reusable."""
+
+    from angee.compose.autoconfig import AutoConfig
+
+    _write_addon(tmp_path, "registry_owner", autoconfig="SETTINGS = {'REGISTRY': {'core': 'core.Impl'}}\n")
+    _write_addon(tmp_path, "registry_extension", autoconfig="SETTINGS = {'REGISTRY.extension': 'extra.Impl'}\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    first = {}
+    composer = AutoConfig(first, reserved_settings=frozenset())
+    composer.update_app(AppConfig.create("registry_owner"))
+    composer.update_app(AppConfig.create("registry_extension"))
+    second = {}
+    AutoConfig(second, reserved_settings=frozenset()).update_app(AppConfig.create("registry_owner"))
+
+    assert first["REGISTRY"] == {"core": "core.Impl", "extension": "extra.Impl"}
+    assert second["REGISTRY"] == {"core": "core.Impl"}
 
 
 @pytest.mark.parametrize("include_messaging", [False, True])

@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   preview: {
     can_apply: true,
     refusal: null as string | null,
+    enableLabel: "Tags",
+    disableLabel: "Legacy",
   },
   refetchPreview: vi.fn(),
   toast: { success: vi.fn(), danger: vi.fn() },
@@ -51,8 +53,8 @@ vi.mock("@angee/refine", async (importOriginal) => ({
         refusal: mocks.preview.refusal,
         roots_before: ["angee.notes"],
         roots_after: ["angee.notes", "angee.tags"],
-        addons_to_enable: [{ name: "angee.tags", label: "Tags", root: false, depends_on: [] }],
-        addons_to_disable: [{ name: "angee.legacy", label: "Legacy", root: true, depends_on: ["angee.notes"] }],
+        addons_to_enable: [{ name: "angee.tags", label: mocks.preview.enableLabel, root: false, depends_on: [] }],
+        addons_to_disable: [{ name: "angee.legacy", label: mocks.preview.disableLabel, root: true, depends_on: ["angee.notes"] }],
         data_inventory: [{
           addon: "angee.legacy",
           models: [{ label: "legacy.Entry", verbose_name: "entry", row_count: 3 }],
@@ -70,6 +72,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 function row(overrides: Partial<AddonResourceRow> = {}): AddonResourceRow {
   return {
     id: "angee.notes",
+    name: "angee.notes",
     label: "notes",
     namespace: "angee",
     category: "Example",
@@ -100,6 +103,8 @@ beforeEach(() => {
   mocks.mutate.mockClear();
   mocks.preview.can_apply = true;
   mocks.preview.refusal = null;
+  mocks.preview.enableLabel = "Tags";
+  mocks.preview.disableLabel = "Legacy";
   mocks.refetchPreview.mockClear();
   mocks.toast.success.mockClear();
   mocks.toast.danger.mockClear();
@@ -122,6 +127,17 @@ describe("AddonCard", () => {
     expect(screen.getByText("Required")).toBeTruthy();
   });
 
+  test("shows the server's canonical-name label for an unresolved remote addon", () => {
+    render(<AddonCard row={row({
+      id: "example.remote",
+      name: "example.remote",
+      label: "example.remote",
+      source: "remote",
+      state: "disabled",
+    })} />);
+    expect(screen.getAllByText("example.remote")).toHaveLength(2);
+  });
+
   test("shows the pending-restart badge", () => {
     render(<AddonCard row={row({ state: "disabled", pending: true })} />);
     expect(screen.getByText("Pending restart")).toBeTruthy();
@@ -129,6 +145,18 @@ describe("AddonCard", () => {
 });
 
 describe("AddonCardActions", () => {
+  test("uses the server's labels in the confirmation title and unresolved impacts", () => {
+    mocks.preview.enableLabel = "angee.tags";
+    mocks.preview.disableLabel = "angee.legacy";
+    render(<AddonCardActions row={row({ label: "angee.notes", state: "disabled" })} context={CONTEXT} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+    expect(screen.getByRole("heading", { name: "Install angee.notes?" })).toBeTruthy();
+    expect(screen.getAllByText("angee.tags")).toHaveLength(2);
+    expect(screen.getAllByText("angee.legacy")).toHaveLength(3);
+  });
+
   test("routes install and disable invalidation through the resource owner", () => {
     render(<AddonCardActions row={row()} context={CONTEXT} />);
 

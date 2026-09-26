@@ -7,24 +7,41 @@ from typing import Any
 from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, transaction
-from rebac import system_context
+from django.db import IntegrityError, transaction
+from rebac import system_context, to_subject_ref
+from referencing.exceptions import Unresolvable
 
-from angee.base.authority import TransactionBoundAuthority
-from angee.base.mixins import AuditMixin
+from angee.base.actors import actor_user_id
+from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.refs import record_ref_for
+from angee.base.scoping import read_scoped_queryset, system_queryset
+from angee.base.serialization import canonical_json_sha256
 from angee.workflows.attempts import json_values_equal
-from angee.workflows_extraction.contracts import CorrectionBinding
-from angee.workflows_extraction.engines import DocumentPart, DocumentSource, PageImage, PageResult
+from angee.workflows.data_contracts import json_schema_validator
+from angee.workflows_extraction.contracts import (
+    CorrectionBinding,
+    DocumentPart,
+    DocumentRef,
+    DocumentSource,
+    PageImage,
+    PageResult,
+)
+from angee.workflows_extraction.enums import ExtractionErrorCode
 from angee.workflows_extraction.pointers import (
     implicit_identity_correspondence,
     result_selectors,
 )
-
-_evidence_insertion = TransactionBoundAuthority[None](
-    "extraction_retention_transaction",
-    atomic_error="Extraction evidence insertion requires an active transaction.",
-    nested_error="Extraction evidence insertion already has an owner.",
+from angee.workflows_extraction.service import (
+    _changed_fact_pointers,
+    _confirmed_fact_pointers,
+    _json_object,
+    _lineage_key,
+    _retained_source_facts,
+    _reviewed_correction_unresolved_reasons,
+    _unchanged_claims,
+    _unchanged_corrections,
+    _validated_schema,
 )
 
 
@@ -33,10 +50,6 @@ class RetiredIdentityKind(StrEnum):
 
     DOCUMENT = "document"
     LINE = "line"
-
-
-def evidence_insert_allowed(alias: str | None = None) -> bool:
-    return _evidence_insertion.is_active(alias or DEFAULT_DB_ALIAS)
 
 
 def _same_fact_identity(authority: Any, evidence: Any) -> bool:
@@ -55,38 +68,22 @@ def _same_identity_basis(authority: Any, evidence: Any) -> bool:
     )
 
 
-class ImmutableEvidenceQuerySet(AngeeQuerySet[Any]):
-    """Prevent post-insert mutation and deletion through bulk ORM paths."""
+class EvidenceQuerySet(
+    AppendOnlyQuerySet[Any],
+    AngeeQuerySet[Any],
+):
+    """Keep generic inserts closed and retained evidence append-only."""
 
-    def update(self, **kwargs: Any) -> int:
-        if AuditMixin.is_audit_nullification(kwargs):
-            return super().update(**kwargs)
-        raise ValueError("Extraction evidence is immutable.")
+    def validate_insert(self) -> None:
+        """Keep ordinary create and bulk_create outside retention closed."""
 
-    def delete(self) -> tuple[int, dict[str, int]]:
-        raise ValueError("Extraction evidence is retained and cannot be deleted through the ORM.")
-
-    def _raw_delete(self, using: str) -> int:
-        raise ValueError("Extraction evidence cannot be deleted through relation cascades.")
-
-    def create(self, **kwargs: Any) -> Any:
-        if not evidence_insert_allowed(self.db):
-            raise ValueError("Extraction evidence can only be inserted by the retention owner.")
-        return super().create(**kwargs)
-
-    def bulk_create(self, objs: Any, **kwargs: Any) -> Any:
-        if not evidence_insert_allowed(self.db) or kwargs.get("update_conflicts") or kwargs.get("ignore_conflicts"):
-            raise ValueError("Extraction evidence can only be inserted by the retention owner.")
-        return super().bulk_create(objs, **kwargs)
-
-    def bulk_update(self, objs: Any, fields: Any, **kwargs: Any) -> Any:
-        raise ValueError("Extraction evidence is immutable.")
+        raise ValueError("Extraction evidence can only be inserted by the retention owner.")
 
 
-ImmutableEvidenceManager: Any = AngeeManager.from_queryset(ImmutableEvidenceQuerySet)
+EvidenceManager: Any = AngeeManager.from_queryset(EvidenceQuerySet)
 
 
-class ExtractionManager(ImmutableEvidenceManager):
+class ExtractionManager(EvidenceManager):
     """Persist one authorized result and all of its ordered evidence atomically."""
 
     def automatic_inference_mapping(
@@ -105,7 +102,7 @@ class ExtractionManager(ImmutableEvidenceManager):
             })
         mapping = implicit_identity_correspondence(
             result,
-            layout=base.engine_config.get("evidence_layout", {}),
+            layout=base.profile_config.get("evidence_layout", {}),
             original=base,
         )
         if mapping is None:
@@ -122,7 +119,7 @@ class ExtractionManager(ImmutableEvidenceManager):
 
         if identity_mapping is None:
             implicit = implicit_identity_correspondence(
-                result, layout=original.engine_config.get("evidence_layout", {}),
+                result, layout=original.profile_config.get("evidence_layout", {}),
                 original=original,
             )
             if implicit is None:
@@ -133,7 +130,7 @@ class ExtractionManager(ImmutableEvidenceManager):
         mapping = dict(identity_mapping)
         if not mapping and not retired_identities:
             mapping = implicit_identity_correspondence(
-                result, layout=original.engine_config.get("evidence_layout", {}),
+                result, layout=original.profile_config.get("evidence_layout", {}),
                 original=original,
             ) or {}
         return mapping
@@ -143,7 +140,7 @@ class ExtractionManager(ImmutableEvidenceManager):
 
         lineage_model = self.model._meta.apps.get_model("workflows_extraction", "ExtractionLineage")
         with system_context(reason="workflows_extraction.infer.current_head"):
-            lineage = lineage_model._base_manager.using(self.db).select_related("head").filter(
+            lineage = lineage_model._base_manager.select_related("head").filter(
                 key=base.lineage_key,
             ).first()
         current = lineage.head if lineage is not None else None
@@ -166,10 +163,7 @@ class ExtractionManager(ImmutableEvidenceManager):
 
         if base.status == "succeeded":
             return base
-        if (
-            base.status != "failed"
-            or base.error_code != "source_hold:identity_correspondence_required"
-        ):
+        if not base.awaiting_correspondence:
             raise ValidationError({"inference": "The extraction is not a correspondence hold."})
         correspondence = base.provenance.get("identity_correspondence", {})
         revision = correspondence.get("last_known_revision")
@@ -177,7 +171,7 @@ class ExtractionManager(ImmutableEvidenceManager):
         if type(revision) is not int or revision < 1 or revision >= base.revision:
             raise ValidationError({"inference": "The correspondence hold lacks a valid authority base."})
         with system_context(reason="workflows_extraction.infer.authority_base"):
-            authority = self.model._base_manager.using(self.db).filter(
+            authority = self.model._base_manager.filter(
                 lineage_key=base.lineage_key, revision=revision,
             ).first()
         if authority is None or authority.status != "succeeded":
@@ -200,12 +194,13 @@ class ExtractionManager(ImmutableEvidenceManager):
             raise PermissionDenied("Read access to the retained authority base is required.")
         return authority
 
-    def latest_succeeded_identity_authority(self, head: Any, *, actor: Any) -> Any:
-        """Resolve the latest successful fact owner for one exact lineage head."""
+    def _latest_succeeded_identity_authority(
+        self, head: Any) -> Any:
+        """Resolve one lineage head's latest successful fact owner."""
 
         with system_context(reason="workflows_extraction.infer.latest_succeeded_authority"):
             authority = (
-                self.model._base_manager.using(self.db)
+                self.model._base_manager.all()
                 .filter(
                     lineage_key=head.lineage_key,
                     revision__lt=head.revision,
@@ -216,12 +211,18 @@ class ExtractionManager(ImmutableEvidenceManager):
             )
         if authority is None:
             raise ValidationError({"inference": "The lineage has no successful identity authority."})
-        if not authority.with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to the retained identity authority is required.")
         if not _same_fact_identity(authority, head):
             raise ValidationError({
                 "inference": "The retained identity authority differs from the current extraction."
             })
+        return authority
+
+    def latest_succeeded_identity_authority(self, head: Any, *, actor: Any) -> Any:
+        """Resolve the actor-readable successful fact owner for one exact lineage head."""
+
+        authority = self._latest_succeeded_identity_authority(head)
+        if not authority.with_actor(actor).has_access("read"):
+            raise PermissionDenied("Read access to the retained identity authority is required.")
         return authority
 
     def identity_preserving_pipeline_successor(
@@ -285,8 +286,7 @@ class ExtractionManager(ImmutableEvidenceManager):
     def _correction_revision_parent(
         self,
         authority: Any,
-        revision_parent: Any,
-    ) -> Any:
+        revision_parent: Any) -> Any:
         """Validate immutable adjacency facts without granting record access."""
 
         if (
@@ -300,8 +300,17 @@ class ExtractionManager(ImmutableEvidenceManager):
             )
         if revision_parent.pk == authority.pk:
             return revision_parent
-        selectors = self.inference_candidate_selectors(revision_parent)
-        retained_authority = self._inference_authority_base(revision_parent)
+        failed_inference = revision_parent.failed_at_inference
+        selectors = (
+            ()
+            if failed_inference
+            else self.inference_candidate_selectors(revision_parent)
+        )
+        retained_authority = (
+            self._latest_succeeded_identity_authority(revision_parent)
+            if failed_inference
+            else self._inference_authority_base(revision_parent)
+        )
         if (
             selectors
             or retained_authority.pk != authority.pk
@@ -355,11 +364,11 @@ class ExtractionManager(ImmutableEvidenceManager):
         revision_parent = None
         if correction is not None:
             with system_context(reason="workflows_extraction.correction.original"):
-                original = self.model._base_manager.using(self.db).filter(
+                original = self.model._base_manager.filter(
                     sqid=correction.original_extraction_id,
                     revision=correction.original_revision,
                 ).first()
-                revision_parent = self.model._base_manager.using(self.db).filter(
+                revision_parent = self.model._base_manager.filter(
                     sqid=(
                         correction.revision_parent_extraction_id
                         or correction.original_extraction_id
@@ -438,7 +447,7 @@ class ExtractionManager(ImmutableEvidenceManager):
                 {"decision": "The correction Decision has an invalid revision-parent binding."}
             )
         with system_context(reason="workflows_extraction.correction.revision_parent"):
-            revision_parent = self.model._base_manager.using(self.db).filter(
+            revision_parent = self.model._base_manager.filter(
                 sqid=raw_binding["revision_parent_extraction_id"],
                 revision=raw_binding["revision_parent_extraction_revision"],
             ).first()
@@ -456,6 +465,261 @@ class ExtractionManager(ImmutableEvidenceManager):
                 {"decision": "The correction Decision has another revision-parent binding."}
             )
         return binding, revision_parent
+
+    def revise_from_decision(
+        self,
+        decision_id: int,
+        *,
+        actor: Any,
+        result: Mapping[str, Any],
+        expected_action: str,
+        expected_resolution_action: str,
+        identity_mapping: Mapping[str, str] | None = None,
+        retired_identities: Mapping[str, str] | None = None,
+        confirmed_paths: Sequence[str] = (),
+    ) -> Any:
+        """Retain one domain correction from its canonical completed Decision.
+
+        The caller interprets the domain resolution into ``result`` and its
+        correspondence. This owner reloads the Decision, pins the resolver,
+        validates its frozen extraction/target binding and action, and locks
+        workflow ancestry before the extraction lineage and retained sources.
+        The resolver needs current read access to the original evidence, its
+        revision parent, and the target independently of Decision assignment;
+        a pending Decision's temporary read grants have already been removed.
+        The run's admitted user owns the revision; the human resolver is kept
+        in correction provenance. The unique reuse key makes exact retries
+        return the existing revision, including after the lineage advances.
+        """
+
+        if actor is None:
+            raise PermissionDenied("Correction resolver required.")
+        if not expected_action or not expected_resolution_action:
+            raise ValueError("Correction actions must be explicit.")
+        registry = self.model._meta.apps
+        decision_model = registry.get_model("workflows", "Decision")
+        lineage_model = registry.get_model("workflows_extraction", "ExtractionLineage")
+        with (
+            decision_model.objects.locked_resolution(
+                decision_id,
+                actor=actor,
+                expected_action=expected_action,
+            ) as decision,
+            system_context(reason="workflows_extraction.extraction.revise_from_decision"),
+        ):
+            run = decision.step_run.run
+            if (
+                not isinstance(decision.resolution, Mapping)
+                or decision.resolution.get("action") != expected_resolution_action
+            ):
+                raise ValidationError({"decision": "The correction Decision has another resolution action."})
+            if run.admission_actor_subject() is None:
+                raise ValidationError({"actor": "The correction run requires its admitted actor."})
+            if not isinstance(decision.payload, Mapping):
+                raise ValidationError({"decision": "The correction Decision payload must be an object."})
+            extraction = (
+                self.model._base_manager.all()
+                .filter(
+                    sqid=decision.payload.get("extraction_id"),
+                )
+                .first()
+            )
+            if extraction is None:
+                raise ValidationError({"extraction": "The retained extraction is unavailable."})
+            lineage_model._base_manager.lock_if_supported().get(key=extraction.lineage_key)
+            binding, selected_parent = self.validate_correction_binding(
+                decision.payload,
+                extraction=extraction,
+            )
+            original = system_queryset(self.model,  lock=("self",)).get(pk=extraction.pk)
+            revision_parent = system_queryset(self.model,  lock=("self",)).get(pk=selected_parent.pk)
+            if original.reference != binding.authority or revision_parent.reference != binding.revision_parent:
+                raise ValidationError({"extraction": "The frozen correction revision parent changed before review."})
+            unresolved_target = original.target
+            if unresolved_target is None:
+                raise ValidationError({"extraction": "The retained extraction target is unavailable."})
+            target = system_queryset(type(unresolved_target),  lock=("self",)).get(
+                pk=unresolved_target.pk,
+            )
+            target_ref = record_ref_for(target)
+            if decision.target_model != target_ref.model_label or decision.target_id != target_ref.public_id:
+                raise ValidationError({"decision": "The correction Decision names another target."})
+            for record in (original, revision_parent, target):
+                readable = read_scoped_queryset(type(record), actor)
+                if readable is None or not readable.filter(pk=record.pk).exists():
+                    raise PermissionDenied("Correction evidence, revision parent, and target must remain readable.")
+            retained_sources = tuple(original.sources.lock_if_supported().order_by("position"))
+            file_model = registry.get_model("storage", "File")
+            part_model = registry.get_model("messaging", "Part")
+            fragment_model = registry.get_model("messaging", "Fragment")
+            file_ids = {source.file_id for source in retained_sources if source.file_id is not None}
+            part_ids = {source.message_part_id for source in retained_sources if source.message_part_id is not None}
+            files = {
+                row.pk: row
+                for row in system_queryset(file_model,  lock=("self",))
+                .filter(
+                    pk__in=file_ids,
+                )
+                .order_by("pk")
+            }
+            parts = {
+                row.pk: row
+                for row in system_queryset(part_model,  lock=("self",))
+                .filter(
+                    pk__in=part_ids,
+                )
+                .order_by("pk")
+            }
+            if set(files) != file_ids or set(parts) != part_ids:
+                raise ValidationError({"extraction": "The retained extraction source is unavailable."})
+            fragment_ids = {part.fragment_id for part in parts.values() if part.fragment_id is not None}
+            fragments = {
+                row.pk: row
+                for row in system_queryset(fragment_model,  lock=("self",))
+                .filter(
+                    pk__in=fragment_ids,
+                )
+                .order_by("pk")
+            }
+            if set(fragments) != fragment_ids:
+                raise ValidationError({"extraction": "The retained extraction fragment is unavailable."})
+            for part in parts.values():
+                if part.fragment_id is not None:
+                    part.fragment = fragments[part.fragment_id]
+            for source in retained_sources:
+                if source.file_id is not None:
+                    source.file = files[source.file_id]
+                if source.message_part_id is not None:
+                    source.message_part = parts[source.message_part_id]
+
+            original_ref = record_ref_for(original)
+            decision_ref = record_ref_for(decision)
+            normalized_schema = _validated_schema(original.schema)
+            schema_id = str(normalized_schema.get("$id") or normalized_schema.get("x-version") or "")
+            if (
+                not schema_id
+                or schema_id != str(original.schema_id)
+                or canonical_json_sha256(normalized_schema) != str(original.schema_digest)
+            ):
+                raise ValidationError({"extraction": "The retained extraction schema identity is invalid."})
+            normalized_result = _json_object(result, field="result")
+            try:
+                errors = sorted(
+                    json_schema_validator(normalized_schema).iter_errors(normalized_result),
+                    key=lambda error: list(error.path),
+                )
+            except Unresolvable as error:
+                raise ValidationError(
+                    {"schema": "Extraction references must resolve inside the retained schema."}
+                ) from error
+            if errors:
+                raise ValidationError({"result": "Corrected output does not match the retained extraction schema."})
+
+            source_facts = _retained_source_facts(retained_sources)
+            target_ref = record_ref_for(target)
+            lineage_key = _lineage_key(source_facts=source_facts, target_ref=target_ref)
+            if lineage_key != str(original.lineage_key):
+                raise ValidationError({"extraction": "The retained extraction source identity is invalid."})
+
+            original_provenance = _json_object(original.provenance, field="extraction")
+            retirement = dict(retired_identities or {})
+            effective_mapping = self.correction_identity_mapping(
+                original,
+                normalized_result,
+                identity_mapping=identity_mapping,
+                retired_identities=retirement,
+            )
+            claims = _unchanged_claims(
+                original_provenance.get("claims", {}),
+                before=original.result,
+                after=normalized_result,
+                original_refs=original.document_refs,
+                identity_mapping=effective_mapping,
+                retired_identities=retirement,
+            )
+            corrections = original_provenance.get("corrections", [])
+            if not isinstance(corrections, list) or not all(isinstance(entry, Mapping) for entry in corrections):
+                raise ValidationError({"extraction": "The retained correction provenance is invalid."})
+            carried_corrections = _unchanged_corrections(
+                corrections,
+                before=original.result,
+                after=normalized_result,
+                original_refs=original.document_refs,
+                identity_mapping=effective_mapping,
+                retired_identities=retirement,
+            )
+            changed_paths = _changed_fact_pointers(
+                original.result,
+                normalized_result,
+                original_refs=original.document_refs,
+                identity_mapping=effective_mapping,
+            )
+            confirmed = _confirmed_fact_pointers(
+                confirmed_paths,
+                before=original.result,
+                after=normalized_result,
+                original_refs=original.document_refs,
+                identity_mapping=effective_mapping,
+                retired_identities=retirement,
+            )
+            correction = {
+                "kind": "human_correction",
+                "original_extraction_id": original_ref.public_id,
+                "original_extraction_revision": original.revision,
+                "decision_id": decision_ref.public_id,
+                "decision_resolved_by": str(decision.resolved_by),
+                "recorded_by": str(to_subject_ref(actor)),
+                "corrected_paths": sorted(changed_paths | confirmed),
+                "result_digest": canonical_json_sha256(normalized_result),
+            }
+            if revision_parent.pk != original.pk:
+                revision_parent_ref = record_ref_for(revision_parent)
+                correction.update(
+                    revision_parent_extraction_id=revision_parent_ref.public_id,
+                    revision_parent_extraction_revision=revision_parent.revision,
+                )
+            provenance = {
+                **original_provenance,
+                "claims": claims,
+                "used_model_roles": [],
+                "unresolved_reasons": _reviewed_correction_unresolved_reasons(original_provenance),
+                "corrections": [*carried_corrections, correction],
+            }
+            reuse_basis = {
+                "extraction_id": original_ref.public_id,
+                "extraction_revision": original.revision,
+                "decision_id": decision_ref.public_id,
+            }
+            if revision_parent.pk != original.pk:
+                reuse_basis.update(
+                    revision_parent_id=str(revision_parent.sqid),
+                    revision_parent_revision=revision_parent.revision,
+                )
+            reuse_key = canonical_json_sha256({"human_correction": reuse_basis})
+            return self.create_revision_from_evidence(
+                original,
+                revision_parent=revision_parent,
+                lineage_key=lineage_key,
+                reuse_key=reuse_key,
+                expected_base_id=original.pk,
+                expected_head_id=revision_parent.pk,
+                identity_mapping=effective_mapping,
+                retired_identities=retirement,
+                status="succeeded",
+                error_code="",
+                schema_id=schema_id,
+                schema=normalized_schema,
+                schema_digest=str(original.schema_digest),
+                profile=str(original.profile),
+                model_id=original.model_id,
+                recognition_model_id=original.recognition_model_id,
+                profile_config=original.profile_config,
+                result=normalized_result,
+                provenance=provenance,
+                content_type_id=original.content_type_id,
+                object_id=original.object_id,
+                created_by_id=actor_user_id(run.admission_actor_subject()),
+            )
 
     def reviewed_correction_authority(
         self,
@@ -482,7 +746,7 @@ class ExtractionManager(ImmutableEvidenceManager):
         if decision is None:
             with system_context(reason="workflows_extraction.correction.authority"):
                 decision = (
-                    decision_model._base_manager.using(self.db)
+                    decision_model._base_manager.all()
                     .filter(sqid=correction.decision_id)
                     .first()
                 )
@@ -517,17 +781,13 @@ class ExtractionManager(ImmutableEvidenceManager):
             )
         return original, decision
 
-    def inference_candidate_selectors(
-        self, base: Any
-    ) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    def inference_candidate_selectors(self, base: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:
         """Expose selectors only for an exact retained correspondence candidate."""
 
         if (
             not isinstance(base, self.model)
             or base.pk is None
-            or base.status != "failed"
-            or base.error_code
-            != "source_hold:identity_correspondence_required"
+            or not base.awaiting_correspondence
             or not isinstance(base.result, dict)
             or not base.result
         ):
@@ -536,7 +796,7 @@ class ExtractionManager(ImmutableEvidenceManager):
             )
         return result_selectors(
             base.result,
-            base.engine_config.get("evidence_layout", {}),
+            base.profile_config.get("evidence_layout", {}),
         )
 
     def create_revision(
@@ -548,9 +808,12 @@ class ExtractionManager(ImmutableEvidenceManager):
         parts: Sequence[DocumentPart],
         **values: Any,
     ) -> Any:
-        """Reuse exact requests or allocate the next revision with fresh engine evidence."""
+        """Reuse exact requests or allocate the next revision with fresh profile evidence."""
 
-        return self._create_revision(values=values, evidence=(sources, pages, page_results, parts))
+        return self._create_revision(
+            values=values,
+            evidence=(sources, pages, page_results, parts),
+        )
 
     def create_revision_from_evidence(
         self,
@@ -593,7 +856,8 @@ class ExtractionManager(ImmutableEvidenceManager):
             Sequence[PageImage],
             Sequence[PageResult],
             Sequence[DocumentPart],
-        ] | None = None,
+        ]
+        | None = None,
         original: Any | None = None,
         revision_parent: Any | None = None,
     ) -> Any:
@@ -621,27 +885,29 @@ class ExtractionManager(ImmutableEvidenceManager):
         with system_context(reason="workflows_extraction.extraction.create_revision"):
             for attempt in range(3):
                 try:
-                    with transaction.atomic(using=self.db), _evidence_insertion.scope(self.db, None):
+                    with transaction.atomic():
                         lineage_model = self.model._meta.apps.get_model("workflows_extraction", "ExtractionLineage")
-                        lineage, _ = lineage_model._base_manager.using(self.db).get_or_create(key=values["lineage_key"])
-                        lineage = lineage_model._base_manager.using(self.db).select_for_update().get(pk=lineage.pk)
-                        previous = lineage.head
+                        lineage = lineage_model._base_manager.filter(key=values["lineage_key"]).first()
+                        if lineage is None:
+                            lineage = lineage_model(key=values["lineage_key"])
+                            lineage.allocate()
+                        lineage = lineage_model._base_manager.lock_if_supported().get(pk=lineage.pk)
+                        previous: Any = lineage.head
                         existing = self.filter(reuse_key=values["reuse_key"]).first()
                         unresolved_failure = (
                             values.get("status") == "failed"
                             and (
                                 values.get("result") == {}
-                                or values.get("error_code")
-                                == "source_hold:identity_correspondence_required"
+                                or values.get("error_code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
                             )
                             and (
-                                previous is not None if existing is None else
-                                "last_known_revision" in existing.provenance.get("identity_correspondence", {})
+                                previous is not None
+                                if existing is None
+                                else "last_known_revision" in existing.provenance.get("identity_correspondence", {})
                             )
                         )
                         correspondence_failure = (
-                            values.get("error_code")
-                            == "source_hold:identity_correspondence_required"
+                            values.get("error_code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
                         )
                         if unresolved_failure:
                             if identity_mapping or retired_identities:
@@ -694,20 +960,24 @@ class ExtractionManager(ImmutableEvidenceManager):
                             retired = deepcopy(previous.retired_identities)
                         else:
                             document_map, retired = _document_mapping(
-                                values["result"], layout=values["engine_config"].get("evidence_layout", {}),
-                                original=(original or previous), identity_mapping=identity_mapping,
+                                values["result"],
+                                layout=values["profile_config"].get("evidence_layout", {}),
+                                original=(original or previous),
+                                identity_mapping=identity_mapping,
                                 retired_identities=retired_identities,
                             )
-                        extraction = self.create(
+                        extraction = self.model(
                             revision=previous.revision + 1 if previous else 1,
-                            document_map=document_map, retired_identities=retired, **values,
+                            document_map=document_map,
+                            retired_identities=retired,
+                            **values,
                         )
+                        extraction.retain()
                         if evidence is not None:
                             self._persist_fresh_evidence(extraction, *evidence)
                         else:
                             self._clone_retained_evidence(extraction, original)
-                        lineage.head = extraction
-                        lineage.save(update_fields=("head",))
+                        lineage.advance_head(extraction)
                         return extraction
                 except IntegrityError:
                     duplicate = self.filter(reuse_key=values["reuse_key"]).first()
@@ -767,7 +1037,7 @@ class ExtractionManager(ImmutableEvidenceManager):
             for row, source in zip(retained, sources)
         ):
             return False
-        retained_pages = list(existing.pages.order_by("position"))
+        retained_pages = list(existing.pages.select_related("source").order_by("position"))
         if len(retained_pages) != len(pages) or len(pages) != len(page_results):
             return False
         if any(
@@ -775,11 +1045,11 @@ class ExtractionManager(ImmutableEvidenceManager):
             or row.position != position or row.width != page.width or row.height != page.height
             or row.dpi != page.dpi or row.duration_ms != max(result.duration_ms, 0)
             or not json_values_equal(row.result, result.value)
-            or not json_values_equal(row.engine_metadata, result.engine_metadata or {})
+            or not json_values_equal(row.provider_metadata, result.provider_metadata or {})
             for position, (row, page, result) in enumerate(zip(retained_pages, pages, page_results))
         ):
             return False
-        retained_parts = list(existing.parts.order_by("position"))
+        retained_parts = list(existing.parts.select_related("source").order_by("position"))
         return len(retained_parts) == len(parts) and all(
             row.position == position and row.source.position == part.source_position
             and row.source_page == part.source_page and row.mime_type == part.mime_type
@@ -806,10 +1076,9 @@ class ExtractionManager(ImmutableEvidenceManager):
         sources: Sequence[DocumentSource],
         pages: Sequence[PageImage],
         page_results: Sequence[PageResult],
-        parts: Sequence[DocumentPart],
-    ) -> None:
+        parts: Sequence[DocumentPart]) -> None:
         source_model, page_model, part_model = self._evidence_models()
-        retained_sources = source_model._base_manager.using(self.db).bulk_create(
+        retained_sources = source_model._base_manager.all().owner_bulk_create(
             [
                 source_model(
                     extraction=extraction,
@@ -822,7 +1091,7 @@ class ExtractionManager(ImmutableEvidenceManager):
             ]
         )
         source_by_position = {source.position: source for source in retained_sources}
-        page_model._base_manager.using(self.db).bulk_create(
+        page_model._base_manager.all().owner_bulk_create(
             [
                 page_model(
                     extraction=extraction,
@@ -834,13 +1103,13 @@ class ExtractionManager(ImmutableEvidenceManager):
                     dpi=page.dpi,
                     duration_ms=max(result.duration_ms, 0),
                     result=result.value,
-                    engine_metadata=result.engine_metadata or {},
+                    provider_metadata=result.provider_metadata or {},
                 )
                 for position, (page, result) in enumerate(zip(pages, page_results))
             ]
         )
         claims = extraction.provenance["claims"]
-        part_model._base_manager.using(self.db).bulk_create(
+        part_model._base_manager.all().owner_bulk_create(
             [
                 part_model(
                     extraction=extraction,
@@ -866,11 +1135,11 @@ class ExtractionManager(ImmutableEvidenceManager):
     def _clone_retained_evidence(self, extraction: Any, original: Any) -> None:
         source_model, page_model, part_model = self._evidence_models()
         original_sources = list(
-            source_model._base_manager.using(self.db).filter(extraction=original).order_by("position")
+            source_model._base_manager.filter(extraction=original).order_by("position")
         )
         if [source.position for source in original_sources] != list(range(len(original_sources))):
             raise ValidationError({"extraction": "The retained source ordering is invalid."})
-        retained_sources = source_model._base_manager.using(self.db).bulk_create(
+        retained_sources = source_model._base_manager.all().owner_bulk_create(
             [
                 source_model(
                     extraction=extraction,
@@ -887,11 +1156,11 @@ class ExtractionManager(ImmutableEvidenceManager):
             for original_source, retained_source in zip(original_sources, retained_sources)
         }
         original_pages = list(
-            page_model._base_manager.using(self.db).filter(extraction=original).order_by("position")
+            page_model._base_manager.filter(extraction=original).order_by("position")
         )
         if [page.position for page in original_pages] != list(range(len(original_pages))):
             raise ValidationError({"extraction": "The retained page ordering is invalid."})
-        page_model._base_manager.using(self.db).bulk_create(
+        page_model._base_manager.all().owner_bulk_create(
             [
                 page_model(
                     extraction=extraction,
@@ -903,18 +1172,18 @@ class ExtractionManager(ImmutableEvidenceManager):
                     dpi=page.dpi,
                     duration_ms=page.duration_ms,
                     result=page.result,
-                    engine_metadata=page.engine_metadata,
+                    provider_metadata=page.provider_metadata,
                 )
                 for page in original_pages
             ]
         )
         original_parts = list(
-            part_model._base_manager.using(self.db).filter(extraction=original).order_by("position")
+            part_model._base_manager.filter(extraction=original).order_by("position")
         )
         if [part.position for part in original_parts] != list(range(len(original_parts))):
             raise ValidationError({"extraction": "The retained part ordering is invalid."})
         claims = extraction.provenance["claims"]
-        part_model._base_manager.using(self.db).bulk_create(
+        part_model._base_manager.all().owner_bulk_create(
             [
                 part_model(
                     extraction=extraction,
@@ -941,7 +1210,7 @@ class ExtractionManager(ImmutableEvidenceManager):
 class ExtractionSystemManager(ExtractionManager):
     """Expose guarded unscoped rows to Django and field-backed REBAC traversal."""
 
-    def get_queryset(self) -> ImmutableEvidenceQuerySet:
+    def get_queryset(self) -> EvidenceQuerySet:
         return super().get_queryset().system_context(
             reason="workflows_extraction.extraction.base_manager"
         )
@@ -982,7 +1251,7 @@ def _document_mapping(
     """Allocate once, or carry reviewed correspondence without matching printed facts."""
 
     requested = result_selectors(result, layout)
-    previous = tuple(original.document_refs) if original is not None else ()
+    previous: tuple[DocumentRef, ...] = tuple(original.document_refs) if original is not None else ()
     mapping = dict(identity_mapping or {})
     retirement = dict(retired_identities or {})
     if original is not None and previous and not mapping:

@@ -28,9 +28,5 @@ SETTINGS = {
     # Networked resource manifests belong to integrate's outbound HTTP owner; the
     # resources addon reads the settings registry lazily when entries materialize.
     "ANGEE_RESOURCE_SOURCE_CLASSES.url": "angee.integrate.resource_source.url_source",
-    # Credential disconnect guards are explicit operation hooks. Login addons can
-    # append guards here without wiring model-delete signals that also fire during
-    # unrelated cascades.
-    "ANGEE_CREDENTIAL_DISCONNECT_GUARDS": (),
 }
 """Django settings contributed when the integrate addon is installed."""

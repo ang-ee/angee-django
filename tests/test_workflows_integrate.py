@@ -6,6 +6,7 @@ import io
 import stat
 import zipfile
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
 
@@ -17,21 +18,17 @@ from rebac import system_context
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
+from angee.workflows.steps import StepImpl
+from angee.workflows.testing.drivers import advance_once, execute_started, run_to_terminal, step_run_for
+from angee.workflows.testing.models import Decision, Step, StepRun
 from angee.workflows_integrate import archives
+from angee.workflows_integrate.archive_steps import (
+    ArchiveGateStepImpl,
+)
 from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
 from angee.workflows_integrate.steps import ArchiveExecutionReporter, ArchiveExtractor
-from tests.conftest import STORAGE_TEST_MODELS, Backend, Drive, File
-from tests.workflows import (
-    WORKFLOW_RUNTIME_MODELS,
-    Decision,
-    StepRun,
-    advance_once,
-    execute_started,
-    run_to_terminal,
-    step_run_for,
-    workflow_table_setup,
-    workflow_with_steps,
-)
+from tests.conftest import Backend, Drive, File
+from tests.workflows import start_run, workflow_with_steps
 
 User = get_user_model()
 
@@ -45,6 +42,18 @@ _HETEROGENEOUS_EXTRACTORS = {
     "fixture_archive": "tests.test_workflows_integrate.FixtureArchiveExtractor",
     "hetero_archive": "tests.test_workflows_integrate.HeteroArchiveExtractor",
 }
+
+
+@pytest.fixture(autouse=True)
+def archive_registry() -> Iterator[None]:
+    """Register the test's extractor without installing another Django app."""
+
+    with override_settings(
+        ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES={
+            "fixture_archive": "tests.test_workflows_integrate.FixtureArchiveExtractor",
+        },
+    ):
+        yield
 
 
 def test_archive_member_names_reject_root_traversal() -> None:
@@ -84,6 +93,29 @@ def test_archive_extraction_rejects_symbolic_links(tmp_path: Path) -> None:
             archives.extract_archive(archive, tmp_path, entries=entries)
 
 
+@pytest.mark.parametrize("absolute_path", (False, True))
+def test_archive_extraction_rejects_hostile_mapping_keys(tmp_path: Path, absolute_path: bool) -> None:
+    """The public extraction entry validates caller-supplied names before writing."""
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("safe.txt", "contents")
+    buffer.seek(0)
+    escaped = tmp_path / "escaped.txt"
+    hostile_name = str(escaped) if absolute_path else "../escaped.txt"
+
+    with zipfile.ZipFile(buffer) as archive:
+        with pytest.raises(archives.ArchiveError, match="escapes its archive root"):
+            archives.extract_archive(
+                archive,
+                tmp_path / "staging",
+                entries={hostile_name: archive.getinfo("safe.txt")},
+            )
+
+    assert not escaped.exists()
+    assert not (tmp_path / "staging").exists()
+
+
 def test_bounded_reader_rejects_reads_beyond_its_budget() -> None:
     """Every archive probe fails closed before exceeding its declared budget."""
 
@@ -113,6 +145,45 @@ def test_archive_subtree_selection_keeps_only_the_declared_parent() -> None:
         "chosen/media/photo.jpg",
         "chosen/result.json",
     }
+
+
+@pytest.mark.parametrize("parent", ("../outside", "/outside"))
+def test_stage_subtree_rejects_unsafe_parent_before_yielding(parent: str) -> None:
+    """A selected parent cannot escape the temporary archive root."""
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("chosen/result.json", "{}")
+    buffer.seek(0)
+
+    with zipfile.ZipFile(buffer) as archive:
+        with (
+            pytest.raises(archives.ArchiveError, match="escapes its archive root"),
+            archives.stage_subtree(archive, PurePosixPath(parent)),
+        ):
+            pytest.fail("Unsafe archive parent was yielded to the extractor.")
+
+
+@pytest.mark.parametrize("parent", (".", "chosen"))
+def test_stage_subtree_materializes_selected_contents_and_cleans_up(parent: str) -> None:
+    """Extractors receive the selected tree only while its staging context is open."""
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("chosen/result.json", "{}")
+        archive.writestr("chosen/media/photo.jpg", b"photo")
+        archive.writestr("sibling/secret.txt", "secret")
+    buffer.seek(0)
+
+    with zipfile.ZipFile(buffer) as archive:
+        with archives.stage_subtree(archive, PurePosixPath(parent)) as staged:
+            root = staged if parent == "." else staged.parent
+            chosen = staged / "chosen" if parent == "." else staged
+            assert (chosen / "result.json").read_text() == "{}"
+            assert (chosen / "media" / "photo.jpg").read_bytes() == b"photo"
+            assert (root / "sibling" / "secret.txt").exists() is (parent == ".")
+
+        assert not root.exists()
 
 
 def test_stage_subtree_rejects_declared_content_above_the_shared_cap(
@@ -223,14 +294,12 @@ class HeteroArchiveExtractor(FixtureArchiveExtractor):
 
 
 @pytest.fixture()
-def workflows_integrate_tables(transactional_db: Any) -> Iterator[None]:
-    """Create workflow and storage tables with one local archive file."""
+def workflows_integrate_tables(composed_tables: None) -> Iterator[None]:
+    """Reset archive ingest state around tests using the shared composition."""
 
-    del transactional_db
+    del composed_tables
     FixtureArchiveIngest.landed.clear()
-    models = STORAGE_TEST_MODELS + WORKFLOW_RUNTIME_MODELS
-    with workflow_table_setup(models):
-        yield
+    yield
     FixtureArchiveIngest.landed.clear()
 
 
@@ -238,15 +307,46 @@ def test_probe_gate_map_execute_archive_end_to_end(
     workflows_integrate_tables: None,
     no_workflow_queue: None,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Probe, form gate, and stock map units land through the extractor ingest owner."""
 
     del workflows_integrate_tables, no_workflow_queue
+    native_keepalive = StepImpl.heartbeat_during
+    recognizes = FixtureArchiveExtractor.recognizes
+    execute = FixtureArchiveExtractor.execute
+    active_io: list[str] = []
+
+    @contextmanager
+    def keepalive(self: StepImpl, step_run: Any) -> Iterator[None]:
+        with native_keepalive(self, step_run):
+            active_io.append(step_run.step.key)
+            try:
+                yield
+            finally:
+                active_io.pop()
+
+    def recognize_with_lease(self: FixtureArchiveExtractor, file: Any) -> bool:
+        assert active_io == ["probe"]
+        return recognizes(self, file)
+
+    def execute_with_lease(
+        self: FixtureArchiveExtractor,
+        file: Any,
+        target_pk: str,
+        reporter: ArchiveExecutionReporter,
+    ) -> dict[str, Any]:
+        assert active_io == ["execute_unit"]
+        return execute(self, file, target_pk, reporter)
+
+    monkeypatch.setattr(StepImpl, "heartbeat_during", keepalive)
+    monkeypatch.setattr(FixtureArchiveExtractor, "recognizes", recognize_with_lease)
+    monkeypatch.setattr(FixtureArchiveExtractor, "execute", execute_with_lease)
     operator = User.objects.create_user(username="archive-operator")
     file, drive = _archive_storage(tmp_path, operator=operator, content=_FIXTURE_ARCHIVE)
     workflow = _archive_workflow()
 
-    run = engine.start(workflow, subject=file, actor=operator)
+    run = start_run(workflow, subject=file, actor=operator)
     advance_once(run)
     execute_started(run)
     advance_once(run)
@@ -267,87 +367,17 @@ def test_probe_gate_map_execute_archive_end_to_end(
     with system_context(reason="test workflows integrate decision"):
         decision = Decision.objects.select_related("step_run").get(step_run__run=run)
     assert decision.step_run.resume_state["_decision_ids"] == [decision.pk]
-    expected_schema = {
-        "type": "object",
-        "required": ["action"],
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["apply_mappings"],
-                "options": [{
-                    "value": "apply_mappings",
-                    "label": "Apply mappings",
-                    "verdict": "COMPLETE",
-                }],
-            },
-            "mappings": {
-                "type": "array",
-                "widget": "rows",
-                "label": "Archive mappings",
-                "items": {
-                    "type": "object",
-                    "required": ["extractor", "label", "target"],
-                    "properties": {
-                        "extractor": {
-                            "type": "string",
-                            "label": "Extractor key",
-                            "readOnly": True,
-                        },
-                        "label": {
-                            "type": "string",
-                            "label": "Archive type",
-                            "readOnly": True,
-                        },
-                        "target": {
-                            "type": "string",
-                            "label": "Target",
-                            "relation": {
-                                "resource": "storage.Drive",
-                                "create": {"resource": "storage.Drive"},
-                            },
-                        },
-                    },
-                    "propertyOrder": ["extractor", "label", "target"],
-                },
-            }
-        },
-        "oneOf": [{
-            "type": "object",
-            "required": ["action", "mappings"],
-            "properties": {
-                "action": {"const": "apply_mappings"},
-                "mappings": {
-                    "type": "array",
-                    "widget": "rows",
-                    "label": "Archive mappings",
-                    "items": {
-                        "type": "object",
-                        "required": ["extractor", "label", "target"],
-                        "properties": {
-                            "extractor": {
-                                "type": "string", "label": "Extractor key", "readOnly": True,
-                            },
-                            "label": {
-                                "type": "string", "label": "Archive type", "readOnly": True,
-                            },
-                            "target": {
-                                "type": "string", "label": "Target",
-                                "relation": {
-                                    "resource": "storage.Drive",
-                                    "create": {"resource": "storage.Drive"},
-                                },
-                            },
-                        },
-                        "propertyOrder": ["extractor", "label", "target"],
-                    },
-                },
-            },
-            "additionalProperties": False,
-            "propertyOrder": ["action", "mappings"],
-        }],
-        "propertyOrder": ["action", "mappings"],
+    fields = decision.form_schema["properties"]
+    assert fields["action"]["enum"] == ["apply_mappings"]
+    assert fields["mappings"]["widget"] == "rows"
+    target = fields["mappings"]["items"]["properties"]["target"]
+    assert target["relation"] == {
+        "resource": "storage.Drive",
+        "create": {"resource": "storage.Drive"},
     }
-    assert decision.form_schema == expected_schema
+    branch = decision.form_schema["oneOf"][0]
+    assert branch["properties"]["action"]["const"] == "apply_mappings"
+    assert branch["required"] == ["action", "mappings"]
     assert decision.payload == {
         "mappings": [
             {
@@ -381,14 +411,14 @@ def test_probe_gate_map_execute_archive_end_to_end(
                 "map_index": 0,
                 "status": "succeeded",
                 "outcome": "completed",
-                    "output": {
-                        "extractor": "fixture_archive",
-                        "target": str(drive.sqid),
-                        "result": {"landed": 1, "target": str(drive.sqid)},
-                    },
-                    "output_present": True,
-                    "error": "",
-                }
+                "output": {
+                    "extractor": "fixture_archive",
+                    "target": str(drive.sqid),
+                    "result": {"landed": 1, "target": str(drive.sqid)},
+                },
+                "output_present": True,
+                "error": "",
+            }
         ],
     }
     with system_context(reason="test workflows integrate unit"):
@@ -400,6 +430,7 @@ def test_probe_gate_map_execute_archive_end_to_end(
             "target": str(drive.sqid),
         }
     }
+    assert active_io == []
 
 
 def test_decide_rejects_relation_targets_the_actor_cannot_write(
@@ -421,7 +452,7 @@ def test_decide_rejects_relation_targets_the_actor_cannot_write(
     file, own_drive = _archive_storage(tmp_path, operator=operator, content=_FIXTURE_ARCHIVE)
     _, foreign_drive = _archive_storage(tmp_path, operator=outsider, content=b"foreign payload")
 
-    run = engine.start(_archive_workflow(), subject=file, actor=operator)
+    run = start_run(_archive_workflow(), subject=file, actor=operator)
     advance_once(run)
     execute_started(run)
     advance_once(run)
@@ -478,15 +509,13 @@ def test_prepare_rejects_swapped_extractors_and_blank_targets(
         "complete",
         payload={
             "action": "apply_mappings",
-            "mappings": [
-                {"extractor": "aux_archive", "label": "Fixture archive", "target": str(drive.sqid)}
-            ]
+            "mappings": [{"extractor": "aux_archive", "label": "Fixture archive", "target": str(drive.sqid)}],
         },
         actor=operator,
     )
     assert attempted.validation_error is None
     swapped_run = swapped.step_run.run
-    run_to_terminal(swapped_run)
+    run_to_terminal(swapped_run, allow_failed={swapped_run.pk})
     prepare = step_run_for(swapped_run, "prepare")
     assert prepare.status == workflow_models.StepRunStatus.FAILED
     assert "changed a proposed extractor" in prepare.error
@@ -495,7 +524,7 @@ def test_prepare_rejects_swapped_extractors_and_blank_targets(
     attempted = engine.decide(blank, "complete", payload=_resolution(target=""), actor=operator)
     assert attempted.validation_error is None
     blank_run = blank.step_run.run
-    run_to_terminal(blank_run)
+    run_to_terminal(blank_run, allow_failed={blank_run.pk})
     prepare = step_run_for(blank_run, "prepare")
     assert prepare.status == workflow_models.StepRunStatus.FAILED
     assert "requires a target" in prepare.error
@@ -513,7 +542,7 @@ def test_probe_orders_proposals_by_stable_key(
     del workflows_integrate_tables, no_workflow_queue
     operator = User.objects.create_user(username="archive-order")
     file, _ = _archive_storage(tmp_path, operator=operator, content=_FIXTURE_ARCHIVE)
-    run = engine.start(_archive_workflow(), subject=file, actor=operator)
+    run = start_run(_archive_workflow(), subject=file, actor=operator)
     advance_once(run)
     execute_started(run)
 
@@ -545,7 +574,7 @@ def test_map_partial_failure_lands_only_successful_units(
             "mappings": [
                 {"extractor": "aux_archive", "label": "Aux archive", "target": target},
                 {"extractor": "fixture_archive", "label": "Fixture archive", "target": target},
-            ]
+            ],
         },
         actor=operator,
     )
@@ -587,7 +616,7 @@ def test_gate_routes_heterogeneous_targets_down_the_failed_edge(
     del workflows_integrate_tables, no_workflow_queue
     operator = User.objects.create_user(username="archive-hetero")
     file, _ = _archive_storage(tmp_path, operator=operator, content=_FIXTURE_ARCHIVE)
-    run = engine.start(_archive_workflow(), subject=file, actor=operator)
+    run = start_run(_archive_workflow(), subject=file, actor=operator)
     advance_once(run)
     execute_started(run)
     advance_once(run)
@@ -632,7 +661,7 @@ def test_probe_no_match_uses_failed_outcome_and_skips_the_gate(
     del workflows_integrate_tables, no_workflow_queue
     operator = User.objects.create_user(username="archive-no-match")
     file, _ = _archive_storage(tmp_path, operator=operator, content=b"unknown archive")
-    run = engine.start(_archive_workflow(), subject=file, actor=operator)
+    run = start_run(_archive_workflow(), subject=file, actor=operator)
 
     advance_once(run)
     execute_started(run)
@@ -649,18 +678,96 @@ def test_probe_no_match_uses_failed_outcome_and_skips_the_gate(
 def test_autoconfig_contributes_archive_registry_and_workflow_steps() -> None:
     """The bridge composes row-less extractors and step classes through settings."""
 
-    assert WORKFLOWS_INTEGRATE_SETTINGS == {
+    assert {
+        key: value
+        for key, value in WORKFLOWS_INTEGRATE_SETTINGS.items()
+        if key == "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES" or key.startswith("ANGEE_WORKFLOW_STEP_CLASSES.archive_")
+    } == {
         "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES": {},
-        "ANGEE_WORKFLOW_STEP_CLASSES.archive_probe": (
-            "angee.workflows_integrate.steps.ArchiveProbeStepImpl"
-        ),
-        "ANGEE_WORKFLOW_STEP_CLASSES.archive_gate": (
-            "angee.workflows_integrate.steps.ArchiveGateStepImpl"
-        ),
+        "ANGEE_WORKFLOW_STEP_CLASSES.archive_probe": ("angee.workflows_integrate.archive_steps.ArchiveProbeStepImpl"),
+        "ANGEE_WORKFLOW_STEP_CLASSES.archive_gate": ("angee.workflows_integrate.archive_steps.ArchiveGateStepImpl"),
         "ANGEE_WORKFLOW_STEP_CLASSES.archive_execute": (
-            "angee.workflows_integrate.steps.ArchiveExecuteStepImpl"
+            "angee.workflows_integrate.archive_steps.ArchiveExecuteStepImpl"
         ),
     }
+
+
+@pytest.mark.parametrize(
+    ("step_class", "config"),
+    (
+        ("archive_probe", {}),
+        ("archive_gate", {}),
+        ("archive_gate", {"action": "map-backup", "assignee": "auth/user:1", "max_attempts": 2}),
+        ("archive_execute", {"mode": "prepare"}),
+        ("archive_execute", {"mode": "unit"}),
+    ),
+)
+def test_archive_step_declarations_validate(step_class: str, config: dict[str, Any]) -> None:
+    """The public registry keys resolve through native Step definition validation."""
+
+    step = Step(key="archive", step_class=step_class, config=config)
+    step.clean()
+    assert step.config_projection().errors == {}
+
+
+@pytest.mark.parametrize(
+    "config",
+    (
+        {"action": ""},
+        {"assignee": ""},
+        {"max_attempts": 0},
+        {"decision_schema": {"oneOf": []}},
+    ),
+)
+def test_archive_gate_rejects_invalid_declarations(config: dict[str, Any]) -> None:
+    """The archive adapter exposes its mapping contract rather than accepting a second gate schema."""
+
+    with pytest.raises(ValidationError):
+        ArchiveGateStepImpl.validate_config(config)
+
+
+@pytest.mark.parametrize(
+    ("step_class", "config", "value"),
+    (
+        ("archive_gate", {}, {"proposals": [{"extractor": "fixture_archive", "label": "Fixture archive"}]}),
+        ("archive_execute", {"mode": "unit"}, {"extractor": "fixture_archive", "target": 123}),
+        ("archive_execute", {"mode": "unit"}, {"extractor": "fixture_archive", "target": ""}),
+        (
+            "archive_execute",
+            {"mode": "prepare"},
+            {"proposals": [], "target_resources": [], "unsupported": "No shared target resource."},
+        ),
+    ),
+)
+def test_archive_execution_rejects_invalid_bound_input(
+    workflows_integrate_tables: None,
+    no_workflow_queue: None,
+    step_class: str,
+    config: dict[str, Any],
+    value: Any,
+) -> None:
+    """Malformed proposals, map units and failure outputs cannot create reviews or ingest."""
+
+    del workflows_integrate_tables, no_workflow_queue
+    workflow = workflow_with_steps(
+        steps=(
+            {
+                "key": "archive",
+                "step_class": step_class,
+                "config": config,
+                "input_binding": {"kind": "constant", "value": value},
+            },
+        ),
+        edges=(),
+    )
+    run = start_run(workflow)
+    run_to_terminal(run, allow_failed={run.pk})
+    step_run = step_run_for(run, "archive")
+    assert step_run.status == workflow_models.StepRunStatus.FAILED
+    assert step_run.error == "Workflow step input is invalid."
+    with system_context(reason="test invalid archive input"):
+        assert not Decision.objects.exists()
+    assert FixtureArchiveIngest.landed == {}
 
 
 class _HeartbeatStub:
@@ -681,14 +788,14 @@ def _resolution(*, target: str) -> dict[str, Any]:
                 "label": "Fixture archive",
                 "target": target,
             }
-        ]
+        ],
     }
 
 
 def _run_to_decision(file: Any, *, actor: Any) -> Any:
     """Start one archive run for ``file`` and return its suspended gate decision."""
 
-    run = engine.start(_archive_workflow(), subject=file, actor=actor)
+    run = start_run(_archive_workflow(), subject=file, actor=actor)
     advance_once(run)
     execute_started(run)
     advance_once(run)

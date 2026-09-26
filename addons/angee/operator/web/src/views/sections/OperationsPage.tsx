@@ -8,7 +8,7 @@ import {
   LogStream,
   RowsListView,
   defineRowAction,
-  statusTone,
+  useStatusTone,
   textRoleVariants,
   useConfirm,
   useToast,
@@ -57,6 +57,7 @@ interface PreviewRequest {
 
 /** Operations page: the daemon job list with run + stack lifecycle controls. */
 export function OperationsPage(): ReactNode {
+  const statusTone = useStatusTone();
   const t = useOperatorT();
   const { rows, fetching, error, refetch } = useOperatorRows(
     { operations: true },

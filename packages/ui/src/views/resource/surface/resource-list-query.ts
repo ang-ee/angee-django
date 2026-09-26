@@ -26,7 +26,7 @@ export function useResourceListQuery({
     }
   }, [resource, scope?.filter, scope?.order, fields]);
   const result = useList<RowRecord, HttpError, RowRecord>({
-    resource: resource ? refineResourceName(resource) : "__angee_disabled__",
+    resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
     pagination: { mode: "server", currentPage: scope?.page ?? 1, pageSize: scope?.pageSize ?? 1 },
     filters: [], sorters: [], meta: request.meta,

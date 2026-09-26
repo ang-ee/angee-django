@@ -143,7 +143,10 @@ def test_production_child_watchdog_exits_stuck_job_on_stop_or_parent_eof(tmp_pat
     context = multiprocessing.get_context("spawn")
     parent, child = context.Pipe()
     ready = tmp_path / "ready"
-    process = context.Process(target=isolated_session_child, args=(child, "stuck", {"ready": str(ready)}))
+    process = context.Process(
+        target=isolated_session_child,
+        args=(child, "stuck", {"ready": str(ready)}),
+    )
     process.start()
     child.close()
     try:

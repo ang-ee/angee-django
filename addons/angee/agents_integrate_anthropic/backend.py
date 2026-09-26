@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import anthropic
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -74,6 +74,7 @@ class AnthropicInferenceBackend(SDKInferenceBackend):
     icon = "anthropic"
     oauth_client = "anthropic-personal"
     api_key_env = ("ANTHROPIC_API_KEY",)
+    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = (anthropic.APIConnectionError,)
     defaults = {
         "vendor": "anthropic",
         "name": "Anthropic",

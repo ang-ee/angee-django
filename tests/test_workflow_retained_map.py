@@ -11,6 +11,7 @@ from django.db.models.signals import post_save
 from django.utils import timezone
 from rebac import system_context
 
+from angee.workflows import engine
 from angee.workflows.attempts import (
     AttemptCause,
     AttemptInput,
@@ -19,16 +20,10 @@ from angee.workflows.attempts import (
     MapItemSource,
 )
 from angee.workflows.models import RunStatus, StepRunStatus
-from angee.workflows.steps import HandlerStep, StepResult
-from tests.workflows import (
-    StepAttempt,
-    StepRun,
-    advance_once,
-    execute_started,
-    run_to_terminal,
-    start_run,
-    workflow_with_steps,
-)
+from angee.workflows.steps import StepResult
+from angee.workflows.testing.drivers import advance_once, execute_started, run_to_terminal
+from angee.workflows.testing.models import StepAttempt, StepRun
+from tests.workflows import FixtureStep, start_run, workflow_with_steps
 
 
 def _map_workflow(*, item: Any, explicit: bool) -> Any:
@@ -42,7 +37,7 @@ def _map_workflow(*, item: Any, explicit: bool) -> Any:
             },
             {
                 "key": "body",
-                "step_class": "handler",
+                "step_class": "fixture",
                 "input_binding": {"kind": "map_item", "path": []} if explicit else None,
             },
         ),
@@ -53,18 +48,18 @@ def _map_workflow(*, item: Any, explicit: bool) -> Any:
 @pytest.mark.parametrize("item", [None, "scalar", {"item": "mapping"}])
 @pytest.mark.django_db(transaction=True)
 def test_explicit_map_item_uses_exact_raw_json_and_retained_source(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     item: Any,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
 
-    def echo(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def echo(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         return StepResult.done(step_run.input, outcome="done")
 
-    monkeypatch.setattr(HandlerStep, "run", echo)
+    monkeypatch.setattr(FixtureStep, "run", echo)
     run = start_run(_map_workflow(item=item, explicit=True))
     run_to_terminal(run)
 
@@ -102,17 +97,17 @@ def test_explicit_map_item_uses_exact_raw_json_and_retained_source(
 
 @pytest.mark.django_db(transaction=True)
 def test_automatic_map_body_keeps_wrapped_input_and_captures_raw_source(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
 
-    def echo(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def echo(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         return StepResult.done(step_run.input, outcome="done")
 
-    monkeypatch.setattr(HandlerStep, "run", echo)
+    monkeypatch.setattr(FixtureStep, "run", echo)
     run = start_run(_map_workflow(item="scalar", explicit=False))
     run_to_terminal(run)
 
@@ -128,14 +123,94 @@ def test_automatic_map_body_keeps_wrapped_input_and_captures_raw_source(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_map_expansion_uses_declared_bound_input_instead_of_routing_predecessor(
+    composed_tables: None,
+    no_workflow_queue: None,
+    monkeypatch: pytest.MonkeyPatch,
+    django_assert_num_queries: Any,
+) -> None:
+    del composed_tables, no_workflow_queue
+    prepare_input = engine._prepare_attempt_input
+    prepared_maps: list[int] = []
+
+    def prepare(run: Any, step_run: Any, *, source_rows: Any) -> Any:
+        if step_run.step.key != "map":
+            return prepare_input(run, step_run, source_rows=source_rows)
+        with django_assert_num_queries(0):
+            result = prepare_input(run, step_run, source_rows=source_rows)
+        prepared_maps.append(step_run.pk)
+        return result
+
+    monkeypatch.setattr(engine, "_prepare_attempt_input", prepare)
+    item = {"document_id": "document-1"}
+    workflow = workflow_with_steps(
+        name="Bound Map input",
+        steps=(
+            {
+                "key": "materialize",
+                "config": {"output": {"document_review_items": [item]}},
+            },
+            {
+                "key": "prepare",
+                "config": {"output": {"clean": True}},
+                "input_binding": {
+                    "kind": "step_output",
+                    "step_key": "materialize",
+                    "path": [],
+                },
+            },
+            {
+                "key": "map",
+                "step_class": "map",
+                "config": {
+                    "target_step": "body",
+                    "items": "input.document_review_items",
+                },
+                "input_binding": {
+                    "kind": "step_output",
+                    "step_key": "materialize",
+                    "path": [],
+                },
+            },
+            {"key": "body", "step_class": "fixture"},
+        ),
+        edges=(
+            ("materialize", "prepare", "done"),
+            ("prepare", "map", "done"),
+        ),
+    )
+
+    run = start_run(workflow)
+    run_to_terminal(run)
+
+    with system_context(reason="verify bound Map controller input"):
+        controller = StepRun.objects.get(run=run, step__key="map")
+        attempts = list(StepAttempt.objects.filter(step_run=controller).order_by("ordinal"))
+        body = StepRun.objects.get(run=run, step__key="body", map_index=0)
+    expected_input = {
+        "key": "materialize",
+        "input": {},
+        "document_review_items": [item],
+    }
+    assert run.status == RunStatus.SUCCEEDED
+    assert prepared_maps == [controller.pk]
+    assert controller.input == {"key": "prepare", "input": expected_input, "clean": True}
+    assert [attempt.input for attempt in attempts] == [expected_input, expected_input]
+    assert all(attempt.input_present for attempt in attempts)
+    assert all(attempt.input_provenance["kind"] == "step_output" for attempt in attempts)
+    assert all(attempt.input_provenance["step_key"] == "materialize" for attempt in attempts)
+    assert body.output["input"] == item
+
+
+@pytest.mark.django_db(transaction=True)
 def test_map_capacity_failure_rolls_back_expansion_and_children(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -149,7 +224,7 @@ def test_map_capacity_failure_rolls_back_expansion_and_children(
             },
             {
                 "key": "body",
-                "step_class": "handler",
+                "step_class": "fixture",
                 "input_binding": {"kind": "map_item", "path": []},
             },
         ),
@@ -173,13 +248,13 @@ def test_map_capacity_failure_rolls_back_expansion_and_children(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_reexpansion_reserves_reused_terminal_body_execution(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -206,13 +281,13 @@ def test_map_reexpansion_reserves_reused_terminal_body_execution(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_override_shrinks_current_membership_without_rebinding_history(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -220,7 +295,7 @@ def test_map_override_shrinks_current_membership_without_rebinding_history(
         name="Map shrink",
         steps=(
             {"key": "map", "step_class": "map", "config": {"target_step": "body", "items": [1, 2, 3]}},
-            {"key": "body", "step_class": "handler"},
+            {"key": "body", "step_class": "fixture"},
         ),
         edges=(),
     )
@@ -238,7 +313,11 @@ def test_map_override_shrinks_current_membership_without_rebinding_history(
             config={"target_step": "body", "items": [1]},
         )
         controller.step.refresh_from_db()
-    recorded = StepAttempt.objects.record_map_expansion(controller, at=now)
+    recorded = StepAttempt.objects.record_map_expansion(
+        controller,
+        input=AttemptInput(),
+        at=now,
+    )
     assert recorded is not None
     new_expansion, _plan = recorded
     StepRun.objects.bind_map_membership(
@@ -266,13 +345,13 @@ def test_map_override_shrinks_current_membership_without_rebinding_history(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_aggregate_rejects_nonexpansion_attempt_without_projection(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -299,13 +378,13 @@ def test_map_aggregate_rejects_nonexpansion_attempt_without_projection(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_membership_rejects_wrong_declared_target_without_rebinding(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -331,13 +410,13 @@ def test_map_membership_rejects_wrong_declared_target_without_rebinding(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_aggregate_waits_for_complete_current_membership(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -361,39 +440,43 @@ def test_map_aggregate_waits_for_complete_current_membership(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_expansion_owner_rejects_non_map_step_without_writes(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
-    workflow = workflow_with_steps(steps=({"key": "handler", "step_class": "handler"},), edges=())
+    workflow = workflow_with_steps(steps=({"key": "fixture", "step_class": "fixture"},), edges=())
     run = start_run(workflow)
     with system_context(reason="load non-Map expansion target"):
-        handler = StepRun.objects.get(run=run, step__key="handler")
+        fixture = StepRun.objects.get(run=run, step__key="fixture")
 
     with pytest.raises(ValidationError, match="requires a Map step"):
-        StepAttempt.objects.record_map_expansion(handler, at=timezone.now())
+        StepAttempt.objects.record_map_expansion(
+            fixture,
+            input=AttemptInput(),
+            at=timezone.now(),
+        )
 
     with system_context(reason="verify non-Map expansion rollback"):
-        handler.refresh_from_db()
-        assert StepAttempt.objects.filter(step_run=handler).count() == 0
-    assert handler.status == StepRunStatus.SCHEDULED
+        fixture.refresh_from_db()
+        assert StepAttempt.objects.filter(step_run=fixture).count() == 0
+    assert fixture.status == StepRunStatus.SCHEDULED
 
 
 @pytest.mark.django_db(transaction=True)
 def test_invalid_map_definition_retains_failed_wait_and_aggregate(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -422,13 +505,13 @@ def test_invalid_map_definition_retains_failed_wait_and_aggregate(
 
 @pytest.mark.django_db(transaction=True)
 def test_retained_map_advance_ignores_system_journal_rows(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -450,13 +533,13 @@ def test_retained_map_advance_ignores_system_journal_rows(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_membership_identity_rejects_public_instance_and_bulk_initializers(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -487,13 +570,13 @@ def test_map_membership_identity_rejects_public_instance_and_bulk_initializers(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_claim_rejects_forged_sibling_step_membership(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -526,13 +609,13 @@ def test_map_claim_rejects_forged_sibling_step_membership(
 
 @pytest.mark.django_db(transaction=True)
 def test_map_expansion_signal_cannot_forge_membership_inside_owner_session(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     monkeypatch.setattr(
-        HandlerStep,
+        FixtureStep,
         "run",
         lambda self, step_run, *, now: StepResult.done(step_run.input, outcome="done"),
     )
@@ -553,7 +636,11 @@ def test_map_expansion_signal_cannot_forge_membership_inside_owner_session(
     post_save.connect(forge_membership, sender=StepAttempt, weak=False)
     try:
         with pytest.raises(ValidationError, match="initialized by StepAttemptManager"):
-            StepAttempt.objects.record_map_expansion(controller, at=timezone.now())
+            StepAttempt.objects.record_map_expansion(
+                controller,
+                input=AttemptInput(),
+                at=timezone.now(),
+            )
     finally:
         post_save.disconnect(forge_membership, sender=StepAttempt)
 

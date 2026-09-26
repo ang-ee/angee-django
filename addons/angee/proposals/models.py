@@ -108,12 +108,6 @@ def _receipt_user_id(fallback: Any | None = None) -> Any | None:
     return actor_user_id(current_actor()) or fallback
 
 
-def _user(user_id: Any) -> models.Model:
-    """Resolve one attribution/user id through Django's configured user model."""
-
-    return apps.get_model(settings.AUTH_USER_MODEL)._base_manager.get(pk=user_id)
-
-
 def _relationship(resource: models.Model, relation: str, user: models.Model) -> RelationshipTuple:
     """Build one direct user relationship using each model's owned identity."""
 
@@ -162,6 +156,7 @@ class ImmutableFieldsMixin(models.Model):
             if self.pk is not None and not self._state.adding:
                 checked = tuple(name for name in self.immutable_fields if name not in allowed)
                 if checked:
+                    # Compare committed identities without loading unrelated deferred columns.
                     with system_context(reason=f"proposals.{self._meta.model_name}.immutable_fields"):
                         persisted = type(self)._base_manager.filter(pk=self.pk).values(*checked).first()
                     if persisted is not None:
@@ -304,14 +299,6 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
 
         return self.name
 
-    def apply_create_defaults(self) -> Mapping[str, tuple[models.Model, ...]]:
-        """Expose the exactly-one target to the unsaved-row create preflight."""
-
-        self._validate_target()
-        if self.task_id is not None:
-            return {"task": (self.task,)}
-        return {"project": (self.project,)}
-
     def clean(self) -> None:
         """Validate target, deadline, outcome, and receipt coherence."""
 
@@ -326,10 +313,9 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         self._validate_target()
         self._validate_dates()
         if self.pk is not None and not self._state.adding:
+            # Opening-policy immutability depends on the committed lifecycle state.
             with system_context(reason="proposals.round.opening_policy"):
-                persisted = type(self)._base_manager.filter(pk=self.pk).values(
-                    "status", "opening_policy"
-                ).first()
+                persisted = type(self)._base_manager.filter(pk=self.pk).values("status", "opening_policy").first()
             if (
                 persisted is not None
                 and persisted["status"] != RoundStatus.COLLECTING
@@ -481,7 +467,6 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         if self.pk is None or user.pk is None:
             raise ValidationError("A saved round and user are required.")
         proposal_model = apps.get_model("proposals", "Proposal")
-        project_model = apps.get_model("projects", "Project")
         with transaction.atomic():
             locked = type(self).objects.sudo(reason="proposals.round.transfer").lock_if_supported().get(pk=self.pk)
             proposals = list(
@@ -495,22 +480,20 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             old_id = locked.facilitator_id
             if old_id == user.pk:
                 return self
-            old_user = _user(old_id)
+            old_user: Any = locked.facilitator
             locked.facilitator = user
             locked.allow_immutable_save("facilitator_id")
             locked.save(update_fields=("facilitator", "updated_at"))
             for proposal in proposals:
                 if proposal.track_id is None:
                     continue
-                track = project_model._base_manager.get(pk=proposal.track_id)
+                track: Any = proposal.track
                 if proposal.responder_id != old_id:
                     delete_relationship(_relationship(track, "editor", old_user))
                 write_relationships([_relationship(track, "editor", user)])
                 if track.lead_id == old_id and proposal.responder_id is None:
                     track.lead = user
-                    track.sudo(reason="proposals.round.transfer.track_lead").save(
-                        update_fields=("lead", "updated_at")
-                    )
+                    track.sudo(reason="proposals.round.transfer.track_lead").save(update_fields=("lead", "updated_at"))
         _adopt(self, locked, ("facilitator", "updated_at", "updated_by"))
         return self
 
@@ -595,8 +578,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
             {
                 proposal.responder_id
                 for proposal in proposals
-                if proposal.responder_id is not None
-                and (states is None or proposal.state in states)
+                if proposal.responder_id is not None and (states is None or proposal.state in states)
             }
         )
         users = apps.get_model(settings.AUTH_USER_MODEL)._base_manager.in_bulk(ids)
@@ -605,10 +587,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
     def _opening_relationships(self, proposals: list[models.Model]) -> list[RelationshipTuple]:
         if self.opening_policy == RoundOpeningPolicy.FACILITATOR_ONLY:
             return []
-        recipients = self._responder_users(
-            proposals,
-            states={str(ProposalState.SUBMITTED)},
-        )
+        recipients = self._responder_users(proposals, states={str(ProposalState.SUBMITTED)})
         return [
             _relationship(proposal, "reader", user)
             for proposal in proposals
@@ -670,10 +649,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
 
         if self.opening_policy != RoundOpeningPolicy.ANSWERS_AND_TRACKS:
             return
-        recipients = self._responder_users(
-            proposals,
-            states={str(ProposalState.SUBMITTED)},
-        )
+        recipients = self._responder_users(proposals, states={str(ProposalState.SUBMITTED)})
         tracked = [
             proposal
             for proposal in proposals
@@ -717,9 +693,7 @@ class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel
         if self.outcome != outcome or self.closed_at is None or self.closed_by_id is None:
             raise ValidationError("Closed round receipts do not match the requested postcondition.")
         actual_accepted = {proposal.pk for proposal in proposals if proposal.state == ProposalState.ACCEPTED}
-        actual_partial = {
-            proposal.pk for proposal in proposals if proposal.state == ProposalState.PARTIALLY_ACCEPTED
-        }
+        actual_partial = {proposal.pk for proposal in proposals if proposal.state == ProposalState.PARTIALLY_ACCEPTED}
         if actual_accepted != accepted_ids or actual_partial != partial_ids:
             raise ValidationError("Closed round decisions do not match the requested postcondition.")
         if any(proposal.state == ProposalState.SUBMITTED for proposal in proposals):
@@ -811,29 +785,19 @@ class ProposalManager(AngeeManager):
         actor = current_actor()
         with transaction.atomic():
             locked_round = (
-                type(round)
-                .objects.sudo(reason="proposals.capture.round")
-                .lock_if_supported()
-                .get(pk=round.pk)
+                type(round).objects.sudo(reason="proposals.capture.round").lock_if_supported().get(pk=round.pk)
             )
             if locked_round.status != RoundStatus.COLLECTING:
                 raise ValidationError({"round": "Replies cannot be captured after opening."})
             locked_message = (
-                type(message)
-                .objects.sudo(reason="proposals.capture.message")
-                .lock_if_supported()
-                .get(pk=message.pk)
+                type(message).objects.sudo(reason="proposals.capture.message").lock_if_supported().get(pk=message.pk)
             )
             resolved_party = party or self._resolved_sender_party(locked_message)
             if resolved_party is None:
                 raise ValidationError({"party": "Capture requires a party or a resolved sender party."})
             interpretation = self._interpret(locked_message, locked_round)
             payload_hash = self._payload_hash(locked_message)
-            proposal = self._locked_capture_proposal(
-                message=locked_message,
-                round=locked_round,
-                party=resolved_party,
-            )
+            proposal = self._locked_capture_proposal(message=locked_message, round=locked_round, party=resolved_party)
             if proposal.state != ProposalState.DRAFT:
                 if (
                     proposal.state == ProposalState.SUBMITTED
@@ -845,10 +809,7 @@ class ProposalManager(AngeeManager):
                 raise ValidationError("Captured proposal does not match the replayed interpretation.")
 
             self._apply_interpretation(
-                proposal,
-                message=locked_message,
-                interpretation=interpretation,
-                payload_hash=payload_hash,
+                proposal, message=locked_message, interpretation=interpretation, payload_hash=payload_hash
             )
             proposal._submit_locked(fallback_user_id=locked_message.created_by_id or locked_round.facilitator_id)
         bind_actor(proposal, actor)
@@ -866,10 +827,7 @@ class ProposalManager(AngeeManager):
         candidates = list(
             self.sudo(reason="proposals.capture.lookup")
             .lock_if_supported()
-            .filter(
-                models.Q(source_message_id=message.pk)
-                | models.Q(round_id=round.pk, party_id=party.pk)
-            )
+            .filter(models.Q(source_message_id=message.pk) | models.Q(round_id=round.pk, party_id=party.pk))
             .order_by("pk")
         )
         if len(candidates) > 1:
@@ -891,10 +849,7 @@ class ProposalManager(AngeeManager):
             proposal = (
                 self.sudo(reason="proposals.capture.concurrent_reload")
                 .lock_if_supported()
-                .filter(
-                    models.Q(source_message_id=message.pk)
-                    | models.Q(round_id=round.pk, party_id=party.pk)
-                )
+                .filter(models.Q(source_message_id=message.pk) | models.Q(round_id=round.pk, party_id=party.pk))
                 .order_by("pk")
                 .first()
             )
@@ -983,7 +938,7 @@ class ProposalManager(AngeeManager):
                 "capture_payload_hash",
                 "capture_parser_version",
                 "updated_at",
-            )
+            ),
         )
 
         answer_model = apps.get_model("proposals", "Answer")
@@ -1002,10 +957,11 @@ class ProposalManager(AngeeManager):
 
         if message.sender_id is None:
             return None
-        handle = apps.get_model("parties", "Handle")._base_manager.get(pk=message.sender_id)
+        handle: Any = message.sender
         if handle.party_id is None:
             apps.get_model("parties", "PartyHandle").objects.suggest_for(handle)
-            handle.refresh_from_db(fields=("party",))
+            # Matching may assign the party through another Handle instance.
+            handle.refresh_from_db(fields=["party"])
         return handle.party
 
     def _payload_hash(self, message: models.Model) -> str:
@@ -1268,7 +1224,8 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 .get(pk=self.round_id)
             )
             locked = (
-                type(self).objects.sudo(reason="proposals.proposal.submit")
+                type(self)
+                .objects.sudo(reason="proposals.proposal.submit")
                 .lock_if_supported()
                 .filter(round_id=locked_round.pk, pk=self.pk)
                 .order_by("pk")
@@ -1298,7 +1255,8 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 .get(pk=self.round_id)
             )
             locked = (
-                type(self).objects.sudo(reason="proposals.proposal.withdraw")
+                type(self)
+                .objects.sudo(reason="proposals.proposal.withdraw")
                 .lock_if_supported()
                 .filter(round_id=locked_round.pk, pk=self.pk)
                 .order_by("pk")
@@ -1327,7 +1285,8 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 .get(pk=self.round_id)
             )
             locked = (
-                type(self).objects.sudo(reason="proposals.proposal.identify")
+                type(self)
+                .objects.sudo(reason="proposals.proposal.identify")
                 .lock_if_supported()
                 .filter(round_id=locked_round.pk, pk=self.pk)
                 .order_by("pk")
@@ -1358,14 +1317,15 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 .get(pk=self.round_id)
             )
             locked = (
-                type(self).objects.sudo(reason="proposals.proposal.create_track")
+                type(self)
+                .objects.sudo(reason="proposals.proposal.create_track")
                 .lock_if_supported()
                 .filter(round_id=locked_round.pk, pk=self.pk)
                 .order_by("pk")
                 .get()
             )
             if locked.track_id is not None:
-                track = project_model._base_manager.get(pk=locked.track_id)
+                track: Any = locked.track
             else:
                 track = project_model(
                     title=f"{locked_round.name} — proposal track",
@@ -1375,9 +1335,9 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 bind_actor(track, _TRACK_SYSTEM_ACTOR)
                 with system_context(reason="proposals.proposal.create_track.project"):
                     track.sudo(reason="proposals.proposal.create_track.project").save()
-                users = [_user(locked_round.facilitator_id)]
+                users: list[Any] = [locked_round.facilitator]
                 if locked.responder_id is not None and locked.responder_id != locked_round.facilitator_id:
-                    users.append(_user(locked.responder_id))
+                    users.append(locked.responder)
                 write_relationships([_relationship(track, "editor", user) for user in users])
                 locked.track = track
                 locked.allow_immutable_save("track_id")
@@ -1400,7 +1360,8 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 .get(pk=self.round_id)
             )
             proposals = list(
-                type(self).objects.sudo(reason="proposals.proposal.publish_track.proposals")
+                type(self)
+                .objects.sudo(reason="proposals.proposal.publish_track.proposals")
                 .lock_if_supported()
                 .filter(round_id=locked_round.pk)
                 .order_by("pk")
@@ -1418,11 +1379,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         actor_id = actor_user_id(current_actor())
         if actor_id is not None and str(actor_id) == str(round.facilitator_id):
             return
-        if (
-            actor_id is not None
-            and str(actor_id) == str(self.responder_id)
-            and round.status == RoundStatus.OPENED
-        ):
+        if actor_id is not None and str(actor_id) == str(self.responder_id) and round.status == RoundStatus.OPENED:
             return
         raise ValidationError(
             {
@@ -1488,13 +1445,15 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
         # neither edge becomes visible without the other.
         self._mark_submitted(fallback_user_id)
         if self.responder_id is not None:
-            delete_relationship(_relationship(self, "editor", _user(self.responder_id)))
+            responder: Any = self.responder
+            delete_relationship(_relationship(self, "editor", responder))
 
     def _assert_submitted_postcondition(self) -> None:
         if self.submitted_at is None or self.submitted_by_id is None or self.decided_at is not None:
             raise ValidationError("Submitted proposal receipts do not match the requested postcondition.")
         if self.responder_id is not None:
-            editor = _relationship(self, "editor", _user(self.responder_id))
+            responder: Any = self.responder
+            editor = _relationship(self, "editor", responder)
             key = _relationship_key(editor)
             rows = active_relationship_model().objects.filter(
                 resource_type=key[0],
@@ -1510,7 +1469,7 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     def _reconcile_shell_access(self) -> None:
         if self.pk is None or self.responder_id is None:
             return
-        responder = _user(self.responder_id)
+        responder: Any = self.responder
         editor = _relationship(self, "editor", responder)
         if self.state == ProposalState.DRAFT:
             write_relationships([editor])
@@ -1520,13 +1479,11 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     def _publish_track_locked(self, proposals: list[models.Model]) -> models.Model:
         if self.track_id is None:
             raise ValidationError({"track": "Create the proposal track before publishing it."})
-        project_model = apps.get_model("projects", "Project")
-        track = project_model._base_manager.get(pk=self.track_id)
+        track: Any = self.track
         self._validate_track_task_queues(track)
-        recipients = self.round._responder_users(
-            proposals,
-            states=self._track_recipient_states(),
-        )
+        round_row = self.round
+        assert round_row is not None
+        recipients = round_row._responder_users(proposals, states=self._track_recipient_states())
         if recipients:
             write_relationships([_relationship(track, "reader", user) for user in recipients])
         return track
@@ -1547,28 +1504,40 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
 
         if self.track_id is None:
             return False
-        recipients = self.round._responder_users(
-            proposals,
-            states=self._track_recipient_states(),
-        )
+        round_row = self.round
+        assert round_row is not None
+        recipients = round_row._responder_users(proposals, states=self._track_recipient_states())
         subject_ids = {to_subject_ref(user).subject_id for user in recipients}
         if not subject_ids:
             return False
         track_ref = to_object_ref(self.track)
-        return active_relationship_model().objects.filter(
-            resource_type=track_ref.resource_type,
-            resource_id=track_ref.resource_id,
-            relation="reader",
-            subject_type=to_subject_ref(recipients[0]).subject_type,
-            subject_id__in=subject_ids,
-        ).exists()
+        return (
+            active_relationship_model()
+            .objects.filter(
+                resource_type=track_ref.resource_type,
+                resource_id=track_ref.resource_id,
+                relation="reader",
+                subject_type=to_subject_ref(recipients[0]).subject_type,
+                subject_id__in=subject_ids,
+            )
+            .exists()
+        )
 
     def _allowed_track_queue_ids(self, queue_model: type[models.Model]) -> set[Any]:
         """Return facilitator/responder personal queues allowed while sealed."""
 
+        round_row = self.round
+        assert round_row is not None
+        sources = {
+            round_row.facilitator_id: (round_row, "facilitator"),
+            self.responder_id: (self, "responder"),
+        }
         allowed_queue_ids: set[Any] = set()
-        for user_id in {self.round.facilitator_id, self.responder_id} - {None}:
-            queue = queue_model.objects.personal_for(_user(user_id), provision=False)
+        for user_id, (source, field_name) in sources.items():
+            if user_id is None:
+                continue
+            user: Any = getattr(source, field_name)
+            queue = queue_model.objects.personal_for(user, provision=False)
             if queue is not None:
                 allowed_queue_ids.add(queue.pk)
         return allowed_queue_ids
@@ -1600,16 +1569,13 @@ class Proposal(ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
                 }
             )
 
-
     def _validate_lifecycle_receipts(self) -> None:
         if self.state == ProposalState.DRAFT and any(
             value is not None
             for value in (self.submitted_at, self.submitted_by_id, self.decided_at, self.decided_by_id)
         ):
             raise ValidationError("A draft proposal cannot carry lifecycle receipts.")
-        if self.state != ProposalState.DRAFT and (
-            self.submitted_at is None or self.submitted_by_id is None
-        ):
+        if self.state != ProposalState.DRAFT and (self.submitted_at is None or self.submitted_by_id is None):
             raise ValidationError("A non-draft proposal requires its submission receipt.")
         terminal = {
             ProposalState.ACCEPTED,
@@ -1657,17 +1623,21 @@ class TaskProposalAccess(models.Model):
             super().save(*args, **kwargs)
             return
         update_fields = kwargs.get("update_fields")
-        containment_may_change = self._state.adding or update_fields is None or bool(
-            {
-                "project",
-                "project_id",
-                queue_field.name,
-                queue_field.attname,
-                "stage",
-                "stage_id",
-                "cycle",
-                "cycle_id",
-            }.intersection(update_fields)
+        containment_may_change = (
+            self._state.adding
+            or update_fields is None
+            or bool(
+                {
+                    "project",
+                    "project_id",
+                    queue_field.name,
+                    queue_field.attname,
+                    "stage",
+                    "stage_id",
+                    "cycle",
+                    "cycle_id",
+                }.intersection(update_fields)
+            )
         )
         queue_id = getattr(self, queue_field.attname)
         if queue_id is None:
@@ -1679,18 +1649,12 @@ class TaskProposalAccess(models.Model):
         if containment_may_change and self.project_id is not None and queue_id is not None:
             proposal_model = apps.get_model("proposals", "Proposal")
             proposal = (
-                proposal_model._base_manager.select_related("round", "track")
-                .filter(track_id=self.project_id)
-                .first()
+                proposal_model._base_manager.select_related("round", "track").filter(track_id=self.project_id).first()
             )
             if proposal is not None:
-                proposals = list(
-                    proposal_model._base_manager.filter(round_id=proposal.round_id).order_by("pk")
-                )
-                if (
-                    not proposal._track_is_published(proposals)
-                    and queue_id
-                    not in proposal._allowed_track_queue_ids(queue_field.related_model)
+                proposals = list(proposal_model._base_manager.filter(round_id=proposal.round_id).order_by("pk"))
+                if not proposal._track_is_published(proposals) and queue_id not in proposal._allowed_track_queue_ids(
+                    queue_field.related_model
                 ):
                     raise ValidationError(
                         {

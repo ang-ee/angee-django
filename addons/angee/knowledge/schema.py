@@ -372,7 +372,12 @@ MAX_SEARCH_PAGE_SIZE = 100
 """Upper bound on :meth:`KnowledgeQuery.search_pages` ``first`` — every backend inherits it."""
 
 
-def _record_for_binding(model_label: str, record_id: PublicID, *, write: bool = False) -> Any | None:
+def _record_for_binding(
+    model_label: str,
+    record_id: PublicID,
+    *,
+    write: bool = False,
+) -> Any | None:
     """Resolve an arbitrary REBAC record through the ambient actor's row scope."""
 
     try:
@@ -385,7 +390,11 @@ def _record_for_binding(model_label: str, record_id: PublicID, *, write: bool = 
     return instance_from_public_id(model, str(record_id), queryset=queryset)
 
 
-def _knowledge_for_binding(input: RecordBindingInput, *, write: bool = False) -> tuple[Any | None, Any | None]:
+def _knowledge_for_binding(
+    input: RecordBindingInput,
+    *,
+    write: bool = False,
+) -> tuple[Any | None, Any | None]:
     """Resolve exactly one Page/Vault owner through the ambient actor's row scope."""
 
     if (input.page is None) == (input.vault is None):

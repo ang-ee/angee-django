@@ -578,15 +578,19 @@ class IAMUserWriteBackend:
         require_platform_admin(info)
         payload = dict(data)
         password = payload.pop("password")
+
         with transaction.atomic():
             return User.objects.create_user(password=password, **payload)
 
-    def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
+    def update(
+        self, info: strawberry.Info, pk: str, data: dict[str, Any],
+    ) -> Any:
         """Patch one user, hashing ``password`` when supplied."""
 
         require_platform_admin(info)
         payload = dict(data)
         password = payload.pop("password", None)
+
         with transaction.atomic():
             user = _user_for_resource_id(pk, write_queryset(User))
             for field, value in payload.items():
@@ -605,6 +609,7 @@ class IAMUserWriteBackend:
         """Delete one user by public id and return the deleted row."""
 
         require_platform_admin(info)
+
         with transaction.atomic():
             return _delete_instance(_user_for_resource_id(pk, write_queryset(User)))
 
@@ -616,16 +621,20 @@ class IAMGroupWriteBackend:
         """Create one IAM group."""
 
         require_platform_admin(info)
+
         with transaction.atomic():
             group = Group(**data)
             group.full_clean()
             group.save()
             return group
 
-    def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
+    def update(
+        self, info: strawberry.Info, pk: str, data: dict[str, Any],
+    ) -> Any:
         """Patch one IAM group."""
 
         require_platform_admin(info)
+
         with transaction.atomic():
             group = _group_for_resource_id(pk, write_queryset(Group))
             for field, value in data.items():
@@ -638,6 +647,7 @@ class IAMGroupWriteBackend:
         """Delete one IAM group by public id."""
 
         require_platform_admin(info)
+
         with transaction.atomic():
             return _delete_instance(_group_for_resource_id(pk, write_queryset(Group)))
 
@@ -907,10 +917,7 @@ class IAMPermissionHubMutation:
     ) -> bool:
         """Grant a declared role to one concrete IAM subject."""
 
-        with (
-            system_context(reason="iam.graphql.permission_hub.grant_role"),
-            transaction.atomic(),
-        ):
+        with system_context(reason="iam.graphql.permission_hub.grant_role"):
             _grant_role_owner(
                 subject=subject,
                 role=role,
@@ -923,10 +930,7 @@ class IAMPermissionHubMutation:
     def revoke_role(self, subject: str, role: str, caveat_name: str = "") -> bool:
         """Revoke the selected caveated or uncaveated role tuple."""
 
-        with (
-            system_context(reason="iam.graphql.permission_hub.revoke_role"),
-            transaction.atomic(),
-        ):
+        with system_context(reason="iam.graphql.permission_hub.revoke_role"):
             return _revoke_role_owner(subject=subject, role=role, caveat_name=caveat_name)
 
 

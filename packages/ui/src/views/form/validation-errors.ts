@@ -100,11 +100,20 @@ export function validationErrorMap(
   );
 }
 
+/** Format an opaque field-to-messages validation map for a summary surface. */
+export function validationErrorMessages(value: unknown): string[] {
+  const errors = validationErrorMap(value);
+  if (!errors) return [];
+  return Object.entries(errors).flatMap(([field, messages]) =>
+    messages.map((message) => `${field}: ${message}`),
+  );
+}
+
 /**
  * Re-scope the descendant-message strings returned by
- * {@link useDottedPathFieldErrors} to one nested dotted path. Exact messages
- * lose their path prefix; deeper descendants retain it for another nested
- * owner. Matching keeps the owner's exact-or-dot-boundary rule.
+ * {@link useDottedPathFieldErrors} or `fieldErrorMessages` to one nested dotted
+ * path. Exact messages lose their path prefix; deeper descendants retain it
+ * for another nested owner. Matching keeps the owner's exact-or-dot-boundary rule.
  */
 export function messagesForDottedPath(
   messages: readonly string[],
@@ -120,7 +129,11 @@ export function messagesForDottedPath(
   });
 }
 
-/** Direct messages from a scoped list, excluding its dotted descendants. */
+/**
+ * Direct messages from a scoped list returned by `fieldErrorMessages` or
+ * {@link useDottedPathFieldErrors}: exact-path messages are bare, while dotted
+ * descendants retain their prefixes and are excluded here.
+ */
 export function directDottedPathMessages(
   messages: readonly string[],
   path: string,

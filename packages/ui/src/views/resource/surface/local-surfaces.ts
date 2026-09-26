@@ -39,7 +39,7 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     includeDeclaredOrder: false,
   });
   const dataResource = modelMetadata?.resource ?? null;
-  const resourceName = dataResource ? refineResourceName(dataResource) : "__angee_disabled__";
+  const resourceName = refineResourceName(dataResource);
   const active = enabled && Boolean(dataResource);
   const run = useResourceListQuery({
     resource: dataResource,

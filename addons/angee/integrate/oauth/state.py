@@ -110,6 +110,4 @@ def _check_state_cache() -> None:
     if getattr(settings, "DEBUG", False) or getattr(settings, "ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE", False):
         return
     if isinstance(caches[DEFAULT_CACHE_ALIAS], LocMemCache):
-        raise ImproperlyConfigured(
-            "OAuth redirect state requires a shared cache; LocMemCache is per-process."
-        )
+        raise ImproperlyConfigured("OAuth redirect state requires a shared cache; LocMemCache is per-process.")

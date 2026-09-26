@@ -17,12 +17,9 @@ from angee.messaging.inbox_transcript import InboxTranscript
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
 from tests.conftest import execute_schema, make_integration, result_data
 from tests.test_messaging import Fragment, Handle, Message, Part, Participant, Party, Thread
-from tests.test_nexus import (
-    _schema,
-    nexus_tables,  # noqa: F401
-)
+from tests.test_nexus import _schema
 
-pytestmark = pytest.mark.usefixtures("nexus_tables")
+pytestmark = pytest.mark.usefixtures("composed_tables")
 User = get_user_model()
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -104,9 +101,9 @@ def test_search_candidates_preserve_terms_roles_and_distinct_message_uses():
     owner = User.objects.create_user(username="explorer-search-owner")
     other = User.objects.create_user(username="explorer-search-other")
     with system_context(reason="seed indexed search candidates"):
-        invoice = Fragment.objects.upsert(text="invoice", owner_id=owner.pk)
+        document = Fragment.objects.upsert(text="document", owner_id=owner.pk)
         alpha = Fragment.objects.upsert(text="alpha", owner_id=owner.pk)
-        phrase = Fragment.objects.upsert(text="invoice alpha", owner_id=owner.pk)
+        phrase = Fragment.objects.upsert(text="document alpha", owner_id=owner.pk)
         public = Thread._base_manager.create(created_by=owner, modality="public_thread")
         messages = {
             name: Message._base_manager.create(
@@ -118,28 +115,28 @@ def test_search_candidates_preserve_terms_roles_and_distinct_message_uses():
             for name in ("text", "shared", "quoted", "filename", "inline", "hidden", "draft", "public")
         }
         for name in ("text", "shared", "hidden", "draft", "public"):
-            for position, fragment in enumerate((invoice, alpha, invoice)):
+            for position, fragment in enumerate((document, alpha, document)):
                 Part._base_manager.create(
                     created_by=owner, message=messages[name], role="body", fragment=fragment, position=position,
                 )
         Part._base_manager.create(created_by=owner, message=messages["quoted"], role="quoted", fragment=phrase)
         for name in ("text", "filename", "inline"):
             Part._base_manager.create(
-                created_by=owner, message=messages[name], name="invoice alpha.pdf",
+                created_by=owner, message=messages[name], name="document alpha.pdf",
                 disposition="inline" if name == "inline" else "attachment", position=10,
             )
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
-        matches = inbox.results(InboxCoverage(), InboxSearch(text="invoice alpha"))
+        matches = inbox.results(InboxCoverage(), InboxSearch(text="document alpha"))
         assert set(matches.values_list("pk", flat=True)) == {
             messages[name].pk for name in ("text", "shared", "filename")
         }
         assert matches.count() == 3
-        quoted = inbox.results(InboxCoverage(), InboxSearch(text='"invoice alpha"', quoted=True))
+        quoted = inbox.results(InboxCoverage(), InboxSearch(text='"document alpha"', quoted=True))
         assert set(quoted.values_list("pk", flat=True)) == {
             messages[name].pk for name in ("text", "quoted", "filename")
         }
-        assert inbox.results(InboxCoverage(), InboxSearch(text="invoice missing-token")).count() == 0
+        assert inbox.results(InboxCoverage(), InboxSearch(text="document missing-token")).count() == 0
         groups = InboxResults(inbox, matches, InboxResultOptions()).groups("conversation").page()
         assert (groups.count, groups.record_count, groups.message_count) == (3, 3, 3)
 
@@ -262,7 +259,7 @@ def test_group_windows_keep_exact_totals_on_empty_and_out_of_range_pages():
 def test_message_group_totals_span_pages_and_conversation_titles_remain_exact():
     owner = User.objects.create_user(username="explorer-partition-totals")
     with system_context(reason="seed disjoint message groups"):
-        title = Fragment.objects.upsert(text="An invoice conversation", owner_id=owner.pk)
+        title = Fragment.objects.upsert(text="A document conversation", owner_id=owner.pk)
         thread = Thread._base_manager.create(created_by=owner, title=title)
         untitled = Thread._base_manager.create(created_by=owner)
         for index, conversation in enumerate((thread, thread, untitled, None)):
@@ -281,7 +278,7 @@ def test_message_group_totals_span_pages_and_conversation_titles_remain_exact():
             assert sum(row.message_count for row in groups.page().rows) == 4
         conversations = results.groups("conversation").page()
         assert [row.label for row in conversations.rows] == [
-            "Standalone message", "Conversation", "An invoice conversation",
+            "Standalone message", "Conversation", "A document conversation",
         ]
         assert [row.message_count for row in conversations.rows] == [1, 1, 2]
 
@@ -391,7 +388,7 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
     owner = User.objects.create_user(username="explorer-related")
     other = User.objects.create_user(username="explorer-private")
     with system_context(reason="seed explorer"):
-        fragment = Fragment.objects.upsert(text="shared invoice text", owner_id=owner.pk)
+        fragment = Fragment.objects.upsert(text="shared document text", owner_id=owner.pk)
         rows = [
             Message._base_manager.create(created_by=user, status=status, platform=platform, sent_at=T0)
             for user, status, platform in [
@@ -415,7 +412,7 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
         for axis in ("platform", "conversation"):
             groups = shared.groups(axis).page(size=1)
             assert (groups.count, groups.record_count, groups.message_count) == (2, 1, 2)
-        results = inbox.results(InboxCoverage(platforms=["email"]), InboxSearch(text='"shared invoice"'))
+        results = inbox.results(InboxCoverage(platforms=["email"]), InboxSearch(text='"shared document"'))
         assert list(results.values_list("pk", flat=True)) == [rows[0].pk]
         content = InboxResults(inbox, results, InboxResultOptions(lens="text"))
         page = content.page()

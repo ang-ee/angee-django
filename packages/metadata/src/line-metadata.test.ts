@@ -32,7 +32,7 @@ function field(
 
 const LINES: DataResourceLinesMetadata = {
   field: "lines",
-  modelLabel: "accounting.JournalItem",
+  modelLabel: "example.DocumentLine",
   positionField: "position",
   fields: [
     field("product", "relation", {
@@ -44,10 +44,10 @@ const LINES: DataResourceLinesMetadata = {
       widget: "money",
       currencyField: "entry.currency",
     }),
-    field("role", "enum", { values: [{ value: "product" }, { value: "tax" }] }),
-    field("taxes", "list", {
+    field("role", "enum", { values: [{ value: "product" }, { value: "category" }] }),
+    field("categories", "list", {
       scalar: "ID",
-      relationModelLabel: "accounting.Tax",
+      relationModelLabel: "example.Category",
     }),
     field("ownerId", "relation", {
       relationModelLabel: "accounts.User",
@@ -66,7 +66,7 @@ describe("line field references", () => {
     });
     expect(LINES.fields?.[2]?.values).toEqual([
       { value: "product" },
-      { value: "tax" },
+      { value: "category" },
     ]);
   });
 });
@@ -86,7 +86,7 @@ describe("lineReadSelectionPaths", () => {
       "product.name",
       "priceUnit",
       "role",
-      "taxes",
+      "categories",
       "ownerId",
     ]);
   });

@@ -11,7 +11,7 @@ from threading import Barrier
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import close_old_connections, connection, connections, models, transaction
+from django.db import IntegrityError, close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -25,31 +25,31 @@ from angee.workflows.attempts import (
     AttemptInput,
     AttemptResult,
     AttemptResultKind,
+    FixtureRole,
+    FixtureSpec,
     JsonPresence,
     RecoveryCapability,
     RecoveryMode,
     workflow_result_terminal_match_error,
 )
+from angee.workflows.attempts import WorkflowScope as WorkflowTestScope
 from angee.workflows.definitions import StaleDefinitionError
 from angee.workflows.dispatch import WorkflowDispatchKind
-from angee.workflows.managers import _admitted_decision_input
 from angee.workflows.models import RunOrigin, WorkflowStatus
 from angee.workflows.steps import StepImpl, StepResult
-from angee.workflows.testing import FixtureRole, FixtureSpec
-from angee.workflows.testing import WorkflowScope as WorkflowTestScope
-from tests.workflows import (
+from angee.workflows.testing.drivers import advance_once, execute_started
+from angee.workflows.testing.models import (
     Edge,
     Step,
     StepArtifact,
     StepAttempt,
+    StepExternalSubscription,
     StepRun,
     Workflow,
     WorkflowDispatch,
     WorkflowRecoveryEvidence,
     WorkflowRun,
     WorkflowTestFixture,
-    advance_once,
-    execute_started,
 )
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -82,11 +82,11 @@ class _ReconcilingTestStep(StepImpl):
 
 
 def test_recovery_reuses_exact_input_and_records_nonduplicated_artifacts(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="recovery-owner")
     workflow, step = _draft(owner=actor)
     with system_context(reason="recovery source setup"):
@@ -144,16 +144,26 @@ def test_recovery_reuses_exact_input_and_records_nonduplicated_artifacts(
     ]
 
 
-def test_admitted_continuation_completion_accepts_one_exact_successful_recovery(
-    workflow_engine_tables: None,
-    monkeypatch: pytest.MonkeyPatch,
+def test_join_continuation_accepts_one_exact_successful_recovery(
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="continuation-completion-owner")
     workflow, step = _draft(name="Recovered continuation", owner=actor)
+    parent_workflow, starter_step = _draft(name="Continuation parent", owner=actor)
     actor_ref = str(to_subject_ref(actor))
-    frozen_input = {"invoice": "retained"}
+    frozen_input = {"document": "retained"}
     with system_context(reason="continuation completion source fixture"):
+        parent = WorkflowRun.objects.create(
+            workflow=parent_workflow,
+            status="running",
+            admitted_actor_ref=actor_ref,
+            created_by=actor,
+        )
+        starter = StepRun.objects.create(run=parent, step=starter_step, status="succeeded")
+        join = StepRun.objects.create(run=parent, step=starter_step, map_index=1)
         original = WorkflowRun.objects.create(
+            parent_step_run=starter,
+            parent_relation="continuation",
             workflow=workflow,
             origin=RunOrigin.WORKFLOW,
             status="running",
@@ -200,16 +210,17 @@ def test_admitted_continuation_completion_accepts_one_exact_successful_recovery(
         )
         recovery.mark_succeeded(outcome="deferred", output={"status": "deferred"})
 
-    monkeypatch.setattr(
-        type(StepAttempt.objects),
-        "admitted_continuation_child",
-        lambda self, *args, **kwargs: original,
+    join_attempt = StepAttempt.objects.claim(join, claimed_at=timezone.now()).attempt
+    StepAttempt.objects.admit_invocation(
+        join_attempt.pk,
+        lease_token=join_attempt.lease_token,
+        at=timezone.now(),
     )
-    retained, completion = StepAttempt.objects.admitted_continuation_completion(
-        failed_step.pk,
-        lease_token=uuid.uuid4(),
-        child_id_path=("child_run_id",),
-        expected_starter_class="starter",
+    retained, completion = StepAttempt.objects.join_continuation(
+        join.pk,
+        lease_token=join_attempt.lease_token,
+        child_id=original.sqid,
+        expected_starter_class=starter_step.step_class,
         actor=actor,
     )
     assert retained.pk == original.pk
@@ -226,25 +237,25 @@ def test_admitted_continuation_completion_accepts_one_exact_successful_recovery(
             admitted_actor_ref=actor_ref,
             created_by=actor,
             input_present=True,
-            input={"invoice": "changed"},
+            input={"document": "changed"},
         )
         conflicting.mark_succeeded(outcome="deferred", output={"status": "deferred"})
     with pytest.raises(ValidationError, match="conflicting retained facts"):
-        StepAttempt.objects.admitted_continuation_completion(
-            failed_step.pk,
-            lease_token=uuid.uuid4(),
-            child_id_path=("child_run_id",),
-            expected_starter_class="starter",
+        StepAttempt.objects.join_continuation(
+            join.pk,
+            lease_token=join_attempt.lease_token,
+            child_id=original.sqid,
+            expected_starter_class=starter_step.step_class,
             actor=actor,
         )
 
 
 def test_fresh_recovery_reuses_original_child_handoff_across_multiple_failures(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="recovery-child-owner")
     source_run, source_step_run, source_attempt, child_head, child = _failed_child_handoff(
         actor=actor, dedup_key="recovery-child:stable",
@@ -305,11 +316,11 @@ def test_fresh_recovery_reuses_original_child_handoff_across_multiple_failures(
 
 
 def test_fresh_recovery_child_handoff_rejects_changed_or_unrelated_identity(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="recovery-child-mismatch-owner")
     _source_run, source_step_run, source_attempt, child_head, child = _failed_child_handoff(
         actor=actor, dedup_key="recovery-child:mismatch",
@@ -360,17 +371,17 @@ def test_fresh_recovery_child_handoff_rejects_changed_or_unrelated_identity(
 
 
 def test_fresh_recovery_keeps_new_downstream_child_on_the_recovery_run(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="recovery-downstream-child-owner")
     child_head = _published_wait_workflow(actor=actor)
     with system_context(reason="downstream recovery child fixture"):
         source_workflow, recovered_step = _draft(name="Recovered predecessor", owner=actor)
         downstream_step = Step.objects.create(
-            workflow=source_workflow, key="handoff", name="Handoff", step_class="handler",
+            workflow=source_workflow, key="handoff", name="Handoff", step_class="fixture",
         )
         Edge.objects.create(
             workflow=source_workflow, source=recovered_step, target=downstream_step,
@@ -453,13 +464,13 @@ def test_fresh_recovery_keeps_new_downstream_child_on_the_recovery_run(
 
 
 def test_repeated_recovery_retains_required_original_and_current_outputs(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A later recovery flattens exact predecessor evidence from the same lineage."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="repeated-recovery-owner")
 
     class RecoverableMiddle(StepImpl):
@@ -510,20 +521,20 @@ def test_repeated_recovery_retains_required_original_and_current_outputs(
     with system_context(reason="repeated recovery fixture"):
         workflow = Workflow.objects.create(name="Repeated recovery", created_by=actor)
         original_step = Step.objects.create(
-            workflow=workflow, key="original", name="Original", step_class="handler", is_entry=True,
+            workflow=workflow, key="original", name="Original", step_class="fixture", is_entry=True,
         )
         middle_step = Step.objects.create(
             workflow=workflow,
             key="middle",
             name="Middle",
-            step_class="handler",
+            step_class="fixture",
             input_binding={"kind": "step_output", "step_key": "original", "path": []},
         )
         end_step = Step.objects.create(
             workflow=workflow,
             key="end",
             name="End",
-            step_class="handler",
+            step_class="fixture",
             input_binding={
                 "kind": "object",
                 "fields": {
@@ -631,13 +642,13 @@ def test_repeated_recovery_retains_required_original_and_current_outputs(
 
 
 def test_fresh_recovery_rebinds_preparation_error_from_admitted_evidence(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed binding is prepared again from the new run's immutable basis."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="preparation-recovery-owner")
 
     class RecoverableBoundStep(StepImpl):
@@ -662,13 +673,13 @@ def test_fresh_recovery_rebinds_preparation_error_from_admitted_evidence(
     with system_context(reason="preparation recovery fixture"):
         workflow = Workflow.objects.create(name="Preparation recovery", created_by=actor)
         source_step = Step.objects.create(
-            workflow=workflow, key="source", name="Source", step_class="handler", is_entry=True,
+            workflow=workflow, key="source", name="Source", step_class="fixture", is_entry=True,
         )
         target_step = Step.objects.create(
             workflow=workflow,
             key="target",
             name="Target",
-            step_class="handler",
+            step_class="fixture",
             input_binding={"kind": "step_output", "step_key": "source", "path": []},
         )
         Edge.objects.create(workflow=workflow, source=source_step, target=target_step)
@@ -740,13 +751,13 @@ def test_fresh_recovery_rebinds_preparation_error_from_admitted_evidence(
 
 
 def test_fresh_recovery_validates_downstream_map_items_against_their_expansion(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A Map reached after recovery owns new item evidence within the recovery run."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="recovery-map-owner")
 
     class RecoveredRoot(StepImpl):
@@ -780,7 +791,7 @@ def test_fresh_recovery_validates_downstream_map_items_against_their_expansion(
     with system_context(reason="downstream recovery map fixture"):
         workflow = Workflow.objects.create(name="Recovery then Map", created_by=actor)
         recovered_step = Step.objects.create(
-            workflow=workflow, key="recover", name="Recover", step_class="handler", is_entry=True,
+            workflow=workflow, key="recover", name="Recover", step_class="fixture", is_entry=True,
         )
         map_step = Step.objects.create(
             workflow=workflow,
@@ -790,7 +801,7 @@ def test_fresh_recovery_validates_downstream_map_items_against_their_expansion(
             config={"target_step": "item", "items": [{"value": "retained"}]},
         )
         item_step = Step.objects.create(
-            workflow=workflow, key="item", name="Item", step_class="handler",
+            workflow=workflow, key="item", name="Item", step_class="fixture",
         )
         Edge.objects.create(
             workflow=workflow, source=recovered_step, target=map_step, condition="done",
@@ -837,14 +848,14 @@ def test_fresh_recovery_validates_downstream_map_items_against_their_expansion(
 
 @pytest.mark.parametrize("scenario", ["remaining_sibling", "retry_failed_recovery"])
 def test_fresh_map_body_recovery_rejoins_retained_results_before_continuing(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     scenario: str,
 ) -> None:
     """Map recovery carries its exact admitted aggregate across a linear branch."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(
         username=f"map-body-recovery-{scenario}"
     )
@@ -896,10 +907,10 @@ def test_fresh_map_body_recovery_rejoins_retained_results_before_continuing(
             is_entry=True,
         )
         Step.objects.create(
-            workflow=workflow, key="page", name="Page", step_class="handler",
+            workflow=workflow, key="page", name="Page", step_class="fixture",
         )
         collect_step = Step.objects.create(
-            workflow=workflow, key="collect", name="Collect", step_class="handler",
+            workflow=workflow, key="collect", name="Collect", step_class="fixture",
         )
         Edge.objects.create(
             workflow=workflow, source=map_step, target=collect_step, condition="succeeded",
@@ -1030,10 +1041,10 @@ def test_fresh_map_body_recovery_rejoins_retained_results_before_continuing(
 
 
 def test_retained_child_for_start_requires_parent_and_child_read_access(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="retained-child-owner")
     reader = get_user_model().objects.create_user(username="retained-child-reader")
     source_run, source_step_run, _source_attempt, _child_head, child = _failed_child_handoff(
@@ -1062,9 +1073,9 @@ def test_retained_child_for_start_requires_parent_and_child_read_access(
 
 
 def test_repair_test_retains_exact_source_attempt_and_original_input(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_engine_tables
+    del composed_tables
     actor = get_user_model().objects.create_user(username="repair-owner")
     workflow, step = _draft(owner=actor)
     with system_context(reason="repair source setup"):
@@ -1129,7 +1140,7 @@ def test_repair_test_retains_exact_source_attempt_and_original_input(
 
 
 def test_repair_context_offers_retained_done_predecessor_as_fixture(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="repair-fixture-owner")
     workflow, selected = _draft(owner=actor)
@@ -1194,7 +1205,7 @@ def test_repair_context_offers_retained_done_predecessor_as_fixture(
 
 
 def test_output_fixture_is_immutable_nonphysical_retained_evidence(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-runner")
     workflow, selected = _draft(owner=actor)
@@ -1234,12 +1245,23 @@ def test_output_fixture_is_immutable_nonphysical_retained_evidence(
         assert run.step_runs.get(step__key=selected.key).status == "succeeded"
         assert run.steps_taken == 0
         assert not WorkflowDispatch.objects.filter(step_attempt=attempt).exists()
-        with pytest.raises(TypeError, match="immutable"):
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be edited"):
             WorkflowTestFixture.objects.filter(pk=fixture.pk).update(outcome="changed")
+        with pytest.raises(TypeError, match="WorkflowRunManager"):
+            WorkflowTestFixture.objects.bulk_create([fixture])
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be edited"):
+            WorkflowTestFixture.objects.bulk_update([fixture], ["outcome"])
+        queryset = WorkflowTestFixture.objects.filter(pk=fixture.pk)
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be edited"):
+            queryset.update(created_by=None, updated_by=None)
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be deleted"):
+            queryset.delete()
+        with pytest.raises(ValidationError, match="WorkflowTestFixture rows cannot be deleted"):
+            queryset._raw_delete(using=queryset.db)
 
 
 def test_setup_plan_uses_graph_effects_and_fixture_substitution(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="test-plan-owner")
     workflow, entry = _draft(owner=actor)
@@ -1267,7 +1289,7 @@ def test_setup_plan_uses_graph_effects_and_fixture_substitution(
 
 
 def test_setup_plan_reports_required_map_item_without_rejecting_incomplete_setup(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="test-plan-map-item")
     workflow, controller = _draft(owner=actor)
@@ -1279,7 +1301,7 @@ def test_setup_plan_reports_required_map_item_without_rejecting_incomplete_setup
             workflow=workflow,
             key="body",
             name="Body",
-            step_class="handler",
+            step_class="fixture",
         )
         workflow.refresh_from_db()
 
@@ -1300,7 +1322,7 @@ def test_setup_plan_reports_required_map_item_without_rejecting_incomplete_setup
 
 
 def test_test_snapshot_freshness_ignores_label_but_detects_exact_config_types(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="test-plan-freshness")
     workflow, entry = _draft(owner=actor)
@@ -1354,7 +1376,7 @@ def test_test_snapshot_freshness_ignores_label_but_detects_exact_config_types(
 
 
 def test_draft_retest_compares_previous_snapshot_semantics_and_source_identity(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="test-plan-previous-run")
     workflow, entry = _draft(owner=actor)
@@ -1404,7 +1426,7 @@ def test_draft_retest_compares_previous_snapshot_semantics_and_source_identity(
 
 
 def test_captured_fixture_sources_are_bounded_and_payload_is_selected_separately(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="captured-source-owner")
     workflow, entry = _draft(owner=actor)
@@ -1499,7 +1521,7 @@ def test_captured_fixture_sources_are_bounded_and_payload_is_selected_separately
 
 
 def test_freshness_propagates_upstream_semantics_to_selected_evidence(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="test-plan-propagation")
     workflow, entry = _draft(owner=actor)
@@ -1549,7 +1571,7 @@ def test_freshness_propagates_upstream_semantics_to_selected_evidence(
 
 
 def test_output_fixture_can_replace_whole_test_entry_without_duplicate_slot(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-entry")
@@ -1578,7 +1600,7 @@ def test_output_fixture_can_replace_whole_test_entry_without_duplicate_slot(
 
 
 def test_whole_output_fixture_waits_for_graph_reachability(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-reachability")
     workflow, entry = _draft(owner=actor)
@@ -1612,7 +1634,7 @@ def test_whole_output_fixture_waits_for_graph_reachability(
 
 
 def test_whole_map_body_output_fixture_stays_bound_to_expansion(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-map-output")
@@ -1622,7 +1644,7 @@ def test_whole_map_body_output_fixture_stays_bound_to_expansion(
         controller.config = {"target_step": "body", "items": ["raw"]}
         controller.save(update_fields={"step_class", "config"})
         body = Step.objects.create(
-            workflow=workflow, key="body", name="Body", step_class="handler"
+            workflow=workflow, key="body", name="Body", step_class="fixture"
         )
         workflow.max_steps = 1
         workflow.save(update_fields={"max_steps"})
@@ -1654,7 +1676,7 @@ def test_whole_map_body_output_fixture_stays_bound_to_expansion(
 
 
 def test_whole_map_output_fixture_skips_expansion_when_reached(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-map-controller")
@@ -1663,7 +1685,7 @@ def test_whole_map_output_fixture_skips_expansion_when_reached(
         controller.step_class = "map"
         controller.config = {"target_step": "body", "items": [1, 2]}
         controller.save(update_fields={"step_class", "config"})
-        Step.objects.create(workflow=workflow, key="body", name="Body", step_class="handler")
+        Step.objects.create(workflow=workflow, key="body", name="Body", step_class="fixture")
         workflow.refresh_from_db()
     run = WorkflowRun.objects.start_test(
         workflow,
@@ -1690,7 +1712,7 @@ def test_whole_map_output_fixture_skips_expansion_when_reached(
 
 
 def test_test_fixture_retry_requires_exact_json_presence_and_facts(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-retry")
     workflow, selected = _draft(owner=actor)
@@ -1733,8 +1755,8 @@ def test_test_fixture_retry_requires_exact_json_presence_and_facts(
         )
 
 
-def test_fixture_creation_requires_run_admission_owner(
-    workflow_engine_tables: None,
+def test_fixture_generic_writes_require_the_run_owner(
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-owner-guard")
     workflow, selected = _draft(owner=actor)
@@ -1756,12 +1778,43 @@ def test_fixture_creation_requires_run_admission_owner(
     )
     with pytest.raises(TypeError, match="WorkflowRunManager"):
         row.save()
-    with pytest.raises(RuntimeError, match="owning run transaction"):
-        WorkflowTestFixture.objects._create_batch(run, (row,))
+    with pytest.raises(TypeError, match="WorkflowRunManager"):
+        WorkflowTestFixture.objects.bulk_create([row])
 
 
-def test_fixture_batch_authority_rejects_signal_reentry(
-    workflow_engine_tables: None,
+@pytest.mark.parametrize(
+    ("model", "message"),
+    (
+        (WorkflowTestFixture, "Workflow test fixtures can only be created by WorkflowRunManager."),
+        (WorkflowRecoveryEvidence, "Recovery evidence can only be created by WorkflowRunManager."),
+        (StepExternalSubscription, "External subscriptions can only be recorded by StepAttemptManager."),
+        (StepArtifact, "Workflow artifacts can only be recorded during attempt finalization."),
+        (StepAttempt, "Step attempts can only be created by StepAttemptManager."),
+        (WorkflowDispatch, "Workflow dispatches can only be created by WorkflowDispatchManager."),
+    ),
+)
+def test_admission_evidence_rejects_all_generic_insert_paths(
+    model: type[models.Model], message: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The queryset owns admission even when a model save hook is replaced."""
+
+    def unexpected_save(*args: object, **kwargs: object) -> None:
+        pytest.fail("Generic insertion reached model persistence.")
+
+    monkeypatch.setattr(model, "save", unexpected_save)
+    with pytest.raises(TypeError) as error:
+        model._default_manager.create()
+    assert str(error.value) == message
+    with pytest.raises(TypeError) as error:
+        model._default_manager.insert(model())
+    assert str(error.value) == message
+    with pytest.raises(TypeError) as error:
+        model._default_manager.bulk_create([model()])
+    assert str(error.value) == message
+
+
+def test_fixture_slot_uniqueness_rejects_signal_reentry(
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="fixture-signal-guard")
     workflow, entry = _draft(owner=actor)
@@ -1778,7 +1831,7 @@ def test_fixture_batch_authority_rejects_signal_reentry(
 
     post_save.connect(reenter, sender=WorkflowTestFixture, weak=False)
     try:
-        with pytest.raises(RuntimeError, match="exact prepared batch"):
+        with pytest.raises(ValidationError) as error:
             WorkflowRun.objects.start_test(
                 workflow,
                 expected_revision=workflow.draft_revision,
@@ -1793,6 +1846,7 @@ def test_fixture_batch_authority_rejects_signal_reentry(
                     ),
                 ),
             )
+        assert error.value.error_dict["__all__"][0].code == "unique_together"
     finally:
         post_save.disconnect(reenter, sender=WorkflowTestFixture)
     with system_context(reason="verify fixture signal rollback"):
@@ -1801,7 +1855,7 @@ def test_fixture_batch_authority_rejects_signal_reentry(
 
 
 def test_node_snapshot_reuse_revalidates_whole_readiness(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="scope-readiness")
     workflow, selected = _draft(owner=actor)
@@ -1810,7 +1864,7 @@ def test_node_snapshot_reuse_revalidates_whole_readiness(
             workflow=workflow,
             key="incomplete",
             name="Incomplete",
-            step_class="handler",
+            step_class="fixture",
         )
         workflow.refresh_from_db()
     node = WorkflowRun.objects.start_test(
@@ -1823,7 +1877,7 @@ def test_node_snapshot_reuse_revalidates_whole_readiness(
         selected_step=selected,
     )
     assert node.workflow.status == WorkflowStatus.TEST
-    with pytest.raises(ValidationError, match="cannot be executed"):
+    with pytest.raises(ValidationError) as error:
         WorkflowRun.objects.start_test(
             workflow,
             expected_revision=workflow.draft_revision,
@@ -1831,12 +1885,14 @@ def test_node_snapshot_reuse_revalidates_whole_readiness(
             subject=None,
             actor=actor,
         )
+    incomplete = Step.system_queryset().get(workflow=node.workflow, key="incomplete")
+    assert error.value.message_dict == {f"node.{incomplete.pk}.key": ["Step is not reachable from the entry step."]}
 
 
 @pytest.mark.parametrize("item", [None, "raw", {"item": "mapping"}])
 @pytest.mark.parametrize("explicit", [False, True])
 def test_map_item_fixture_is_captured_on_real_body_attempt(
-    workflow_engine_tables: None,
+    composed_tables: None,
     item: object,
     explicit: bool,
 ) -> None:
@@ -1850,7 +1906,7 @@ def test_map_item_fixture_is_captured_on_real_body_attempt(
             workflow=workflow,
             key="body",
             name="Body",
-            step_class="handler",
+            step_class="fixture",
             input_binding={"kind": "map_item", "path": []} if explicit else None,
         )
         workflow.refresh_from_db()
@@ -1883,7 +1939,7 @@ def test_map_item_fixture_is_captured_on_real_body_attempt(
 
 
 def test_selected_map_body_requires_one_raw_item_fixture(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="map-fixture-required")
     workflow, controller = _draft(owner=actor)
@@ -1892,7 +1948,7 @@ def test_selected_map_body_requires_one_raw_item_fixture(
         controller.config = {"target_step": "body", "items": [1]}
         controller.save(update_fields={"step_class", "config"})
         body = Step.objects.create(
-            workflow=workflow, key="body", name="Body", step_class="handler"
+            workflow=workflow, key="body", name="Body", step_class="fixture"
         )
         workflow.refresh_from_db()
     with pytest.raises(ValidationError, match="requires exactly one Map item"):
@@ -1950,9 +2006,16 @@ def _failed_child_handoff(
 
 def _published_wait_workflow(*, actor: object) -> Workflow:
     with system_context(reason="recovery child workflow fixture"):
-        workflow = Workflow.objects.create(name="Recovery child", created_by=actor)
+        workflow = Workflow.objects.create(
+            key=f"recovery-child-{uuid.uuid4().hex}",
+            name="Recovery child",
+            created_by=actor,
+        )
         Step.objects.create(
-            workflow=workflow, key="entry", name="Entry", step_class="wait",
+            workflow=workflow,
+            key="entry",
+            name="Entry",
+            step_class="wait",
             config={"until": (timezone.now() + timedelta(hours=1)).isoformat()},
             input_binding={"kind": "workflow_input", "path": []},
             is_entry=True,
@@ -1985,13 +2048,13 @@ def _execute_recovery(
 
 
 def test_fresh_recovery_continues_from_retained_success_blocked_by_skipped_merge(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A retained successful recovery resumes after its exact skipped sibling."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = get_user_model().objects.create_user(username="recovery-merge-continuation-owner")
 
     class RecoverableReview(StepImpl):
@@ -2038,21 +2101,21 @@ def test_fresh_recovery_continues_from_retained_success_blocked_by_skipped_merge
             }],
         )
         direct = Step.objects.create(
-            workflow=workflow, key="direct", name="Direct", step_class="handler", is_entry=True,
+            workflow=workflow, key="direct", name="Direct", step_class="fixture", is_entry=True,
         )
         review = Step.objects.create(
-            workflow=workflow, key="review", name="Review", step_class="handler",
+            workflow=workflow, key="review", name="Review", step_class="fixture",
         )
         apply = Step.objects.create(
-            workflow=workflow, key="apply", name="Apply", step_class="handler",
+            workflow=workflow, key="apply", name="Apply", step_class="fixture",
         )
         merge = Step.objects.create(
-            workflow=workflow, key="merge", name="Merge", step_class="handler",
+            workflow=workflow, key="merge", name="Merge", step_class="fixture",
             join_rule="none_failed_min_one_success",
             input_binding={"kind": "step_output", "step_key": "apply", "path": []},
         )
         terminal = Step.objects.create(
-            workflow=workflow, key="terminal", name="Terminal", step_class="handler",
+            workflow=workflow, key="terminal", name="Terminal", step_class="fixture",
             input_binding={"kind": "step_output", "step_key": "merge", "path": []},
         )
         Edge.objects.create(workflow=workflow, source=direct, target=merge, condition="done")
@@ -2169,7 +2232,8 @@ def test_fresh_recovery_continues_from_retained_success_blocked_by_skipped_merge
 
 @pytest.mark.parametrize("child_finishes_before_recovery", [False, True])
 def test_native_call_recovery_retains_child_and_consumes_exact_completion(
-    workflow_engine_tables: None, child_finishes_before_recovery: bool,
+    composed_tables: None,
+    child_finishes_before_recovery: bool,
 ) -> None:
     """An early or late child finish wakes the same child slot through FRESH recovery."""
 
@@ -2179,16 +2243,28 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
         child_version = child_head.published_versions.get(status=WorkflowStatus.PUBLISHED)
         source_workflow, source_step = _draft(name="Native call recovery parent", owner=actor)
         source_step.step_class = "call_workflow"
-        source_step.config = {"publication": str(child_version.sqid)}
+        source_step.config = {
+            "workflow_key": child_head.key,
+            "expected_input_schema": child_version.input_schema,
+            "expected_output_schema": child_version.output_schema,
+            "expected_subject": child_version.subject_declaration,
+            "expected_outcomes": ["completed"],
+        }
         source_step.save(update_fields={"step_class", "config"})
-        payload = {"publication": str(child_version.sqid), "input": {"child": "retained"}}
+        payload = {"input": {"child": "retained"}}
         source_run = WorkflowRun.objects.create(
-            workflow=source_workflow, status="running",
-            admitted_actor_ref=str(to_subject_ref(actor)), created_by=actor,
-            input_present=True, input=payload,
+            workflow=source_workflow,
+            status="running",
+            admitted_actor_ref=str(to_subject_ref(actor)),
+            created_by=actor,
+            input_present=True,
+            input=payload,
         )
         source_step_run = StepRun.objects.create(
-            run=source_run, step=source_step, status="scheduled", input=payload,
+            run=source_run,
+            step=source_step,
+            status="scheduled",
+            input=payload,
         )
     source_attempt = StepAttempt.objects.claim(
         source_step_run,
@@ -2196,18 +2272,30 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
         claimed_at=timezone.now(),
     ).attempt
     StepAttempt.objects.admit_invocation(
-        source_attempt.pk, lease_token=source_attempt.lease_token, at=timezone.now(),
+        source_attempt.pk,
+        lease_token=source_attempt.lease_token,
+        at=timezone.now(),
     )
     child = engine.start(
-        child_version, subject=None, actor=actor,
-        parent_step_run=source_step_run, parent_relation="owned_call", origin=RunOrigin.WORKFLOW,
+        child_version,
+        subject=None,
+        actor=actor,
+        parent_step_run=source_step_run,
+        parent_relation="owned_call",
+        origin=RunOrigin.WORKFLOW,
         input=JsonPresence(True, payload["input"]),
     )
     StepAttempt.objects.finalize(
-        source_attempt.pk, lease_token=source_attempt.lease_token,
+        source_attempt.pk,
+        lease_token=source_attempt.lease_token,
         result=AttemptResult(AttemptResultKind.ERROR, error="uncertain child handoff"),
         recorded_at=timezone.now(),
     )
+    with system_context(reason="publish a newer keyed child before call recovery"):
+        child_head.name = "Recovery child republished"
+        child_head.save(update_fields={"name", "updated_at"})
+        newer_child_version = child_head.publish()
+    assert newer_child_version.pk != child.workflow_id
 
     def finish_child() -> None:
         with system_context(reason="native call child dispatch fixture"):
@@ -2218,17 +2306,9 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
             attempt = current.current_attempt
             execute = WorkflowDispatch.objects.get(step_attempt=attempt)
             if not child_finishes_before_recovery:
-                admitted, provenance, admitted_run, admitted_path = _admitted_decision_input(
-                    input_source="owned_call_input",
-                    path=("child",),
-                    step_run=current,
-                    attempt=attempt,
-                    using="default",
-                )
-                assert admitted["input"]["child"] == "retained"
-                assert provenance == {"kind": "run_input"}
-                assert admitted_run.pk == source_run.pk
-                assert admitted_path == ("input", "child")
+                assert child.input == {"child": "retained"}
+                assert child.parent_step_run_id == source_step_run.pk
+                assert source_attempt.input_provenance == {"kind": "run_input"}
         assert engine.execute_dispatch(execute.pk, attempt.pk, attempt.lease_token)["executed"] == 1
         future = timezone.now() + timedelta(hours=2)
         assert engine.advance(child.pk, now=future)["claimed"] == 1
@@ -2236,21 +2316,20 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
             current = StepRun.objects.get(run=child)
             attempt = current.current_attempt
             execute = WorkflowDispatch.objects.get(step_attempt=attempt)
-        assert engine.execute_dispatch(
-            execute.pk, attempt.pk, attempt.lease_token, now=future
-        )["executed"] == 1
+        assert engine.execute_dispatch(execute.pk, attempt.pk, attempt.lease_token, now=future)["executed"] == 1
         assert engine.advance(child.pk, now=future)["claimed"] == 0
         with system_context(reason="native call child completion assertion"):
             child.refresh_from_db()
         assert child.result == {
-            "status": "succeeded", "outcome": "completed", "output": {}, "error": None,
+            "status": "succeeded",
+            "outcome": "completed",
+            "output": {},
+            "error": None,
         }
 
     if child_finishes_before_recovery:
         finish_child()
-    stranger = get_user_model().objects.create_user(
-        username=f"call-recovery-stranger-{child_finishes_before_recovery}"
-    )
+    stranger = get_user_model().objects.create_user(username=f"call-recovery-stranger-{child_finishes_before_recovery}")
     with pytest.raises(PermissionDenied, match="Recovery source evidence is unavailable"):
         WorkflowRun.objects.start_recovery(
             source_attempt,
@@ -2258,7 +2337,9 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
             actor=stranger,
         )
     recovery, attempt = _execute_recovery(
-        source_attempt, actor=actor, request_key=f"native-call-{child_finishes_before_recovery}",
+        source_attempt,
+        actor=actor,
+        request_key=f"native-call-{child_finishes_before_recovery}",
     )
     with system_context(reason="native call retained identity assertion"):
         assert WorkflowRun.objects.filter(parent_step_run=source_step_run).count() == 1
@@ -2272,11 +2353,19 @@ def test_native_call_recovery_retains_child_and_consumes_exact_completion(
                 kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
                 artifact_object_id=child.pk,
             )
-        assert engine.deliver_artifact_dispatch(delivery.pk)["woken"] == 1
+        assert WorkflowDispatch.objects.deliver(
+            delivery.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY
+        )["woken"] == 1
         with system_context(reason="native call wake dispatch"):
-            advance = WorkflowDispatch.objects.filter(
-                run=recovery, kind=WorkflowDispatchKind.ADVANCE, consumed_at__isnull=True,
-            ).order_by("pk").first()
+            advance = (
+                WorkflowDispatch.objects.filter(
+                    run=recovery,
+                    kind=WorkflowDispatchKind.ADVANCE,
+                    consumed_at__isnull=True,
+                )
+                .order_by("pk")
+                .first()
+            )
             assert advance is not None
         assert engine.advance_dispatch(advance.pk)["claimed"] == 1
         with system_context(reason="native call resumed execution"):
@@ -2307,7 +2396,7 @@ def _draft(name: str = "Testable draft", *, owner: object | None = None) -> tupl
 
 
 def test_snapshot_uses_exact_revision_reuses_identity_and_does_not_change_currency(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     workflow, _ = _draft()
     revision = workflow.draft_revision
@@ -2337,7 +2426,7 @@ def test_snapshot_uses_exact_revision_reuses_identity_and_does_not_change_curren
 
 
 def test_snapshot_rejects_stale_head_revision_and_preserves_old_snapshot(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     workflow, step = _draft()
     old_revision = workflow.draft_revision
@@ -2358,7 +2447,7 @@ def test_snapshot_rejects_stale_head_revision_and_preserves_old_snapshot(
 
 
 def test_snapshot_workflow_and_definition_rows_are_immutable(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     workflow, _ = _draft()
     snapshot = Workflow.objects.test_snapshot(workflow, expected_revision=workflow.draft_revision)
@@ -2376,7 +2465,7 @@ def test_snapshot_workflow_and_definition_rows_are_immutable(
 
 
 def test_old_snapshot_starts_after_head_edit_and_ambiguous_retry_returns_same_run(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="snapshot-runner")
     workflow, step = _draft(owner=actor)
@@ -2422,7 +2511,7 @@ def test_old_snapshot_starts_after_head_edit_and_ambiguous_retry_returns_same_ru
 
 
 def test_node_test_pins_selected_copied_step_and_reuses_exact_scope(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="node-test-runner")
     workflow, selected = _draft(owner=actor)
@@ -2455,6 +2544,13 @@ def test_node_test_pins_selected_copied_step_and_reuses_exact_scope(
     )
     assert retried.pk == run.pk
 
+    with (
+        system_context(reason="node scope database constraint"),
+        pytest.raises(IntegrityError, match="chk_wfr_test_scope"),
+        transaction.atomic(),
+    ):
+        models.QuerySet.update(WorkflowRun.objects.filter(pk=run.pk), test_scope=None)
+
     with pytest.raises(ValidationError, match="request"):
         WorkflowRun.objects.start_test(
             workflow,
@@ -2466,8 +2562,8 @@ def test_node_test_pins_selected_copied_step_and_reuses_exact_scope(
         )
 
 
-def test_legacy_test_scope_blank_is_read_as_whole_but_new_writes_are_explicit(
-    workflow_engine_tables: None,
+def test_legacy_test_scope_absence_is_read_as_whole_but_new_writes_are_explicit(
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="legacy-test-runner")
     workflow, step = _draft(owner=actor)
@@ -2483,10 +2579,10 @@ def test_legacy_test_scope_blank_is_read_as_whole_but_new_writes_are_explicit(
         copied_step = run.workflow.steps.get(key=step.key)
     assert run.allows_test_step(copied_step) is True
 
-    models.QuerySet.update(WorkflowRun.objects.filter(pk=run.pk), test_scope="")
+    models.QuerySet.update(WorkflowRun.objects.filter(pk=run.pk), test_scope=None)
     with system_context(reason="load legacy test scope"):
         run = WorkflowRun.objects.get(pk=run.pk)
-    assert run.test_scope == ""
+    assert run.test_scope is None
     assert run.allows_test_step(copied_step) is True
     run.error = "legacy row remains writable through unrelated owners"
     with system_context(reason="legacy test unrelated update"):
@@ -2500,7 +2596,7 @@ def test_legacy_test_scope_blank_is_read_as_whole_but_new_writes_are_explicit(
 
 
 def test_node_selector_is_reloaded_under_lineage_lock_and_scope_rejects_foreign_steps(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="node-selector-owner")
     workflow, selected = _draft(owner=actor)
@@ -2535,7 +2631,7 @@ def test_node_selector_is_reloaded_under_lineage_lock_and_scope_rejects_foreign_
 
 
 def test_test_request_rejects_changed_facts_and_cross_actor_replay(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     owner = get_user_model().objects.create_user(username="snapshot-owner")
     stranger = get_user_model().objects.create_user(username="snapshot-stranger")
@@ -2589,7 +2685,7 @@ def test_test_request_rejects_changed_facts_and_cross_actor_replay(
 
 
 def test_test_launch_rejects_unauthorized_first_request_and_published_retry(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     owner = get_user_model().objects.create_user(username="snapshot-access-owner")
     outsider = get_user_model().objects.create_user(username="snapshot-access-outsider")
@@ -2628,7 +2724,7 @@ def test_test_launch_rejects_unauthorized_first_request_and_published_retry(
 
 
 def test_test_request_identity_is_immutable_and_survives_actor_deletion(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="snapshot-identity")
     workflow, _ = _draft(owner=actor)
@@ -2664,7 +2760,7 @@ def test_test_request_identity_is_immutable_and_survives_actor_deletion(
 
 
 def test_test_request_retry_rechecks_revoked_workflow_access(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="snapshot-revoked")
     workflow, _ = _draft(owner=actor)
@@ -2692,7 +2788,7 @@ def test_test_request_retry_rechecks_revoked_workflow_access(
 
 
 def test_test_launch_preserves_absent_null_and_value_input_envelopes(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="snapshot-inputs")
     workflow, _ = _draft(owner=actor)
@@ -2729,7 +2825,7 @@ def test_test_launch_preserves_absent_null_and_value_input_envelopes(
 
 
 def test_failed_test_launch_rolls_back_snapshot_run_entry_and_dispatch(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="snapshot-invalid-subject")
     workflow, _ = _draft(owner=actor)
@@ -2757,10 +2853,10 @@ def test_failed_test_launch_rolls_back_snapshot_run_entry_and_dispatch(
 
 
 def test_test_mutation_preserves_omitted_and_explicit_null_input(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     from tests.conftest import execute_schema, result_data
     from tests.test_workflows import _console_schema
 
@@ -2802,10 +2898,10 @@ def test_test_mutation_preserves_omitted_and_explicit_null_input(
 
 
 def test_test_plan_and_launch_share_node_scope_source_and_fixture_transport(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     from tests.conftest import execute_schema, result_data
     from tests.test_workflows import _console_schema
 
@@ -2848,7 +2944,7 @@ def test_test_plan_and_launch_share_node_scope_source_and_fixture_transport(
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL test-launch serialization contract")
 def test_concurrent_test_request_reuses_one_snapshot_run_and_dispatch(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     actor = get_user_model().objects.create_user(username="snapshot-concurrent")
     workflow, _ = _draft(owner=actor)

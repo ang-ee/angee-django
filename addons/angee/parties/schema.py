@@ -255,7 +255,6 @@ class ContactFolderType(AngeeNode):
     name: auto
     directory: "DirectoryType | None"
     source_href: auto
-    ctag: auto
     created_at: auto
     updated_at: auto
 
@@ -459,9 +458,7 @@ class PartiesIdentityMutation:
         if link.is_dismissed:
             return ActionResult(
                 ok=False,
-                message=(
-                    "This contact remains dismissed. Confirm it in Identity if it should be restored."
-                ),
+                message=("This contact remains dismissed. Confirm it in Identity if it should be restored."),
             )
         return ActionResult(ok=True, message="Contact is available in Identity for review.", id=link.sqid)
 

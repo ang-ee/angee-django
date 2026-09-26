@@ -98,7 +98,7 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [event["step"] for event in events] == [
         ["angee", "build"],
-        ["makemigrations", "--skip-checks"],
+        ["makemigrations", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],

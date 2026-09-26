@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-SETTINGS = {
+SETTINGS: dict[str, int | str] = {
     "CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP": True,
     "CELERY_TASK_IGNORE_RESULT": True,
     "CELERY_TASK_SOFT_TIME_LIMIT": 840,

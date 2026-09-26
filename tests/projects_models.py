@@ -71,6 +71,3 @@ class ProjectBinding(AbstractProjectBinding):
         app_label = "projects"
         db_table = "test_projects_binding"
         rebac_resource_type = "projects/project_binding"
-
-
-PROJECT_TEST_MODELS = (Task, Link, Project, ProjectBinding, Project.history.model)

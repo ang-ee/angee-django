@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import importlib
-from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
-from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, transaction
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.messaging.backends import ParsedHandle
@@ -22,12 +18,10 @@ from angee.parties.backends import ParsedContact
 from angee.parties.connections import ParsedConnection, ingest_connection
 from angee.parties.mixins import LinkSource
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from tests.conftest import _clear_model_tables, _create_missing_tables
+from tests.messaging_models import Folder
 from tests.test_messaging import (
-    MESSAGING_TEST_MODELS,
     Circle,
     CircleMember,
-    Folder,
     Handle,
     Organization,
     Party,
@@ -40,25 +34,6 @@ from tests.test_messaging import (
 
 User = get_user_model()
 
-CIRCLES_TEST_MODELS = MESSAGING_TEST_MODELS
-
-
-@pytest.fixture
-def parties_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the concrete parties/messaging tables and sync the REBAC schema."""
-
-    del transactional_db
-    created_models = _create_missing_tables(CIRCLES_TEST_MODELS)
-    call_command("rebac", "sync", verbosity=0)
-    try:
-        yield
-    finally:
-        _clear_model_tables(CIRCLES_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
 
 def _user(username: str) -> Any:
     """Create a plain user for ownership fixtures."""
@@ -68,14 +43,14 @@ def _user(username: str) -> Any:
 
 @pytest.mark.django_db(transaction=True)
 def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
-    parties_tables: None,
+    composed_tables: None,
 ) -> None:
     """Manual contact entry creates a reviewable claim and never resurrects its anti-link."""
 
-    del parties_tables
+    del composed_tables
     owner = _user("manual-contact-owner")
     with system_context(reason="test manual contact party"):
-        party = Party._base_manager.create(display_name="Supplier", created_by=owner)
+        party = Party._base_manager.create(display_name="Counterparty", created_by=owner)
 
     with actor_context(owner):
         with pytest.raises(ValidationError):
@@ -95,15 +70,15 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
         link = PartyHandle.objects.propose_manual_contact(
             party,
             platform="email",
-            value="billing@example.test",
-            label="Billing",
+            value="contact@example.test",
+            label="Contact",
             actor=owner,
         )
         link.dismiss()
         repeated = PartyHandle.objects.propose_manual_contact(
             party,
             platform="email",
-            value="billing@example.test",
+            value="contact@example.test",
             label="Changed label",
             actor=owner,
         )
@@ -114,25 +89,25 @@ def test_manual_contact_is_unconfirmed_and_dismissed_link_stays_dismissed(
     assert repeated.source == LinkSource.MANUAL
     assert not repeated.is_confirmed
     assert repeated.is_dismissed
-    assert repeated.handle.label == "Billing"
+    assert repeated.handle.label == "Contact"
     assert not repeated.handle.is_verified
     assert not repeated.handle.party_link_confirmed
 
 
 @pytest.mark.django_db(transaction=True)
 def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle(
-    parties_tables: None,
+    composed_tables: None,
 ) -> None:
     """Global Handle reuse neither overwrites its label nor discloses an unreadable match."""
 
-    del parties_tables
+    del composed_tables
     owner = _user("manual-contact-reuse")
     reader = _user("manual-contact-reader")
     foreign = _user("manual-contact-foreign")
     with system_context(reason="test manual contact reuse"):
-        target = Party._base_manager.create(display_name="Target supplier", created_by=owner)
+        target = Party._base_manager.create(display_name="Target counterparty", created_by=owner)
         reader_target = Party._base_manager.create(display_name="Reader target", created_by=reader)
-        confirmed_party = Party._base_manager.create(display_name="Confirmed supplier", created_by=owner)
+        confirmed_party = Party._base_manager.create(display_name="Confirmed counterparty", created_by=owner)
         shared = Handle._base_manager.create(
             platform=Handle.Platform.EMAIL,
             value="shared@example.test",
@@ -206,11 +181,11 @@ def test_manual_contact_reuse_preserves_confirmed_owner_and_hides_foreign_handle
 
 @pytest.mark.django_db(transaction=True)
 def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
-    parties_tables: None,
+    composed_tables: None,
 ) -> None:
     """Social connections confirm one Person and map employment to Relationship."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test connection ingest"):
         owner = _user("connection-owner")
         RelationshipKind._base_manager.create(
@@ -257,10 +232,10 @@ def test_connection_ingest_is_idempotent_and_uses_existing_affiliation_shape(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_circle_subtree_and_ancestor_scopes(parties_tables: None) -> None:
+def test_circle_subtree_and_ancestor_scopes(composed_tables: None) -> None:
     """Circle composes HierarchyMixin: subtree/ancestors read off the path index."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test circles"):
         owner = _user("olivia")
         root = Circle._base_manager.create(name="Friends", created_by=owner)
@@ -276,10 +251,10 @@ def test_circle_subtree_and_ancestor_scopes(parties_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_circle_tree_never_straddles_owners(parties_tables: None) -> None:
+def test_circle_tree_never_straddles_owners(composed_tables: None) -> None:
     """hierarchy_scope_fields=("created_by",): a parent from another owner is rejected."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test circles"):
         mine = Circle._base_manager.create(name="Mine", created_by=_user("me"))
         theirs = Circle._base_manager.create(name="Theirs", created_by=_user("them"))
@@ -288,10 +263,10 @@ def test_circle_tree_never_straddles_owners(parties_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_circle_membership_is_unique_per_pair(parties_tables: None) -> None:
+def test_circle_membership_is_unique_per_pair(composed_tables: None) -> None:
     """One row per (circle, party): a re-suggestion updates, never duplicates."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test circles"):
         owner = _user("uma")
         circle = Circle._base_manager.create(name="Family", created_by=owner)
@@ -302,10 +277,10 @@ def test_circle_membership_is_unique_per_pair(parties_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_relationship_kind_renders_both_directions(parties_tables: None) -> None:
+def test_relationship_kind_renders_both_directions(composed_tables: None) -> None:
     """One kind row carries both readings via inverse_name; blank means symmetric."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test kinds"):
         friend = RelationshipKind._base_manager.create(slug="friend", name="Friend")
         mother = RelationshipKind._base_manager.create(slug="mother", name="Mother", inverse_name="Child")
@@ -321,11 +296,11 @@ def test_relationship_kind_renders_both_directions(parties_tables: None) -> None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_relationship_edge_constraints(parties_tables: None) -> None:
+def test_relationship_edge_constraints(composed_tables: None) -> None:
     """A tracked edge is unique per (party, other, kind), never self-referential,
     and every edge names a counterparty (tracked or free-text)."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test relationships"):
         owner = _user("rita")
         kind = RelationshipKind._base_manager.create(slug="sibling", name="Sibling")
@@ -341,14 +316,14 @@ def test_relationship_edge_constraints(parties_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_relationship_records_untracked_relatives(parties_tables: None) -> None:
+def test_relationship_records_untracked_relatives(composed_tables: None) -> None:
     """A relative who is not a directory entry records as free text (health-gaps).
 
     Two same-kind free-text rows are legitimate (the tracked-pair uniqueness is
     partial), so a family history lists both grandmothers.
     """
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test relationships"):
         owner = _user("gene")
         kind = RelationshipKind._base_manager.create(slug="grandparent", name="Grandparent", inverse_name="Grandchild")
@@ -361,10 +336,10 @@ def test_relationship_records_untracked_relatives(parties_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
+def test_confirm_and_dismiss_drive_resolution(composed_tables: None) -> None:
     """Confirm outranks any score; dismiss is a durable anti-link that demotes and recounts."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test identity"):
         owner = _user("ivan")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -393,7 +368,7 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
 
         # Dismissing the winner demotes the handle to the next candidate and
         # recounts BOTH parties (the demoted owner must not keep a stale count).
-        strong.dismiss()
+        strong.with_actor(owner).dismiss()
         handle.refresh_from_db()
         alice.refresh_from_db()
         alicia.refresh_from_db()
@@ -416,7 +391,7 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
 
         # A human confirm outranks any score and clears the dismissal.
         strong.refresh_from_db()
-        strong.confirm()
+        strong.with_actor(owner).confirm()
         handle.refresh_from_db()
         strong.refresh_from_db()
         assert handle.party_id == alice.pk
@@ -429,15 +404,37 @@ def test_confirm_and_dismiss_drive_resolution(parties_tables: None) -> None:
         review = PartyHandle.objects.filter(is_confirmed=False, is_dismissed=False, confidence__lt=0.5)
         assert list(review.values_list("pk", flat=True)) == [weak.pk]
 
+        with pytest.raises(TypeError, match="transitions must use"):
+            PartyHandle.objects.filter(pk=weak.pk).update(confidence=0.8)
+        weak.confidence = 0.8
+        with pytest.raises(TypeError, match="transitions must use"):
+            PartyHandle.objects.bulk_update([weak], ["confidence"])
+        with pytest.raises(TypeError, match="must be created through"):
+            PartyHandle.objects.bulk_create(
+                [
+                    PartyHandle(
+                        party=alice,
+                        handle=handle,
+                        confidence=0.5,
+                        source=LinkSource.IMPORT,
+                        created_by_id=owner.pk,
+                    )
+                ]
+            )
+        weak.refresh_from_db()
+        assert weak.confidence == 0.4
+        assert PartyHandle.objects.filter(handle=handle).count() == 2
+
 
 @pytest.mark.django_db(transaction=True)
-def test_person_for_user_is_the_one_person_per_user_owner(parties_tables: None) -> None:
-    """PersonManager.for_user get-or-creates keyed on the Person.user O2O — never two rows."""
+@pytest.mark.parametrize("model", [Party, Person])
+def test_person_for_user_is_the_one_person_per_user_owner(composed_tables: None, model: type[Any]) -> None:
+    """The inherited manager always keys the Person.user O2O — never two rows."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test for_user"):
         user = User.objects.create_user(username="mona", email="mona@example.com", password="x")
-        first = Person.objects.for_user(user)
+        first = model.objects.for_user(user)
         again = Person.objects.for_user(user)
 
     assert first.pk == again.pk
@@ -446,10 +443,10 @@ def test_person_for_user_is_the_one_person_per_user_owner(parties_tables: None) 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_claim_own_writes_control_and_identity_facts(parties_tables: None) -> None:
+def test_claim_own_writes_control_and_identity_facts(composed_tables: None) -> None:
     """Handle.claim_own sets the owner (control) and a confirmed self-link (identity)."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test claim_own"):
         user = User.objects.create_user(username="nils", email="nils@example.com", password="x")
         handle = Handle.objects.claim_own(
@@ -478,56 +475,10 @@ def test_claim_own_writes_control_and_identity_facts(parties_tables: None) -> No
 
 
 @pytest.mark.django_db(transaction=True)
-def test_handle_confirmation_migration_backfills_only_confirmed_winners(parties_tables: None) -> None:
-    """The source migration derives the flag from the same surviving party-link pair."""
-
-    del parties_tables
-    with system_context(reason="test handle confirmation backfill"):
-        owner = _user("confirmation-backfill")
-        confirmed_party = Party._base_manager.create(display_name="Confirmed", created_by=owner)
-        suggested_party = Party._base_manager.create(display_name="Suggested", created_by=owner)
-        confirmed = Handle._base_manager.create(
-            platform=Handle.Platform.EMAIL,
-            value="confirmed@example.com",
-            created_by=owner,
-        )
-        suggested = Handle._base_manager.create(
-            platform=Handle.Platform.EMAIL,
-            value="suggested@example.com",
-            created_by=owner,
-        )
-        PartyHandle.objects.link(
-            confirmed_party,
-            confirmed,
-            is_confirmed=True,
-            created_by_id=owner.pk,
-        )
-        PartyHandle.objects.link(
-            suggested_party,
-            suggested,
-            is_confirmed=False,
-            created_by_id=owner.pk,
-        )
-        Handle._base_manager.filter(pk__in=(confirmed.pk, suggested.pk)).update(
-            party_link_confirmed=False
-        )
-
-        module = importlib.import_module(
-            "angee.parties.runtime_migrations.handle_party_link_confirmed"
-        )
-        module.backfill_confirmed_winners(django_apps, type("Editor", (), {"connection": connection})())
-
-    confirmed.refresh_from_db()
-    suggested.refresh_from_db()
-    assert confirmed.party_link_confirmed is True
-    assert suggested.party_link_confirmed is False
-
-
-@pytest.mark.django_db(transaction=True)
-def test_claim_own_records_a_contested_identity_without_reassigning_control(parties_tables: None) -> None:
+def test_claim_own_records_a_contested_identity_without_reassigning_control(composed_tables: None) -> None:
     """A second user's claim stays weak and unconfirmed; the first owner remains in control."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test contested claim_own"):
         first_user = User.objects.create_user(username="first", email="shared@example.com", password="x")
         competing_user = User.objects.create_user(username="competing", email="shared@example.com", password="x")
@@ -560,10 +511,10 @@ def test_claim_own_records_a_contested_identity_without_reassigning_control(part
 
 
 @pytest.mark.django_db(transaction=True)
-def test_handle_persists_normalized_value_on_create_and_value_update(parties_tables: None) -> None:
+def test_handle_persists_normalized_value_on_create_and_value_update(composed_tables: None) -> None:
     """Handle owns its indexed normalization, including Gmail local-part collapsing."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test handle normalization"):
         owner = _user("normalized")
         handle = Handle._base_manager.create(
@@ -582,10 +533,10 @@ def test_handle_persists_normalized_value_on_create_and_value_update(parties_tab
 
 
 @pytest.mark.django_db(transaction=True)
-def test_suggest_for_exact_match_autolinks_at_full_confidence(parties_tables: None) -> None:
+def test_suggest_for_exact_match_autolinks_at_full_confidence(composed_tables: None) -> None:
     """An exact normalized-value match to a resolved handle auto-links (gmail dot/plus)."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test suggest exact"):
         owner = _user("iris")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -610,10 +561,10 @@ def test_suggest_for_exact_match_autolinks_at_full_confidence(parties_tables: No
 
 
 @pytest.mark.django_db(transaction=True)
-def test_suggest_for_resolved_handle_returns_without_competing_links(parties_tables: None) -> None:
+def test_suggest_for_resolved_handle_returns_without_competing_links(composed_tables: None) -> None:
     """A resolved handle is final input to suggest_for, even when a twin disagrees."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test suggest resolved noop"):
         owner = _user("resolved-suggestion")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -641,19 +592,18 @@ def test_suggest_for_resolved_handle_returns_without_competing_links(parties_tab
             created_by_id=owner.pk,
         )
 
+        resolved.refresh_from_db()
         result = PartyHandle.objects.suggest_for(resolved)
 
     assert result is None
-    assert list(PartyHandle._base_manager.filter(handle=resolved).values_list("party_id", flat=True)) == [
-        alice.pk
-    ]
+    assert list(PartyHandle._base_manager.filter(handle=resolved).values_list("party_id", flat=True)) == [alice.pk]
 
 
 @pytest.mark.django_db(transaction=True)
-def test_suggest_for_keeps_dismissed_link_dismissed(parties_tables: None) -> None:
+def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> None:
     """A repeated normalized-value suggestion never resurrects its durable anti-link."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test suggest dismissed noop"):
         owner = _user("dismissed-suggestion")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -675,7 +625,7 @@ def test_suggest_for_keeps_dismissed_link_dismissed(parties_tables: None) -> Non
         )
         dismissed = PartyHandle.objects.suggest_for(unknown)
         assert dismissed is not None
-        dismissed.dismiss()
+        dismissed.with_actor(owner).dismiss()
 
         repeated = PartyHandle.objects.suggest_for(unknown)
 
@@ -689,10 +639,10 @@ def test_suggest_for_keeps_dismissed_link_dismissed(parties_tables: None) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_suggest_for_records_conflicting_normalized_twins(parties_tables: None) -> None:
+def test_suggest_for_records_conflicting_normalized_twins(composed_tables: None) -> None:
     """Resolved normalized twins create one strong suggestion plus weak competing links."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test suggest conflicts"):
         owner = _user("twins")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)
@@ -738,10 +688,10 @@ def test_suggest_for_records_conflicting_normalized_twins(parties_tables: None) 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_suggest_for_org_domain_suggests_at_low_confidence(parties_tables: None) -> None:
+def test_suggest_for_org_domain_suggests_at_low_confidence(composed_tables: None) -> None:
     """An email whose domain matches Organization.domain suggests that org weakly."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test suggest domain"):
         owner = _user("omar")
         acme = Organization._base_manager.create(display_name="Acme", domain="acme.com", created_by=owner)
@@ -756,10 +706,10 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(parties_tables: None)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_suggest_for_no_match_is_a_noop(parties_tables: None) -> None:
+def test_suggest_for_no_match_is_a_noop(composed_tables: None) -> None:
     """No twin and no org-domain match leaves the handle unresolved (the Salesforce policy)."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test suggest noop"):
         owner = _user("nadia")
         handle = Handle._base_manager.create(platform="email", value="stranger@nowhere.example", created_by=owner)
@@ -771,14 +721,17 @@ def test_suggest_for_no_match_is_a_noop(parties_tables: None) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_members_of_serves_the_org_membership_query(parties_tables: None) -> None:
+def test_members_of_serves_the_org_membership_query(composed_tables: None) -> None:
     """PartyQuerySet.members_of returns parties whose relationships name the org."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test members_of"):
         owner = _user("pia")
         kind = RelationshipKind._base_manager.create(
-            slug="employee", name="Employee", inverse_name="Employer", category="professional",
+            slug="employee",
+            name="Employee",
+            inverse_name="Employer",
+            category="professional",
             other_party_kind="organization",
         )
         acme = Organization._base_manager.create(display_name="Acme", created_by=owner)
@@ -799,16 +752,19 @@ def test_members_of_serves_the_org_membership_query(parties_tables: None) -> Non
 
 @pytest.mark.django_db(transaction=True)
 def test_relationship_kind_end_legality_requires_org_counterparty(
-    parties_tables: None,
+    composed_tables: None,
     django_assert_num_queries: Any,
 ) -> None:
     """An organization-typed end rejects a person counterparty via clean()/save()."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test legality"):
         owner = _user("quinn")
         kind = RelationshipKind._base_manager.create(
-            slug="employee", name="Employee", inverse_name="Employer", category="professional",
+            slug="employee",
+            name="Employee",
+            inverse_name="Employer",
+            category="professional",
             other_party_kind="organization",
         )
         ada = Person._base_manager.create(display_name="Ada", created_by=owner)
@@ -840,10 +796,10 @@ def test_relationship_kind_end_legality_requires_org_counterparty(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_merged_into_flattens_transitively(parties_tables: None) -> None:
+def test_merged_into_flattens_transitively(composed_tables: None) -> None:
     """Party.merge_into atomically flattens chains; PartyQuerySet.canonical drops merged rows."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test merge"):
         owner = _user("rex")
         a = Party._base_manager.create(display_name="A", created_by=owner)
@@ -878,10 +834,10 @@ def test_has_real_name_rejects_placeholder_and_letterless_names() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_merge_into_rejects_reversal_and_database_rejects_self_merge(parties_tables: None) -> None:
+def test_merge_into_rejects_reversal_and_database_rejects_self_merge(composed_tables: None) -> None:
     """The verb rejects A→B when B→A exists; the database is the direct-write floor."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test merge reversal"):
         owner = _user("reversal")
         a = Party._base_manager.create(display_name="A", created_by=owner)
@@ -897,10 +853,10 @@ def test_merge_into_rejects_reversal_and_database_rejects_self_merge(parties_tab
 
 
 @pytest.mark.django_db(transaction=True)
-def test_ingest_contact_upserts_carddav_employment_in_place(parties_tables: None) -> None:
+def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: None) -> None:
     """ORG/TITLE/ROLE map to one stable CardDAV edge while manual rows survive."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test carddav employment"):
         owner = _user("carddav")
         folder = Folder._base_manager.create(name="Contacts", created_by=owner)
@@ -967,10 +923,10 @@ def test_ingest_contact_upserts_carddav_employment_in_place(parties_tables: None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_ingest_contact_requires_employee_relationship_kind(parties_tables: None) -> None:
+def test_ingest_contact_requires_employee_relationship_kind(composed_tables: None) -> None:
     """Employment sync fails clearly and atomically when its master kind is missing."""
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test carddav missing kind"):
         owner = _user("missing-kind")
         folder = Folder._base_manager.create(name="Contacts", created_by=owner)
@@ -983,14 +939,14 @@ def test_ingest_contact_requires_employee_relationship_kind(parties_tables: None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_counter_signals_reresolve_on_direct_link_delete(parties_tables: None) -> None:
+def test_counter_signals_reresolve_on_direct_link_delete(composed_tables: None) -> None:
     """The PartyHandle post_delete receiver re-resolves and recounts a raw link delete.
 
     A raw ``delete()`` (or a queryset/cascade delete) bypasses ``dismiss()``, so the
     resolved owner and its ``handle_count`` would drift without the signal.
     """
 
-    del parties_tables
+    del composed_tables
     with system_context(reason="test counters"):
         owner = _user("sam")
         alice = Party._base_manager.create(display_name="Alice", created_by=owner)

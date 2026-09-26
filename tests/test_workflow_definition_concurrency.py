@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Barrier, Event
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -15,11 +15,10 @@ from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
 from rebac import system_context
 
-from angee.resources.managers import ResourceManager
 from angee.resources.models import Resource
 from angee.workflows.definitions import DefinitionEdit, StaleDefinitionError
+from angee.workflows.testing.models import Step, Workflow
 from tests.conftest import write_addon_manifest
-from tests.workflows import WORKFLOW_DEFINITION_MODELS, Step, Workflow, workflow_table_setup
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -32,13 +31,6 @@ class ConcurrencyResourceLedger(Resource):
         abstract = False
         app_label = "resources"
         db_table = "test_workflow_concurrency_resource"
-
-
-@pytest.fixture()
-def concurrency_resource_tables(transactional_db: Any) -> Any:
-    del transactional_db
-    with workflow_table_setup((*WORKFLOW_DEFINITION_MODELS, ConcurrencyResourceLedger)):
-        yield
 
 
 def _thread(call: Any) -> Any:
@@ -105,9 +97,9 @@ def _resource_addon(path: Path, *, suffix: str, reverse: bool = False) -> AppCon
 
 
 def test_publication_and_child_mutation_serialize_to_one_revision_snapshot(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     with system_context(reason="prepare publication race"):
         draft, step = _ready_draft("Publication race")
         source_revision = draft.draft_revision
@@ -115,10 +107,10 @@ def test_publication_and_child_mutation_serialize_to_one_revision_snapshot(
     mutation_started = Event()
 
     def publish() -> int:
-        with Workflow.objects._definition_write((draft.pk,)):
+        with Workflow.objects._definition_write((draft.pk,)) as session:
             locked.set()
             assert mutation_started.wait(5)
-            return Workflow.objects.get(pk=draft.pk).publish().pk
+            return Workflow.objects.get(pk=draft.pk).publish(session=session).pk
 
     def mutate() -> None:
         assert locked.wait(5)
@@ -141,8 +133,8 @@ def test_publication_and_child_mutation_serialize_to_one_revision_snapshot(
         assert draft.draft_revision == source_revision + 1
 
 
-def test_duplicate_publish_if_changed_serializes_to_one_snapshot(workflow_tables: None) -> None:
-    del workflow_tables
+def test_duplicate_publish_if_changed_serializes_to_one_snapshot(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="prepare duplicate publication"):
         draft, _step = _ready_draft("Duplicate publication")
     start = Barrier(2)
@@ -162,8 +154,8 @@ def test_duplicate_publish_if_changed_serializes_to_one_snapshot(workflow_tables
         assert Workflow.objects.filter(published_from_id=draft.pk).count() == 1
 
 
-def test_definition_cas_loses_cleanly_to_a_locked_legacy_write(workflow_tables: None) -> None:
-    del workflow_tables
+def test_definition_cas_loses_cleanly_to_a_locked_legacy_write(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="prepare definition CAS race"):
         draft, step = _ready_draft("CAS race")
         revision = draft.draft_revision
@@ -171,12 +163,12 @@ def test_definition_cas_loses_cleanly_to_a_locked_legacy_write(workflow_tables: 
     cas_started = Event()
 
     def legacy_write() -> None:
-        with Workflow.objects._definition_write((draft.pk,)):
+        with Workflow.objects._definition_write((draft.pk,)) as session:
             legacy_locked.set()
             assert cas_started.wait(5)
             current = Step.objects.get(pk=step.pk)
             current.name = "Legacy winner"
-            current.save(update_fields={"name"})
+            current.save(update_fields={"name"}, session=session)
 
     def cas_write() -> None:
         assert legacy_locked.wait(5)
@@ -203,9 +195,9 @@ def test_definition_cas_loses_cleanly_to_a_locked_legacy_write(workflow_tables: 
 
 
 def test_step_move_to_immutable_parent_is_rejected_without_touching_old_parent(
-    workflow_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     with system_context(reason="prepare immutable move"):
         old, step = _ready_draft("Old parent")
         target, _target_step = _ready_draft("Target parent")
@@ -231,8 +223,8 @@ def test_step_move_to_immutable_parent_is_rejected_without_touching_old_parent(
         assert published.draft_revision == published_revision
 
 
-def test_old_parent_delete_serializes_against_a_concurrent_move(workflow_tables: None) -> None:
-    del workflow_tables
+def test_old_parent_delete_serializes_against_a_concurrent_move(composed_tables: None) -> None:
+    del composed_tables
     with system_context(reason="prepare move delete race"):
         old, step = _ready_draft("Delete parent")
         new = Workflow.objects.create(name="Move parent")
@@ -242,10 +234,10 @@ def test_old_parent_delete_serializes_against_a_concurrent_move(workflow_tables:
     move_started = Event()
 
     def delete() -> None:
-        with Workflow.objects._definition_write((old.pk,)):
+        with Workflow.objects._definition_write((old.pk,)) as session:
             locked.set()
             assert move_started.wait(5)
-            Step.objects.get(pk=step.pk).delete()
+            Step.objects.get(pk=step.pk).delete(session=session)
 
     def move() -> None:
         assert locked.wait(5)
@@ -269,42 +261,11 @@ def test_old_parent_delete_serializes_against_a_concurrent_move(workflow_tables:
         assert new.draft_revision == new_revision
 
 
-def test_resource_preparation_merges_opposite_lineage_orders_before_writes(workflow_tables: None) -> None:
-    del workflow_tables
-    with system_context(reason="prepare resource lock order"):
-        left = Workflow.objects.create(name="Left")
-        right = Workflow.objects.create(name="Right")
-    start = Barrier(2)
-
-    def prepare(rows: tuple[Workflow, Workflow]) -> tuple[int, ...]:
-        resource = SimpleNamespace(
-            related_instances=lambda _dataset, _field: rows,
-            instance_for_xref=lambda _xref: None,
-        )
-        group = SimpleNamespace(model=Step, dataset={"_xref": ("a", "b")})
-        plans = ResourceManager._write_preparations([(group, resource)])
-        assert len(plans) == 1
-        start.wait(timeout=5)
-        with ExitStack() as stack:
-            for plan in plans:
-                stack.enter_context(plan.owner.prepare_resource_writes(plan.targets))
-            return tuple(sorted(plans[0].targets))
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = (
-            pool.submit(_thread, lambda: prepare((left, right))),
-            pool.submit(_thread, lambda: prepare((right, left))),
-        )
-        results = [future.result(timeout=10) for future in futures]
-
-    assert results == [(left.pk, right.pk), (left.pk, right.pk)]
-
-
 def test_native_resource_loaders_serialize_opposite_lineage_orders(
-    concurrency_resource_tables: None,
+    composed_tables: None,
     tmp_path: Path,
 ) -> None:
-    del concurrency_resource_tables
+    del composed_tables
     initial = _resource_addon(tmp_path / "initial", suffix="Initial")
     ConcurrencyResourceLedger.objects.load_addons((initial,), tiers=[Resource.Tier.INSTALL])
     left_first = _resource_addon(tmp_path / "left-first", suffix="Alpha")
@@ -328,10 +289,10 @@ def test_native_resource_loaders_serialize_opposite_lineage_orders(
 
 
 def test_delete_rechecks_parent_when_a_move_commits_after_its_initial_read(
-    workflow_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_tables
+    del composed_tables
     with system_context(reason="prepare inverse move delete race"):
         old, step = _ready_draft("Observed old parent")
         new = Workflow.objects.create(name="Committed new parent")
@@ -349,8 +310,8 @@ def test_delete_rechecks_parent_when_a_move_commits_after_its_initial_read(
             pause_first[0] = False
             parent_observed.set()
             assert move_committed.wait(5)
-        with original(manager, workflow_ids, **kwargs) as rows:
-            yield rows
+        with original(manager, workflow_ids, **kwargs) as session:
+            yield session
 
     monkeypatch.setattr(manager_type, "_definition_write", gated_write)
 
@@ -378,3 +339,58 @@ def test_delete_rechecks_parent_when_a_move_commits_after_its_initial_read(
         assert step.workflow_id == new.pk
         assert old.draft_revision == old_revision + 1
         assert new.draft_revision == new_revision + 1
+
+
+@pytest.mark.parametrize("omit_left", (False, True))
+def test_native_resource_preflight_locks_across_separate_oppositely_ordered_facets(
+    composed_tables: None, tmp_path: Path, omit_left: bool,
+) -> None:
+    """Per-dataset locking cannot serialize these opposite two-dataset loads."""
+
+    del composed_tables
+
+    def addon(path: Path, suffix: str, *, reverse: bool = False, include_heads: bool = False) -> AppConfig:
+        owner = _resource_addon(path, suffix=suffix)
+        directory = path / "resources" / "install"
+        entries: list[dict[str, Any]] = []
+        if include_heads:
+            entries.append({"path": "resources/install/100_workflows.workflow.yaml", "adopt": "key"})
+        heads = ["left", "right"]
+        if reverse:
+            heads.reverse()
+        for head in heads:
+            source = f"resources/install/{head}_workflows.step.yaml"
+            (path / source).write_text(
+                "_meta: {model: workflows.Step}\nrows:\n"
+                f"  - xref: {head}-step\n    fields:\n      workflow: race.{head}\n"
+                f"      key: wait\n      name: {head.title()} {suffix}\n"
+                "      step_class: wait\n      config: {until: '2030-01-02T03:04:05Z'}\n      is_entry: true\n"
+            )
+            entries.append({"path": source})
+        (directory / "101_workflows.step.yaml").unlink()
+        write_addon_manifest(owner, resources={"master": (), "install": tuple(entries), "demo": ()})
+        return owner
+
+    initial = addon(tmp_path / "initial", "Initial", include_heads=True)
+    ConcurrencyResourceLedger.objects.load_addons((initial,), tiers=[Resource.Tier.INSTALL])
+    first = addon(tmp_path / "first", "Alpha")
+    if omit_left:
+        # Its old parent must join the global lock set even though no row
+        # now references that head in this source file.
+        (Path(first.path) / "resources/install/left_workflows.step.yaml").write_text(
+            "_meta: {model: workflows.Step}\nrows: []\n"
+        )
+    second = addon(tmp_path / "second", "Beta", reverse=True)
+    start = Barrier(2)
+
+    def load(owner: AppConfig) -> None:
+        start.wait(timeout=5)
+        ConcurrencyResourceLedger.objects.load_addons((owner,), tiers=[Resource.Tier.INSTALL])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_thread, lambda owner=owner: load(owner)) for owner in (first, second)]
+        for future in futures:
+            future.result(timeout=15)
+    with system_context(reason="verify complete resource lock set"):
+        assert {step.name.split()[-1] for step in Step.objects.all()} in ({"Alpha"}, {"Beta"})
+        assert ConcurrencyResourceLedger.objects.count() == 2 + Step.objects.count()

@@ -65,7 +65,7 @@ def connect_imap_channel(
             name=_credential_name(display_name, channel.sqid),
             material={"username": username, "password": password},
         )
-        channel.connect(credential=credential, account=getattr(credential, "external_account", None))
+        channel.connect(credential=credential, account=None)
     return channel
 
 

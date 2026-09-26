@@ -55,10 +55,10 @@ def _target_binding_permission(model: type[Any]) -> str:
 def bind(*, target: Any, project: Any) -> Any:
     """Idempotently persist one canonical project-container binding."""
 
+    binding_model = apps.get_model("projects", "ProjectBinding")
     if project.pk is None or target.pk is None:
         raise ValidationError("A project binding requires saved project and target rows.")
     require_binding_access(project=project, target=target)
-    binding_model = apps.get_model("projects", "ProjectBinding")
     binding_model.validate_target(target)
     canonical = canonical_record_target(target)
     with transaction.atomic():
@@ -74,8 +74,8 @@ def bind(*, target: Any, project: Any) -> Any:
 def unbind(*, target: Any, project: Any) -> None:
     """Remove one explicit binding while preserving every other evidence row."""
 
-    require_binding_access(project=project, target=target)
     binding_model = apps.get_model("projects", "ProjectBinding")
+    require_binding_access(project=project, target=target)
     binding_model.validate_target(target)
     canonical = canonical_record_target(target)
     with transaction.atomic():
@@ -92,7 +92,6 @@ def reconcile_on_commit(
     project_pk: Any,
     project_ref: Any,
     target: CanonicalRecordTarget | None,
-    using: str,
 ) -> None:
     """Reconcile one project-target tuple from committed binding evidence."""
 
@@ -103,9 +102,7 @@ def reconcile_on_commit(
             project_pk=project_pk,
             project_ref=project_ref,
             target=target,
-            using=using,
         ),
-        using=using,
     )
 
 
@@ -114,20 +111,19 @@ def _reconcile(
     project_pk: Any,
     project_ref: Any,
     target: CanonicalRecordTarget,
-    using: str,
 ) -> None:
     """Write or remove the tuple after checking every projects-owned evidence row."""
 
     with system_context(reason="projects.access.reconcile"):
         project_model = apps.get_model("projects", "Project")
         binding_model = apps.get_model("projects", "ProjectBinding")
-        project_exists = project_model._base_manager.using(using).filter(pk=project_pk).exists()
+        project_exists = project_model._base_manager.filter(pk=project_pk).exists()
         direct_folder = (
             target.content_type.app_label == "storage"
             and target.content_type.model == "folder"
-            and project_model._base_manager.using(using).filter(pk=project_pk, folder_id=target.object_id).exists()
+            and project_model._base_manager.filter(pk=project_pk, folder_id=target.object_id).exists()
         )
-        explicit_binding = binding_model._base_manager.using(using).filter(
+        explicit_binding = binding_model._base_manager.filter(
             project_id=project_pk,
             content_type_id=target.content_type.pk,
             object_id=target.object_id,
@@ -151,8 +147,9 @@ def resync_project_access() -> int:
     binding_model = apps.get_model("projects", "ProjectBinding")
     relationships: dict[str, RelationshipTuple] = {}
     with system_context(reason="projects.access.resync"), transaction.atomic():
-        for project in project_model._base_manager.select_related("folder").filter(folder__isnull=False).order_by("pk"):
-            relationship = _relationship(to_object_ref(project), canonical_record_target(project.folder))
+        for project in project_model._base_manager.filter(folder__isnull=False).order_by("pk"):
+            folder = project.folder
+            relationship = _relationship(to_object_ref(project), canonical_record_target(folder))
             relationships[str(relationship)] = relationship
         for binding in binding_model._base_manager.select_related("project", "content_type").order_by("pk"):
             relationship = _relationship(

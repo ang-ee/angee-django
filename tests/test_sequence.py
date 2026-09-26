@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Iterator
 from datetime import date
 from typing import Any
 
@@ -19,7 +18,6 @@ from rebac import system_context
 
 from angee.sequence.models import Sequence as AbstractSequence
 from angee.sequence.models import SequenceCounter as AbstractSequenceCounter
-from tests.conftest import _clear_model_tables, _create_missing_tables
 
 
 class Sequence(AbstractSequence):
@@ -45,26 +43,6 @@ class SequenceCounter(AbstractSequenceCounter):
         db_table = "test_sequence_counter"
 
 
-SEQUENCE_TEST_MODELS = (Sequence, SequenceCounter)
-"""Concrete sequence models created on demand by sequence test fixtures."""
-
-
-@pytest.fixture()
-def sequence_tables(transactional_db: Any) -> Iterator[None]:
-    """Create the concrete sequence tables for the duration of one test."""
-
-    del transactional_db
-    created_models = _create_missing_tables(SEQUENCE_TEST_MODELS)
-    try:
-        yield
-    finally:
-        _clear_model_tables(SEQUENCE_TEST_MODELS)
-        if created_models:
-            with connection.schema_editor() as schema_editor:
-                for model in reversed(created_models):
-                    schema_editor.delete_model(model)
-
-
 def _make_sequence(**fields: Any) -> Any:
     """Create one Sequence row under system_context (admin-only surface)."""
 
@@ -79,77 +57,77 @@ def _draw(key: str, **kwargs: Any) -> str:
         return Sequence.objects.next_value(key, **kwargs)
 
 
-def test_missing_key_fails_fast(sequence_tables: None) -> None:
+def test_missing_key_fails_fast(transactional_db: None) -> None:
     """An unknown key raises rather than inventing a sequence."""
 
-    del sequence_tables
+    del transactional_db
     with pytest.raises(Sequence.DoesNotExist):
         _draw("does.not.exist")
 
 
-def test_template_formats_prefix_year_and_padded_number(sequence_tables: None) -> None:
+def test_template_formats_prefix_year_and_padded_number(transactional_db: None) -> None:
     """The template renders {prefix}/{year}/{number} at storage precision."""
 
-    del sequence_tables
+    del transactional_db
     _make_sequence(
-        key="invoice",
-        name="Invoice",
-        template="{prefix}INV/{year}/{number:05d}",
+        key="document",
+        name="Document",
+        template="{prefix}DOC/{year}/{number:05d}",
         prefix="AC-",
         period_reset="year",
     )
-    assert _draw("invoice", on_date=date(2026, 7, 4)) == "AC-INV/2026/00001"
+    assert _draw("document", on_date=date(2026, 7, 4)) == "AC-DOC/2026/00001"
 
 
-def test_no_reset_counts_monotonically_across_dates(sequence_tables: None) -> None:
+def test_no_reset_counts_monotonically_across_dates(transactional_db: None) -> None:
     """A none-reset sequence ignores the date and never restarts."""
 
-    del sequence_tables
+    del transactional_db
     _make_sequence(key="entry", name="Entry", template="{number}", period_reset="none")
     assert _draw("entry", on_date=date(2026, 12, 31)) == "1"
     assert _draw("entry", on_date=date(2027, 1, 1)) == "2"
     assert _draw("entry", on_date=date(2027, 6, 1)) == "3"
 
 
-def test_year_reset_restarts_at_the_year_boundary(sequence_tables: None) -> None:
+def test_year_reset_restarts_at_the_year_boundary(transactional_db: None) -> None:
     """A yearly reset partitions the counter by year."""
 
-    del sequence_tables
-    _make_sequence(key="so", name="Sales Order", template="{year}-{number:04d}", period_reset="year")
-    assert _draw("so", on_date=date(2026, 6, 30)) == "2026-0001"
-    assert _draw("so", on_date=date(2026, 12, 31)) == "2026-0002"
-    assert _draw("so", on_date=date(2027, 1, 1)) == "2027-0001"
+    del transactional_db
+    _make_sequence(key="record", name="Record", template="{year}-{number:04d}", period_reset="year")
+    assert _draw("record", on_date=date(2026, 6, 30)) == "2026-0001"
+    assert _draw("record", on_date=date(2026, 12, 31)) == "2026-0002"
+    assert _draw("record", on_date=date(2027, 1, 1)) == "2027-0001"
 
 
-def test_month_reset_restarts_at_the_month_boundary(sequence_tables: None) -> None:
+def test_month_reset_restarts_at_the_month_boundary(transactional_db: None) -> None:
     """A monthly reset partitions the counter by year-month."""
 
-    del sequence_tables
-    _make_sequence(key="pay", name="Payment", template="{number:03d}", period_reset="month")
-    assert _draw("pay", on_date=date(2026, 7, 15)) == "001"
-    assert _draw("pay", on_date=date(2026, 7, 31)) == "002"
-    assert _draw("pay", on_date=date(2026, 8, 1)) == "001"
+    del transactional_db
+    _make_sequence(key="review", name="Review", template="{number:03d}", period_reset="month")
+    assert _draw("review", on_date=date(2026, 7, 15)) == "001"
+    assert _draw("review", on_date=date(2026, 7, 31)) == "002"
+    assert _draw("review", on_date=date(2026, 8, 1)) == "001"
 
 
-def test_preview_is_none_when_disabled(sequence_tables: None) -> None:
+def test_preview_is_none_when_disabled(transactional_db: None) -> None:
     """preview_next declines to peek unless the sequence opts in."""
 
-    del sequence_tables
-    _make_sequence(key="q", name="Quote", template="{number}", preview_enabled=False)
-    assert Sequence.objects.preview_next("q") is None
+    del transactional_db
+    _make_sequence(key="draft", name="Draft", template="{number}", preview_enabled=False)
+    assert Sequence.objects.preview_next("draft") is None
 
 
-def test_preview_is_none_for_unknown_key(sequence_tables: None) -> None:
+def test_preview_is_none_for_unknown_key(transactional_db: None) -> None:
     """preview_next is advisory: an unknown key peeks nothing, never raises."""
 
-    del sequence_tables
+    del transactional_db
     assert Sequence.objects.preview_next("nope") is None
 
 
-def test_preview_never_advances_the_counter(sequence_tables: None) -> None:
+def test_preview_never_advances_the_counter(transactional_db: None) -> None:
     """Repeated previews are stable and only a real draw advances the value."""
 
-    del sequence_tables
+    del transactional_db
     _make_sequence(
         key="draft",
         name="Draft",
@@ -167,10 +145,10 @@ def test_preview_never_advances_the_counter(sequence_tables: None) -> None:
     os.environ.get("DATABASE_URL", "").split(":", 1)[0] not in {"postgres", "postgresql"},
     reason="gapless numbering is guaranteed only on PostgreSQL (row locks)",
 )
-def test_concurrent_draws_are_distinct_and_consecutive(sequence_tables: None) -> None:
+def test_concurrent_draws_are_distinct_and_consecutive(transactional_db: None) -> None:
     """N threads × M draws yield exactly the numbers 1…N×M, once each."""
 
-    del sequence_tables
+    del transactional_db
     if connection.vendor != "postgresql":
         pytest.skip("active Django connection is not PostgreSQL")
 

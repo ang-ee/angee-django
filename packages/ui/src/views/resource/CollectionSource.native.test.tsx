@@ -8,13 +8,9 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
 import {
   Filter,
-  ModelMetadataProvider,
   ResourceQuery,
-  schemaFieldMetadataFromDataResources,
 } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import {
@@ -24,6 +20,7 @@ import {
 } from "@angee/refine";
 import { gql } from "graphql-tag";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 import {
   collectionQuery,
   type CollectionGroupRequest,
@@ -123,10 +120,13 @@ const source: CollectionSource<ActivityRow> = {
   }),
   leafPageSize: 3,
 };
-const clients: QueryClient[] = [];
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://collection",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
 afterEach(() => {
   cleanup();
-  clients.splice(0).forEach((client) => client.clear());
+  clearClients();
 });
 
 function fixture(grouped: boolean, interactive = false, tree = false) {
@@ -175,19 +175,6 @@ function fixture(grouped: boolean, interactive = false, tree = false) {
     };
   });
   const getList = vi.fn();
-  const provider = {
-    getApiUrl: () => "test://collection",
-    custom,
-    getList,
-    getOne: vi.fn(),
-    create: vi.fn(),
-    update: vi.fn(),
-    deleteOne: vi.fn(),
-  } as DataProvider;
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-  });
-  clients.push(client);
   function Surface() {
     view = useResourceView();
     surface = useGroupedResourceViewSurface({
@@ -227,30 +214,22 @@ function fixture(grouped: boolean, interactive = false, tree = false) {
     );
   }
   render(
-    <Refine
-      dataProvider={provider}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}
-    >
-      <ModelMetadataProvider
-        metadata={schemaFieldMetadataFromDataResources([
-          testDataResource("catalog.Reference"),
-        ])}
-      >
-        <OperationDocumentsProvider documents={{}}>
-          <ToastProvider>
-            <ResourceViewProvider
-              scope="local"
-              initialState={{
-                pageSize: 25,
-                ...(grouped ? { groupStack: [{ field: "account" }] } : {}),
-              }}
-            >
-              {grouped ? <Surface /> : <List />}
-            </ResourceViewProvider>
-          </ToastProvider>
-        </OperationDocumentsProvider>
-      </ModelMetadataProvider>
-    </Refine>,
+    <Provider resources={[testDataResource("catalog.Reference")]} refineResources={[]}
+      providerNames={[]} dataProvider={{ custom, getList }}>
+      <OperationDocumentsProvider documents={{}}>
+        <ToastProvider>
+          <ResourceViewProvider
+            scope="local"
+            initialState={{
+              pageSize: 25,
+              ...(grouped ? { groupStack: [{ field: "account" }] } : {}),
+            }}
+          >
+            {grouped ? <Surface /> : <List />}
+          </ResourceViewProvider>
+        </ToastProvider>
+      </OperationDocumentsProvider>
+    </Provider>,
   );
   return {
     get surface() {
@@ -273,11 +252,11 @@ test("an authored server page uses native list paging without a model-resource q
   act(() => f.view.setPage(2));
   await screen.findByText("Activity all page 2");
   expect(f.requests.at(-1)).toMatchObject({ page: 2, pageSize: 25 });
-  act(() => f.view.setFilter({ title: { iContains: "invoice" } }));
+  act(() => f.view.setFilter({ title: { iContains: "document" } }));
   await waitFor(() =>
     expect(f.requests.at(-1)).toMatchObject({
       page: 1,
-      filter: { title: { iContains: "invoice" } },
+      filter: { title: { iContains: "document" } },
     }),
   );
   expect(f.getList).not.toHaveBeenCalled();
@@ -286,9 +265,9 @@ test("an authored server page uses native list paging without a model-resource q
 test("an authored source groups through the complete custom catalog without preset or visible-column declarations", async () => {
   const f = fixture(false);
   await screen.findByText("Activity all page 1");
-  act(() => f.view.setFilter({ title: { iContains: "invoice" } }));
+  act(() => f.view.setFilter({ title: { iContains: "document" } }));
   await waitFor(() => expect(f.requests.at(-1)).toMatchObject({
-    filter: { title: { iContains: "invoice" } },
+    filter: { title: { iContains: "document" } },
   }));
 
   fireEvent.click(screen.getByLabelText("Filter and group"));
@@ -305,11 +284,11 @@ test("an authored source groups through the complete custom catalog without pres
   await waitFor(() => expect(f.requests.some((request) =>
     "group" in request
     && request.group.field === "account"
-    && filterOperatorValue(request.filter, "title", "iContains") === "invoice",
+    && filterOperatorValue(request.filter, "title", "iContains") === "document",
   )).toBe(true));
   await waitFor(() => expect(f.requests.some((request) =>
     !("group" in request)
-    && filterOperatorValue(request.filter, "title", "iContains") === "invoice"
+    && filterOperatorValue(request.filter, "title", "iContains") === "document"
     && Filter.from(request.filter).facetValues("account")[0] === "account-1",
   )).toBe(true));
   expect(f.getList).not.toHaveBeenCalled();

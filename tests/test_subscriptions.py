@@ -329,7 +329,7 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     sent: list[dict[str, object]] = []
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
     # Run the on_commit callback inline so the (non-)broadcast is observable now.
-    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback: callback())
+    monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
     stub_payload = ChangePayload(model="tests.Row", id="1", action="update")
     monkeypatch.setattr(
         publishing.ChangePayload,

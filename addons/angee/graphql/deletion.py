@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 import strawberry
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.deletion import (
     Collector,
     ProtectedError,
@@ -150,14 +150,16 @@ class DeletePreview:
     """Deleted row returned internally to mutation envelopes, never exposed in SDL."""
 
     @classmethod
-    def from_instance(cls, instance: models.Model, actor: Any | None = None) -> DeletePreview:
+    def from_instance(
+        cls, instance: models.Model, actor: Any | None = None,
+    ) -> DeletePreview:
         """Return Django's cascade forecast for ``instance``.
 
         Callers should run previews inside the same transaction as the eventual
         delete so fast-delete counts and visible rows share one database snapshot.
         """
 
-        collector = Collector(using=instance._state.db or "default")
+        collector = Collector(using=router.db_for_write(type(instance), instance=instance))
         blocked: list[DeletePreviewGroup] = []
         try:
             collector.collect([instance])
@@ -300,7 +302,7 @@ def delete_by_public_id(
         instance = require_instance_for_id(
             model,
             public_id,
-            queryset=queryset if queryset is not None else model._default_manager.all(),
+            queryset=(queryset if queryset is not None else model._default_manager.all()),
         )
         preview = DeletePreview.from_instance(instance)
         if confirm and not preview.has_blockers:
@@ -412,7 +414,7 @@ class _PreviewRows:
         collected = [row for row in rows if not _is_root(root, row)]
         if not collected:
             return cls()
-        scoped = _read_scoped_queryset(model, actor)
+        scoped = read_scoped_queryset(model, actor)
         if scoped is None:
             if _requires_read_scope(model):
                 return cls(total_count=len(collected), visible_count=0)
@@ -452,7 +454,7 @@ class _PreviewRows:
 
         if total_count == 0:
             return cls()
-        scoped = _read_scoped_queryset(queryset.model, actor)
+        scoped = read_scoped_queryset(queryset.model, actor)
         if scoped is None:
             if _requires_read_scope(queryset.model):
                 return cls(total_count=total_count, visible_count=0)
@@ -515,15 +517,6 @@ def _chunks(values: list[Any], size: int) -> Iterable[list[Any]]:
 
     for index in range(0, len(values), size):
         yield values[index : index + size]
-
-
-def _read_scoped_queryset(
-    model: type[models.Model],
-    actor: Any | None,
-) -> models.QuerySet[models.Model] | None:
-    """Return a read-scoped queryset for a REBAC model, if one can be resolved."""
-
-    return read_scoped_queryset(model, actor)
 
 
 def _requires_read_scope(model: type[models.Model]) -> bool:

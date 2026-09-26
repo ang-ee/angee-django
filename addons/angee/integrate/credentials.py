@@ -1,9 +1,4 @@
-"""Credential kind registry for connection secrets.
-
-Handlers are open through ``register_handler()``; the values a ``Credential``
-row may store remain the closed :class:`CredentialKind` vocabulary. The model
-stores only common columns and delegates kind-specific behavior here.
-"""
+"""Closed credential kinds and their secret-material behavior."""
 
 from __future__ import annotations
 
@@ -26,6 +21,12 @@ class CredentialKind(models.TextChoices):
     SSH_KEY = "ssh_key", "SSH Key"
     BASIC_AUTH = "basic_auth", "Basic Auth"
     APP_KEYS = "app_keys", "App Keys"
+
+    @property
+    def handler(self) -> CredentialKindHandler:
+        """Return the implementation owned by this supported material kind."""
+
+        return _CREDENTIAL_HANDLERS[self]
 
 
 class CredentialKindHandler:
@@ -88,28 +89,6 @@ class CredentialKindHandler:
         return json.loads(credential.material or "{}")
 
 
-_handlers: dict[str, CredentialKindHandler] = {}
-
-
-def register_handler(handler: CredentialKindHandler) -> None:
-    """Register one credential kind handler."""
-
-    kind = getattr(handler, "kind", "")
-    if not kind:
-        raise ValueError("Credential kind handlers must define a non-empty kind.")
-    _handlers[str(kind)] = handler
-
-
-def handler_for(kind: str | CredentialKind) -> CredentialKindHandler:
-    """Return the handler for ``kind`` or raise a clear configuration error."""
-
-    kind_value = kind.value if isinstance(kind, CredentialKind) else str(kind)
-    try:
-        return _handlers[kind_value]
-    except KeyError as exc:
-        raise ValueError(f"No credential handler registered for kind {kind!r}.") from exc
-
-
 class OAuthCredentialHandler(CredentialKindHandler):
     """Handler for OAuth bearer-token material."""
 
@@ -150,7 +129,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
     def can_refresh(self, credential: Any) -> bool:
         """Return whether a refresh-capable provider and a stored refresh token exist."""
 
-        oauth_client = getattr(credential, "oauth_client", None)
+        oauth_client = credential.oauth_client
         if oauth_client is None or not getattr(oauth_client, "supports_refresh", False):
             return False
         return bool(self.reveal(credential).get("refresh_token"))
@@ -171,7 +150,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
 
         material = self.reveal(credential)
         refresh_value = str(material.get("refresh_token") or "")
-        oauth_client = getattr(credential, "oauth_client", None)
+        oauth_client = credential.oauth_client
         if oauth_client is None or not refresh_value:
             raise ValueError("OAuth credential has no refresh token to renew from.")
         tokens = OAuthClientProtocol(oauth_client).refresh_token(refresh_token=refresh_value)
@@ -293,8 +272,10 @@ class AppKeysCredentialHandler(CredentialKindHandler):
         """Application registrations do not expire through a refresh flow."""
 
 
-register_handler(OAuthCredentialHandler())
-register_handler(StaticTokenCredentialHandler())
-register_handler(SshKeyCredentialHandler())
-register_handler(BasicAuthCredentialHandler())
-register_handler(AppKeysCredentialHandler())
+_CREDENTIAL_HANDLERS = {
+    CredentialKind.OAUTH: OAuthCredentialHandler(),
+    CredentialKind.STATIC_TOKEN: StaticTokenCredentialHandler(),
+    CredentialKind.SSH_KEY: SshKeyCredentialHandler(),
+    CredentialKind.BASIC_AUTH: BasicAuthCredentialHandler(),
+    CredentialKind.APP_KEYS: AppKeysCredentialHandler(),
+}

@@ -41,9 +41,11 @@ export type {
   WidgetFocusTarget,
 } from "./types";
 export { canonicalOptionValue, optionToken, relationValueId } from "./types";
+export { JsonValueSchema } from "./json-value";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
-export { STATUS_TONES, statusTone, type StatusToneOptions } from "./status-tones";
+export { useStatusTone } from "./use-status-tone";
+export { STATUS_TONES, statusTone, type StatusToneMap, type StatusToneOptions } from "./status-tones";
 export {
   DATE_DISPLAY_FORMAT,
   DATETIME_DISPLAY_FORMAT,

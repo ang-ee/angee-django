@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from django.apps import apps as django_apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import connection, models, transaction
-from django.db.migrations.state import ProjectState
+from django.db import connection, connections, transaction
+from django.db.models.signals import m2m_changed
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
@@ -30,8 +28,9 @@ from angee.workflows import models as workflow_models
 from angee.workflows import steps as workflow_steps
 from angee.workflows.attempts import AttemptResult, AttemptResultKind, DecisionSpec, JsonPresence
 from angee.workflows.dispatch import WorkflowDispatchKind
-from angee.workflows.steps import HandlerStep, StepResult
-from tests.workflows import (
+from angee.workflows.steps import StepResult
+from angee.workflows.testing.drivers import advance_once, execute_started, owned_run, run_to_terminal, step_run_for
+from angee.workflows.testing.models import (
     Decision,
     Edge,
     Step,
@@ -41,44 +40,213 @@ from tests.workflows import (
     Workflow,
     WorkflowDispatch,
     WorkflowRun,
-    advance_once,
-    execute_started,
-    run_to_terminal,
-    start_run,
-    step_for,
-    step_run_for,
-    workflow_with_steps,
 )
+from tests.workflows import FixtureStep, admit_workflow_actor, start_run, step_for, workflow_actor, workflow_with_steps
 
 User = get_user_model()
 
 
 @pytest.mark.django_db(transaction=True)
+def test_previous_edge_write_rolls_back_with_transaction(composed_tables: None) -> None:
+    del composed_tables
+    workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())
+    with system_context(reason="previous rollback setup"):
+        run = WorkflowRun.objects.create(workflow=workflow, status=workflow_models.RunStatus.RUNNING)
+        previous = StepRun.objects.create(run=run, system_kind="previous")
+        target = StepRun.objects.create(run=run, system_kind="target")
+
+    with system_context(reason="previous rollback"):
+        with pytest.raises(RuntimeError, match="Abort previous edges"), transaction.atomic():
+            StepRun.objects.update_previous(target, [previous])
+            raise RuntimeError("Abort previous edges")
+        assert not StepRun.previous.through._base_manager.filter(from_steprun_id=target.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_previous_add_and_set_preserve_native_signals(
+    composed_tables: None,
+) -> None:
+    """Native M2M changes preserve deduplication, cache invalidation, and existing edge identity."""
+
+    del composed_tables
+    workflow = workflow_with_steps(
+        steps=tuple(({"key": key} for key in ("a", "b", "c", "target"))),
+        edges=(("a", "b", "done"), ("b", "c", "done"), ("c", "target", "done")),
+    )
+    with system_context(reason="previous edge semantics setup"):
+        run = WorkflowRun.objects.create(workflow=workflow, status=workflow_models.RunStatus.RUNNING)
+        rows = {step.key: StepRun.objects.create(run=run, step=step) for step in Step.objects.filter(workflow=workflow)}
+        a, b, c, target = (rows[key] for key in ("a", "b", "c", "target"))
+        with transaction.atomic():
+            StepRun.objects.update_previous(target, [a, b])
+            StepRun.objects.update_previous(a, [b])
+        target = StepRun.objects.prefetch_related("previous").get(pk=target.pk)
+        through = StepRun.previous.through
+        retained_pk = through._base_manager.get(from_steprun_id=target.pk, to_steprun_id=b.pk).pk
+    observed: list[tuple[str, set[int]]] = []
+
+    def observe(sender: Any, *, action: str, pk_set: set[int], **kwargs: Any) -> None:
+        assert sender is through
+        assert kwargs["instance"] is target
+        assert kwargs["model"] is StepRun
+        assert kwargs["reverse"] is False
+        assert kwargs["using"] == target._state.db
+        assert connections[kwargs["using"]].in_atomic_block
+        observed.append((action, set(pk_set)))
+
+    m2m_changed.connect(observe)
+    try:
+        with system_context(reason="previous edge semantics"):
+            with transaction.atomic():
+                owner = StepRun.objects
+                owner.update_previous(target, [b, c, c])
+                owner.update_previous(target, [c])
+                assert "previous" not in target._prefetched_objects_cache
+                owner.update_previous(target, [b, c], replace=True)
+                edges = through._base_manager.filter(from_steprun_id=target.pk)
+                assert set(edges.values_list("to_steprun_id", flat=True)) == {b.pk, c.pk}
+                assert edges.get(to_steprun_id=b.pk).pk == retained_pk
+                owner.update_previous(target, [b, c], replace=True)
+                owner.update_previous(target, [b, b, c], replace=True)
+                owner.update_previous(target, [], replace=True)
+                assert not edges.exists()
+                assert through._base_manager.filter(from_steprun_id=a.pk, to_steprun_id=b.pk).exists()
+    finally:
+        m2m_changed.disconnect(observe)
+    assert observed == [
+        ("pre_add", {c.pk}),
+        ("post_add", {c.pk}),
+        ("pre_add", set()),
+        ("post_add", set()),
+        ("pre_remove", {a.pk}),
+        ("post_remove", {a.pk}),
+        ("pre_add", set()),
+        ("post_add", set()),
+        ("pre_remove", {b.pk, c.pk}),
+        ("post_remove", {b.pk, c.pk}),
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("failure_action", ["post_remove", "post_add"])
+def test_previous_replacement_rolls_back_when_receiver_fails_without_outer_transaction(
+    composed_tables: None, failure_action: str,
+) -> None:
+    del composed_tables
+    workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())
+    with system_context(reason="previous receiver rollback setup"):
+        run = WorkflowRun.objects.create(workflow=workflow, status=workflow_models.RunStatus.RUNNING)
+        previous = StepRun.objects.create(run=run, system_kind="previous")
+        replacement = StepRun.objects.create(run=run, system_kind="replacement")
+        target = StepRun.objects.create(run=run, system_kind="target")
+        StepRun.objects.update_previous(target, [previous])
+        through = StepRun.previous.through
+        original_pk = through._base_manager.get(from_steprun_id=target.pk).pk
+    failures: list[str] = []
+
+    def reject_change(sender: Any, *, action: str, **kwargs: Any) -> None:
+        if action != failure_action:
+            return
+        assert sender is through
+        assert kwargs["instance"] is target
+        assert connection.in_atomic_block
+        previous_ids = set(
+            through._base_manager.filter(from_steprun_id=target.pk).values_list("to_steprun_id", flat=True)
+        )
+        assert previous_ids == (set() if action == "post_remove" else {replacement.pk})
+        failures.append(action)
+        raise RuntimeError("Reject previous edge change")
+
+    m2m_changed.connect(reject_change, sender=through)
+    try:
+        with system_context(reason="previous receiver rollback"):
+            assert not connection.in_atomic_block
+            with pytest.raises(RuntimeError, match="Reject previous edge change"):
+                StepRun.objects.update_previous(target, [replacement], replace=True)
+            assert not connection.in_atomic_block
+            assert list(
+                through._base_manager.filter(from_steprun_id=target.pk).values_list("pk", "to_steprun_id")
+            ) == [(original_pk, previous.pk)]
+    finally:
+        m2m_changed.disconnect(reject_change, sender=through)
+
+    assert failures == [failure_action]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_deferred_wake_preserves_checkpoint(
+    composed_tables: None, no_workflow_queue: None,
+) -> None:
+    del composed_tables, no_workflow_queue
+    workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())
+    run = start_run(workflow)
+    now = timezone.now()
+    with system_context(reason="deferred wake fixture"):
+        step_run = StepRun.objects.get(run=run)
+    attempt = StepAttempt.objects.claim(step_run, claimed_at=now).attempt
+    StepAttempt.objects.admit_invocation(attempt.pk, lease_token=attempt.lease_token, at=now)
+    StepAttempt.objects.finalize(
+        attempt.pk,
+        lease_token=attempt.lease_token,
+        result=AttemptResult(
+            AttemptResultKind.WAIT,
+            checkpoint_present=True,
+            checkpoint={"cursor": 7},
+            waiting_kind="external",
+            requested_until=now + timedelta(hours=1),
+        ),
+        recorded_at=now,
+    )
+    with system_context(reason="deferred wake source"):
+        step_run = StepRun.objects.only("pk").get(pk=step_run.pk)
+        step_run.wake(at=now)
+        stored = StepRun.objects.get(pk=step_run.pk)
+
+    assert stored.status == workflow_models.StepRunStatus.WAITING
+    assert stored.wait_until == now
+    assert stored.resume_state == {"cursor": 7}
+    assert stored.current_attempt_id == attempt.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_partial_save_does_not_publish_unpersisted_terminal_status(
+    composed_tables: None, no_workflow_queue: None,
+) -> None:
+    del composed_tables, no_workflow_queue
+    workflow = workflow_with_steps(steps=({"key": "entry"},), edges=())
+    run = start_run(workflow)
+    with system_context(reason="terminal partial save"):
+        names = [field.attname for field in WorkflowRun._meta.concrete_fields]
+        stale = WorkflowRun.from_db(
+            run._state.db,
+            names,
+            [workflow_models.RunStatus.SUCCEEDED if name == "status" else getattr(run, name) for name in names],
+        )
+        stale.save(update_fields=["wake_at"])
+        assert WorkflowRun.objects.get(pk=run.pk).status == workflow_models.RunStatus.PENDING
+        assert not WorkflowDispatch.objects.filter(
+            kind=WorkflowDispatchKind.ARTIFACT_DELIVERY, artifact_object_id=run.pk
+        ).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_run_retains_admitted_actor_identity_after_audit_user_deletion(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Deleting audit attribution preserves identity and cannot grant later authority."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="deleted-workflow-actor")
     reviewer = User.objects.create_user(username="deleted-workflow-reviewer")
     actor_ref = str(to_subject_ref(actor))
     workflow = workflow_with_steps(
+        actor=actor,
         steps=({"key": "gate", "step_class": "agent_session", "config": {}},),
         edges=(),
     )
     run = engine.start(workflow, subject=None, actor=actor)
-    with system_context(reason="test legacy workflow actor attribution"):
-        models.QuerySet.update(
-            WorkflowRun.objects.filter(pk=run.pk), admitted_actor_ref="",
-        )
-    from angee.workflows.runtime_migrations.workflow_admitted_actor import (
-        backfill_known_admission_actors,
-    )
-
-    historical_apps = ProjectState.from_apps(django_apps).apps
-    backfill_known_admission_actors(historical_apps, SimpleNamespace(connection=connection))
+    assert run.admitted_actor_ref == actor_ref
     with system_context(reason="test delete workflow admission actor"):
         actor.delete()
         run.refresh_from_db()
@@ -90,9 +258,7 @@ def test_run_retains_admitted_actor_identity_after_audit_user_deletion(
     assert run.admission_actor() is None
 
     claim = StepAttempt.objects.claim(step_run, claimed_at=timezone.now())
-    StepAttempt.objects.admit_invocation(
-        claim.attempt.pk, lease_token=claim.attempt.lease_token, at=timezone.now()
-    )
+    StepAttempt.objects.admit_invocation(claim.attempt.pk, lease_token=claim.attempt.lease_token, at=timezone.now())
     with pytest.raises(ValidationError, match="admitted run actor"):
         StepAttempt.objects.finalize(
             claim.attempt.pk,
@@ -110,11 +276,11 @@ def test_run_retains_admitted_actor_identity_after_audit_user_deletion(
 
 @pytest.mark.django_db(transaction=True)
 def test_decision_requester_may_share_exact_read_without_delegating_action_or_share(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
     """A requester may expose retained evidence without making the reader an assignee."""
 
-    del workflow_engine_tables
+    del composed_tables
     requester = User.objects.create_user(username="decision-share-requester")
     assignee = User.objects.create_user(username="decision-share-assignee")
     reader = User.objects.create_user(username="decision-share-reader")
@@ -148,9 +314,9 @@ def test_decision_requester_may_share_exact_read_without_delegating_action_or_sh
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_start_captures_input_presence_and_initial_advance_atomically(
-    workflow_engine_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from angee.workflows import dispatch
@@ -159,7 +325,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     monkeypatch.setattr(
         dispatch,
         "enqueue_task",
-        lambda name, *, kwargs: publish_requests.append((name, kwargs)),
+        lambda name, *, kwargs=None: publish_requests.append((name, kwargs)),
     )
     workflow = workflow_with_steps(
         steps=({"key": "start", "step_class": "wait", "config": {"until": "2099-01-01T00:00:00Z"}},),
@@ -167,9 +333,13 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     )
     supplied = {"value": [1]}
 
-    absent = engine.start(workflow, subject=None, actor=None)
-    present_null = engine.start(workflow, subject=None, actor=None, input=JsonPresence(True, None))
-    present_value = engine.start(workflow, subject=None, actor=None, input=JsonPresence(True, supplied))
+    absent = engine.start(workflow, subject=None, actor=admit_workflow_actor(workflow))
+    present_null = engine.start(
+        workflow, subject=None, actor=admit_workflow_actor(workflow), input=JsonPresence(True, None)
+    )
+    present_value = engine.start(
+        workflow, subject=None, actor=admit_workflow_actor(workflow), input=JsonPresence(True, supplied)
+    )
     supplied["value"].append(2)
 
     assert (absent.input_present, absent.input) == (False, None)
@@ -195,7 +365,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 @pytest.mark.parametrize(
     "invalid",
     [
@@ -206,7 +376,7 @@ def test_start_captures_input_presence_and_initial_advance_atomically(
     ],
 )
 def test_start_rejects_malformed_input_presence_before_writes(
-    workflow_engine_tables: None,
+    composed_tables: None,
     invalid: JsonPresence,
 ) -> None:
     workflow = workflow_with_steps(
@@ -215,20 +385,94 @@ def test_start_rejects_malformed_input_presence_before_writes(
     )
 
     with pytest.raises(ValueError, match="workflow run input"):
-        engine.start(workflow, subject=None, actor=None, input=invalid)
+        engine.start(workflow, subject=None, actor=admit_workflow_actor(workflow), input=invalid)
 
     with system_context(reason="verify rejected workflow start"):
         assert WorkflowRun.objects.count() == 0
         assert WorkflowDispatch.objects.count() == 0
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("schema_format", "valid_value"),
+    [
+        ("date", "2026-09-25"),
+        ("date-time", "2026-09-25T12:00:00Z"),
+        ("uri", "https://example.test/workflow"),
+    ],
+)
+def test_start_asserts_input_schema_formats_before_writes(
+    composed_tables: None,
+    no_workflow_queue: None,
+    schema_format: str,
+    valid_value: str,
+) -> None:
+    del composed_tables, no_workflow_queue
+    with system_context(reason="test workflow format input contract"):
+        draft = Workflow.objects.create(
+            created_by=workflow_actor(),
+            name="Formatted input",
+            input_schema={"type": "string", "format": schema_format},
+        )
+        Step.objects.create(
+            workflow=draft,
+            key="wait",
+            name="Wait",
+            step_class="wait",
+            config={"until": "2099-01-01T00:00:00Z"},
+            is_entry=True,
+        )
+        workflow = draft.publish()
+    actor = admit_workflow_actor(workflow)
+
+    with pytest.raises(ValidationError, match="input does not satisfy"):
+        engine.start(workflow, subject=None, actor=actor, input=JsonPresence(True, "nope"))
+
+    with system_context(reason="verify rejected formatted input"):
+        assert WorkflowRun.objects.count() == 0
+        assert WorkflowDispatch.objects.count() == 0
+    run = engine.start(workflow, subject=None, actor=actor, input=JsonPresence(True, valid_value))
+    assert run.input == valid_value
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("value", ["2026-09-25", "nope"])
+def test_emit_asserts_output_schema_formats(
+    composed_tables: None,
+    no_workflow_queue: None,
+    value: str,
+) -> None:
+    del composed_tables, no_workflow_queue
+    workflow = workflow_with_steps(
+        steps=({
+            "key": "emit",
+            "step_class": "emit",
+            "config": {"output_schema": {"type": "string", "format": "date"}},
+            "input_binding": {"kind": "constant", "value": value},
+        },),
+        edges=(),
+    )
+    run = start_run(workflow)
+    invalid = value == "nope"
+    run_to_terminal(run, allow_failed={run.pk} if invalid else ())
+
+    emitted = step_run_for(run, "emit")
+    if invalid:
+        assert run.status == workflow_models.RunStatus.FAILED
+        assert emitted.status == workflow_models.StepRunStatus.FAILED
+        assert "does not satisfy its declared projection contract" in emitted.error
+    else:
+        assert run.status == workflow_models.RunStatus.SUCCEEDED
+        assert emitted.output == value
+
+
 @pytest.fixture()
-def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Make the abstract handler testable by journaling calls from config."""
+def fixture_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Journal calls made through the concrete test fixture operation."""
 
     calls: list[dict[str, Any]] = []
 
-    def run(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, now
         config = dict(step_run.step.config)
         calls.append(
@@ -239,7 +483,7 @@ def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             }
         )
         if config.get("mode") == "error":
-            raise RuntimeError(str(config.get("error", "handler failed")))
+            raise RuntimeError(str(config.get("error", "fixture failed")))
         output = {
             "key": step_run.step.key,
             "input": step_run.input,
@@ -247,19 +491,19 @@ def handler_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         }
         return StepResult.done(output=output, outcome=str(config.get("outcome", "done")))
 
-    monkeypatch.setattr(HandlerStep, "run", run)
+    monkeypatch.setattr(FixtureStep, "run", run)
     return calls
 
 
 @pytest.mark.django_db(transaction=True)
 def test_two_step_run_completes_end_to_end(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A run pins the published version, injects output, and succeeds."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -279,18 +523,214 @@ def test_two_step_run_completes_end_to_end(
     assert [row.status for row in rows] == [step_run_status.SUCCEEDED, step_run_status.SUCCEEDED]
     finish = step_run_for(run, "finish")
     assert finish.input["value"] == 7
-    assert [call["key"] for call in handler_calls] == ["start", "finish"]
+    assert [call["key"] for call in fixture_calls] == ["start", "finish"]
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+def test_run_to_terminal_rejects_failed_owned_descendant_with_diagnostics(
+    composed_tables: None,
+    no_workflow_queue: None,
+    fixture_calls: list[dict[str, Any]],
+) -> None:
+    """A terminal root cannot hide a failed run in its exact owned tree."""
+
+    del composed_tables, no_workflow_queue, fixture_calls
+    actor = User.objects.create_user(username="testing-failed-descendant-actor")
+    parent_workflow = workflow_with_steps(
+        key="testing-parent",
+        steps=({"key": "handoff", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    failed_workflow = workflow_with_steps(
+        key="testing-failed-child",
+        steps=(
+            {
+                "key": "explode",
+                "config": {"mode": "error", "error": "owned child boom"},
+            },
+        ),
+        edges=(),
+    )
+    parent = start_run(parent_workflow, actor=actor)
+    advance_once(parent)
+    child = engine.start(
+        failed_workflow,
+        subject=None,
+        actor=admit_workflow_actor(failed_workflow, actor),
+        parent_step_run=step_run_for(parent, "handoff"),
+        parent_relation="owned_call",
+    )
+
+    with pytest.raises(AssertionError, match="owned child boom"):
+        run_to_terminal(parent)
+
+    parent.refresh_from_db()
+    assert parent.status == workflow_models.RunStatus.SUCCEEDED
+    child.refresh_from_db()
+    assert child.status == workflow_models.RunStatus.FAILED
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("fixture_calls")
+def test_run_to_terminal_allows_only_named_canceled_descendant(
+    composed_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """A caller can admit one intentional cancellation by retained run ID."""
+
+    del composed_tables, no_workflow_queue
+    actor = User.objects.create_user(username="testing-canceled-descendant-actor")
+    parent_workflow = workflow_with_steps(
+        key="testing-cancel-parent",
+        steps=({"key": "handoff", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    child_workflow = workflow_with_steps(
+        key="testing-canceled-child",
+        steps=({"key": "work", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    parent = run_to_terminal(start_run(parent_workflow, actor=actor))
+    child = engine.start(
+        child_workflow,
+        subject=None,
+        actor=admit_workflow_actor(child_workflow, actor),
+        parent_step_run=step_run_for(parent, "handoff"),
+        parent_relation="continuation",
+    )
+    engine.cancel(child, actor=actor)
+
+    with pytest.raises(AssertionError, match="unexpected terminal runs"):
+        run_to_terminal(parent)
+    assert run_to_terminal(parent, allow_canceled={child.pk}) == parent
+
+
+@pytest.mark.django_db(transaction=True)
+def test_execute_started_selects_one_exact_step_key(
+    composed_tables: None,
+    no_workflow_queue: None,
+    fixture_calls: list[dict[str, Any]],
+) -> None:
+    """Keyed execution does not depend on started-row ordering."""
+
+    del composed_tables, no_workflow_queue
+    workflow = workflow_with_steps(
+        steps=(
+            {"key": "fork", "config": {"outcome": "ready"}},
+            {"key": "first", "config": {"outcome": "done"}},
+            {"key": "second", "config": {"outcome": "done"}},
+        ),
+        edges=(("fork", "first", "ready"), ("fork", "second", "ready")),
+    )
+    run = start_run(workflow)
+    advance_once(run)
+    execute_started(run, key="fork")
+    assert [call["key"] for call in fixture_calls] == ["fork"]
+    fixture_calls.clear()
+    advance_once(run)
+
+    execute_started(run, key="second")
+
+    first = step_run_for(run, "first")
+    second = step_run_for(run, "second")
+    assert first.status == workflow_models.StepRunStatus.STARTED
+    assert second.status == workflow_models.StepRunStatus.SUCCEEDED
+    assert [call["key"] for call in fixture_calls] == ["second"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_testing_helpers_reject_unretained_objects_before_engine_mutation(
+    composed_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unretained objects cannot reach mutating engine entrypoints."""
+
+    del composed_tables
+    workflow = workflow_with_steps(
+        steps=({"key": "work", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    run = start_run(workflow)
+    engine_calls: list[str] = []
+    monkeypatch.setattr(engine, "start", lambda *args, **kwargs: engine_calls.append("start"))
+    monkeypatch.setattr(engine, "advance", lambda *args, **kwargs: engine_calls.append("advance"))
+
+    workflow.pk = None
+    workflow._state.adding = True
+    workflow._state.db = None
+    with pytest.raises(ValueError, match="workflow is not persisted"):
+        start_run(workflow)
+
+    run._state.adding = True
+    with pytest.raises(ValueError, match="run is not persisted"):
+        advance_once(run)
+
+    assert engine_calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("fixture_calls")
+def test_owned_run_resolves_exact_workflow_key_subject_and_owned_tree(
+    composed_tables: None,
+    no_workflow_queue: None,
+) -> None:
+    """Owned-run lookup is unique by lineage key and optional subject."""
+
+    del composed_tables, no_workflow_queue
+    actor = User.objects.create_user(username="testing-owned-run-actor")
+    parent_workflow = workflow_with_steps(
+        key="testing-owned-parent",
+        steps=(
+            {"key": "handoff", "config": {"outcome": "done"}},
+            {"key": "continue", "config": {"outcome": "done"}},
+        ),
+        edges=(("handoff", "continue", "done"),),
+    )
+    child_workflow = workflow_with_steps(
+        key="testing-owned-child",
+        steps=({"key": "work", "config": {"outcome": "done"}},),
+        edges=(),
+    )
+    parent = start_run(parent_workflow, actor=actor)
+    advance_once(parent)
+    handoff = step_run_for(parent, "handoff")
+    first = engine.start(
+        child_workflow,
+        subject=parent_workflow,
+        actor=admit_workflow_actor(child_workflow, actor),
+        parent_step_run=handoff,
+        parent_relation="owned_call",
+    )
+    execute_started(parent, key="handoff")
+    advance_once(parent)
+    second = engine.start(
+        child_workflow,
+        subject=handoff.step,
+        actor=actor,
+        parent_step_run=step_run_for(parent, "continue"),
+        parent_relation="continuation",
+    )
+    engine.start(child_workflow, subject=parent_workflow, actor=actor)
+
+    assert owned_run(
+        parent,
+        "testing-owned-child",
+        subject=parent_workflow,
+    ) == first
+    assert owned_run(parent, "testing-owned-child", subject=handoff.step) == second
+    with pytest.raises(WorkflowRun.MultipleObjectsReturned):
+        owned_run(parent, "testing-owned-child")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("fixture_calls")
 def test_start_accepts_matching_and_empty_subject_declarations(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """A subject declaration accepts its model while an empty declaration accepts any subject."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     declared = workflow_with_steps(
         name="Declared subject",
         subject_declaration=Workflow._meta.label,
@@ -306,22 +746,22 @@ def test_start_accepts_matching_and_empty_subject_declarations(
         workflow_subject = Workflow.objects.create(name="Workflow subject")
         step_subject = Step.objects.get(workflow=declared, key="start")
 
-    declared_run = engine.start(declared, subject=workflow_subject, actor=None)
-    unrestricted_run = engine.start(unrestricted, subject=step_subject, actor=None)
+    declared_run = engine.start(declared, subject=workflow_subject, actor=admit_workflow_actor(declared))
+    unrestricted_run = engine.start(unrestricted, subject=step_subject, actor=admit_workflow_actor(unrestricted))
 
     assert declared_run.subject == workflow_subject
     assert unrestricted_run.subject == step_subject
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_start_rejects_subject_outside_subject_declaration(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """A declared workflow rejects a subject whose concrete model differs."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = workflow_with_steps(
         subject_declaration=Workflow._meta.label,
         steps=({"key": "start", "config": {"outcome": "done"}},),
@@ -332,7 +772,7 @@ def test_start_rejects_subject_outside_subject_declaration(
         before = WorkflowRun.objects.count()
 
     with pytest.raises(ValidationError, match="subject declaration"):
-        engine.start(workflow, subject=wrong_subject, actor=None)
+        engine.start(workflow, subject=wrong_subject, actor=admit_workflow_actor(workflow))
 
     with system_context(reason="test workflows rejected subject run count"):
         assert WorkflowRun.objects.count() == before
@@ -340,13 +780,13 @@ def test_start_rejects_subject_outside_subject_declaration(
 
 @pytest.mark.django_db(transaction=True)
 def test_crash_replay_does_not_reexecute_completed_steps(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Replaying advance/execute after a completed step reuses journaled output."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = workflow_with_steps(
         steps=(
             {"key": "start", "config": {"outcome": "next", "output": {"recorded": "yes"}}},
@@ -367,19 +807,19 @@ def test_crash_replay_does_not_reexecute_completed_steps(
     execute_started(run)
     run_to_terminal(run)
 
-    assert [call["key"] for call in handler_calls] == ["start", "finish"]
+    assert [call["key"] for call in fixture_calls] == ["start", "finish"]
     assert step_run_for(run, "finish").input["recorded"] == "yes"
 
 
 @pytest.mark.django_db(transaction=True)
 def test_duplicate_advance_claims_a_scheduled_step_once(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Duplicate advance calls are idempotent while a step is already claimed."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=({"key": "start", "config": {"outcome": "done"}},),
@@ -399,13 +839,13 @@ def test_duplicate_advance_claims_a_scheduled_step_once(
 
 @pytest.mark.django_db(transaction=True)
 def test_conditional_branch_skip_cascades_through_all_success_join(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Untaken branch targets skip, and default joins skip behind them."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -430,13 +870,13 @@ def test_conditional_branch_skip_cascades_through_all_success_join(
 
 @pytest.mark.django_db(transaction=True)
 def test_none_failed_min_one_success_join_cures_post_branch_skip(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A post-branch join can run when one branch succeeded and the other skipped."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -466,13 +906,13 @@ def test_none_failed_min_one_success_join_cures_post_branch_skip(
 
 @pytest.mark.django_db(transaction=True)
 def test_conditional_convergence_counts_each_predecessor_route_once(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Inactive alternatives cannot preempt a later matching converging route."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     converging = workflow_with_steps(
         key="conditional-convergence",
@@ -561,13 +1001,13 @@ def test_conditional_convergence_counts_each_predecessor_route_once(
 
 @pytest.mark.django_db(transaction=True)
 def test_one_success_join_runs_without_waiting_for_all_siblings(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """The one_success join schedules as soon as one upstream succeeds."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -612,9 +1052,9 @@ def test_one_success_join_runs_without_waiting_for_all_siblings(
         (workflow_models.JoinRule.NONE_FAILED_MIN_ONE_SUCCESS, ("skipped", "succeeded"), "started"),
     ],
 )
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_join_rule_truth_table(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     rule: Any,
     upstream_statuses: tuple[str, str],
@@ -622,7 +1062,7 @@ def test_join_rule_truth_table(
 ) -> None:
     """Join readiness is derived from upstream sibling StepRun statuses."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -670,13 +1110,13 @@ def test_join_rule_truth_table(
 
 @pytest.mark.django_db(transaction=True)
 def test_content_routing_uses_outcome_edges(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Only edges matching the source outcome are taken."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -694,16 +1134,16 @@ def test_content_routing_uses_outcome_edges(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 @pytest.mark.parametrize("conditions", [("pdf", "image"), ("image", "pdf")])
 def test_alternative_outcomes_to_same_target_route_once_regardless_of_edge_order(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     conditions: tuple[str, str],
 ) -> None:
     """A nonmatching alternative cannot skip a target reached by a sibling edge."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     step_run_status = workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -728,13 +1168,13 @@ def test_alternative_outcomes_to_same_target_route_once_regardless_of_edge_order
 
 @pytest.mark.django_db(transaction=True)
 def test_max_steps_fails_run_before_claiming_next_step(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """The engine, not a step impl, enforces the pinned max_steps bound."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         max_steps=1,
@@ -758,13 +1198,13 @@ def test_max_steps_fails_run_before_claiming_next_step(
 
 @pytest.mark.django_db(transaction=True)
 def test_timer_wait_resumes_from_wake_sweep(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A durable wait step becomes executable when the sweep sees its wake time."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     now = timezone.now()
     wake_at = now + timedelta(hours=1)
@@ -801,19 +1241,19 @@ def test_timer_wait_resumes_from_wake_sweep(
     assert run.status == run_status.SUCCEEDED
     with system_context(reason="test completed wait projection"):
         projected = WorkflowRun.objects.annotate(**WorkflowRun.waiting_projection_annotation()).get(pk=run.pk)
-    assert projected._workflow_waiting_kind == ""
+    assert projected._workflow_waiting_kind is None
     assert projected._workflow_next_wake_at is None
 
 
 @pytest.mark.django_db(transaction=True)
 def test_deliver_is_idempotent_and_ignores_terminal_runs(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Repeated delivery advances active generations while terminal runs ignore delivery."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     now = timezone.now()
     parked = workflow_with_steps(
         name="Deliver parked run",
@@ -869,19 +1309,19 @@ def test_deliver_is_idempotent_and_ignores_terminal_runs(
 
 @pytest.mark.django_db(transaction=True)
 def test_deliver_artifact_wakes_all_exact_external_waits_without_approvals(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A resource event leaves an unrelated approval wait parked in the same run."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     dependency = User.objects.create_user(username="external-artifact-dependency")
     unrelated = User.objects.create_user(username="unrelated-artifact-dependency")
     reviewer = User.objects.create_user(username="artifact-reviewer")
     now = timezone.now()
 
-    def wait_on_dependency(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def wait_on_dependency(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self
         if step_run.step.key == "entry":
             return StepResult.done(outcome="done")
@@ -891,12 +1331,12 @@ def test_deliver_artifact_wakes_all_exact_external_waits_without_approvals(
             artifacts=(workflow_steps.ArtifactSpec(dependency, "External dependency"),),
         )
 
-    monkeypatch.setattr(HandlerStep, "run", wait_on_dependency)
+    monkeypatch.setattr(FixtureStep, "run", wait_on_dependency)
     workflow = workflow_with_steps(
         name="Exact artifact delivery",
         steps=(
-            {"key": "entry", "step_class": "handler"},
-            {"key": "external", "step_class": "handler"},
+            {"key": "entry", "step_class": "fixture"},
+            {"key": "external", "step_class": "fixture"},
             {
                 "key": "approval",
                 "step_class": "gate",
@@ -989,14 +1429,14 @@ def test_deliver_artifact_wakes_all_exact_external_waits_without_approvals(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_cancellation_propagates_to_journal_and_child_runs(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Canceling a run cancels durable waits, scheduled rows, and child runs."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -1014,7 +1454,12 @@ def test_cancellation_propagates_to_journal_and_child_runs(
     queued = step_for(workflow, "queued")
     waiting = step_for(workflow, "waiting")
     with system_context(reason="test workflows cancel setup"):
-        run = WorkflowRun.objects.create(workflow=workflow, status=workflow_models.RunStatus.RUNNING)
+        actor = User.objects.create_user(username="workflow-cancellation-owner")
+        run = WorkflowRun.objects.create(
+            workflow=workflow,
+            status=workflow_models.RunStatus.RUNNING,
+            created_by=actor,
+        )
         started = StepRun.objects.create(run=run, step=entry, status=step_run_status.STARTED)
         scheduled = StepRun.objects.create(run=run, step=queued, status=step_run_status.SCHEDULED)
         waiting_row = StepRun.objects.create(run=run, step=waiting, status=step_run_status.WAITING)
@@ -1028,7 +1473,7 @@ def test_cancellation_propagates_to_journal_and_child_runs(
 
     from angee.workflows import engine
 
-    engine.cancel(run)
+    engine.cancel(run, actor=actor)
 
     run.refresh_from_db()
     with system_context(reason="test workflows deliver child cancellation"):
@@ -1037,7 +1482,7 @@ def test_cancellation_propagates_to_journal_and_child_runs(
             kind=WorkflowDispatchKind.CHILD_CANCEL,
         )
     assert child.status == run_status.WAITING
-    assert engine.cancel_child_dispatch(cancel_dispatch.pk, expected_child_id=child.pk) == {
+    assert WorkflowDispatch.objects.deliver(cancel_dispatch.pk, expected_target_id=child.pk) == {
         "canceled": 1,
     }
     child.refresh_from_db()
@@ -1053,15 +1498,15 @@ def test_cancellation_propagates_to_journal_and_child_runs(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_transient_step_error_uses_configured_retry_backoff(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Transient impl failures retain a durable successor using configured backoff."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     transient_error = getattr(workflow_steps, "TransientStepError", None)
     assert transient_error is not None
     step_run_status = workflow_models.StepRunStatus
@@ -1077,11 +1522,11 @@ def test_transient_step_error_uses_configured_retry_backoff(
     run = start_run(workflow)
     step_run = advance_once(run)[0]
 
-    def run_transient(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run_transient(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del self, step_run, now
         raise transient_error("try again")
 
-    monkeypatch.setattr(HandlerStep, "run", run_transient)
+    monkeypatch.setattr(FixtureStep, "run", run_transient)
 
     from angee.workflows import engine
 
@@ -1103,13 +1548,13 @@ def test_transient_step_error_uses_configured_retry_backoff(
 
 @pytest.mark.django_db(transaction=True)
 def test_hard_failure_routes_failed_outcome(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Hard impl failures journal outcome=failed and activate matching edges."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     workflow = workflow_with_steps(
         steps=(
@@ -1137,15 +1582,15 @@ def test_hard_failure_routes_failed_outcome(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_step_impl_heartbeat_helper_updates_started_row(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Long-running impls can refresh their own StepRun heartbeat."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     started_at = timezone.now()
     pulse_at = started_at + timedelta(seconds=30)
     workflow = workflow_with_steps(
@@ -1154,12 +1599,12 @@ def test_step_impl_heartbeat_helper_updates_started_row(
     )
     run = start_run(workflow)
 
-    def run_with_heartbeat(self: HandlerStep, step_run: Any, *, now: Any) -> StepResult:
+    def run_with_heartbeat(self: FixtureStep, step_run: Any, *, now: Any) -> StepResult:
         del now
         self.heartbeat(step_run, at=pulse_at)
         return StepResult.done(output={}, outcome="done")
 
-    monkeypatch.setattr(HandlerStep, "run", run_with_heartbeat)
+    monkeypatch.setattr(FixtureStep, "run", run_with_heartbeat)
     advance_once(run, now=started_at)
     execute_started(run, now=started_at)
 
@@ -1169,14 +1614,14 @@ def test_step_impl_heartbeat_helper_updates_started_row(
 
 @pytest.mark.django_db(transaction=True)
 def test_heartbeat_timeout_reaps_started_rows_and_routes_failed_outcome(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """The reaper fails stale started rows, enqueues advance, and failed edges route."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 60
     step_run_status = workflow_models.StepRunStatus
     now = timezone.now()
@@ -1213,14 +1658,14 @@ def test_heartbeat_timeout_reaps_started_rows_and_routes_failed_outcome(
 
 @pytest.mark.django_db(transaction=True)
 def test_reaper_ignores_waiting_rows(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Waiting rows represent durable waits and are exempt from heartbeat reaping."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 60
     step_run_status = workflow_models.StepRunStatus
     now = timezone.now()
@@ -1246,16 +1691,16 @@ def test_reaper_ignores_waiting_rows(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_reaper_finishes_canceled_started_rows(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Canceled runs flag started rows; the heartbeat reaper moves those rows terminal."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     settings.ANGEE_WORKFLOWS_HEARTBEAT_TIMEOUT = 60
     run_status, step_run_status = workflow_models.RunStatus, workflow_models.StepRunStatus
     now = timezone.now()
@@ -1265,13 +1710,20 @@ def test_reaper_finishes_canceled_started_rows(
         steps=({"key": "start", "config": {"outcome": "done"}},),
         edges=(),
     )
-    run = start_run(workflow)
+    actor = User.objects.create_user(username="canceled-reaper-owner")
+    with system_context(reason="grant workflow start in reaper test"):
+        write_relationships(
+            [
+                RelationshipTuple(to_object_ref(workflow.published_from), "editor", to_subject_ref(actor)),
+            ]
+        )
+    run = start_run(workflow, actor=actor)
     step_run = advance_once(run, now=stale_at)[0]
 
     from angee.workflows import engine
 
-    engine.cancel(run)
-    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id: enqueued.append(run_id))
+    engine.cancel(run, actor=actor)
+    monkeypatch.setattr(engine, "enqueue_advance", lambda run_id, **kwargs: enqueued.append(run_id))
     assert engine.reap(now=now) == {"reaped": 0}
 
     run.refresh_from_db()
@@ -1284,13 +1736,13 @@ def test_reaper_finishes_canceled_started_rows(
 
 @pytest.mark.django_db(transaction=True)
 def test_error_workflow_fires_once_with_failed_run_subject(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A failed run starts its linked error workflow once using the failed StepRun as parent."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     run_status = workflow_models.RunStatus
     error_version = workflow_with_steps(
         name="Error workflow",
@@ -1298,16 +1750,20 @@ def test_error_workflow_fires_once_with_failed_run_subject(
         edges=(),
     )
     with system_context(reason="test workflows error workflow definition"):
-        draft = Workflow.objects.create(name="Primary", error_workflow=error_version.published_from)
+        draft = Workflow.objects.create(
+            created_by=workflow_actor(), name="Primary", error_workflow=error_version.published_from
+        )
         Step.objects.create(
             workflow=draft,
             key="explode",
             name="Explode",
+            step_class="fixture",
             config={"mode": "error", "error": "boom"},
             is_entry=True,
         )
         workflow = draft.publish()
-    run = run_to_terminal(start_run(workflow))
+    run = start_run(workflow)
+    run_to_terminal(run, allow_failed={run.pk})
     failed = step_run_for(run, "explode")
 
     from angee.workflows import engine
@@ -1325,54 +1781,14 @@ def test_error_workflow_fires_once_with_failed_run_subject(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
-def test_identity_migration_backfills_only_structurally_known_run_origins(
-    workflow_engine_tables: None,
-) -> None:
-    """Trigger and parent links recover origins while unexplained history stays unknown."""
-
-    del workflow_engine_tables
-    from django.apps import apps as django_apps
-
-    from angee.workflows.runtime_migrations.workflow_identity import backfill_structural_run_origins
-
-    version = workflow_with_steps(
-        name="Origin backfill",
-        steps=({"key": "start", "config": {"outcome": "done"}},),
-        edges=(),
-    )
-    with system_context(reason="test structural origins setup"):
-        trigger = Trigger.objects.create(workflow=version.published_from, kind=workflow_models.TriggerKind.MANUAL)
-        trigger_run = WorkflowRun.objects.create(workflow=version, trigger=trigger)
-        unexplained = WorkflowRun.objects.create(workflow=version)
-        parent_run = WorkflowRun.objects.create(workflow=version)
-        parent_step = StepRun.objects.create(run=parent_run, step=step_for(version, "start"))
-        child = WorkflowRun.objects.create(
-            workflow=version, parent_step_run=parent_step, parent_relation="continuation"
-        )
-
-    editor = SimpleNamespace(connection=connection)
-    historical_apps = ProjectState.from_apps(django_apps).apps
-    backfill_structural_run_origins(historical_apps, editor)
-    backfill_structural_run_origins(historical_apps, editor)
-
-    trigger_run.refresh_from_db()
-    unexplained.refresh_from_db()
-    child.refresh_from_db()
-    assert trigger_run.origin == workflow_models.RunOrigin.TRIGGER
-    assert child.origin == workflow_models.RunOrigin.ERROR_WORKFLOW
-    assert unexplained.origin == workflow_models.RunOrigin.UNKNOWN
-
-
-@pytest.mark.django_db(transaction=True)
 def test_linked_business_workflow_can_start_its_error_workflow(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """Business child linkage must not suppress the child's error handling."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     recovery = workflow_with_steps(
         name="Child recovery", steps=({"key": "recover", "config": {"outcome": "done"}},), edges=()
     )
@@ -1381,11 +1797,14 @@ def test_linked_business_workflow_can_start_its_error_workflow(
     )
     parent = run_to_terminal(start_run(parent_workflow))
     with system_context(reason="test linked business child error handling"):
-        draft = Workflow.objects.create(name="Business child", error_workflow=recovery.published_from)
+        draft = Workflow.objects.create(
+            created_by=workflow_actor(), name="Business child", error_workflow=recovery.published_from
+        )
         Step.objects.create(
             workflow=draft,
             key="explode",
             name="Explode",
+            step_class="fixture",
             config={"mode": "error", "error": "child failed"},
             is_entry=True,
         )
@@ -1393,12 +1812,12 @@ def test_linked_business_workflow_can_start_its_error_workflow(
     child = engine.start(
         version,
         subject=None,
-        actor=None,
+        actor=admit_workflow_actor(version),
         parent_step_run=step_run_for(parent, "handoff"),
         parent_relation="continuation",
         origin=workflow_models.RunOrigin.WORKFLOW,
     )
-    run_to_terminal(child)
+    run_to_terminal(child, allow_failed={child.pk})
     with system_context(reason="test linked business child recovery"):
         error_run = WorkflowRun.objects.get(parent_step_run=step_run_for(child, "explode"))
     assert error_run.origin == workflow_models.RunOrigin.ERROR_WORKFLOW
@@ -1407,13 +1826,13 @@ def test_linked_business_workflow_can_start_its_error_workflow(
 
 @pytest.mark.django_db(transaction=True)
 def test_error_workflow_run_does_not_start_another_error_workflow(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
-    handler_calls: list[dict[str, Any]],
+    fixture_calls: list[dict[str, Any]],
 ) -> None:
     """A failing run already launched as error handling does not recurse."""
 
-    del workflow_engine_tables, no_workflow_queue, handler_calls
+    del composed_tables, no_workflow_queue, fixture_calls
     error_version = workflow_with_steps(
         name="Self error workflow",
         steps=({"key": "recover", "config": {"mode": "error", "error": "recovery failed"}},),
@@ -1423,36 +1842,46 @@ def test_error_workflow_run_does_not_start_another_error_workflow(
         error_draft = error_version.published_from
         error_draft.error_workflow = error_draft
         error_draft.save(update_fields={"error_workflow", "updated_at"})
-        primary = Workflow.objects.create(name="Primary cyclic", error_workflow=error_draft)
+        primary = Workflow.objects.create(
+            created_by=workflow_actor(), name="Primary cyclic", error_workflow=error_draft
+        )
         Step.objects.create(
             workflow=primary,
             key="explode",
             name="Explode",
+            step_class="fixture",
             config={"mode": "error", "error": "boom"},
             is_entry=True,
         )
         workflow = primary.publish()
 
-    run = run_to_terminal(start_run(workflow))
+    run = start_run(workflow)
+    run_to_terminal(run, stop_key="recover", allow_failed={run.pk})
     failed = step_run_for(run, "explode")
     with system_context(reason="test workflows first error workflow child"):
         child = WorkflowRun.objects.get(parent_step_run=failed)
 
-    run_to_terminal(child)
+    run_to_terminal(child, allow_failed={child.pk})
 
+    assert run.status == workflow_models.RunStatus.FAILED
+    assert failed.error == "boom"
+    assert child.status == workflow_models.RunStatus.FAILED
+    assert step_run_for(child, "recover").error == "recovery failed"
     with system_context(reason="test workflows cyclic error workflow children"):
         assert WorkflowRun.objects.filter(parent_step_run__run=child).count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
+@pytest.mark.parametrize("actor_source", ["model", "subject", "ambient"])
 def test_override_run_reuses_existing_terminal_step_run(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
+    actor_source: str,
 ) -> None:
     """Overriding to a failed step reschedules its existing journal row."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     admin = User.objects.create_user(username="workflow-override-rerun")
     workflow = workflow_with_steps(
         steps=(
@@ -1474,9 +1903,12 @@ def test_override_run_reuses_existing_terminal_step_run(
             outcome="failed",
         )
 
-    override = engine.override_run(run, [retry], actor=admin)
+    actor = {"model": admin, "subject": to_subject_ref(admin), "ambient": None}[actor_source]
+    with actor_context(admin):
+        override = engine.override_run(run, [retry], actor=actor)
 
     failed.refresh_from_db()
+    assert override.created_by_id == admin.pk
     assert failed.status == workflow_models.StepRunStatus.SCHEDULED
     assert failed.error == ""
     assert failed.outcome == ""
@@ -1486,14 +1918,14 @@ def test_override_run_reuses_existing_terminal_step_run(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_workflow_run_save_checks_current_invocation_under_run_lock(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """An ordinary run update compares the current retained invocation under a lock."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = workflow_with_steps(
         steps=({"key": "start", "config": {"outcome": "done"}},),
         edges=(),
@@ -1514,14 +1946,14 @@ def test_workflow_run_save_checks_current_invocation_under_run_lock(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_ordinary_workflow_run_invocation_is_immutable_across_write_paths(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Manual runs retain publication, parent, actor, and subject facts after admission."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = workflow_with_steps(
         steps=({"key": "start", "config": {"outcome": "done"}},),
         edges=(),
@@ -1550,18 +1982,19 @@ def test_ordinary_workflow_run_invocation_is_immutable_across_write_paths(
 
 @pytest.mark.django_db(transaction=True)
 def test_workflow_step_save_preserves_validated_config(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """The shared impl mixin must not replace workflow validation with typed normalization."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     with system_context(reason="test workflow config preservation"):
         workflow = Workflow.objects.create(name="Config preservation")
         step = Step.objects.create(
             workflow=workflow,
             key="start",
             name="Start",
+            step_class="fixture",
             config={"outcome": "done"},
             is_entry=True,
         )
@@ -1574,12 +2007,12 @@ def test_workflow_step_save_preserves_validated_config(
 
 @pytest.mark.django_db(transaction=True)
 def test_event_wait_surface_is_not_accepted(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Timer waits remain; event-only waits are an explicit future seam."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     with pytest.raises(TypeError, match="event"):
         workflow_steps.StepResult.wait(event="message")  # type: ignore[call-arg]
     with pytest.raises(ValidationError, match="until"):
@@ -1592,12 +2025,12 @@ def test_event_wait_surface_is_not_accepted(
 )
 @pytest.mark.django_db(transaction=True)
 def test_postgres_lock_sql_scopes_joined_engine_queries_to_self(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Joined engine lock queries compile as FOR UPDATE OF the base table only."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     if connection.vendor != "postgresql":
         pytest.skip("active Django connection is not PostgreSQL")
 
@@ -1628,14 +2061,14 @@ def test_postgres_lock_sql_scopes_joined_engine_queries_to_self(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_publish_retargets_new_starts_without_migrating_trigger(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Existing runs keep v1 while trigger-backed new starts resolve the v2 lineage head."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     first = workflow_with_steps(
         steps=({"key": "start", "config": {"outcome": "done", "output": {"version": 1}}},),
         edges=(),
@@ -1652,7 +2085,7 @@ def test_publish_retargets_new_starts_without_migrating_trigger(
 
     from angee.workflows import engine
 
-    new_run = engine.start(draft, subject=None, actor=None, trigger=trigger)
+    new_run = engine.start(draft, subject=None, actor=admit_workflow_actor(draft), trigger=trigger)
 
     old_run.refresh_from_db()
     assert old_run.workflow == first
@@ -1661,14 +2094,14 @@ def test_publish_retargets_new_starts_without_migrating_trigger(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_published_and_archived_definition_rows_are_immutable(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Step and Edge writes are rejected on published and archived workflow versions."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = workflow_with_steps(
         steps=(
             {"key": "start", "config": {"outcome": "done"}},
@@ -1681,7 +2114,12 @@ def test_published_and_archived_definition_rows_are_immutable(
         edge = Edge.objects.get(workflow=workflow)
 
         with pytest.raises(ValidationError, match="immutable"):
-            Step.objects.create(workflow=workflow, key="late", name="Late")
+            Step.objects.create(
+                workflow=workflow,
+                key="late",
+                name="Late",
+                step_class="fixture",
+            )
 
         step.name = "Edited"
         with pytest.raises(ValidationError, match="immutable"):
@@ -1698,14 +2136,14 @@ def test_published_and_archived_definition_rows_are_immutable(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_archived_latest_version_refuses_new_runs(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Archiving the latest lineage version prevents falling back to an older published version."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     first = workflow_with_steps(
         steps=({"key": "start", "config": {"outcome": "done"}},),
         edges=(),
@@ -1720,14 +2158,14 @@ def test_archived_latest_version_refuses_new_runs(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.usefixtures("handler_calls")
+@pytest.mark.usefixtures("fixture_calls")
 def test_referenced_published_version_delete_is_rejected_as_immutable(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Published history remains immutable even when a run also pins the version."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     workflow = workflow_with_steps(
         steps=({"key": "start", "config": {"outcome": "done"}},),
         edges=(),

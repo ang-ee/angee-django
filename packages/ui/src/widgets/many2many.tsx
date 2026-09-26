@@ -7,7 +7,7 @@ import { widgetLabel } from "./label";
 import {
   optionLabel,
   optionTextLabel,
-  relationValueId,
+  relationIdList,
   type WidgetDefinition,
   type WidgetOption,
   type WidgetRenderProps,
@@ -20,7 +20,7 @@ export function Many2ManyEdit({
   readOnly,
   controlRef,
 }: WidgetRenderProps<readonly unknown[]>): ReactElement {
-  const selected = normaliseValues(value);
+  const selected = relationIdList(value);
   const options = field?.options ?? [];
   const available = options.filter((option) => !selected.includes(option.value));
 
@@ -58,7 +58,7 @@ export function Many2ManyCellEdit({
   field,
   readOnly,
 }: WidgetRenderProps<readonly unknown[]>): ReactElement {
-  const selected = normaliseValues(value);
+  const selected = relationIdList(value);
   const options = field?.options ?? [];
   // Retain selected ids outside the loaded option window. They remain visible
   // and removable; opening the picker must never silently drop a stored relation.
@@ -122,7 +122,7 @@ function Many2ManyRead({
 }: WidgetRenderProps<readonly unknown[]>): ReactElement {
   return (
     <Many2ManyChips
-      values={normaliseValues(value)}
+      values={relationIdList(value)}
       options={field?.options ?? []}
     />
   );
@@ -170,7 +170,3 @@ export const many2manyWidget = {
   read: Many2ManyRead,
   cell: Many2ManyRead,
 } satisfies WidgetDefinition<readonly unknown[]>;
-
-function normaliseValues(value: readonly unknown[] | null | undefined): string[] {
-  return [...new Set((value ?? []).map(relationValueId))].filter(Boolean);
-}

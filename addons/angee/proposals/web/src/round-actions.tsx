@@ -76,8 +76,8 @@ export function useRoundCeremonyActions(
       const id = actionRecordId(context.record, t("round.action.failed"));
       return (await closeRound(id, {
         outcome: closeOutcome(closeOutcomeOptions, values.outcome, t("round.action.invalidOutcome")),
-        accepted: idList(values.accepted),
-        partial: idList(values.partial),
+        accepted: values.accepted,
+        partial: values.partial,
       })) ?? { ok: false, message: t("round.action.failed") };
     },
     [closeOutcomeOptions, closeRound, t],
@@ -249,12 +249,6 @@ function actionRecordId(record: Row | null, message: string): string {
 function requiredId(value: unknown, message: string): string {
   if (typeof value === "string" && value) return value;
   throw new TypeError(message);
-}
-
-function idList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && item !== "")
-    : [];
 }
 
 export function closeOutcome(

@@ -38,6 +38,17 @@ the target write. The primitive owns the state write and then calls
 ``on_success``. It does not save the model; transition methods remain ordinary
 model methods and own any persistence of non-state fields. Illegal transitions
 raise ``TransitionNotAllowed`` with the field, source, and target in the message.
+Callers may pass ``persist=callback`` to a declared transition to compose its
+final save. The existing success hook must explicitly accept and forward that
+keyword to ``save_state``; the callback applies only to that invocation.
+The body, target write and success hook share one ``transaction.atomic``, so a
+hook failure rolls back the body's database writes too. Existing outer
+transactions compose through Django savepoints; commit callbacks wait for the
+outermost transaction.
+
+``get_transition_save_field(instance)`` exposes the active save context's field
+attname, or ``None``, for model save guards without inspecting private markers.
+
 
 Direct Python assignment to a guarded field is rejected at descriptor level after
 initial model construction. The descriptor still permits initial loading,
@@ -47,7 +58,8 @@ idempotent field normalization, and the primitive's own target write, so existin
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, NoReturn, cast
@@ -61,7 +73,7 @@ from angee.base.fields import StateField, enum_member_for
 from angee.base.scoping import system_queryset
 
 Condition = Callable[[models.Model], bool]
-SuccessHook = Callable[[models.Model, Any, Any], None]
+SuccessHook = Callable[..., None]
 TransitionMethod = Callable[..., Any]
 
 
@@ -252,8 +264,11 @@ class StateTransitions:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        """Execute one decorated transition method under this declaration."""
+        """Execute the body, target write and success hook atomically."""
 
+        persist = kwargs.pop("persist", None)
+        if persist is not None and spec.on_success is None:
+            raise ImproperlyConfigured("A composed transition save requires an explicit success hook.")
         source = self.field.to_python(getattr(instance, self.field.attname))
         target = self.field.to_python(spec.target)
         source_key = self._state_key(source)
@@ -266,14 +281,15 @@ class StateTransitions:
             if not condition(instance):
                 self._raise_not_allowed(source, target, "condition returned false")
 
-        result = method(instance, *args, **kwargs)
-        self._write_target(instance, target)
-        if spec.on_success is not None:
-            setattr(instance, "_angee_transition_save_field", self.field.attname)
-            try:
-                spec.on_success(instance, source, target)
-            finally:
-                delattr(instance, "_angee_transition_save_field")
+        with transaction.atomic():
+            result = method(instance, *args, **kwargs)
+            self._write_target(instance, target)
+            if spec.on_success is not None:
+                with _transition_save_context(instance, self.field.attname):
+                    if persist is None:
+                        spec.on_success(instance, source, target)
+                    else:
+                        spec.on_success(instance, source, target, persist=persist)
         return result
 
     def force_state(self, instance: models.Model, target: Any, *, reason: str) -> None:
@@ -300,15 +316,12 @@ class StateTransitions:
             if hasattr(instance, "_transition_fields"):
                 delattr(instance, "_transition_fields")
             return
-        setattr(instance, "_angee_transition_save_field", self.field.attname)
         try:
-            save_state(instance, source, target_value)
+            with _transition_save_context(instance, self.field.attname):
+                save_state(instance, source, target_value)
         except Exception:
             self._write_target(instance, source)
             raise
-        finally:
-            if hasattr(instance, "_angee_transition_save_field"):
-                delattr(instance, "_angee_transition_save_field")
 
     def not_allowed(self, source: Any, target: Any) -> NoReturn:
         """Raise the primitive's standard ``TransitionNotAllowed`` for this field."""
@@ -474,7 +487,40 @@ def _as_values(value: Any) -> tuple[Any, ...]:
     return (value,)
 
 
-def save_state(instance: models.Model, source: Any, target: Any) -> None:
+@contextmanager
+def _transition_save_context(instance: models.Model, field_name: str) -> Iterator[None]:
+    """Expose this save's field and restore any enclosing transition context."""
+
+    previous = get_transition_save_field(instance)
+    setattr(instance, "_angee_transition_save", field_name)
+    try:
+        yield
+    finally:
+        if previous is None:
+            delattr(instance, "_angee_transition_save")
+        else:
+            setattr(instance, "_angee_transition_save", previous)
+
+
+def get_transition_save_field(instance: models.Model) -> str | None:
+    """Return the active transition-save field's attname, or ``None``.
+
+    The context spans the success hook (including ``save_state``) or a saved-row
+    ``force_state`` save, not the transition body. A nested transition on the same
+    instance retains the outer context until its own hook begins, then restores
+    it when that hook exits, including on failure.
+    """
+
+    return cast(str | None, getattr(instance, "_angee_transition_save", None))
+
+
+def save_state(
+    instance: models.Model,
+    source: Any,
+    target: Any,
+    *,
+    persist: Callable[..., None] | None = None,
+) -> None:
     """Persist a transition-owned state change plus method-touched fields.
 
     An optimistic concurrency guard brackets the write: the row is locked and its
@@ -485,25 +531,35 @@ def save_state(instance: models.Model, source: Any, target: Any) -> None:
     the guard only *verifies*; ``instance.save`` still performs the ``source ->
     target`` column write, so ``post_save`` receivers, audit stamping, ``changes``
     publishers, and pre-save change trackers observe the real old->new transition.
+
+    ``persist(instance, *, update_fields)`` composes this final save while
+    retaining the concurrency guard when a cooperative ``save`` override requires
+    invocation-local arguments. Custom success hooks must forward it explicitly;
+    no persistence callback is installed as ambient state.
     """
 
-    field_name = cast(str | None, getattr(instance, "_angee_transition_save_field", None))
+    field_name = get_transition_save_field(instance)
     if field_name is None:
         raise ImproperlyConfigured("save_state must run as a StateTransitions on_success hook.")
     fields = {field_name, *cast(set[str], getattr(instance, "_transition_fields", set()))}
     try:
         with transaction.atomic():
             _verify_uncontended_source(instance, field_name, source, target)
-            instance.save(update_fields=fields)
+            if persist is None:
+                instance.save(update_fields=fields)
+            else:
+                persist(instance, update_fields=fields)
     finally:
         if hasattr(instance, "_transition_fields"):
             delattr(instance, "_transition_fields")
 
 
-def _verify_uncontended_source(instance: models.Model, field_name: str, source: Any, target: Any) -> None:
+def _verify_uncontended_source(
+    instance: models.Model, field_name: str, source: Any, target: Any
+) -> None:
     """Lock the row and reject a committed state that already left ``source``."""
 
-    reader = system_queryset(type(instance), lock=())
+    reader = system_queryset(type(instance), lock=("self",))
     committed = reader.filter(pk=instance.pk).values_list(field_name, flat=True).first()
     field = cast(StateField, instance._meta.get_field(field_name))
     if _state_key(field, committed) != _state_key(field, source):

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import QuerySet, Subquery
 from pydantic import BaseModel
 from rebac import (
@@ -376,25 +377,25 @@ def grant_role(
 ) -> None:
     """Grant one declared role to one existing supported IAM subject."""
 
-    grant_membership(
-        subject=validate_subject(subject),
-        container=validate_role(role, grantable=True),
-        caveat_name=caveat_name,
-        caveat_context=caveat_context,
-    )
-
+    with transaction.atomic():
+        grant_membership(
+            subject=validate_subject(subject),
+            container=validate_role(role, grantable=True),
+            caveat_name=caveat_name,
+            caveat_context=caveat_context,
+        )
 
 def revoke_role(*, subject: str, role: str, caveat_name: str = "") -> bool:
     """Revoke an exact role tuple while allowing stale subject and role ids."""
 
-    return bool(
-        revoke_membership(
-            subject=validate_subject(subject, require_existing=False),
-            container=validate_role(role),
-            caveat_name=caveat_name,
+    with transaction.atomic():
+        return bool(
+            revoke_membership(
+                subject=validate_subject(subject, require_existing=False),
+                container=validate_role(role),
+                caveat_name=caveat_name,
+            )
         )
-    )
-
 
 def relationship_rows(limit: int | None = PERMISSION_HUB_LIST_CAP) -> QuerySet[Any]:
     """Return active relationship rows in stable order."""

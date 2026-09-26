@@ -39,13 +39,7 @@ def land_posts(channel: Any, posts: list[ParsedPost], *, owner_id: Any) -> list[
     return messages
 
 
-def _overlay_engagement(
-    channel: Any,
-    posts: list[ParsedPost],
-    messages: list[Any],
-    *,
-    owner_id: Any,
-) -> None:
+def _overlay_engagement(channel: Any, posts: list[ParsedPost], messages: list[Any], *, owner_id: Any) -> None:
     """Attach public payload and engagement to the rows messaging returned."""
 
     if not posts:

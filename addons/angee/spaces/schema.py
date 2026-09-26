@@ -91,7 +91,7 @@ class SpacesMembershipMutation:
         party = require_instance_for_id(
             Party,
             party_id,
-            queryset=Party.objects.all().scoped(),
+            queryset=Party.objects.scoped(),
             not_found="party not found",
         )
         membership = Membership.objects.add_confirmed(

@@ -8,6 +8,7 @@ import {
   type FieldValues,
   type UseFormSetValue,
 } from "react-hook-form";
+import type { CrudFilter } from "@refinedev/core";
 import {
   DndContext,
   closestCenter,
@@ -89,6 +90,11 @@ export interface EditableLinesProps {
   primaryFields?: readonly string[];
   /** Read-only columns derived by the composing domain from each live line. */
   supplementalColumns?: readonly EditableLineSupplementalColumn[];
+  /** Domain-owned relation constraints for a line field and its owning document. */
+  relationFilters?: (
+    fieldName: string,
+    parentRow: Row | null,
+  ) => readonly CrudFilter[] | undefined;
 }
 
 export interface EditableLineSupplementalColumn {
@@ -138,6 +144,7 @@ export function EditableLines({
   rowErrors,
   primaryFields,
   supplementalColumns = [],
+  relationFilters,
 }: EditableLinesProps): React.ReactElement {
   const t = useUiT();
   const config = React.useMemo(() => lineDiffConfig(lines), [lines]);
@@ -291,6 +298,7 @@ export function EditableLines({
                       supplementalColumns={supplementalColumns}
                       row={rows[index]}
                       parentRow={parentRow}
+                      relationFilters={relationFilters}
                       formIsDirty={formIsDirty}
                       onRowChange={(patch) => patchRow(row.rhfKey, patch)}
                       gridStyle={gridStyle}
@@ -338,6 +346,7 @@ function LineRow({
   supplementalColumns,
   row,
   parentRow,
+  relationFilters,
   formIsDirty,
   onRowChange,
   gridStyle,
@@ -355,6 +364,7 @@ function LineRow({
   supplementalColumns: readonly EditableLineSupplementalColumn[];
   row?: Row;
   parentRow?: Row | null;
+  relationFilters?: EditableLinesProps["relationFilters"];
   formIsDirty: boolean;
   onRowChange: (patch: Record<string, unknown>) => void;
   gridStyle: React.CSSProperties;
@@ -401,6 +411,7 @@ function LineRow({
                   onChange={controller.onChange}
                   readOnly={readOnly}
                   relation={column.relationMulti}
+                  filters={relationFilters?.(column.field.name, parentRow ?? null)}
                   aria-label={column.header}
                 />
               ) : column.relation ? (
@@ -409,6 +420,7 @@ function LineRow({
                   onChange={controller.onChange}
                   readOnly={readOnly}
                   relation={column.relation}
+                  filters={relationFilters?.(column.field.name, parentRow ?? null)}
                   selectedOption={relationSelectedOption(
                     controller.value,
                     column.relation.labelField,

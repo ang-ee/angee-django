@@ -6,12 +6,12 @@ import pytest
 from rebac import system_context
 
 from angee.workflows.definitions import DefinitionEdit, NodePatch, StaleDefinitionError
+from angee.workflows.testing.models import Step, Workflow
 from tests.test_workflow_definition_commands import _draft
-from tests.workflows import Step, Workflow
 
 
-def test_saved_comparison_separates_semantic_and_presentation_changes(workflow_tables: None) -> None:
-    del workflow_tables
+def test_saved_comparison_separates_semantic_and_presentation_changes(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, tail, _edge = _draft()
     with system_context(reason="version comparison setup"):
         publication = workflow.publish()
@@ -41,8 +41,8 @@ def test_saved_comparison_separates_semantic_and_presentation_changes(workflow_t
     assert any(item.kind == "step" and item.change == "added" and item.key == "renamed" for item in comparison.changes)
 
 
-def test_restore_replaces_only_the_saved_draft_and_uses_revision_cas(workflow_tables: None) -> None:
-    del workflow_tables
+def test_restore_replaces_only_the_saved_draft_and_uses_revision_cas(composed_tables: None) -> None:
+    del composed_tables
     workflow, entry, _tail, _edge = _draft()
     with system_context(reason="version restore setup"):
         publication = workflow.publish()

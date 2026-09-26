@@ -1,0 +1,82 @@
+_meta:
+  model: workflows.Step
+rows:
+  - xref: document_extraction_prepare_pages
+    fields:
+      workflow: workflows_extraction.document_extraction
+      key: prepare_pages
+      name: Prepare document pages
+      step_class: prepare_pages
+      is_entry: true
+      position: {x: 0, y: 0}
+      input_binding:
+        kind: object
+        fields:
+          files: {kind: workflow_input, path: [files]}
+          message_parts: {kind: workflow_input, path: [message_parts]}
+          profile: {kind: workflow_input, path: [profile]}
+          profile_config: {kind: workflow_input, path: [profile_config]}
+          model: {kind: workflow_input, path: [model]}
+          recognition_model: {kind: workflow_input, path: [recognition_model]}
+          target_model: {kind: workflow_input, path: [target_model]}
+          target_id: {kind: workflow_input, path: [target_id]}
+  - xref: document_extraction_map_pages
+    fields:
+      workflow: workflows_extraction.document_extraction
+      key: map_pages
+      name: Recognize text-poor pages
+      step_class: map
+      config: {target_step: recognize_page, items: input.recognition_pages, all_must_succeed: true}
+      position: {x: 240, y: 0}
+      input_binding: {kind: step_output, step_key: prepare_pages, path: []}
+  - xref: document_extraction_recognize_page
+    fields:
+      workflow: workflows_extraction.document_extraction
+      key: recognize_page
+      name: Recognize one document page
+      step_class: recognize_page
+      position: {x: 240, y: 180}
+      input_binding:
+        kind: object
+        fields:
+          source_position: {kind: map_item, path: [source_position]}
+          page_position: {kind: map_item, path: [page_position]}
+          image_file_id: {kind: map_item, path: [image_file_id]}
+          image_digest: {kind: map_item, path: [image_digest]}
+          width: {kind: map_item, path: [width]}
+          height: {kind: map_item, path: [height]}
+          dpi: {kind: map_item, path: [dpi]}
+          model_id: {kind: map_item, path: [model_id]}
+          config_digest: {kind: map_item, path: [config_digest]}
+          profile_config: {kind: workflow_input, path: [profile_config, recognition_config]}
+          timeout: {kind: workflow_input, path: [recognition_timeout]}
+  - xref: document_extraction_collect_carriers
+    fields:
+      workflow: workflows_extraction.document_extraction
+      key: collect_carriers
+      name: Collect complete document carriers
+      step_class: collect_carriers
+      position: {x: 480, y: 0}
+      input_binding:
+        kind: object
+        fields:
+          prepared: {kind: step_output, step_key: prepare_pages, path: []}
+          recognition: {kind: step_output, step_key: map_pages, path: []}
+          profile_config: {kind: workflow_input, path: [profile_config]}
+  - xref: document_extraction_process_evidence
+    fields:
+      workflow: workflows_extraction.document_extraction
+      key: process_evidence
+      name: Retain processed document evidence
+      step_class: process_evidence
+      position: {x: 720, y: 0}
+      input_binding:
+        kind: object
+        fields:
+          prepared: {kind: step_output, step_key: collect_carriers, path: [prepared]}
+          recognition_results: {kind: step_output, step_key: collect_carriers, path: [recognition_results]}
+          hold_reasons: {kind: step_output, step_key: collect_carriers, path: [hold_reasons]}
+          completed_page_count: {kind: step_output, step_key: collect_carriers, path: [completed_page_count]}
+          schema: {kind: workflow_input, path: [schema]}
+          profile: {kind: workflow_input, path: [profile]}
+          profile_config: {kind: workflow_input, path: [profile_config]}

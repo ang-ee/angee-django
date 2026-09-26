@@ -40,8 +40,6 @@ from angee.base.identity import (
 )
 from angee.base.scoping import (
     aggregate_scoped_queryset,
-    bind_actor,
-    requires_angee_rebac_contract,
     system_queryset,
 )
 from angee.data.field_classification import (
@@ -221,11 +219,13 @@ class AngeeHasuraWriteBackend:
 
         if self.lines is None:
             raise ImproperlyConfigured(f"{self.model._meta.label} resource declares no editable lines.")
+        targets = self.write_target_queryset()
+
         with transaction.atomic():
             instance = require_instance_for_id(
                 self.model,
                 pk,
-                queryset=self.write_target_queryset(),
+                queryset=targets,
             )
             if not instance.has_access("write"):
                 raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
@@ -242,47 +242,16 @@ class AngeeHasuraWriteBackend:
             return instance
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create one row through strawberry-django's stock mutation resolver."""
+        """Create one row through strawberry-django's prepared-instance resolver."""
 
-        decoded_data, relationships = self._decode_public_id_fields_with_relationships(data)
-        check_create = getattr(self.model._default_manager, "check_create", None)
-        if not callable(check_create):
-            if requires_angee_rebac_contract(self.model):
-                raise ImproperlyConfigured(f"{self.model._meta.label} manager must expose check_create().")
-            return mutation_resolvers.create(
-                info,
-                self.model,
-                decoded_data,
-                key_attr=PUBLIC_ID_FIELD_NAME,
-                full_clean=True,
-            )
-
-        verified_actor: Any | None = None
-
-        def pre_save_hook(instance: models.Model) -> None:
-            nonlocal verified_actor
-            # The gate must see the row as it will persist: let the model apply
-            # its blank-on-input create defaults before gating, and fold the
-            # subject relations those defaults add into the preflight. A
-            # caller-supplied relation always wins the merge, so an explicit id
-            # still rides the gate — no bypass through the default.
-            apply_defaults = getattr(instance, "apply_create_defaults", None)
-            default_relationships = apply_defaults() if callable(apply_defaults) else {}
-            verified_actor = check_create({**default_relationships, **relationships})
-            sudo = getattr(instance, "sudo", None)
-            if callable(sudo):
-                sudo(reason="graphql.hasura.create")
-
-        instance = mutation_resolvers.create(
+        decoded_data = self._decode_public_id_fields(data)
+        return mutation_resolvers.create(
             info,
             self.model,
             decoded_data,
             key_attr=PUBLIC_ID_FIELD_NAME,
             full_clean=True,
-            pre_save_hook=pre_save_hook,
         )
-        bind_actor(instance, verified_actor)
-        return instance
 
     def _pop_line_rows(self, data: dict[str, Any]) -> list[dict[str, Any]] | None:
         """Pop the nested-insert envelope for the lines relation off ``data``."""
@@ -365,10 +334,12 @@ class AngeeHasuraWriteBackend:
     def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
         """Patch one public-id-addressed row through the write queryset."""
 
+        targets = self.write_target_queryset()
+
         instance = require_instance_for_id(
             self.model,
             pk,
-            queryset=self.write_target_queryset(),
+            queryset=targets,
         )
         with transaction.atomic():
             return mutation_resolvers.update(
@@ -407,20 +378,7 @@ class AngeeHasuraWriteBackend:
         data: dict[str, Any],
         public_id_fields: Mapping[str, type[models.Model]] | None = None,
     ) -> dict[str, Any]:
-        """Translate public-id relation fields to Django-native write values."""
-
-        decoded, _relationships = self._decode_public_id_fields_with_relationships(
-            data,
-            public_id_fields,
-        )
-        return decoded
-
-    def _decode_public_id_fields_with_relationships(
-        self,
-        data: dict[str, Any],
-        public_id_fields: Mapping[str, type[models.Model]] | None = None,
-    ) -> tuple[dict[str, Any], dict[str, tuple[Any, ...]]]:
-        """Translate public-id relation fields and keep relationship instances.
+        """Translate public IDs under the caller into Django-native write values.
 
         ``public_id_fields`` defaults to the parent's map; a child line write
         passes the child's own map (its owner model resolves the field kind).
@@ -434,7 +392,6 @@ class AngeeHasuraWriteBackend:
             field_models = public_id_fields
             owner_model = self.lines.model if self.lines is not None else self.model
         out: dict[str, Any] = {}
-        relationships: dict[str, tuple[Any, ...]] = {}
         for key, value in data.items():
             related_model = field_models.get(key)
             if related_model is None:
@@ -448,17 +405,15 @@ class AngeeHasuraWriteBackend:
                 field = None
             if getattr(field, "many_to_many", False):
                 instances = (
-                    tuple(_write_public_instance(related_model, item) for item in value) if value is not None else ()
+                    tuple(_write_public_instance(related_model, item) for item in value)
+                    if value is not None
+                    else ()
                 )
                 out[key] = list(instances) if value is not None else None
-                if instances:
-                    relationships[key] = instances
                 continue
             instance = _write_public_instance(related_model, value)
             out[f"{key}_id"] = None if instance is None else instance.pk
-            if instance is not None:
-                relationships[key] = (instance,)
-        return out, relationships
+        return out
 
 
 def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:

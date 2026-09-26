@@ -1,3 +1,4 @@
+import { lazy } from "react";
 import type { BaseAddonRoute } from "@angee/app";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import type { BaseMenuItem } from "@angee/ui";
@@ -7,6 +8,9 @@ import { Box, Cpu, GitBranch, LayoutTemplate, Server, Sparkles, Wrench } from "l
 import { enAgentsMessages } from "./i18n";
 import { AgentChatterPane } from "./views/AgentChatterPane";
 import { inferenceProviderForm } from "./views/InferencePage";
+import { AGENT_CHAT_SLOT } from "./chat-slot";
+
+const AcpAgentChat = lazy(() => import("./views/AgentChat").then((module) => ({ default: module.AcpAgentChat })));
 
 const AGENTS_ID = "agents";
 
@@ -96,6 +100,13 @@ const agents = defineBaseAddon({
   routes: agentsRoutes,
   menus: agentsMenu,
   i18n: { agents: enAgentsMessages },
+  slots: ["claude_code", "opencode"].map((impl) => ({
+    slot: AGENT_CHAT_SLOT,
+    model: "agents.Agent",
+    impl,
+    id: "chat",
+    content: <AcpAgentChat />,
+  })),
   forms: { "agents.InferenceProvider": inferenceProviderForm },
   icons: {
     // `agent` is a shared glyph owned by the base icon registry — reference it, don't

@@ -6,14 +6,14 @@ import { useUiT } from "../../../i18n";
 import { BoardView } from "../BoardView";
 import { GroupedBoardBody } from "../board/grouped";
 import { type ResourceViewContextValue } from "../resource-view-context";
-import { type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
+import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../resource-view-surface";
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
 import type { CardActionContext, ListEmptyContent, ListViewProps } from "../resource-view-types";
-import { createLabelForResource, mergeFilterFields, mergeFilterOptions, resolveTextFilterField } from "../resource-view-utils";
+import { createLabelForResource, mergeFilterFields, mergeFilterOptions } from "../resource-view-utils";
 import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
@@ -23,7 +23,6 @@ import { useResourceToolbarProps } from "../resource-toolbar-props";
 import { useResourceViewToolbarInputs } from "../resource-view-toolbar-inputs";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
 import { ResourceViewUtilities } from "../resource-view-utilities";
-import type { ResourceViewFilter } from "../resource-view-model";
 interface ListViewContentProps<TRow extends Row> {
   source?: ListViewProps<TRow>["source"];
   textFilterField?: string | null;
@@ -125,11 +124,13 @@ export function ListViewContent<TRow extends Row = Row>({
       mergeFilterFields(declaredFacets.filterFields, scalarFacets.filterFields),
     [declaredFacets.filterFields, scalarFacets.filterFields],
   );
-  // Search the model's real title field (recordRepresentation → e.g. displayName
-  // for Person), not the hardcoded "title" that non-title models lack.
+  // Use the query owner's authored search field or record-representation fallback,
+  // not the hardcoded "title" that non-title models lack.
   const textFilterField =
     declaredTextField === undefined
-      ? resolveTextFilterField(modelMetadata)
+      ? modelMetadata
+        ? ResourceQuery.from(modelMetadata).textSearchFields()[0] ?? null
+        : DEFAULT_TEXT_FILTER_FIELD
       : declaredTextField;
   const toolbarInputs = useResourceViewToolbarInputs({
     query: source?.query,

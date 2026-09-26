@@ -8,6 +8,8 @@ import pytest
 import reversion
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.sessions.base_session import AbstractBaseSession
+from django.test.utils import isolate_apps
 from rebac import (
     MissingActorError,
     PermissionDenied,
@@ -28,10 +30,10 @@ from angee.knowledge.models import (
     parse_wikilinks,
 )
 from angee.mcp.graphql import execute_under_actor
-from tests.conftest import Link, MarkdownPage, Page, SchemaAddon, Vault, create_user, vault_for
+from tests.conftest import Link, MarkdownPage, Page, RecordBinding, SchemaAddon, Vault, create_user, vault_for
 
 
-def test_create_for_sets_owner_and_audit_stamps(knowledge_tables: None) -> None:
+def test_create_for_sets_owner_and_audit_stamps(composed_tables: None) -> None:
     """The vault factory persists ownership and stamps the creating actor."""
 
     alice = create_user("alice")
@@ -44,7 +46,7 @@ def test_create_for_sets_owner_and_audit_stamps(knowledge_tables: None) -> None:
     assert str(vault.sqid).startswith("vlt_")
 
 
-def test_factory_rows_stay_gated_after_creation(knowledge_tables: None) -> None:
+def test_factory_rows_stay_gated_after_creation(composed_tables: None) -> None:
     """The create-time elevation must not survive on the returned instance."""
 
     alice = create_user("alice")
@@ -56,7 +58,7 @@ def test_factory_rows_stay_gated_after_creation(knowledge_tables: None) -> None:
         vault.as_user(bob).save(update_fields=("name",))
 
 
-def test_create_for_refuses_foreign_owner(knowledge_tables: None) -> None:
+def test_create_for_refuses_foreign_owner(composed_tables: None) -> None:
     """A vault may only be created for the acting user."""
 
     alice = create_user("alice")
@@ -66,7 +68,7 @@ def test_create_for_refuses_foreign_owner(knowledge_tables: None) -> None:
         Vault.objects.create_for(bob, name="Gift")
 
 
-def test_create_vault_requires_an_authenticated_actor(knowledge_tables: None) -> None:
+def test_create_vault_requires_an_authenticated_actor(composed_tables: None) -> None:
     """Anonymous and actor-less calls cannot create vaults."""
 
     anonymous = AnonymousUser()
@@ -77,7 +79,7 @@ def test_create_vault_requires_an_authenticated_actor(knowledge_tables: None) ->
         Vault.objects.create_for(None, name="Nope")
 
 
-def test_vault_scope_hides_other_owners(knowledge_tables: None) -> None:
+def test_vault_scope_hides_other_owners(composed_tables: None) -> None:
     """Actor-scoped vault reads only return the actor's own grants."""
 
     alice = create_user("alice")
@@ -88,7 +90,7 @@ def test_vault_scope_hides_other_owners(knowledge_tables: None) -> None:
     assert list(Vault.objects.as_user(bob)) == []
 
 
-def test_create_in_requires_vault_write(knowledge_tables: None) -> None:
+def test_create_in_requires_vault_write(composed_tables: None) -> None:
     """Only actors who can write the vault may add pages to it."""
 
     alice = create_user("alice")
@@ -107,7 +109,7 @@ def test_create_in_requires_vault_write(knowledge_tables: None) -> None:
     assert list(Page.objects.as_user(bob)) == []
 
 
-def test_create_in_refuses_cross_vault_parent(knowledge_tables: None) -> None:
+def test_create_in_refuses_cross_vault_parent(composed_tables: None) -> None:
     """A parent from another vault would leak access across the boundary."""
 
     alice = create_user("alice")
@@ -119,7 +121,7 @@ def test_create_in_refuses_cross_vault_parent(knowledge_tables: None) -> None:
             Page.objects.create_in(research, parent=folder, title="Escapee")
 
 
-def test_page_inherits_vault_read(knowledge_tables: None) -> None:
+def test_page_inherits_vault_read(composed_tables: None) -> None:
     """A vault viewer grant reaches every page through ``vault->read``."""
 
     alice = create_user("alice")
@@ -134,7 +136,7 @@ def test_page_inherits_vault_read(knowledge_tables: None) -> None:
     assert [row.name for row in Vault.objects.as_user(bob)] == ["Research"]
 
 
-def test_page_inherits_parent_read(knowledge_tables: None) -> None:
+def test_page_inherits_parent_read(composed_tables: None) -> None:
     """A grant on a folder page cascades to its children via ``parent->read``."""
 
     alice = create_user("alice")
@@ -150,7 +152,7 @@ def test_page_inherits_parent_read(knowledge_tables: None) -> None:
     assert {row.title for row in Page.objects.as_user(bob)} == {"Projects", "Roadmap"}
 
 
-def test_folder_delete_cascades_past_foreign_children(knowledge_tables: None) -> None:
+def test_folder_delete_cascades_past_foreign_children(composed_tables: None) -> None:
     """Deleting a folder passes the gate on children other users created."""
 
     alice = create_user("alice")
@@ -169,7 +171,7 @@ def test_folder_delete_cascades_past_foreign_children(knowledge_tables: None) ->
         assert not Page.objects.as_user(alice).exists()
 
 
-def test_roles_grant_cross_vault_reach(knowledge_tables: None) -> None:
+def test_roles_grant_cross_vault_reach(composed_tables: None) -> None:
     """The shipped knowledge roles cover every vault without per-row grants."""
 
     alice = create_user("alice")
@@ -203,7 +205,7 @@ def test_roles_grant_cross_vault_reach(knowledge_tables: None) -> None:
     assert list(Vault.objects.as_user(alice)) == []
 
 
-def test_write_body_creates_updates_and_guards(knowledge_tables: None) -> None:
+def test_write_body_creates_updates_and_guards(composed_tables: None) -> None:
     """Body writes upsert the sidecar, derive hash facts, and reject stale tokens."""
 
     alice = create_user("alice")
@@ -233,7 +235,7 @@ def test_write_body_creates_updates_and_guards(knowledge_tables: None) -> None:
         MarkdownPage.objects.write_body(page, "vandalised")
 
 
-def test_write_body_rejects_bodyless_kinds(knowledge_tables: None) -> None:
+def test_write_body_rejects_bodyless_kinds(composed_tables: None) -> None:
     """Folder pages carry no markdown body sidecar."""
 
     alice = create_user("alice")
@@ -244,7 +246,7 @@ def test_write_body_rejects_bodyless_kinds(knowledge_tables: None) -> None:
             MarkdownPage.objects.write_body(folder, "nope")
 
 
-def test_body_revisions_roll_back(knowledge_tables: None) -> None:
+def test_body_revisions_roll_back(composed_tables: None) -> None:
     """Body edits snapshot through django-reversion and revert cleanly."""
 
     alice = create_user("alice")
@@ -269,7 +271,7 @@ def test_body_revisions_roll_back(knowledge_tables: None) -> None:
     assert markdown.word_count == 2
 
 
-def test_excerpt_truncates_long_bodies(knowledge_tables: None) -> None:
+def test_excerpt_truncates_long_bodies(composed_tables: None) -> None:
     """The excerpt keeps short bodies intact and ellipsizes long ones."""
 
     alice = create_user("alice")
@@ -292,7 +294,7 @@ def test_parse_wikilinks_extracts_target_and_display() -> None:
     }
 
 
-def test_body_save_builds_resolved_and_dangling_links(knowledge_tables: None) -> None:
+def test_body_save_builds_resolved_and_dangling_links(composed_tables: None) -> None:
     """Saving a body indexes its wikilinks, resolved against same-vault titles."""
 
     alice = create_user("alice")
@@ -309,7 +311,7 @@ def test_body_save_builds_resolved_and_dangling_links(knowledge_tables: None) ->
     assert links["Ghost"].target_page_id is None
 
 
-def test_editing_body_replaces_stale_links(knowledge_tables: None) -> None:
+def test_editing_body_replaces_stale_links(composed_tables: None) -> None:
     """A re-saved body fully replaces the page's previous link set."""
 
     alice = create_user("alice")
@@ -322,7 +324,7 @@ def test_editing_body_replaces_stale_links(knowledge_tables: None) -> None:
     assert [link.target_text for link in Link._base_manager.filter(source_page=page)] == ["Beta"]
 
 
-def test_backlinks_respect_source_page_read(knowledge_tables: None) -> None:
+def test_backlinks_respect_source_page_read(composed_tables: None) -> None:
     """A backlink is visible only to actors who can read its source page."""
 
     alice = create_user("alice")
@@ -339,7 +341,7 @@ def test_backlinks_respect_source_page_read(knowledge_tables: None) -> None:
     assert list(Link.objects.as_user(bob).filter(target_page=target)) == []
 
 
-def test_patch_section_splices_guards_and_reindexes(knowledge_tables: None) -> None:
+def test_patch_section_splices_guards_and_reindexes(composed_tables: None) -> None:
     """A section patch CAS-guards, records a revision, and rebuilds backlinks."""
 
     alice = create_user("alice")
@@ -377,7 +379,7 @@ def test_patch_section_splices_guards_and_reindexes(knowledge_tables: None) -> N
     assert links["Target"].target_page_id == target.pk
 
 
-def test_replace_unique_swaps_exact_text_with_guard(knowledge_tables: None) -> None:
+def test_replace_unique_swaps_exact_text_with_guard(composed_tables: None) -> None:
     """An exact-string replace CAS-guards and swaps the single occurrence."""
 
     alice = create_user("alice")
@@ -393,7 +395,7 @@ def test_replace_unique_swaps_exact_text_with_guard(knowledge_tables: None) -> N
     assert updated.body == "alpha BETA gamma"
 
 
-def test_append_and_prepend_grow_body_and_record_revisions(knowledge_tables: None) -> None:
+def test_append_and_prepend_grow_body_and_record_revisions(composed_tables: None) -> None:
     """Whole-page append/prepend join one blank apart, CAS-guard, and version."""
 
     alice = create_user("alice")
@@ -417,7 +419,7 @@ def test_append_and_prepend_grow_body_and_record_revisions(knowledge_tables: Non
     assert versions[0].field_dict["body"] == "header\n\nfirst line\n\nsecond line"
 
 
-def test_mcp_body_write_records_a_revision(knowledge_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mcp_body_write_records_a_revision(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """A section patch driven through the MCP engine is versioned like an HTTP edit.
 
     The MCP path runs GraphQL with ``request=None``, so ``RevisionMiddleware`` never
@@ -462,7 +464,7 @@ def test_mcp_body_write_records_a_revision(knowledge_tables: None, monkeypatch: 
     assert versions[0].revision.user_id == alice.pk  # the MCP actor bound as the revision user
 
 
-def test_lexical_retrieval_matches_title_and_body_scoped_to_actor(knowledge_tables: None) -> None:
+def test_lexical_retrieval_matches_title_and_body_scoped_to_actor(composed_tables: None) -> None:
     """The lexical provider matches title or body and row-scopes to the actor."""
 
     alice = create_user("alice")
@@ -504,26 +506,17 @@ def _rename(vault: Any, name: str) -> None:
 
 
 @pytest.mark.django_db
-def test_binding_teardown_ignores_string_pk_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+@isolate_apps()
+def test_binding_teardown_ignores_string_pk_rows() -> None:
     """A record whose canonical pk is not an integer is a no-op, not an error.
 
     The global pre_delete receiver runs for every model — django Session's
     string key crashed logout by coercing into the integer object_id filter.
     """
 
-    from types import SimpleNamespace
+    class Session(AbstractBaseSession):
+        class Meta:
+            app_label = "tests"
 
-    from django.apps import apps as django_apps
-    from django.contrib.contenttypes.models import ContentType
-
-    from angee.knowledge import models as knowledge_models
-
-    binding_model = django_apps.get_model("knowledge", "RecordBinding")
-    content_type = ContentType.objects.get_for_model(binding_model)
-    monkeypatch.setattr(
-        knowledge_models,
-        "canonical_record_target",
-        lambda record: (content_type, "5nak4kkrccy3b268oc6zt7hbcui3ru1l"),
-    )
-    probe = SimpleNamespace(pk=1)
-    binding_model.objects.teardown_for_record(probe)
+    probe = Session(session_key="5nak4kkrccy3b268oc6zt7hbcui3ru1l")
+    RecordBinding.objects.teardown_for_record(probe)

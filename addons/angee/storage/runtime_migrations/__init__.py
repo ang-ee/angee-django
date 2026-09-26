@@ -1,1 +1,1 @@
-"""Addon-owned runtime migrations for the storage base addon."""
+"""Self-contained upgrade transitions copied into composed runtime history."""

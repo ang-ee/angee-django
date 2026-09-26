@@ -20,13 +20,7 @@ from angee.storage_integrate.mounts import LocalFolderMountBackend, validate_loc
 _LOCAL_VENDOR_SLUG = "local"
 
 
-def create_local_folder_mount(
-    user: Any,
-    *,
-    name: str,
-    path: str,
-    mode: MountMode | str,
-) -> Any:
+def create_local_folder_mount(user: Any, *, name: str, path: str, mode: MountMode | str) -> Any:
     """Validate and provision one local-folder Mount."""
 
     try:
@@ -107,18 +101,18 @@ def provision_mount(
             storage_backend = _default_drive(drive_model).backend
             prefix = f"mounts/{slug}"
         drive = drive_model.objects.create(
-            backend=storage_backend,
+            backend_id=storage_backend.pk,
             slug=drive_slug,
             name=display_name,
             prefix=prefix,
             created_by_id=user.pk,
         )
         mount = mount_model.objects.create(
-            vendor=apps.get_model("integrate", "Vendor").objects.seeded(_LOCAL_VENDOR_SLUG),
-            owner=user,
+            vendor_id=apps.get_model("integrate", "Vendor").objects.seeded(_LOCAL_VENDOR_SLUG).pk,
+            owner_id=user.pk,
             display_name=display_name,
             backend_class=backend_class,
-            drive=drive,
+            drive_id=drive.pk,
             mode=mount_mode,
             lifecycle=IntegrationLifecycle.DISCONNECTED,
             config=mount_config,
@@ -129,13 +123,7 @@ def provision_mount(
     return mount
 
 
-def _available_mount_slug(
-    name: str,
-    *,
-    slug_default: str,
-    backend_model: Any,
-    drive_model: Any,
-) -> str:
+def _available_mount_slug(name: str, *, slug_default: str, backend_model: Any, drive_model: Any) -> str:
     """Return a slug whose mount-prefixed backend and drive ids are unused."""
 
     base = slugify(name) or slug_default
@@ -154,6 +142,8 @@ def _default_drive(drive_model: Any) -> Any:
     """Return the configured managed drive, failing clearly on resource drift."""
 
     try:
-        return drive_model.objects.select_related("backend").get(slug=str(settings.ANGEE_STORAGE_DEFAULT_DRIVE))
+        return drive_model.objects.select_related("backend").get(
+            slug=str(settings.ANGEE_STORAGE_DEFAULT_DRIVE),
+        )
     except drive_model.DoesNotExist as error:
         raise ImproperlyConfigured("The configured default storage drive is missing.") from error

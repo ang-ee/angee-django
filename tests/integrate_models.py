@@ -1,4 +1,4 @@
-"""Canonical concrete Integration shared by bare-Django test fixtures."""
+"""Concrete Integration composed with the framework suite's projects extension."""
 
 from angee.integrate.models import Integration as AbstractIntegration
 from angee.projects.models import IntegrationProjects

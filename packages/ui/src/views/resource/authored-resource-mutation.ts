@@ -2,7 +2,6 @@ import * as React from "react";
 import {
   useAuthoredMutation,
   type AuthoredDocument,
-  type AuthoredMutate,
   type AuthoredMutationOptions,
   type AuthoredVariables,
   type DocumentData,
@@ -36,7 +35,7 @@ export function useAuthoredResourceMutation<TDocument extends AuthoredDocument>(
     DocumentData<TDocument>,
     AuthoredVariables<TDocument>
   > = {},
-): [AuthoredMutate<TDocument>, { fetching: boolean; error: Error | null }] {
+): ReturnType<typeof useAuthoredMutation<TDocument>> {
   const canonicalInvalidateModels = useCanonicalResourceModelLabels(
     options.invalidateModels,
   );

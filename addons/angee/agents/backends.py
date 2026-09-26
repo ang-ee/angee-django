@@ -10,10 +10,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from math import isfinite
+from typing import Any, ClassVar, cast
 
 from asgiref.sync import async_to_sync
+from httpx import NetworkError, Timeout, TimeoutException
 from pydantic_ai.direct import model_request
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
@@ -82,6 +85,9 @@ class InferenceBackend(ImplBase):
     # Whether callers must attach an inference credential. This belongs to the
     # contract because every backend consumer must make the same typed decision.
     requires_credential: ClassVar[bool] = True
+    default_base_url: ClassVar[str] = ""
+    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = ()
+    """Vendor SDK transport failures in addition to the shared network types."""
     defaults = {
         "name": "Manual",
         "status": "draft",
@@ -92,6 +98,22 @@ class InferenceBackend(ImplBase):
 
         self.provider = provider
 
+    @property
+    def endpoint(self) -> str:
+        """Return the canonical configured endpoint; blank delegates to the SDK."""
+
+        return str(self.provider.base_url or self.default_base_url).strip().rstrip("/")
+
+    def is_transient_error(self, error: Exception) -> bool:
+        """Classify native provider failures; vendor adapters extend transport types."""
+
+        if isinstance(error, ModelHTTPError):
+            return error.status_code == 429 or 500 <= error.status_code < 600
+        cause = error.__cause__ if isinstance(error, ModelAPIError) else error
+        return isinstance(
+            cause, (TimeoutError, ConnectionError, TimeoutException, NetworkError, *self.transient_error_types)
+        )
+
     def connect_oauth_client(self, owner_label: str) -> Any:
         """Return the enabled OAuth client this backend connects its provider through.
 
@@ -99,7 +121,8 @@ class InferenceBackend(ImplBase):
         connectable. The bound provider's vendor slug feeds the ``{vendor}`` template.
         """
 
-        vendor_slug = str(getattr(getattr(self.provider, "vendor", None), "slug", "") or "")
+        vendor = self.provider.vendor
+        vendor_slug = str(getattr(vendor, "slug", "") or "")
         return enabled_oauth_client_from_hint(
             self.oauth_client,
             owner_label=owner_label,
@@ -121,6 +144,35 @@ class InferenceBackend(ImplBase):
 
         raise NotImplementedError(f"{self.label} does not support in-process inference.")
 
+    def request_settings(self, model_settings: ModelSettings | None) -> ModelSettings | None:
+        """Reject transport overrides and return safe direct-request settings.
+
+        Vendor backends may admit named transport extensions by removing and
+        validating them before composing this owner.
+        """
+
+        result = dict(model_settings or {})
+        forbidden = {"extra_body", "extra_headers", "extra_query"} & result.keys()
+        if forbidden:
+            names = ", ".join(sorted(forbidden))
+            raise ValueError(f"Inference request settings cannot override provider transport: {names}.")
+        unknown = result.keys() - (ModelSettings.__required_keys__ | ModelSettings.__optional_keys__)
+        if unknown:
+            raise ValueError(f"Unknown inference request settings: {', '.join(sorted(unknown))}.")
+        self.validate_timeout(result.get("timeout"))
+        return cast(ModelSettings, result)
+
+    @staticmethod
+    def validate_timeout(timeout: Any) -> None:
+        """Reject invalid timeout configuration before it reaches network transport."""
+
+        values = timeout.as_dict().values() if isinstance(timeout, Timeout) else (timeout,)
+        if any(
+            value is not None and (not isinstance(value, int | float) or not isfinite(value) or value <= 0)
+            for value in values
+        ):
+            raise ValueError("Inference timeout must be positive and finite, or None.")
+
     def chat(
         self,
         handle: str,
@@ -132,6 +184,7 @@ class InferenceBackend(ImplBase):
     ) -> ModelResponse:
         """Make one native request; tools are declared but never executed here."""
 
+        request_settings = self.request_settings(model_settings)
         binding = self.model(handle, credential=credential)
 
         async def request() -> ModelResponse:
@@ -139,7 +192,7 @@ class InferenceBackend(ImplBase):
                 return await model_request(
                     model,
                     messages,
-                    model_settings=model_settings,
+                    model_settings=request_settings,
                     model_request_parameters=model_request_parameters,
                 )
 

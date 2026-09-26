@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import {
-  ModelMetadataProvider,
   schemaFieldMetadataFromDataResources,
   type Row,
   type SchemaFieldMetadata,
@@ -15,29 +14,14 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
+import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, type FormSpecFieldDescriptor } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
-import type { RowsValue } from "./RowsField";
-
-Element.prototype.scrollIntoView = vi.fn();
-
-const refineMocks = vi.hoisted(() => ({
-  useList: vi.fn(),
-  useOne: vi.fn(),
-}));
-
-vi.mock("@refinedev/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@refinedev/core")>();
-  return {
-    ...actual,
-    useList: refineMocks.useList,
-    useOne: refineMocks.useOne,
-  };
-});
+import { RowsField, type RowsValue } from "./RowsField";
 
 const channelRows: Row[] = [
   { id: "chn-general", name: "General" },
@@ -60,43 +44,9 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
 ]);
 
 describe("rows widget", () => {
-  afterEach(cleanup);
-
-  beforeEach(() => {
-    refineMocks.useList.mockReset();
-    refineMocks.useOne.mockReset();
-    refineMocks.useOne.mockImplementation(
-      (options?: { id?: string; queryOptions?: { enabled?: boolean } }) => ({
-        result:
-          options?.queryOptions?.enabled !== false
-            ? channelRows.find((row) => row.id === options?.id)
-            : undefined,
-        query: {
-          isFetching: false,
-          error: null,
-          refetch: vi.fn(),
-        },
-      }),
-    );
-    refineMocks.useList.mockImplementation(
-      (options?: {
-        resource?: string;
-        queryOptions?: { enabled?: boolean };
-      }) => {
-        const enabled = options?.queryOptions?.enabled !== false;
-        const rows = enabled && options?.resource === "channels"
-          ? channelRows
-          : [];
-        return {
-          result: { data: rows, total: rows.length },
-          query: {
-            isFetching: false,
-            error: null,
-            refetch: vi.fn(),
-          },
-        };
-      },
-    );
+  afterEach(() => {
+    cleanup();
+    clearClients();
   });
 
   test("renders a deserialized array-of-objects schema through the real registry", async () => {
@@ -179,7 +129,7 @@ describe("rows widget", () => {
     const filters = [
       { field: "status", operator: "eq" as const, value: "active" },
     ];
-    renderRows(
+    const { getOne, getList } = renderRows(
       <LabeledDescriptorField
         field={rowsField([
           {
@@ -203,29 +153,15 @@ describe("rows widget", () => {
       name: "Target: General",
     });
     expect(screen.queryByPlaceholderText("Search…")).toBeNull();
-    expect(refineMocks.useOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resource: "channels",
-        id: "chn-general",
-        queryOptions: expect.objectContaining({ enabled: true }),
-      }),
+    expect(getOne).toHaveBeenCalledWith(
+      expect.objectContaining({ resource: "channels", id: "chn-general" }),
     );
-    expect(refineMocks.useList).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resource: "channels",
-        filters,
-        queryOptions: expect.objectContaining({ enabled: false }),
-      }),
-    );
+    expect(getList).not.toHaveBeenCalled();
 
     fireEvent.click(trigger);
     await waitFor(() =>
-      expect(refineMocks.useList).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          resource: "channels",
-          filters,
-          queryOptions: expect.objectContaining({ enabled: true }),
-        }),
+      expect(getList).toHaveBeenCalledWith(
+        expect.objectContaining({ resource: "channels", filters }),
       ),
     );
     const search = await screen.findByPlaceholderText("Search…");
@@ -291,6 +227,39 @@ describe("rows widget", () => {
     expect(screen.getByText("Off").closest("td")).not.toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
   });
+
+  test.each([false, true])("applies row visibility in both layouts (sections: %s)", async (sections) => {
+    const controlRef = vi.fn();
+    renderRows(
+      <RowsField
+        field={rowsField([
+          { name: "target", label: "Target", widget: "text", showWhen: (row) => row.editable === true },
+          { name: "source", label: "Source", widget: "text" },
+          { name: "unused", label: "Unused", widget: "text", showWhen: () => false },
+        ])}
+        value={[
+          { source: "Archive A", target: "Hidden target", editable: false },
+          { source: "Archive B", target: "Visible target", editable: true },
+        ]}
+        rowTitle={sections ? (_row, index) => `Row ${index + 1}` : undefined}
+        controlRef={controlRef}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const targets = await screen.findAllByRole("textbox", { name: "Target" });
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toHaveProperty("value", "Visible target");
+    expect(screen.queryByDisplayValue("Hidden target")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Unused" })).toBeNull();
+    expect(controlRef).toHaveBeenCalledWith(screen.getAllByRole("textbox", { name: "Source" })[0]);
+    if (!sections) {
+      expect(screen.queryByRole("columnheader", { name: "Unused" })).toBeNull();
+      const rows = screen.getAllByRole("row").slice(1);
+      expect(rows.map((row) => row.querySelectorAll("td").length)).toEqual([2, 2]);
+      expect(rows[0]?.querySelector("td")?.textContent).toBe("");
+    }
+  });
 });
 
 function rowsField(
@@ -305,12 +274,23 @@ function rowsField(
   };
 }
 
-function renderRows(children: ReactElement): ReturnType<typeof render> {
-  return render(
-    <ModelMetadataProvider metadata={metadata}>
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://channels",
+  metadata,
+  queryClientConfig: { defaultOptions: { queries: { retry: false } } },
+});
+
+function renderRows(children: ReactElement) {
+  const getOne = vi.fn(async ({ id }: { id: string }) => ({
+    data: channelRows.find((row) => row.id === id),
+  }));
+  const getList = vi.fn(async () => ({ data: channelRows, total: channelRows.length }));
+  const view = render(
+    <Provider dataProvider={{ getOne, getList }}>
       <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
         {children}
       </AppRuntimeProvider>
-    </ModelMetadataProvider>,
+    </Provider>,
   );
+  return { ...view, getOne, getList };
 }

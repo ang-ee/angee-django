@@ -192,6 +192,8 @@ Names are the index of a framework:
   owns the behavior.
 - Follow the host framework's naming and discovery conventions. A new synonym
   is a design choice with a maintenance cost.
+- Framework code, tests, fixtures, and docs use neutral example vocabulary;
+  never name deployments, customers, or consumer products.
 
 The [backend](backend/guidelines.md) and [frontend](frontend/guidelines.md) guides
 own language-specific naming conventions.

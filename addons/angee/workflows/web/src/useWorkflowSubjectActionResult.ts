@@ -1,8 +1,8 @@
 import * as React from "react";
-import { useActionResultRun, type ActionResultRun } from "@angee/ui";
+import { updateRouteSearch, useActionResultRun, type ActionResultRun } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 
-import { workflowSubjectActionSearch } from "./decision-navigation";
+import { workflowSubjectActionSearchPatch } from "./decision-navigation";
 
 /** Settle an ActionResult and follow its returned WorkflowRun in the current subject aside. */
 export function useWorkflowSubjectActionResult(): ActionResultRun {
@@ -15,7 +15,7 @@ export function useWorkflowSubjectActionResult(): ActionResultRun {
       void navigate({
         to: ".",
         replace: true,
-        search: (current: Record<string, unknown>) => workflowSubjectActionSearch(current, runId),
+        search: updateRouteSearch(workflowSubjectActionSearchPatch(runId)),
       });
     }
     return outcome;

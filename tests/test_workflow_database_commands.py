@@ -10,17 +10,26 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
 from django.utils import timezone
 from rebac import system_context, to_subject_ref
 
 from angee.workflows import engine
-from angee.workflows.attempts import ArtifactSpec, InvocationAdmission, LeaseRevocationReason, RecoveryMode
+from angee.workflows.attempts import ArtifactSpec, InvocationAdmission, LeaseRevocationReason
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepEffect, StepExecutionMode, StepResult
+from angee.workflows.testing.models import (
+    Step,
+    StepArtifact,
+    StepAttempt,
+    StepRun,
+    Workflow,
+    WorkflowDispatch,
+    WorkflowRun,
+)
 from angee.workflows_extraction.steps import ProcessEvidenceStepImpl
-from tests.workflows import Step, StepArtifact, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 User = get_user_model()
 
@@ -177,11 +186,11 @@ def _scheduled_run_cancel_command(
 
 @pytest.mark.django_db(transaction=True)
 def test_revoked_after_invocation_admission_is_fenced_before_domain_write(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before = _retained_facts(attempt, step_run.run)
     manager_type = type(StepAttempt.objects)
@@ -212,11 +221,11 @@ def test_revoked_after_invocation_admission_is_fenced_before_domain_write(
 
 @pytest.mark.django_db(transaction=True)
 def test_finalization_failure_rolls_back_domain_command_and_result(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before = _retained_facts(attempt, step_run.run)
 
@@ -236,14 +245,14 @@ def test_finalization_failure_rolls_back_domain_command_and_result(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_process_evidence_is_fresh_recoverable_and_rolls_back_with_finalization(
-    workflow_engine_tables: None,
+def test_process_evidence_has_no_implicit_replay_and_rolls_back_with_finalization(
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     capability = ProcessEvidenceStepImpl.recovery_capability(attempt=object())
-    assert capability.mode is RecoveryMode.FRESH
+    assert capability.mode is None
 
     user, step_run, attempt, dispatch = _scheduled_command(
         monkeypatch,
@@ -268,11 +277,11 @@ def test_process_evidence_is_fresh_recoverable_and_rolls_back_with_finalization(
 
 @pytest.mark.django_db(transaction=True)
 def test_continuation_failure_rolls_back_command_result_and_artifact_before_failure_audit(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before_artifacts, before_advances = _retained_facts(attempt, step_run.run)
     manager_type = type(WorkflowDispatch.objects)
@@ -303,11 +312,11 @@ def test_continuation_failure_rolls_back_command_result_and_artifact_before_fail
 
 @pytest.mark.django_db(transaction=True)
 def test_committed_success_replay_does_not_repeat_domain_command(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before_artifacts, before_advances = _retained_facts(attempt, step_run.run)
     assert engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)["executed"] == 1
@@ -332,18 +341,37 @@ def test_committed_success_replay_does_not_repeat_domain_command(
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("parent_relation", (None, "owned_call", "continuation"))
 def test_run_cancel_waits_for_committed_cancellation_before_continuing(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
+    parent_relation: str | None,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="run-cancel-owner")
     with system_context(reason="run cancellation target setup"):
         target_workflow = Workflow.objects.create(name="Retired target")
+        parent_step_run = None
+        if parent_relation:
+            parent = WorkflowRun.objects.create(
+                workflow=target_workflow,
+                status=RunStatus.RUNNING,
+                created_by=actor,
+            )
+            parent_step = Step.objects.create(
+                workflow=target_workflow,
+                key=f"parent-{parent_relation}",
+                name="Parent",
+                step_class="fixture",
+            )
+            parent_step_run = StepRun.objects.create(run=parent, step=parent_step)
         target = WorkflowRun.objects.create(
             workflow=target_workflow,
             status=RunStatus.RUNNING,
+            created_by=actor,
+            parent_step_run=parent_step_run,
+            parent_relation=parent_relation,
         )
     step_run, attempt, execute = _scheduled_run_cancel_command(
         monkeypatch,
@@ -352,11 +380,12 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
         suffix="ordered",
     )
 
-    with pytest.raises(RuntimeError, match="active attempt write session"):
+    with pytest.raises(ValidationError, match="current invocation lease"):
         WorkflowDispatch.objects.schedule_run_cancel(
             step_run.pk,
             target,
             actor=actor,
+            lease_token=attempt.lease_token,
         )
 
     assert engine.execute_dispatch(
@@ -374,10 +403,16 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
     assert step_run.status == StepRunStatus.WAITING
     assert target.status == RunStatus.RUNNING
 
-    assert engine.cancel_run_dispatch(
-        intent.pk,
-        expected_run_id=target.pk,
+    with pytest.raises(ValidationError, match="Transport envelope"):
+        WorkflowDispatch.objects.deliver(
+            intent.pk, expected_kind=WorkflowDispatchKind.RUN_CANCEL, expected_target_id=target.pk + 1,
+        )
+    assert WorkflowDispatch.objects.deliver(
+        intent.pk, expected_kind=WorkflowDispatchKind.RUN_CANCEL, expected_target_id=target.pk,
     ) == {"canceled": 1}
+    assert WorkflowDispatch.objects.deliver(
+        intent.pk, expected_kind=WorkflowDispatchKind.RUN_CANCEL, expected_target_id=target.pk,
+    ) == {"canceled": 0}
     with system_context(reason="run cancellation delivery verification"):
         target.refresh_from_db()
         intent.refresh_from_db()
@@ -388,15 +423,21 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
         )
     assert target.status == RunStatus.CANCELED
     assert intent.consumed_at is not None
-    assert engine.deliver_artifact_dispatch(delivery.pk)["woken"] == 1
+    assert WorkflowDispatch.objects.deliver(
+        delivery.pk, expected_kind=WorkflowDispatchKind.ARTIFACT_DELIVERY,
+    )["woken"] == 1
 
     with system_context(reason="run cancellation continuation"):
-        continuation = WorkflowDispatch.objects.filter(
-            kind=WorkflowDispatchKind.ADVANCE,
-            run=step_run.run,
-            available_at__lte=timezone.now(),
-            consumed_at__isnull=True,
-        ).order_by("pk").first()
+        continuation = (
+            WorkflowDispatch.objects.filter(
+                kind=WorkflowDispatchKind.ADVANCE,
+                run=step_run.run,
+                available_at__lte=timezone.now(),
+                consumed_at__isnull=True,
+            )
+            .order_by("pk")
+            .first()
+        )
     assert continuation is not None
     assert engine.advance_dispatch(continuation.pk)["claimed"] == 1
     with system_context(reason="run cancellation continuation execution"):
@@ -418,17 +459,18 @@ def test_run_cancel_waits_for_committed_cancellation_before_continuing(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL unique-intent race")
 def test_concurrent_database_commands_share_one_run_cancel_intent(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="run-cancel-race-owner")
     with system_context(reason="run cancellation race target setup"):
         target_workflow = Workflow.objects.create(name="Concurrent retired target")
         target = WorkflowRun.objects.create(
             workflow=target_workflow,
             status=RunStatus.RUNNING,
+            created_by=actor,
         )
     first = _scheduled_run_cancel_command(
         monkeypatch,
@@ -468,14 +510,16 @@ def test_concurrent_database_commands_share_one_run_cancel_intent(
             )
         assert outcomes == ({"executed": 1}, {"executed": 1})
         with system_context(reason="concurrent run cancellation verification"):
-            assert WorkflowDispatch.objects.filter(
-                kind=WorkflowDispatchKind.RUN_CANCEL,
-                run=target,
-                consumed_at__isnull=True,
-            ).count() == 1
+            assert (
+                WorkflowDispatch.objects.filter(
+                    kind=WorkflowDispatchKind.RUN_CANCEL,
+                    run=target,
+                    consumed_at__isnull=True,
+                ).count()
+                == 1
+            )
             assert all(
-                StepRun.objects.get(pk=values[0].pk).status == StepRunStatus.WAITING
-                for values in (first, second)
+                StepRun.objects.get(pk=values[0].pk).status == StepRunStatus.WAITING for values in (first, second)
             )
     finally:
         _RunCancelDatabaseCommand.rendezvous = None
@@ -484,11 +528,11 @@ def test_concurrent_database_commands_share_one_run_cancel_intent(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL row-lock contract")
 def test_revoke_waits_for_fenced_command_and_observes_committed_result(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     user, step_run, attempt, dispatch = _scheduled_command(monkeypatch)
     before_artifacts, before_advances = _retained_facts(attempt, step_run.run)
     entered, release = Event(), Event()

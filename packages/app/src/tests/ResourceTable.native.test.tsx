@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
-
+import { createUiTestProviders } from "@angee/ui/testing";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider, type GetListParams } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
+import type { GetListParams } from "@refinedev/core";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
-import { ModelMetadataProvider, schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
 import { testDataResource, testResourceQuery, testQueryField } from "@angee/metadata/testing";
 import { ToastProvider } from "@angee/ui/feedback/index";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "@angee/ui/views/resource-view-context";
@@ -22,21 +22,20 @@ const resource = testDataResource("notes.Note", {
 const metadata = schemaFieldMetadataFromDataResources([resource]);
 const model: ModelMetadata = { ...metadata.labels!["notes.Note"]!, fields: { id: { name: "id", kind: "scalar" }, title: { name: "title", kind: "scalar" }, updated_at: { name: "updated_at", kind: "scalar" } } };
 const columns = [{ field: "title", sortable: true }, { field: "updated_at", sortable: true }];
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+const { Provider, clients, clearClients } = createUiTestProviders({
+  apiUrl: "test://resource",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 async function fixture({ total = 45, initialPath = "/?page=2&pageSize=20&keep=external", initialState = {}, order }: { total?: number; initialPath?: string; initialState?: ResourceViewInitialState; order?: ResourceListOrder } = {}) {
   const calls: GetListParams[] = [];
   const provider = {
-    getApiUrl: () => "test://resource",
     getList: vi.fn(async (params: GetListParams) => {
       calls.push(params);
       return { data: [{ id: `row-${params.pagination?.currentPage}`, title: "Note" }], ...(total >= 0 ? { total } : {}) };
     }),
-    getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(),
-  } as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
+  } satisfies RefineTestDataProvider;
   let view!: ResourceViewContextValue;
   let surface!: ResourceViewSurface;
   function Probe() {
@@ -45,17 +44,17 @@ async function fixture({ total = 45, initialPath = "/?page=2&pageSize=20&keep=ex
     return <output>{surface.rows.length}</output>;
   }
   const rootRoute = createRootRoute({ component: () => (
-    <Refine dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-      <ModelMetadataProvider metadata={metadata}><ToastProvider>
+    <Provider metadata={metadata} refineResources={[]} dataProvider={provider}>
+      <ToastProvider>
         <ResourceViewProvider initialState={{ pageSize: 20, ...initialState }}><Probe /></ResourceViewProvider>
-      </ToastProvider></ModelMetadataProvider>
-    </Refine>
+      </ToastProvider>
+    </Provider>
   ) });
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createRouter({ routeTree: rootRoute, history, parseSearch: parseFlatSearch, stringifySearch: stringifyFlatSearch });
   render(<RouterProvider router={router} />);
   await waitFor(() => expect(surface?.rows.length).toBe(1));
-  return { calls, provider, client, router, history, view: () => view, surface: () => surface, setTotal: (next: number) => { total = next; } };
+  return { calls, provider, client: clients.at(-1)!, router, history, view: () => view, surface: () => surface, setTotal: (next: number) => { total = next; } };
 }
 
 test("native Table controls Refine requests and Router search without a second table state", async () => {

@@ -52,7 +52,9 @@ class Resource(AngeeModel):
 
         if not self.target_id:
             return None
-        return instance_from_public_id(resolve_model(self.target_model), self.target_id)
+
+        model = resolve_model(self.target_model)
+        return instance_from_public_id(model, self.target_id)
 
     class Meta:
         """Django model options for the abstract resource ledger."""

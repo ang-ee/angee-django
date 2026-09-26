@@ -70,36 +70,31 @@ def _reconcile_project_folder(
     instance: Any,
     created: bool = False,
     raw: bool = False,
-    using: str = "default",
     update_fields: Any = None,
     **kwargs: Any,
 ) -> None:
     """Schedule mirrors for both sides of a Project.folder edit."""
 
     del sender, kwargs
-    if raw or (
-        not created and update_fields is not None and not {"folder", "folder_id"}.intersection(update_fields)
-    ):
+    if raw or (not created and update_fields is not None and not {"folder", "folder_id"}.intersection(update_fields)):
         return
     project_ref = to_object_ref(instance)
     previous_id = getattr(instance, "_projects_previous_folder_id", _UNTRACKED)
     folder_model = apps.get_model("storage", "Folder")
     if previous_id is not _UNTRACKED and previous_id != instance.folder_id:
-        previous = folder_model._base_manager.using(using).filter(pk=previous_id).first()
+        previous = folder_model._base_manager.filter(pk=previous_id).first()
         if previous is not None:
             reconcile_on_commit(
                 project_pk=instance.pk,
                 project_ref=project_ref,
                 target=canonical_record_target(previous),
-                using=using,
             )
     if instance.folder_id is not None:
-        folder = folder_model._base_manager.using(using).get(pk=instance.folder_id)
+        folder: Any = instance.folder
         reconcile_on_commit(
             project_pk=instance.pk,
             project_ref=project_ref,
             target=canonical_record_target(folder),
-            using=using,
         )
 
 
@@ -113,7 +108,6 @@ def _snapshot_binding(
     sender: Any,
     instance: Any,
     raw: bool = False,
-    using: str = "default",
     update_fields: Any = None,
     **kwargs: Any,
 ) -> None:
@@ -124,29 +118,24 @@ def _snapshot_binding(
     if raw or instance._state.adding or (update_fields is not None and not key_fields.intersection(update_fields)):
         instance._projects_previous_binding = _UNTRACKED
         return
-    instance._projects_previous_binding = sender._base_manager.using(using).filter(pk=instance.pk).values_list(
-        "project_id", "content_type_id", "object_id"
-    ).first()
+    instance._projects_previous_binding = (
+        sender._base_manager.filter(pk=instance.pk).values_list("project_id", "content_type_id", "object_id").first()
+    )
 
 
-def _schedule_binding_key(instance: Any, key: tuple[Any, Any, Any] | None, using: str) -> None:
+def _schedule_binding_key(instance: Any, key: tuple[Any, Any, Any] | None) -> None:
     if key is None:
         return
     project_id, content_type_id, object_id = key
     project_model = apps.get_model("projects", "Project")
-    project = project_model._base_manager.using(using).filter(pk=project_id).first()
+    project = project_model._base_manager.filter(pk=project_id).first()
     if project is None:
         return
-    content_type = (
-        apps.get_model("contenttypes", "ContentType")
-        .objects.db_manager(using)
-        .get(pk=content_type_id)
-    )
+    content_type = apps.get_model("contenttypes", "ContentType").objects.get(pk=content_type_id)
     reconcile_on_commit(
         project_pk=project_id,
         project_ref=to_object_ref(project),
         target=CanonicalRecordTarget(content_type, object_id),
-        using=using,
     )
 
 
@@ -155,7 +144,6 @@ def _reconcile_binding(
     instance: Any,
     created: bool = False,
     raw: bool = False,
-    using: str = "default",
     update_fields: Any = None,
     **kwargs: Any,
 ) -> None:
@@ -168,12 +156,12 @@ def _reconcile_binding(
     previous = getattr(instance, "_projects_previous_binding", _UNTRACKED)
     current = _binding_key(instance)
     if previous is not _UNTRACKED and previous != current:
-        _schedule_binding_key(instance, cast(tuple[Any, Any, Any] | None, previous), using)
-    _schedule_binding_key(instance, current, using)
+        _schedule_binding_key(instance, cast(tuple[Any, Any, Any] | None, previous))
+    _schedule_binding_key(instance, current)
 
 
-def _reconcile_deleted_binding(sender: Any, instance: Any, using: str = "default", **kwargs: Any) -> None:
+def _reconcile_deleted_binding(sender: Any, instance: Any, **kwargs: Any) -> None:
     """Remove a tuple only when no other projects-owned evidence remains."""
 
     del sender, kwargs
-    _schedule_binding_key(instance, _binding_key(instance), using)
+    _schedule_binding_key(instance, _binding_key(instance))

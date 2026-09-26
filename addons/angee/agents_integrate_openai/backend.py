@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, ClassVar
 
+from openai import APIConnectionError
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -23,6 +24,7 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
     label = "OpenAI"
     icon = "openai"
     api_key_env: ClassVar[tuple[str, ...]] = ("OPENAI_API_KEY",)
+    transient_error_types: ClassVar[tuple[type[BaseException], ...]] = (APIConnectionError,)
     defaults = {
         "vendor": "openai",
         "name": "OpenAI",

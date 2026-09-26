@@ -565,12 +565,14 @@ class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         super().clean()
         if (self.page_id is None) == (self.vault_id is None):
             raise ValidationError("Exactly one of page or vault is required.")
-        _canonical_object_ref(self.content_type, self.object_id)
+        content_type = cast(ContentType, self.content_type)
+        _canonical_object_ref(content_type, self.object_id)
 
     def change_read_resource(self) -> ObjectRef:
-        """Gate binding change events on the canonical target's ``read``."""
+        """Gate binding changes on the canonical target's read permission."""
 
-        return _canonical_object_ref(self.content_type, self.object_id)
+        content_type = cast(ContentType, self.content_type)
+        return _canonical_object_ref(content_type, self.object_id)
 
     def __str__(self) -> str:
         """Return a readable knowledge-to-record edge label."""
@@ -1005,6 +1007,7 @@ class LinkManager(AngeeManager):
         """
 
         page = markdown.page
+        assert page is not None
         wanted = parse_wikilinks(markdown.body)
         pages = type(page)._base_manager
         links = self.model._base_manager

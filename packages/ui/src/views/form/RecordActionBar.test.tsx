@@ -8,10 +8,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import {
-  QueryClient,
-  QueryClientProvider,
-} from "@tanstack/react-query";
 import * as React from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -19,10 +15,18 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { DialogForm } from "../../fragments/DialogForm";
 import { RecordActionBar } from "./RecordActionBar";
 import { RecordActionTrigger } from "./RecordActionMenu";
+import { createUiTestProviders } from "../../testing";
+
+const { Provider, clearClients } = createUiTestProviders({
+  queryClientConfig: { defaultOptions: {
+    mutations: { retry: false }, queries: { retry: false },
+  } },
+});
 
 describe("RecordActionBar", () => {
   afterEach(() => {
     cleanup();
+    clearClients();
   });
 
   test("clears trigger loading after a run action resolves in StrictMode", async () => {
@@ -159,17 +163,11 @@ function DialogActionProbe({
 }
 
 function renderActionBar(children: React.ReactElement): void {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      mutations: { retry: false },
-      queries: { retry: false },
-    },
-  });
   render(
-    <QueryClientProvider client={queryClient}>
+    <Provider>
       <ModalsHost>
         <ToastProvider>{children}</ToastProvider>
       </ModalsHost>
-    </QueryClientProvider>,
+    </Provider>,
   );
 }

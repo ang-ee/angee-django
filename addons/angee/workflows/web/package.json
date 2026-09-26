@@ -18,6 +18,8 @@
     "@angee/metadata": "workspace:*",
     "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "lucide-react": "^1.21.0",
     "react-hook-form": "^7.81.0",
     "valibot": "^1.4.2"

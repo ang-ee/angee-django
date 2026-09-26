@@ -81,9 +81,9 @@ export interface Message {
 export const ME = "me";
 
 export const accounts: readonly Account[] = [
-  { id: "acc_wa", label: "Alexis WhatsApp", platform: "whatsapp" },
-  { id: "acc_tg", label: "Alexis Telegram", platform: "telegram" },
-  { id: "acc_mail", label: "alexis@apexive.com", platform: "email", health: "stale" },
+  { id: "acc_wa", label: "Alex WhatsApp", platform: "whatsapp" },
+  { id: "acc_tg", label: "Alex Telegram", platform: "telegram" },
+  { id: "acc_mail", label: "alex@example.test", platform: "email", health: "stale" },
   { id: "acc_sig", label: "Signal", platform: "signal" },
 ];
 
@@ -104,72 +104,72 @@ export const senders: readonly Sender[] = [
   { id: "pty_anna", name: "Anna Kowalski", link: "confirmed", address: "+48 601 220 118", platforms: ["whatsapp", "email"], firstSeen: ago(400 * DAY) },
   { id: "hdl_j", name: "J", link: "unlinked", address: "+1 424 479 8217", platforms: ["whatsapp"], firstSeen: ago(60 * DAY) },
   { id: "pty_marek", name: "Marek Nowak", link: "confirmed", address: "+48 500 111 222", platforms: ["whatsapp", "telegram"], firstSeen: ago(900 * DAY) },
-  { id: "hdl_toptal", name: "Toptal", link: "unlinked", address: "team@toptal.com", platforms: ["email"], firstSeen: ago(7 * HOUR) },
-  { id: "hdl_oceans", name: "Oceans Property Management", link: "unlinked", address: "+1 305 555 0143", platforms: ["whatsapp"], firstSeen: ago(200 * DAY) },
+  { id: "hdl_team", name: "Example Team", link: "unlinked", address: "team@example.test", platforms: ["email"], firstSeen: ago(7 * HOUR) },
+  { id: "hdl_organization", name: "Example Organization", link: "unlinked", address: "+1 305 555 0143", platforms: ["whatsapp"], firstSeen: ago(200 * DAY) },
   { id: "hdl_sofia", name: "sofia.m", link: "suggested", address: "@sofia_m", platforms: ["telegram"], candidate: "pty_sofia", firstSeen: ago(30 * DAY) },
-  { id: "pty_sofia", name: "Sofia Marin", link: "confirmed", address: "sofia@northstar.studio", platforms: ["email"], firstSeen: ago(120 * DAY) },
-  { id: "hdl_kirill", name: "Kirill Shikhalev", link: "unlinked", address: "@kshikhalev", platforms: ["telegram"], firstSeen: ago(300 * DAY) },
-  { id: "pty_palmas", name: "Palmas United", link: "confirmed", address: "signal group", platforms: ["signal"], fading: true, firstSeen: ago(500 * DAY) },
+  { id: "pty_sofia", name: "Sofia Marin", link: "confirmed", address: "sofia@example.test", platforms: ["email"], firstSeen: ago(120 * DAY) },
+  { id: "hdl_sam", name: "Sam Example", link: "unlinked", address: "@sam_example", platforms: ["telegram"], firstSeen: ago(300 * DAY) },
+  { id: "pty_group", name: "Example Group", link: "confirmed", address: "signal group", platforms: ["signal"], fading: true, firstSeen: ago(500 * DAY) },
 ];
 
 export const threads: readonly Thread[] = [
   { id: "thr_anna", kind: "direct", title: null, accounts: ["acc_wa"], participants: ["pty_anna", ME], total: 42 },
-  { id: "thr_family", kind: "group", title: "Family group", accounts: ["acc_wa"], participants: ["pty_anna", "pty_marek", ME, "hdl_oceans"], total: 1383 },
-  { id: "thr_invoice", kind: "mail", title: "Invoice August 2026", accounts: ["acc_mail"], participants: ["pty_anna", ME], total: 3 },
+  { id: "thr_family", kind: "group", title: "Family group", accounts: ["acc_wa"], participants: ["pty_anna", "pty_marek", ME, "hdl_organization"], total: 1383 },
+  { id: "thr_document", kind: "mail", title: "Document August 2026", accounts: ["acc_mail"], participants: ["pty_anna", ME], total: 3 },
   { id: "thr_j", kind: "direct", title: null, accounts: ["acc_wa"], participants: ["hdl_j", ME], total: 14 },
-  { id: "thr_odoo", kind: "group", title: "Odoo Developers", accounts: ["acc_tg"], participants: ["hdl_kirill", ME], total: 381 },
-  { id: "thr_toptal", kind: "mail", title: "Getting started with Toptal", accounts: ["acc_mail"], participants: ["hdl_toptal", ME], total: 3 },
+  { id: "thr_example", kind: "group", title: "Example Developers", accounts: ["acc_tg"], participants: ["hdl_sam", ME], total: 381 },
+  { id: "thr_team", kind: "mail", title: "Getting started with Example Team", accounts: ["acc_mail"], participants: ["hdl_team", ME], total: 3 },
   { id: "thr_marek", kind: "direct", title: null, accounts: ["acc_tg", "acc_wa"], participants: ["pty_marek", ME], total: 120 },
   { id: "thr_sofia_tg", kind: "direct", title: null, accounts: ["acc_tg"], participants: ["hdl_sofia", ME], total: 8 },
   { id: "thr_sofia_mail", kind: "mail", title: "Customer portal proposal", accounts: ["acc_mail"], participants: ["pty_sofia", ME], total: 6 },
-  { id: "thr_oceans", kind: "direct", title: null, accounts: ["acc_wa"], participants: ["hdl_oceans", ME], total: 5 },
-  { id: "thr_palmas", kind: "group", title: "Palmas United", accounts: ["acc_sig"], participants: ["pty_palmas", ME], total: 339 },
+  { id: "thr_organization", kind: "direct", title: null, accounts: ["acc_wa"], participants: ["hdl_organization", ME], total: 5 },
+  { id: "thr_group", kind: "group", title: "Example Group", accounts: ["acc_sig"], participants: ["pty_group", ME], total: 339 },
 ];
 
-const invoice: Attachment = { fileId: "fil_invoice", name: "invoice-aug.pdf", size: "184 KB", mime: "application/pdf" };
-const invoiceRenamed: Attachment = { fileId: "fil_invoice", name: "Kowalski_invoice_08.pdf", size: "184 KB", mime: "application/pdf" };
+const document: Attachment = { fileId: "fil_document", name: "document-aug.pdf", size: "184 KB", mime: "application/pdf" };
+const documentRenamed: Attachment = { fileId: "fil_document", name: "Kowalski_document_08.pdf", size: "184 KB", mime: "application/pdf" };
 const video: Attachment = { fileId: "fil_video", name: "attachment.bin", size: "3.6 MB", mime: "video/mp4", preview: "video" };
 const photo: Attachment = { fileId: "fil_photo", name: "IMG_2231.jpg", size: "1.1 MB", mime: "image/jpeg", preview: "image" };
 const logo: Attachment = { fileId: "fil_logo", name: "logo.png", size: "12 KB", mime: "image/png", preview: "image" };
 
 export const fragments: Readonly<Record<string, string>> = {
   frg_tonight: "Sure, sending tonight — the August one includes the extra day.",
-  frg_hundreds: "hundreds of articles on the topic. Give me one good reason not to avoid pure long positions",
+  frg_hundreds: "hundreds of articles on the topic. Give me one good reason not to avoid repeated edits",
 };
 
 export const messages: readonly Message[] = [
   // J — unlinked WhatsApp handle, media-only, newest
   { id: "msg_j3", threadId: "thr_j", senderId: "hdl_j", direction: "inbound", accountId: "acc_wa", sentAt: ago(10 * MIN), body: "", attachments: [video] },
-  { id: "msg_j2", threadId: "thr_j", senderId: "hdl_j", direction: "inbound", accountId: "acc_wa", sentAt: ago(21 * HOUR), body: "https://youtu.be/NufJ7g63KSY hundreds of articles on the topic. Give me one good reason not to avoid pure long positions", fragments: ["frg_hundreds"] },
-  { id: "msg_j1", threadId: "thr_j", senderId: "hdl_j", direction: "inbound", accountId: "acc_wa", sentAt: ago(24 * HOUR), body: "https://suno.com/s/lWA6lJD3HljjnaqV full song" },
+  { id: "msg_j2", threadId: "thr_j", senderId: "hdl_j", direction: "inbound", accountId: "acc_wa", sentAt: ago(21 * HOUR), body: "https://example.test/videos/overview hundreds of articles on the topic. Give me one good reason not to avoid repeated edits", fragments: ["frg_hundreds"] },
+  { id: "msg_j1", threadId: "thr_j", senderId: "hdl_j", direction: "inbound", accountId: "acc_wa", sentAt: ago(24 * HOUR), body: "https://example.test/audio/sample full song" },
   // Anna — direct WhatsApp
-  { id: "msg_anna_d3", threadId: "thr_anna", senderId: "pty_anna", direction: "inbound", accountId: "acc_wa", sentAt: ago(2 * HOUR), body: "Can you send the invoice for August? The accountant needs it before Friday.", starred: true },
+  { id: "msg_anna_d3", threadId: "thr_anna", senderId: "pty_anna", direction: "inbound", accountId: "acc_wa", sentAt: ago(2 * HOUR), body: "Can you send the document for August? The reviewer needs it before Friday.", starred: true },
   { id: "msg_me_d2", threadId: "thr_anna", senderId: ME, direction: "outbound", accountId: "acc_wa", sentAt: ago(3 * HOUR), body: "Sure, sending tonight — the August one includes the extra day.", fragments: ["frg_tonight"], to: ["pty_anna"] },
-  { id: "msg_anna_d1", threadId: "thr_anna", senderId: "pty_anna", direction: "inbound", accountId: "acc_wa", sentAt: ago(26 * HOUR), body: "Here is the signed one back.", attachments: [invoiceRenamed], parentId: "msg_me_d2" },
+  { id: "msg_anna_d1", threadId: "thr_anna", senderId: "pty_anna", direction: "inbound", accountId: "acc_wa", sentAt: ago(26 * HOUR), body: "Here is the signed one back.", attachments: [documentRenamed], parentId: "msg_me_d2" },
   // Family group
   { id: "msg_fam4", threadId: "thr_family", senderId: "pty_marek", direction: "inbound", accountId: "acc_wa", sentAt: ago(5 * HOUR), body: "🔥🔥🔥🔥🔥", attachments: [photo], reactions: [{ reaction: "❤️", count: 2 }] },
-  { id: "msg_fam3", threadId: "thr_family", senderId: "pty_anna", direction: "inbound", accountId: "acc_wa", sentAt: ago(1 * DAY + 2 * HOUR), body: "Forwarding the invoice so everyone has it.", attachments: [invoice] },
-  { id: "msg_fam2", threadId: "thr_family", senderId: "hdl_oceans", direction: "inbound", accountId: "acc_wa", sentAt: ago(1 * DAY + 6 * HOUR), body: "Never forget. Rest in peace to so much of civility and mutual trust." },
+  { id: "msg_fam3", threadId: "thr_family", senderId: "pty_anna", direction: "inbound", accountId: "acc_wa", sentAt: ago(1 * DAY + 2 * HOUR), body: "Forwarding the document so everyone has it.", attachments: [document] },
+  { id: "msg_fam2", threadId: "thr_family", senderId: "hdl_organization", direction: "inbound", accountId: "acc_wa", sentAt: ago(1 * DAY + 6 * HOUR), body: "Never forget. Rest in peace to so much of civility and mutual trust." },
   { id: "msg_fam1", threadId: "thr_family", senderId: ME, direction: "outbound", accountId: "acc_wa", sentAt: ago(2 * DAY), body: "Dinner Saturday at ours?", to: ["pty_anna", "pty_marek"] },
-  // Invoice mail thread
-  { id: "msg_mail3", threadId: "thr_invoice", senderId: "pty_anna", direction: "inbound", accountId: "acc_mail", sentAt: ago(3 * DAY), subject: "Re: Invoice August 2026", body: "Thanks! Attached the countersigned copy for your records.", quoted: "> Sure, sending tonight — the August one includes the extra day.", signature: "Anna Kowalski\nKowalski Consulting · +48 601 220 118", attachments: [invoice, logo], fragments: ["frg_tonight"] },
-  { id: "msg_mail2", threadId: "thr_invoice", senderId: ME, direction: "outbound", accountId: "acc_mail", sentAt: ago(3 * DAY + 4 * HOUR), subject: "Re: Invoice August 2026", body: "Attached. Let me know if the PO number is right.", attachments: [invoice, logo], to: ["pty_anna"] },
-  { id: "msg_mail1", threadId: "thr_invoice", senderId: "pty_anna", direction: "inbound", accountId: "acc_mail", sentAt: ago(4 * DAY), subject: "Invoice August 2026", body: "Hi Alexis, could you send over the August invoice when you have a minute?", signature: "Anna Kowalski\nKowalski Consulting" },
-  // Toptal mail
-  { id: "msg_toptal", threadId: "thr_toptal", senderId: "hdl_toptal", direction: "inbound", accountId: "acc_mail", sentAt: ago(7 * HOUR), subject: "Getting started with Toptal", body: "Welcome aboard. Your onboarding call is scheduled for Monday; the attached guide covers the first week.", attachments: [{ fileId: "fil_guide", name: "onboarding-guide.pdf", size: "2.1 MB", mime: "application/pdf" }] },
-  // Odoo group
-  { id: "msg_odoo2", threadId: "thr_odoo", senderId: "hdl_kirill", direction: "inbound", accountId: "acc_tg", sentAt: ago(17 * MIN), body: "Python 3.14 free-threading works with the ORM if you pin psycopg 3.3." },
-  { id: "msg_odoo1", threadId: "thr_odoo", senderId: "hdl_kirill", direction: "inbound", accountId: "acc_tg", sentAt: ago(1 * DAY + 3 * HOUR), body: "Anyone tried the new invoice matching in 19?" },
+  // Document mail thread
+  { id: "msg_mail3", threadId: "thr_document", senderId: "pty_anna", direction: "inbound", accountId: "acc_mail", sentAt: ago(3 * DAY), subject: "Re: Document August 2026", body: "Thanks! Attached the countersigned copy for your records.", quoted: "> Sure, sending tonight — the August one includes the extra day.", signature: "Anna Kowalski\nKowalski Consulting · +48 601 220 118", attachments: [document, logo], fragments: ["frg_tonight"] },
+  { id: "msg_mail2", threadId: "thr_document", senderId: ME, direction: "outbound", accountId: "acc_mail", sentAt: ago(3 * DAY + 4 * HOUR), subject: "Re: Document August 2026", body: "Attached. Let me know if the reference is right.", attachments: [document, logo], to: ["pty_anna"] },
+  { id: "msg_mail1", threadId: "thr_document", senderId: "pty_anna", direction: "inbound", accountId: "acc_mail", sentAt: ago(4 * DAY), subject: "Document August 2026", body: "Hi Alex, could you send over the August document when you have a minute?", signature: "Anna Kowalski\nKowalski Consulting" },
+  // Example Team mail
+  { id: "msg_team", threadId: "thr_team", senderId: "hdl_team", direction: "inbound", accountId: "acc_mail", sentAt: ago(7 * HOUR), subject: "Getting started with Example Team", body: "Welcome aboard. Your onboarding call is scheduled for Monday; the attached guide covers the first week.", attachments: [{ fileId: "fil_guide", name: "onboarding-guide.pdf", size: "2.1 MB", mime: "application/pdf" }] },
+  // Example group
+  { id: "msg_example2", threadId: "thr_example", senderId: "hdl_sam", direction: "inbound", accountId: "acc_tg", sentAt: ago(17 * MIN), body: "Python 3.14 free-threading works with the ORM if you pin psycopg 3.3." },
+  { id: "msg_example1", threadId: "thr_example", senderId: "hdl_sam", direction: "inbound", accountId: "acc_tg", sentAt: ago(1 * DAY + 3 * HOUR), body: "Anyone tried the new document matching in 19?" },
   // Marek direct (two accounts)
   { id: "msg_marek2", threadId: "thr_marek", senderId: "pty_marek", direction: "inbound", accountId: "acc_tg", sentAt: ago(2 * DAY + 1 * HOUR), body: "Got the photos, thanks. Same time next week?" },
   { id: "msg_marek1", threadId: "thr_marek", senderId: ME, direction: "outbound", accountId: "acc_wa", sentAt: ago(2 * DAY + 3 * HOUR), body: "Sent you the climbing photos on Telegram.", to: ["pty_marek"] },
   // Sofia (suggested handle on Telegram, confirmed party on mail)
   { id: "msg_sofia_tg", threadId: "thr_sofia_tg", senderId: "hdl_sofia", direction: "inbound", accountId: "acc_tg", sentAt: ago(1 * DAY + 5 * HOUR), body: "Is the portal proposal still on for Thursday?" },
   { id: "msg_sofia_mail", threadId: "thr_sofia_mail", senderId: "pty_sofia", direction: "inbound", accountId: "acc_mail", sentAt: ago(6 * DAY), subject: "Customer portal proposal", body: "Sharing the revised proposal with the milestone plan we discussed.", attachments: [{ fileId: "fil_proposal", name: "portal-proposal-v3.pdf", size: "980 KB", mime: "application/pdf" }] },
-  // Oceans direct
-  { id: "msg_oceans", threadId: "thr_oceans", senderId: "hdl_oceans", direction: "inbound", accountId: "acc_wa", sentAt: ago(18 * HOUR), body: "Reminder: pool maintenance Thursday 9–11.", attachments: [{ fileId: "fil_notice", name: "attachment.bin", size: "58 KB", mime: "image/jpeg", preview: "image" }] },
-  // Palmas (fading)
-  { id: "msg_palmas", threadId: "thr_palmas", senderId: "pty_palmas", direction: "inbound", accountId: "acc_sig", sentAt: ago(40 * DAY), body: "Training moved to 7pm this week." },
+  // Organization direct
+  { id: "msg_organization", threadId: "thr_organization", senderId: "hdl_organization", direction: "inbound", accountId: "acc_wa", sentAt: ago(18 * HOUR), body: "Reminder: pool maintenance Thursday 9–11.", attachments: [{ fileId: "fil_notice", name: "attachment.bin", size: "58 KB", mime: "image/jpeg", preview: "image" }] },
+  // Group (fading)
+  { id: "msg_group", threadId: "thr_group", senderId: "pty_group", direction: "inbound", accountId: "acc_sig", sentAt: ago(40 * DAY), body: "Training moved to 7pm this week." },
 ];
 
 export const senderById = new Map(senders.map((sender) => [sender.id, sender]));

@@ -408,21 +408,13 @@ export const CreateWorkflowEdgeDocument = graphql(`
   }
 `);
 
-export const PublishWorkflowDocument = graphql(`
-  mutation PublishWorkflow($id: ID!) {
-    publish_workflow(workflow: $id) {
-      ok
-      message
-    }
-  }
-`);
-
 export const WorkflowsForSubjectDeclarationDocument = graphql(`
   query WorkflowsForSubjectDeclaration($subjectDeclaration: String!) {
     workflows_for_subject_declaration(
       subject_declaration: $subjectDeclaration
     ) {
       id
+      key
       name
       subject_declaration
     }
@@ -459,40 +451,39 @@ export const RunWorkflowDocument = graphql(`
   }
 `);
 
-export const CancelWorkflowRunDocument = graphql(`
-  mutation CancelWorkflowRun($id: ID!) {
-    cancel_workflow_run(run: $id) {
-      ok
-      message
-    }
+export const WorkflowRunInspectionFields = graphql(`
+  fragment WorkflowRunInspectionFields on WorkflowRunType {
+    id origin occurrence_id status waiting_kind next_wake_at error
+    test_repair_source_attempt { id step_run { id run { id } } }
+    recovery_source_attempt { id step_run { id run { id } } }
+    workflow { id name status version draft_revision }
+  }
+`);
+
+export const WorkflowStepRunSelectionFields = graphql(`
+  fragment WorkflowStepRunSelectionFields on StepRunType {
+    id system_kind map_index status outcome error
+    step { id key name }
+    current_attempt { id error }
+  }
+`);
+
+export const WorkflowStepAttemptIdentityFields = graphql(`
+  fragment WorkflowStepAttemptIdentityFields on StepAttemptType {
+    id
   }
 `);
 
 export const WorkflowRunDetailDocument = graphql(`
   query WorkflowRunDetail($run: String!) {
     workflow_runs_by_pk(id: $run) {
-      id
+      ...WorkflowRunInspectionFields
       display_name
-      status
-      origin
-      occurrence_id
-      test_repair_source_attempt { id step_run { id run { id } } }
-      recovery_source_attempt { id step_run { id run { id } } }
-      error
       steps_taken
       budget_spent
       wake_at
-      waiting_kind
-      next_wake_at
       created_at
       updated_at
-      workflow {
-        id
-        name
-        status
-        version
-        draft_revision
-      }
     }
     workflow_step_runs(
       where: { run: { _eq: $run } }
@@ -528,10 +519,7 @@ export const WorkflowRunDetailDocument = graphql(`
 export const WorkflowRunInspectionDocument = graphql(`
   query WorkflowRunInspection($run: String!) {
     workflow_runs_by_pk(id: $run) {
-      id origin occurrence_id status waiting_kind next_wake_at error
-      test_repair_source_attempt { id step_run { id run { id } } }
-      recovery_source_attempt { id step_run { id run { id } } }
-      workflow { id name status version draft_revision }
+      ...WorkflowRunInspectionFields
     }
     workflow_step_runs_groups(
       group_by: [{field: STEP}, {field: STATUS}]
@@ -568,7 +556,7 @@ export const WorkflowAttemptPayloadDocument = graphql(`
       where: {id: {_eq: $attempt}, step_run: {_eq: $stepRun}}
       limit: 1
     ) {
-      id
+      ...WorkflowStepAttemptIdentityFields
       input_present
       input @include(if: $includeInput)
       output_present
@@ -587,19 +575,13 @@ export const WorkflowInspectionSelectionDocument = graphql(`
       where: {id: {_eq: $execution}, run: {_eq: $run}}
       limit: 1
     ) {
-      id
-      step { id key name }
-      system_kind
-      map_index
-      status
-      outcome
-      current_attempt { id }
+      ...WorkflowStepRunSelectionFields
     }
     workflow_step_attempts(
       where: {id: {_eq: $attempt}, step_run: {_eq: $execution}}
       limit: 1
     ) {
-      id
+      ...WorkflowStepAttemptIdentityFields
     }
     workflow_step_attempts_aggregate(where: {step_run: {_eq: $execution}}) {
       aggregate { count }

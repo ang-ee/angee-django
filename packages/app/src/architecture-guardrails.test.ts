@@ -34,6 +34,9 @@ const REQUIRED_ADDON_ROOTS = [
 const OPTIONAL_ADDON_ROOTS = [
   resolve(MONOREPO_ROOT, "../angee-messaging-bridges/addons"),
 ] as const;
+// Parsing every framework, tooling, and addon source file grows with the tree,
+// not with a hang; Vitest's 5s unit default fails it on loaded CI runners.
+const FULL_TREE_SCAN_TIMEOUT_MS = 30_000;
 
 test("addon TypeScript resolves host-generated GraphQL before the standalone cache", () => {
   const path = join(MONOREPO_ROOT, "addons", "angee", "tsconfig.base.json");
@@ -91,14 +94,24 @@ interface DynamicI18nKeyFamily {
 }
 
 const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
+  frameworkCriticalExport("StatusToneMap", "@angee/ui", "src/widgets/status-tones.ts"),
+  frameworkCriticalExport("statusTone", "@angee/ui", "src/widgets/status-tones.ts"),
+  frameworkCriticalExport("useStatusTone", "@angee/ui", "src/widgets/use-status-tone.ts"),
   frameworkCriticalExport("ManageAccessDialog", "@angee/ui", "src/views/access/ManageAccessDialog.tsx"),
   frameworkCriticalExport("RecordChrome", "@angee/ui", "src/views/resource/record-chrome-context.tsx"),
   frameworkCriticalExport("collectionQuery", "@angee/ui", "src/views/resource/collection-source.ts"),
   frameworkCriticalExport("CollectionTreeView", "@angee/ui", "src/views/tree/CollectionTreeView.tsx"),
   frameworkCriticalExport("RelationFieldWidget", "@angee/ui", "src/views/relation/RelationFieldWidget.tsx"),
+  frameworkCriticalExport("createAngeeI18nInstance", "@angee/ui", "src/runtime/i18n.ts"),
   frameworkCriticalExport("resourcePageRoutes", "@angee/app", "src/define-base-addon.ts"),
   frameworkCriticalExport("expectValidBaseAddon", "@angee/app", "src/testing.tsx"),
   frameworkCriticalExport("MutationDialog", "@angee/ui", "src/views/form/MutationDialog.tsx"),
+  frameworkCriticalExport("parseFormSpec", "@angee/ui", "src/views/form/form-spec-schema.ts"),
+  frameworkCriticalExport("isCompositeFieldDescriptor", "@angee/ui", "src/views/form/form-view-model.ts"),
+  frameworkCriticalExport("JsonValueSchema", "@angee/ui", "src/widgets/json-value.ts"),
+  frameworkCriticalExport("FORM_SPEC_ANNOTATIONS", "@angee/ui", "src/views/form/form-spec-schema.ts"),
+  frameworkCriticalExport("textValue", "@angee/ui", "src/views/form/field-values.ts"),
+  frameworkCriticalExport("DISABLED_RESOURCE", "@angee/metadata", "src/resources.ts"),
   frameworkCriticalExport("GraphViewGeometry", "@angee/ui", "src/views/GraphView.tsx"),
   frameworkCriticalExport("graphNodeStyle", "@angee/ui", "src/views/GraphView.tsx"),
   frameworkCriticalExport("ScopedExplorerPane", "@angee/ui", "src/views/tree/ScopedExplorerPane.tsx"),
@@ -158,6 +171,7 @@ describe("React architecture guardrails", () => {
     () => {
       expect(importViolations(allPackageRoots())).toEqual([]);
     },
+    FULL_TREE_SCAN_TIMEOUT_MS,
   );
 
   test("relative package escape detection reports a seeded violation", () => {
@@ -424,7 +438,7 @@ function addonRepositoryRoots(): string[] {
 }
 
 function importViolations(packages: readonly PackageRoot[]): string[] {
-  const violations: string[] = [];
+  const violations = publishedVitestViolations(packages);
   for (const pkg of packages) {
     const dependencies = packageDependencies(pkg.root);
     for (const file of sourceFiles(pkg.root)) {
@@ -471,6 +485,96 @@ function importViolations(packages: readonly PackageRoot[]): string[] {
     }
   }
   return violations;
+}
+
+function publishedVitestViolations(packages: readonly PackageRoot[]): string[] {
+  const extensions = [...SOURCE_EXTENSIONS, ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+  const isSourceTarget = (target: string): boolean =>
+    extensions.some((extension) => target.endsWith(extension)) && existsSync(target);
+  const owners = packages.filter((pkg) => pkg.name.startsWith("@angee/")).map((pkg) => {
+    const manifest: {
+      exports?: Record<string, unknown>;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    } = JSON.parse(readFileSync(join(pkg.root, "package.json"), "utf8"));
+    return {
+      ...pkg,
+      exports: manifest.exports ?? {},
+      optionalVitest: Boolean(manifest.peerDependencies?.vitest)
+        && manifest.peerDependenciesMeta?.vitest?.optional === true,
+    };
+  });
+  const entries = owners.flatMap((owner) => Object.entries(owner.exports).map(([key, value]) => ({
+    owner,
+    key,
+    specifier: owner.name + (key === "." ? "" : key.slice(1)),
+    targets: [...new Set(exportTargets(value))].map((target) => resolve(owner.root, target)),
+  })));
+  const options: ts.CompilerOptions = {
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    allowJs: true,
+    paths: Object.fromEntries(entries.map((entry) => [entry.specifier, entry.targets])),
+  };
+  const graph = new Map<string, { importsVitest: boolean; targets: string[] }>();
+  const violations = new Set<string>();
+  const reachesVitest = (file: string, visited: Set<string>): boolean => {
+    if (visited.has(file)) return false;
+    visited.add(file);
+    let node = graph.get(file);
+    if (!node) {
+      const imports = importSpecifiers(file);
+      node = {
+        importsVitest: imports.some((specifier) => specifier === "vitest" || specifier.startsWith("vitest/")),
+        targets: imports.flatMap((specifier) => {
+          if (!specifier.startsWith(".") && !owners.some((owner) => owner.name === angeePackageName(specifier))) {
+            return [];
+          }
+          const exported = entries.find((entry) => entry.specifier === specifier);
+          if (exported) {
+            return exported.targets.filter(isSourceTarget);
+          }
+          // Keep explicit JS sources visible when a neighboring declaration exists.
+          const explicit = resolve(dirname(file), specifier);
+          if (specifier.startsWith(".") && isSourceTarget(explicit)) {
+            return [explicit];
+          }
+          const target = ts.resolveModuleName(specifier, file, options, ts.sys).resolvedModule?.resolvedFileName;
+          return target ? [target] : [];
+        }),
+      };
+      graph.set(file, node);
+      if (node.importsVitest) {
+        const owner = owners.find((pkg) => !relativeImportEscapes(pkg.root, file, "./"));
+        if (owner && !owner.optionalVitest) {
+          violations.add(`${workspaceRelative(file)} imports vitest without an optional peer in ${owner.name}`);
+        }
+      }
+    }
+    // Visit all dependencies so every direct runner owner gets its peer checked.
+    const children = node.targets.map((target) => reachesVitest(target, visited));
+    return node.importsVitest || children.some(Boolean);
+  };
+  for (const entry of entries) {
+    const files = entry.targets.flatMap((target) => target.includes("*")
+      // Wildcard source exports also match tests that the package build excludes.
+      ? ts.sys.readDirectory(entry.owner.root, extensions, undefined, [target])
+        .filter((file) => !isTestFile(file))
+      : isSourceTarget(target) ? [target] : []);
+    const importsVitest = files.map((file) => reachesVitest(file, new Set())).some(Boolean);
+    // The app's config entry is test tooling, just like public testing helpers.
+    const testing = entry.key === "./testing" || entry.key.startsWith("./testing/")
+      || entry.specifier === "@angee/app/vitest";
+    if (importsVitest && !testing) {
+      violations.add(`${entry.specifier} is a non-testing published entry that reaches vitest`);
+    }
+  }
+  return [...violations].sort();
+}
+
+function exportTargets(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(exportTargets);
+  return isRecord(value) ? Object.values(value).flatMap(exportTargets) : [];
 }
 
 function isRepositoryPackage(pkg: PackageRoot): boolean {
@@ -541,38 +645,43 @@ function sourceFiles(root: string): string[] {
   return files;
 }
 
-function importSpecifiers(file: string): string[] {
+// Source files do not change during a run, so each is parsed once across the
+// layering scan and the published-vitest graph of every guardrail.
+const importSpecifierCache = new Map<string, readonly string[]>();
+
+function importSpecifiers(file: string): readonly string[] {
+  const cached = importSpecifierCache.get(file);
+  if (cached) return cached;
   const text = readFileSync(file, "utf8");
   const source = ts.createSourceFile(
     file,
     text,
     ts.ScriptTarget.Latest,
     true,
-    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
   const specifiers: string[] = [];
   const visit = (node: ts.Node): void => {
-    const dynamicImportArgument = ts.isCallExpression(node)
-      ? node.arguments[0]
-      : undefined;
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
-      && node.moduleSpecifier
-      && ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      specifiers.push(node.moduleSpecifier.text);
+    let specifier: ts.Node | undefined;
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      specifier = node.moduleSpecifier;
+    } else if (ts.isExternalModuleReference(node)) {
+      specifier = node.expression;
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      specifier = node.argument.literal;
     } else if (
       ts.isCallExpression(node)
-      && node.expression.kind === ts.SyntaxKind.ImportKeyword
-      && node.arguments.length === 1
-      && dynamicImportArgument !== undefined
-      && ts.isStringLiteral(dynamicImportArgument)
+      && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(node.expression) && node.expression.text === "require"))
     ) {
-      specifiers.push(dynamicImportArgument.text);
+      specifier = node.arguments[0];
+    }
+    if (specifier && ts.isStringLiteralLike(specifier)) {
+      specifiers.push(specifier.text);
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
+  importSpecifierCache.set(file, specifiers);
   return specifiers;
 }
 

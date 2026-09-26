@@ -19,6 +19,7 @@ from angee.base.scoping import read_scoped_queryset
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
 from angee.graphql.writes import instance_for_write
+from graphql import GraphQLError
 
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)
 _RebacActionTarget = TypeVar("_RebacActionTarget", bound=RebacMixin)
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 class ActionResult:
     """Outcome of a console domain action: a success flag and a human message.
 
-    Returned by non-CRUD action mutations (sync, test, discover, register-payment,
+    Returned by non-CRUD action mutations (sync, test, discover, open-document,
     …) so the client can surface a toast and refresh the affected record.
 
     On a *domain* failure the action returns ``ok=False`` and may populate
@@ -49,7 +50,7 @@ class ActionResult:
     id: strawberry.ID | None = None
     """Public id of the record the verb created, when the action creates one.
 
-    A create-and-return verb (register a payment, open a document) populates this so
+    A create-and-return verb (register a review, open a document) populates this so
     the client can route to or refresh the new record; a verb that only mutates an
     existing row leaves it ``None``.
     """
@@ -198,13 +199,9 @@ def _require_action_permission(
     """Preserve the shared not-found and row-permission result contract."""
 
     if instance is None:
-        raise ValidationError(
-            {NON_FIELD_ERRORS: [f"{model._meta.object_name} {public_id_value(id)!r} was not found."]}
-        )
+        raise ValidationError({NON_FIELD_ERRORS: [f"{model._meta.object_name} {public_id_value(id)!r} was not found."]})
     if not instance.has_access(permission):
-        raise ValidationError(
-            {NON_FIELD_ERRORS: [f"You are not allowed to modify this {model._meta.verbose_name}."]}
-        )
+        raise ValidationError({NON_FIELD_ERRORS: [f"You are not allowed to modify this {model._meta.verbose_name}."]})
     return cast(_RebacActionTarget, instance)
 
 
@@ -223,7 +220,7 @@ def resolve_action_target(
     This helper owns the repeated action-write lookup shape: build the requested
     queryset, enter ``system_context`` for the row read, and raise a stable
     not-found error instead of leaking ``None`` into the action body. A missing
-    row raises ``ValueError`` — a GraphQL error, matching the role-gated surface.
+    row raises a ``BAD_USER_INPUT`` GraphQL error, matching the role-gated surface.
 
     For a domain verb authorized by the row itself (the ceremony
     session gate → actor-scoped lookup → per-row check, returning in-band
@@ -231,12 +228,16 @@ def resolve_action_target(
     """
 
     active_queryset = queryset if queryset is not None else model._default_manager.all()
+
     if select_related:
         active_queryset = active_queryset.select_related(*select_related)
     with system_context(reason=reason):
         instance = instance_for_id(model, id, queryset=active_queryset)
     if instance is None:
-        raise ValueError(f"{model._meta.object_name} {public_id_value(id)!r} was not found.")
+        raise GraphQLError(
+            f"{model._meta.object_name} {public_id_value(id)!r} was not found.",
+            extensions={"code": "BAD_USER_INPUT"},
+        )
     return cast(_ActionTarget, instance)
 
 

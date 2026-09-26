@@ -1,8 +1,8 @@
 """Stage 0: ``_finalize_data_resource`` supports computed (non-model) resources.
 
 A computed resource has no Django model — it passes ``model=None`` and a dotted
-``app.model`` label. The model handle is ``{"wire": False}`` so the serialized
-payload is identical to a model-backed resource.
+``app.model`` label. Pydantic excludes the internal model handle from
+serialization, so the payload is identical to a model-backed resource.
 """
 
 from __future__ import annotations

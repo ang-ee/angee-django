@@ -12,36 +12,6 @@ dependencies = [
   "pycountry>=26,<27",
 ]
 
-[[migrations]]
-fresh_history = "baseline"
-name = "relationship_anchor"
-app_label = "parties"
-module = "runtime_migrations.relationship_anchor"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "handle_party_link_confirmed"
-app_label = "parties"
-module = "runtime_migrations.handle_party_link_confirmed"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "handle_normalized_value"
-app_label = "parties"
-module = "runtime_migrations.handle_normalized_value"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "address_one_primary"
-app_label = "parties"
-module = "runtime_migrations.address_one_primary"
-
-[[migrations]]
-fresh_history = "baseline"
-name = "address_country_code"
-app_label = "parties"
-module = "runtime_migrations.address_country_code"
-
 [resources]
 master = [
   { path = "resources/master/010_parties.relationshipkind.yaml", adopt = "slug" },

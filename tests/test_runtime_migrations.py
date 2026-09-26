@@ -4,277 +4,32 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import logging
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, migrations, models
+from django.db import connection, connections, migrations, models
+from django.db.backends.sqlite3.base import DatabaseWrapper
+from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.loader import MigrationLoader
+from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.state import ModelState, ProjectState
+from django.db.migrations.writer import MigrationWriter
 
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.compose.migrations import RuntimeMigrations
-from angee.integrate_vcs.runtime_migrations.adopt_vcs_permission_schema import (
-    NEW_PACKAGE,
-    OLD_PACKAGE,
-    adopt_vcs_permission_schema,
-)
-from angee.integrate_vcs.runtime_migrations.delete_integrate_vcs_state import applies as vcs_delete_applies
-from angee.spaces.runtime_migrations.live_relation_backing import (
-    Migration as LiveSpacesMigration,
-)
-from angee.spaces.runtime_migrations.live_relation_backing import applies as live_spaces_applies
 from tests.conftest import make_addon, write_addon_manifest
 
 
 def _write_module(path: Path, text: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-
-
-def test_live_spaces_backing_waits_for_thread_groups_and_applies_once() -> None:
-    """The spaces cutover follows the thread M2M transition and removes its snapshot."""
-
-    current = ProjectState()
-    current.add_model(
-        ModelState(
-            "spaces",
-            "Membership",
-            [
-                ("id", models.AutoField(primary_key=True)),
-                ("group", models.IntegerField()),
-                ("party", models.IntegerField()),
-                ("role", models.CharField(max_length=32)),
-            ],
-        )
-    )
-    current.add_model(
-        ModelState(
-            "messaging",
-            "Thread",
-            [
-                ("id", models.AutoField(primary_key=True)),
-                ("groups", models.ManyToManyField("spaces.Group")),
-            ],
-        )
-    )
-    assert live_spaces_applies(current) is False
-
-    historical = current.clone()
-    historical.models[("spaces", "membership")].fields["granted_user"] = models.ForeignKey(
-        "iam.User",
-        null=True,
-        on_delete=models.SET_NULL,
-    )
-    assert live_spaces_applies(historical) is True
-    migrated = LiveSpacesMigration("probe", "spaces").mutate_state(historical.clone())
-    assert "granted_user" not in migrated.models[("spaces", "membership")].fields
-    assert live_spaces_applies(migrated) is False
-
-    waiting = historical.clone()
-    thread = waiting.models[("messaging", "thread")]
-    groups = thread.fields.pop("groups")
-    thread.fields["group"] = models.ForeignKey(
-        groups.remote_field.model,
-        null=True,
-        on_delete=models.SET_NULL,
-    )
-    assert live_spaces_applies(waiting) is False
-
-    malformed = historical.clone()
-    malformed.models[("spaces", "membership")].fields.pop("role")
-    with pytest.raises(ImproperlyConfigured, match="partial Membership"):
-        live_spaces_applies(malformed)
-
-
-def test_vcs_state_delete_waits_for_non_moved_integrate_consumer() -> None:
-    """A generic integrate model can retain the old state just like another app."""
-
-    state = ProjectState()
-    for app_label in ("integrate", "integrate_vcs"):
-        for name in ("VcsBridge", "Repository", "Source", "Template"):
-            state.add_model(
-                ModelState(
-                    app_label=app_label,
-                    name=name,
-                    fields={"id": models.AutoField(primary_key=True)},
-                )
-            )
-    state.add_model(
-        ModelState(
-            app_label="integrate",
-            name="Consumer",
-            fields={
-                "id": models.AutoField(primary_key=True),
-                "source": models.ForeignKey("integrate.Source", on_delete=models.CASCADE),
-            },
-        )
-    )
-
-    assert vcs_delete_applies(state) is False
-
-
-@pytest.mark.django_db
-def test_vcs_permission_schema_adoption_preserves_provenance_target() -> None:
-    """The append-only adoption changes only the package ledger identity."""
-
-    from django.contrib.contenttypes.models import ContentType
-    from django.utils import timezone
-    from rebac.models import PackageManagedRecord, SchemaDefinition
-
-    definition = SchemaDefinition.objects.create(resource_type="integrate_vcs/source")
-    target_type = ContentType.objects.get_for_model(SchemaDefinition)
-    record = PackageManagedRecord.objects.create(
-        package=OLD_PACKAGE,
-        external_id="definition:integrate/source",
-        schema_revision=7,
-        target_ct=target_type,
-        target_pk=definition.pk,
-        content_hash="historical-content-hash",
-        no_update=True,
-        last_synced_at=timezone.now(),
-    )
-
-    adopt_vcs_permission_schema(apps, SimpleNamespace(connection=connection))
-
-    record.refresh_from_db()
-    assert (record.package, record.external_id) == (NEW_PACKAGE, "definition:integrate_vcs/source")
-    assert record.target_pk == definition.pk
-    assert record.target_ct_id == target_type.pk
-    assert record.schema_revision == 7
-    assert record.content_hash == "historical-content-hash"
-    assert record.no_update is True
-
-
-@pytest.mark.django_db
-def test_vcs_permission_schema_adoption_rejects_destination_collision() -> None:
-    """A pre-existing destination owner fails before any source record moves."""
-
-    from django.contrib.contenttypes.models import ContentType
-    from django.utils import timezone
-    from rebac.models import PackageManagedRecord, SchemaDefinition
-
-    target_type = ContentType.objects.get_for_model(SchemaDefinition)
-    source = SchemaDefinition.objects.create(resource_type="integrate/source")
-    destination = SchemaDefinition.objects.create(resource_type="integrate_vcs/source")
-    common = {
-        "schema_revision": 1,
-        "target_ct": target_type,
-        "content_hash": "hash",
-        "no_update": True,
-        "last_synced_at": timezone.now(),
-    }
-    old_record = PackageManagedRecord.objects.create(
-        package=OLD_PACKAGE,
-        external_id="definition:integrate/source",
-        target_pk=source.pk,
-        **common,
-    )
-    PackageManagedRecord.objects.create(
-        package=NEW_PACKAGE,
-        external_id="definition:integrate_vcs/source",
-        target_pk=destination.pk,
-        **common,
-    )
-
-    with pytest.raises(ImproperlyConfigured, match="destination package records"):
-        adopt_vcs_permission_schema(apps, SimpleNamespace(connection=connection))
-
-    old_record.refresh_from_db()
-    assert (old_record.package, old_record.external_id) == (OLD_PACKAGE, "definition:integrate/source")
-
-
-@pytest.mark.django_db(transaction=True)
-def test_vcs_permission_schema_adoption_survives_reconcile_and_sync() -> None:
-    """The next native reconcile/sync retains schema identities and live grants."""
-
-    from django.core.management import call_command
-    from rebac.models import PackageManagedRecord, SchemaDefinition, active_relationship_model
-
-    call_command("rebac", "sync", verbosity=0)
-    definition = SchemaDefinition.objects.get(resource_type="integrate_vcs/source")
-    records = (
-        list(
-            PackageManagedRecord.objects.filter(
-                package=NEW_PACKAGE,
-                external_id__startswith="definition:integrate_vcs/source",
-            )
-        )
-        + list(
-            PackageManagedRecord.objects.filter(
-                package=NEW_PACKAGE,
-                external_id__startswith="relation:integrate_vcs/source#",
-            )
-        )
-        + list(
-            PackageManagedRecord.objects.filter(
-                package=NEW_PACKAGE,
-                external_id__startswith="permission:integrate_vcs/source#",
-            )
-        )
-    )
-    before = {
-        record.external_id: (
-            record.pk,
-            record.target_ct_id,
-            record.target_pk,
-            record.schema_revision,
-            record.no_update,
-        )
-        for record in records
-    }
-    assert before
-    for record in records:
-        record.package = OLD_PACKAGE
-        record.external_id = record.external_id.replace("integrate_vcs/source", "integrate/source", 1)
-        record.save(update_fields=["package", "external_id"])
-
-    active_relationship_model().objects.create(
-        resource_type="integrate_vcs/source",
-        resource_id="source-proof",
-        relation="proof",
-        subject_type="angee/role",
-        subject_id="admin",
-        optional_subject_relation="",
-    )
-
-    adopt_vcs_permission_schema(apps, SimpleNamespace(connection=connection))
-    call_command("reconcile_permissions", verbosity=0)
-    call_command("rebac", "sync", verbosity=0)
-    call_command("rebac", "sync", verbosity=0)
-
-    definition.refresh_from_db()
-    assert definition.resource_type == "integrate_vcs/source"
-    after_records = PackageManagedRecord.objects.filter(
-        package=NEW_PACKAGE,
-        external_id__in=before,
-    )
-    assert {
-        record.external_id: (
-            record.pk,
-            record.target_ct_id,
-            record.target_pk,
-            record.schema_revision,
-            record.no_update,
-        )
-        for record in after_records
-    } == before
-    assert (
-        active_relationship_model()
-        .objects.filter(
-            resource_type="integrate_vcs/source",
-            resource_id="source-proof",
-            relation="proof",
-            subject_type="angee/role",
-            subject_id="admin",
-        )
-        .exists()
-    )
 
 
 @pytest.fixture
@@ -362,7 +117,7 @@ class Migration(migrations.Migration):
 def test_materialize_copies_complete_source_and_attaches_current_leaf(runtime_migration_probe) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
 
-    written = materializer.materialize()
+    written = materializer.materialize(apps=apps)
 
     output = runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py"
     assert written == (output,)
@@ -377,248 +132,6 @@ def test_materialize_copies_complete_source_and_attaches_current_leaf(runtime_mi
     state = loader.project_state()
     assert "new_name" in state.models["resources", "legacy"].fields
     assert "old_name" not in state.models["resources", "legacy"].fields
-
-
-def test_fresh_final_initial_graph_baselines_historical_declaration(
-    runtime_migration_probe, monkeypatch
-) -> None:
-    """A final-model initial leaf records old transitions without replaying them."""
-
-    materializer, addon, source_path, runtime_dir, _ = runtime_migration_probe
-    initial = runtime_dir / "resources" / "migrations" / "0001_legacy.py"
-    initial.write_text(
-        initial.read_text(encoding="utf-8")
-        .replace(
-            "models.AutoField(primary_key=True)",
-            "models.CharField(primary_key=True, max_length=10)",
-        )
-        .replace(
-            "class Migration(migrations.Migration):",
-            "class Migration(migrations.Migration):\n    initial = True",
-        ),
-        encoding="utf-8",
-    )
-    source_path.write_text(
-        source_path.read_text(encoding="utf-8").replace(
-            'model = project_state.models.get(("resources", "legacy"))',
-            'raise RuntimeError("historical predicate must not run")',
-        ),
-        encoding="utf-8",
-    )
-    importlib.invalidate_caches()
-    write_addon_manifest(
-        addon,
-        migrations=(
-            {
-                "name": "rename_legacy",
-                "app_label": "resources",
-                "module": "runtime_migrations.rename_legacy",
-                "fresh_history": "baseline",
-            },
-        ),
-    )
-    current_state = MigrationLoader(None, ignore_no_migrations=True).project_state()
-    monkeypatch.setattr(
-        ProjectState,
-        "from_apps",
-        classmethod(lambda cls, registry: current_state.clone()),
-    )
-    current_apps = current_state.apps
-
-    (output,) = materializer.materialize(apps=current_apps, fresh_history=True)
-
-    text = output.read_text(encoding="utf-8")
-    assert output.name == "0002_rename_legacy.py"
-    assert "operations = []" in text
-    assert "Migration.angee_fresh_baseline = True" in text
-    assert 'Migration.angee_origin = "example.demo:rename_legacy"' in text
-    assert materializer.materialize(apps=current_apps, fresh_history=True) == ()
-    assert materializer.materialize(apps=current_apps) == ()
-    materializer.check()
-
-
-def test_initial_only_history_is_not_implicitly_baselined(runtime_migration_probe) -> None:
-    """A normal build never skips a declaration because its leaf is initial."""
-
-    materializer, addon, source_path, runtime_dir, _ = runtime_migration_probe
-    initial = runtime_dir / "resources" / "migrations" / "0001_legacy.py"
-    initial.write_text(
-        initial.read_text(encoding="utf-8")
-        .replace(
-            "models.AutoField(primary_key=True)",
-            "models.CharField(primary_key=True, max_length=10)",
-        )
-        .replace(
-            "class Migration(migrations.Migration):",
-            "class Migration(migrations.Migration):\n    initial = True",
-        ),
-        encoding="utf-8",
-    )
-    write_addon_manifest(
-        addon,
-        migrations=(
-            {
-                "name": "rename_legacy",
-                "app_label": "resources",
-                "module": "runtime_migrations.rename_legacy",
-                "fresh_history": "baseline",
-            },
-        ),
-    )
-    importlib.invalidate_caches()
-
-    (output,) = materializer.materialize(
-        apps=MigrationLoader(None, ignore_no_migrations=True).project_state().apps
-    )
-
-    text = output.read_text(encoding="utf-8")
-    assert text.startswith(source_path.read_text(encoding="utf-8"))
-    assert "angee_fresh_baseline" not in text
-
-
-def test_fresh_history_executes_unmarked_operational_declaration(
-    runtime_migration_probe, monkeypatch
-) -> None:
-    """Fresh history baselines only opted-in transitions and keeps operational bodies."""
-
-    materializer, addon, _, runtime_dir, source_root = runtime_migration_probe
-    initial = runtime_dir / "resources" / "migrations" / "0001_legacy.py"
-    initial.write_text(
-        initial.read_text(encoding="utf-8")
-        .replace(
-            "models.AutoField(primary_key=True)",
-            "models.CharField(primary_key=True, max_length=10)",
-        )
-        .replace(
-            "class Migration(migrations.Migration):",
-            "class Migration(migrations.Migration):\n    initial = True",
-        ),
-        encoding="utf-8",
-    )
-    operational = source_root / "runtime_migrations" / "install_guard.py"
-    _write_module(
-        operational,
-        """\
-from django.db import migrations
-
-
-def applies(project_state):
-    return ("resources", "legacy") in project_state.models
-
-
-def install_guard(apps, schema_editor):
-    pass
-
-
-class Migration(migrations.Migration):
-    dependencies = []
-    operations = [migrations.RunPython(install_guard, migrations.RunPython.noop)]
-""",
-    )
-    write_addon_manifest(
-        addon,
-        migrations=(
-            {
-                "name": "rename_legacy",
-                "app_label": "resources",
-                "module": "runtime_migrations.rename_legacy",
-                "fresh_history": "baseline",
-            },
-            {
-                "name": "install_guard",
-                "app_label": "resources",
-                "module": "runtime_migrations.install_guard",
-            },
-        ),
-    )
-    importlib.invalidate_caches()
-    current_state = MigrationLoader(None, ignore_no_migrations=True).project_state()
-    monkeypatch.setattr(
-        ProjectState,
-        "from_apps",
-        classmethod(lambda cls, registry: current_state.clone()),
-    )
-    current_apps = current_state.apps
-
-    baseline, guard = materializer.materialize(apps=current_apps, fresh_history=True)
-
-    assert baseline.name == "0002_rename_legacy.py"
-    assert "operations = []" in baseline.read_text(encoding="utf-8")
-    assert guard.name == "0003_install_guard.py"
-    assert guard.read_text(encoding="utf-8").startswith(operational.read_text(encoding="utf-8"))
-
-
-def test_fresh_history_rejects_existing_full_body_for_baseline_origin(
-    runtime_migration_probe,
-) -> None:
-    """A reset cannot reinterpret normal upgrade history as an empty baseline."""
-
-    materializer, addon, _, _, _ = runtime_migration_probe
-    materializer.materialize()
-    write_addon_manifest(
-        addon,
-        migrations=(
-            {
-                "name": "rename_legacy",
-                "app_label": "resources",
-                "module": "runtime_migrations.rename_legacy",
-                "fresh_history": "baseline",
-            },
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="full-body history for baseline origins"):
-        materializer.materialize(apps=apps, fresh_history=True)
-
-
-def test_fresh_baseline_body_is_checked_against_canonical_render(
-    runtime_migration_probe, monkeypatch
-) -> None:
-    """A generated file cannot authorize its own edited baseline body."""
-
-    materializer, addon, _, runtime_dir, _ = runtime_migration_probe
-    initial = runtime_dir / "resources" / "migrations" / "0001_legacy.py"
-    initial.write_text(
-        initial.read_text(encoding="utf-8")
-        .replace(
-            "models.AutoField(primary_key=True)",
-            "models.CharField(primary_key=True, max_length=10)",
-        )
-        .replace(
-            "class Migration(migrations.Migration):",
-            "class Migration(migrations.Migration):\n    initial = True",
-        ),
-        encoding="utf-8",
-    )
-    write_addon_manifest(
-        addon,
-        migrations=(
-            {
-                "name": "rename_legacy",
-                "app_label": "resources",
-                "module": "runtime_migrations.rename_legacy",
-                "fresh_history": "baseline",
-            },
-        ),
-    )
-    current_state = MigrationLoader(None, ignore_no_migrations=True).project_state()
-    monkeypatch.setattr(
-        ProjectState,
-        "from_apps",
-        classmethod(lambda cls, registry: current_state.clone()),
-    )
-    (output,) = materializer.materialize(apps=current_state.apps, fresh_history=True)
-    output.write_text(
-        output.read_text(encoding="utf-8").replace(
-            "operations = []",
-            'operations = [migrations.RunSQL("SELECT 1")]'
-        ),
-        encoding="utf-8",
-    )
-    importlib.invalidate_caches()
-
-    with pytest.raises(RuntimeError, match="materialized body digest changed"):
-        materializer.materialize(apps=current_state.apps, fresh_history=True)
 
 
 def test_applies_false_writes_nothing(runtime_migration_probe, caplog) -> None:
@@ -788,7 +301,7 @@ class Migration(migrations.Migration):
     )
     importlib.invalidate_caches()
 
-    written = materializer.materialize()
+    written = materializer.materialize(apps=apps)
 
     assert [path.name for path in written] == ["0002_rename_legacy.py", "0003_add_marker.py"]
     second = (runtime_dir / "resources" / "migrations" / "0003_add_marker.py").read_text(encoding="utf-8")
@@ -830,10 +343,10 @@ class Migration(migrations.Migration):
     )
     importlib.invalidate_caches()
 
-    written = materializer.materialize()
+    written = materializer.materialize(apps=apps)
 
     assert [path.name for path in written] == ["0002_rename_legacy.py", "0003_add_marker.py"]
-    assert materializer.materialize() == ()
+    assert materializer.materialize(apps=apps) == ()
     state = MigrationLoader(None, ignore_no_migrations=True).project_state()
     assert "marker" in state.models["resources", "legacy"].fields
 
@@ -845,14 +358,14 @@ def test_deferred_cross_app_declaration_depends_on_present_planned_leaf(
     """A later-round declaration receives a concrete native cross-app dependency."""
 
     materializer, addon, _, runtime_dir, source_root = runtime_migration_probe
-    iam_migrations = runtime_dir / "iam" / "migrations"
-    _write_module(runtime_dir / "iam" / "__init__.py")
-    _write_module(iam_migrations / "__init__.py")
+    compose_migrations = runtime_dir / "compose" / "migrations"
+    _write_module(runtime_dir / "compose" / "__init__.py")
+    _write_module(compose_migrations / "__init__.py")
     _write_module(
         source_root / "runtime_migrations" / "after_flag.py",
         """from django.db import migrations
 def applies(project_state):
-    return ("iam", "flag") in project_state.models
+    return ("compose", "flag") in project_state.models
 class Migration(migrations.Migration):
     dependencies = []
     operations = []
@@ -862,34 +375,34 @@ class Migration(migrations.Migration):
         source_root / "runtime_migrations" / "add_flag.py",
         """from django.db import migrations, models
 def applies(project_state):
-    return ("iam", "flag") not in project_state.models
+    return ("compose", "flag") not in project_state.models
 class Migration(migrations.Migration):
     dependencies = []
     operations = [migrations.CreateModel(name="Flag", fields=[("id", models.AutoField(primary_key=True))])]
 """,
     )
     dependent = dict(name="after_flag", app_label="resources", module="runtime_migrations.after_flag")
-    enabling = dict(name="add_flag", app_label="iam", module="runtime_migrations.add_flag")
+    enabling = dict(name="add_flag", app_label="compose", module="runtime_migrations.add_flag")
     write_addon_manifest(addon, migrations=(dependent, enabling) if dependent_first else (enabling, dependent))
-    monkeypatch.setitem(settings.MIGRATION_MODULES, "iam", f"{runtime_dir.name}.iam.migrations")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
     importlib.invalidate_caches()
-    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=("resources", "iam"))
+    materializer = RuntimeMigrations((addon,), runtime_dir=runtime_dir, labels=("resources", "compose"))
 
-    written = materializer.materialize()
+    written = materializer.materialize(apps=apps)
 
     assert [path.name for path in written] == ["0001_add_flag.py", "0002_after_flag.py"]
     deferred = (runtime_dir / "resources" / "migrations" / "0002_after_flag.py").read_text()
-    assert 'Migration.dependencies.append(("iam", "0001_add_flag"))' in deferred
-    assert materializer.materialize() == ()
+    assert 'Migration.dependencies.append(("compose", "0001_add_flag"))' in deferred
+    assert materializer.materialize(apps=apps) == ()
 
 
 def test_latest_dependency_resolves_to_other_runtime_leaf(runtime_migration_probe, monkeypatch, settings) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
-    iam_migrations = runtime_dir / "iam" / "migrations"
-    _write_module(runtime_dir / "iam" / "__init__.py")
-    _write_module(iam_migrations / "__init__.py")
+    compose_migrations = runtime_dir / "compose" / "migrations"
+    _write_module(runtime_dir / "compose" / "__init__.py")
+    _write_module(compose_migrations / "__init__.py")
     _write_module(
-        iam_migrations / "0004_current.py",
+        compose_migrations / "0004_current.py",
         """\
 from django.db import migrations
 
@@ -901,27 +414,105 @@ class Migration(migrations.Migration):
     )
     source_path.write_text(
         source_path.read_text(encoding="utf-8").replace(
-            "dependencies = []", 'dependencies = [("iam", "__latest__")]', 1
+            "dependencies = []", 'dependencies = [("compose", "__latest__")]', 1
         ),
         encoding="utf-8",
     )
-    monkeypatch.setitem(settings.MIGRATION_MODULES, "iam", f"{runtime_dir.name}.iam.migrations")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
     importlib.invalidate_caches()
 
-    materializer.materialize()
+    materializer.materialize(apps=apps)
 
     text = (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").read_text(encoding="utf-8")
-    assert '("iam", "0004_current") if dependency == ("iam", "__latest__")' in text
+    assert '("compose", "0004_current") if dependency == ("compose", "__latest__")' in text
 
 
 def test_materialization_is_idempotent(runtime_migration_probe) -> None:
     materializer, _, _, _, _ = runtime_migration_probe
 
-    first = materializer.materialize()
-    second = materializer.materialize()
+    first = materializer.materialize(apps=apps)
+    second = materializer.materialize(apps=apps)
 
     assert len(first) == 1
     assert second == ()
+
+
+def test_removed_declaration_preserves_materialized_body_and_graph(runtime_migration_probe) -> None:
+    materializer, addon, source_path, _, _ = runtime_migration_probe
+    (output,) = materializer.materialize(apps=apps)
+    body = output.read_bytes()
+    previous_graph = MigrationLoader(None, ignore_no_migrations=True).graph
+
+    write_addon_manifest(addon)
+    source_path.unlink()
+
+    assert materializer.materialize(apps=apps) == ()
+    materializer.check()
+
+    assert output.read_bytes() == body
+    graph = MigrationLoader(None, ignore_no_migrations=True).graph
+    assert graph.nodes.keys() == previous_graph.nodes.keys()
+    for node in graph.nodes:
+        assert graph.forwards_plan(node) == previous_graph.forwards_plan(node)
+
+
+@pytest.fixture
+def released_baseline_migration(runtime_migration_probe):
+    materializer, addon, source_path, runtime_dir, _ = runtime_migration_probe
+    output = runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py"
+    # Literal output of the retired fresh-history writer, independent of the
+    # compatibility renderer used to validate it.
+    output.write_text(
+        '''\
+"""Fresh-history baseline for one released addon migration."""
+
+from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = [
+        ("resources", "0001_legacy")
+    ]
+    operations = []
+# ANGEE MATERIALIZED MIGRATION - DO NOT EDIT
+Migration.angee_origin = "example.demo:rename_legacy"
+'''
+        f'Migration.angee_source_sha256 = "{hashlib.sha256(source_path.read_bytes()).hexdigest()}"\n'
+        "Migration.angee_fresh_baseline = True\n",
+        encoding="utf-8",
+    )
+    importlib.invalidate_caches()
+    return materializer, addon, source_path, output
+
+
+@pytest.mark.parametrize("retained_declaration", [True, False])
+def test_released_fresh_baseline_is_loaded_without_rewriting(released_baseline_migration, retained_declaration) -> None:
+    materializer, addon, source_path, output = released_baseline_migration
+    body = output.read_bytes()
+    if not retained_declaration:
+        write_addon_manifest(addon)
+        source_path.unlink()
+
+    assert materializer.materialize(apps=apps) == ()
+    materializer.check()
+
+    assert output.read_bytes() == body
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    migration = loader.disk_migrations["resources", "0002_rename_legacy"]
+    assert migration.dependencies == [("resources", "0001_legacy")]
+    assert migration.operations == []
+
+
+@pytest.mark.parametrize("alteration", [
+    "    operations = [migrations.RunPython(migrations.RunPython.noop)]\n",
+    "    operations = []  # edited\n",
+])
+def test_released_fresh_baseline_body_is_frozen(released_baseline_migration, alteration: str) -> None:
+    materializer, _, _, output = released_baseline_migration
+    output.write_text(output.read_text(encoding="utf-8").replace("    operations = []\n", alteration), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="materialized body digest changed"):
+        materializer.materialize(apps=apps)
 
 
 def test_check_reports_pending_without_writing(runtime_migration_probe) -> None:
@@ -938,76 +529,26 @@ def test_check_reports_pending_without_writing(runtime_migration_probe) -> None:
 
 def test_changed_released_source_fails_instead_of_rewriting(runtime_migration_probe) -> None:
     materializer, _, source_path, _, _ = runtime_migration_probe
-    materializer.materialize()
+    materializer.materialize(apps=apps)
     source_path.write_text(
         source_path.read_text(encoding="utf-8") + "# changed\n",
         encoding="utf-8",
     )
 
     with pytest.raises(RuntimeError, match="source digest changed"):
-        materializer.materialize()
-
-
-def test_declared_compatible_released_source_remains_immutable(runtime_migration_probe) -> None:
-    """An exact historical source digest may coexist with its current declaration."""
-
-    materializer, addon, source_path, _, _ = runtime_migration_probe
-    (output,) = materializer.materialize()
-    released_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
-    source_path.write_text(source_path.read_text(encoding="utf-8") + "# current source\n", encoding="utf-8")
-    write_addon_manifest(
-        addon,
-        migrations=(
-            dict(
-                name="rename_legacy",
-                app_label="resources",
-                module="runtime_migrations.rename_legacy",
-                compatible_source_sha256=[released_digest],
-            ),
-        ),
-    )
-
-    assert materializer.materialize() == ()
-    output.write_text(
-        output.read_text(encoding="utf-8").replace("def forwards", "def edited_forwards", 1),
-        encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError, match="materialized body digest changed"):
-        materializer.materialize()
-
-
-@pytest.mark.parametrize("digest", ["not-a-digest", "A" * 64, 7])
-def test_compatible_source_digest_requires_exact_lowercase_sha256(
-    runtime_migration_probe,
-    digest: object,
-) -> None:
-    materializer, addon, _, _, _ = runtime_migration_probe
-    write_addon_manifest(
-        addon,
-        migrations=(
-            dict(
-                name="rename_legacy",
-                app_label="resources",
-                module="runtime_migrations.rename_legacy",
-                compatible_source_sha256=[digest],
-            ),
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="compatible_source_sha256"):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 def test_changed_materialized_body_fails_instead_of_becoming_history(runtime_migration_probe) -> None:
     materializer, _, _, runtime_dir, _ = runtime_migration_probe
-    (output,) = materializer.materialize()
+    (output,) = materializer.materialize(apps=apps)
     output.write_text(
         output.read_text(encoding="utf-8").replace("def forwards", "def edited_forwards", 1),
         encoding="utf-8",
     )
 
     with pytest.raises(RuntimeError, match="materialized body digest changed"):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
     assert output == runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py"
 
@@ -1023,15 +564,6 @@ def test_changed_materialized_body_fails_instead_of_becoming_history(runtime_mig
             dict(name="rename_legacy", app_label="unknown", module="runtime_migrations.rename_legacy"),
             "unknown runtime migration target 'unknown'",
         ),
-        (
-            dict(
-                name="rename_legacy",
-                app_label="resources",
-                module="runtime_migrations.rename_legacy",
-                fresh_history="skip",
-            ),
-            'fresh_history must be "baseline" when declared',
-        ),
     ],
 )
 def test_rejects_invalid_declarations(runtime_migration_probe, declaration, message: str) -> None:
@@ -1039,7 +571,7 @@ def test_rejects_invalid_declarations(runtime_migration_probe, declaration, mess
     write_addon_manifest(addon, migrations=(declaration,))
 
     with pytest.raises(RuntimeError, match=message):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 def test_rejects_duplicate_declared_origins(runtime_migration_probe) -> None:
@@ -1048,7 +580,7 @@ def test_rejects_duplicate_declared_origins(runtime_migration_probe) -> None:
     write_addon_manifest(addon, migrations=(declaration, declaration))
 
     with pytest.raises(RuntimeError, match="duplicate addon runtime migration origin example.demo:rename_legacy"):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 @pytest.mark.parametrize(
@@ -1077,7 +609,7 @@ def test_rejects_invalid_source_contract(runtime_migration_probe, old: str, new:
     importlib.invalidate_caches()
 
     with pytest.raises(RuntimeError, match=message):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 def test_rejects_unresolved_latest_dependency(runtime_migration_probe) -> None:
@@ -1091,7 +623,7 @@ def test_rejects_unresolved_latest_dependency(runtime_migration_probe) -> None:
     importlib.invalidate_caches()
 
     with pytest.raises(RuntimeError, match="__latest__ dependency app 'missing' has no migration leaf"):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 def test_rejects_multiple_target_leaves(runtime_migration_probe) -> None:
@@ -1115,12 +647,12 @@ class Migration(migrations.Migration):
         RuntimeError,
         match="example.demo:rename_legacy: runtime migration target 'resources' has multiple leaves",
     ):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 def test_rejects_duplicate_materialized_origins(runtime_migration_probe) -> None:
     materializer, _, _, runtime_dir, _ = runtime_migration_probe
-    (output,) = materializer.materialize()
+    (output,) = materializer.materialize(apps=apps)
     duplicate = runtime_dir / "resources" / "migrations" / "0003_duplicate.py"
     duplicate.write_text(output.read_text(encoding="utf-8"), encoding="utf-8")
     importlib.invalidate_caches()
@@ -1129,7 +661,7 @@ def test_rejects_duplicate_materialized_origins(runtime_migration_probe) -> None
         RuntimeError,
         match="duplicate materialized addon runtime migration origin example.demo:rename_legacy",
     ):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 def test_rejects_run_before_cycle(runtime_migration_probe) -> None:
@@ -1145,7 +677,7 @@ def test_rejects_run_before_cycle(runtime_migration_probe) -> None:
     importlib.invalidate_caches()
 
     with pytest.raises(RuntimeError, match="migration graph is invalid"):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 def test_invalid_later_declaration_writes_no_earlier_plan(runtime_migration_probe) -> None:
@@ -1171,872 +703,9 @@ class Migration(migrations.Migration):
     importlib.invalidate_caches()
 
     with pytest.raises(RuntimeError, match="example.demo:broken: source module must define applies"):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
     assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
-
-
-def test_workflow_stable_key_migration_guards_and_preserves_constraint_state() -> None:
-    """The workflow migration accepts only the exact pre-stable-key shape."""
-
-    from angee.workflows.models import Workflow
-
-    module = importlib.import_module("angee.workflows.runtime_migrations.workflow_stable_key")
-    legacy = ProjectState()
-    legacy.add_model(
-        ModelState(
-            "workflows",
-            "Workflow",
-            [
-                ("id", models.AutoField(primary_key=True)),
-                (
-                    "published_from",
-                    models.ForeignKey(
-                        "workflows.Workflow",
-                        blank=True,
-                        null=True,
-                        on_delete=models.CASCADE,
-                    ),
-                ),
-            ],
-        )
-    )
-    partial = legacy.clone()
-    partial.models["workflows", "workflow"].fields["key"] = models.SlugField(
-        blank=True,
-        default="",
-        max_length=100,
-    )
-
-    assert module.applies(ProjectState()) is False
-    assert module.applies(legacy) is True
-    with pytest.raises(ImproperlyConfigured, match="partial Workflow stable key transition"):
-        module.applies(partial)
-
-    migrated = module.Migration("probe", "workflows").mutate_state(legacy)
-    assert module.applies(migrated) is False
-    workflow = migrated.models["workflows", "workflow"]
-    field = workflow.fields["key"]
-    constraint = next(
-        item for item in workflow.options["constraints"] if item.name == "uniq_workflows_workflow_head_key"
-    )
-    assert isinstance(field, models.SlugField)
-    assert field.blank is True
-    assert field.default == ""
-    assert field.max_length == 100
-    assert constraint.fields == ("key",)
-    assert constraint.condition == models.Q(published_from__isnull=True) & ~models.Q(key="")
-    assert constraint.violation_error_code == "unique"
-    assert constraint.violation_error_message == "A workflow with this key already exists."
-    _path, _args, kwargs = constraint.deconstruct()
-    assert kwargs["violation_error_code"] == "unique"
-    assert kwargs["violation_error_message"] == "A workflow with this key already exists."
-    assert isinstance(module.Migration.operations[0], migrations.AddField)
-    assert isinstance(module.Migration.operations[1], migrations.AddConstraint)
-    model_constraint = next(
-        item for item in Workflow._meta.constraints if item.name == "uniq_workflows_workflow_head_key"
-    )
-    assert model_constraint.deconstruct() == constraint.deconstruct()
-
-
-def test_workflow_identity_migration_is_additive_and_matches_source_fields() -> None:
-    """The identity migration applies once and preserves exact StateField state."""
-
-    from angee.workflows.models import StepRun, Workflow, WorkflowRun
-
-    module = importlib.import_module("angee.workflows.runtime_migrations.workflow_identity")
-    legacy = ProjectState()
-    for name in ("Workflow", "WorkflowRun", "StepRun"):
-        legacy.add_model(ModelState("workflows", name, [("id", models.AutoField(primary_key=True))]))
-
-    assert module.applies(legacy) is True
-    partial = legacy.clone()
-    partial.models["workflows", "workflow"].fields["purpose"] = module.Migration.operations[0].field
-    with pytest.raises(ImproperlyConfigured, match="partial identity transition"):
-        module.applies(partial)
-    migrated = module.Migration("probe", "workflows").mutate_state(legacy)
-    assert module.applies(migrated) is False
-
-    for model_name, field_name, source_model in (
-        ("workflow", "purpose", Workflow),
-        ("workflowrun", "origin", WorkflowRun),
-        ("steprun", "waiting_kind", StepRun),
-    ):
-        migrated_field = migrated.models["workflows", model_name].fields[field_name]
-        source_field = source_model._meta.get_field(field_name)
-        migrated_path, migrated_args, migrated_kwargs = migrated_field.deconstruct()[1:]
-        source_path, source_args, source_kwargs = source_field.deconstruct()[1:]
-        if (model_name, field_name) == ("workflowrun", "origin"):
-            assert tuple(migrated_kwargs.pop("choices")) == module.RUN_ORIGIN_CHOICES
-            current_choices = tuple(source_kwargs.pop("choices"))
-            assert set(current_choices) == {
-                *module.RUN_ORIGIN_CHOICES,
-                ("test", "Test"),
-                ("recovery", "Recovery"),
-                ("workflow", "Workflow"),
-            }
-            assert len(current_choices) == len(module.RUN_ORIGIN_CHOICES) + 3
-        assert (migrated_path, migrated_args, migrated_kwargs) == (
-            source_path,
-            source_args,
-            source_kwargs,
-        )
-
-
-def test_workflow_admitted_actor_migration_requires_a_complete_audited_run() -> None:
-    """Admission identity is added only after nullable audit attribution exists."""
-
-    module = importlib.import_module("angee.workflows.runtime_migrations.workflow_admitted_actor")
-    state = ProjectState()
-    state.add_model(ModelState(
-        "workflows",
-        "WorkflowRun",
-        [
-            ("id", models.AutoField(primary_key=True)),
-            ("created_by", models.ForeignKey(
-                "auth.User", null=True, on_delete=models.SET_NULL, related_name="+",
-            )),
-        ],
-    ))
-
-    assert module.applies(state) is True
-    migrated = module.Migration("probe", "workflows").mutate_state(state)
-    assert module.applies(migrated) is False
-    field = migrated.models["workflows", "workflowrun"].fields["admitted_actor_ref"]
-    source = __import__("angee.workflows.models", fromlist=["WorkflowRun"]).WorkflowRun
-    assert field.deconstruct()[1:] == source._meta.get_field("admitted_actor_ref").deconstruct()[1:]
-
-    partial = ProjectState()
-    partial.add_model(ModelState(
-        "workflows", "WorkflowRun", [("id", models.AutoField(primary_key=True))],
-    ))
-    with pytest.raises(ImproperlyConfigured, match="without audit attribution"):
-        module.applies(partial)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_workflow_admitted_actor_backfill_uses_historical_run_primary_key() -> None:
-    """The data migration clears current-model ordering absent from StateApps."""
-
-    module = importlib.import_module("angee.workflows.runtime_migrations.workflow_admitted_actor")
-    state = ProjectState()
-    state.add_model(ModelState(
-        "iam",
-        "User",
-        [
-            ("id", models.AutoField(primary_key=True)),
-            ("sqid", models.CharField(max_length=255, unique=True)),
-        ],
-        options={"db_table": "test_workflow_admitted_actor_user"},
-    ))
-    state.add_model(ModelState(
-        "workflows",
-        "WorkflowRun",
-        [
-            ("id", models.AutoField(primary_key=True)),
-            ("created_by", models.ForeignKey("iam.User", null=True, on_delete=models.SET_NULL)),
-            ("admitted_actor_ref", models.CharField(blank=True, default="", max_length=255)),
-        ],
-        options={
-            "db_table": "test_workflow_admitted_actor_run",
-            "ordering": ("-created_at", "sqid"),
-        },
-    ))
-    historical_apps = state.apps
-    user = historical_apps.get_model("iam", "User")
-    run = historical_apps.get_model("workflows", "WorkflowRun")
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(user)
-        schema_editor.create_model(run)
-    try:
-        actor = models.QuerySet(model=user).create(sqid="usr_retained")
-        row = models.QuerySet(model=run).create(created_by_id=actor.pk)
-        with connection.schema_editor() as schema_editor:
-            module.backfill_known_admission_actors(historical_apps, schema_editor)
-        row.refresh_from_db()
-        assert row.admitted_actor_ref == str(module._historical_user_subject_ref(actor))
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(run)
-            schema_editor.delete_model(user)
-
-
-def test_agent_session_identity_migration_waits_for_complete_identity_state() -> None:
-    """The bridge data migration becomes applicable only after both owning apps exist."""
-
-    identity = importlib.import_module("angee.workflows.runtime_migrations.workflow_identity")
-    bridge = importlib.import_module("angee.workflows_agents.runtime_migrations.agent_session_identity")
-    resources = importlib.import_module("angee.workflows_agents.runtime_migrations.agent_session_resources")
-    assert bridge.Migration.dependencies == []
-    assert resources.Migration.dependencies == [("resources", "__latest__")]
-    legacy = ProjectState()
-    for name in ("Workflow", "WorkflowRun", "StepRun"):
-        legacy.add_model(ModelState("workflows", name, [("id", models.AutoField(primary_key=True))]))
-    assert bridge.applies(legacy) is False
-    assert resources.applies(legacy) is False
-
-    migrated = identity.Migration("probe", "workflows").mutate_state(legacy)
-    assert bridge.applies(migrated) is False
-    migrated.add_model(ModelState("agents", "AgentSession", [("id", models.AutoField(primary_key=True))]))
-    migrated.add_model(ModelState("resources", "Resource", [("id", models.AutoField(primary_key=True))]))
-    assert bridge.applies(migrated) is True
-    assert resources.applies(migrated) is True
-
-
-def test_decision_target_migration_requires_and_adds_the_complete_pair() -> None:
-    module = importlib.import_module("angee.workflows.runtime_migrations.decision_target")
-    state = ProjectState()
-    state.add_model(ModelState("workflows", "Decision", [("id", models.AutoField(primary_key=True))]))
-
-    assert module.applies(state) is True
-    migrated = module.Migration("probe", "workflows").mutate_state(state)
-    assert {"target_model", "target_id", "target_tab"}.issubset(migrated.models["workflows", "decision"].fields)
-    assert module.applies(migrated) is False
-
-    partial = ProjectState()
-    partial.add_model(
-        ModelState(
-            "workflows",
-            "Decision",
-            [
-                ("id", models.AutoField(primary_key=True)),
-                ("target_model", models.CharField(default="", max_length=255)),
-            ],
-        )
-    )
-    with pytest.raises(ImproperlyConfigured, match="partial Decision target pair"):
-        module.applies(partial)
-
-
-def _integration_lifecycle_state(
-    choices: tuple[tuple[str, str], ...],
-) -> ProjectState:
-    state = ProjectState()
-    state.add_model(
-        ModelState(
-            "integrate",
-            "Integration",
-            [
-                ("id", models.AutoField(primary_key=True)),
-                ("lifecycle", models.CharField(choices=choices, max_length=32)),
-            ],
-        )
-    )
-    return state
-
-
-@pytest.mark.parametrize(
-    ("legacy_status", "split_axes", "current_lifecycle"),
-    [
-        ("draft", ("draft", "ok"), "disconnected"),
-        ("ACTIVE", ("active", "ok"), "connected"),
-        ("paused", ("paused", "ok"), "paused"),
-        ("DISABLED", ("disabled", "ok"), "disconnected"),
-        ("error", ("active", "error"), "connected"),
-    ],
-)
-def test_historical_integration_status_split_remains_replayable(
-    legacy_status: str,
-    split_axes: tuple[str, str],
-    current_lifecycle: str,
-) -> None:
-    """Frozen migration imports retain old axes before current normalization."""
-
-    from angee.integrate.models import integration_status_axes  # noqa: PLC0415
-
-    lifecycle_values = importlib.import_module("angee.integrate.runtime_migrations.integration_lifecycle_values")
-    assert integration_status_axes(legacy_status) == split_axes
-    assert dict(lifecycle_values.FORWARD_VALUES).get(split_axes[0], split_axes[0]) == current_lifecycle
-
-
-def test_historical_integration_status_split_rejects_current_runtime_vocabulary() -> None:
-    """The migration shim does not make current lifecycle values legacy statuses."""
-
-    from angee.integrate.models import integration_status_axes  # noqa: PLC0415
-
-    with pytest.raises(ValueError, match="Unsupported legacy integration status: connected"):
-        integration_status_axes("connected")
-
-
-def test_integrate_lifecycle_values_migration_applies_on_the_legacy_marker_values() -> None:
-    """The predicate keys on marker values, so a later fourth value is not a landmine."""
-
-    module = importlib.import_module("angee.integrate.runtime_migrations.integration_lifecycle_values")
-    legacy = _integration_lifecycle_state(
-        (
-            ("draft", "Draft"),
-            ("active", "Active"),
-            ("paused", "Paused"),
-            ("disabled", "Disabled"),
-        )
-    )
-    current = _integration_lifecycle_state(
-        (
-            ("disconnected", "Disconnected"),
-            ("connected", "Connected"),
-            ("paused", "Paused"),
-        )
-    )
-    # The whole point of keying on markers: a project that adds a fourth
-    # lifecycle value later still reads as already-migrated. Against an
-    # exact-tuple predicate this raised, failing `angee build` forever for every
-    # project that had not yet materialized the migration — unrepairable, because
-    # editing the module raises "source digest changed" for every project that had.
-    extended = _integration_lifecycle_state(
-        (
-            ("disconnected", "Disconnected"),
-            ("connected", "Connected"),
-            ("paused", "Paused"),
-            ("erroring", "Erroring"),
-        )
-    )
-    partial = _integration_lifecycle_state(
-        (
-            ("disconnected", "Disconnected"),
-            ("active", "Active"),
-            ("paused", "Paused"),
-        )
-    )
-
-    assert module.applies(ProjectState()) is False
-    assert module.applies(legacy) is True
-    assert module.applies(current) is False
-    assert module.applies(extended) is False
-    with pytest.raises(ImproperlyConfigured, match="partial Integration lifecycle transition"):
-        module.applies(partial)
-
-    migrated = module.Migration("probe", "integrate").mutate_state(legacy)
-    field = migrated.models["integrate", "integration"].fields["lifecycle"]
-    assert tuple(value for value, _label in field.choices) == module.CURRENT_VALUES
-    assert field.max_length == 12
-    assert isinstance(module.Migration.operations[0], migrations.AlterField)
-    assert isinstance(module.Migration.operations[1], migrations.RunPython)
-    assert all(operation.reversible for operation in module.Migration.operations)
-
-
-def _credential_kind_state(choices: tuple[tuple[str, str], ...], *, include_kind: bool = True) -> ProjectState:
-    """Return a minimal historical Credential state for kind-choice guards."""
-
-    fields: list[tuple[str, models.Field]] = [("id", models.AutoField(primary_key=True))]
-    if include_kind:
-        fields.append(("kind", models.CharField(choices=choices, max_length=32)))
-    state = ProjectState()
-    state.add_model(ModelState("integrate", "Credential", fields))
-    return state
-
-
-def test_integrate_credential_app_keys_migration_guards_the_choice_transition() -> None:
-    """APP_KEYS alters only the complete legacy Credential kind vocabulary."""
-
-    try:
-        module = importlib.import_module("angee.integrate.runtime_migrations.credential_app_keys")
-    except ModuleNotFoundError:
-        pytest.fail("The integrate credential_app_keys migration is not implemented.")
-    legacy = _credential_kind_state(module.LEGACY_CHOICES)
-    current = _credential_kind_state(module.CURRENT_CHOICES)
-    extended = _credential_kind_state((*module.CURRENT_CHOICES, ("future", "Future")))
-    extended_legacy = _credential_kind_state((*module.LEGACY_CHOICES, ("future", "Future")))
-    partial = _credential_kind_state(module.LEGACY_CHOICES[:-1])
-
-    assert module.applies(ProjectState()) is False
-    assert module.applies(legacy) is True
-    assert module.applies(current) is False
-    assert module.applies(extended) is False
-    with pytest.raises(ImproperlyConfigured, match="partial Credential kind transition"):
-        module.applies(extended_legacy)
-    with pytest.raises(ImproperlyConfigured, match="partial Credential kind transition"):
-        module.applies(partial)
-    with pytest.raises(ImproperlyConfigured, match="Credential without kind"):
-        module.applies(_credential_kind_state((), include_kind=False))
-
-    migrated = module.Migration("probe", "integrate").mutate_state(legacy)
-    field = migrated.models["integrate", "credential"].fields["kind"]
-    assert tuple(field.choices) == module.CURRENT_CHOICES
-    assert isinstance(module.Migration.operations[0], migrations.AlterField)
-    assert len(module.Migration.operations) == 1
-
-
-@pytest.mark.django_db(transaction=True)
-def test_integrate_lifecycle_values_migration_rewrites_existing_rows() -> None:
-    module = importlib.import_module("angee.integrate.runtime_migrations.integration_lifecycle_values")
-
-    class LegacyIntegrationLifecycle(models.TextChoices):
-        DRAFT = "draft", "Draft"
-        ACTIVE = "active", "Active"
-        PAUSED = "paused", "Paused"
-        DISABLED = "disabled", "Disabled"
-
-    class LegacyIntegration(models.Model):
-        lifecycle = StateField(
-            choices_enum=LegacyIntegrationLifecycle,
-            default=LegacyIntegrationLifecycle.DRAFT,
-            max_length=8,
-        )
-
-        class Meta:
-            app_label = "tests"
-            db_table = "test_legacy_integration_lifecycle_values"
-
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(LegacyIntegration)
-    historical_apps = SimpleNamespace(get_model=lambda *args: LegacyIntegration)
-    try:
-        LegacyIntegration._base_manager.bulk_create(
-            [
-                LegacyIntegration(lifecycle="draft"),
-                LegacyIntegration(lifecycle="active"),
-                LegacyIntegration(lifecycle="paused"),
-                LegacyIntegration(lifecycle="disabled"),
-            ]
-        )
-        with connection.schema_editor() as schema_editor:
-            module.rewrite_lifecycle_values(historical_apps, schema_editor)
-
-        table = connection.ops.quote_name(LegacyIntegration._meta.db_table)
-        lifecycle = connection.ops.quote_name("lifecycle")
-        identifier = connection.ops.quote_name("id")
-        with connection.cursor() as cursor:
-            cursor.execute(f"SELECT {lifecycle} FROM {table} ORDER BY {identifier}")
-            values = [row[0] for row in cursor.fetchall()]
-        assert values == ["disconnected", "connected", "paused", "disconnected"]
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(LegacyIntegration)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_integrate_lifecycle_values_migration_restores_legacy_values_that_fit_the_narrow_column() -> None:
-    """Reversing rewrites data back to legacy values before the column narrows again.
-
-    Operations reverse last-first, so this rewrite runs while the column is still
-    ``max_length=12`` and must leave only values the ``max_length=8`` column the
-    reverse ``AlterField`` restores can hold. A ``noop`` reverse left
-    ``disconnected`` (12 chars) in place: Postgres then fails the reverse
-    ``AlterField`` with "value too long for type character varying(8)" (verified
-    against Postgres 17), while SQLite ignores the width and leaves every row
-    failing the legacy ``StateField``'s ``to_python``.
-    """
-
-    module = importlib.import_module("angee.integrate.runtime_migrations.integration_lifecycle_values")
-
-    class LegacyIntegrationLifecycle(models.TextChoices):
-        DRAFT = "draft", "Draft"
-        ACTIVE = "active", "Active"
-        PAUSED = "paused", "Paused"
-        DISABLED = "disabled", "Disabled"
-
-    class ReversedIntegration(models.Model):
-        lifecycle = StateField(
-            choices_enum=LegacyIntegrationLifecycle,
-            default=LegacyIntegrationLifecycle.DRAFT,
-            max_length=8,
-        )
-
-        class Meta:
-            app_label = "tests"
-            db_table = "test_reversed_integration_lifecycle_values"
-
-    legacy_width = ReversedIntegration._meta.get_field("lifecycle").max_length
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(ReversedIntegration)
-    historical_apps = SimpleNamespace(get_model=lambda *args: ReversedIntegration)
-    try:
-        ReversedIntegration._base_manager.bulk_create(
-            [
-                ReversedIntegration(lifecycle="draft"),
-                ReversedIntegration(lifecycle="active"),
-                ReversedIntegration(lifecycle="paused"),
-                ReversedIntegration(lifecycle="disabled"),
-            ]
-        )
-        with connection.schema_editor() as schema_editor:
-            module.rewrite_lifecycle_values(historical_apps, schema_editor)
-            module.restore_lifecycle_values(historical_apps, schema_editor)
-
-        table = connection.ops.quote_name(ReversedIntegration._meta.db_table)
-        lifecycle = connection.ops.quote_name("lifecycle")
-        identifier = connection.ops.quote_name("id")
-        with connection.cursor() as cursor:
-            cursor.execute(f"SELECT {lifecycle} FROM {table} ORDER BY {identifier}")
-            values = [row[0] for row in cursor.fetchall()]
-        # Lossy by construction: the `disabled` row comes back as `draft`,
-        # because `disconnected` has two legacy sources and keeps neither.
-        assert values == ["draft", "active", "paused", "draft"]
-        assert all(len(value) <= legacy_width for value in values)
-        assert set(values) <= set(LegacyIntegrationLifecycle.values)
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(ReversedIntegration)
-
-
-def _old_relationship_state() -> ProjectState:
-    from angee.parties.models import Relationship
-
-    relationship = ModelState.from_model(Relationship)
-    relationship.fields.pop("party")
-    relationship.fields.pop("other_party")
-    relationship.fields.pop("other_name")
-    relationship.fields["from_party"] = models.ForeignKey(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="relationships",
-    )
-    relationship.fields["to_party"] = models.ForeignKey(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="inbound_relationships",
-    )
-    relationship.options["ordering"] = ("from_party", "sqid")
-    relationship.options["constraints"] = [
-        models.UniqueConstraint(
-            fields=("from_party", "to_party", "kind"),
-            name="uq_relationship_edge",
-        ),
-        models.CheckConstraint(
-            condition=~models.Q(from_party=models.F("to_party")),
-            name="ck_relationship_distinct_parties",
-        ),
-    ]
-    state = ProjectState()
-    state.add_model(relationship)
-    return state
-
-
-def test_parties_relationship_migration_preserves_renamed_foreign_keys() -> None:
-    """The append-only source migration owns only the lossless anchor transition."""
-
-    module = importlib.import_module("angee.parties.runtime_migrations.relationship_anchor")
-    old_state = _old_relationship_state()
-
-    assert module.applies(old_state) is True
-    migrated = module.Migration("probe", "parties").mutate_state(old_state)
-    relationship = migrated.models["parties", "relationship"]
-
-    assert "party" in relationship.fields
-    assert "other_party" in relationship.fields
-    assert "other_name" in relationship.fields
-    assert "from_party" not in relationship.fields
-    assert "to_party" not in relationship.fields
-    assert relationship.fields["other_party"].null is True
-    assert relationship.fields["other_party"].remote_field.on_delete is models.SET_NULL
-    assert relationship.options["ordering"] == ("party", "sqid")
-    assert {constraint.name for constraint in relationship.options["constraints"]} == {
-        "uq_relationship_edge",
-        "ck_relationship_distinct_parties",
-        "ck_relationship_has_other",
-    }
-
-
-def test_parties_relationship_migration_applies_only_to_exact_old_state() -> None:
-    from angee.parties.models import Relationship
-
-    module = importlib.import_module("angee.parties.runtime_migrations.relationship_anchor")
-    current = ProjectState()
-    current.add_model(ModelState.from_model(Relationship))
-    mixed = _old_relationship_state()
-    mixed.models["parties", "relationship"].fields["party"] = models.ForeignKey(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="mixed_relationships",
-    )
-
-    assert module.applies(ProjectState()) is False
-    assert module.applies(current) is False
-    with pytest.raises(ImproperlyConfigured, match="partial Relationship field transition"):
-        module.applies(mixed)
-
-
-def test_parties_handle_confirmation_migration_adds_materialized_winner_state() -> None:
-    from angee.parties.models import Handle
-
-    module = importlib.import_module("angee.parties.runtime_migrations.handle_party_link_confirmed")
-    old_state = ProjectState()
-    handle = ModelState.from_model(Handle)
-    handle.fields.pop("party_link_confirmed")
-    old_state.add_model(handle)
-
-    assert module.applies(old_state) is True
-    migrated = module.Migration("probe", "parties").mutate_state(old_state)
-    field = migrated.models["parties", "handle"].fields["party_link_confirmed"]
-
-    assert isinstance(field, models.BooleanField)
-    assert field.default is False
-    assert module.applies(migrated) is False
-
-
-def test_parties_handle_normalized_value_migration_adds_required_indexed_field() -> None:
-    from angee.parties.models import Handle
-
-    module = importlib.import_module("angee.parties.runtime_migrations.handle_normalized_value")
-    old_state = ProjectState()
-    handle = ModelState.from_model(Handle)
-    handle.fields.pop("normalized_value")
-    old_state.add_model(handle)
-
-    assert module.applies(old_state) is True
-    migrated = module.Migration("probe", "parties").mutate_state(old_state)
-    field = migrated.models["parties", "handle"].fields["normalized_value"]
-
-    assert isinstance(field, models.CharField)
-    assert field.null is False
-    assert field.db_index is True
-    assert field.editable is False
-    assert module.applies(migrated) is False
-
-
-def _thread_group_state(*, include_group: bool, include_groups: bool) -> ProjectState:
-    """Return a minimal messaging.Thread state for the spaces audience migration."""
-
-    state = ProjectState()
-    state.add_model(
-        ModelState(
-            "spaces",
-            "Group",
-            [("id", models.AutoField(primary_key=True))],
-        )
-    )
-    fields: list[tuple[str, models.Field]] = [
-        ("id", models.AutoField(primary_key=True)),
-    ]
-    if include_group:
-        fields.append(
-            (
-                "group",
-                models.ForeignKey(
-                    "spaces.Group",
-                    null=True,
-                    blank=True,
-                    on_delete=models.SET_NULL,
-                    related_name="threads",
-                ),
-            )
-        )
-    if include_groups:
-        fields.append(
-            (
-                "groups",
-                models.ManyToManyField(
-                    "spaces.Group",
-                    blank=True,
-                    related_name="threads",
-                ),
-            )
-        )
-    state.add_model(ModelState("messaging", "Thread", fields))
-    return state
-
-
-def test_spaces_thread_groups_migration_guards_and_preserves_state() -> None:
-    """The spaces runtime migration applies only to the exact FK-to-M2M transition."""
-
-    module = importlib.import_module("angee.spaces.runtime_migrations.thread_groups")
-    old_state = _thread_group_state(include_group=True, include_groups=False)
-    current = _thread_group_state(include_group=False, include_groups=True)
-    partial = _thread_group_state(include_group=True, include_groups=True)
-    unexpected = _thread_group_state(include_group=True, include_groups=False)
-    unexpected.models["messaging", "thread"].fields["group"] = models.CharField(max_length=32)
-
-    assert module.applies(ProjectState()) is False
-    assert module.applies(old_state) is True
-    assert module.applies(current) is False
-    with pytest.raises(ImproperlyConfigured, match="partial ThreadSpace group transition"):
-        module.applies(partial)
-    with pytest.raises(ImproperlyConfigured, match="unexpected Thread.group field"):
-        module.applies(unexpected)
-
-    intermediate = old_state.clone()
-    module.Migration.operations[0].state_forwards("messaging", intermediate)
-    intermediate.apps.get_model("messaging", "Thread")
-
-    migrated = module.Migration("probe", "messaging").mutate_state(old_state)
-    thread = migrated.models["messaging", "thread"]
-    assert "groups" in thread.fields
-    assert "group" not in thread.fields
-    assert isinstance(thread.fields["groups"], models.ManyToManyField)
-    assert thread.fields["groups"].remote_field.related_name == "threads"
-    assert module.applies(migrated) is False
-
-
-@pytest.mark.django_db(transaction=True)
-def test_spaces_thread_groups_migration_backfills_existing_fk_rows() -> None:
-    """Existing single-group threads retain that group in the new M2M audience."""
-
-    module = importlib.import_module("angee.spaces.runtime_migrations.thread_groups")
-
-    class LegacySpaceGroup(models.Model):
-        class Meta:
-            app_label = "tests"
-            db_table = "test_legacy_spaces_thread_group"
-
-    class LegacyThread(models.Model):
-        group = models.ForeignKey(
-            LegacySpaceGroup,
-            null=True,
-            blank=True,
-            on_delete=models.SET_NULL,
-            related_name="+",
-        )
-        groups = models.ManyToManyField(
-            LegacySpaceGroup,
-            blank=True,
-            related_name="+",
-        )
-
-        class Meta:
-            app_label = "tests"
-            db_table = "test_legacy_messaging_thread_groups"
-
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(LegacySpaceGroup)
-        schema_editor.create_model(LegacyThread)
-    historical_apps = SimpleNamespace(
-        get_model=lambda app_label, model_name: {
-            ("spaces", "Group"): LegacySpaceGroup,
-            ("messaging", "Thread"): LegacyThread,
-        }[app_label, model_name]
-    )
-    try:
-        group = LegacySpaceGroup._base_manager.create()
-        retained = LegacyThread._base_manager.create(group=group)
-        no_group = LegacyThread._base_manager.create(group=None)
-
-        with connection.schema_editor() as schema_editor:
-            module.copy_thread_group_to_groups(historical_apps, schema_editor)
-
-        through_model = LegacyThread.groups.through
-        thread_field = module._through_field_for(through_model, LegacyThread)
-        group_field = module._through_field_for(through_model, LegacySpaceGroup)
-        assert list(
-            through_model._base_manager.order_by(thread_field.attname).values_list(
-                thread_field.attname,
-                group_field.attname,
-            )
-        ) == [(retained.pk, group.pk)]
-        assert no_group.pk not in set(through_model._base_manager.values_list(thread_field.attname, flat=True))
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(LegacyThread)
-            schema_editor.delete_model(LegacySpaceGroup)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_parties_handle_normalized_value_migration_backfills_existing_rows() -> None:
-    module = importlib.import_module("angee.parties.runtime_migrations.handle_normalized_value")
-
-    class LegacyHandle(models.Model):
-        platform = models.CharField(max_length=8)
-        value = models.CharField(max_length=512)
-        normalized_value = models.CharField(max_length=512, null=True)
-
-        class Meta:
-            app_label = "tests"
-            db_table = "test_legacy_handle_normalized_value"
-
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(LegacyHandle)
-    historical_apps = SimpleNamespace(get_model=lambda *args: LegacyHandle)
-    try:
-        LegacyHandle._base_manager.bulk_create(
-            [
-                LegacyHandle(platform="email", value=" Alice.Smith+work@GMAIL.com "),
-                LegacyHandle(platform="email", value="User@Example.COM"),
-                LegacyHandle(platform="phone", value=" +420 123 456 "),
-            ]
-        )
-        with connection.schema_editor() as schema_editor:
-            module.backfill_normalized_values(historical_apps, schema_editor)
-
-        assert list(LegacyHandle._base_manager.order_by("id").values_list("normalized_value", flat=True)) == [
-            "alicesmith@gmail.com",
-            "user@example.com",
-            "+420 123 456",
-        ]
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(LegacyHandle)
-
-
-def _old_nexus_state() -> ProjectState:
-    from angee.nexus.models import Tie
-
-    tie = ModelState.from_model(Tie)
-    tie.fields.pop("party_a")
-    tie.fields.pop("party_b")
-    tie.fields.pop("a_to_b_count")
-    tie.fields.pop("b_to_a_count")
-    tie.fields["party"] = models.OneToOneField(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="tie",
-    )
-    tie.fields["outbound_count"] = models.PositiveIntegerField(default=0)
-    tie.fields["inbound_count"] = models.PositiveIntegerField(default=0)
-    tie.fields["cadence_days"] = models.PositiveIntegerField(null=True, blank=True)
-    tie.fields["touch_due_at"] = models.DateTimeField(null=True, blank=True, db_index=True)
-    tie.options["constraints"] = []
-    state = ProjectState()
-    state.add_model(tie)
-    return state
-
-
-def test_nexus_tie_pair_migration_replaces_only_the_exact_legacy_shape() -> None:
-    from angee.nexus.models import Cadence, Tie
-
-    module = importlib.import_module("angee.nexus.runtime_migrations.tie_pair_reshape")
-    old_state = _old_nexus_state()
-
-    assert module.applies(old_state) is True
-    migrated = module.Migration("probe", "nexus").mutate_state(old_state)
-    assert ("nexus", "tie") not in migrated.models
-
-    current = ProjectState()
-    current.add_model(ModelState.from_model(Tie))
-    current.add_model(ModelState.from_model(Cadence))
-    assert module.applies(ProjectState()) is False
-    assert module.applies(current) is False
-
-    mixed = _old_nexus_state()
-    mixed.models["nexus", "tie"].fields["party_a"] = models.ForeignKey(
-        "parties.Party",
-        on_delete=models.CASCADE,
-        related_name="mixed_ties",
-    )
-    with pytest.raises(ImproperlyConfigured, match="partial Tie field transition"):
-        module.applies(mixed)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_nexus_tie_pair_migration_refuses_to_discard_cadence_values() -> None:
-    module = importlib.import_module("angee.nexus.runtime_migrations.tie_pair_reshape")
-
-    class LegacyNexusTie(models.Model):
-        cadence_days = models.PositiveIntegerField(null=True, blank=True)
-
-        class Meta:
-            app_label = "tests"
-            db_table = "test_legacy_nexus_tie_guard"
-
-    with connection.schema_editor() as schema_editor:
-        schema_editor.create_model(LegacyNexusTie)
-    historical_apps = SimpleNamespace(get_model=lambda *args: LegacyNexusTie)
-    try:
-        LegacyNexusTie._base_manager.create(cadence_days=None)
-        with connection.schema_editor() as schema_editor:
-            module.assert_no_legacy_cadence_values(historical_apps, schema_editor)
-
-        LegacyNexusTie._base_manager.create(cadence_days=30)
-        with connection.schema_editor() as schema_editor:
-            with pytest.raises(RuntimeError, match="legacy cadence values"):
-                module.assert_no_legacy_cadence_values(historical_apps, schema_editor)
-    finally:
-        with connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(LegacyNexusTie)
-
-
-def test_parties_source_migration_is_not_discovered_as_an_app_migration() -> None:
-    loader = MigrationLoader(None, ignore_no_migrations=True)
-
-    assert ("parties", "relationship_anchor") not in loader.disk_migrations
 
 
 def test_rejects_source_in_djangos_conventional_migrations_package(runtime_migration_probe) -> None:
@@ -2046,7 +715,7 @@ def test_rejects_source_in_djangos_conventional_migrations_package(runtime_migra
     )
 
     with pytest.raises(RuntimeError, match="must live outside Django's conventional migrations package"):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 def test_applies_error_is_reported_with_the_declaration_origin(runtime_migration_probe) -> None:
@@ -2065,7 +734,7 @@ def test_applies_error_is_reported_with_the_declaration_origin(runtime_migration
         RuntimeError,
         match=r"example.demo:rename_legacy: applies\(project_state\) failed",
     ):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 def test_later_render_error_writes_no_earlier_plan(runtime_migration_probe) -> None:
@@ -2102,7 +771,7 @@ class Migration(migrations.Migration):
     importlib.invalidate_caches()
 
     with pytest.raises(RuntimeError, match="source migration must end with a newline"):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
     assert not (runtime_dir / "resources" / "migrations" / "0002_rename_legacy.py").exists()
 
@@ -2114,7 +783,7 @@ def test_materialized_origin_uses_app_config_name(runtime_migration_probe) -> No
         migrations=(dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),),
     )
 
-    (output,) = materializer.materialize()
+    (output,) = materializer.materialize(apps=apps)
 
     assert 'Migration.angee_origin = "example.demo:rename_legacy"' in output.read_text(encoding="utf-8")
 
@@ -2131,7 +800,7 @@ def test_rejects_malformed_dependency_with_origin(runtime_migration_probe) -> No
         RuntimeError,
         match="example.demo:rename_legacy: invalid Django migration dependency 3",
     ):
-        materializer.materialize()
+        materializer.materialize(apps=apps)
 
 
 @pytest.mark.parametrize(
@@ -2164,68 +833,345 @@ def test_validated_plan_render_uses_the_hashed_source_snapshot(runtime_migration
     assert not rendered.startswith("changed after planning")
 
 
-def test_integration_parent_impl_axis_migration_recognizes_exact_state() -> None:
-    """The S4 migration is append-only over exact old/new shapes."""
+def _upgrade_states(label):
+    """Freeze affected field/constraint shapes from the 0a55a6fb upgrade floor.
 
-    from tests.conftest import Integration
+    Legacy declarations use that revision's field classes, choices and defaults,
+    independently of live models. Unrelated columns are omitted; relation targets
+    outside the affected tables use scalar stand-ins for this isolated database.
+    """
+    from angee.storage.models import Folder
+    from angee.workflows.models import StepAttempt, StepRun, WorkflowRun
+    from angee.workflows_extraction.models import Extraction, ExtractionPage
 
-    module = importlib.import_module("angee.integrate.runtime_migrations.integration_parent_impl_axis")
+    if label == "workflows":
+        declarations = (
+            (WorkflowRun, ("parent_relation", "test_scope"), ("chk_wfr_test_scope",)),
+            (StepRun, ("waiting_kind",), ()),
+            (StepAttempt, ("lease_revocation_reason", "result_kind"), (
+                "chk_wsa_revocation_pair", "chk_wsa_result_pair", "chk_wsa_orchestration_error",
+            )),
+        )
+        extras = {
+            "workflowrun": {
+                "origin": models.CharField(max_length=32, default="manual"),
+                "test_step": models.IntegerField(null=True),
+                "test_source_step_id": models.IntegerField(null=True),
+            },
+            "stepattempt": {
+                "lease_revoked_at": models.DateTimeField(null=True),
+                "result_recorded_at": models.DateTimeField(null=True),
+                "orchestration_error": models.TextField(default=""),
+            },
+        }
+        legacy_fields = {
+            "workflowrun": {
+                "parent_relation": StateField(
+                    choices=[("owned_call", "Owned call"), ("continuation", "Continuation")],
+                    blank=True, default="", editable=False,
+                ),
+                "test_scope": StateField(
+                    choices=[("whole", "Whole workflow"), ("node", "Selected node")],
+                    blank=True, default="", editable=False,
+                ),
+            },
+            "steprun": {
+                "waiting_kind": StateField(
+                    choices=[
+                        ("scheduled", "Scheduled"), ("approval", "Approval"),
+                        ("external", "External input"), ("children", "Child steps"),
+                    ],
+                    blank=True, default="",
+                ),
+            },
+            "stepattempt": {
+                "lease_revocation_reason": models.CharField(
+                    max_length=32, blank=True,
+                    choices=[("canceled", "Canceled"), ("heartbeat_lost", "Heartbeat_Lost"),
+                             ("superseded", "Superseded")],
+                ),
+                "result_kind": models.CharField(
+                    max_length=32, blank=True,
+                    choices=[
+                        ("done", "Done"), ("wait", "Wait"), ("suspend", "Suspend"), ("error", "Error"),
+                        ("no_result", "No_Result"), ("preparation_error", "Preparation_Error"),
+                        ("transient_error", "Transient_Error"),
+                    ],
+                ),
+            },
+        }
+        legacy_constraints = {
+            "workflowrun": [models.CheckConstraint(
+                condition=(
+                    models.Q(origin="test", test_scope__in=("", "whole"),
+                             test_step__isnull=True, test_source_step_id__isnull=True)
+                    | models.Q(origin="test", test_scope="node",
+                               test_step__isnull=False, test_source_step_id__isnull=False)
+                    | (~models.Q(origin="test") & models.Q(
+                        test_scope="", test_step__isnull=True, test_source_step_id__isnull=True,
+                    ))
+                ), name="chk_wfr_test_scope",
+            )],
+            "stepattempt": [
+                models.CheckConstraint(
+                    condition=(models.Q(lease_revoked_at__isnull=True, lease_revocation_reason="")
+                               | (models.Q(lease_revoked_at__isnull=False) & ~models.Q(lease_revocation_reason=""))),
+                    name="chk_wsa_revocation_pair",
+                ),
+                models.CheckConstraint(
+                    condition=(models.Q(result_recorded_at__isnull=True, result_kind="")
+                               | (models.Q(result_recorded_at__isnull=False) & ~models.Q(result_kind=""))),
+                    name="chk_wsa_result_pair",
+                ),
+                models.CheckConstraint(
+                    condition=models.Q(orchestration_error="") | models.Q(result_kind="transient_error"),
+                    name="chk_wsa_orchestration_error",
+                ),
+            ],
+        }
+    elif label == "storage":
+        declarations = ((Folder, ("smart_kind",), ("uniq_storage_folder_owner_smart_kind",)),)
+        extras = {"folder": {"owner": models.IntegerField(null=True), "is_virtual": models.BooleanField(default=False)}}
+        legacy_fields = {"folder": {"smart_kind": StateField(
+            choices=[("trash", "Trash")], blank=True, default="", editable=False,
+        )}}
+        legacy_constraints = {"folder": [models.UniqueConstraint(
+            fields=("owner", "smart_kind"), condition=models.Q(is_virtual=True) & ~models.Q(smart_kind=""),
+            name="uniq_storage_folder_owner_smart_kind",
+        )]}
+    else:
+        old = ProjectState()
+        current = ProjectState()
+        for model, renames in (
+            (Extraction, (("engine", "profile"), ("engine_config", "profile_config"))),
+            (ExtractionPage, (("engine_metadata", "provider_metadata"),)),
+        ):
+            fields = {"id": models.AutoField(primary_key=True)}
+            old_fields = {"id": models.AutoField(primary_key=True)}
+            for old_name, new_name in renames:
+                fields[new_name] = model._meta.get_field(new_name).clone()
+                old_fields[old_name] = (
+                    ImplClassField(registry_setting="ANGEE_EXTRACTION_ENGINE_CLASSES", editable=False)
+                    if old_name == "engine" else models.JSONField(default=dict, blank=True, editable=False)
+                )
+            old.add_model(ModelState(label, model.__name__, old_fields))
+            current.add_model(ModelState(label, model.__name__, fields))
+        return old, current
+
     old = ProjectState()
-    old.add_model(ModelState.from_model(Integration))
-    old.models["integrate", "integration"].fields["impl_class"] = ImplClassField(
-        registry_setting="ANGEE_INTEGRATION_IMPLS",
-        default="none",
-    )
-    old.models["integrate", "integration"].options["constraints"] = [
-        models.UniqueConstraint(
-            fields=("owner", "vendor", "impl_class"),
-            condition=models.Q(kind="Integration"),
-            name=module.CONSTRAINT_NAME,
-        )
+    current = ProjectState()
+    for model, names, constraints in declarations:
+        name = model._meta.model_name
+        fields = {"id": models.AutoField(primary_key=True), **extras.get(name, {})}
+        old_fields = {key: field.clone() for key, field in fields.items()}
+        for field_name in names:
+            field = model._meta.get_field(field_name)
+            fields[field_name] = field.clone()
+            old_fields[field_name] = legacy_fields[name][field_name]
+        old.add_model(ModelState(label, model.__name__, old_fields, options={
+            "constraints": legacy_constraints.get(name, []),
+        }))
+        current.add_model(ModelState(label, model.__name__, fields, options={
+            "constraints": [
+                constraint.clone() for constraint in model._meta.constraints if constraint.name in constraints
+            ],
+        }))
+    return old, current
+
+
+@pytest.fixture
+def isolated_upgrade_database():
+    """Replay real constraint names without colliding with the source test apps."""
+    original = connections["default"]
+    database = DatabaseWrapper({
+        **original.settings_dict,
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ":memory:",
+        "OPTIONS": {},
+        "TIME_ZONE": None,
+    }, alias="default")
+    connections["default"] = database
+    try:
+        yield
+    finally:
+        database.close()
+        connections["default"] = original
+
+
+@pytest.mark.parametrize("label,schema_nullable,domain_inference", [
+    ("workflows", False, False), ("storage", False, False), ("workflows_extraction", False, False),
+    ("workflows", True, False), ("storage", True, False), ("workflows_extraction", False, True),
+])
+@pytest.mark.django_db(transaction=True)
+def test_declared_upgrades_preserve_floor_rows_or_reject_partial_schema(
+    runtime_migration_probe, settings, monkeypatch, isolated_upgrade_database, label, schema_nullable, domain_inference,
+):
+    """Materialize real declarations, migrate test tables, and compare live owners."""
+    _, _, _, runtime_dir, _ = runtime_migration_probe
+    if domain_inference:
+        settings.ANGEE_EXTRACTION_PROFILE_CLASSES = {
+            **settings.ANGEE_EXTRACTION_PROFILE_CLASSES,
+            "inference": "example.domain.InferenceProfile",
+        }
+    legacy, current = _upgrade_states(label)
+    if schema_nullable:
+        for key, model in legacy.models.items():
+            for name, field in model.fields.items():
+                if current.models[key].fields[name].null:
+                    field.null = True
+    package = runtime_dir / label / "migrations"
+    _write_module(package.parent / "__init__.py")
+    _write_module(package / "__init__.py")
+    initial = migrations.Migration("0001_legacy", label)
+    initial.operations = [
+        migrations.CreateModel(model.name, list(model.fields.items()), options=model.options)
+        for model in legacy.models.values()
     ]
+    _write_module(package / "0001_legacy.py", MigrationWriter(initial).as_string())
+    monkeypatch.setitem(settings.MIGRATION_MODULES, label, f"{runtime_dir.name}.{label}.migrations")
+    importlib.invalidate_caches()
+    materializer = RuntimeMigrations((apps.get_app_config(label),), runtime_dir=runtime_dir, labels=(label,))
+    if schema_nullable:
+        # Recompiling a legacy '' constraint through an already-nullable
+        # StateField changes its meaning. Reject this partial graph before writes.
+        with pytest.raises(RuntimeError, match=r"applies\(project_state\) failed") as caught:
+            materializer.materialize(apps=apps)
+        assert isinstance(caught.value.__cause__, ValueError)
+        assert "partial nullable transition" in str(caught.value.__cause__)
+        assert sorted(path.name for path in package.glob("[0-9]*.py")) == ["0001_legacy.py"]
+        return
+    (plan,) = materializer.plan()
+    source = importlib.import_module(f"angee.{label}.runtime_migrations.{plan.origin.split(':')[1]}")
+    assert not source.applies(ProjectState())
+    assert not source.applies(current)
+    assert materializer.materialize(apps=apps) == (plan.output_path,)
+    assert materializer.materialize(apps=apps) == ()
 
-    assert module.applies(old) is True
-    migrated = module.Migration("probe", "integrate").mutate_state(old)
-    assert module.applies(migrated) is False
-    assert "impl_class" not in migrated.models["integrate", "integration"].fields
-    assert module.CONSTRAINT_NAME not in {
-        constraint.name for constraint in migrated.models["integrate", "integration"].options["constraints"]
-    }
-    assert module.applies(ProjectState()) is False
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    before = loader.project_state([(label, "0001_legacy")])
+    after = loader.project_state([(label, plan.name)])
+    expected = before.clone()
+    for key, model in current.models.items():
+        expected.models[key] = model.clone()
+        for name, field in model.fields.items():
+            assert after.models[key].fields[name].deconstruct()[1:] == field.deconstruct()[1:], (key, name)
+    questioner = Mock(spec=MigrationQuestioner)
+    questioner.ask_rename.side_effect = AssertionError("unexpected rename prompt")
+    questioner.ask_not_null_addition.side_effect = AssertionError("unexpected default prompt")
+    assert MigrationAutodetector(after, expected, questioner).changes(graph=loader.graph) == {}
+    assert not questioner.mock_calls
+
+    with connection.schema_editor() as editor:
+        for key in legacy.models:
+            editor.create_model(before.apps.get_model(*key))
+    try:
+        if label == "workflows":
+            before.apps.get_model(label, "WorkflowRun")._base_manager.create()
+            before.apps.get_model(label, "WorkflowRun")._base_manager.create(
+                origin="test", test_scope="node", test_step=4, test_source_step_id=4, parent_relation="owned_call",
+            )
+            before.apps.get_model(label, "StepRun")._base_manager.create()
+            before.apps.get_model(label, "StepRun")._base_manager.create(waiting_kind="approval")
+            before.apps.get_model(label, "StepAttempt")._base_manager.create()
+            before.apps.get_model(label, "StepAttempt")._base_manager.create(
+                lease_revocation_reason="canceled", lease_revoked_at=datetime(2026, 1, 1, tzinfo=UTC),
+                result_kind="transient_error", result_recorded_at=datetime(2026, 1, 1, tzinfo=UTC),
+                orchestration_error="retained error",
+            )
+        elif label == "storage":
+            folder = before.apps.get_model(label, "Folder")
+            folder._base_manager.create(owner=1, is_virtual=True)
+            folder._base_manager.create(owner=1, is_virtual=True)
+            folder._base_manager.create(owner=1, is_virtual=True, smart_kind="trash")
+        else:
+            extraction = before.apps.get_model(label, "Extraction")
+            # The retired registry is absent in new settings; seed stored legacy
+            # keys without asking its historical enum to decode INSERT RETURNING.
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    f"INSERT INTO {connection.ops.quote_name(extraction._meta.db_table)} "
+                    "(engine, engine_config) VALUES (%s, %s)",
+                    [(key, json.dumps({"retained": key})) for key in ("inference", "none", "custom_domain")],
+                )
+            before.apps.get_model(label, "ExtractionPage")._base_manager.create(engine_metadata={"retained": [1, 2]})
+
+        def snapshot(state):
+            # Raw SQL verifies storage without modern StateField coercing '' to None.
+            with connection.cursor() as cursor:
+                result = {}
+                for key in legacy.models:
+                    table = state.apps.get_model(*key)._meta.db_table
+                    cursor.execute(f"SELECT * FROM {connection.ops.quote_name(table)} ORDER BY id")
+                    names = [column[0] for column in cursor.description]
+                    result[key] = [dict(zip(names, row)) for row in cursor.fetchall()]
+                return result
+
+        original = snapshot(before)
+        migration = loader.disk_migrations[label, plan.name]
+        with connection.schema_editor() as editor:
+            migration.apply(before, editor)
+            source.forwards(after.apps, editor)  # Data conversion is idempotent.
+        upgraded = snapshot(after)
+        if label == "workflows_extraction":
+            rows = upgraded[label, "extraction"]
+            assert [row["profile"] for row in rows] == ["none", "none", "custom_domain"]
+            assert [row["profile_config"] for row in rows] == [
+                row["engine_config"] for row in original[label, "extraction"]
+            ]
+            assert upgraded[label, "extractionpage"][0]["provider_metadata"] == (
+                original[label, "extractionpage"][0]["engine_metadata"]
+            )
+            # Rollback is deliberately lossy only for the obsolete transport key.
+            original[label, "extraction"][0]["engine"] = "none"
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"INSERT INTO {connection.ops.quote_name(extraction._meta.db_table)} "
+                    "(profile, profile_config) VALUES (%s, %s)", ("none", "{}"),
+                )
+            original[label, "extraction"].append({"id": 4, "engine": "none", "engine_config": "{}"})
+        else:
+            assert upgraded == {
+                key: [{name: None if value == "" and name in current.models[key].fields
+                       and current.models[key].fields[name].null else value for name, value in row.items()}
+                      for row in rows]
+                for key, rows in original.items()
+            }
+        with connection.schema_editor() as editor:
+            migration.unapply(
+                loader.project_state([(label, "0001_legacy")]), editor,
+            )
+        assert snapshot(before) == original
+    finally:
+        with connection.schema_editor() as editor:
+            for key in reversed(legacy.models):
+                editor.delete_model(before.apps.get_model(*key))
 
 
-def test_integration_parent_impl_axis_migration_rejects_partial_shapes() -> None:
-    """Field-only, constraint-only, and altered old constraints fail closed."""
+@pytest.mark.parametrize("label,name", [
+    ("workflows", "optional_states_nullable"), ("storage", "smart_kind_nullable"),
+])
+@pytest.mark.parametrize("change", ["condition", "name", "remove"])
+def test_optional_state_upgrade_skips_evolved_current_constraints(label, name, change):
+    source = importlib.import_module(f"angee.{label}.runtime_migrations.{name}")
+    _, current = _upgrade_states(label)
+    for key, model in current.models.items():
+        for index in range(len(model.options.get("constraints", []))):
+            evolved = current.clone()
+            constraints = [constraint.clone() for constraint in model.options["constraints"]]
+            evolved.models[key].options["constraints"] = constraints
+            if change == "condition":
+                constraints[index].condition &= models.Q(pk__gt=0)
+            elif change == "name":
+                constraints[index].name += "_revised"
+            else:
+                del constraints[index]
+            assert not source.applies(evolved), (key, index, change)
 
-    from tests.conftest import Integration
 
-    module = importlib.import_module("angee.integrate.runtime_migrations.integration_parent_impl_axis")
-    old = ProjectState()
-    old.add_model(ModelState.from_model(Integration))
-    old.models["integrate", "integration"].fields["impl_class"] = ImplClassField(
-        registry_setting="ANGEE_INTEGRATION_IMPLS",
-        default="none",
-    )
-    old.models["integrate", "integration"].options["constraints"] = [
-        models.UniqueConstraint(
-            fields=("owner", "vendor", "impl_class"),
-            condition=models.Q(kind="Integration"),
-            name=module.CONSTRAINT_NAME,
-        )
-    ]
-    field_only = old.clone()
-    field_only.models["integrate", "integration"].options["constraints"] = []
-    constraint_only = old.clone()
-    constraint_only.models["integrate", "integration"].fields.pop("impl_class")
-    altered = old.clone()
-    altered.models["integrate", "integration"].options["constraints"] = [
-        models.UniqueConstraint(
-            fields=("owner", "vendor"),
-            condition=models.Q(kind="Integration"),
-            name=module.CONSTRAINT_NAME,
-        )
-    ]
+def test_workflow_state_upgrade_rejects_mixed_nullability():
+    from angee.workflows.runtime_migrations.optional_states_nullable import applies
 
-    for state in (field_only, constraint_only, altered):
-        with pytest.raises(ImproperlyConfigured, match="partial Integration transition"):
-            module.applies(state)
+    legacy, _ = _upgrade_states("workflows")
+    legacy.models["workflows", "steprun"].fields["waiting_kind"].null = True
+    with pytest.raises(ValueError, match="partial nullable transition"):
+        applies(legacy)

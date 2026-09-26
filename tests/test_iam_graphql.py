@@ -40,20 +40,20 @@ from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import OAuthFlowError
+from tests import (
+    test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
+    test_messaging,  # noqa: F401 -- register the concrete relation graph
+)
 from tests.conftest import (
-    POSTS_TEST_MODELS,
     Credential,
     ExternalAccount,
     OAuthClient,
-    _clear_model_tables,
     addon_schema,
     execute_schema,
 )
-from tests.conftest import _create_missing_tables as _create_connection_tables
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
-from tests.test_agents_graphql import AGENTS_GRAPHQL_MODELS
-from tests.test_messaging import MESSAGING_TEST_MODELS
+from tests.tables import model_tables
 
 User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -1794,35 +1794,17 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
 
 @pytest.fixture()
 def iam_connection_tables(transactional_db: Any) -> Iterator[None]:
-    """Create concrete connection tables for connection/login GraphQL tests.
+    """Sync connection policy and materialize test-only auth relations.
 
-    Also materializes any other concrete ``auth``-app tables (e.g. test models
-    registered by sibling suites with ``app_label="auth"``): deleting a real
-    ``auth.User`` walks Django's deletion collector across every ``auth``-app
-    relation (``AuditMixin`` adds ``SET_NULL`` user FKs), so a phantom registered
-    model without a table would break ``delete_user`` under suite ordering. The
-    OIDC last-sign-in disconnect guard is contributed through settings, matching
-    composed runtime behavior.
+    The migrated auth app cannot sync these test models natively. User deletion
+    traverses their audit relations, including models registered by other tests.
     """
 
     del transactional_db
-    connection_models = tuple(dict.fromkeys(MESSAGING_TEST_MODELS + POSTS_TEST_MODELS + AGENTS_GRAPHQL_MODELS))
-    _create_connection_tables(connection_models)
-    auth_models = tuple(_create_auth_app_tables())
-    call_command("rebac", "sync", verbosity=0)
-    try:
+    auth_models = tuple(model for model in apps.get_app_config("auth").get_models() if model._meta.managed)
+    with model_tables(auth_models):
+        call_command("rebac", "sync", verbosity=0)
         yield
-    finally:
-        _clear_model_tables(connection_models + auth_models)
-
-
-def _create_auth_app_tables() -> list[Any]:
-    """Create missing tables for concrete managed models in the ``auth`` app."""
-
-    auth_models = tuple(
-        model for model in apps.get_app_config("auth").get_models() if model._meta.managed and not model._meta.abstract
-    )
-    return _create_connection_tables(auth_models)
 
 
 def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
@@ -1920,8 +1902,6 @@ def _user_with_password_hash(username: str, password_hash: str) -> Any:
         user.password = password_hash
         user.save(update_fields=["password"])
     return user
-
-
 
 
 def _user_public_id(user: Any) -> str:

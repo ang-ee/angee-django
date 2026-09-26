@@ -40,6 +40,3 @@ class ExtractionPart(models.ExtractionPart):
         app_label = "workflows_extraction"
         db_table = "test_extraction_extractionpart"
         rebac_resource_type = "workflows_extraction/extraction_part"
-
-
-EXTRACTION_MODELS = (Extraction, ExtractionLineage, ExtractionSource, ExtractionPage, ExtractionPart)

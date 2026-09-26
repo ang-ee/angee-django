@@ -17,7 +17,6 @@ Messaging's canonical attachment manager.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
@@ -102,9 +101,7 @@ class NeedManager(AngeeManager):
         actor = current_actor()
         with transaction.atomic():
             with system_context(reason="intake.need.capture.lookup"):
-                locked_target = type(target).objects.sudo(reason="intake.need.capture.target").locked_get(
-                    pk=target.pk
-                )
+                locked_target = type(target).objects.sudo(reason="intake.need.capture.target").locked_get(pk=target.pk)
                 existing = (
                     self.model._base_manager.filter(
                         **target_filter,
@@ -197,11 +194,10 @@ class NeedManager(AngeeManager):
             project=project,
             title=normalized_title or "Captured need",
             note=str(note or ""),
-            sort_order=task_model.objects._append_rank("sort_order", project=project),
-            sub_sort_order=task_model.objects._append_rank("sub_sort_order", parent=None),
             created_by_id=created_by_id,
             updated_by_id=created_by_id,
         )
+        task.allocate_ordering_ranks()
         with task._work_verb_write():
             task.full_clean(validate_unique=False, validate_constraints=False)
             task.sudo(reason="intake.need.create_triage_task").save()
@@ -222,7 +218,7 @@ class NeedManager(AngeeManager):
     def _resolved_sender_party_id(message: models.Model) -> Any | None:
         """Resolve the sender through parties' matching owner and return its party id."""
 
-        sender = getattr(message, "sender", None)
+        sender = message.sender
         if sender is None:
             return None
         if sender.party_id is None:
@@ -357,14 +353,6 @@ class Need(AuditMixin, AngeeDataModel):
             object.__setattr__(self, "_intake_track_targets", True)
             object.__setattr__(self, "_intake_project_assigned", False)
 
-    def apply_create_defaults(self) -> Mapping[str, Sequence[Any]]:
-        """Project the target before the generic create gate evaluates its relations."""
-
-        self._normalize_target()
-        if self.task_id is not None:
-            return {"task": (self.task,)}
-        return {"project": (self.project,)}
-
     def clean(self) -> None:
         """Normalize task-project context and reject missing or double-authored targets."""
 
@@ -429,10 +417,11 @@ class Need(AuditMixin, AngeeDataModel):
             return
         if getattr(self, "_intake_project_assigned", False):
             raise ValidationError({"project": "Choose either a task or a project, not both."})
-        task_project_id = self.task.project_id
+        task = self.task
+        assert task is not None
         object.__setattr__(self, "_intake_internal_target", True)
         try:
-            self.project_id = task_project_id
+            self.project_id = task.project_id
             self.targets_project = False
         finally:
             object.__setattr__(self, "_intake_internal_target", False)

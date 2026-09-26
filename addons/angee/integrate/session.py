@@ -315,7 +315,7 @@ class LiveSession:
         overwrites it after invalidating persisted and queued old answers.
         """
 
-        credential = self._fresh_credential()
+        credential = self.bridge.fresh_credential()
         if credential is None:
             return self._terminal_password_failure(ValueError("This live bridge has no credential for password input."))
         self._arm_password_round(
@@ -370,7 +370,7 @@ class LiveSession:
             return True
         if awaiting != "":
             return True
-        credential = self._fresh_credential()
+        credential = self.bridge.fresh_credential()
         if credential is None:
             return self._terminal_password_failure(ValueError("This live bridge has no credential for password input."))
         password = credential.reveal().get(material_key)
@@ -400,18 +400,12 @@ class LiveSession:
 
         if not self._password_delivered:
             return True
-        credential = self._fresh_credential()
+        credential = self.bridge.fresh_credential()
         if credential is None:
             return self._terminal_password_failure(ValueError("This live bridge has no credential for password input."))
         credential.update_material(**{self._password_material_key: None})
         self._password_delivered = False
         return True
-
-    def _fresh_credential(self) -> Any | None:
-        """Reload and return the bridge credential, replacing Django's FK cache."""
-
-        self.bridge.refresh_from_db(fields=["credential"])
-        return self.bridge.credential
 
     def _terminal_password_failure(self, error: Exception) -> bool:
         """Report a safe runtime failure and end this session without raising."""

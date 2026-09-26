@@ -137,7 +137,8 @@ def consume_validated_state(
 def enabled_oauth_client(oauth_client_sqid: str) -> Any:
     """Return one enabled OAuth client addressed by sqid, or raise."""
 
-    queryset = _oauth_client_model().objects.system_context(reason="integrate.oauth.flow.oauth_client")
+    model = _oauth_client_model()
+    queryset = model.objects.system_context(reason="integrate.oauth.flow.oauth_client")
     oauth_client = queryset.from_public_id(oauth_client_sqid)
     if oauth_client is None or not oauth_client.is_enabled:
         raise ValueError("OAuth client is not enabled.")

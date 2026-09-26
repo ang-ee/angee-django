@@ -17,20 +17,21 @@ from angee.base.refs import RecordRefMixin
 from angee.workflows_extraction.contracts import (
     CorrectionRef,
     DocumentRef,
+    ExtractionPartKind,
     ExtractionRef,
     FactAuthority,
     LineRef,
     PageRef,
     SourceRef,
 )
-from angee.workflows_extraction.engines import ExtractionEngine, ExtractionPartKind, ExtractionStatus
+from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionStatus
 from angee.workflows_extraction.managers import (
+    EvidenceManager,
     ExtractionManager,
     ExtractionSystemManager,
-    ImmutableEvidenceManager,
-    evidence_insert_allowed,
 )
 from angee.workflows_extraction.pointers import json_pointer_value
+from angee.workflows_extraction.profiles import ExtractionProfile
 
 
 class DecisionReadableFile(models.Model):
@@ -51,16 +52,27 @@ class ExtractionLineage(AngeeModel):
     head = models.ForeignKey(
         "workflows_extraction.Extraction", null=True, on_delete=models.PROTECT, related_name="+"
     )
-    objects = ImmutableEvidenceManager()
+    objects = EvidenceManager()
 
     class Meta:
         abstract = True
         base_manager_name = "objects"
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("The extraction lineage head changes only during retention.")
-        super().save(*args, **kwargs)
+        raise ValueError("The extraction lineage head changes only during retention.")
+
+    def allocate(self) -> None:
+        """Create the lineage lock row before allocating its first revision."""
+
+        super().save( force_insert=True)
+
+    def advance_head(self, extraction: Any) -> None:
+        """Project the newly retained revision under the manager's lineage lock."""
+
+        if extraction.lineage_key != self.pk:
+            raise ValueError("An extraction head must belong to its lineage.")
+        self.head = extraction
+        super().save( update_fields=("head",))
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("The extraction lineage is retained and cannot be deleted.")
@@ -81,9 +93,9 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
     schema = models.JSONField(editable=False)
-    engine = ImplClassField(
-        base_class=ExtractionEngine,
-        registry_setting="ANGEE_EXTRACTION_ENGINE_CLASSES",
+    profile = ImplClassField(
+        base_class=ExtractionProfile,
+        registry_setting="ANGEE_EXTRACTION_PROFILE_CLASSES",
         editable=False,
     )
     model = models.ForeignKey(
@@ -96,7 +108,7 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         on_delete=models.PROTECT,
         related_name="recognition_extraction_evidence",
     )
-    engine_config = models.JSONField(default=dict, blank=True, editable=False)
+    profile_config = models.JSONField(default=dict, blank=True, editable=False)
     result = models.JSONField(editable=False)
     provenance = models.JSONField(default=dict, editable=False)
     document_map = models.JSONField(default=list, editable=False)
@@ -117,13 +129,12 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Refuse mutation after the evidence row has been inserted."""
+        raise ValueError("Extraction evidence is immutable; use the retention owner.")
 
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("Extraction evidence can only be inserted by the retention owner.")
-        if self.pk is not None and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValueError("Extraction evidence is immutable; create a new revision.")
-        super().save(*args, **kwargs)
+    def retain(self) -> None:
+        """Insert one immutable revision; the manager retains its children and head."""
+
+        super().save( force_insert=True)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction evidence is retained and cannot be deleted.")
@@ -219,6 +230,30 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         return self.provenance.get("document", {})
 
     @property
+    def awaiting_correspondence(self) -> bool:
+        """Whether this revision holds a candidate awaiting reviewed identity mapping."""
+
+        return (
+            self.status == ExtractionStatus.FAILED
+            and self.error_code == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
+        )
+
+    @property
+    def failed_at_inference(self) -> bool:
+        """Return whether this failed revision retains an inference-stage failure.
+
+        The structured stage is authoritative; a legacy row without it does not
+        establish an inference failure from its composite error code alone.
+        """
+
+        failure = self.stage_provenance.get("failure", {})
+        return (
+            self.status == ExtractionStatus.FAILED
+            and isinstance(failure, Mapping)
+            and failure.get("stage") == "inference"
+        )
+
+    @property
     def unresolved_reasons(self) -> tuple[str, ...]:
         return tuple(self.provenance.get("unresolved_reasons", ()))
 
@@ -228,7 +263,7 @@ class ExtractionSource(SqidMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "exs_"
-    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.CASCADE, related_name="sources")
+    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.PROTECT, related_name="sources")
     file = models.ForeignKey(
         "storage.File", null=True, blank=True, on_delete=models.PROTECT, related_name="extraction_sources"
     )
@@ -237,7 +272,7 @@ class ExtractionSource(SqidMixin, AngeeModel):
     )
     position = models.PositiveIntegerField(editable=False)
     content_hash = models.CharField(max_length=64, editable=False)
-    objects = ImmutableEvidenceManager()
+    objects = EvidenceManager()
 
     class Meta:
         abstract = True
@@ -266,11 +301,7 @@ class ExtractionSource(SqidMixin, AngeeModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("Extraction source evidence can only be inserted by the retention owner.")
-        if self.pk is not None and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValueError("Extraction source evidence is immutable.")
-        super().save(*args, **kwargs)
+        raise ValueError("Extraction source evidence is immutable; use the retention owner.")
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction source evidence is retained and cannot be deleted.")
@@ -287,8 +318,8 @@ class ExtractionPage(SqidMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "exp_"
-    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.CASCADE, related_name="pages")
-    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.CASCADE, related_name="pages")
+    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.PROTECT, related_name="pages")
+    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.PROTECT, related_name="pages")
     position = models.PositiveIntegerField(editable=False)
     source_page = models.PositiveIntegerField(editable=False)
     width = models.PositiveIntegerField(editable=False)
@@ -296,8 +327,8 @@ class ExtractionPage(SqidMixin, AngeeModel):
     dpi = models.PositiveIntegerField(editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
     result = models.JSONField(editable=False)
-    engine_metadata = models.JSONField(default=dict, blank=True, editable=False)
-    objects = ImmutableEvidenceManager()
+    provider_metadata = models.JSONField(default=dict, blank=True, editable=False)
+    objects = EvidenceManager()
 
     class Meta:
         abstract = True
@@ -310,18 +341,14 @@ class ExtractionPage(SqidMixin, AngeeModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("Extraction page evidence can only be inserted by the retention owner.")
-        if self.pk is not None and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValueError("Extraction page evidence is immutable.")
-        super().save(*args, **kwargs)
+        raise ValueError("Extraction page evidence is immutable; use the retention owner.")
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction page evidence is retained and cannot be deleted.")
 
     @property
     def reference(self) -> PageRef:
-        carriers = self.engine_metadata.get("carrier_files", ())
+        carriers = self.provider_metadata.get("carrier_files", ())
         return PageRef(self.source.reference, int(self.source_page), tuple(str(item) for item in carriers))
 
 
@@ -330,8 +357,8 @@ class ExtractionPart(SqidMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "exr_"
-    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.CASCADE, related_name="parts")
-    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.CASCADE, related_name="parts")
+    extraction = models.ForeignKey("workflows_extraction.Extraction", on_delete=models.PROTECT, related_name="parts")
+    source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.PROTECT, related_name="parts")
     position = models.PositiveIntegerField(editable=False)
     source_page = models.PositiveIntegerField(null=True, blank=True, editable=False)
     mime_type = models.CharField(max_length=128, editable=False)
@@ -345,7 +372,7 @@ class ExtractionPart(SqidMixin, AngeeModel):
     claims = models.JSONField(default=dict, blank=True, editable=False)
     metadata = models.JSONField(default=dict, blank=True, editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
-    objects = ImmutableEvidenceManager()
+    objects = EvidenceManager()
 
     class Meta:
         abstract = True
@@ -357,11 +384,7 @@ class ExtractionPart(SqidMixin, AngeeModel):
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        if not evidence_insert_allowed(kwargs.get("using") or self._state.db):
-            raise ValueError("Extraction part evidence can only be inserted by the retention owner.")
-        if self.pk is not None and type(self)._base_manager.filter(pk=self.pk).exists():
-            raise ValueError("Extraction part evidence is immutable.")
-        super().save(*args, **kwargs)
+        raise ValueError("Extraction part evidence is immutable; use the retention owner.")
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction part evidence is retained and cannot be deleted.")

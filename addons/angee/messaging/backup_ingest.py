@@ -22,11 +22,10 @@ method for it yet, so both sites spell the format out. Centralizing the
 derivation on a Thread/Message manager method — the single owner both the ingest
 and this resume path would then call — is a follow-up.
 
-The WhatsApp addon predates this owner and still carries its own copy in
-:class:`angee.messaging_integrate_whatsapp.backup.BackupImporter`; migrating it
-onto this module (its ``_resume_watermarks`` normalizes the recovered key with
-``bare_jid`` and pre-converts to CoreData seconds — both moves this owner leaves to
-the store) is a mechanical follow-up.
+The WhatsApp addon still carries its own resume-watermark query in
+:class:`angee.messaging_integrate_whatsapp.backup.BackupImporter`; its
+``_resume_watermarks`` normalizes the recovered key with ``bare_jid`` and
+pre-converts to CoreData seconds — both moves this owner leaves to the store.
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ from django.apps import apps
 from django.db.models import Max
 from rebac import system_context
 
-from angee.messaging.backends import ParsedMessage
+from angee.messaging.backends import ParsedMessage, ParsedPart
 
 _THREAD_KEY_PREFIX = "chat:{channel_pk}:"
 """The manager's chat-thread external-id namespace; stripped to recover the store key."""
@@ -137,9 +136,9 @@ def batch_ingest(
 ) -> int:
     """Drive a store's messages through the shared ingest path in batches; return the total.
 
-    ``messages`` yields the store's platform DTOs (each exposing ``media`` for
-    byte accounting); ``parsed_message`` maps one DTO onto the neutral messaging
-    seam. A batch flushes at ``batch_size`` messages **or** ``max_batch_bytes`` of
+    ``parsed_message`` maps each source record onto the neutral messaging seam.
+    Byte accounting reads the parsed body tree, independent of the source's
+    media representation. A batch flushes at ``batch_size`` messages **or** ``max_batch_bytes`` of
     buffered media, whichever comes first. Every chat backup lands under the
     ``CHAT`` kind with the email quotation graph off. Historical imports suppress
     live message events and party suggestions through the shared ingest owner.
@@ -171,9 +170,18 @@ def batch_ingest(
         batch_bytes = 0
 
     for message in messages:
-        batch.append(parsed_message(message))
-        batch_bytes += sum(len(item.content) for item in getattr(message, "media", ()) if item.content)
+        parsed = parsed_message(message)
+        batch.append(parsed)
+        batch_bytes += _body_content_bytes(parsed.body)
         if len(batch) >= batch_size or batch_bytes >= max_batch_bytes:
             flush()
     flush()
     return total
+
+
+def _body_content_bytes(part: ParsedPart | None) -> int:
+    """Return the resolved content bytes retained by one neutral body tree."""
+
+    if part is None:
+        return 0
+    return len(part.content or b"") + sum(_body_content_bytes(child) for child in part.children)

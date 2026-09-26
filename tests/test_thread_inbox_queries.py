@@ -11,9 +11,9 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 
 from tests.chatterdemo.models import ChatterDoc
-from tests.test_messaging import Fragment, Thread, ThreadAttachment, messaging_tables  # noqa: F401
+from tests.test_messaging import Fragment, Thread, ThreadAttachment
 
-pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("messaging_tables")]
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
 
 
 def test_inbox_antijoin_preserves_title_projection_and_null_timestamp_ties() -> None:

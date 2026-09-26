@@ -1,17 +1,18 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider } from "@refinedev/core";
-import { QueryClient } from "@tanstack/react-query";
-import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
-import { testDataResource } from "@angee/metadata/testing";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
+import { createUiTestProviders } from "../../testing";
 import { RelationFieldWidget } from "./RelationFieldWidget";
 import { useRelationSelectedOption } from "./relation-options";
 import { customFilterChipsFor } from "../resource/resource-view-utils";
 
-const clients: QueryClient[] = [];
-afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); });
+const { Provider, clearClients } = createUiTestProviders({
+  apiUrl: "test://relations",
+  queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
+});
+afterEach(() => { cleanup(); clearClients(); });
 
 function SelectedFilter({ value }: { value: string }) {
   const selected = useRelationSelectedOption(
@@ -25,6 +26,14 @@ function SelectedFilter({ value }: { value: string }) {
 }
 
 test("relation search reaches records beyond the first page and resolves a selected label separately", async () => {
+  const searchFields = ["name", "value"];
+  const resource = testDataResource("contacts.Address", {
+    query: testResourceQuery({
+      fields: Object.fromEntries(searchFields.map((field) => [field, testQueryField(field, {
+        filter: { field, scalar: "String", values: [], operators: ["exact", "iContains"] },
+      })])),
+    }),
+  });
   const selected = { id: "address-999", name: "Distant sender" };
   const getOne = vi.fn(async () => ({ data: selected }));
   const getList = vi.fn(async ({ filters }: { filters?: unknown[] }) => ({
@@ -33,16 +42,11 @@ test("relation search reaches records beyond the first page and resolves a selec
       : Array.from({ length: 200 }, (_, index) => ({ id: `address-${index}`, name: `Sender ${index}` })),
     total: 1000,
   }));
-  const provider = { getApiUrl: () => "test://relations", getOne, getList, create: vi.fn(), update: vi.fn(), deleteOne: vi.fn() } as unknown as DataProvider;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
   const change = vi.fn();
-  render(<Refine dataProvider={{ default: provider, console: provider }} options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>
-    <ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([testDataResource("contacts.Address")])}>
-      <RelationFieldWidget value={selected.id} onChange={change} relation={{ resource: "contacts.Address", labelField: "name", canCreate: false }} searchFields={["name", "value"]} aria-label="Exact address" />
-      <SelectedFilter value={selected.id} />
-    </ModelMetadataProvider>
-  </Refine>);
+  render(<Provider resources={[resource]} refineResources={[]} dataProvider={{ getOne, getList }}>
+    <RelationFieldWidget value={selected.id} onChange={change} relation={{ resource: "contacts.Address", labelField: "name", canCreate: false }} searchFields={searchFields} aria-label="Exact address" />
+    <SelectedFilter value={selected.id} />
+  </Provider>);
   await screen.findByText("Distant sender");
   await screen.findByText("Sender is Distant sender");
   expect(getOne).toHaveBeenCalledOnce();

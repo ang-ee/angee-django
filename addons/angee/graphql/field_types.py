@@ -11,8 +11,9 @@ registers its GraphQL type at its own module import. Self-registration guarantee
 the type exists before any schema resource that uses the field can be constructed,
 independent of ``INSTALLED_APPS`` order.
 
-State and id fields need no entry: strawberry-django resolves ``StateField`` by
-``isinstance`` against ``django-choices-field``'s ``TextChoicesField``, and the
+State and id fields need no map entry: strawberry-django resolves ``StateField``
+through ``django-choices-field``'s ``TextChoicesField``. Optional states declare
+``null=True, blank=True`` on the model and project natively as nullable enums. The
 opaque-id ``SqidField`` is a non-concrete column projected explicitly as
 ``strawberry.ID`` by ``AngeeNode`` — neither reaches ``field_type_map``.
 """

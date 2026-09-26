@@ -12,22 +12,3 @@ install = [
   { path = "resources/install/100_workflows.workflow.yaml", publish = true },
   { path = "resources/install/101_workflows.step.yaml", depends_on = "resources/install/100_workflows.workflow.yaml" },
 ]
-
-# New histories order resources before the frozen identity backfill. Existing
-# histories retain that origin and append this dependency-only declaration.
-[[migrations]]
-fresh_history = "baseline"
-name = "agent_session_resources"
-app_label = "workflows"
-module = "runtime_migrations.agent_session_resources"
-# Existing copies differ only by the empty operations list's type annotation.
-compatible_source_sha256 = ["bcebd73a5480658fb19f2cd2ce40117fc790d061e57e78a919e4ff71277a51ca"]
-
-[[migrations]]
-fresh_history = "baseline"
-name = "agent_session_identity"
-app_label = "workflows"
-module = "runtime_migrations.agent_session_identity"
-# This exact owner-rendered source added only the resources/0001 dependency
-# before the original source was restored; its immutable body remains valid.
-compatible_source_sha256 = ["01451c436ccbdad2acdded85ddf6f236520f717f3ae829cab96f7f35501803b7"]

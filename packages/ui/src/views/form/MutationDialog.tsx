@@ -30,7 +30,7 @@ import { RelationPicker, type RelationCreateConfig } from "../relation/RelationP
 import { useRelationPickerOptions } from "../relation/relation-options";
 import type { FieldDescriptor } from "../page";
 import { directDottedPathMessages } from "./validation-errors";
-import { fieldErrorMessages, isFieldVisible, resolveField } from "./form-view-model";
+import { fieldErrorMessages, isCompositeFieldDescriptor, isFieldVisible, resolveField } from "./form-view-model";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
 
@@ -391,7 +391,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
                 dialogValues={values}
                 messages={fieldState.error ? fieldErrorMessages(
                   [fieldState.error],
-                  field.objectTemplate || field.itemTemplate || "rowTemplate" in field ? field.name : undefined,
+                  isCompositeFieldDescriptor(field) ? field.name : undefined,
                 ) : []}
                 readOnly={field.readOnly || field.readOnlyWhen?.(values) || submitting}
                 onChange={(next) => {
@@ -488,11 +488,12 @@ export function LabeledDescriptorField({
   onChange: (value: unknown) => void;
   onCommit?: () => void;
   controlRef?: (target: import("../../widgets").WidgetFocusTarget | null) => void;
-}): React.ReactElement {
+}): React.ReactElement | null {
   const generatedId = React.useId();
+  if (field.hidden) return null;
   const controlId = `mutation-field-${generatedId}`;
   const labelId = `${controlId}-label`;
-  const isCompositeField = field.rowTemplate !== undefined || field.objectTemplate !== undefined || field.itemTemplate !== undefined;
+  const isCompositeField = isCompositeFieldDescriptor(field);
   const groupLabel = field.controlLabelMode === "group" || isCompositeField;
   const displayedMessages = isCompositeField
     ? directDottedPathMessages(messages, field.name)

@@ -1,4 +1,4 @@
-import { testQueryField, testResourceQuery } from "@angee/metadata/testing";
+import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 // @vitest-environment happy-dom
 
 import {
@@ -25,7 +25,7 @@ const sdkMocks = vi.hoisted(() => ({
     meta?: { fields?: unknown };
   } | null,
   rows: [
-    { id: "vnd_1", display_name: "Acme" },
+    { id: "rev_1", display_name: "Acme" },
   ] as Record<string, unknown>[],
   refetch: vi.fn(),
 }));
@@ -60,7 +60,7 @@ afterEach(() => {
   cleanup();
   sdkMocks.useListOptions = null;
   sdkMocks.rows = [
-    { id: "vnd_1", display_name: "Acme" },
+    { id: "rev_1", display_name: "Acme" },
   ];
   sdkMocks.refetch.mockClear();
 });
@@ -69,14 +69,14 @@ describe("useRelationOptions", () => {
   test("requests public id with the label field so rows become selectable options", () => {
     render(
       <ModelMetadataProvider metadata={metadata}>
-        <RelationOptionsProbe relation={vendorRelation} />
+        <RelationOptionsProbe relation={reviewerRelation} />
       </ModelMetadataProvider>,
     );
 
-    expect(sdkMocks.useListOptions?.resource).toBe("vendors");
+    expect(sdkMocks.useListOptions?.resource).toBe("reviewers");
     expect(sdkMocks.useListOptions?.dataProviderName).toBe("console");
     expect(sdkMocks.useListOptions?.meta?.fields).toEqual(["id", "display_name"]);
-    expect(screen.getByText("vnd_1: Acme")).toBeTruthy();
+    expect(screen.getByText("rev_1: Acme")).toBeTruthy();
   });
 
   test("returns relation options in server order without client label sorting", () => {
@@ -110,7 +110,7 @@ describe("useRelationOptions", () => {
   test("searches a declared text field when the computed label is not filterable", () => {
     render(
       <ModelMetadataProvider metadata={metadata}>
-        <RelationOptionsProbe relation={vendorRelation} searchText="admin" />
+        <RelationOptionsProbe relation={reviewerRelation} searchText="admin" />
       </ModelMetadataProvider>,
     );
 
@@ -122,6 +122,37 @@ describe("useRelationOptions", () => {
         ],
       },
     ]);
+  });
+
+  test("falls back to the searchable record representation", () => {
+    render(
+      <ModelMetadataProvider metadata={metadata}>
+        <RelationOptionsProbe relation={stageRelation} searchText="new" />
+      </ModelMetadataProvider>,
+    );
+
+    expect(sdkMocks.useListOptions?.filters).toEqual([
+      {
+        operator: "or",
+        value: [
+          { field: "name", operator: "contains", value: "new" },
+        ],
+      },
+    ]);
+  });
+
+  test("honors an explicit empty search-field override", () => {
+    render(
+      <ModelMetadataProvider metadata={metadata}>
+        <RelationOptionsProbe
+          relation={currencyRelation}
+          searchFields={[]}
+          searchText="USD"
+        />
+      </ModelMetadataProvider>,
+    );
+
+    expect(sdkMocks.useListOptions?.filters).toEqual([]);
   });
 
   test("searches every resource-authored record field while retaining its computed label", () => {
@@ -165,14 +196,16 @@ describe("useRelationOptions", () => {
 
 function RelationOptionsProbe({
   relation,
+  searchFields,
   searchText,
   sorters,
 }: {
   relation: RelationFieldInfo;
+  searchFields?: readonly string[];
   searchText?: string;
   sorters?: readonly { field: string; order: "asc" | "desc" }[];
 }) {
-  const { options } = useRelationOptions(relation, { searchText, sorters });
+  const { options } = useRelationOptions(relation, { searchFields, searchText, sorters });
   return (
     <ul>
       {options.map((option) => (
@@ -182,8 +215,8 @@ function RelationOptionsProbe({
   );
 }
 
-const vendorRelation: RelationFieldInfo = {
-  resource: "integrate.Vendor",
+const reviewerRelation: RelationFieldInfo = {
+  resource: "example.Reviewer",
   labelField: "display_name",
   canCreate: false,
 };
@@ -206,209 +239,50 @@ const currencyRelation: RelationFieldInfo = {
   canCreate: false,
 };
 
+const searchableField = (name: string) => testQueryField(name, {
+  filter: {
+    field: name,
+    scalar: "String",
+    values: [],
+    operators: ["exact", "iContains"],
+  },
+});
+
 const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
-  {
-    schemaName: "console",
-    modelLabel: "integrate.Vendor",
-    appLabel: "integrate",
-    modelName: "vendor",
+  testDataResource("example.Reviewer", {
     recordRepresentation: "display_name",
-    recordSearchFields: [],
+    recordSearchFields: ["username"],
     query: testResourceQuery({
       fields: {
         display_name: testQueryField("display_name", { filter: null }),
-        username: testQueryField("username", {
-          filter: {
-            field: "username",
-            scalar: "String",
-            values: [],
-            operators: ["exact", "iContains"],
-          },
-        }),
+        username: searchableField("username"),
       },
     }),
-    roots: { list: "vendors" },
-    typeNames: { node: "VendorType" },
-    capabilities: ["list"],
-    fields: [
-      {
-        name: "id",
-        kind: "scalar",
-        scalar: "ID",
-        readable: true,
-
-
-        aggregatable: true,
-
-        creatable: false,
-        updatable: false,
-        requiredOnCreate: false,
-      },
-      {
-        name: "display_name",
-        kind: "scalar",
-        scalar: "String",
-        readable: true,
-
-
-        aggregatable: false,
-
-        creatable: true,
-        updatable: true,
-        requiredOnCreate: true,
-      },
-    ],
-
-
-    aggregateFields: ["id"],
-
-
-  },
-  {
-    schemaName: "console",
-    modelLabel: "crm.Stage",
-    appLabel: "crm",
-    modelName: "stage",
-    query: testResourceQuery(),
-    roots: { list: "stages" },
-    typeNames: { node: "StageType" },
+  }),
+  testDataResource("crm.Stage", {
+    query: testResourceQuery({ fields: { name: searchableField("name") } }),
     recordRepresentation: "name",
-    capabilities: ["list"],
-    fields: [
-      {
-        name: "id",
-        kind: "scalar",
-        scalar: "ID",
-        readable: true,
-
-
-        aggregatable: true,
-
-        creatable: false,
-        updatable: false,
-        requiredOnCreate: false,
-      },
-      {
-        name: "name",
-        kind: "scalar",
-        scalar: "String",
-        readable: true,
-
-
-        aggregatable: false,
-
-        creatable: true,
-        updatable: true,
-        requiredOnCreate: true,
-      },
-    ],
-
-
-    aggregateFields: ["id"],
-
-
-  },
-  {
-    schemaName: "console",
-    modelLabel: "iam.ServiceAccount",
-    appLabel: "iam",
-    modelName: "serviceaccount",
-    query: testResourceQuery({
-      fields: {
-        display_name: testQueryField("display_name", { filter: null }),
-      },
-    }),
+  }),
+  testDataResource("iam.ServiceAccount", {
     roots: { list: "service_accounts" },
-    typeNames: { node: "ServiceAccountType" },
-    recordRepresentation: "display_name",
-    capabilities: ["list"],
-    fields: [
-      {
-        name: "id",
-        kind: "scalar",
-        scalar: "ID",
-        readable: true,
-
-
-        aggregatable: true,
-
-        creatable: false,
-        updatable: false,
-        requiredOnCreate: false,
-      },
-      {
-        name: "display_name",
-        kind: "scalar",
-        scalar: "String",
-        readable: true,
-
-
-        aggregatable: false,
-
-        creatable: false,
-        updatable: false,
-        requiredOnCreate: false,
-      },
-    ],
-
-
-    aggregateFields: ["id"],
-
-
-  },
-  {
-    schemaName: "console",
-    modelLabel: "money.Currency",
-    appLabel: "money",
-    modelName: "currency",
     query: testResourceQuery({
       fields: {
         display_name: testQueryField("display_name", { filter: null }),
-        code: testQueryField("code", {
-          filter: {
-            field: "code",
-            scalar: "String",
-            values: [],
-            operators: ["exact", "iContains"],
-          },
-        }),
-        name: testQueryField("name", {
-          filter: {
-            field: "name",
-            scalar: "String",
-            values: [],
-            operators: ["exact", "iContains"],
-          },
-        }),
+        hidden: searchableField("hidden"),
       },
     }),
+    recordRepresentation: "display_name",
+  }),
+  testDataResource("money.Currency", {
     roots: { list: "currencies" },
-    typeNames: { node: "CurrencyType" },
+    query: testResourceQuery({
+      fields: {
+        display_name: testQueryField("display_name", { filter: null }),
+        code: searchableField("code"),
+        name: searchableField("name"),
+      },
+    }),
     recordRepresentation: "display_name",
     recordSearchFields: ["code", "name"],
-    capabilities: ["list"],
-    fields: [
-      {
-        name: "id",
-        kind: "scalar",
-        scalar: "ID",
-        readable: true,
-        aggregatable: true,
-        creatable: false,
-        updatable: false,
-        requiredOnCreate: false,
-      },
-      {
-        name: "display_name",
-        kind: "scalar",
-        scalar: "String",
-        readable: true,
-        aggregatable: false,
-        creatable: false,
-        updatable: false,
-        requiredOnCreate: false,
-      },
-    ],
-    aggregateFields: ["id"],
-  },
+  }),
 ]);

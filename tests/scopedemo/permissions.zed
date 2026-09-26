@@ -1,7 +1,7 @@
 // Authorization schema for the local-scope create-gate demo (test-only).
 // @rebac_package: scopedemo
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 4
 
 definition scopedemo/scope {
     relation parent:        scopedemo/scope // rebac:field=parent
@@ -17,7 +17,7 @@ definition scopedemo/scope {
 }
 
 // A locally scoped document whose `create` rides `scope->member` — the arm that
-// fail-closes unless the auto-CRUD create preflight is evaluated against the
+// fail-closes unless the pre-save candidate gate is evaluated against the
 // scope the row defaults from the actor's sole membership. This is the framework
 // regression handle for that gate.
 definition scopedemo/doc {
@@ -28,4 +28,25 @@ definition scopedemo/doc {
     permission read   = scope->member + admin->member
     permission write  = scope->member + admin->member
     permission delete = scope->member + admin->member
+}
+
+definition scopedemo/factory_doc {
+    relation scope: scopedemo/scope // rebac:field=scope
+
+    permission create = scope->write
+    permission read = scope->member
+}
+
+definition scopedemo/projection_doc {
+    relation siblings: scopedemo/projection_doc // rebac:field=parent__children
+
+    permission create = authenticated - siblings->read
+    permission read = authenticated
+}
+
+definition scopedemo/shared_doc {
+    relation shared: auth/user:*
+
+    permission create = shared
+    permission read = shared
 }

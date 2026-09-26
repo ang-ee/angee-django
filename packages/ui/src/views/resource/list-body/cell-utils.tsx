@@ -24,7 +24,10 @@ export function cellContent<TRow extends Row>(
   metadata?: ModelMetadata | null,
 ): React.ReactNode {
   if (column.render) return column.render(row);
-  const value = rowValueAtPath(row, column.field);
+  const queryField = column.queryField;
+  const projected = rowValueAtPath(row, queryField?.row?.path ?? column.field);
+  const labelPath = queryField?.relation?.labelPath;
+  const value = labelPath ? rowValueAtPath(row, labelPath) ?? projected : projected;
   const tone = columnTone(column, value);
   if (tone) {
     const label = value == null ? "" : String(value);
@@ -41,7 +44,9 @@ export function cellContent<TRow extends Row>(
       </span>
     );
   }
-  const field = metadata?.fields[column.field];
+  const field = queryField ?? metadata?.fields[column.field];
+  const enumValue = field?.kind === "enum" ? field.values?.find((item) => item.value === value) : undefined;
+  if (enumValue) return enumValueLabel(enumValue);
   const date = isDateField(field, column.field)
     ? dateFromUnknown(value)
     : null;

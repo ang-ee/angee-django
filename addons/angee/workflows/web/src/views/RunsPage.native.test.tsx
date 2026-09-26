@@ -15,9 +15,11 @@ const mocks = vi.hoisted(() => ({
   runStatus: "RUNNING",
   runError: null as string | null,
   recoveryMapIndex: null as number | null,
+  recoveryRequiresUncertaintyAck: false,
   payloadVariables: [] as unknown[],
   resources: [] as Array<Record<string, unknown>>,
   mutation: vi.fn(),
+  mutationState: { fetching: false, error: null as Error | null, reset: vi.fn() },
   routeAvailable: true,
   listeners: new Set<() => void>(),
 }));
@@ -34,7 +36,16 @@ vi.mock("@angee/refine", async (importOriginal) => {
       );
       if (Object.hasOwn(variables, "sourceAttempt")) return {
         data: {
-          workflow_recovery_plan: { available: true, mode: "reconcile", unavailable_reason: "", map_index: mocks.recoveryMapIndex },
+          workflow_recovery_plan: {
+            available: true,
+            mode: "reconcile",
+            unavailable_reason: "",
+            map_index: mocks.recoveryMapIndex,
+            requires_uncertainty_ack: mocks.recoveryRequiresUncertaintyAck,
+            uncertainty_reason: mocks.recoveryRequiresUncertaintyAck
+              ? "The external request may already have run."
+              : "",
+          },
           workflow_test_repair_context: null,
         },
         isFetching: false, error: null,
@@ -103,15 +114,14 @@ vi.mock("@angee/refine", async (importOriginal) => {
         error: null,
       };
     },
-    useAuthoredMutation: () => [mocks.mutation, { fetching: false, error: null }],
+    useAuthoredMutation: () => [mocks.mutation, mocks.mutationState],
   };
 });
 
 vi.mock("@angee/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@angee/ui")>();
+  const { createUiTestModule } = await import("@angee/ui/testing");
   const ReactRuntime = await import("react");
-  return {
-    ...actual,
+  return createUiTestModule(importOriginal, {
     useRouteHref: () => (_route: string, parameters: { id: string }) => `/runs/${parameters.id}`,
     useResourceRecordHrefLookup: () => (_model: string, id: string) => mocks.routeAvailable ? `/records/${id}` : undefined,
     useContainerQuery: () => [{ current: null }, mocks.wide],
@@ -153,10 +163,10 @@ vi.mock("@angee/ui", async (importOriginal) => {
     SplitPanes: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
     SplitPane: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
     SplitPaneHandle: () => null,
-  };
+  });
 });
 
-import { AttemptPayloadPanel, AttemptRecoveryPanel, RunTimelinePanel } from "./RunsPage";
+import { AttemptPayloadPanel, AttemptRecoveryPanel, RunTimelinePanel } from "./RunInspection";
 
 beforeEach(() => {
   cleanup();
@@ -168,9 +178,13 @@ beforeEach(() => {
   mocks.runStatus = "RUNNING";
   mocks.runError = null;
   mocks.recoveryMapIndex = null;
+  mocks.recoveryRequiresUncertaintyAck = false;
   mocks.payloadVariables.length = 0;
   mocks.resources.length = 0;
   mocks.mutation.mockReset();
+  mocks.mutationState.fetching = false;
+  mocks.mutationState.error = null;
+  mocks.mutationState.reset.mockReset();
   mocks.routeAvailable = true;
   mocks.listeners.clear();
 });
@@ -178,8 +192,8 @@ beforeEach(() => {
 test("a failed run leads with the failed step, retained error, inspection, and native recovery", async () => {
   mocks.loading = false;
   mocks.runStatus = "FAILED";
-  const reprocess = vi.fn().mockResolvedValue("Reprocess started");
-  const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" onReprocess={reprocess} /> }), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const reprocess = vi.fn().mockResolvedValue(undefined);
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" onReprocess={reprocess} /> }), history: createMemoryHistory({ initialEntries: ["/?tab=automations&page=3"] }) });
   await router.load();
   render(<RouterProvider router={router} />);
 
@@ -191,10 +205,24 @@ test("a failed run leads with the failed step, retained error, inspection, and n
   fireEvent.click(screen.getByRole("button", { name: "Inspect failed execution" }));
   await waitFor(() => expect(router.state.location.search).toMatchObject({
     step: "step-1", execution: "execution-failed", attempt: "attempt-failed",
+    tab: "automations", page: 3,
   }));
   await waitFor(() => expect(mocks.resources.some((props) =>
     props.resource === "workflows.StepAttempt" && props.defaultRecordTab === "failure",
   )).toBe(true));
+});
+
+test("the reprocess button follows the mutation owner's pending state", async () => {
+  mocks.loading = false;
+  mocks.runStatus = "FAILED";
+  const reprocess = vi.fn().mockResolvedValue(undefined);
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <RunTimelinePanel runId="run-1" onReprocess={reprocess} reprocessing /> }), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  await router.load();
+  render(<RouterProvider router={router} />);
+  const button = await screen.findByRole("button", { name: "Starting reprocess…" });
+  expect(button).toHaveProperty("disabled", true);
+  fireEvent.click(button);
+  expect(reprocess).not.toHaveBeenCalled();
 });
 
 test("an active run exposes a durable advancement error without failed-run actions", async () => {
@@ -268,11 +296,56 @@ test("a successful recovery without a route retains its acknowledged run and can
   expect(mocks.mutation).toHaveBeenCalledTimes(1);
 });
 
+test("recovery renders mutation state and resets it when the selected attempt changes", () => {
+  mocks.loading = false;
+  const { rerender } = render(<AttemptRecoveryPanel attemptId="attempt-1" />);
+  mocks.mutationState.reset.mockClear();
+
+  mocks.mutationState.fetching = true;
+  rerender(<AttemptRecoveryPanel attemptId="attempt-1" />);
+  expect((screen.getByRole("button", { name: "Starting recovery…" }) as HTMLButtonElement).disabled).toBe(true);
+
+  mocks.mutationState.fetching = false;
+  mocks.mutationState.error = new Error("Recovery request failed");
+  rerender(<AttemptRecoveryPanel attemptId="attempt-1" />);
+  expect(screen.getByText("Recovery request failed")).toBeTruthy();
+
+  rerender(<AttemptRecoveryPanel attemptId="attempt-2" />);
+  expect(mocks.mutationState.reset).toHaveBeenCalledOnce();
+});
+
+/** A routed recovery navigates to the started run, so it mounts inside a router. */
+async function renderRecoveryInRouter(attemptId: string) {
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <AttemptRecoveryPanel attemptId={attemptId} /> }), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  await router.load();
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
+test("an uncertain recovery requires the shared labeled checkbox acknowledgement", async () => {
+  mocks.loading = false;
+  mocks.recoveryRequiresUncertaintyAck = true;
+  mocks.mutation.mockResolvedValue({ start_workflow_recovery: { ok: true, id: "run-uncertain" } });
+  const router = await renderRecoveryInRouter("attempt-uncertain");
+  const start = await screen.findByRole("button", { name: "Recover from this attempt" });
+  expect((start as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("checkbox", {
+    name: "I understand the external request may already have run, and I choose to start a new recovery attempt.",
+  }));
+  expect((start as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(start);
+  await waitFor(() => expect(mocks.mutation).toHaveBeenCalledWith(expect.objectContaining({
+    sourceAttempt: "attempt-uncertain",
+    acknowledgeUncertainExternal: true,
+  })));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/records/run-uncertain"));
+});
+
 test("a Map recovery can name the exact retained prior recovery basis", async () => {
   mocks.loading = false;
   mocks.recoveryMapIndex = 2;
   mocks.mutation.mockResolvedValue({ start_workflow_recovery: { ok: true, id: "run-map-recovery" } });
-  render(<AttemptRecoveryPanel attemptId="attempt-map-failure" />);
+  const router = await renderRecoveryInRouter("attempt-map-failure");
   fireEvent.change(await screen.findByLabelText("Prior Map recovery run"), {
     target: { value: "wfr_exact_prior" },
   });
@@ -281,6 +354,7 @@ test("a Map recovery can name the exact retained prior recovery basis", async ()
     sourceAttempt: "attempt-map-failure",
     priorRecovery: "wfr_exact_prior",
   })));
+  await waitFor(() => expect(router.state.location.pathname).toBe("/records/run-map-recovery"));
 });
 
 test("a terminal execution without retained attempts reports missing history without querying payloads", async () => {

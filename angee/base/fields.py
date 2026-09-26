@@ -37,8 +37,9 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from django.conf import settings
+from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, FieldError, ImproperlyConfigured, ValidationError
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models.query_utils import DeferredAttribute
 from django_choices_field import TextChoicesField
 from django_sqids import SqidsField
@@ -203,7 +204,11 @@ class StateField(TextChoicesField):
     angee_scalar_hint = "String"
 
     def __init__(self, **kwargs: Any) -> None:
-        """Default a state column to indexed; it is what queries filter on."""
+        """Index state columns and accept legacy blank-string migration state.
+
+        New optional state declarations use NULL; the blank-string spelling is
+        retained only so historical migration fields can still be reconstructed.
+        """
 
         self._angee_blank_string = bool(kwargs.get("blank")) and not bool(kwargs.get("null"))
         if self._angee_blank_string:
@@ -212,6 +217,29 @@ class StateField(TextChoicesField):
         super().__init__(**kwargs)
         if self._angee_blank_string:
             self.blank = True
+
+    def deconstruct(self) -> tuple[str | None, str, list[Any], dict[str, Any]]:
+        """Preserve index opt-outs despite Django's opposite constructor default."""
+
+        name, path, args, kwargs = super().deconstruct()
+        kwargs["db_index"] = self.db_index
+        return name, path, args, kwargs
+
+    def check(self, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Reject blank-string state declarations on active concrete models."""
+
+        errors = super().check(**kwargs)
+        model = getattr(self, "model", None)
+        if self.blank and not self.null and model is not None and not model._meta.abstract:
+            errors.append(
+                checks.Error(
+                    "Optional StateField requires null=True.",
+                    hint="Declare null=True and migrate stored empty strings to NULL.",
+                    obj=self,
+                    id="angee.E019",
+                )
+            )
+        return errors
 
     def to_python(self, value: Any) -> Any:
         """Accept stored values and GraphQL enum member names for this state."""
@@ -262,7 +290,7 @@ class FractionalRankField(models.FloatField):
         Hasura input generation uses Django's field-owned ``has_default`` fact
         to decide whether an insert column may be omitted.  A fractional rank
         has no context-free literal default; ``pre_save`` supplies its
-        contextual append rank for every model write path.
+        contextual append rank when omitted.
         """
 
         return True
@@ -280,17 +308,17 @@ class FractionalRankField(models.FloatField):
         super().validate(value, model_instance)
 
     def pre_save(self, model_instance: models.Model, add: bool) -> float:
-        """Honor an explicit rank or append within the model's unique context."""
+        """Honor an explicit rank or append within the instance's context."""
 
         value = super().pre_save(model_instance, add)
         if value is not None:
             return cast(float, value)
-        rank = self._append_rank_for_instance(model_instance)
+        rank = self._get_append_rank_for_instance(model_instance)
         setattr(model_instance, self.attname, rank)
         return rank
 
-    def _append_rank_for_instance(self, instance: models.Model) -> float:
-        """Return the next rank from an unscoped scan of the instance context."""
+    def _get_append_rank_for_instance(self, instance: models.Model) -> float:
+        """Read the next rank within the instance's unique context."""
 
         model = type(instance)
         context_fields = self._unique_context_fields(model)
@@ -298,9 +326,8 @@ class FractionalRankField(models.FloatField):
             context_field.attname: getattr(instance, context_field.attname)
             for context_field in context_fields
         }
-        database = router.db_for_write(model, instance=instance)
         previous = (
-            system_queryset(model, using=database, lock=())
+            system_queryset(model, lock=("self",))
             .filter(**context)
             .order_by(f"-{self.name}")
             .values_list(self.name, flat=True)
@@ -387,7 +414,7 @@ class FractionalRankField(models.FloatField):
             )
         return candidate
 
-    def rebalance(self, *, context: Mapping[str, Any], using: str | None = None) -> int:
+    def rebalance(self, *, context: Mapping[str, Any]) -> int:
         """Rewrite this field to a clean spread inside one exact context.
 
         Returns the number of rows whose rank changed. Rows are read in committed
@@ -401,10 +428,9 @@ class FractionalRankField(models.FloatField):
         if model is None or self.name is None:
             raise ImproperlyConfigured("FractionalRankField must be bound to a model before rebalance().")
         context_filter = self._context_filter(context)
-        database = using or router.db_for_write(model)
 
-        with transaction.atomic(using=database):
-            writer = system_queryset(model, using=database, lock=()).filter(**context_filter)
+        with transaction.atomic():
+            writer = system_queryset(model, lock=("self",)).filter(**context_filter)
             rows = list(writer.only(model._meta.pk.name, self.name).order_by(self.name, model._meta.pk.name))
             current = [self._coerce_endpoint(getattr(row, self.attname), name=self.attname) for row in rows]
             clean = self._clean_ranks(len(rows))

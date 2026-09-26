@@ -14,13 +14,16 @@ strict mode, exactly as the real ``Location`` reads do server-side.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import pytest
-from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import connection, models, transaction
+from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
+from angee.base.models import AngeeQuerySet
 from tests.hierdemo.models import HierNode, PlainManagerHierNode, ScopedHierNode
 from tests.scopedemo.models import Scope
 
@@ -72,33 +75,32 @@ def test_create_under_parent_derives_path_shape() -> None:
 
 
 @pytest.mark.django_db
-def test_explicit_using_is_forwarded_through_create_and_reparent() -> None:
-    """The selected write alias reaches both internal saved-row paths once."""
-
-    with system_context(reason="test hierarchy explicit database alias"):
-        first = HierNode(name="first")
-        first.save(using="default")
-        second = HierNode(name="second")
-        second.save(using="default")
-        child = HierNode(name="child", parent=first)
-        child.save(using="default")
-        child.parent = second
-        child.save(using="default")
-        child.refresh_from_db(using="default")
-    assert child.path.startswith(second.path)
-    assert not child.path.startswith(first.path)
-
-
-@pytest.mark.django_db
 def test_direct_path_update_cannot_bypass_the_saved_row_owner() -> None:
-    """A composed queryset guard recognizes only the hierarchy's live capability."""
+    """Public and cloned querysets reject writes to the derived path."""
 
     with system_context(reason="test hierarchy path bypass"):
         node = HierNode.objects.create(name="guarded")
+        queryset = HierNode.objects.filter(pk=node.pk)
         with pytest.raises(ValidationError, match="saved-row owner"):
-            HierNode.objects.filter(pk=node.pk).update(path="/forged/")
+            queryset.update(path="/forged/")
+        with pytest.raises(ValidationError, match="saved-row owner"):
+            queryset.all().update(path="/forged/")
+        node.path = "/forged/"
+        with pytest.raises(ValidationError, match="saved-row owner"), transaction.atomic():
+            queryset.bulk_update([node], ["path"])
         node.refresh_from_db()
     assert node.path != "/forged/"
+
+
+def test_hierarchy_path_writes_preserve_downstream_queryset_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Derived path maintenance still obeys the next owner's write policy."""
+
+    def deny(*args: Any, **kwargs: Any) -> int:
+        raise PermissionDenied("downstream write guard")
+
+    monkeypatch.setattr(AngeeQuerySet, "update", deny)
+    with pytest.raises(PermissionDenied, match="downstream write guard"):
+        HierNode()._write_hierarchy_path(HierNode.objects.filter(pk=1), "/000000000001/")
 
 
 @pytest.mark.django_db
@@ -272,6 +274,35 @@ def test_deferred_load_reparent_still_repaths() -> None:
 
 
 @pytest.mark.django_db
+def test_deferred_save_does_not_overwrite_a_concurrent_reparent() -> None:
+    """Saving a loaded name preserves tree columns moved during the save."""
+
+    with system_context(reason="test hierarchy concurrent deferred save"):
+        first = HierNode.objects.create(name="first")
+        second = HierNode.objects.create(name="second")
+        node = HierNode.objects.create(name="child", parent=first)
+        deferred = HierNode.objects.only("name").get(pk=node.pk)
+        deferred.name = "renamed"
+
+        def reparent_before_update(sender, instance, **kwargs) -> None:
+            if instance is deferred:
+                node.parent = second
+                node.save()
+
+        pre_save.connect(reparent_before_update, sender=HierNode)
+        try:
+            deferred.save()
+        finally:
+            pre_save.disconnect(reparent_before_update, sender=HierNode)
+        assert "path" not in deferred.__dict__
+        stored = HierNode.objects.get(pk=node.pk)
+
+    assert stored.name == "renamed"
+    assert stored.parent_id == second.pk
+    assert stored.path.startswith(second.path)
+
+
+@pytest.mark.django_db
 def test_create_under_reparented_parent_uses_committed_path() -> None:
     """A create derives the child prefix from the parent's committed path.
 
@@ -298,18 +329,41 @@ def test_create_under_reparented_parent_uses_committed_path() -> None:
 
 
 @pytest.mark.django_db
+def test_bulk_parent_updates_cannot_bypass_the_saved_row_owner() -> None:
+    """Both FK spellings and bulk_update must use the row's reparent owner."""
+
+    with system_context(reason="test hierarchy parent bypass"):
+        nodes = _tree()
+        home = HierNode.objects.create(name="H")
+        node = nodes["B"]
+        old_parent, old_path = node.parent_id, node.path
+        queryset = HierNode.objects.filter(pk=node.pk)
+        with pytest.raises(ValidationError, match="saved-row owner"):
+            queryset.update(parent=home)
+        with pytest.raises(ValidationError, match="saved-row owner"):
+            queryset.update(parent_id=home.pk)
+        node.parent = home
+        with pytest.raises(ValidationError, match="saved-row owner"), transaction.atomic():
+            queryset.bulk_update([node], ["parent"])
+        node.refresh_from_db()
+        assert (node.parent_id, node.path) == (old_parent, old_path)
+
+
+@pytest.mark.django_db
 def test_refresh_from_db_resyncs_the_reparent_baseline() -> None:
     """A refreshed row is not misclassified as reparented on its next save.
 
-    An external queryset ``update`` moves the FK behind the instance's back;
-    after ``refresh_from_db`` a plain field save must stay a plain save — no
-    forced parent/path write, no subtree cascade.
+    An external move performed through another instance changes the FK behind
+    this instance's back; after ``refresh_from_db`` a plain field save must stay
+    a plain save with no forced parent/path write and no subtree cascade.
     """
 
     with system_context(reason="test hierarchy refresh baseline"):
         nodes = _tree()
         home = HierNode.objects.create(name="H")
-        HierNode.objects.filter(pk=nodes["B"].pk).update(parent=home)
+        other = HierNode.objects.get(pk=nodes["B"].pk)
+        other.parent = home
+        other.save()
 
         node = nodes["B"]
         node.refresh_from_db()

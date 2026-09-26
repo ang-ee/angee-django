@@ -40,8 +40,8 @@ def test_event_legacy_alias_fills_an_empty_canonical_model(canonical: object) ->
 
 
 def test_event_canonical_model_keeps_precedence_over_legacy_alias() -> None:
-    declaration = EventTriggerConfig.model_validate({"model": "CRM.Contact", "model_label": "notes.page"})
-    assert declaration.model == "crm.contact"
+    declaration = EventTriggerConfig.model_validate({"model": " Notes.Entry ", "model_label": "notes.page"})
+    assert declaration.model == "notes.entry"
 
 
 def test_event_whitespace_model_without_alias_is_invalid() -> None:

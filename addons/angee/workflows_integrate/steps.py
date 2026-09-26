@@ -1,488 +1,317 @@
-"""Vendor-free archive extraction workflow steps.
+"""Workflow execution and review composed over integrate's durable stream owners.
 
-Archive extractor classes arrive through
-``ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES``. Each extractor recognizes a
-``storage.File`` with a hard boolean result and executes through the target
-domain's own idempotent ingest surface. The workflow steps only orchestrate that
-contract: probe emits proposals, gate authors the serializable mapping form, and
-execute prepares and runs the stock ``MapStep`` units.
+ArchiveExtractor and ArchiveExecutionReporter are public extension imports for
+messaging-bridge extractors; their implementations remain in archive_steps.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, ClassVar, cast
+from contextlib import closing
+from datetime import datetime, timedelta
+from typing import Any
 
 from django.apps import apps
-from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured, ValidationError
-from pydantic import JsonValue
+from django.core.exceptions import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rebac import system_context
 
-from angee.base.identity import canonical_subject_ref
-from angee.base.impl import ImplBase, impl_registry, resolve_impl_class
-from angee.base.scoping import system_queryset
-from angee.workflows.steps import DecisionSpec, StepImpl, StepResult, positive_int
+from angee.base.identity import instance_from_public_id, public_id_of
+from angee.integrate.impl import AdapterContractError
+from angee.integrate.models import Bridge
+from angee.integrate.states import DiscrepancyKind
+from angee.integrate.streams import advance_stream, begin_stream_cycle, open_stream
+from angee.workflows.attempts import RecoveryMode
+from angee.workflows.configs import WorkflowStepConfig
+from angee.workflows.decision_actions import ReviewAction, ReviewRecordReference, build_decision_action
+from angee.workflows.steps import GateStep, StepEffect, StepExecutionMode, StepImpl, StepResult, TransientStepError
+from angee.workflows_integrate.archive_steps import ArchiveExecutionReporter as ArchiveExecutionReporter
+from angee.workflows_integrate.archive_steps import ArchiveExtractor as ArchiveExtractor
 
-ARCHIVE_EXTRACTOR_CLASSES_SETTING = "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES"
-"""Settings mapping from stable archive extractor keys to trusted class paths."""
+_PASSTHROUGH_STREAM_ERRORS = (
+    ValidationError,
+    AdapterContractError,
+    TransientStepError,
+)
+"""Preserve authoring/contract failures and explicit native retry classification."""
 
-_EXECUTE_MODES = frozenset({"prepare", "unit"})
+
+class BridgeReference(BaseModel):
+    """Exact concrete Bridge public identity, bound to the admitted run subject."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str = Field(min_length=1)
+    id: str = Field(min_length=1)
 
 
-@dataclass(frozen=True, slots=True)
-class ArchiveExecutionReporter:
-    """Workflow-owned progress reporter passed to one extractor execution.
+class StreamReference(BaseModel):
+    """A backend's stream partition identity, independent of its current epoch."""
 
-    The current engine has one durable progress primitive: the step heartbeat.
-    Extractors call :meth:`heartbeat` during long ingest work; richer progress
-    remains an engine concern rather than vendor state hidden in this addon.
-    The wrapper is a deliberate capability-narrowing boundary: vendor extractor
-    code receives only this reporter, never the ``StepImpl``/``step_run``
-    surface — ``mark_failed``, ``resume_state``, and the engine verbs stay
-    workflow-owned.
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    key: str = Field(min_length=1)
+    partition: str = ""
+
+
+class StreamStageInput(StreamReference):
+    """Immutable page parameters; the cursor is exclusively SyncStream-owned."""
+
+    bridge: BridgeReference
+    page_bound: int = Field(default=100, ge=1)
+
+
+class StreamStageOutput(BaseModel):
+    """Stage counts and durable stream/discrepancy evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    counts: dict[str, int]
+    discrepancy_ids: list[str]
+    evidence: list[ReviewRecordReference]
+
+
+class CoverageInput(BaseModel):
+    """The complete stream partition set whose coverage this cycle requires."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    bridge: BridgeReference
+    streams: list[StreamReference] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique_streams(self) -> CoverageInput:
+        """Reject duplicate identities instead of concealing an authoring mistake."""
+
+        identities = [(stream.key, stream.partition) for stream in self.streams]
+        if len(identities) != len(set(identities)):
+            raise ValueError("Coverage streams must be distinct.")
+        return self
+
+
+class CoverageConfig(WorkflowStepConfig):
+    """Bounded reconciliation timer for discrepancies resolved outside the run."""
+
+    reconcile_seconds: int = Field(default=60, ge=1)
+    rescan_bound: int = Field(default=100, ge=1)
+
+
+class BoundedStreamStage(StepImpl):
+    """Advance one driver page outside the engine's finalization transaction.
+
+    A crash after the page commits replays from SyncStream.cursor. Resume state
+    retains stream correlation and the applied count from finalized pulses;
+    completion publishes that cycle total. The separate page/finalization commits
+    can omit a crashed pulse's count, but never reconstruct a cursor or reapply
+    that page. Consumers may declare their concrete subject_declaration.
     """
 
-    step: StepImpl
-    step_run: Any
-
-    def heartbeat(self, *, at: datetime | None = None) -> None:
-        """Refresh the mapped step-run heartbeat."""
-
-        self.step.heartbeat(self.step_run, at=at)
-
-
-class ArchiveExtractor(ImplBase, ABC):
-    """Base contract for a settings-registered archive extractor.
-
-    Subclasses declare a stable :attr:`key`, a human :attr:`label`,
-    ``target_resource`` as an ``app_label.Model`` string, and
-    ``subject_resource`` — the storage container kind the run subject is, a
-    ``storage.File`` (an archive to open) or a ``storage.Drive`` (a mounted tree
-    to inspect). ``recognizes(subject)`` returns a real :class:`bool` —
-    confidence scores and truthy substitutes are not accepted.
-    ``execute(subject, target_pk, reporter)`` must land content via the target
-    domain's own idempotent ingest API and return JSON-safe journal output.
-    Vendor parsing and target-domain identity rules stay on the concrete
-    extractor and its owning addon.
-    """
-
-    target_resource: ClassVar[str] = ""
-    subject_resource: ClassVar[str] = "storage.File"
-
-    @abstractmethod
-    def recognizes(self, subject: Any) -> bool:
-        """Return whether ``subject`` is a container this extractor owns.
-
-        ``subject`` is the run subject named by :attr:`subject_resource`. The
-        probe only invokes extractors whose ``subject_resource`` matches the run
-        subject, so a file extractor never sees a drive. Recognition must stay
-        bounded: read only a header/prefix of a file, or a metadata lookup plus a
-        bounded manifest probe of a drive — the probe runs every matching
-        extractor against the same subject.
-        """
-
-        raise NotImplementedError
-
-    @abstractmethod
-    def execute(
-        self,
-        subject: Any,
-        target_pk: str,
-        reporter: ArchiveExecutionReporter,
-    ) -> Any:
-        """Idempotently ingest ``subject`` into ``target_pk`` and return journal output."""
-
-        raise NotImplementedError
-
-
-def archive_extractor_classes() -> tuple[type[ArchiveExtractor], ...]:
-    """Return configured extractor classes in deterministic stable-key order."""
-
-    classes: list[type[ArchiveExtractor]] = []
-    for key in sorted(impl_registry(ARCHIVE_EXTRACTOR_CLASSES_SETTING)):
-        extractor = cast(
-            type[ArchiveExtractor],
-            resolve_impl_class(ARCHIVE_EXTRACTOR_CLASSES_SETTING, key, ArchiveExtractor),
-        )
-        _validate_extractor_declaration(key, extractor)
-        classes.append(extractor)
-    return tuple(classes)
-
-
-def archive_extractor_class(key: str) -> type[ArchiveExtractor]:
-    """Resolve and validate the extractor registered as ``key``."""
-
-    extractor = cast(
-        type[ArchiveExtractor],
-        resolve_impl_class(ARCHIVE_EXTRACTOR_CLASSES_SETTING, key, ArchiveExtractor),
-    )
-    _validate_extractor_declaration(key, extractor)
-    return extractor
-
-
-class ArchiveProbeStepImpl(StepImpl):
-    """Probe a workflow run's storage file with every configured extractor."""
-
-    key = "archive_probe"
-    label = "Probe archive"
+    key = "integrate_stream"
+    label = "Advance sync stream"
     category = "Activity"
-
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Return stable extractor proposals or the routable ``failed`` outcome."""
-
-        del now
-        subject = _subject_container(step_run)
-        subject_resource = subject._meta.label
-        proposals: list[dict[str, str]] = []
-        for extractor_class in archive_extractor_classes():
-            if extractor_class.subject_resource != subject_resource:
-                continue
-            recognized = extractor_class().recognizes(subject)
-            if not isinstance(recognized, bool):
-                raise TypeError(
-                    f"{extractor_class.__name__}.recognizes() must return bool, "
-                    f"got {type(recognized).__name__}."
-                )
-            if recognized:
-                proposals.append(_proposal(extractor_class))
-        return StepResult.done(
-            output={"proposals": proposals},
-            outcome="recognized" if proposals else "failed",
-        )
-
-
-class ArchiveGateStepImpl(StepImpl):
-    """Suspend for a fixed-row extractor-to-target mapping decision.
-
-    v1 renders one shared rows template, so every recognized extractor must
-    declare the same target resource; heterogeneous archives route down the
-    ``failed`` edge until per-resource row grouping ships.
-    """
-
-    key = "archive_gate"
-    label = "Map archive targets"
-    category = "Control"
-
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Validate optional decision action, assignee, and attempt settings."""
-
-        super().validate_config(config)
-        if "action" in config and not str(config.get("action") or "").strip():
-            raise ValidationError({"config": "Archive gate action must be a non-empty string."})
-        if "assignee" in config and not str(config.get("assignee") or "").strip():
-            raise ValidationError({"config": "Archive gate assignee must be a non-empty subject ref."})
-        positive_int(config.get("max_attempts", 3), "Archive gate max_attempts")
-
-    def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Author the mapping form from probe output and suspend one decision."""
-
-        del now
-        proposals = _input_proposals(step_run.input)
-        target_resources = sorted({proposal["target_resource"] for proposal in proposals})
-        if len(target_resources) != 1:
-            return StepResult.done(
-                output={
-                    "proposals": proposals,
-                    "target_resources": target_resources,
-                    "unsupported": "Archive mapping rows require one shared target resource.",
-                },
-                outcome="failed",
-            )
-        target_resource = target_resources[0]
-        config = dict(step_run.step.config)
-        assignee = str(config.get("assignee") or _run_owner_subject(step_run.run))
-        mappings: list[JsonValue] = [
-            {
-                "extractor": proposal["extractor"],
-                "label": proposal["label"],
-                "target": "",
-            }
-            for proposal in proposals
-        ]
-        return StepResult.suspend(
-            resume_state={"gate": {"policy": "one_done"}},
-            decisions=(
-                DecisionSpec(
-                    assignees=(assignee,),
-                    action=str(config.get("action") or "map-archive"),
-                    payload={"mappings": mappings},
-                    max_attempts=positive_int(config.get("max_attempts", 3), "Archive gate max_attempts"),
-                    decision_schema=_mapping_form_schema(target_resource),
-                ),
-            ),
-        )
-
-
-class ArchiveExecuteStepImpl(StepImpl):
-    """Prepare a confirmed decision mapping or execute one stock-map unit.
-
-    A workflow uses this implementation twice: ``mode=prepare`` follows the
-    archive gate and turns its completed decision into a plain mapping list;
-    the built-in ``map`` step consumes that list and targets a second step with
-    ``mode=unit``. This keeps decision lookup outside the generic map engine and
-    preserves its existing per-unit partial-failure accounting.
-    """
-
-    key = "archive_execute"
-    label = "Execute archive import"
-    category = "Activity"
+    description = "Apply one bounded stream page and retain a continuation until exhausted."
+    input_model = StreamStageInput
+    output_model = StreamStageOutput
+    config_model = WorkflowStepConfig
+    execution_mode = StepExecutionMode.STANDARD
+    effect = StepEffect.WRITE
+    effect_description = "The integrate driver commits each page with its durable cursor."
+    idempotent = True
+    replay_mode = RecoveryMode.FRESH
     deterministic = False
 
-    @classmethod
-    def validate_config(cls, config: Any) -> None:
-        """Require an explicit prepare/unit execution mode."""
+    def run(self, step_run: Any, *, now: datetime) -> StepResult:
+        """Resolve the admitted partition and delegate exactly one page to its owner."""
 
-        super().validate_config(config)
-        mode = str(config.get("mode") or "")
-        if mode not in _EXECUTE_MODES:
-            raise ValidationError(
-                {"config": f"Archive execute mode must be one of {', '.join(sorted(_EXECUTE_MODES))}."}
-            )
+        value = self.validate_input(step_run.input)
+        with system_context(reason="workflows_integrate.stream.resolve"):
+            bridge = bridge_for_step(step_run, value.bridge)
+        try:
+            with (
+                self.heartbeat_during(step_run),
+                closing(bridge.backend) as adapter,
+                system_context(reason="workflows_integrate.stream"),
+            ):
+                stream = open_stream(bridge, value.key, value.partition, adapter)
+                # The page commits its timestamp with its cursor. Preparation
+                # repeats safely before that first commit, including a crashed
+                # first attempt, but never rescans a page this stage committed.
+                # A retained reset wait also proves preparation: the new epoch
+                # has no last_advanced_at until its first baseline page commits.
+                if not step_run.resume_state and (
+                    stream.last_advanced_at is None or stream.last_advanced_at < step_run.created_at
+                ):
+                    stream = begin_stream_cycle(stream, adapter)
+                page = advance_stream(stream, adapter, page_bound=value.page_bound)
+                cycle_items = step_run.resume_state.get("cycle_items", 0) + page.count
+                if not page.exhausted:
+                    return StepResult.wait(
+                        until=now,
+                        resume_state={
+                            "stream": public_id_of(page.stream),
+                            "generation": page.stream.generation,
+                            "cycle_items": cycle_items,
+                        },
+                    )
+                discrepancies = list(
+                    apps.get_model("integrate", "SyncDiscrepancy")
+                    .objects
+                    .unresolved()
+                    .filter(stream=page.stream)
+                    .order_by("pk")
+                )
+                return StepResult.done(
+                    output=StreamStageOutput(
+                        counts={"page_items": page.count, "cycle_items": cycle_items},
+                        discrepancy_ids=[public_id_of(row) for row in discrepancies],
+                        evidence=[_evidence(page.stream), *(_evidence(row) for row in discrepancies)],
+                    ).model_dump(mode="json")
+                )
+        except _PASSTHROUGH_STREAM_ERRORS:
+            raise
+        except Exception as error:  # noqa: BLE001 -- driver quarantines semantic failures itself.
+            raise TransientStepError(str(error) or type(error).__name__) from error
+
+
+class CoverageGate(GateStep):
+    """Refuse acceptance until every cycle stream's discrepancies are resolved.
+
+    Conflict Decisions request review, never authorize automatic reconciliation.
+    Their completion only rechecks coverage: the discrepancy remains authoritative
+    until its own domain resolution calls SyncDiscrepancy.objects.resolve_conflict().
+    Waiting pulses retry at most one bounded stream page, rotating through the
+    admitted partitions. Provider reads run outside workflow finalization; native
+    gate results still let the engine retain Decisions atomically.
+    """
+
+    key = "integrate_coverage"
+    label = "Verify sync coverage"
+    category = "Control"
+    description = "Review conflicts and wait for all required stream discrepancies to resolve."
+    input_model = CoverageInput
+    output_model = StreamStageOutput
+    config_model = CoverageConfig
+    execution_mode = StepExecutionMode.STANDARD
+    effect = StepEffect.WRITE
+    effect_description = "Retries due stream discrepancies and requests native conflict Decisions."
+    idempotent = True
+    replay_mode = RecoveryMode.FRESH
+    deterministic = False
+    outcomes = ()
 
     def run(self, step_run: Any, *, now: datetime) -> StepResult:
-        """Prepare confirmed mappings or execute the mapped extractor unit."""
+        """Compose native gate admission, then keep acceptance tied to data truth."""
 
-        mode = str(step_run.step.config.get("mode") or "")
-        if mode == "prepare":
-            return StepResult.done(output=_prepared_mappings(step_run), outcome="prepared")
-
-        subject = _subject_container(step_run)
-        extractor_key, target_pk = _mapping_unit(step_run.input)
-        extractor_class = archive_extractor_class(extractor_key)
-        reporter = ArchiveExecutionReporter(step=self, step_run=step_run)
-        reporter.heartbeat(at=now)
-        result = extractor_class().execute(subject, target_pk, reporter)
-        return StepResult.done(
-            output={
-                "extractor": extractor_key,
-                "target": target_pk,
-                "result": result,
-            },
-            outcome="completed",
-        )
-
-
-def _validate_extractor_declaration(key: str, extractor: type[ArchiveExtractor]) -> None:
-    """Fail fast when configured extractor metadata disagrees with its registry key."""
-
-    if extractor.key != key:
-        raise ImproperlyConfigured(
-            f"settings.{ARCHIVE_EXTRACTOR_CLASSES_SETTING}[{key!r}] resolves "
-            f"{extractor.__name__} with key {extractor.key!r}."
-        )
-    if not extractor.display_label().strip():
-        raise ImproperlyConfigured(f"Archive extractor {key!r} must declare a display label.")
-    _validate_resource_label(key, "target_resource", extractor.target_resource)
-    _validate_resource_label(key, "subject_resource", extractor.subject_resource)
-
-
-def _validate_resource_label(key: str, attr: str, value: str) -> None:
-    """Validate one ``app_label.Model`` extractor attribute is installed and canonical."""
-
-    label = str(value or "")
-    app_label, separator, model_name = label.partition(".")
-    if not separator or not app_label or not model_name or "." in model_name:
-        raise ImproperlyConfigured(
-            f"Archive extractor {key!r} {attr} must be an app_label.Model string."
-        )
-    try:
-        model = apps.get_model(app_label, model_name)
-    except LookupError as error:
-        raise ImproperlyConfigured(
-            f"Archive extractor {key!r} {attr} {label!r} is not installed."
-        ) from error
-    if model._meta.label != label:
-        raise ImproperlyConfigured(
-            f"Archive extractor {key!r} {attr} must use canonical label {model._meta.label!r}."
-        )
-
-
-def _proposal(extractor: type[ArchiveExtractor]) -> dict[str, str]:
-    """Return one JSON-safe probe proposal owned by ``extractor``."""
-
-    return {
-        "extractor": extractor.key,
-        "label": extractor.display_label(),
-        "target_resource": extractor.target_resource,
-    }
-
-
-def _subject_container(step_run: Any) -> Any:
-    """Return the run's storage File or Drive subject, or reject the definition."""
-
-    file_model = apps.get_model("storage", "File")
-    drive_model = apps.get_model("storage", "Drive")
-    subject = step_run.run.subject
-    if subject is None or not isinstance(subject, (file_model, drive_model)):
-        raise ValidationError(
-            {"subject": "Archive workflow runs require a storage.File or storage.Drive subject."}
-        )
-    return subject
-
-
-def _input_proposals(value: Any) -> list[dict[str, str]]:
-    """Return validated probe proposals from a gate step's input."""
-
-    if not isinstance(value, Mapping) or not isinstance(value.get("proposals"), list):
-        raise ValidationError({"input": "Archive gate input must contain probe proposals."})
-    proposals: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for index, value_proposal in enumerate(value["proposals"]):
-        if not isinstance(value_proposal, Mapping):
-            raise ValidationError({"input": f"Archive proposal {index + 1} must be an object."})
-        proposal = {
-            "extractor": str(value_proposal.get("extractor") or ""),
-            "label": str(value_proposal.get("label") or ""),
-            "target_resource": str(value_proposal.get("target_resource") or ""),
-        }
-        # The proposal content is trusted same-run probe output; resolving the
-        # key still guards against registry drift between probe and gate.
-        _registered_extractor(proposal["extractor"], owner="input")
-        if proposal["extractor"] in seen:
-            raise ValidationError({"input": f"Archive extractor {proposal['extractor']!r} is proposed twice."})
-        seen.add(proposal["extractor"])
-        proposals.append(proposal)
-    if not proposals:
-        raise ValidationError({"input": "Archive gate requires at least one recognized extractor."})
-    return proposals
+        value = self.validate_input(step_run.input)
+        with system_context(reason="workflows_integrate.coverage"):
+            bridge = bridge_for_step(step_run, value.bridge)
+            config = CoverageConfig.model_validate(step_run.step.config)
+            manager = apps.get_model("integrate", "SyncStream").objects
+            streams = [
+                manager.current_for_bridge(bridge, reference.key).get(partition=reference.partition)
+                for reference in value.streams
+            ]
+            discrepancy_manager = apps.get_model("integrate", "SyncDiscrepancy").objects
+            discrepancies = list(discrepancy_manager.unresolved().filter(stream__in=streams).order_by("pk"))
+            state = step_run.resume_state.get("state", step_run.resume_state)
+            index = state.get("rescan_index", 0) % len(streams)
+            baseline = state.get("rescan_baseline", "")
+            if step_run.resume_state and (
+                baseline
+                or any(row.link_id is not None and row.kind != DiscrepancyKind.CONFLICT for row in discrepancies)
+            ):
+                try:
+                    with self.heartbeat_during(step_run), closing(bridge.backend) as adapter:
+                        stream = streams[index]
+                        if baseline != public_id_of(stream):
+                            stream = begin_stream_cycle(stream, adapter, page_bound=config.rescan_bound)
+                        if baseline or stream.resync_required:
+                            page = advance_stream(stream, adapter, page_bound=config.rescan_bound)
+                            stream = page.stream
+                            baseline = "" if page.exhausted else public_id_of(stream)
+                        streams[index] = stream
+                except _PASSTHROUGH_STREAM_ERRORS:
+                    raise
+                except Exception as error:  # noqa: BLE001 -- transport failures use native retained retries.
+                    raise TransientStepError(str(error) or type(error).__name__) from error
+                if not baseline:
+                    index = (index + 1) % len(streams)
+                discrepancies = list(discrepancy_manager.unresolved().filter(stream__in=streams).order_by("pk"))
+            resume_state = {
+                "streams": [public_id_of(stream) for stream in streams],
+                "rescan_index": index,
+                **({"rescan_baseline": baseline} if baseline else {}),
+            }
+            if not discrepancies and not baseline:
+                return StepResult.done(
+                    output=StreamStageOutput(
+                        counts={"streams": len(streams)},
+                        discrepancy_ids=[],
+                        evidence=[_evidence(stream) for stream in streams],
+                    ).model_dump(mode="json")
+                )
+            decisions = apps.get_model("workflows", "Decision").objects
+            reviewed = {
+                payload.get("discrepancy")
+                for payload in decisions.filter(step_run=step_run).values_list("payload", flat=True)
+            }
+            conflicts = [
+                row
+                for row in discrepancies
+                if row.kind == DiscrepancyKind.CONFLICT and public_id_of(row) not in reviewed
+            ]
+            if conflicts:
+                run = step_run.run
+                if run is None:
+                    raise ValidationError({"run": "Coverage review requires an admitted workflow run."})
+                actor = run.admission_actor_subject()
+                if actor is None:
+                    raise ValidationError({"actor": "Coverage review requires the run's admitted actor."})
+                slots = []
+                for row in conflicts:
+                    review = build_decision_action(
+                        actions=(ReviewAction(value="recheck", label="Recheck coverage", verdict="COMPLETE"),),
+                        payload={"discrepancy": public_id_of(row)},
+                        references=_evidence(row),
+                    )
+                    slots.append(
+                        {
+                            "assignees": [str(actor)],
+                            "payload": review.payload,
+                            "decision_schema": review.decision_schema,
+                            "target": {"model": row._meta.label_lower, "id": public_id_of(row)},
+                        }
+                    )
+                return self.gate_result(
+                    step_run,
+                    config={
+                        "action": "review-sync-conflict",
+                        "policy": "all_done",
+                        "resume": True,
+                        "slots": slots,
+                    },
+                    retained_state=resume_state,
+                )
+            return StepResult.wait(
+                until=now + timedelta(seconds=config.reconcile_seconds),
+                resume_state=resume_state,
+            )
 
 
-def _registered_extractor(key: str, *, owner: str) -> type[ArchiveExtractor]:
-    """Resolve ``key`` for input validation, keying registry drift as input errors."""
+def bridge_for_step(step_run: Any, reference: BridgeReference) -> Any:
+    """Resolve only the Bridge that was admitted as this run's subject."""
 
-    try:
-        return archive_extractor_class(key)
-    except ImproperlyConfigured as error:
-        raise ValidationError({owner: f"Archive extractor {key!r} is not registered."}) from error
-
-
-def _mapping_form_schema(target_resource: str) -> dict[str, Any]:
-    """Return the serializable fixed-row mapping form for ``target_resource``."""
-
-    mappings = {
-        "type": "array",
-        "widget": "rows",
-        "label": "Archive mappings",
-        "items": {
-            "type": "object",
-            "required": ["extractor", "label", "target"],
-            "properties": {
-                "extractor": {"type": "string", "label": "Extractor key", "readOnly": True},
-                "label": {"type": "string", "label": "Archive type", "readOnly": True},
-                "target": {"type": "string", "label": "Target", "relation": {
-                    "resource": target_resource, "create": {"resource": target_resource},
-                }},
-            },
-        },
-    }
-    return {
-        "type": "object",
-        "required": ["action"],
-        "properties": {
-            "action": {"type": "string", "enum": ["apply_mappings"],
-                       "options": [{"value": "apply_mappings", "label": "Apply mappings",
-                                    "verdict": "COMPLETE"}]},
-            "mappings": mappings,
-        },
-        "oneOf": [{"type": "object", "required": ["action", "mappings"],
-                   "properties": {"action": {"const": "apply_mappings"}, "mappings": mappings},
-                   "additionalProperties": False}],
-    }
+    run = step_run.run
+    if run is None:
+        raise ValidationError({"run": "The stage requires an admitted workflow run."})
+    content_type = run.subject_content_type
+    model = content_type.model_class() if content_type is not None else None
+    if model is None or not issubclass(model, Bridge) or model._meta.label_lower != reference.model.lower():
+        raise ValidationError({"bridge": "The stage bridge must be the workflow run's concrete Bridge subject."})
+    bridge = instance_from_public_id(model, reference.id, queryset=model._base_manager.all())
+    if bridge is None or bridge.pk != run.subject_object_id:
+        raise ValidationError({"bridge": "The stage bridge must match the admitted workflow subject."})
+    return bridge
 
 
-def _run_owner_subject(run: Any) -> str:
-    """Return the run's retained admission subject as the mapping assignee."""
-
-    subject = run.admission_actor_subject()
-    if subject is None:
-        raise ValidationError({"run": "Archive mapping gates require an admitted actor or explicit assignee."})
-    return str(subject)
-
-
-def _prepared_mappings(step_run: Any) -> list[dict[str, str]]:
-    """Load completed decision resolutions and return verified map items."""
-
-    value = step_run.input
-    if not isinstance(value, Mapping) or not isinstance(value.get("resolutions"), list):
-        raise ValidationError({"input": "Archive prepare requires the typed gate resolution."})
-    if len(value["resolutions"]) != 1 or not isinstance(value["resolutions"][0], Mapping):
-        raise ValidationError({"input": "Archive prepare requires one exact resolution."})
-    gate_rows = list(
-        system_queryset(type(step_run), using=step_run._state.db, lock=None)
-        .filter(next_step_runs=step_run, step__step_class="archive_gate")
-        .select_related("step")
-    )
-    if len(gate_rows) != 1:
-        raise ValidationError({"gate": "Archive prepare needs one declared predecessor gate."})
-    gate = gate_rows[0]
-    from angee.workflows import engine
-
-    decision, _ = engine.consume_decision_resolution(
-        step_run, ("resolutions", 0),
-        expected_action=str(gate.step.config.get("action") or "map-archive"),
-        expected_target=("", ""), expected_verdict="completed",
-        actor=_resolution_actor(value["resolutions"][0]),
-    )
-
-    mappings: list[dict[str, str]] = []
-    seen: set[str] = set()
-    expected_rows = _mapping_rows(decision.payload, owner="payload")
-    resolved_rows = _mapping_rows(decision.resolution, owner="resolution")
-    if len(expected_rows) != len(resolved_rows):
-        raise ValidationError({"input": "Archive mapping resolution must preserve every proposed row."})
-    for expected, resolved in zip(expected_rows, resolved_rows, strict=True):
-        extractor_key = str(resolved.get("extractor") or "")
-        label = str(resolved.get("label") or "")
-        target_pk = str(resolved.get("target") or "")
-        if extractor_key != str(expected.get("extractor") or "") or label != str(expected.get("label") or ""):
-            raise ValidationError({"input": "Archive mapping resolution changed a proposed extractor."})
-        extractor = _registered_extractor(extractor_key, owner="input")
-        if label != extractor.display_label():
-            raise ValidationError({"input": "Archive mapping resolution has stale extractor metadata."})
-        if not target_pk:
-            raise ValidationError({"input": f"Archive extractor {extractor_key!r} requires a target."})
-        if extractor_key in seen:
-            raise ValidationError({"input": f"Archive extractor {extractor_key!r} is mapped twice."})
-        seen.add(extractor_key)
-        mappings.append({"extractor": extractor_key, "target": target_pk})
-    return mappings
-
-
-def _resolution_actor(value: Mapping[str, Any]) -> Any:
-    """Resolve the retained human Decision resolver for the consumption check."""
-
-    try:
-        subject = canonical_subject_ref(str(value.get("resolved_by") or ""))
-    except (TypeError, ValueError) as error:
-        raise ValidationError({"decision": "Archive mapping requires a human resolver."}) from error
-    actor = get_user_model().objects.active_person_for_subject(subject)
-    if actor is None:
-        raise ValidationError({"decision": "Archive mapping requires a human resolver."})
-    return actor
-
-
-def _mapping_rows(value: Any, *, owner: str) -> list[Mapping[str, Any]]:
-    """Return mapping rows from a decision payload or resolution."""
-
-    if not isinstance(value, Mapping) or not isinstance(value.get("mappings"), list):
-        raise ValidationError({"input": f"Archive mapping decision {owner} is invalid."})
-    rows = value["mappings"]
-    if any(not isinstance(row, Mapping) for row in rows):
-        raise ValidationError({"input": f"Archive mapping decision {owner} rows must be objects."})
-    return cast(list[Mapping[str, Any]], rows)
-
-
-def _mapping_unit(value: Any) -> tuple[str, str]:
-    """Return one extractor/target pair from a stock map child input."""
-
-    if not isinstance(value, Mapping):
-        raise ValidationError({"input": "Archive execute unit input must be an object."})
-    extractor_key = str(value.get("extractor") or "")
-    target_pk = str(value.get("target") or "")
-    if not extractor_key or not target_pk:
-        raise ValidationError({"input": "Archive execute unit requires extractor and target."})
-    return extractor_key, target_pk
+def _evidence(record: Any) -> ReviewRecordReference:
+    return ReviewRecordReference(model=record._meta.label_lower, id=public_id_of(record))

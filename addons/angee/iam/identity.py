@@ -181,7 +181,7 @@ def user_from_public_id(user_id: Any) -> Any:
 
     user_model = get_user_model()
     with system_context(reason="iam.identity.user.lookup"):
-        user = instance_from_public_id(user_model, str(user_id), queryset=user_model._default_manager.all())
+        user = instance_from_public_id(user_model, str(user_id))
     if user is None:
         raise ValueError(f"User {user_id!s} was not found.")
     return user

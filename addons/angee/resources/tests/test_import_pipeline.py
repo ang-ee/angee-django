@@ -10,7 +10,8 @@ import pytest
 import tablib
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import connection, models, router, transaction
+from django.db import models, transaction
+from django.db.models.fields import NOT_PROVIDED
 from rebac.models import active_relationship_model
 
 from angee.base.models import AngeeModel
@@ -18,6 +19,7 @@ from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
 from angee.resources.tests.test_resources import addon, entry
+from tests.tables import model_tables
 
 
 @pytest.mark.parametrize(("suffix", "separator"), [("csv", ","), ("tsv", "\t")])
@@ -56,7 +58,7 @@ def test_rectangular_sources_reuse_the_loaded_dataset(
 
 
 def test_mixed_sources_keep_sparse_cells_and_original_row_indexes(tmp_path: Path) -> None:
-    """Envelope model precedence and native rectangular nulls remain explicit."""
+    """Structured omissions survive rectangularization, separate from explicit null."""
 
     path = tmp_path / "mixed.json"
     path.write_text(
@@ -78,8 +80,8 @@ def test_mixed_sources_keep_sparse_cells_and_original_row_indexes(tmp_path: Path
     assert second.source_rows == [2]
     assert first.dataset.headers == ["_xref", "title", "model", "enabled"]
     assert first.dataset.dict == [
-        {"_xref": "first", "title": "one", "model": None, "enabled": None},
-        {"_xref": "third", "title": None, "model": "real field", "enabled": True},
+        {"_xref": "first", "title": "one", "model": NOT_PROVIDED, "enabled": NOT_PROVIDED},
+        {"_xref": "third", "title": NOT_PROVIDED, "model": "real field", "enabled": True},
     ]
 
 
@@ -141,24 +143,20 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
             "demo": (),
         },
     )
-    models_to_create = (PipelineTag, PipelineItem, PipelineLedger)
-    with connection.schema_editor() as editor:
-        for model in models_to_create:
-            editor.create_model(model)
-    call_command("rebac", "sync", verbosity=0)
-    relationships = active_relationship_model()._default_manager
-    relationship_count = relationships.count()
+    with model_tables((PipelineTag, PipelineItem, PipelineLedger)):
+        call_command("rebac", "sync", verbosity=0)
+        relationships = active_relationship_model()._default_manager
+        relationship_count = relationships.count()
 
-    def assert_rolled_back() -> None:
-        assert PipelineTag._base_manager.count() == 0
-        assert PipelineItem._base_manager.count() == 0
-        assert PipelineItem.tags.through.objects.count() == 0
-        assert PipelineLedger.objects.count() == 0
-        assert not user_model._base_manager.filter(username="pipeline-user").exists()
-        assert relationships.count() == relationship_count
-        assert "committed" not in events
+        def assert_rolled_back() -> None:
+            assert PipelineTag._base_manager.count() == 0
+            assert PipelineItem._base_manager.count() == 0
+            assert PipelineItem.tags.through.objects.count() == 0
+            assert PipelineLedger.objects.count() == 0
+            assert not user_model._base_manager.filter(username="pipeline-user").exists()
+            assert relationships.count() == relationship_count
+            assert "committed" not in events
 
-    try:
         validated = PipelineLedger.objects.validate_addons((owner,), tiers=["master"])
         assert validated.checked_files == 2
         assert validated.checked_rows == 4
@@ -219,18 +217,3 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
         unchanged = PipelineLedger.objects.load_addons((owner,), tiers=["master"])
         assert unchanged.loaded == 0
         assert unchanged.skipped == 4
-
-        route = router.db_for_write
-        with monkeypatch.context() as patch:
-            patch.setattr(
-                router,
-                "db_for_write",
-                lambda model, **hints: "other" if model is PipelineItem else route(model, **hints),
-            )
-            with pytest.raises(ResourceLoadError, match="default database"):
-                PipelineLedger.objects.load_addons((owner,), tiers=["master"])
-        assert PipelineItem._base_manager.get().model == "v2"
-    finally:
-        with connection.schema_editor() as editor:
-            for model in reversed(models_to_create):
-                editor.delete_model(model)

@@ -8,8 +8,17 @@ title = "angee-django gitleaks"
 useDefault = true
 
 [allowlist]
-description = "Django test fixtures that pass a credential row next to an MCP placement enum; 'credential=' followed by 'MCPPlacement.INTERNAL' trips generic-api-key."
+description = "A credential row next to an MCP placement enum trips generic-api-key."
 regexTarget = "line"
 regexes = [
   '''credential=[A-Za-z_]+,\s*placement=MCPPlacement\.[A-Z_]+''',
 ]
+
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "Fake Django session keys in test fixtures."
+condition = "AND"
+paths = ['''^tests/''']
+regexTarget = "line"
+regexes = ['''Session\(session_key="[a-z0-9]{32}"\)''']

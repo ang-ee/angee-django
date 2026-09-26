@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
+import { createUiTestProviders } from "@angee/ui/testing";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { Refine, type DataProvider, type LiveProvider } from "@refinedev/core";
-import { QueryClient, keepPreviousData } from "@tanstack/react-query";
+import type { LiveProvider } from "@refinedev/core";
+import { keepPreviousData } from "@tanstack/react-query";
 import { authoredQueryReadsAnyModel, createAngeeChangeLiveProvider } from "@angee/refine";
 import type { ReactNode } from "react";
+import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const auth = vi.hoisted(() => ({ actor: "actor-a" as string | undefined }));
@@ -16,9 +18,9 @@ import { ThreadTranscriptDocument, ThreadTranscriptRevalidateDocument } from "./
 import { messageFeedRows } from "./message-feed";
 import { useThreadMessageFeed } from "./thread-message-feed";
 
-const clients: QueryClient[] = [];
+const { Provider, createClient, clearClients } = createUiTestProviders({ apiUrl: "test://messages", providerNames: [] });
 beforeEach(() => { auth.actor = "actor-a"; });
-afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });
+afterEach(() => { cleanup(); clearClients(); });
 
 const row = (id: number) => ({ id: `message-${id}`, feed_order_key: `v1:000${id}`, preview: `Message ${id}` });
 const page = (messages = [row(3), row(2)], more = true) => ({
@@ -27,27 +29,26 @@ const page = (messages = [row(3), row(2)], more = true) => ({
 });
 
 function fixture(nativeLive = false) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, placeholderData: keepPreviousData } } });
-  clients.push(client);
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, placeholderData: keepPreviousData } } });
   let refreshed = false;
   let denied = false;
-  const custom = vi.fn(async ({ meta }: { meta: { gqlQuery: unknown; gqlVariables: Record<string, unknown>; signal: AbortSignal } }) => {
+  const dataProvider = { custom: vi.fn(async ({ meta }) => {
     if (denied) throw new Error("Unreadable thread");
-    const variables = meta.gqlVariables;
-    if (meta.gqlQuery === ThreadTranscriptRevalidateDocument) {
+    const variables = meta?.gqlVariables ?? {};
+    if (meta?.gqlQuery === ThreadTranscriptRevalidateDocument) {
       const ids = variables.ids as string[];
       return { data: { thread_message_feed_revalidate: {
         messages: ids.filter((id) => id !== "message-2").map((id) => row(Number(id.slice(-1)))),
         absent_ids: ids.filter((id) => id === "message-2"),
       } } };
     }
-    expect(meta.gqlQuery).toBe(ThreadTranscriptDocument);
+    expect(meta?.gqlQuery).toBe(ThreadTranscriptDocument);
     return { data: { thread_message_feed: variables.beforeCursor
       ? page([row(1)], false)
       : page(refreshed ? [row(4), row(3)] : undefined),
     } };
-  });
-  const provider = { getApiUrl: () => "test://messages", getList: vi.fn(), getOne: vi.fn(), create: vi.fn(), update: vi.fn(), deleteOne: vi.fn(), custom } as unknown as DataProvider;
+  }) } satisfies RefineTestDataProvider;
+  const { custom } = dataProvider;
   const subscribe = vi.fn<LiveProvider["subscribe"]>(() => "messages");
   const unsubscribe = vi.fn();
   const roots = [
@@ -66,10 +67,10 @@ function fixture(nativeLive = false) {
   const onError = vi.fn(async () => ({}));
   const notify = vi.fn();
   function Providers({ children }: { children: ReactNode }) {
-    return <Refine dataProvider={provider} liveProvider={nativeLive ? nativeProvider : { subscribe, unsubscribe }}
+    return <Provider dataProvider={dataProvider} queryClient={client} liveProvider={nativeLive ? nativeProvider : { subscribe, unsubscribe }}
       authProvider={{ login: async () => ({ success: true }), logout: async () => ({ success: true }), check: async () => ({ authenticated: true }), onError }}
       notificationProvider={{ open: notify, close: vi.fn() }}
-      options={{ disableTelemetry: true, reactQuery: { clientConfig: client } }}>{children}</Refine>;
+    >{children}</Provider>;
   }
   return { client, custom, subscribe, unsubscribe, onError, notify, wrapper: Providers,
     refresh: () => { refreshed = true; }, deny: () => { denied = true; },
@@ -84,20 +85,20 @@ test("real Refine transport sends fixed cuts and revalidation documents through 
   const feed = fixture();
   const { result, unmount } = renderHook(() => useThreadMessageFeed("thread-a"), { wrapper: feed.wrapper });
   await waitFor(() => expect(messageFeedRows(result.current.data)).toHaveLength(2));
-  expect(feed.custom.mock.calls[0]?.[0].meta.gqlVariables).toEqual({ threadId: "thread-a", anchor: "", beforeCursor: null, throughCursor: null, limit: 50 });
+  expect(feed.custom.mock.calls[0]?.[0].meta?.gqlVariables).toEqual({ threadId: "thread-a", anchor: "", beforeCursor: null, throughCursor: null, limit: 50 });
   await act(async () => { await result.current.fetchNextPage({ cancelRefetch: false }); });
-  expect(feed.custom.mock.calls[1]?.[0].meta.gqlVariables).toMatchObject({ beforeCursor: "opaque-message-2", throughCursor: null });
+  expect(feed.custom.mock.calls[1]?.[0].meta?.gqlVariables).toMatchObject({ beforeCursor: "opaque-message-2", throughCursor: null });
   feed.refresh();
   await act(async () => { await feed.client.invalidateQueries({ predicate: (query) => authoredQueryReadsAnyModel(query.meta, ["messaging.Reaction"]) }); });
   await waitFor(() => expect(messageFeedRows(result.current.data).map((message) => message.id)).toEqual(["message-4", "message-3", "message-1"]));
-  const revalidations = feed.custom.mock.calls.filter(([request]) => request.meta.gqlQuery === ThreadTranscriptRevalidateDocument);
-  expect(revalidations.map(([request]) => request.meta.gqlVariables.ids)).toEqual([["message-3", "message-2"], ["message-1"]]);
-  expect(feed.custom.mock.calls[2]?.[0].meta.gqlVariables).toMatchObject({ beforeCursor: null, throughCursor: "opaque-message-2" });
+  const revalidations = feed.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === ThreadTranscriptRevalidateDocument);
+  expect(revalidations.map(([request]) => request.meta?.gqlVariables?.ids)).toEqual([["message-3", "message-2"], ["message-1"]]);
+  expect(feed.custom.mock.calls[2]?.[0].meta?.gqlVariables).toMatchObject({ beforeCursor: null, throughCursor: "opaque-message-2" });
   expect(feed.client.getQueryCache().findAll({ queryKey: ["angee", "authored"] })).toHaveLength(1);
   expect(feed.subscribe).toHaveBeenCalledWith(expect.objectContaining({ params: { models: [
     "messaging.Message", "messaging.Reaction", "messaging.Thread", "parties.Handle", "parties.Party", "storage.File",
   ] } }));
-  expect(feed.custom.mock.calls[0]?.[0].meta.signal).toBeInstanceOf(AbortSignal);
+  expect(feed.custom.mock.calls[0]?.[0].meta?.signal).toBeInstanceOf(AbortSignal);
   unmount(); expect(feed.unsubscribe).toHaveBeenCalledWith("messages");
 });
 
@@ -108,7 +109,7 @@ test.each(["parties.Handle", "parties.Party", "messaging.Thread", "storage.File"
   feed.refresh();
   act(() => feed.emit(model));
   await waitFor(() => expect(messageFeedRows(result.current.data).map((message) => message.id)).toEqual(["message-4", "message-3"]));
-  expect(feed.custom.mock.calls.some(([request]) => request.meta.gqlQuery === ThreadTranscriptRevalidateDocument)).toBe(true);
+  expect(feed.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === ThreadTranscriptRevalidateDocument)).toBe(true);
 });
 
 test("resolved actor and thread changes never expose another native entry's rows", async () => {

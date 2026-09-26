@@ -17,7 +17,7 @@ from angee.workflows.attempts import AttemptResultKind, DecisionGateOutput
 from angee.workflows.dispatch import WorkflowDispatchKind
 from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepImpl, StepResult
-from tests.workflows import Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
+from angee.workflows.testing.models import Step, StepAttempt, StepRun, Workflow, WorkflowDispatch, WorkflowRun
 
 
 class _DoneImpl(StepImpl):
@@ -59,11 +59,11 @@ class _DecisionGateConsumer(StepImpl):
 
 @pytest.mark.django_db(transaction=True)
 def test_durable_advance_claims_and_exact_execute_retains_result(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     with system_context(reason="retained runtime setup"):
         workflow = Workflow.objects.create(name="Retained runtime", max_steps=10)
         step = Step.objects.create(
@@ -105,11 +105,11 @@ def test_durable_advance_claims_and_exact_execute_retains_result(
 
 @pytest.mark.django_db(transaction=True)
 def test_empty_exception_message_retains_class_and_traceback(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     with system_context(reason="empty exception result setup"):
         workflow = Workflow.objects.create(name="Empty exception result", max_steps=10)
         step = Step.objects.create(
@@ -145,20 +145,20 @@ def test_empty_exception_message_retains_class_and_traceback(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("delay", [0, 60])
 def test_advance_wake_is_durable_before_transport_publication(
-    workflow_engine_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
     delay: int,
 ) -> None:
     """Immediate and timer wakes commit their intent before notifying transport."""
 
-    del workflow_engine_tables
+    del composed_tables
     now = timezone.now()
     published: list[int] = []
     with system_context(reason="durable wake setup"):
         workflow = Workflow.objects.create(name="Durable wake")
         run = WorkflowRun.objects.create(workflow=workflow, status=RunStatus.RUNNING)
     monkeypatch.setattr(engine.timezone, "now", lambda: now)
-    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda: published.append(run.pk))
+    monkeypatch.setattr(engine, "enqueue_dispatch_publisher", lambda **kwargs: published.append(run.pk))
 
     with transaction.atomic():
         if delay:
@@ -175,9 +175,9 @@ def test_advance_wake_is_durable_before_transport_publication(
 
 @pytest.mark.django_db(transaction=True)
 def test_wrong_dispatch_handler_does_not_consume_valid_execute_intent(
-    workflow_engine_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflow_engine_tables
+    del composed_tables
     with system_context(reason="retained mismatched envelope setup"):
         workflow = Workflow.objects.create(name="Mismatched envelope")
         step = Step.objects.create(
@@ -209,11 +209,11 @@ def test_wrong_dispatch_handler_does_not_consume_valid_execute_intent(
 
 @pytest.mark.django_db(transaction=True)
 def test_wait_result_retains_immediate_and_future_advance_intents(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     now = timezone.now()
     _WaitImpl.until = now + timedelta(minutes=5)
     with system_context(reason="retained wait setup"):
@@ -252,11 +252,11 @@ def test_wait_result_retains_immediate_and_future_advance_intents(
 
 @pytest.mark.django_db(transaction=True)
 def test_preparation_failure_retains_candidate_provenance_and_advance(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     now = timezone.now()
     with system_context(reason="retained preparation setup"):
         workflow = Workflow.objects.create(name="Preparation evidence", max_steps=10)
@@ -304,13 +304,13 @@ def test_preparation_failure_retains_candidate_provenance_and_advance(
 
 @pytest.mark.django_db(transaction=True)
 def test_preparation_validates_persisted_json_through_the_input_model_json_boundary(
-    workflow_engine_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Strict tuple contracts accept the JSON arrays retained by JSONField."""
 
-    del workflow_engine_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     now = timezone.now()
     gate_output = {"resolutions": [], "outcome": "completed"}
     with system_context(reason="JSON input model boundary setup"):

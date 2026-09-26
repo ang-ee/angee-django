@@ -44,60 +44,28 @@ export function useRecordPeekContext(): RecordPeekContextValue | null {
   return React.useContext(RecordPeekContext);
 }
 
-/** Publish a readonly native record form into Chatter or a record's right aside. */
+/** Publish a readonly native record form into Chatter. */
 export function useRecordPeek(): RecordPeekOpen {
   const t = useUiT();
-  const {
-    recordSupportKey, setRecordPreview, setActiveTab, setCollapsed, setInitialActiveTab,
-  } = useChatter();
-  const ownerRef = React.useRef<symbol | null>(null);
-  if (ownerRef.current === null) ownerRef.current = Symbol("record-preview");
-  const owner = ownerRef.current;
-  const [state, setState] = React.useState<{
-    key: string | null;
-    references: readonly RecordPeekReference[];
-  }>({ key: recordSupportKey, references: [] });
-  const references = state.key === recordSupportKey ? state.references : [];
+  const { setActiveTab, setCollapsed, setInitialActiveTab } = useChatter();
+  const [references, setReferences] = React.useState<readonly RecordPeekReference[]>([]);
   const openRecord = React.useCallback((
     reference: RecordPeekReference,
     options?: RecordPeekOpenOptions,
   ) => {
-    setState((current) => {
-      const records = current.key === recordSupportKey ? current.references : [];
-      const previous = records.at(-1);
+    setReferences((current) => {
+      const previous = current.at(-1);
       if (previous && sameRecordPeekReference(previous, reference)) return current;
-      return { key: recordSupportKey, references: [...records, reference] };
+      return [...current, reference];
     });
-    if (recordSupportKey === null) {
-      if (options?.tabActivation === "initial") setInitialActiveTab("records");
-      else setActiveTab("records");
-    }
+    if (options?.tabActivation === "initial") setInitialActiveTab("records");
+    else setActiveTab("records");
     setCollapsed(false);
-  }, [recordSupportKey, setActiveTab, setCollapsed, setInitialActiveTab]);
-  const openSource = React.useCallback((
-    reference: RecordPeekReference,
-    options?: RecordPeekOpenOptions,
-  ) => {
-    if (recordSupportKey === null) {
-      openRecord(reference, options);
-      return;
-    }
-    setState((current) => current.key === recordSupportKey
-      && current.references.length === 1
-      && sameRecordPeekReference(current.references[0]!, reference)
-        ? current
-        : { key: recordSupportKey, references: [reference] });
-    setCollapsed(false);
-  }, [openRecord, recordSupportKey, setCollapsed]);
+  }, [setActiveTab, setCollapsed, setInitialActiveTab]);
   const goBack = React.useCallback((index: number) => {
-    setState((current) => current.key === recordSupportKey
-      ? { ...current, references: current.references.slice(0, index + 1) }
-      : current);
-  }, [recordSupportKey]);
-  const close = React.useCallback(() => {
-    setState({ key: recordSupportKey, references: [] });
-  }, [recordSupportKey]);
-  const content = React.useMemo(() => recordSupportKey === null && references.length ? {
+    setReferences((current) => current.slice(0, index + 1));
+  }, []);
+  const content = React.useMemo(() => references.length ? {
     tabs: [{
       id: "records",
       label: t("chatter.tabRecords"),
@@ -105,27 +73,15 @@ export function useRecordPeek(): RecordPeekOpen {
       panelClassName: "p-0",
       children: <RecordPeek references={references} openRecord={openRecord} goBack={goBack} />,
     }],
-  } : null, [recordSupportKey, references, openRecord, goBack, t]);
+  } : null, [references, openRecord, goBack, t]);
   useChatterContent(content);
-  const preview = React.useMemo(() => recordSupportKey && references.length
-    ? <RecordPeek references={references} openRecord={openRecord} goBack={goBack} close={close} />
-    : null, [recordSupportKey, references, openRecord, goBack, close]);
-  React.useEffect(() => {
-    if (!recordSupportKey) return;
-    setRecordPreview(owner, recordSupportKey, preview);
-    return () => setRecordPreview(owner, recordSupportKey, null);
-  }, [owner, preview, recordSupportKey, setRecordPreview]);
-  React.useEffect(() => {
-    if (preview) setCollapsed(false);
-  }, [preview, setCollapsed]);
-  return openSource;
+  return openRecord;
 }
 
-function RecordPeek({ references, openRecord, goBack, close }: {
+function RecordPeek({ references, openRecord, goBack }: {
   references: readonly RecordPeekReference[];
   openRecord: RecordPeekOpen;
   goBack: (index: number) => void;
-  close?: () => void;
 }): React.ReactElement | null {
   const t = useUiT();
   const recordHref = useResourceRecordHrefLookup();
@@ -138,7 +94,7 @@ function RecordPeek({ references, openRecord, goBack, close }: {
   const href = baseHref ? recordTargetHref(baseHref, { tab: reference.tab, search: reference.search }) : undefined;
   return <RecordPeekContext.Provider value={context}>
     <ControlBandProvider host={undefined}>
-      <div className={close ? "flex h-full min-h-0 flex-col" : undefined}>
+      <div>
         <nav aria-label={t("chatter.recordTrail")} className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle p-3 text-sm">
           {references.slice(0, -1).map((record, index) => <React.Fragment key={`${record.model}:${record.id}:${index}`}>
             <Button variant="ghost" size="sm" onClick={() => goBack(index)}>
@@ -147,12 +103,11 @@ function RecordPeek({ references, openRecord, goBack, close }: {
             <Glyph name="chevron-right" />
           </React.Fragment>)}
           {href ? <TextLink href={href} target="_blank" className="ml-auto">{t("chatter.openRecord")}</TextLink> : null}
-          {close ? <Button variant="ghost" size="sm" onClick={close} className="ml-auto" aria-label={t("dialog.close")}><Glyph name="x" /></Button> : null}
         </nav>
-        <div className={close ? "min-h-0 flex-1" : undefined}>
+        <div>
           <RecordForm key={`${reference.model}:${reference.id}:${reference.tab ?? ""}`} resource={reference.model} id={reference.id} readOnly hideRecordChrome recordPresentation="workspace"
             defaultRecordTab={reference.tab ?? undefined}
-            className={close ? "h-full min-h-0" : "min-h-96"} />
+            className="min-h-96" />
         </div>
       </div>
     </ControlBandProvider>

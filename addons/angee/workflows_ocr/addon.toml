@@ -1,6 +1,0 @@
-[addon]
-name = "angee.workflows_ocr"
-description = "Migration-history compatibility for the retired extraction app label"
-keywords = ["migration-history", "workflows", "extraction"]
-category = "Workflows"
-depends_on = []

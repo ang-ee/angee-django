@@ -8,6 +8,32 @@ from django.db import models
 from rebac.resources import model_resource_type
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+_QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
+
+
+def lock_if_supported(queryset: _QuerySetT, *, of: tuple[str, ...] = ("self",)) -> _QuerySetT:
+    """Declare row-lock intent; Django owns write routing and backend support.
+
+    ``"self"`` means the whole row: for a multi-table child it also names every
+    parent link, since Django's ``of`` locks only the tables it names.
+    """
+
+    if "self" in of:
+        of = (*of, *(path for path in _parent_link_paths(queryset.model._meta.concrete_model) if path not in of))
+    return queryset.select_for_update(of=of)
+
+
+def _parent_link_paths(model: type[models.Model], prefix: str = "") -> tuple[str, ...]:
+    """Return ``of`` paths reaching each concrete multi-table ancestor of ``model``."""
+
+    paths: list[str] = []
+    for parent, link in model._meta.parents.items():
+        if link is None:
+            continue
+        path = f"{prefix}{link.name}"
+        paths.append(path)
+        paths.extend(_parent_link_paths(parent, f"{path}__"))
+    return tuple(paths)
 
 
 def bind_actor(instance: models.Model, actor: Any | None) -> None:
@@ -75,22 +101,19 @@ def write_scoped_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
 def system_queryset(
     model: type[_ModelT],
     *,
-    using: str | None = None,
     lock: tuple[str, ...] | None = None,
 ) -> models.QuerySet[_ModelT]:
     """Return the model's unscoped system queryset, with a third-party fallback."""
 
     owner = getattr(model, "system_queryset", None)
     if callable(owner):
-        return cast(models.QuerySet[_ModelT], owner(using=using, lock=lock))
+        return cast(models.QuerySet[_ModelT], owner(lock=lock))
     queryset = model._base_manager.all()
-    queryset = queryset.using(using) if using is not None else queryset
     system_context = getattr(queryset, "system_context", None)
     if callable(system_context):
         queryset = system_context(reason=f"{model._meta.label_lower}.system_queryset")
-    locker = getattr(queryset, "lock_if_supported", None)
-    if lock is not None and callable(locker):
-        queryset = locker(of=lock)
+    if lock is not None:
+        queryset = lock_if_supported(queryset, of=lock)
     return cast(models.QuerySet[_ModelT], queryset)
 
 

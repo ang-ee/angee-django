@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import ValidationError
-from django.db import router
+from django.db import transaction
 
+from angee.base.identity import public_id_of
 from angee.base.scoping import system_queryset
 from angee.workflows.attempts import json_values_equal
 from angee.workflows.graph import (
@@ -24,7 +25,27 @@ from angee.workflows.graph import (
 )
 
 if TYPE_CHECKING:
-    from angee.workflows.managers import WorkflowQuerySet
+    from angee.workflows.managers import DefinitionWriteSession, WorkflowQuerySet
+
+
+def declaration_changed(
+    instance: Any,
+    persisted: Any | None,
+    *,
+    fields: Iterable[str],
+    update_fields: Iterable[str] | None,
+) -> bool:
+    """Compare only persisted declaration values, using native FK storage names."""
+
+    if persisted is None:
+        return True
+    updated = None if update_fields is None else set(update_fields)
+    for name in fields:
+        attname = instance._meta.get_field(name).attname
+        if updated is None or name in updated or attname in updated:
+            if getattr(instance, attname) != getattr(persisted, attname):
+                return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,27 +219,176 @@ class WorkflowDefinitionManagerMixin:
     if TYPE_CHECKING:
         model: type[Any]
 
-        def using(self, alias: str) -> "WorkflowQuerySet": ...
+        def get(self, **kwargs: Any) -> Any: ...
+        def with_action(self, action: str) -> WorkflowQuerySet: ...
         def current_published_for(self, workflow: Any) -> Any | None: ...
         def _definition_caller(self, workflow: Any) -> AbstractContextManager[None]: ...
-        def _definition_read(self, workflow_id: int, *, using: str | None = None) -> AbstractContextManager[Any]: ...
+        def _definition_read(self, workflow_id: int) -> AbstractContextManager[Any]: ...
         def _definition_write(
             self,
             workflow_ids: Iterable[int],
             *,
-            using: str | None = None,
+            session: DefinitionWriteSession | None = None,
             _allow_status_transition: bool = False,
-        ) -> AbstractContextManager[Any]: ...
-        def _definition_revision(self, workflow_id: int, current: int) -> int: ...
+        ) -> AbstractContextManager[DefinitionWriteSession]: ...
 
-    _WORKFLOW_FIELDS = frozenset(
-        {"name", "description", "purpose", "subject_declaration", "error_workflow", "max_steps", "budget",
-         "input_schema", "output_schema", "result_rules"}
-    )
-    _NODE_FIELDS = frozenset(
-        {"key", "name", "step_class", "config", "input_binding", "join_rule", "is_entry", "position"}
-    )
-    _EDGE_FIELDS = frozenset({"condition"})
+    def install_definition(
+        self,
+        model: type[Any],
+        declarations: Mapping[str, Any],
+        *,
+        ledger_model: type[Any],
+        source_addon: str,
+        source_path: str,
+    ) -> dict[str, Any]:
+        """Reconcile one native-cleaned, exactly source-owned definition facet.
+
+        Import-export owns identity, coercion, row outcomes and ledger upserts.
+        This owner composes snapshots and checked edits, including omission.
+        Incident edges must be explicitly removed by their own facet before a
+        step can be omitted; a facet never cascades another source's declaration.
+
+        The head's draft_revision is a compare-and-swap counter, not a load
+        number. Each changed facet advances it through its own definition edit;
+        one load changing workflow scalars, steps and edges advances it three
+        times. Callers compare or carry the returned revision, never its delta.
+        """
+
+        steps = self.model._meta.get_field("steps").related_model
+        edges = self.model._meta.get_field("edges").related_model
+        if model not in {self.model, steps, edges}:
+            raise ValidationError("Unsupported workflow definition facet.")
+        with transaction.atomic():
+            owned = ledger_model._default_manager.filter(
+                source_addon=source_addon, source_path=source_path, target_model=model._meta.label,
+            )
+            omitted = list(owned.exclude(xref__in=declarations))
+            removed = {row.pk: row for ledger in omitted if (row := ledger.target_instance()) is not None}
+            candidates = list(declarations.values())
+            if any(not isinstance(row, model) for row in candidates):
+                raise ValidationError("A workflow declaration must contain its native cleaned instance.")
+            retained_ids = {row.pk for row in candidates if not row._state.adding}
+            if len(retained_ids) != sum(not row._state.adding for row in candidates):
+                raise ValidationError("Two resource xrefs identify the same workflow definition row.")
+            removed = {pk: row for pk, row in removed.items() if pk not in retained_ids}
+            targets = (*candidates, *removed.values())
+            target_ids = [public_id_of(row) for row in targets if not row._state.adding]
+            foreign = ledger_model._default_manager.filter(
+                target_model=model._meta.label, target_id__in=target_ids,
+            ).exclude(source_addon=source_addon, source_path=source_path)
+            if foreign.exists():
+                raise ValidationError("A workflow definition row is owned by another resource contribution.")
+            head_ids = {
+                row.pk if model is self.model else row.workflow_id
+                for row in targets if model is not self.model or not row._state.adding
+            }
+            with self._definition_write(head_ids):
+                persisted: dict[str, Any] = {}
+                if model is self.model:
+                    for xref, row in declarations.items():
+                        if row.error_workflow is not None:
+                            # An earlier buffered native row now has its PK;
+                            # reassign the cached relation before comparing IDs.
+                            row.error_workflow = row.error_workflow
+                        if row._state.adding:
+                            row.save()
+                        else:
+                            snapshot = self.definition_snapshot(row)
+                            if row.key != snapshot.workflow.key:
+                                # The model owns one-time key backfill and rejects renames.
+                                row.save(update_fields={"key"})
+                            patch = self._installation_patch(
+                                row, snapshot.workflow, self.model.editable_declaration_fields
+                            )
+                            if patch:
+                                self.apply_definition(
+                                    row, expected_revision=snapshot.revision, edit=DefinitionEdit(workflow=patch),
+                                )
+                        persisted[xref] = self.get(pk=row.pk)
+                    for row in removed.values():
+                        if (
+                            row.steps.exists() or row.edges.exists()
+                            or row.triggers.exists()
+                            or row.error_for_workflows.exists()
+                        ):
+                            raise ValidationError("Omitted workflow still has contributions; remove its facets first.")
+                        row.delete()
+                else:
+                    for head_id in sorted(head_ids):
+                        head = self.get(pk=head_id)
+                        current = {xref: row for xref, row in declarations.items() if row.workflow_id == head_id}
+                        omitted_rows = [row for row in removed.values() if row.workflow_id == head_id]
+                        persisted.update(self._install_definition_children(
+                            head, model, current, omitted_rows,
+                        ))
+                # Upserts remain exclusively in AngeeResource.after_save_instance.
+                owned.filter(pk__in=[ledger.pk for ledger in omitted]).delete()
+                return persisted
+
+    @staticmethod
+    def _installation_patch(candidate: Any, stored: Any, names: frozenset[str]) -> dict[str, Any]:
+        """Compare native cleaned values without repeating import field coercion."""
+
+        return {
+            name: getattr(candidate, name)
+            for name in sorted(names)
+            if not json_values_equal(
+                getattr(candidate, candidate._meta.get_field(name).attname),
+                getattr(stored, stored._meta.get_field(name).attname),
+            )
+        }
+
+    def _install_definition_children(
+        self, head: Any, model: type[Any], declarations: Mapping[str, Any], omitted: list[Any]
+    ) -> dict[str, Any]:
+        snapshot = self.definition_snapshot(head)
+        is_step = model is self.model._meta.get_field("steps").related_model
+        saved = {row.pk: row for row in (snapshot.nodes if is_step else snapshot.edges)}
+        node_creates: list[NodeCreate] = []
+        node_patches: list[NodePatch] = []
+        edge_creates: list[EdgeCreate] = []
+        edge_patches: list[EdgePatch] = []
+        for xref, row in declarations.items():
+            if not row._state.adding and row.pk not in saved:
+                raise ValidationError(f"{xref}: a resource definition cannot move to another workflow.")
+            names = model.editable_declaration_fields
+            wanted = {name: getattr(row, name) for name in names}
+            if is_step:
+                if row._state.adding:
+                    node_creates.append(NodeCreate(xref, wanted))
+                else:
+                    patch = self._installation_patch(row, saved[row.pk], names)
+                    if patch:
+                        node_patches.append(NodePatch(row.pk, patch))
+            else:
+                source, target = EndpointRef(existing_id=row.source_id), EndpointRef(existing_id=row.target_id)
+                if row._state.adding:
+                    edge_creates.append(EdgeCreate(xref, source, target, wanted))
+                else:
+                    old = saved[row.pk]
+                    patch = self._installation_patch(row, old, names)
+                    changed = old.source_id != row.source_id or old.target_id != row.target_id
+                    if patch or changed:
+                        edge_patches.append(EdgePatch(
+                            row.pk, patch, source if changed else None, target if changed else None,
+                        ))
+        removed_ids = {row.pk for row in omitted}
+        if is_step and any(edge.source_id in removed_ids or edge.target_id in removed_ids for edge in snapshot.edges):
+            raise ValidationError("Omitted step still has incident edges; remove those edge declarations first.")
+        edit = DefinitionEdit(
+            node_creates=tuple(node_creates), node_patches=tuple(node_patches),
+            node_deletes=tuple(NodeDelete(pk) for pk in sorted(removed_ids)) if is_step else (),
+            edge_creates=tuple(edge_creates), edge_patches=tuple(edge_patches),
+            edge_deletes=() if is_step else tuple(EdgeDelete(pk) for pk in sorted(removed_ids)),
+        )
+        created: dict[str, int] = {}
+        if any((node_creates, node_patches, edge_creates, edge_patches, removed_ids)):
+            result = self.apply_definition(head, expected_revision=snapshot.revision, edit=edit)
+            created = {item.client_key: item.identity for item in (result.nodes if is_step else result.edges)}
+        rows = model._default_manager.in_bulk(
+            [created.get(xref, row.pk) for xref, row in declarations.items()],
+        )
+        return {xref: rows[created.get(xref, row.pk)] for xref, row in declarations.items()}
 
     def definition_snapshot(self, workflow: Any) -> DefinitionSnapshot:
         """Read one coherent revision and definition under its lineage lock."""
@@ -236,39 +406,37 @@ class WorkflowDefinitionManagerMixin:
         """
 
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
-            self.using(alias).with_action("read").get(pk=workflow.pk)
-            with self._definition_read(workflow.pk, using=alias) as locked:
-                return self._owned_definition_graph(locked, using=alias)
+            self.with_action("read").get(pk=workflow.pk)
+            with self._definition_read(workflow.pk) as locked:
+                return self._owned_definition_graph(locked)
 
     @staticmethod
-    def _owned_definition_rows(workflow: Any, *, using: str) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+    def _owned_definition_rows(workflow: Any) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
         """Return all rows owned by one already-authorized definition."""
 
         step_model = workflow.steps.model
         edge_model = workflow.edges.model
         nodes = tuple(
-            system_queryset(step_model, using=using, lock=None)
+            system_queryset(step_model, lock=None)
             .filter(workflow_id=workflow.pk)
             .order_by("key", "pk")
         )
         edges = tuple(
-            system_queryset(edge_model, using=using, lock=None)
+            system_queryset(edge_model, lock=None)
             .filter(workflow_id=workflow.pk)
             .select_related("source", "target")
             .order_by("pk")
         )
         return nodes, edges
 
-    def _owned_definition_graph(self, workflow: Any, *, using: str) -> WorkflowGraph:
-        nodes, edges = self._owned_definition_rows(workflow, using=using)
+    def _owned_definition_graph(self, workflow: Any) -> WorkflowGraph:
+        nodes, edges = self._owned_definition_rows(workflow)
         return WorkflowGraph.from_rows(workflow, nodes, edges)
 
     def _definition_snapshot(self, workflow: Any) -> DefinitionSnapshot:
-        alias = router.db_for_write(self.model, instance=workflow)
-        projected = self.using(alias).with_action("read").with_lineage_projection().get(pk=workflow.pk)
-        with self._definition_read(workflow.pk, using=alias) as locked:
-            nodes, edges = self._owned_definition_rows(locked, using=alias)
+        projected = self.with_action("read").with_lineage_projection().get(pk=workflow.pk)
+        with self._definition_read(workflow.pk) as locked:
+            nodes, edges = self._owned_definition_rows(locked)
             readiness = WorkflowGraph.from_rows(locked, nodes, edges).diagnostics()
             return DefinitionSnapshot(locked.draft_revision, projected, nodes, edges, readiness)
 
@@ -297,11 +465,10 @@ class WorkflowDefinitionManagerMixin:
 
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
-            with self._definition_read(workflow.pk, using=alias) as locked:
+            with self._definition_read(workflow.pk) as locked:
                 if locked.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=locked.draft_revision)
-                state = _DefinitionState(self, locked, edit, alias=alias, action="read")
+                state = _DefinitionState(self, locked, edit, action="read")
                 state.preflight()
                 target_identity = state.target_identity(target)
                 graph = state.graph()
@@ -324,11 +491,10 @@ class WorkflowDefinitionManagerMixin:
 
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
-            with self._definition_read(workflow.pk, using=alias) as locked:
+            with self._definition_read(workflow.pk) as locked:
                 if locked.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=locked.draft_revision)
-                state = _DefinitionState(self, locked, edit, alias=alias, action="read")
+                state = _DefinitionState(self, locked, edit, action="read")
                 state.preflight()
                 owner_identity = state.target_identity(owner)
                 graph = state.graph()
@@ -344,33 +510,31 @@ class WorkflowDefinitionManagerMixin:
 
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
-            with self._definition_write((workflow.pk,), using=alias):
-                draft = self.using(alias).get(pk=workflow.pk)
+            with self._definition_write((workflow.pk,)) as session:
+                draft = self.get(pk=workflow.pk)
                 if draft.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
-                diagnostics = self._owned_definition_graph(draft, using=alias).diagnostics()
+                diagnostics = self._owned_definition_graph(draft).diagnostics()
                 if diagnostics:
                     raise DefinitionReadinessError(diagnostics)
                 current = self.current_published_for(draft)
                 if current is not None and draft._definition_signature() == current._definition_signature():
-                    projected = self.using(alias).with_action("read").with_lineage_projection().get(pk=current.pk)
+                    projected = self.with_action("read").with_lineage_projection().get(pk=current.pk)
                     return PublicationResult(draft.draft_revision, projected, False)
-                published = draft.publish()
-                projected = self.using(alias).with_action("read").with_lineage_projection().get(pk=published.pk)
+                published = draft.publish(session=session)
+                projected = self.with_action("read").with_lineage_projection().get(pk=published.pk)
                 return PublicationResult(draft.draft_revision, projected, True)
 
     def compare_definition(self, workflow: Any, source: Any) -> DefinitionComparison:
         """Compare two exact saved lineage definitions under one coherent lock."""
 
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
-            self.using(alias).with_action("read").get(pk=workflow.pk)
-            self.using(alias).with_action("read").get(pk=source.pk)
+            self.with_action("read").get(pk=workflow.pk)
+            self.with_action("read").get(pk=source.pk)
             with self._definition_write(
-                (workflow.pk, source.pk), using=alias, _allow_status_transition=True
-            ) as rows:
-                by_id = {row.pk: row for row in rows}
+                (workflow.pk, source.pk), _allow_status_transition=True
+            ) as session:
+                by_id = {row.pk: row for row in session.rows}
                 draft = by_id[workflow.pk]
                 locked_source = by_id[source.pk]
                 _validate_version_source(draft, locked_source)
@@ -396,28 +560,26 @@ class WorkflowDefinitionManagerMixin:
 
         self._validate_expected_revision(workflow, expected_revision)
         with self._definition_caller(workflow):
-            alias = router.db_for_write(self.model, instance=workflow)
-            self.using(alias).with_action("write").get(pk=workflow.pk)
-            self.using(alias).with_action("read").get(pk=source.pk)
+            self.with_action("write").get(pk=workflow.pk)
+            self.with_action("read").get(pk=source.pk)
             with self._definition_write(
-                (workflow.pk, source.pk), using=alias, _allow_status_transition=True
-            ) as rows:
-                by_id = {row.pk: row for row in rows}
+                (workflow.pk, source.pk), _allow_status_transition=True
+            ) as session:
+                by_id = {row.pk: row for row in session.rows}
                 draft = by_id[workflow.pk]
                 locked_source = by_id[source.pk]
                 _validate_version_source(draft, locked_source)
                 if draft.draft_revision != expected_revision:
                     raise StaleDefinitionError(expected=expected_revision, current=draft.draft_revision)
-                draft.edges.all().delete()
-                draft.steps.all().delete()
-                for field_name in self._WORKFLOW_FIELDS:
-                    if field_name == "error_workflow":
-                        draft.error_workflow_id = locked_source.error_workflow_id
-                    else:
-                        setattr(draft, field_name, copy.deepcopy(getattr(locked_source, field_name)))
-                draft.save(update_fields=[*sorted(self._WORKFLOW_FIELDS), "updated_at"])
-                locked_source._copy_definition_to(draft)
-                projected_revision = self._definition_revision(draft.pk, draft.draft_revision)
+                draft.edges.all().delete(session=session)
+                draft.steps.all().delete(session=session)
+                fields = self.model.editable_declaration_fields
+                for field_name in sorted(fields):
+                    attname = draft._meta.get_field(field_name).attname
+                    setattr(draft, attname, copy.deepcopy(getattr(locked_source, attname)))
+                draft.save(update_fields=[*sorted(fields), "updated_at"], session=session)
+                locked_source._copy_definition_to(draft, session=session)
+                projected_revision = session.revision(draft.pk, draft.draft_revision)
                 draft.draft_revision = projected_revision
                 nodes = tuple(draft.steps.order_by("key", "pk"))
                 edges = tuple(draft.edges.select_related("source", "target").order_by("pk"))
@@ -446,17 +608,16 @@ class WorkflowDefinitionManagerMixin:
         )
 
     def _apply_definition(self, workflow: Any, *, expected_revision: int, edit: DefinitionEdit) -> DefinitionResult:
-        alias = router.db_for_write(self.model, instance=workflow)
         result: DefinitionResult
-        with self._definition_write((workflow.pk,), using=alias):
-            locked = self.using(alias).get(pk=workflow.pk)
+        with self._definition_write((workflow.pk,)) as session:
+            locked = self.get(pk=workflow.pk)
             if locked.draft_revision != expected_revision:
                 raise StaleDefinitionError(expected=expected_revision, current=locked.draft_revision)
-            state = _DefinitionState(self, locked, edit, alias=alias)
+            state = _DefinitionState(self, locked, edit)
             state.preflight()
-            node_correlations, edge_correlations = state.persist()
-            revision = self._definition_revision(locked.pk, locked.draft_revision)
-            readiness = self._owned_definition_graph(locked, using=alias).diagnostics()
+            node_correlations, edge_correlations = state.persist(session=session)
+            revision = session.revision(locked.pk, locked.draft_revision)
+            readiness = self._owned_definition_graph(locked).diagnostics()
             result = DefinitionResult(revision, tuple(node_correlations), tuple(edge_correlations), readiness)
         return result
 
@@ -464,17 +625,19 @@ class WorkflowDefinitionManagerMixin:
 class _DefinitionState:
     """One proposed definition inside its manager-owned locked transaction."""
 
-    def __init__(self, manager: Any, workflow: Any, edit: DefinitionEdit, *, alias: str, action: str = "write") -> None:
+    def __init__(self, manager: Any, workflow: Any, edit: DefinitionEdit, *, action: str = "write") -> None:
         self.manager = manager
         self.workflow = workflow
         self.edit = edit
-        self.alias = alias
         self.step_model = workflow.steps.model
         self.edge_model = workflow.edges.model
         self.workflow_fields = dict(edit.workflow)
         self.nodes = {row.pk: row for row in workflow.steps.with_action(action).order_by("pk")}
         self.edges = {
-            row.pk: row for row in workflow.edges.with_action(action).select_related("source", "target").order_by("pk")
+            row.pk: row
+            for row in (
+                workflow.edges.with_action(action).select_related("source", "target").order_by("pk")
+            )
         }
         self.original_nodes = dict(self.nodes)
         self.original_edges = dict(self.edges)
@@ -484,8 +647,8 @@ class _DefinitionState:
         self.diagnostics: list[GraphDiagnostic] = []
 
     def preflight(self) -> None:
-        all_node_count = system_queryset(self.step_model, using=self.alias).filter(workflow_id=self.workflow.pk).count()
-        all_edge_count = system_queryset(self.edge_model, using=self.alias).filter(workflow_id=self.workflow.pk).count()
+        all_node_count = system_queryset(self.step_model).filter(workflow_id=self.workflow.pk).count()
+        all_edge_count = system_queryset(self.edge_model).filter(workflow_id=self.workflow.pk).count()
         if len(self.nodes) != all_node_count or len(self.edges) != all_edge_count:
             self._command(
                 "workflow",
@@ -549,7 +712,7 @@ class _DefinitionState:
             return
         related = self.workflow_fields["error_workflow"]
         related_pk = getattr(related, "pk", None)
-        available = self.manager.using(self.alias).with_action("read").filter(pk=related_pk).first()
+        available = self.manager.with_action("read").filter(pk=related_pk).first()
         if available is None:
             self._command(
                 "workflow",
@@ -577,12 +740,12 @@ class _DefinitionState:
                     "Atomic swaps of existing edge identities are not supported.",
                 )
 
-    def persist(self) -> tuple[list[Correlation], list[Correlation]]:
+    def persist(self, *, session: DefinitionWriteSession) -> tuple[list[Correlation], list[Correlation]]:
         workflow_fields = set(self.workflow_fields)
         if workflow_fields:
             for name, value in self.workflow_fields.items():
                 setattr(self.workflow, name, copy.deepcopy(value))
-            self.workflow.save(update_fields=workflow_fields)
+            self.workflow.save(update_fields=workflow_fields, session=session)
 
         deleted_node_ids = {item.identity for item in self.edit.node_deletes}
         incident = [
@@ -592,21 +755,21 @@ class _DefinitionState:
         ]
         for edge in sorted(incident, key=lambda row: row.pk or 0):
             if edge.pk:
-                edge.delete()
+                edge.delete(session=session)
         for edge_delete in self.edit.edge_deletes:
             edge = self.original_edges.get(edge_delete.identity)
             if edge is not None and edge not in incident:
-                edge.delete()
+                edge.delete(session=session)
         for node_delete in self.edit.node_deletes:
-            self.original_nodes[node_delete.identity].delete()
+            self.original_nodes[node_delete.identity].delete(session=session)
 
         node_results: list[Correlation] = []
         for node_patch in self.edit.node_patches:
             row = self.nodes[node_patch.identity]
-            row.save(update_fields=set(node_patch.fields))
+            row.save(update_fields=set(node_patch.fields), session=session)
         for node_create in self.edit.node_creates:
             row = self.created_nodes[node_create.client_key]
-            row.save()
+            row.save(session=session)
             node_results.append(Correlation(node_create.client_key, row.pk))
 
         edge_results: list[Correlation] = []
@@ -619,12 +782,12 @@ class _DefinitionState:
             if edge_patch.target is not None:
                 row.target = self._persisted_endpoint(edge_patch.target)
                 fields.add("target")
-            row.save(update_fields=fields)
+            row.save(update_fields=fields, session=session)
         for edge_create in self.edit.edge_creates:
             row = self.created_edges[edge_create.client_key]
             row.source = self._persisted_endpoint(edge_create.source)
             row.target = self._persisted_endpoint(edge_create.target)
-            row.save()
+            row.save(session=session)
             edge_results.append(Correlation(edge_create.client_key, row.pk))
         return node_results, edge_results
 
@@ -633,26 +796,31 @@ class _DefinitionState:
             "workflow",
             GraphIdentity(existing_id=self.workflow.pk),
             self.workflow_fields,
-            WorkflowDefinitionManagerMixin._WORKFLOW_FIELDS,
+            self.workflow.editable_declaration_fields,
         )
         for node_create in self.edit.node_creates:
             self._fields(
                 "node",
                 GraphIdentity(client_key=node_create.client_key),
                 node_create.fields,
-                self.manager._NODE_FIELDS,
+                self.step_model.editable_declaration_fields,
             )
         for node_patch in self.edit.node_patches:
-            self._fields("node", _edit_identity(node_patch), node_patch.fields, self.manager._NODE_FIELDS)
+            self._fields(
+                "node", _edit_identity(node_patch), node_patch.fields, self.step_model.editable_declaration_fields
+            )
         for edge_create in self.edit.edge_creates:
             self._fields(
                 "edge",
                 GraphIdentity(client_key=edge_create.client_key),
                 edge_create.fields,
-                self.manager._EDGE_FIELDS,
+                self.edge_model.editable_declaration_fields,
             )
         for edge_patch in self.edit.edge_patches:
-            self._fields("edge", _edit_identity(edge_patch), edge_patch.fields, self.manager._EDGE_FIELDS)
+            self._fields(
+                "edge", _edit_identity(edge_patch), edge_patch.fields,
+                self.edge_model.editable_declaration_fields,
+            )
         self._unique("node", "client_key", [item.client_key for item in self.edit.node_creates], client=True)
         self._unique("edge", "client_key", [item.client_key for item in self.edit.edge_creates], client=True)
         self._unique(

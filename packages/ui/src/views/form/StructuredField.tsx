@@ -7,6 +7,7 @@ import type { WidgetDefinition, WidgetField, WidgetRenderProps } from "../../wid
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { initialFormSpecValue } from "./form-spec";
 import { LabeledDescriptorField } from "./MutationDialog";
+import { updatedRecord } from "./field-values";
 import { messagesForDottedPath } from "./validation-errors";
 
 type StructuredWidgetField = WidgetField & {
@@ -19,8 +20,9 @@ type StructuredWidgetField = WidgetField & {
 };
 
 function ObjectField({ value, field, messages = [], readOnly = false, onChange, onCommit, controlRef }: WidgetRenderProps): React.ReactElement {
-  const template = structuredField(field).objectTemplate;
-  if (!template) throw new Error('The "object" widget requires field.objectTemplate.');
+  const objectTemplate = structuredField(field).objectTemplate;
+  if (!objectTemplate) throw new Error('The "object" widget requires field.objectTemplate.');
+  const template = objectTemplate.filter((child) => !child.hidden);
   const objectValue = recordValue(value);
   const name = requiredName(field, "object");
   const focusIndex = template.findIndex((child) => !child.readOnly);
@@ -93,13 +95,6 @@ function recordValue(value: unknown): Record<string, unknown> {
   if (value == null) return {};
   if (typeof value !== "object" || Array.isArray(value)) throw new Error('The "object" widget value must be an object.');
   return value as Record<string, unknown>;
-}
-
-function updatedRecord(value: Record<string, unknown>, key: string, next: unknown): Record<string, unknown> {
-  if (next !== undefined) return { ...value, [key]: next };
-  const updated = { ...value };
-  delete updated[key];
-  return updated;
 }
 
 function moved<T>(values: readonly T[], from: number, to: number): T[] {
