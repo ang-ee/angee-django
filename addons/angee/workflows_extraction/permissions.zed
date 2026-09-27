@@ -1,12 +1,20 @@
-// Extraction values may contain sensitive document facts. Access is explicit
-// and deliberately narrower than the polymorphic target/file graph.
+// Authorization schema for the workflows_extraction addon.
+// @rebac_package: workflows_extraction
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 2
+
+// An extraction's values restate facts of the source it was read from, so a
+// reader of that source File or Message reads the extraction. The target is a
+// GenericForeignKey: Extraction.retain mirrors a File or Message target into
+// the stored `target` relation (`resync_extraction_targets` backfills it).
+// Other targets stay explicit through owner and viewer grants.
 definition workflows_extraction/extraction {
     relation owner: auth/user // rebac:field=created_by
     relation viewer: auth/user | auth/group#member
-    relation pending_decision: workflows/decision
+    relation target: storage/file | messaging/message
     relation admin: angee/role // rebac:const=admin
 
-    permission read = owner + viewer + pending_decision->assignee + admin->member
+    permission read = owner + viewer + target->read + admin->member
 }
 
 definition workflows_extraction/extraction_source {

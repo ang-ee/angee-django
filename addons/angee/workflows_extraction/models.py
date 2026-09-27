@@ -8,6 +8,8 @@ from typing import Any
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+from rebac import RelationshipTuple, SubjectRef, write_relationships
+from rebac.resources import model_resource_type, to_object_ref
 
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
@@ -27,21 +29,12 @@ from angee.workflows_extraction.contracts import (
 from angee.workflows_extraction.enums import ExtractionErrorCode, ExtractionStatus
 from angee.workflows_extraction.managers import (
     EvidenceManager,
+    EvidenceSystemManager,
     ExtractionManager,
     ExtractionSystemManager,
 )
 from angee.workflows_extraction.pointers import json_pointer_value
 from angee.workflows_extraction.profiles import ExtractionProfile
-
-
-class DecisionReadableFile(models.Model):
-    """Temporarily let one pending Decision's assignees read its exact File."""
-
-    extends = "storage.File"
-    rebac_grantable = {"viewer": "write", "pending_decision": "write"}
-
-    class Meta:
-        abstract = True
 
 
 class ExtractionLineage(AngeeModel):
@@ -83,7 +76,9 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
 
     runtime = True
     sqid_prefix = "ext_"
-    rebac_grantable = {"viewer": "read", "pending_decision": "read"}
+    rebac_grantable = {"viewer": "read"}
+    TARGET_RESOURCE_TYPES = frozenset({"messaging/message", "storage/file"})
+    """Target resource types whose readers inherit extraction read (``relation target``)."""
 
     revision = models.PositiveIntegerField(default=1, editable=False)
     lineage_key = models.CharField(max_length=64, db_index=True, editable=False)
@@ -135,6 +130,19 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         """Insert one immutable revision; the manager retains its children and head."""
 
         super().save( force_insert=True)
+        relationship = self.target_relationship()
+        if relationship is not None:
+            write_relationships([relationship])
+
+    def target_relationship(self) -> RelationshipTuple | None:
+        """Return the stored ``target`` tuple mirroring a File or Message target."""
+
+        target = self.target
+        if target is None or model_resource_type(type(target)) not in self.TARGET_RESOURCE_TYPES:
+            return None
+        return RelationshipTuple(
+            resource=to_object_ref(self), relation="target", subject=SubjectRef(to_object_ref(target))
+        )
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         raise ValueError("Extraction evidence is retained and cannot be deleted.")
@@ -273,10 +281,11 @@ class ExtractionSource(SqidMixin, AngeeModel):
     position = models.PositiveIntegerField(editable=False)
     content_hash = models.CharField(max_length=64, editable=False)
     objects = EvidenceManager()
+    system_objects = EvidenceSystemManager()
 
     class Meta:
         abstract = True
-        base_manager_name = "objects"
+        base_manager_name = "system_objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_source"
         constraints = (
@@ -329,10 +338,11 @@ class ExtractionPage(SqidMixin, AngeeModel):
     result = models.JSONField(editable=False)
     provider_metadata = models.JSONField(default=dict, blank=True, editable=False)
     objects = EvidenceManager()
+    system_objects = EvidenceSystemManager()
 
     class Meta:
         abstract = True
-        base_manager_name = "objects"
+        base_manager_name = "system_objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_page"
         constraints = (
@@ -373,10 +383,11 @@ class ExtractionPart(SqidMixin, AngeeModel):
     metadata = models.JSONField(default=dict, blank=True, editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
     objects = EvidenceManager()
+    system_objects = EvidenceSystemManager()
 
     class Meta:
         abstract = True
-        base_manager_name = "objects"
+        base_manager_name = "system_objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_part"
         constraints = (

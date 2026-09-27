@@ -277,6 +277,7 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
     operator = User.objects.create_user(username="identity-reviewer")
     with system_context(reason="test identity fixture"):
         party = Party._base_manager.create(display_name="Old Counterparty", created_by=operator)
+        source = Handle._base_manager.create(platform="email", value="printed@example.test", created_by=operator)
     proposal = {
         "party_id": str(party.sqid),
         "proposed": {
@@ -284,7 +285,9 @@ def test_identity_review_freezes_context_and_applies_name_and_address(
             "address": {"street": "10 Example Road", "city": "Exampleton", "country": "GB"},
             "handle": {},
         },
-        "evidence": [{"label": "Printed counterparty", "source_model": "storage.File", "source_id": "fil_example"}],
+        "evidence": [
+            {"label": "Printed counterparty", "source_model": source._meta.label, "source_id": str(source.sqid)}
+        ],
         "context": {"document_id": "doc_example", "draft_revision": 2},
     }
     workflow = _identity_workflow(config=config)
