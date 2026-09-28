@@ -2,23 +2,30 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
 from django.apps import AppConfig
+from django.conf import settings
 from django.core.management import call_command
-from rebac import system_context
+from django.test import override_settings
+from rebac import actor_context, system_context
 
 from angee.addons import addon_manifest
 from angee.graphql.schema import GraphQLSchemas
+from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
 from angee.workflows import models as workflow_models
 from angee.workflows.definitions import DefinitionEdit, NodePatch
-from angee.workflows.testing.models import Trigger, Workflow
-from tests.conftest import write_addon_manifest
+from angee.workflows.testing.models import Step, Trigger, Workflow
+from example.notes.models import Note as AbstractNote
+from tests.conftest import SchemaAddon, create_platform_admin, make_addon, write_addon_manifest
+from tests.tables import model_tables
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,20 +41,32 @@ class WorkflowResourceLedger(Resource):
         db_table = "test_workflows_resource_ledger"
 
 
+class Note(AbstractNote):
+    """Concrete subject for the shipped demo trigger and its native publisher."""
+
+    class Meta(AbstractNote.Meta):
+        abstract = False
+        app_label = "notes"
+        db_table = "test_workflows_resource_note"
+
+
 @pytest.fixture()
-def workflow_resource_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Sync workflow permissions after publishing the fixture's change-feed labels."""
+def workflow_resource_tables(transactional_db: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Sync permissions and declare the fixture's readable change-feed subject."""
 
     del transactional_db
+    with (
+        override_settings(INSTALLED_APPS=[*settings.INSTALLED_APPS, "example.notes"]),
+        model_tables((Note,)),
+    ):
+        # The source schema resolves Note through the registry after this concrete
+        # fixture model is registered, matching the composed-model lifecycle.
+        from example.notes.schema import schemas as note_schemas
 
-    class PublishedLabels:
-        """Schema collection stand-in for the example notes change feed."""
-
-        def change_publisher_model_labels(self) -> frozenset[str]:
-            return frozenset({"notes.note"})
-
-    monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: PublishedLabels()))
-    call_command("rebac", "sync", verbosity=0)
+        schemas = GraphQLSchemas([SchemaAddon(note_schemas)])
+        monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+        call_command("rebac", "sync", verbosity=0)
+        yield
 
 
 def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(
@@ -76,6 +95,13 @@ def test_demo_workflow_resources_publish_lineage_and_leave_trigger_disabled(
     assert [row.version for row in published] == [1]
     assert current == published[0]
     assert trigger.enabled is False
+    assert trigger.config_mapping["model"] == "notes.note"
+    assert trigger.config_mapping["condition"] == {"status": "in_review"}
+    trigger.validated_config(require_publisher=True)
+    trigger_resource = Path("resources/demo/103_workflows.trigger.yaml")
+    assert (Path(owner.path) / trigger_resource).read_bytes() == (
+        _REPO_ROOT / "examples/addons/example/notes" / trigger_resource
+    ).read_bytes()
     assert draft.error_workflow_id is None
     assert draft_binding == {"kind": "workflow_input", "path": []}
     assert published_binding == {"kind": "workflow_input", "path": []}
@@ -188,6 +214,7 @@ def test_resource_republication_preserves_omitted_same_impl_config_until_explici
         draft.refresh_from_db()
         assert draft.steps.get(key="entry").config == {"operator_policy": {"mode": "strict"}}
         current = Workflow.objects.current_published_for(draft)
+        assert current is not None
         assert current.steps.get(key="entry").config == {"operator_policy": {"mode": "strict"}}
         publication_count = Workflow.objects.filter(published_from=draft).count()
 
@@ -209,6 +236,7 @@ def test_resource_republication_preserves_omitted_same_impl_config_until_explici
         draft.refresh_from_db()
         assert draft.steps.get(key="entry").config == {}
         current = Workflow.objects.current_published_for(draft)
+        assert current is not None
         assert current.steps.get(key="entry").config == {}
 
         snapshot = Workflow.objects.definition_snapshot(draft)
@@ -239,6 +267,52 @@ def test_resource_republication_preserves_omitted_same_impl_config_until_explici
         entry = draft.steps.get(key="entry")
         assert entry.step_class == "parties_dedupe_scan"
         assert entry.config == {}
+
+
+def test_resource_import_cannot_change_enabled_trigger_rule(
+    workflow_resource_tables: None, tmp_path: Path,
+) -> None:
+    """Native resource updates still save through the enabled-rule owner."""
+
+    del workflow_resource_tables
+    admin = create_platform_admin("trigger-import-admin")
+    with system_context(reason="test enabled trigger resource setup"):
+        workflow = Workflow.objects.create(name="Scheduled import", created_by=admin)
+        Step.objects.create(
+            workflow=workflow, key="start", name="Start", step_class="wait", is_entry=True,
+            config={"until": "2099-01-01T00:00:00Z"},
+        )
+        workflow.publish()
+        trigger = Trigger.objects.create(
+            workflow=workflow, kind=workflow_models.TriggerKind.SCHEDULE, config={"interval_seconds": 60},
+        )
+    with actor_context(admin):
+        trigger.enable()
+    original = dict(trigger.config)
+    owner = make_addon(
+        name="tests.trigger_rules", path=tmp_path,
+        resources={"install": [{"path": "trigger.yaml"}]},
+    )
+    with system_context(reason="test retained trigger resource identity"):
+        WorkflowResourceLedger.objects.create(
+            source_addon=owner.name, source_path="trigger.yaml", tier="install", xref="trigger",
+            content_hash="previous", target_model="workflows.Trigger", target_id=str(trigger.sqid),
+        )
+    (tmp_path / "trigger.yaml").write_text(json.dumps({
+        "_meta": {"model": "workflows.Trigger"},
+        "rows": [{"xref": "trigger", "fields": {
+            "config": {"interval_seconds": 120},
+        }}],
+    }))
+
+    with pytest.raises(ResourceLoadError, match="Disable the trigger before editing its rule"):
+        WorkflowResourceLedger.objects.load_addons((owner,), tiers=["install"])
+
+    with system_context(reason="inspect rejected trigger import"):
+        trigger.refresh_from_db()
+    assert trigger.config == original
+    assert trigger.execution_actor_id == admin.pk
+    assert trigger.enabled is True
 
 
 def _notes_workflow_addon(tmp_path: Path) -> AppConfig:

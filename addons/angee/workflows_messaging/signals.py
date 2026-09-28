@@ -75,14 +75,16 @@ def deliver_message_event(sender: Any, instance: Any, **kwargs: Any) -> None:
     """Synchronously admit one run per matching channel Trigger.
 
     Admission shares the ingest transaction. Invalid trigger configuration disables
-    the trigger without discarding the Message. Infrastructure failures propagate
-    so the bridge retries a delivery whose admission could not be persisted.
+    the trigger without discarding the Message. Rejected event admissions are
+    logged without disabling the trigger. Infrastructure failures propagate so
+    the bridge retries a delivery whose admission could not be persisted.
     """
 
     del sender, kwargs
     if instance.channel_id is None:
         return
     trigger_model = apps.get_model("workflows", "Trigger")
+    run_model = apps.get_model("workflows", "WorkflowRun")
     triggers = (
         trigger_model._base_manager
         .filter(
@@ -91,18 +93,21 @@ def deliver_message_event(sender: Any, instance: Any, **kwargs: Any) -> None:
             event_model_label="messaging.message",
             message_channel_id=instance.channel_id,
         )
-        .select_related("workflow", "execution_actor", "message_channel__created_by")
+        .select_related("workflow__created_by", "execution_actor", "created_by")
         .order_by("pk")
     )
     for trigger in triggers:
         try:
             if trigger.validated_config(require_publisher=True).source != MESSAGE_INGESTED:
                 continue
-            actor = trigger.execution_actor or instance.created_by or trigger.message_channel.created_by
+            actor = run_model.objects._owner(None, trigger, trigger.workflow)
             if actor is None:
                 raise ValidationError("Message workflow admission requires an execution actor.")
-            if not trigger.condition_matches(type(instance), instance):
-                continue
+        except ValidationError:
+            trigger.sudo(reason="workflows_messaging.invalid_config").disable()
+            logger.exception("Disabled message workflow trigger %s after invalid configuration.", trigger.pk)
+            continue
+        try:
             trigger_model.objects.start_event(
                 trigger.pk,
                 subject=instance,
@@ -112,5 +117,6 @@ def deliver_message_event(sender: Any, instance: Any, **kwargs: Any) -> None:
                 source=MESSAGE_INGESTED,
             )
         except ValidationError:
-            trigger.sudo(reason="workflows_messaging.invalid_admission").disable()
-            logger.exception("Disabled message workflow trigger %s after invalid admission.", trigger.pk)
+            logger.exception(
+                "Rejected message workflow event for message %s on trigger %s.", instance.pk, trigger.pk
+            )

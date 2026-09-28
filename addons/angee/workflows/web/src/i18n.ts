@@ -334,7 +334,7 @@ export const enWorkflowsMessages: Record<string, string> = {
   "triggers.eachChange": "Once for each matching change",
   "triggers.addCondition": "Add condition",
   "triggers.removeCondition": "Remove condition",
-  "triggers.opaqueConditions": "Additional unsupported conditions are preserved in Rule JSON.",
+  "triggers.opaqueConditions": "Remove or correct unsupported conditions in Rule JSON before saving.",
   "runs.loading": "Loading run",
   "runs.graph": "Workflow run graph",
   "runs.unavailable": "Run unavailable",
