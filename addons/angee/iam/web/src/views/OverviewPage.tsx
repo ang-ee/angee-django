@@ -3,7 +3,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
-  Button, DashboardView, InlineEmpty, Metric, MiniCard, MutationDialog, RowsListView, SurfacePanel, mutationDialogValueCodecs, textRoleVariants, titleCase, useAuthoredResourceMutation, useRouteHref, type MutationDialogField } from "@angee/ui";
+  formSubmitError, Button, DashboardView, InlineEmpty, Metric, MiniCard, MutationDialog, RowsListView, SurfacePanel, mutationDialogValueCodecs, textRoleVariants, titleCase, useAuthoredResourceMutation, useRouteHref, type DescriptorField } from "@angee/ui";
 
 import {
   IamGrantRole,
@@ -63,7 +63,7 @@ export function OverviewPage(): ReactElement {
   const privilegedTotal = overviewFacts?.privileged_grant_count ?? privileged.length;
   const unassignedTotal = overviewFacts?.unassigned_user_count ?? unassigned.length;
 
-  const grantFields = useMemo<readonly MutationDialogField[]>(() => [
+  const grantFields = useMemo<readonly DescriptorField[]>(() => [
     {
       name: "subject",
       label: t("overview.grant.subject"),
@@ -119,7 +119,9 @@ export function OverviewPage(): ReactElement {
                 })}
                 onSubmit={async (values) => {
                   const result = await grantRole(values);
-                  if (result?.grant_role === false) throw new Error(t("overview.grant.error"));
+                  return result?.grant_role === true
+                    ? { status: "ok", data: result }
+                    : formSubmitError(t("overview.grant.error"));
                 }}
               />
             </div>

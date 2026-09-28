@@ -2,8 +2,8 @@ import * as React from "react";
 import { Controller, get, useWatch } from "react-hook-form";
 import { useModelMetadata } from "@angee/metadata";
 
-import type { MutationDialogField } from "./MutationDialog";
-import { LabeledDescriptorField } from "./MutationDialog";
+import type { DescriptorField } from "./DescriptorFieldList";
+import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { fieldErrorMessages, isFieldVisible, resolveField, type FormValues } from "./form-view-model";
 import type { FormViewSaveSurface } from "./use-form-view-save";
 import { fieldsWithMetadataDefaults } from "../resource/model-metadata-defaults";
@@ -15,7 +15,7 @@ export interface BoundDescriptorFieldProps {
   /** Resource whose metadata owns the descriptor. */
   resource: string;
   /** Descriptor expressed relative to `scope`. */
-  field: MutationDialogField;
+  field: DescriptorField;
   /** Dotted object path containing the descriptor's sibling values. */
   scope?: string;
   readOnly?: boolean;
@@ -78,7 +78,7 @@ export function BoundDescriptorField({
   const declared = React.useMemo(
     () => fieldsWithMetadataDefaults([field], modelMetadata)[0] ?? field,
     [field, modelMetadata],
-  ) as MutationDialogField;
+  ) as DescriptorField;
   const needsSiblingValues = declared.resolve !== undefined
     || declared.showWhen !== undefined
     || declared.control !== undefined;
@@ -90,7 +90,7 @@ export function BoundDescriptorField({
     ? watched
     : (scope ? get(surface.form.getValues(), scope) : surface.form.getValues());
   const siblingValues = isFormValues(scopedValues) ? scopedValues : {};
-  const resolved = resolveField(declared, siblingValues) as MutationDialogField;
+  const resolved = resolveField(declared, siblingValues) as DescriptorField;
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;
   if (!isFieldVisible(resolved, siblingValues)) return <></>;
 

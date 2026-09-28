@@ -33,7 +33,7 @@ vi.mock("../SubjectControl", () => ({
   ),
 }));
 
-import { AppRuntimeProvider, ModalsHost, baseIcons, createRouteHref, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, ModalsHost, ToastProvider, baseIcons, createRouteHref, defaultWidgets } from "@angee/ui";
 
 import { OverviewPage } from "./OverviewPage";
 
@@ -71,6 +71,22 @@ describe("IAM overview page", () => {
     expect(await screen.findByRole("option", { name: "angee / Reader" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "angee / Admin" })).toBeTruthy();
     expect(screen.queryByRole("option", { name: "angee / Removed" })).toBeNull();
+  });
+
+  test.each([false, undefined])("keeps a refused or missing grant result open for retry (%s)", async (granted) => {
+    mocks.overview.data = overviewData();
+    mocks.grantRole.mockResolvedValue({ grant_role: granted });
+    renderPage(<OverviewPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Grant" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Choose group" }));
+    const submit = screen.getAllByRole("button", { name: "Grant" }).at(-1)!;
+    await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(submit);
+
+    expect(await screen.findByText("Could not grant role.")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
   });
 
   test("links dashboard metrics to their related IAM views", () => {
@@ -130,7 +146,9 @@ function renderPage(children: ReactNode): ReturnType<typeof render> {
         routeHref: createRouteHref(iam.routes ?? []),
       }}
     >
-      <ModalsHost>{children}</ModalsHost>
+      <ToastProvider>
+        <ModalsHost>{children}</ModalsHost>
+      </ToastProvider>
     </AppRuntimeProvider>,
   );
 }

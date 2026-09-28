@@ -6,7 +6,7 @@ import { useUiT } from "../../i18n";
 import type { WidgetDefinition, WidgetField, WidgetRenderProps } from "../../widgets/types";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { initialFormSpecValue } from "./form-spec";
-import { LabeledDescriptorField } from "./MutationDialog";
+import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { updatedRecord } from "./field-values";
 import { messagesForDottedPath } from "./validation-errors";
 

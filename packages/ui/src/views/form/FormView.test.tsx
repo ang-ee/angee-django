@@ -590,9 +590,8 @@ describe("FormView", () => {
     };
     const submit = vi.fn(
       async (data: Record<string, unknown>, context: FormSubmitContext) => ({
-        ...sdkMocks.record,
-        ...data,
-        id: context.id,
+        status: "ok" as const,
+        data: { ...sdkMocks.record, ...data, id: context.id },
       }),
     );
 
@@ -634,9 +633,8 @@ describe("FormView", () => {
     };
     const submit = vi.fn(
       async (data: Record<string, unknown>, context: FormSubmitContext) => ({
-        ...sdkMocks.record,
-        ...data,
-        id: context.id,
+        status: "ok" as const,
+        data: { ...sdkMocks.record, ...data, id: context.id },
       }),
     );
     const relationFields = [
@@ -2984,9 +2982,9 @@ describe("FormView", () => {
 
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     await screen.findByText("This field cannot be blank.");
-    // Only field errors → the banner names declared labels and raw server-only keys.
+    // Server-only issues retain both their field name and their actionable reason.
     expect(
-      screen.getByText("Please fix the highlighted fields: Title, environment."),
+      screen.getByText("Please fix the highlighted fields: Title. environment: This field cannot be blank."),
     ).toBeTruthy();
   });
 });

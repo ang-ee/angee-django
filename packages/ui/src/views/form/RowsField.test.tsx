@@ -20,7 +20,7 @@ import { AppRuntimeProvider } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, type FormSpecFieldDescriptor } from "./form-spec";
-import { LabeledDescriptorField } from "./MutationDialog";
+import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { RowsField, type RowsValue } from "./RowsField";
 
 const channelRows: Row[] = [

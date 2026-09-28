@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec, formSpecInitialValues, normalizeFormSpecValues } from "./form-spec";
-import { LabeledDescriptorField } from "./MutationDialog";
+import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { listWidget, objectWidget } from "./StructuredField";
 import { structuredFieldErrorPaths } from "./field-values";
 import type { WidgetRenderProps } from "../../widgets/types";

@@ -331,6 +331,8 @@ export const enUiMessages: Record<string, string> = {
   "form.record": "Record",
   "form.required": "This field is required.",
   "form.saveFailed": "Save failed",
+  "form.saveConflict": "Record changed",
+  "form.reloadSaved": "Reload saved record",
   "form.save": "Save",
   "form.stay": "Stay",
   "form.tabOverview": "Overview",

@@ -9,6 +9,7 @@ import type { RecordActivityRow } from "./documents";
 
 const mocks = vi.hoisted(() => ({
   threadData: undefined as unknown,
+  scheduleError: null as Error | null,
   mutateCalls: [] as Array<{ op: string; vars: Record<string, unknown> }>,
   useAuthoredQuery: vi.fn(),
 }));
@@ -37,6 +38,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
     const op = operationName(document);
     const mutate = vi.fn(async (vars: Record<string, unknown>) => {
       mocks.mutateCalls.push({ op, vars });
+      if (op === "MessagingScheduleRecordActivity" && mocks.scheduleError) throw mocks.scheduleError;
       return {};
     });
     return [mutate, { fetching: false }];
@@ -86,6 +88,7 @@ function renderPane(ctx: ChatterViewContext = context): void {
 
 beforeEach(() => {
   mocks.mutateCalls = [];
+  mocks.scheduleError = null;
   mocks.useAuthoredQuery.mockReset();
   mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
     const op = operationName(document);
@@ -142,7 +145,9 @@ describe("RecordActivityPane", () => {
 
     renderPane();
     const summaryInput = screen.getByPlaceholderText("Activity summary");
-    fireEvent.change(summaryInput, { target: { value: "Call the customer" } });
+    fireEvent.change(summaryInput, { target: { value: "  Review the note  " } });
+    const noteInput = screen.getByRole("textbox", { name: "Notes" });
+    fireEvent.change(noteInput, { target: { value: "Add detail" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
 
     // The migrated form fires the authored schedule mutation with the collected
@@ -152,8 +157,9 @@ describe("RecordActivityPane", () => {
         mocks.mutateCalls.some(
           (call) =>
             call.op === "MessagingScheduleRecordActivity" &&
-            call.vars.summary === "Call the customer" &&
-            call.vars.activityType === "todo",
+            call.vars.summary === "Review the note" &&
+            call.vars.activityType === "todo" &&
+            call.vars.note === "Add detail",
         ),
       ).toBe(true),
     );
@@ -161,6 +167,39 @@ describe("RecordActivityPane", () => {
     await waitFor(() =>
       expect((summaryInput as HTMLInputElement).value).toBe(""),
     );
+    expect((noteInput as HTMLTextAreaElement).value).toBe("");
+  });
+
+  test("requires a non-blank summary before scheduling and describes the error", async () => {
+    mocks.threadData = threadPayload([]);
+    renderPane();
+    const input = screen.getByPlaceholderText("Activity summary");
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+
+    const error = await screen.findByText("This field is required.");
+    expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(error.id);
+    expect(mocks.mutateCalls).toEqual([]);
+    fireEvent.change(input, { target: { value: "  Review the note  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect(mocks.mutateCalls).toEqual([
+      expect.objectContaining({ op: "MessagingScheduleRecordActivity", vars: expect.objectContaining({ summary: "Review the note" }) }),
+    ]));
+  });
+
+  test("retains native form values on failure and allows retry", async () => {
+    mocks.threadData = threadPayload([]);
+    mocks.scheduleError = new Error("Try again");
+    renderPane();
+    const input = screen.getByPlaceholderText("Activity summary");
+    fireEvent.change(input, { target: { value: "Review the note" } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await screen.findByText("Try again");
+    expect((input as HTMLInputElement).value).toBe("Review the note");
+    mocks.scheduleError = null;
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(""));
+    expect(screen.queryByText("Try again")).toBeNull();
   });
 
   test("shows the not-enabled state for a record without a thread", () => {

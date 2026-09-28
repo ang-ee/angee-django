@@ -20,6 +20,7 @@ import { relationFieldInfoForResource } from "../resource/model-metadata-default
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { useActionForm } from "./use-action-form";
+import { actionOutcomeSubmitResult } from "./validation-errors";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from "../page";
 
 export interface ActionFormDialogProps {
@@ -61,15 +62,10 @@ export function ActionFormDialog({
     () => new Set(args.map((arg) => arg.name)),
     [args],
   );
-  const actionForm = useActionForm<ArgValues>({
+  const actionForm = useActionForm<ArgValues, ActionOutcome>({
     defaultValues: argDefaultValues(args, context),
     submit: async (collected) => {
-      // `run` is reached only when `action.submit` is set (guarded below); the
-      // fallback just keeps the return total for the optional descriptor field.
-      if (!action.submit) return { ok: true, message: "" };
-      // An envelope-less response resolves `undefined`; the form owner reads
-      // `null` as its form-level failure, so fold the two here.
-      return (await action.submit(serializeActionArgValues(args, collected), context)) ?? null;
+      return actionOutcomeSubmitResult(await action.submit?.(serializeActionArgValues(args, collected), context));
     },
     onSuccess: (_values, outcome) => {
       onSucceeded?.(outcome);
@@ -87,7 +83,7 @@ export function ActionFormDialog({
   const form = actionForm.form;
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (action.submit) void actionForm.run(form.getValues());
+    if (action.submit) void actionForm.run();
   };
 
   const footer = (

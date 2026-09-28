@@ -1,7 +1,7 @@
 import * as React from "react";
 import { rowPublicId, type Row, } from "@angee/metadata";
 import {
-  Action, Column, ResourceList, Facet, Field, Form, Group, List, registerForm, useAuthoredResourceMutation, useRecordActionMutation, useEnumOptions, useImplPrefill, useRouteHref, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
+  savedFormSubmitResult, useUiT, Action, Column, ResourceList, Facet, Field, Form, Group, List, registerForm, useAuthoredResourceMutation, useRecordActionMutation, useEnumOptions, useImplPrefill, useRouteHref, type FormSubmit, type RegisteredFormProps } from "@angee/ui";
 import { canConnectRecord, ConnectOAuthButton, } from "@angee/integrate";
 import { useAuthoredMutation, type DocumentVariables } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
@@ -42,6 +42,7 @@ export function InferenceProvidersPage(): React.ReactElement {
 }
 
 function InferenceProviderForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
+  const uiT = useUiT();
   const t = useAgentsT();
   const [refreshModels] = useRecordActionMutation<ActionFieldName>(
     "refresh_provider_models",
@@ -62,7 +63,7 @@ function InferenceProviderForm({ resource: _resource, ...props }: RegisteredForm
         const variables: DocumentVariables<typeof CreateInferenceProvider> = {
           data: data as DocumentVariables<typeof CreateInferenceProvider>["data"],
         };
-        return (await createProvider(variables))?.create_inference_provider ?? null;
+        return savedFormSubmitResult((await createProvider(variables))?.create_inference_provider, uiT("form.genericSaveError"));
       }
       if (!context.id) throw new Error("Inference provider update requires a saved record.");
       // `data` is FormView's already-normalized payload: relation fields arrive
@@ -75,9 +76,9 @@ function InferenceProviderForm({ resource: _resource, ...props }: RegisteredForm
         >["data"],
       };
       const result = await updateProvider(variables);
-      return result?.update_inference_provider ?? null;
+      return savedFormSubmitResult(result?.update_inference_provider, uiT("form.genericSaveError"));
     },
-    [createProvider, updateProvider],
+    [createProvider, updateProvider, uiT],
   );
 
   return (

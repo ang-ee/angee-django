@@ -7,11 +7,11 @@ import {
   baseIcons,
   defaultWidgets,
   mutationDialogValueCodecs,
-  type MutationDialogField,
+  type DescriptorField,
   type MutationDialogValues,
 } from "@angee/ui";
 
-const fields: readonly MutationDialogField[] = [
+const fields: readonly DescriptorField[] = [
   { name: "name", label: "Name", required: true },
   {
     name: "serverUrl",
@@ -75,6 +75,7 @@ function MutationDialogDemo(): React.ReactElement {
         parseValues={parseValues}
         onSubmit={async (values) => {
           setSubmitted(values);
+          return { status: "ok", data: values };
         }}
       />
     </AppRuntimeProvider>

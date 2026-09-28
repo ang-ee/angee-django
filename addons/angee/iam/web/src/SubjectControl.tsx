@@ -1,10 +1,10 @@
 import { useState, type ReactElement } from "react";
-import { Select, SubjectPicker, type MutationDialogControlProps } from "@angee/ui";
+import { Select, SubjectPicker, type DescriptorFieldControlProps } from "@angee/ui";
 
 import { useIamT } from "./i18n";
 
 /** IAM offers principals and its group subject sets through the shared picker. */
-export function SubjectControl({ id, value, readOnly, describedBy, labelledBy, onChange }: MutationDialogControlProps): ReactElement {
+export function SubjectControl({ id, value, readOnly, describedBy, labelledBy, onChange }: DescriptorFieldControlProps): ReactElement {
   const t = useIamT();
   const selected = typeof value === "string" ? value : "";
   const [chosenResource, setChosenResource] = useState("iam.User");

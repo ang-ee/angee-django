@@ -141,6 +141,14 @@ the stack's dependency owner before codegen; never install in the source slot.
 The stack's JS dependencies must already be installed. Framework packages are
 schema-independent; addon fragments need the composed host's generated documents.
 
+Name frontend test files `<owner>[.<concern>].test.ts` (or `.tsx` for JSX), beside
+the owner, and name each test for observable behavior. Use `.native.test.tsx`
+when a separate suite exercises real provider integration; compose the existing
+[`createUiTestProviders`](../packages/ui/src/testing.tsx) or
+[`createRefineTestProviders`](../packages/refine/src/testing.tsx) harness instead
+of copying provider setup. These names share the same Vitest discovery and
+focused-file selection convention.
+
 | Scope | Working directory | Command |
 |---|---|---|
 | Focused package test/typecheck/build | Framework source root | `pnpm --config.verify-deps-before-run=false --fail-if-no-match --filter <package-name> run <script>` |

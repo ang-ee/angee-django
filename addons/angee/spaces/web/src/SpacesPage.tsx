@@ -17,7 +17,7 @@ import {
   defineRowAction,
   rowIdVariables,
   type ListColumn,
-  type MutationDialogField,
+  type DescriptorField,
   type MutationDialogValues,
   type RecordPanelContext,
   type RecordTabDescriptor,
@@ -108,7 +108,7 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
     ],
     [t],
   );
-  const addFields = React.useMemo<readonly MutationDialogField[]>(
+  const addFields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "party",
@@ -126,7 +126,7 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
     ],
     [roleOptions, t],
   );
-  const roleFields = React.useMemo<readonly MutationDialogField[]>(
+  const roleFields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {
         name: "role",
@@ -211,13 +211,14 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
         submittingLabel={t("group.roster.adding")}
         errorFallback={t("group.roster.addError")}
         parseValues={parseAddMembershipValues}
-        onSubmit={(values) =>
-          add({
+        onSubmit={async (values) => ({
+          status: "ok",
+          data: await add({
             group: recordId,
             party: values.party,
             role: values.role,
-          })
-        }
+          }),
+        })}
       />
       <MutationDialog
         open={roleRow !== null}
@@ -231,12 +232,13 @@ function GroupRosterTab({ recordId }: RecordPanelContext): React.ReactElement {
         submittingLabel={t("group.roster.savingRole")}
         errorFallback={t("group.roster.roleError")}
         parseValues={parseMembershipRoleValues}
-        onSubmit={(values) =>
-          updateRole({
+        onSubmit={async (values) => ({
+          status: "ok",
+          data: await updateRole({
             id: roleRow?.id ?? "",
             role: values.role,
-          })
-        }
+          }),
+        })}
         onSubmitted={() => setRoleRow(null)}
       />
     </>

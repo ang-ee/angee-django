@@ -13,7 +13,7 @@ import {
   errorMessage,
   mutationDialogValueCodecs,
   textRoleVariants,
-  type MutationDialogControlProps,
+  type DescriptorFieldControlProps,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -28,7 +28,7 @@ type BrowseResult = DocumentData<
 >["browse_mount_source"];
 type MountLocation = BrowseResult["entries"][number];
 
-export interface MountSourceBrowserProps extends MutationDialogControlProps {
+export interface MountSourceBrowserProps extends DescriptorFieldControlProps {
   backendClass: string;
 }
 

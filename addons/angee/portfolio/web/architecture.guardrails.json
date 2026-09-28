@@ -19,10 +19,6 @@
     {
       "name": "RELEASE_MODEL",
       "ownerFile": "src/resources.ts"
-    },
-    {
-      "name": "parsePortfolioUpdateValues",
-      "ownerFile": "src/update-composer.tsx"
     }
   ]
 }

@@ -1,7 +1,7 @@
 import {
   MutationDialog,
-  type MutationDialogField,
-  type MutationDialogValidationResult,
+  type DescriptorField,
+  type ValidationErrors,
   type MutationDialogValues,
 } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
@@ -47,7 +47,7 @@ export function WorkspaceCreateDialog({
     () => [...new Set(templates.flatMap((template) => editableTemplateInputs(template.inputs).map((input) => input.name)))],
     [templates],
   );
-  const fields = React.useMemo<readonly MutationDialogField[]>(() => [
+  const fields = React.useMemo<readonly DescriptorField[]>(() => [
     {
       name: "template",
       label: t("workspaces.create.template"),
@@ -70,7 +70,7 @@ export function WorkspaceCreateDialog({
       label: t("workspaces.create.ttl"),
       description: t("workspaces.create.ttlDescription"),
     },
-    ...inputNames.map((name): MutationDialogField => ({
+    ...inputNames.map((name): DescriptorField => ({
       name,
       label: name,
       showWhen: (values) => templateInputFor(templates, values.template, name) !== null,
@@ -83,13 +83,13 @@ export function WorkspaceCreateDialog({
 
   const validate = React.useCallback(async (
     object: WorkspaceCreateInput,
-  ): Promise<MutationDialogValidationResult | null> => {
+  ): Promise<ValidationErrors | null> => {
     const checked = (await preflight.run({ input: object }))?.workspaceCreatePreflight;
     if (!checked) throw new Error(t("workspaces.create.failed"));
     if (checked.ok) return null;
     return {
       fieldErrors: preflightErrors(checked, t("workspaces.create.required")),
-      formError: t("workspaces.create.validationFailed"),
+      formErrors: [t("workspaces.create.validationFailed")],
     };
   }, [preflight, t]);
 
@@ -99,7 +99,7 @@ export function WorkspaceCreateDialog({
     // Pull the snapshot before navigating: detail resolves by name from the
     // workspaces pane and would otherwise bounce back to the list.
     await Promise.resolve(refetchWorkspaces()).catch(() => undefined);
-    return workspace;
+    return { status: "ok" as const, data: workspace };
   }, [create, refetchWorkspaces, t]);
 
   return (
@@ -129,7 +129,7 @@ function templateLabel(template: TemplateDescriptor): string {
   return template.name || template.ref;
 }
 
-function templateInputField(input: TemplateInputDescriptor): MutationDialogField {
+function templateInputField(input: TemplateInputDescriptor): DescriptorField {
   const type = input.type?.toLowerCase();
   return {
     name: input.name,

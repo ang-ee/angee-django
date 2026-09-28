@@ -199,6 +199,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     formIsDirty,
     displayRecord,
     saveError,
+    saveConflict,
     declaredActions,
     recordChromeContext,
     recordActions,
@@ -352,6 +353,18 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     </ControlBand>
   );
 
+  const saveErrorBanner = (
+    <ErrorBanner
+      description={saveError}
+      title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
+      actions={saveConflict ? (
+        <Button type="button" variant="secondary" size="sm" onClick={() => { discardChanges(); reload(); }}>
+          {t("form.reloadSaved")}
+        </Button>
+      ) : undefined}
+    />
+  );
+
   const formElement = (
     <form
       className={cn("min-h-full bg-sheet", className)}
@@ -371,7 +384,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         )}
       >
         <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} />
-        <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+        {saveErrorBanner}
         {tabbed ? (
           <>
             <Tabs.List>
@@ -416,7 +429,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 py-3">
             <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
-            <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+            {saveErrorBanner}
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6 py-6")}>
@@ -447,7 +460,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
             <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
-            <ErrorBanner description={saveError} title={t("form.saveFailed")} />
+            {saveErrorBanner}
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (
                 <Tabs.Tab

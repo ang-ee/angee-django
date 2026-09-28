@@ -63,14 +63,9 @@ export {
   type ImplementationDetailContext,
 } from "./relation/implementation-details";
 export {
-  LabeledDescriptorField,
   MutationDialog,
-  type MutationDialogControlProps,
-  type MutationDialogField,
   type MutationDialogParseValues,
   type MutationDialogProps,
-  type MutationDialogRelation,
-  type MutationDialogValidationResult,
   type MutationDialogValues,
   mutationDialogValueCodecs,
 } from "./form/MutationDialog";
@@ -96,14 +91,21 @@ export {
   ActionFormDialog,
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
+export { useWatch, type ResolverResult } from "react-hook-form";
 export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
-  formLevelMessage,
   useActionForm,
   type UseActionFormOptions,
   type UseActionFormResult,
 } from "./form/use-action-form";
 export {
+  actionFormSubmitResult,
+  actionOutcomeSubmitResult,
+  invalidFormSubmit,
+  formSubmitError,
+  savedFormSubmitResult,
+  applyFormErrors,
+  type FormSubmitResult,
   useDottedPathFieldErrors,
   directDottedPathMessages,
   lineRowErrorsFromDottedPaths,
@@ -115,6 +117,14 @@ export {
   type DottedPathFieldErrors,
   type ValidationErrors,
 } from "./form/validation-errors";
+export {
+  DescriptorFieldList,
+  LabeledDescriptorField,
+  type DescriptorFieldListProps,
+  type DescriptorField,
+  type DescriptorFieldRelation,
+  type DescriptorFieldControlProps,
+} from "./form/DescriptorFieldList";
 export { fieldErrorMessages, isCompositeFieldDescriptor } from "./form/form-view-model";
 export {
   FieldDescriptorControl,

@@ -5,7 +5,7 @@ import {
   isWidgetDefinition,
   type WidgetOption,
 } from "../../widgets";
-import type { MutationDialogField } from "./MutationDialog";
+import type { DescriptorField } from "./DescriptorFieldList";
 import { emptyValueForField } from "./field-values";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
 import { parseFormSpec, parseFormSpecPayload, type FormSpecWire, type FormSpecFieldType } from "./form-spec-schema";
@@ -32,7 +32,7 @@ export type FormSpecRelationCreate = Pick<
  * Properties and items may reference root-local `$defs` or `definitions`;
  * reference siblings override presentation metadata on the referenced schema.
  */
-export interface FormSpecFieldDescriptor extends MutationDialogField {
+export interface FormSpecFieldDescriptor extends DescriptorField {
   /** Approval layout intent; ordinary forms and unspecified fields remain inputs. */
   layout?: "context" | "input";
   rowTemplate?: readonly FormSpecFieldDescriptor[];

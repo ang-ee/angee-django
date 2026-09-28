@@ -456,18 +456,25 @@ history uses native Query pages with domain-owned
   related model's fields, so a relation is created, edited, and followed without
   leaving the parent form. The create-form override stays create-only: an edit
   dialog renders the passed `fields` (the registered form is not reused for edit).
-- Toolbar/action dialogs with ordinary field inputs compose `MutationDialog` from
-  `@angee/ui`. It owns the `DialogForm` scaffold, value reset, required gating,
-  submit busy/error state, and FieldDescriptor widget rendering; addons provide
-  fields, mutation variables, and domain result handling. Decode raw controls at
-  that boundary with `parseValues` and `mutationDialogValueCodecs`; ordinary text
-  trims and maps empty input to `null`, while explicit required/verbatim codecs
-  guard their authored field contracts. A **record action that
-  collects typed args** — relation pickers, a relation list prefilled from the
-  invoking selection/record, scalars — instead declares `args` + `submit` on its
-  `<Action>`; `RecordActionBar` opens `ActionFormDialog`, which fires the authored
-  mutation and binds the in-band `ActionOutcome.validationErrors` to the args,
-  staying open until `ok`. Declare args, don't hand-roll the dialog.
+- Toolbar dialogs compose [MutationDialog](../../packages/ui/src/views/form/MutationDialog.tsx).
+  Declare `DescriptorField`s; the shared [DescriptorFieldList](../../packages/ui/src/views/form/DescriptorFieldList.tsx)
+  owns controls and requires a native RHF `FormProvider`. Decode raw controls with
+  `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
+  authored field contracts. Record actions declare `args` + `submit` on `<Action>`;
+  `RecordActionBar` composes `ActionFormDialog` for their inputs.
+- Submit owners return [FormSubmitResult](../../packages/ui/src/views/form/validation-errors.ts):
+  `ok` acknowledges saved data; `invalid` carries `ValidationErrors`; `conflict`
+  preserves edits and offers reload. Adapt wire responses with
+  `actionFormSubmitResult(data, root)` and normalized outcomes with
+  `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
+  owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
+  returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
+  data is an invalid result, never an `ok` null sentinel.
+- Schema-driven forms import [createJsonSchemaResolver](../../packages/ui/src/views/form/json-schema.ts)
+  from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
+  discriminator selection; RHF owns original and transformed values. Keep this
+  opt-in adapter out of the UI main entry so other forms do not load Ajv.
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
   composer not bound to a model record) before hand-rolling a `<label>` wrapper.
