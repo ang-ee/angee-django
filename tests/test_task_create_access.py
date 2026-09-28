@@ -38,6 +38,7 @@ class ProjectAccessTask(AbstractTask):
     """Production task lifecycle with a small, independently protected project."""
 
     sqid_prefix = "pat_"
+    owner_container = None
     project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
     milestone = None
     milestone_id = None
@@ -52,7 +53,10 @@ class ProjectAccessTask(AbstractTask):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/project_access_task"
-        constraints = AbstractTask.Meta.constraints[:2]
+        constraints = [
+            constraint for constraint in AbstractTask.Meta.constraints
+            if constraint.name != "uq_projects_task_converted_activity"
+        ]
 
 
 @strawberry_django.type(ProjectAccessTask)
@@ -94,6 +98,7 @@ def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]
         definition scopedemo/project_access_task {
             permission create = authenticated
             permission read = authenticated
+            permission write = authenticated
         }
         """
     )
@@ -197,3 +202,37 @@ def test_direct_task_save_requires_project_write(
         with pytest.raises(PermissionDenied, match="Write access to the project is required to add a task."):
             candidate.save()
         assert not ProjectAccessTask._base_manager.exists()
+
+
+@pytest.mark.parametrize("allowed", (False, True), ids=("project-reader", "project-writer"))
+@pytest.mark.parametrize("update_fields", (None, ("project",), ("project_id",)))
+def test_task_move_requires_destination_project_write(
+    task_create_case: tuple[Scope, Any, Any],
+    allowed: bool,
+    update_fields: tuple[str, ...] | None,
+) -> None:
+    """A task writer cannot move it into a merely readable project."""
+
+    destination, reader, admin = task_create_case
+    with system_context(reason="tests.task_create_access.move"):
+        source = Scope.objects.create(name="Source project")
+        task = ProjectAccessTask.objects.create(title="Moving task", project=source)
+    task.with_actor(admin if allowed else reader)
+    assert task.has_access("write")
+    initial_history = task.history.count()
+    initial_revision = task.revision
+    task.project = destination
+
+    if allowed:
+        task.save(update_fields=update_fields)
+        task.refresh_from_db()
+        assert task.project_id == destination.pk
+        assert task.revision == initial_revision + 1
+        assert task.history.count() == initial_history + 1
+    else:
+        with pytest.raises(PermissionDenied, match="Write access to the project is required to add a task."):
+            task.save(update_fields=update_fields)
+        task.refresh_from_db()
+        assert task.project_id == source.pk
+        assert task.revision == initial_revision
+        assert task.history.count() == initial_history

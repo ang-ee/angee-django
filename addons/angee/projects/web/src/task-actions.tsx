@@ -1,3 +1,4 @@
+import { extractActionOutcome, type DocumentVariables } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   Action,
@@ -9,6 +10,9 @@ import {
   useActionResultMutation,
   useActionOutcomeMutation,
   useEnumOptions,
+  useAuthoredResourceMutation,
+  useActionResultRun,
+  useRecordAction,
   useRecordActionMutation,
   type ActionDescriptor,
   type RowActionDeclaration,
@@ -17,6 +21,7 @@ import {
 } from "@angee/ui";
 import * as React from "react";
 
+import { SetTaskVisibilityDocument } from "./documents";
 import { useProjectsT } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
@@ -66,6 +71,7 @@ export function useTaskRowActions<
 /** One Form declaration reused by the routed task page and personal board create flow. */
 export function useTaskFormDeclaration(): React.ReactElement {
   const t = useProjectsT();
+  const visibilityOptions = useEnumOptions(TASK_MODEL, "visibility", { casing: "upper" });
   const statusOptions = useEnumOptions(TASK_MODEL, "status");
   const priorityOptions = useEnumOptions(TASK_MODEL, "priority");
   const dropReasonOptions = useEnumOptions(TASK_MODEL, "dropped_reason", { casing: "upper" });
@@ -77,17 +83,35 @@ export function useTaskFormDeclaration(): React.ReactElement {
     invalidateModels: [TASK_MODEL],
     settle: true,
   });
-  const [promote] = useRecordActionMutation<ActionFieldName>(
-    "promote_task_to_project",
-    {
-      invalidateModels: [TASK_MODEL, PROJECT_MODEL],
-      linkTo: PROJECT_MODEL,
-      settle: true,
-    },
-  );
+  const [promoteTask] = useActionOutcomeMutation<ActionFieldName>("promote_task_to_project", {
+    invalidateModels: [TASK_MODEL, PROJECT_MODEL],
+  });
+  const settlePromotion = useActionResultRun({ linkTo: PROJECT_MODEL });
+  const promote = useRecordAction(async (id, context) => {
+    await settlePromotion(() => promoteTask(id, { expected_revision: context.record?.revision }));
+  });
   const [dropTask] = useActionOutcomeMutation<ActionFieldName>("drop_task", {
     invalidateModels: [TASK_MODEL],
   });
+  const [setVisibility] = useAuthoredResourceMutation(SetTaskVisibilityDocument, {
+    invalidateModels: [TASK_MODEL],
+    shouldInvalidate: (data) => data?.set_task_visibility.ok === true,
+  });
+  const visibilitySubmit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(
+    async (values, context) => {
+      const id = context.record?.id;
+      const value = canonicalOptionValue(visibilityOptions, values.visibility);
+      if (typeof id !== "string" || value === undefined) {
+        return { ok: false, message: t("task.action.failed") };
+      }
+      return extractActionOutcome(await setVisibility({
+        id,
+        visibility: value as DocumentVariables<typeof SetTaskVisibilityDocument>["visibility"],
+        expected_revision: typeof context.record?.revision === "number" ? context.record.revision : undefined,
+      }), "set_task_visibility");
+    },
+    [setVisibility, visibilityOptions, t],
+  );
   const dropSubmit = React.useCallback<
     NonNullable<ActionDescriptor["submit"]>
   >(
@@ -106,6 +130,8 @@ export function useTaskFormDeclaration(): React.ReactElement {
   return (
     <Form resource={TASK_MODEL} layout="tabs">
       <Field name="title" title />
+      <Field name="revision" readOnly hidden />
+      <Field name="visibility" options={visibilityOptions} createOnly />
       <Field name="status" widget="statusbar" options={statusOptions} createOnly />
       <Group label={t("task.group.placement")} columns={2}>
         <Field name="project" />
@@ -131,6 +157,13 @@ export function useTaskFormDeclaration(): React.ReactElement {
         <Field name="dropped_at" readOnly />
       </Group>
       <Field name="note" widget="markdown.editor" body />
+      <Action
+        id="visibility"
+        label={t("task.action.visibility")}
+        icon="eye"
+        args={[{ name: "visibility", label: t("common.visibility"), widget: "select", options: visibilityOptions }]}
+        submit={visibilitySubmit}
+      />
       <Action
         id="complete"
         label={t("task.action.complete")}
@@ -166,7 +199,6 @@ export function useTaskFormDeclaration(): React.ReactElement {
         label={t("task.action.promote")}
         icon="projects"
         run={promote}
-        visibleWhen={() => true}
       />
     </Form>
   );
