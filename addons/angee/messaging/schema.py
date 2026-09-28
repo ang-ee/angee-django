@@ -16,12 +16,13 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
 from rebac import PermissionDenied, current_actor
+from rebac.resources import model_resource_type
 from strawberry import auto
 
 from angee.base.identity import instance_from_public_id
@@ -1071,11 +1072,12 @@ class RecordErrorPayload:
     error_code: str | None = strawberry.field(name="error_code", default=None)
 
     @classmethod
-    def from_error(cls, error: PermissionDenied | ValueError, *, invalid_code: str) -> Self:
+    def from_error(cls, error: PermissionDenied | ValueError | ValidationError, *, invalid_code: str) -> Self:
         """Project one caught chatter error without changing its legacy envelope."""
 
         code = "PERMISSION_DENIED" if isinstance(error, PermissionDenied) else invalid_code
-        return cls(error=str(error), error_code=code)
+        message = " ".join(error.messages) if isinstance(error, ValidationError) else str(error)
+        return cls(error=message, error_code=code)
 
 
 @strawberry.type
@@ -1415,7 +1417,12 @@ class MessagingMutation:
         return cast(MessageType, message)
 
     @strawberry.mutation(name="post_record_message")
-    def post_record_message(self, info: strawberry.Info, input: RecordMessagePostInput) -> RecordMessagePostPayload:
+    def post_record_message(
+        self,
+        info: strawberry.Info,
+        input: RecordMessagePostInput,
+        client_creation_key: str | None = None,
+    ) -> RecordMessagePostPayload:
         """Post an internal comment to the record's chatter thread."""
 
         try:
@@ -1432,7 +1439,9 @@ class MessagingMutation:
             if kind == "note":
                 if recipient_user_ids or input.autofollow_recipients:
                     raise ValueError("Internal notes cannot target recipients.")
-                message = cast(Any, record).message_log(input.body, attachments=attachments, parent=parent)
+                message = cast(Any, record).message_log(
+                    input.body, attachments=attachments, parent=parent, client_creation_key=client_creation_key
+                )
             else:
                 message = cast(Any, record).message_post(
                     input.body,
@@ -1440,8 +1449,9 @@ class MessagingMutation:
                     recipient_user_ids=recipient_user_ids,
                     autofollow_recipients=input.autofollow_recipients,
                     parent=parent,
+                    client_creation_key=client_creation_key,
                 )
-        except (PermissionDenied, ValueError) as error:
+        except (PermissionDenied, ValueError, ValidationError) as error:
             return RecordMessagePostPayload.from_error(error, invalid_code="BAD_MESSAGE")
         payload = _record_thread_payload(record, info, role=input.role)
         return RecordMessagePostPayload.from_thread_state(
@@ -1791,7 +1801,7 @@ class _InboxWriteBackend(AngeeHasuraWriteBackend):
     The read side scopes ``threads``/``messages`` to ``.inbox()`` through
     ``get_queryset``; the write side must match, or a creator who lost record access
     could still reach a record-attached row through ``update_<res>_by_pk`` /
-    ``delete_<res>_by_pk`` (its own ``owner``/``admin`` permission would allow it).
+    ``delete_<res>_by_pk`` through the thread's ownership or channel access.
     Narrowing the write-target queryset to ``.inbox()`` makes the by-pk lookup miss
     a record-attached row, so the generic mutation reports it as not found while the
     inbox rows keep their update/delete surfaces. The ``.inbox()`` verb resolves
@@ -2222,13 +2232,13 @@ def _record_message_access_cache(info: strawberry.Info | None) -> dict[Any, tupl
 def _record_message_access(record: ThreadedModelMixin, user: Any) -> tuple[bool, bool]:
     """Compose record predicates with the shared permission evaluator."""
 
-    def permission_check(name: str) -> bool:
-        return name in held_permissions(record, (name,))
+    if user is not None and not user.is_authenticated:
+        return False, False
+    if not model_resource_type(record):
+        return record.can_post(user), record.can_moderate(user)
+    permissions = held_permissions(record, (record.thread_post_access, "write"))
+    return record.thread_post_access in permissions, "write" in permissions
 
-    return (
-        record.can_post(user, permission_check=permission_check),
-        record.can_moderate(user, permission_check=permission_check),
-    )
 
 
 def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any]:

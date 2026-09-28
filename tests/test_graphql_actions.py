@@ -23,6 +23,7 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
+from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import (
@@ -66,8 +67,7 @@ def test_action_guard_maps_baseline_domain_errors(caplog: pytest.LogCaptureFixtu
     assert validation.ok is False
     assert validation.message == "Could not register the review."
     assert validation.validation_errors == {"amount": ["Exceeds the limit."]}
-    assert "GraphQL action register failed" in caplog.messages
-    assert caplog.records[-1].exc_info is not None
+    assert not caplog.records
 
     transition = register("transition")
     assert transition.ok is False
@@ -124,9 +124,24 @@ def test_action_guard_preserves_typed_wire_errors(
 
     assert result.errors is not None
     assert result.errors[0].message == code
-    assert result.errors[0].extensions == {"code": code}
+    expected = {"code": code}
+    if isinstance(error, StaleRevisionError):
+        expected["current_revision"] = error.current
+    assert result.errors[0].extensions == expected
     assert result.errors[0].original_error is None
     assert str(error) not in caplog.text
+    assert not caplog.records
+
+
+def test_action_guard_keeps_dual_typed_validation_refusals_in_band(caplog: pytest.LogCaptureFixture) -> None:
+    @action_guard("Access change refused.")
+    def update_access() -> ActionResult:
+        raise RecordAccessSubjectRefused()
+
+    result = update_access()
+    assert not result.ok
+    assert result.message == "Access change refused."
+    assert not caplog.records
 
 
 def test_action_result_carries_in_band_validation_errors() -> None:

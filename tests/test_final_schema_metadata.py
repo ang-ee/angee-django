@@ -1,6 +1,6 @@
 from graphql import build_schema
 
-from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
+from angee.data.metadata import DataMutationArgument, DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.final_schema import final_schema_references
 from angee.graphql.data.metadata import _finalize_data_resource
 
@@ -83,7 +83,7 @@ def test_final_schema_references_intersect_roots_types_and_capabilities() -> Non
         type_names=type_names,
         capabilities=capabilities,
     )
-    assert metadata.create_arguments == ("client_creation_key", "reason")
+    assert metadata.create_arguments == ()
     assert metadata.update_arguments == metadata.save_arguments == ()
 
 
@@ -127,7 +127,10 @@ def test_mutation_argument_metadata_uses_final_exposed_root_arguments() -> None:
         ),
         type_names=DataResourceTypeNames(node="ResourceNode"),
         capabilities=("create", "update", "save"),
+        create_argument_names=("client_creation_key", "removed_argument"),
+        update_argument_names=("expected_revision",),
+        save_argument_names=("expected_revision",),
     )
 
-    assert metadata.create_arguments == ("client_creation_key",)
-    assert metadata.update_arguments == metadata.save_arguments == ("expected_revision",)
+    assert metadata.create_arguments == (DataMutationArgument("client_creation_key", "String"),)
+    assert metadata.update_arguments == metadata.save_arguments == (DataMutationArgument("expected_revision", "Int"),)

@@ -28,6 +28,7 @@ from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
 from angee.base.errors import DomainError
+from angee.base.mixins import StaleRevisionError
 from angee.data.metadata import DataResourceMetadata, serialize_data_resources
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -55,9 +56,6 @@ _EXPECTED_ERROR_CODES = frozenset(
         "UNAUTHENTICATED",
         "PERMISSION_DENIED",
         "FORBIDDEN",
-        "VIEW_AS_READ_ONLY",
-        "STALE_REVISION",
-        "CREATION_KEY_CONFLICT",
     }
 )
 
@@ -103,6 +101,7 @@ class AngeeSchema(strawberry.Schema):
 
         errors_to_log: list[GraphQLError] = []
         for error in errors:
+            refusal = isinstance(error.original_error, DomainError)
             if error.path is None and isinstance(error.original_error, GraphQLError):
                 # graphql-core's request coercion errors echo submitted values.
                 # Preserve them for the client without passing them to logging.
@@ -111,7 +110,8 @@ class AngeeSchema(strawberry.Schema):
             self._apply_rebac_code(error)
             self._apply_validation_error(error)
             self._sanitize_unexpected_error(error)
-            errors_to_log.append(error)
+            if not refusal:
+                errors_to_log.append(error)
         super().process_errors(errors_to_log, execution_context)
 
     @staticmethod
@@ -124,6 +124,8 @@ class AngeeSchema(strawberry.Schema):
         if isinstance(original, DomainError):
             error.message = original.code
             error.extensions = {"code": original.code}
+            if isinstance(original, StaleRevisionError):
+                error.extensions["current_revision"] = original.current
             error.original_error = None
             return
         if _unwrap_validation_error(original) is not None:

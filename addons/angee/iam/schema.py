@@ -112,6 +112,13 @@ class UserType(AngeeNode):
     is_staff: auto
     is_active: auto
 
+    @strawberry_django.field(only=["kind", "is_active", "is_staff", "is_superuser", "password"])
+    def can_issue_password(self) -> bool:
+        """Whether the viewer may issue this account's first password."""
+
+        user = cast(Any, self)
+        return bool(user.has_access("issue_password") and user.password_issue_error() is None)
+
     @strawberry_django.field
     def assignment_subject(self) -> str:
         """Public subject used by workflow and approval assignment inputs."""

@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+import strawberry
 from django.apps import apps
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth.hashers import PBKDF2PasswordHasher
@@ -25,6 +27,8 @@ from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
+from rebac.middleware import ActorMiddleware
+from strawberry.django.views import GraphQLView
 
 from angee.base.identity import (
     instance_from_public_id,
@@ -36,6 +40,8 @@ from angee.data.field_classification import resource_field_kind, resource_field_
 from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.events import ChangePayload
+from angee.graphql.schema import AngeeSchema
+from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -871,8 +877,8 @@ def test_user_crud_create_update_delete_are_admin_only(
         "is_active": True,
         "full_name": "Console User",
     }
-    # ``password`` is write-only: it is neither a field on ``UserType`` nor in its SDL.
-    assert "password" not in _sdl_block(console_schema.as_str(), "type UserType")
+    # ``password`` is write-only: it is not a field on ``UserType``.
+    assert console_schema.get_field_for_type("password", "UserType") is None
     with system_context(reason="test.iam.user_crud.create"):
         user = User.objects.get(username="console-user")
         # Requires strawberry-django-hasura >= 0.12.1 input-extension forwarding.
@@ -1832,6 +1838,57 @@ def test_discover_oauth_endpoints_is_admin_gated_and_validates_discovery_url(
     result = _data(_execute(console_schema, discover, {"id": oauth_client_id}, user=admin))["discover_oauth_endpoints"]
     assert result["ok"] is False
     assert "discovery url" in result["message"].lower()
+
+
+def test_view_as_target_has_no_pinned_admitting_actor(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real endpoint through ActorMiddleware binds only the target authority."""
+
+    admin = _platform_admin("preview-admitting-admin")
+    target = User.objects.create_user(username="preview-target", email="preview-target@example.com")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def target_authority(self, info: strawberry.Info) -> bool:
+            active = info.context.request
+            assert active.user.pk == target.pk
+            assert active.user is active.view_as.target
+            assert active.user.actor() is None
+            assert not active.user.is_sudo()
+            assert active.user.effective_actor() == (to_subject_ref(target), False)
+            return active.user.has_access("write")
+
+    view = GraphQLView.as_view(schema=AngeeSchema(query=Query))
+    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    request = RequestFactory().post(
+        "/graphql/public/", data={"query": "{ targetAuthority }"},
+        content_type="application/json", HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
+    )
+    request.user = admin
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+    assert json.loads(response.content) == {"data": {"targetAuthority": False}}
+    assert request.user is admin
+    assert not hasattr(request, "view_as")
+
+
+def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    admin = _platform_admin("preview-denied-admin")
+    monkeypatch.setattr(User._default_manager, "admit_view_as", None)
+    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: None)
+    request = RequestFactory().post(
+        "/graphql/public/", data={"query": "query Preview { __typename }", "operationName": "Preview"},
+        content_type="application/json", HTTP_X_ANGEE_VIEW_AS="unknown-public-id",
+    )
+    request.user = admin
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+    assert response.status_code == 403
+    message = next(record for record in caplog.records if "view-as denied" in record.message)
+    assert message.levelname == "WARNING"
+    assert all(value in message.message for value in (_user_public_id(admin), "unknown-public-id", "public", "Preview"))
 
 
 def _schema(name: str) -> Any:

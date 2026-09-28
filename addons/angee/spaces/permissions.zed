@@ -1,14 +1,10 @@
 // Authorization schema for the spaces addon.
 // @rebac_package: spaces
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 7
 
 definition spaces/group {
-    relation creator: auth/user // rebac:field=created_by
-    relation owner: auth/user
-    relation moderator: auth/user
-    relation member: auth/user | auth/group#member
-    relation viewer: auth/user | auth/group#member
+    relation owner: auth/user // rebac:field=owner
     relation roster_owner: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"owner"}}
     relation roster_moderator: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"moderator"}}
     relation roster_member: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"member"}}
@@ -17,18 +13,27 @@ definition spaces/group {
     relation admin: angee/role // rebac:const=admin
 
     permission create = authenticated
-    permission read   = creator + viewer + roster_viewer + member + roster_member + moderator + roster_moderator + owner + roster_owner + reader + admin->member
-    permission post   = member + roster_member + moderator + roster_moderator + owner + roster_owner + admin->member
-    permission write  = creator + moderator + roster_moderator + owner + roster_owner + admin->member
-    permission delete = creator + owner + roster_owner + admin->member
+    permission read   = owner + roster_viewer + roster_member + roster_moderator + roster_owner + reader + admin->member
+    permission post   = owner + roster_member + roster_moderator + roster_owner + admin->member
+    permission write  = owner + roster_moderator + roster_owner + admin->member
+    permission delete = owner + roster_owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
+    permission manage_roster = owner + roster_owner + admin->member
 }
 
 definition spaces/membership {
     relation group: spaces/group // rebac:field=group
+    relation member_of: spaces/group // rebac:field={"path":"group","filters":{"role":"member"}}
+    relation viewer_of: spaces/group // rebac:field={"path":"group","filters":{"role":"viewer"}}
+    relation holder: auth/user // rebac:field={"path":"party__person__user","filters":{"is_confirmed":true,"is_dismissed":false}}
     relation admin: angee/role // rebac:const=admin
 
-    permission create = authenticated
+    permission create = group->manage_roster + member_of->write + viewer_of->write + admin->member
     permission read   = group->read + admin->member
-    permission write  = group->write + admin->member
-    permission delete = group->delete + admin->member
+    permission write  = group->manage_roster + member_of->write + viewer_of->write + admin->member
+    permission delete = group->manage_roster + member_of->write + viewer_of->write + admin->member
+    permission write__role = group->manage_roster + admin->member
+    permission write__group = admin->member
+    permission set_notifications = holder
 }

@@ -1,6 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, errorMessage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants } from "@angee/ui";
+import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, createClientKey, errorMessage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants } from "@angee/ui";
 import {
   useStorageUpload,
   type UploadedFile,
@@ -144,6 +144,7 @@ export function RecordThreadConversation({
   const [replyToMessage, setReplyToMessage] = React.useState<RecordMessageRow | null>(null);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const postAttempt = React.useRef<{ intent: string; clientCreationKey: string } | null>(null);
 
   const threadPayload = threadQuery.data?.record_thread;
   const recipientOptions = React.useMemo(
@@ -267,7 +268,7 @@ export function RecordThreadConversation({
     async (args: PostArgs): Promise<boolean> => {
       setError(null);
       try {
-        await postMessage({
+        const input = {
           modelLabel,
           recordId,
           body: args.body,
@@ -277,7 +278,15 @@ export function RecordThreadConversation({
           recipientUserIds: postKind === "comment" ? [...args.recipientUserIds] : [],
           autofollowRecipients:
             postKind === "comment" && args.recipientUserIds.length > 0 && args.autofollowRecipients,
-        });
+        };
+        // Retain identity after a failed response; an edited submission starts a new request.
+        const intent = JSON.stringify(input);
+        if (postAttempt.current?.intent !== intent) {
+          postAttempt.current = { intent, clientCreationKey: createClientKey("message") };
+        }
+        const attempt = postAttempt.current;
+        await postMessage({ ...input, clientCreationKey: attempt.clientCreationKey });
+        if (postAttempt.current === attempt) postAttempt.current = null;
         setReplyToMessage(null);
         return true;
       } catch (cause) {

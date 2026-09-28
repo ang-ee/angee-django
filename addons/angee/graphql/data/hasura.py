@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import inspect
 import json
 import types as _types
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
-from typing import Any, cast
+from typing import Any
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db import IntegrityError, models, transaction
+from django.db import models, transaction
 from django.db.models.expressions import Combinable
 from rebac import PermissionDenied, current_actor, system_context
 from rebac.resources import model_resource_type
@@ -39,7 +38,6 @@ from strawberry_django_hasura import (
     hasura_resource as build_hasura_resource,
 )
 
-from angee.base.actors import actor_user_id
 from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
@@ -201,59 +199,38 @@ class AngeeHasuraWriteBackend:
         with transaction.atomic():
             data = dict(data)
             line_rows = self._pop_line_rows(data) if self.lines is not None else None
-            replay_rows = None
-            scope = None
-            fingerprint = ""
-            if client_creation_key is not None:
-                if not issubclass(self.model, CreationKeyMixin):
-                    raise ImproperlyConfigured(f"{self.model._meta.label} does not compose CreationKeyMixin.")
-                scope = actor_user_id(current_actor())
-                if scope is None:
-                    raise ValidationError({"client_creation_key": "A creation key requires a user actor."})
-                scope_field = self.model._meta.get_field(self.model.creation_key_scope)
-                decoded = self._decode_public_id_fields(data)
-                supplied_scope = decoded.get(scope_field.attname, decoded.get(scope_field.name, scope))
-                supplied_scope = supplied_scope.pk if isinstance(supplied_scope, models.Model) else supplied_scope
-                if supplied_scope != scope:
-                    raise ValidationError({"client_creation_key": "The creation scope must be the current actor."})
-                fingerprint = hashlib.sha256(
-                    json.dumps(
-                        {
-                            "object": decoded,
-                            "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None,
-                        },
-                        cls=_CreationFingerprintEncoder,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode()
-                ).hexdigest()
-                replay_rows = read_scoped_queryset(self.model, current_actor())
-                if replay_rows is None:
-                    raise ImproperlyConfigured("Creation-key resources require an actor-scoped queryset.")
-                existing = replay_rows.for_creation_key(scope, client_creation_key, fingerprint)
-                if existing is not None:
-                    return existing
-                data.update(
-                    {
-                        scope_field.attname: scope,
-                        "client_creation_key": client_creation_key,
-                        "creation_fingerprint": fingerprint,
-                    }
-                )
-            try:
-                with transaction.atomic():
-                    instance = self._create_row(info, data)
-                    if line_rows is not None:
-                        self._apply_line_diff(info, instance, line_rows)
-            except IntegrityError, ValidationError:
-                # Django's constraint validation can observe a winner before INSERT.
-                # Both paths retry only through the same readable replay scope.
-                if replay_rows is not None:
-                    existing = replay_rows.for_creation_key(scope, client_creation_key, fingerprint)
-                    if existing is not None:
-                        return existing
-                raise
+
+            def insert() -> Any:
+                instance = self._create_row(info, data)
+                if line_rows is not None:
+                    self._apply_line_diff(info, instance, line_rows)
+                return instance
+
+            if client_creation_key is None:
+                return insert()
+            if not issubclass(self.model, CreationKeyMixin):
+                raise ValidationError({"client_creation_key": "This resource does not support creation keys."})
+            decoded = self._decode_public_id_fields(data)
+            scope = self.model.creation_key_actor_scope(current_actor(), decoded)
+            fingerprint = self._creation_fingerprint(decoded, line_rows)
+            scope_field = self.model._meta.get_field(self.model.creation_key_scope)
+            data.update({
+                scope_field.attname: scope,
+                "client_creation_key": client_creation_key,
+                "creation_fingerprint": fingerprint,
+            })
+            replays = read_scoped_queryset(self.model, current_actor())
+            if replays is None:
+                raise ImproperlyConfigured("Creation-key resources require an actor-scoped queryset.")
+            instance, _created = replays.replay_or_insert(scope, client_creation_key, fingerprint, insert)
             return instance
+
+    def _creation_fingerprint(self, data: dict[str, Any], line_rows: list[dict[str, Any]] | None) -> str:
+        """Fingerprint decoded write inputs, including the declared line envelope."""
+
+        content = {"object": data, "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None}
+        encoded = json.dumps(content, cls=_CreationFingerprintEncoder, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode()).hexdigest()
 
     def save(
         self,
@@ -640,6 +617,38 @@ def _aggregate_queryset(
     return get_aggregate_queryset
 
 
+def _relation_scalar_queryset(
+    model: type[models.Model],
+    source: Callable[[strawberry.Info], models.QuerySet[Any]],
+    paths: Iterable[str],
+) -> Callable[[strawberry.Info], models.QuerySet[Any]]:
+    """Make relation-path filters and ordering see the same redacted SQL values."""
+
+    scalar_paths = []
+    for path in sorted(set(paths)):
+        if "__" not in path or "." in path:
+            continue
+        try:
+            field = require_field_for_path(model, path)
+        except FieldPathError:
+            continue
+        if not field.is_relation:
+            scalar_paths.append(path)
+    if not scalar_paths:
+        return source
+
+    def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+        queryset = source(info)
+        expressions = {
+            path: expression
+            for path in scalar_paths
+            if (expression := actor_scoped_relation_group_expression(queryset, path)) is not None
+        }
+        return queryset.alias(**expressions) if expressions else queryset
+
+    return get_queryset
+
+
 def _group_by_expression_provider(
     info: strawberry.Info,
     queryset: models.QuerySet[Any],
@@ -703,15 +712,23 @@ def _public_pk(model: type[models.Model], value: Any) -> Any:
 
 
 def _relation_filter_pk(model: type[models.Model], value: Any, *, decoder: Callable[[Any], Any] | None = None) -> Any:
-    """Give unknown and unreadable filter targets the same identity failure."""
+    """Resolve readable operands, with identical NULL semantics for hidden/unknown ids."""
 
     queryset = None
     if model_resource_type(model):
         queryset = read_scoped_queryset(model, current_actor())
         if queryset is None:
             queryset = model._default_manager.none()
-    instance = _public_instance(model, value, queryset=queryset)
-    return decoder(value) if decoder is not None else None if instance is None else instance.pk
+    if value in (None, ""):
+        return None
+    instance = instance_from_public_id(
+        model, str(value), queryset=queryset if queryset is not None else system_queryset(model),
+    )
+    if instance is None:
+        # Django omits NULL operands from IN lists. Scalar comparisons retain
+        # the same NULL semantics for unknown and unreadable identities.
+        return None
+    return decoder(value) if decoder is not None else instance.pk
 
 
 def _write_public_instance(model: type[models.Model], value: Any) -> Any:
@@ -737,7 +754,7 @@ def _public_instance(
         queryset=active_queryset,
     )
     if instance is None:
-        raise ValueError(f"{model._meta.object_name} {value!r} was not found")
+        raise ValidationError("The requested record was not found.", code="not_found")
     return instance
 
 
@@ -836,7 +853,17 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         )
 
     resource_name = name or model.__name__.lower()
-    read_queryset = get_queryset or _model_queryset(model)
+    relation_paths = (
+        *filterable,
+        *sortable,
+        *(alias.path if isinstance(alias, SortAlias) else alias for alias in (sortable_aliases or {}).values()),
+    )
+    read_queryset = _relation_scalar_queryset(model, get_queryset or _model_queryset(model), relation_paths)
+    aggregate_source = (
+        _relation_scalar_queryset(model, get_aggregate_queryset, relation_paths)
+        if get_aggregate_queryset is not None
+        else _aggregate_queryset(read_queryset)
+    )
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
     active_write_backend = write_backend or AngeeHasuraWriteBackend(model, lines=lines)
@@ -897,7 +924,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         else None,
         field_id_decode=field_id_decode,
         get_queryset=read_queryset,
-        get_aggregate_queryset=get_aggregate_queryset or _aggregate_queryset(read_queryset),
+        get_aggregate_queryset=aggregate_source,
         write_backend=active_write_backend,
         id_decode=id_decode,
         id_column=id_column,
@@ -1036,38 +1063,35 @@ def _attach_lines_save(
         )
     save_root = f"{res}_save"
 
-    def resolve_save(
-        self: Any,
-        info: strawberry.Info,
-        pk: PublicID,
-        patch: Any = None,
-        lines: Any = None,
-        expected_revision: int | None = None,
-    ) -> Any:
+    revisioned = issubclass(django_model(node), OptimisticLockMixin)
+
+    def save(info: strawberry.Info, pk: PublicID, patch: Any, lines: Any, **kwargs: Any) -> Any:
         patch_data = input_to_dict(patch) if patch is not None else {}
         rows = None if lines is None else [input_to_dict(row) for row in lines]
-        kwargs = {"expected_revision": expected_revision} if issubclass(django_model(node), OptimisticLockMixin) else {}
         return write_backend.save(info, str(pk), patch_data, rows, **kwargs)
 
-    annotations: dict[str, Any] = {"self": Any, "info": strawberry.Info, "pk": PublicID}
-    annotations["patch"] = patch_type | None
-    annotations["lines"] = _types.GenericAlias(list, (line_input,)) | None
-    annotations["return"] = node
-    annotations["expected_revision"] = int | None
-    resolve_save.__annotations__ = annotations
+    def resolve_save(self: Any, info: strawberry.Info, pk: PublicID, patch: Any = None, lines: Any = None) -> Any:
+        return save(info, pk, patch, lines)
 
-    # Reuse Strawberry's native signature to expose the optional root argument
-    # only on models that own a revision.
-    if not issubclass(django_model(node), OptimisticLockMixin):
-        signature = inspect.signature(resolve_save)
-        parameters = [p for p in signature.parameters.values() if p.name != "expected_revision"]
-        cast(Any, resolve_save).__signature__ = signature.replace(parameters=parameters)
+    def resolve_revisioned_save(
+        self: Any, info: strawberry.Info, pk: PublicID, patch: Any = None, lines: Any = None,
+        expected_revision: int | None = None,
+    ) -> Any:
+        return save(info, pk, patch, lines, expected_revision=expected_revision)
+
+    resolver = resolve_revisioned_save if revisioned else resolve_save
+    resolver.__annotations__.update({
+        "self": Any, "info": strawberry.Info, "pk": PublicID,
+        "patch": patch_type | None, "lines": _types.GenericAlias(list, (line_input,)) | None, "return": node,
+    })
+    if revisioned:
+        resolver.__annotations__["expected_revision"] = int | None
 
     save_holder = strawberry.type(
         type(
             f"{res}__save_mutation",
             (),
-            {save_root: strawberry.mutation(resolver=resolve_save, name=save_root)},
+            {save_root: strawberry.mutation(resolver=resolver, name=save_root)},
         )
     )
     combined_mutation = strawberry.type(type(f"{res}__mutation", (resource.mutation, save_holder), {}))
@@ -1124,6 +1148,7 @@ def attach_hasura_resource_metadata(
             record_representation=record_representation,
             record_search_fields=record_search_fields,
             lines_declaration=lines,
+            save_argument_names=("expected_revision",) if lines is not None else (),
         ),
     )
     attach_data_resource_contribution(resource.query, contribution)

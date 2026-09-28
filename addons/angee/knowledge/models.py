@@ -12,6 +12,7 @@ values and their own sidecar model with a one-to-one to
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -19,7 +20,6 @@ from graphlib import CycleError, TopologicalSorter
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
-from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -41,8 +41,16 @@ from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.mixins import (
+    AuditMixin,
+    CreationKeyMixin,
+    CreationKeyQuerySet,
+    HistoryMixin,
+    OwnerMixin,
+    RevisionMixin,
+    SqidMixin,
+)
+from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet
 from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target
 from angee.knowledge.retrieval import RetrievalBackend
 
@@ -91,7 +99,11 @@ def parse_wikilinks(body: str) -> dict[str, str]:
     return found
 
 
-class VaultManager(AngeeManager):
+class VaultQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
+    """Actor-scoped vault reads with caller-scoped creation replay."""
+
+
+class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[misc]
     """Factories for actor-owned vault writes."""
 
     def create_for(self, owner: Any, **fields: Any) -> Any:
@@ -106,21 +118,40 @@ class VaultManager(AngeeManager):
             raise PermissionDenied(f"Denied: {actor} cannot create a vault owned by {owner!r}")
         return self._create_for_actor(actor, **fields)
 
-    def create_from(self, template: Vault, *, name: str) -> Vault:
+    def create_from(
+        self,
+        template: Vault,
+        *,
+        name: str,
+        owned: bool = True,
+        client_creation_key: str | None = None,
+    ) -> Vault:
         """Clone a readable vault's page tree and markdown bodies for the actor.
 
-        Requires vault create and template read. New identities and attribution
+        Requires vault create and, for a new clone, template read. New identities and attribution
         belong to the actor; grants and record bindings are never copied. Unknown
         sidecar kinds are refused rather than copied without their content.
-        Ownerless cloning (``owned=False``) and ``client_creation_key`` replay
-        arrive with the nullable-owner contract in step 7.
+        ``owned=False`` inserts the clone without an owner. A replay
+        key belongs to the creating actor, even after ownership is transferred or
+        cleared; changing template, name or ownership intent conflicts. Template
+        edits, loss of access or deletion do not change an already completed clone.
         """
 
         actor = self.check_create()
-        page_model = apps.get_model("knowledge", "Page")
-        markdown_model = apps.get_model("knowledge", "MarkdownPage")
-        with transaction.atomic():
+        user_id = actor_user_id(actor)
+        if user_id is None:
+            raise PermissionDenied("Cloning a vault requires a user actor.")
+        if client_creation_key == "":
+            raise ValidationError({"client_creation_key": "A client creation key must not be empty."})
+        fingerprint = hashlib.sha256(json.dumps([template.pk, name, owned]).encode()).hexdigest()
+        # A successful ownerless clone is not necessarily readable by its caller.
+        # Resolve only this actor's creation receipt, then rebind the returned row.
+        replays = self.system_context(reason="knowledge.vault.clone.replay")
+
+        def insert() -> Vault:
             source = self.with_actor(actor).get(pk=template.pk)
+            page_model = apps.get_model("knowledge", "Page")
+            markdown_model = apps.get_model("knowledge", "MarkdownPage")
             pages = {
                 page.pk: page
                 for page in page_model._default_manager.with_actor(actor).filter(vault=source).order_by("pk")
@@ -131,44 +162,60 @@ class VaultManager(AngeeManager):
             bodies = list(markdown_model._default_manager.with_actor(actor).filter(page__vault=source))
             vault = self._create_for_actor(
                 actor,
+                owned=owned,
                 name=name,
                 description=source.description,
                 icon=source.icon,
                 accent=source.accent,
                 retrieval_class=source.retrieval_class,
+                client_creation_key=client_creation_key,
+                creation_fingerprint=fingerprint,
             )
-            copies = page_model._default_manager._copy_tree_in(vault, pages)
+            copies = page_model._default_manager._copy_tree_in(vault, pages, actor=actor)
             markdown_model._default_manager._copy_bodies(bodies, copies, actor=actor)
-            return vault
+            return cast(Vault, vault)
 
-    def _create_for_actor(self, actor: SubjectRef, **fields: Any) -> Any:
-        """Persist an owned vault after its caller's create preflight."""
+        vault, _created = replays.replay_or_insert(user_id, client_creation_key, fingerprint, insert)
+        return cast(Vault, vault.with_actor(actor))
+
+    def _create_for_actor(self, actor: SubjectRef, *, owned: bool = True, **fields: Any) -> Any:
+        """Persist a vault after its caller's create preflight."""
 
         owner_id = actor_user_id(actor)
         if owner_id is None:
             raise PermissionDenied("An actor-owned vault requires a user actor.")
-        vault = self.model(owner_id=owner_id, **fields)
+        vault = self.model(
+            owner_id=owner_id if owned else None,
+            created_by_id=owner_id,
+            updated_by_id=owner_id,
+            **fields,
+        )
         vault.full_clean()
-        vault.sudo(reason="knowledge.vault.create").save()
+        if owned:
+            vault.sudo(reason="knowledge.vault.create").save()
+        else:
+            # Native bulk insertion bypasses OwnerMixin's insert default. As for
+            # the cloned pages, explicit audit stamps and the save notification
+            # retain history without assigning a temporary owner.
+            self.sudo(reason="knowledge.vault.clone").bulk_create([vault])
+            post_save.send(
+                sender=self.model, instance=vault, created=True, raw=False, using=self.db, update_fields=None,
+            )
         return vault.with_actor(actor)
 
 
-class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
+class Vault(SqidMixin, OwnerMixin, CreationKeyMixin, AngeeModel, HistoryMixin):
     """Top-level page container; the permission and namespace boundary.
 
     Deleting a vault cascade-deletes every page inside it; the crud delete
-    mutation previews that blast radius before confirming. ``owner`` is
-    protected so deleting a user account never silently wipes their vaults.
+    mutation previews that blast radius before confirming. Ownership can be
+    transferred or cleared without changing attribution; deleting a user clears
+    ownership and retains their vaults.
     """
 
     runtime = True
 
     sqid_prefix = "vlt_"
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="owned_vaults",
-    )
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
     icon = models.CharField(max_length=64, blank=True, default="")
@@ -188,7 +235,10 @@ class Vault(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         abstract = True
         ordering = ("name", "sqid")
         rebac_resource_type = "knowledge/vault"
-        constraints = (models.UniqueConstraint(fields=("owner", "name"), name="uniq_knowledge_vault_owner_name"),)
+        constraints = (
+            models.UniqueConstraint(fields=("owner", "name"), name="uniq_knowledge_vault_owner_name"),
+            CreationKeyMixin.creation_key_constraint(),
+        )
 
     def __str__(self) -> str:
         """Return the vault name for Django displays."""
@@ -245,8 +295,10 @@ class PageManager(AngeeManager):
         page.sudo(reason="knowledge.page.create").save()
         return page.with_actor(actor)
 
-    def _copy_tree_in(self, vault: Vault, pages: Mapping[Any, Page]) -> dict[Any, Page]:
-        """Copy template pages after one destination-vault create preflight.
+    def _copy_tree_in(
+        self, vault: Vault, pages: Mapping[Any, Page], *, actor: SubjectRef,
+    ) -> dict[Any, Page]:
+        """Copy template pages within the authorized vault-cloning transaction.
 
         The clone owner supplies actor-readable source pages. Their unchanged
         scalar values retain source validation; tree edges are checked here and
@@ -254,7 +306,6 @@ class PageManager(AngeeManager):
         history and other subscribers after each level's bulk insert.
         """
 
-        actor = self.check_create({"vault": (vault,)})
         user_id = actor_user_id(actor)
         for page in pages.values():
             if page.parent_id is not None and page.parent_id not in pages:
@@ -352,11 +403,9 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
 class RecordBindingManager(AngeeManager):
     """Own polymorphic knowledge-to-record binding writes and reverse reads.
 
-    Django/Zed cannot field-back a relation through ``GenericForeignKey``. The
-    model's own Zed definition is therefore deliberately fail-closed; these
-    authored methods are the only read/write surface and gate every operation on
-    the target's canonical REBAC identity. Returned querysets are exact-filtered
-    system querysets, never a general bypass.
+    Record owners contribute two-ended read permissions through reverse generic
+    relations. Both read directions use that same REBAC scope; writes separately
+    require permission on the knowledge owner and canonical target.
     """
 
     DEFAULT_ROLE = "related"
@@ -439,11 +488,10 @@ class RecordBindingManager(AngeeManager):
     def teardown_for_record(self, record: models.Model) -> None:
         """Delete every binding to ``record`` before the target row disappears.
 
-        Canonical targets have no reverse ``GenericRelation`` because knowledge can
-        bind any current or future REBAC model. The global knowledge-owned
+        Targets may omit a reverse ``GenericRelation``. The global knowledge-owned
         ``pre_delete`` receiver therefore delegates here so primary-key reuse cannot
         make an old binding resolve to a new row. Deleting the bindings normally keeps
-        their ``post_delete`` change publisher and target read anchor intact.
+        their normal ``post_delete`` lifecycle intact.
         """
 
         if record.pk is None:
@@ -461,12 +509,10 @@ class RecordBindingManager(AngeeManager):
             bindings.delete()
 
     def for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
-        """Return bindings on one actor-readable canonical record."""
+        """Return actor-readable bindings on one canonical record."""
 
         canonical = canonical_record_target(self._saved(record, "record"))
-        if not self._target_has_access(canonical, "read"):
-            return self.system_context(reason="knowledge.record_binding.for_record.denied").none()
-        queryset = self.system_context(reason="knowledge.record_binding.for_record").filter(
+        queryset = self.get_queryset().filter(
             content_type=canonical.content_type, object_id=canonical.object_id
         )
         return queryset if role is None else queryset.filter(role=self._role(role))
@@ -490,27 +536,8 @@ class RecordBindingManager(AngeeManager):
         """Return bindings from one readable page/vault to actor-readable targets."""
 
         knowledge, owner_field = self._knowledge_owner_instance(knowledge)
-        self._require_access(knowledge, "read", "Read access to the knowledge owner is required.")
-        actor = self._actor()
-        candidates = self.system_context(reason="knowledge.record_binding.for_knowledge.candidates").filter(
-            **{owner_field: knowledge}
-        )
-        if role is not None:
-            candidates = candidates.filter(role=self._role(role))
-        pairs = list(candidates.values_list("content_type_id", "object_id"))
-        allowed = models.Q(pk__in=())
-        content_types = ContentType.objects.in_bulk({content_type_id for content_type_id, _ in pairs})
-        for content_type_id, object_ids in _object_ids_by_content_type(pairs).items():
-            content_type = content_types.get(content_type_id)
-            model = None if content_type is None else content_type.model_class()
-            if model is None or model_resource_type(model) is None:
-                continue
-            readable_ids = list(
-                model._default_manager.with_actor(actor).filter(pk__in=object_ids).values_list("pk", flat=True)
-            )
-            if readable_ids:
-                allowed |= models.Q(content_type_id=content_type_id, object_id__in=readable_ids)
-        return candidates.filter(allowed)
+        queryset = self.get_queryset().filter(**{owner_field: knowledge})
+        return queryset if role is None else queryset.filter(role=self._role(role))
 
     def records_for_page(self, page: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
         """Return public refs for actor-readable records bound from ``page``."""
@@ -578,20 +605,16 @@ class RecordBindingManager(AngeeManager):
             raise PermissionDenied(message)
 
     @classmethod
-    def _target_has_access(cls, canonical: Any, action: str) -> bool:
-        return (
-            rebac_backend()
+    def _require_target_access(cls, canonical: Any, action: str, message: str) -> None:
+        if (
+            not rebac_backend()
             .check_access(
                 subject=cls._actor(),
                 action=action,
                 resource=_canonical_object_ref(canonical.content_type, canonical.object_id),
             )
             .allowed
-        )
-
-    @classmethod
-    def _require_target_access(cls, canonical: Any, action: str, message: str) -> None:
-        if not cls._target_has_access(canonical, action):
+        ):
             raise PermissionDenied(message)
 
 
@@ -599,9 +622,9 @@ class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     """Role-keyed edge from a knowledge Page/Vault to any REBAC record.
 
     The target is canonicalized to its topmost REBAC-typed MTI ancestor. The
-    edge never grants access to either side: authored reads ride target ``read``
-    while a returned page/vault id must still be resolved through that knowledge
-    row's own REBAC policy before content is available.
+    edge grants access to neither side. Its REBAC read permission requires both
+    the knowledge row and target to be readable. A target whose owner contributes
+    no permission arm has unreadable bindings, including for administrators.
     """
 
     runtime = True
@@ -663,12 +686,6 @@ class RecordBinding(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
         content_type = cast(ContentType, self.content_type)
         _canonical_object_ref(content_type, self.object_id)
 
-    def change_read_resource(self) -> ObjectRef:
-        """Gate binding changes on the canonical target's read permission."""
-
-        content_type = cast(ContentType, self.content_type)
-        return _canonical_object_ref(content_type, self.object_id)
-
     def __str__(self) -> str:
         """Return a readable knowledge-to-record edge label."""
 
@@ -684,15 +701,6 @@ def _canonical_object_ref(content_type: ContentType, object_id: Any) -> ObjectRe
     if model is None or resource_type is None:
         raise ValidationError("Knowledge bindings require a REBAC-typed target.")
     return ObjectRef(resource_type, str(object_id))
-
-
-def _object_ids_by_content_type(pairs: list[tuple[int, Any]]) -> dict[int, set[Any]]:
-    """Group canonical object ids by content type for actor-scoped reverse reads."""
-
-    grouped: dict[int, set[Any]] = {}
-    for content_type_id, object_id in pairs:
-        grouped.setdefault(content_type_id, set()).add(object_id)
-    return grouped
 
 
 class StaleBodyError(ValueError):
@@ -749,7 +757,7 @@ class MarkdownPageManager(AngeeManager):
         *,
         actor: SubjectRef,
     ) -> None:
-        """Insert bodies for pages authorized by the clone's tree-copy preflight.
+        """Insert bodies for pages authorized by the vault-cloning preflight.
 
         Audit stamps belong to the initiating actor, derived fields use the body
         owner, and native save notifications retain revision/change subscribers.

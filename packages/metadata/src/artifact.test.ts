@@ -77,9 +77,9 @@ describe("generated resource wire contract", () => {
         relationModelLabel: null, widget: null,
       }],
       futureResourceFact: { enabled: true },
-      createArguments: ["client_creation_key"],
-      updateArguments: ["expected_revision"],
-      saveArguments: ["expected_revision"],
+      createArguments: [{ name: "client_creation_key", type: "String" }],
+      updateArguments: [{ name: "expected_revision", type: "Int" }],
+      saveArguments: [{ name: "expected_revision", type: "Int" }],
     });
     const wire = { vendor: { retained: true }, angee: { resources: [resource], future: "kept" } };
     expect(defineAngeeSchemaMetadata(wire)).toEqual(wire);

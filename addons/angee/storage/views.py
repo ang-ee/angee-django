@@ -29,8 +29,8 @@ def upload(request: HttpRequest) -> JsonResponse:
     ``Authorization: Bearer``) binds the PUT to a single draft row and is
     unforgeable + single-use — the CSRF property this endpoint relies on in
     place of the cookie token. Identity is still the request actor:
-    :meth:`File.receive_bytes` requires an authenticated uploader (the row's
-    ``created_by``) or a drive writer, so the request must carry the session
+    :meth:`File.receive_bytes` requires an authenticated file writer,
+    so the request must carry the session
     cookie (or a credential the actor middleware resolves).
     """
 

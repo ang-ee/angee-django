@@ -415,31 +415,18 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
         if not client_creation_key:
             raise ValidationError({"client_creation_key": "A client creation key is required."})
         name = name.strip() or "Untitled dashboard"
-        existing = self.for_creation_key(owner, client_creation_key, "")
-        if existing is not None:
-            return existing
-        dashboard = self.model(
-            owner=owner,
-            scope="personal",
-            scope_key=None,
-            name=name,
-            description=description,
-            client_creation_key=client_creation_key,
-        )
-        try:
-            with transaction.atomic():
-                # Validate fields first so excluding the key from constraint
-                # checks doesn't skip its field validation. Its unique constraint
-                # arbitrates concurrent creations through the typed replay below.
-                dashboard.full_clean(validate_constraints=False)
-                dashboard.validate_constraints(exclude={"client_creation_key"})
-                dashboard.sudo(reason="dashboards.create_personal").save()
-        except IntegrityError:
-            existing = self.for_creation_key(owner, client_creation_key, "")
-            if existing is None:
-                raise
-            return existing
-        return dashboard.with_actor(actor)
+        def insert() -> Any:
+            dashboard = self.model(
+                owner=owner, scope="personal", scope_key=None, name=name, description=description,
+                client_creation_key=client_creation_key,
+            )
+            dashboard.full_clean(validate_constraints=False)
+            dashboard.validate_constraints(exclude={"client_creation_key"})
+            dashboard.sudo(reason="dashboards.create_personal").save()
+            return dashboard.with_actor(actor)
+
+        dashboard, _created = self.replay_or_insert(owner, client_creation_key, "", insert)
+        return dashboard
 
     def save_snapshot(
         self,

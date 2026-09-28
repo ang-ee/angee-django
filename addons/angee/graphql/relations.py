@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
+import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
@@ -13,8 +14,8 @@ from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
-from strawberry.types import Info
-from strawberry_django.utils.typing import get_django_definition, unwrap_type
+from strawberry_django.fields.field import StrawberryDjangoField
+from strawberry_django.optimizer import OptimizerStore
 
 from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
 from angee.data.field_classification import is_to_one_relation
@@ -28,7 +29,7 @@ def actor_scoped_relation_group_expression(
     queryset: models.QuerySet[Any],
     field_path: str,
 ) -> Combinable | None:
-    """Return a read-safe scalar expression for one related group axis.
+    """Return a read-safe scalar expression for grouping, filtering and ordering.
 
     Every protected target crossed by the selected to-one path contributes an
     uncorrelated membership guard. The related scalar is projected only when
@@ -41,9 +42,11 @@ def actor_scoped_relation_group_expression(
     try:
         fields = fields_for_path(queryset.model, field_path)
     except FieldPathError as error:
-        raise ImproperlyConfigured(
-            f"{queryset.model._meta.label}.{field_path} must traverse to-one relations to a scalar field"
-        ) from error
+        if error.to_many:
+            raise ImproperlyConfigured(
+                f"{queryset.model._meta.label}.{field_path} must traverse to-one relations to a scalar field"
+            ) from error
+        return None
     terminal = fields[-1]
     relations = fields if terminal.is_relation else fields[:-1]
     if not relations:
@@ -99,7 +102,8 @@ def actor_scoped_to_one(field_name: str) -> Any:
     unreadable parents cache as ``None``.
     Unprefetched roots fall back to one actor-scoped lookup per row. The parent
     may be actor-scoped or sudo-loaded; cached targets are reused only for the
-    current actor, and ``only`` keeps the parent projection to the FK id.
+    current actor, and ``only`` keeps the parent projection to the FK id. The
+    target prefetch retains the selected type's nested optimizer hints.
     """
 
     return _guarded_to_one_field(field_name, _actor_scoped_to_one_resolver(field_name))
@@ -162,23 +166,40 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
 def _guarded_to_one_field(field_name: str, resolver: Callable[[models.Model], Any]) -> Any:
     """Bind a relation projection to the native hint scoped by the REBAC optimizer."""
 
-    def prefetch(info: Info) -> models.Prefetch | str:
-        # Resolver-owned hints stop native traversal into child selections.
-        # Optimize the target explicitly so nested hints survive that boundary.
-        definition = get_django_definition(unwrap_type(info.return_type))
-        if definition is None:
-            return field_name
-        return models.Prefetch(
-            field_name,
-            queryset=optimize(definition.model._default_manager.all(), info),
-        )
-
     return strawberry_django.field(
         resolver=resolver,
         field_name=field_name,
         only=[f"{field_name}_id"],
-        prefetch_related=[prefetch],
+        prefetch_related=[_guarded_relation_prefetch(field_name)],
     )
+
+
+def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], models.Prefetch | str]:
+    """Apply selected node annotations and nested hints alongside the join key.
+
+    The native optimizer resolves ``permissions_field`` annotation callbacks on
+    this related queryset, as it does on roots, before any row is materialized.
+    """
+
+    def prefetch(info: strawberry.Info) -> models.Prefetch | str:
+        field = cast(StrawberryDjangoField, info._field)
+        related_model = field.django_model
+        if related_model is None:
+            # A public-ID scalar has no nested model projection to optimize.
+            return field_name
+        queryset = read_scoped_queryset(related_model, current_actor())
+        if queryset is None:
+            queryset = related_model._default_manager.none()
+        assert field.origin_django_type is not None
+        relation = field.origin_django_type.model._meta.get_field(field_name)
+        store = OptimizerStore()
+        if isinstance(relation, models.ManyToOneRel):
+            store.only.append(relation.field.attname)
+        elif isinstance(relation, models.ForeignKey):
+            store.only.append(relation.target_field.attname)
+        return models.Prefetch(field_name, queryset=optimize(queryset, info, store=store))
+
+    return prefetch
 
 
 def actor_scoped_to_many(field_name: str) -> Any:
@@ -200,8 +221,12 @@ def actor_scoped_to_many(field_name: str) -> Any:
             return []
 
         cached = getattr(root, "_prefetched_objects_cache", {}).get(field_name, _UNCACHED)
-        if cached is not _UNCACHED and all(getattr(row, "_rebac_actor", None) == actor for row in cached):
-            return cached
+        if cached is not _UNCACHED:
+            rows = list(cached)
+            if all(getattr(row, "_rebac_actor", None) == actor for row in rows):
+                # Returning an evaluated list preserves the prefetch; a queryset
+                # would be cloned by Strawberry's relation ordering machinery.
+                return rows
 
         related_queryset = getattr(root, field_name).all()
         with_actor = getattr(related_queryset, "with_actor", None)
@@ -217,5 +242,5 @@ def actor_scoped_to_many(field_name: str) -> Any:
     return strawberry_django.field(
         resolver=resolve,
         field_name=field_name,
-        prefetch_related=[field_name],
+        prefetch_related=[_guarded_relation_prefetch(field_name)],
     )

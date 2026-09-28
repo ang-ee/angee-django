@@ -11,25 +11,32 @@ from django.contrib.auth.base_user import AbstractBaseUser
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.http import HttpRequest, HttpResponse
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import actor_context
 from rebac.actors import is_sudo
 from strawberry.extensions import SchemaExtension
 from strawberry.types.graphql import OperationType
 
-from angee.base.identity import instance_from_public_id
-from angee.base.scoping import system_queryset
-from graphql import GraphQLError
+from angee.base.errors import DomainError
+from angee.base.identity import public_id_of
 
 logger = logging.getLogger(__name__)
 _DENIED = "View-as is not permitted."
+
+
+class ViewAsReadOnly(DomainError):
+    """A preview accepts queries only."""
+
+    code = "VIEW_AS_READ_ONLY"
 
 
 @dataclass(slots=True)
 class ViewAs:
     """Typed ``request.view_as`` carrier shared with identity resolvers.
 
-    IAM owns the target's person/role bound through ``preview_candidates`` and
-    ``is_previewable``. This adapter owns admission, binding and rollback only.
+    The composed user manager may implement ``admit_view_as(actor, public_id)``:
+    return an authorized target with no pinned actor or elevation, or ``None``.
+    IAM owns that admission policy. Without the hook previews are refused.
+    This adapter owns request binding and rollback only.
     """
 
     real_user: AbstractBaseUser
@@ -44,17 +51,9 @@ class ViewAs:
         real_user = getattr(request, "user", None)
         if real_user is None or not real_user.is_authenticated or is_sudo():
             raise PermissionDenied(_DENIED)
-        model = get_user_model()
-        with system_context(reason="graphql.view_as.target"):
-            target = instance_from_public_id(
-                model,
-                target_id,
-                queryset=system_queryset(model).preview_candidates(),
-            )
+        admit = getattr(get_user_model()._default_manager, "admit_view_as", None)
+        target = admit(real_user, target_id) if callable(admit) else None
         if target is None:
-            raise PermissionDenied(_DENIED)
-        target.with_actor(to_subject_ref(real_user))
-        if not target.has_access("view_as") or not target.is_previewable():
             raise PermissionDenied(_DENIED)
         return cls(real_user=real_user, target=target)
 
@@ -79,13 +78,8 @@ class ViewAs:
             request.user = self.real_user
             del request.view_as
             logger.info(
-                "GraphQL view-as request",
-                extra={
-                    "real_actor": str(to_subject_ref(self.real_user)),
-                    "target": str(to_subject_ref(self.target)),
-                    "schema": schema_name,
-                    "operation": tuple(self.operations),
-                },
+                "GraphQL view-as request: real_actor=%s target=%s schema=%s operations=%s",
+                public_id_of(self.real_user), public_id_of(self.target), schema_name, tuple(self.operations),
             )
 
 
@@ -100,6 +94,6 @@ class ViewAsReadOnlyExtension(SchemaExtension):
         if preview is None or self.execution_context.graphql_document is None:
             return
         operation = self.execution_context.operation_type
-        preview.operations.append(operation.value)
+        preview.operations.append(self.execution_context.operation_name or operation.value)
         if operation is not OperationType.QUERY:
-            raise GraphQLError("View-as is read-only.", extensions={"code": "VIEW_AS_READ_ONLY"})
+            raise ViewAsReadOnly()

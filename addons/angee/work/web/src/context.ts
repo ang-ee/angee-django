@@ -1,8 +1,10 @@
+import { TASK_MODEL } from "@angee/projects";
 import { useAuthoredQuery } from "@angee/refine";
 
 import {
   WorkCycleContextDocument,
   WorkQueueContextDocument,
+  WorkTaskContextDocument,
 } from "./documents";
 import { CYCLE_MODEL, QUEUE_MODEL, STAGE_MODEL } from "./resources";
 
@@ -21,5 +23,14 @@ export function useCycleContext(id: string) {
     WorkCycleContextDocument,
     { id },
     { enabled: Boolean(id), models: [CYCLE_MODEL] },
+  );
+}
+
+/** Stage facts required by task record actions beyond the form's relation label. */
+export function useTaskContext(id: string) {
+  return useAuthoredQuery(
+    WorkTaskContextDocument,
+    { id },
+    { enabled: Boolean(id), models: [TASK_MODEL, STAGE_MODEL] },
   );
 }

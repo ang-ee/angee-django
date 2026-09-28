@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import DatabaseError, models, router, transaction
+from django.db import DatabaseError, IntegrityError, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
     SubjectRef,
-    current_actor,
     delete_relationships,
     system_context,
     to_object_ref,
@@ -25,7 +24,7 @@ from rebac.managers import RebacQuerySet
 from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
-from angee.base.actors import actor_user_id
+from angee.base.actors import actor_user_id, instance_actor
 from angee.base.errors import DomainError
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
@@ -61,14 +60,6 @@ def audit_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model],
 
     del using
     collector.add_field_update(field, None, list(sub_objs))
-
-
-def _instance_actor(instance: models.Model) -> SubjectRef | None:
-    """Use an instance's pinned actor before the ambient actor for defaults and audit."""
-
-    actor_getter = getattr(instance, "actor", None)
-    actor = actor_getter() if callable(actor_getter) else None
-    return actor if actor is not None else current_actor()
 
 
 def _shared_reader_policy_field_spellings(model: type[models.Model]) -> frozenset[str]:
@@ -288,7 +279,7 @@ class AuditMixin(models.Model):
                 super().save(*args, **kwargs)
                 return
 
-        user_id = actor_user_id(_instance_actor(self))
+        user_id = actor_user_id(instance_actor(self))
         touched: set[str] = set()
         if user_id is not None:
             if self._state.adding:
@@ -339,11 +330,15 @@ class ItemOwnershipMixin(models.Model):
 class OwnerMixin(AuditMixin):
     """Give a grant root transferable ownership independent of its audit attribution.
 
-    A non-null owner wins. Otherwise an owning container leaves the owner empty;
-    other inserts default to ``created_by`` and then the pinned acting user.
+    A non-null owner wins. Otherwise an owning container or ``save(ownerless=True)``
+    leaves the owner empty; other inserts default to ``created_by`` and then the
+    pinned acting user.
     A cached, saved container supplies its flag; an uncached container costs one
     query per insert. ``bulk_create`` bypasses this instance-save default.
     Compose :class:`OwnerQuerySet` when an owning verb needs bulk release.
+    The owning model declares ``write__owner = <owner_transfer_permission>`` in
+    Zed; multi-table children delegate that gate through their parent relation.
+    Direct saves and queryset updates require the same transfer permission.
     """
 
     owner_transfer_permission: ClassVar[str] = "transfer"
@@ -362,24 +357,38 @@ class OwnerMixin(AuditMixin):
     class Meta:
         abstract = True
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Apply the insert-only owner default before the audit and permission hooks."""
+    def container_owns_items(self) -> bool:
+        """Return the declared container's item-ownership policy, or false without one.
 
-        if self._state.adding and self.owner_id is None:
-            container_owns_items = False
-            if self.owner_container is not None:
-                field = self._meta.get_field(self.owner_container)
-                container_id = getattr(self, field.attname)
-                container = field.get_cached_value(self, default=None)
-                if container is not None and not container._state.adding:
-                    container_owns_items = container.owns_items
-                elif container_id is not None:
-                    container_owns_items = system_queryset(field.related_model).filter(
-                        pk=container_id, owns_items=True,
-                    ).exists()
-            if not container_owns_items:
+        Reuse a cached, saved container; otherwise read its flag through the
+        system scope because this persistence rule is independent of read access.
+        """
+
+        if self.owner_container is None:
+            return False
+        field = self._meta.get_field(self.owner_container)
+        container_id = getattr(self, field.attname)
+        container = field.get_cached_value(self, default=None)
+        if container is not None and not container._state.adding:
+            return bool(container.owns_items)
+        return container_id is not None and system_queryset(field.related_model).filter(
+            pk=container_id, owns_items=True,
+        ).exists()
+
+    def save(self, *args: Any, ownerless: bool = False, **kwargs: Any) -> None:
+        """Apply the insert-only owner default before the audit and permission hooks.
+
+        ``ownerless=True`` requires a new row with no owner and skips only the
+        owner default. Native audit, permission, history and save signals still
+        run. To clear an existing owner, use ``transfer_ownership(None)``.
+        """
+
+        if ownerless and (not self._state.adding or self.owner_id is not None):
+            raise ValidationError({"owner": "Ownerless insertion requires a new row with no owner."})
+        if self._state.adding and self.owner_id is None and not ownerless:
+            if not self.container_owns_items():
                 self.owner_id = (
-                    self.created_by_id if self.created_by_id is not None else actor_user_id(_instance_actor(self))
+                    self.created_by_id if self.created_by_id is not None else actor_user_id(instance_actor(self))
                 )
         super().save(*args, **kwargs)
 
@@ -388,6 +397,8 @@ class OwnerMixin(AuditMixin):
 
         Even ambient ``system_context`` must supply a resolvable actor: this verb
         owns an actor-authorized transfer, not an unattended ownership backfill.
+        A concrete parent owns authorization when it declares the owner field.
+        Constraints are validated against all rows before writing the new owner.
         A full save and refresh let composed mixins own their updated fields.
         """
 
@@ -395,16 +406,24 @@ class OwnerMixin(AuditMixin):
             raise ValidationError("Ownership transfer requires a saved row.")
         if user is not None and user.pk is None:
             raise ValidationError({"owner": "The new owner must be a saved user."})
-        actor = _instance_actor(self)
+        actor = instance_actor(self)
         if actor is None:
             raise PermissionDenied("Ownership transfer requires an acting user.")
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
-            if not locked.with_actor(actor).has_access(self.owner_transfer_permission):
+            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk).with_actor(actor)
+            owner_model = locked._meta.get_field("owner").model
+            target = locked
+            if owner_model is not type(locked):
+                target = system_queryset(owner_model).get(pk=locked._get_pk_val(owner_model._meta)).with_actor(actor)
+            if not target.has_access(target.owner_transfer_permission):
                 raise PermissionDenied("You cannot transfer ownership of this row.")
+            if user is not None:
+                locked.validate_record_access_subject(relation="owner", subject=user)
             owner_id = user.pk if user is not None else None
             if locked.owner_id != owner_id:
                 locked.owner = user
+                with system_context(reason="ownership.transfer.validate_constraints"):
+                    locked.validate_constraints()
                 locked.sudo(reason="ownership.transfer").save()
             self.refresh_from_db()
         return self
@@ -686,10 +705,12 @@ class CreationKeyQuerySet(models.QuerySet[_ModelT]):
         """Return a readable replay, refusing content changes for the same key.
 
         A missing scope or key has no replay identity. Callers own fingerprint
-        construction and the insert/savepoint retry on a uniqueness race.
+        construction; :meth:`replay_or_insert` owns uniqueness races.
         An empty stored fingerprint is unknown legacy content and permits replay.
         """
 
+        if key is not None and not key.strip():
+            raise ValidationError({"client_creation_key": "A client creation key must not be blank."})
         if scope is None or key is None:
             return None
         model = cast(type[CreationKeyMixin], self.model)
@@ -698,6 +719,29 @@ class CreationKeyQuerySet(models.QuerySet[_ModelT]):
         if stored and stored != fingerprint:
             raise CreationKeyConflict("This client creation key was already used for different content.")
         return row
+
+    def replay_or_insert(
+        self, scope: Any, key: str | None, fingerprint: str, insert: Callable[[], _ModelT],
+    ) -> tuple[_ModelT, bool]:
+        """Return a readable replay or insert once, retrying a uniqueness race.
+
+        The callback owns domain persistence and runs inside a savepoint. Only
+        an existing matching receipt turns an insert/constraint failure into a
+        replay. The boolean tells callers whether to run creation side effects.
+        """
+
+        self._for_write = True
+        existing = self.for_creation_key(scope, key, fingerprint)
+        if existing is not None:
+            return existing, False
+        try:
+            with transaction.atomic(using=self.db):
+                return insert(), True
+        except (IntegrityError, ValidationError):
+            existing = self.for_creation_key(scope, key, fingerprint)
+            if existing is None:
+                raise
+            return existing, False
 
 
 class CreationKeyMixin(models.Model):
@@ -715,6 +759,20 @@ class CreationKeyMixin(models.Model):
 
     class Meta:
         abstract = True
+
+    @classmethod
+    def creation_key_actor_scope(cls, actor: Any, values: Mapping[str, Any]) -> Any:
+        """Require a user-scoped creation receipt to belong to the acting user."""
+
+        scope = actor_user_id(actor)
+        if scope is None:
+            raise ValidationError({"client_creation_key": "A creation key requires a user actor."})
+        scope_field = cls._meta.get_field(cls.creation_key_scope)
+        supplied = values.get(scope_field.attname, values.get(scope_field.name, scope))
+        supplied = supplied.pk if isinstance(supplied, models.Model) else supplied
+        if supplied != scope:
+            raise ValidationError({"client_creation_key": "The creation scope must be the current actor."})
+        return scope
 
     @classmethod
     def creation_key_constraint(cls, *, scope: str | None = None, name: str | None = None) -> models.UniqueConstraint:

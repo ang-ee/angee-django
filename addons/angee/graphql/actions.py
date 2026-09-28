@@ -122,11 +122,12 @@ def action_guard(
     the body raises naturally and one owner projects the failure (a Django
     ``ValidationError`` carrying ``error_dict`` becomes the field-keyed in-band
     ``validation_errors`` map a typed-args form binds). Any other exception
-    propagates as a GraphQL error. Typed ``DomainError`` refusals always propagate
+    propagates as a GraphQL error. Validation errors always remain in band,
+    including typed domain refusals. Other ``DomainError`` refusals propagate
     to the schema's stable-code projection, even when included in ``errors``.
     ``@wraps`` preserves the resolver signature so a
     Strawberry field decorated with it keeps its introspected arguments. Every
-    caught failure is logged with the action name and traceback before projection.
+    non-validation failure is logged with the action name before projection.
     """
 
     caught = BASELINE_ACTION_ERRORS + tuple(errors)
@@ -136,6 +137,8 @@ def action_guard(
         def guarded(*args: _P.args, **kwargs: _P.kwargs) -> ActionResult:
             try:
                 return resolver(*args, **kwargs)
+            except ValidationError as error:
+                return ActionResult.from_error(error, summary)
             except DomainError:
                 raise
             except caught as error:

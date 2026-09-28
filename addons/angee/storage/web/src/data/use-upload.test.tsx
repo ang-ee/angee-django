@@ -10,19 +10,6 @@ const uploadMocks = vi.hoisted(() => ({
   useAuthoredMutation: vi.fn(),
 }));
 
-vi.mock("@angee/metadata", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/metadata")>()),
-  refineResourceName: () => "files",
-  useModelMetadata: () => ({
-    resource: { schemaName: "console", modelLabel: "storage.File" },
-  }),
-}));
-
-vi.mock("@refinedev/core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@refinedev/core")>()),
-  useInvalidate: () => uploadMocks.invalidate,
-}));
-
 vi.mock("@angee/ui", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/ui")>()),
   errorMessage: (error: unknown, fallback: string) =>
@@ -41,6 +28,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredMutation: uploadMocks.useAuthoredMutation,
+  useInvalidateAuthoredModels: () => uploadMocks.invalidate,
 }));
 
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
@@ -96,6 +84,8 @@ describe("useStorageUpload", () => {
         drive: null,
         drive_slug: "",
         folder: null,
+        visibility: "INHERITED",
+        record: null,
         content_hash: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
       },
     });
@@ -114,11 +104,7 @@ describe("useStorageUpload", () => {
     expect(onUploaded).toHaveBeenCalledWith([
       { id: "fil_ready", filename: "note.txt" },
     ], undefined);
-    expect(uploadMocks.invalidate).toHaveBeenCalledWith({
-      resource: "files",
-      dataProviderName: "console",
-      invalidates: ["list", "many", "detail"],
-    });
+    expect(uploadMocks.invalidate).toHaveBeenCalledWith(["storage.File", "storage.FileAttachment"]);
   });
 
   test("passes explicit drive and folder targets through the begin request", async () => {
@@ -129,7 +115,10 @@ describe("useStorageUpload", () => {
     await act(async () => {
       result.current.upload(
         [new File(["body"], "brief.txt", { type: "" })],
-        { driveId: "drv_assets", folderId: "fld_cases" },
+        {
+          driveId: "drv_assets", folderId: "fld_cases", visibility: "RECORD",
+          record: { model_label: "projects.Task", record_id: "task_7" },
+        },
         completionContext,
       );
     });
@@ -142,6 +131,8 @@ describe("useStorageUpload", () => {
         drive: "drv_assets",
         drive_slug: "",
         folder: "fld_cases",
+        visibility: "RECORD",
+        record: { model_label: "projects.Task", record_id: "task_7" },
       }),
     });
     expect(onUploaded).toHaveBeenCalledWith([

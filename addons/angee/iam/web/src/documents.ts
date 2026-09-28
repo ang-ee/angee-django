@@ -80,6 +80,14 @@ export const IamUsers = graphql(`
   }
 `);
 
+export const IamIssueUserPassword = graphql(`
+  mutation IamIssueUserPassword($id: ID!) {
+    issue_user_password(id: $id) {
+      password
+    }
+  }
+`);
+
 export const IamAssignmentSubjects = graphql(`
   query IamAssignmentSubjects($limit: Int = 500) {
     users(limit: $limit, order_by: [{ username: asc }]) {

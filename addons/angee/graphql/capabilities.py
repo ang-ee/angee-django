@@ -12,14 +12,12 @@ import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from rebac import current_actor, current_evaluator
-from rebac.backends import backend
-from rebac.resources import to_object_ref
+from rebac import current_actor
 from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
 
 from angee.base.permissions import effective_rebac_definition
-from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
+from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset, system_queryset
 from angee.graphql.introspection import django_model
 
 _ACTOR = "_angee_permission_actor"
@@ -44,31 +42,24 @@ def permission_annotations(model: type[models.Model], names: Iterable[str]) -> d
 def held_permissions(record: models.Model, names: Iterable[str]) -> frozenset[str]:
     """Return declared permission names held by the ambient actor on this row.
 
-    List projections reuse SQL annotations; other callers use the native
-    operation evaluator. Instance-local elevation never grants a capability to
-    the viewer. Owner predicates still compose their non-permission rules.
+    List projections reuse SQL annotations; single records use the same
+    annotations on a one-row queryset. Neither instance-local nor ambient
+    elevation grants a capability: the permission scopes pin the concrete
+    ambient actor. Without an actor no capabilities are granted.
     """
 
     actor = current_actor()
     if actor is None:
         return frozenset()
-    evaluator = current_evaluator()
-    resource = to_object_ref(record)
-    held = set()
-    for name in names:
-        annotation = f"_angee_permission_{name}"
-        if record.__dict__.get(_ACTOR) == str(actor) and annotation in record.__dict__:
-            allowed = bool(record.__dict__[annotation])
-        else:
-            result = (
-                evaluator.check(backend(), subject=actor, action=name, resource=resource)
-                if evaluator is not None
-                else backend().check_access(subject=actor, action=name, resource=resource)
-            )
-            allowed = result.allowed
-        if allowed:
-            held.add(name)
-    return frozenset(held)
+    names = tuple(names)
+    values = record.__dict__
+    if values.get(_ACTOR) != str(actor) or any(f"_angee_permission_{name}" not in values for name in names):
+        annotations = permission_annotations(type(record), names)
+        values = (
+            system_queryset(type(record)).filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
+            or {}
+        )
+    return frozenset(name for name in names if values.get(f"_angee_permission_{name}"))
 
 
 @cache

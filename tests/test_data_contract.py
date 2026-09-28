@@ -8,6 +8,7 @@ from django.db import models
 
 from angee.data.metadata import (
     DataLinesMetadata,
+    DataMutationArgument,
     DataQueryField,
     DataQueryFilter,
     DataQueryIdentity,
@@ -45,9 +46,9 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         type_names=DataResourceTypeNames(node="CatalogItem", filter="catalog_items_bool_exp"),
         contributors=("CatalogItemQuery", "CatalogItemMutation"),
         capabilities=("list", "detail", "create"),
-        create_arguments=("client_creation_key",),
-        update_arguments=("expected_revision",),
-        save_arguments=("expected_revision",),
+        create_arguments=(DataMutationArgument("client_creation_key", "String"),),
+        update_arguments=(DataMutationArgument("expected_revision", "Int"),),
+        save_arguments=(DataMutationArgument("expected_revision", "Int"),),
         fields=(title_field, status_field),
         subtitle=DataResourceSubtitleMetadata(created="created_at", word_count="body.word_count"),
         lines=DataLinesMetadata(field="items", model_label="catalog.line", fields=(title_field,)),
@@ -80,9 +81,9 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
     assert wire["linesResource"]["fields"] == [wire["fields"][0]]
     assert wire["linesResource"]["defaults"] == {}
     assert wire["aggregateFields"] == []
-    assert wire["createArguments"] == ["client_creation_key"]
-    assert wire["updateArguments"] == ["expected_revision"]
-    assert wire["saveArguments"] == ["expected_revision"]
+    assert wire["createArguments"] == [{"name": "client_creation_key", "type": "String"}]
+    assert wire["updateArguments"] == [{"name": "expected_revision", "type": "Int"}]
+    assert wire["saveArguments"] == [{"name": "expected_revision", "type": "Int"}]
     assert wire["query"]["axes"] == {}
     assert wire["query"]["sort"] == {"default": []}
     assert {"model", "contributors", "nodeType", "filterType", "orderType"}.isdisjoint(wire)

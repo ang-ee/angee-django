@@ -8,12 +8,16 @@ from urllib.parse import urlencode
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.urls import reverse
-from rebac import ObjectRef, system_context
+from graphql import GraphQLError
+from rebac import ObjectRef, PermissionDenied, system_context
+from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
+from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
@@ -26,9 +30,9 @@ from angee.graphql.relations import actor_scoped_public_id
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
-from angee.iam.permissions import RolePermission
+from angee.iam.permissions import RolePermission, request_from_info
 from angee.storage import exceptions
-from angee.storage.models import UploadState
+from angee.storage.models import FileVisibility, UploadState
 
 Backend = apps.get_model("storage", "Backend")
 Drive = apps.get_model("storage", "Drive")
@@ -38,6 +42,8 @@ File = apps.get_model("storage", "File")
 
 _STORAGE_ADMIN_ROLE = ObjectRef("storage/role", "storage_admin")
 """Role whose effective members may manage backends and drives."""
+
+strawberry.enum(cast(Any, FileVisibility))
 
 
 @strawberry_django.type(MimeType)
@@ -76,6 +82,7 @@ class DriveType(AngeeNode):
     updated_at: auto
 
     backend: strawberry.ID | None = actor_scoped_public_id("backend")
+    owns_items: auto
 
 
 @strawberry_django.type(Folder)
@@ -108,6 +115,7 @@ class FileType(AuthoredRefMixin, AngeeNode):
     size_bytes: auto
     metadata: JSON
     upload_state: auto
+    visibility: auto
     is_trashed: auto
     trashed_at: auto
     created_at: auto
@@ -118,18 +126,28 @@ class FileType(AuthoredRefMixin, AngeeNode):
     folder: strawberry.ID | None = actor_scoped_public_id("folder")
 
     @strawberry_django.field
-    def url(self) -> str:
-        """Return the token proxy download URL for READY rows, empty otherwise.
+    def url(self, info: strawberry.Info) -> str | None:
+        """Return a READY row's download URL, empty when unready, null in previews.
 
         The bearer token names the current actor. Download lookup re-checks
         that actor's read permission, so revocation stops subsequent requests
         even before the token expires (see :meth:`File.download_url`).
         """
 
+        if getattr(request_from_info(info), "view_as", None) is not None:
+            return None
         row = cast(Any, self)
         if row.upload_state != UploadState.READY:
             return ""
         return str(row.download_url())
+
+
+@strawberry.input
+class FileUploadRecordInput:
+    """The model and public identity of the upload's attachment target."""
+
+    model_label: str = strawberry.field(name="model_label")
+    record_id: PublicID = strawberry.field(name="record_id")
 
 
 @strawberry.input
@@ -143,6 +161,8 @@ class FileUploadBeginInput:
     drive_slug: str = strawberry.field(name="drive_slug", default="")
     folder: PublicID | None = None
     content_hash: str = strawberry.field(name="content_hash", default="")
+    visibility: FileVisibility = cast(FileVisibility, FileVisibility.INHERITED)
+    record: FileUploadRecordInput | None = None
 
 
 @strawberry.type
@@ -202,6 +222,8 @@ class FolderWriteBackend(AngeeHasuraWriteBackend):
         """Create a real folder through ``Folder.objects.create_in_drive``."""
 
         del info
+        if client_creation_key is not None:
+            raise ValidationError({"client_creation_key": "Folder creation does not support creation keys."})
         try:
             return Folder.objects.create_in_drive(
                 drive_id=str(data["drive"]),
@@ -229,12 +251,12 @@ _DRIVE_RESOURCE = hasura_model_resource(
     DriveType,
     model=Drive,
     name="drives",
-    filterable=["id", "slug", "name", "is_archived", "backend"],
+    filterable=["id", "slug", "name", "is_archived", "backend", "owns_items"],
     sortable=["slug", "name", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["is_archived", "created_at"],
-    insertable=["backend", "slug", "name", "description", "prefix"],
-    updatable=["name", "description", "prefix", "is_archived"],
+    insertable=["backend", "slug", "name", "description", "prefix", "owns_items"],
+    updatable=["name", "description", "prefix", "is_archived", "owns_items"],
     field_id_decode={"backend": public_pk_decoder(Backend)},
     write_backend=AngeeHasuraWriteBackend(Drive, public_id_fields=("backend",)),
 )
@@ -263,6 +285,7 @@ _FILE_RESOURCE = hasura_model_resource(
         "filename",
         "title",
         "upload_state",
+        "visibility",
         "is_trashed",
         "updated_at",
         "drive",
@@ -313,6 +336,20 @@ class StorageMutation:
         """Reserve a draft file and tell the client where to send bytes."""
 
         try:
+            record = None
+            if input.record is not None:
+                try:
+                    model = apps.get_model(input.record.model_label.strip())
+                except (LookupError, ValueError) as error:
+                    raise exceptions.UploadRecordDenied() from error
+                if model_resource_type(model) is None:
+                    raise exceptions.UploadRecordDenied()
+                try:
+                    record = resolve_action_target(
+                        model, input.record.record_id, reason="storage.upload.record_target",
+                    )
+                except GraphQLError as error:
+                    raise exceptions.UploadRecordDenied() from error
             row = File.objects.draft(
                 filename=input.filename,
                 mime_type=input.mime_type,
@@ -321,6 +358,8 @@ class StorageMutation:
                 drive_slug=input.drive_slug,
                 folder_id=str(input.folder) if input.folder else "",
                 content_hash=input.content_hash,
+                visibility=input.visibility,
+                record=record,
             )
         except exceptions.UploadError as error:
             return FileUploadBeginPayload(error=str(error), error_code=error.code)
@@ -329,6 +368,18 @@ class StorageMutation:
         token = row.issue_upload_token()
         upload_url = f"{reverse('storage_upload')}?{urlencode({'token': token})}"
         return FileUploadBeginPayload(method="proxy", file=row, upload_url=upload_url, upload_token=token)
+
+    @strawberry.mutation(name="set_file_visibility")
+    @action_guard("Could not change file visibility.")
+    def set_file_visibility(self, id: PublicID, visibility: FileVisibility) -> ActionResult:
+        """Dispatch to the visibility owner with one missing-or-denied response."""
+
+        try:
+            row = resolve_action_target(File, id, reason="storage.file.visibility_target")
+            row.set_visibility(visibility)
+        except (GraphQLError, ObjectDoesNotExist, PermissionDenied) as error:
+            raise ValidationError("File is unavailable or access is denied.") from error
+        return ActionResult(ok=True, message="File visibility updated.")
 
     @strawberry.mutation(name="file_upload_finalize")
     def file_upload_finalize(self, input: FileUploadFinalizeInput) -> FileUploadFinalizePayload:

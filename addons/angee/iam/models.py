@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import secrets
 from collections.abc import Mapping
+from copy import copy
 from typing import Any, Self, cast
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
@@ -38,7 +39,7 @@ from rebac.roles import ROLE_RELATION
 
 from angee.base.errors import DomainError
 from angee.base.fields import StateField
-from angee.base.identity import canonical_subject_ref, instance_from_public_id
+from angee.base.identity import canonical_subject_ref, instance_from_public_id, public_id_of
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
 from angee.iam.events import person_created
@@ -462,17 +463,32 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
 
         subject = to_subject_ref(actor)
         bounded = bounded_limit(limit, maximum=VIEWABLE_PEOPLE_MAX_LIMIT)
-        queryset = (
-            self.with_actor(subject).with_action("view_as").picker(search).preview_candidates()
-            .exclude(pk=subject.subject_id)
-        )
+        queryset = self.with_actor(subject).with_action("view_as").picker(search)
         people = []
         for person in queryset[:bounded * 3].iterator(chunk_size=bounded):
-            if person.is_previewable():
-                people.append(person)
+            if (target := self.admit_view_as(actor, public_id_of(person))) is not None:
+                people.append(target)
                 if len(people) == bounded:
                     break
         return people
+
+    def admit_view_as(self, actor: Any, public_id: str) -> Any | None:
+        """Admit a preview identity for both the picker and GraphQL header.
+
+        Admission uses an actor-scoped candidate. REBAC's native copy contract
+        strips its instance actor/elevation before it becomes a request identity;
+        subsequent instance checks therefore follow the preview's ambient actor.
+        """
+
+        subject = to_subject_ref(actor)
+        candidate = instance_from_public_id(
+            self.model,
+            str(public_id),
+            queryset=self.with_actor(subject).with_action("view_as").preview_candidates().exclude(pk=subject.subject_id),
+        )
+        if candidate is None or not candidate.is_previewable():
+            return None
+        return copy(candidate)
 
     def active_person_for_subject(self, subject: SubjectRef) -> Any | None:
         """Resolve an accountable human actor from a concrete canonical subject."""
@@ -573,6 +589,15 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
                 kwargs["update_fields"] = update_field_names
         super().save(*args, **kwargs)
 
+    def password_issue_error(self) -> str | None:
+        """Return the password-issuance eligibility failure, or None."""
+
+        if not self.is_person or not self.is_active or self.is_staff or self.is_superuser:
+            return "Only active, non-staff person accounts can receive a password."
+        if self.has_usable_password():
+            return "This account already has a usable password."
+        return None
+
     def issue_password(self) -> str:
         """Set and return one random credential for a passwordless active person.
 
@@ -591,10 +616,8 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
                 user.sudo(reason="iam.password.issue")
             if not user.has_access("issue_password"):
                 raise PermissionDenied("Password issue permission is required.")
-            if not user.is_person or not user.is_active or user.is_staff or user.is_superuser:
-                raise ValidationError("Only active, non-staff person accounts can receive a password.")
-            if user.has_usable_password():
-                raise ValidationError("This account already has a usable password.")
+            if error := user.password_issue_error():
+                raise ValidationError(error)
             password = secrets.token_urlsafe(24)
             user.set_password(password)
             user.sudo(reason="iam.password.issue").save(update_fields=["password"])

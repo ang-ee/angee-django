@@ -27,8 +27,15 @@ class UploadDenied(UploadError):
     code = "denied"
 
 
+class UploadRecordDenied(UploadDenied):
+    """Uniform denial for missing, unreadable, or untyped attachment records."""
+
+    def __init__(self) -> None:
+        super().__init__("Record is unavailable or access is denied.")
+
+
 class UploadTargetNotFound(UploadError):
-    """A drive, folder, or file addressed by the request does not exist."""
+    """A drive, folder, file, or attachment target in the request does not exist."""
 
     status_code = 404
     code = "not_found"
