@@ -29,11 +29,15 @@ from tests.conftest import (
     Drive,
     File,
     Folder,
+    Vault,
     Vendor,
+    create_platform_admin,
+    create_user,
     installed_field_owners,
 )
-from tests.messaging_models import Channel, Message, Thread
-from tests.projects_models import Project, ProjectBinding
+from tests.messaging_models import Channel, Message, Person, Thread, ThreadAttachment
+from tests.projects_models import Project, ProjectBinding, Task
+from tests.spaces_models import Group, Membership
 
 
 def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
@@ -43,12 +47,39 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
     messaging = Path(apps.get_app_config("messaging").path, "permissions.zed").read_text()
 
     for definition in (
-        "storage/drive", "storage/folder", "storage/file", "integrate/integration", "messaging/thread",
-        "knowledge/vault", "knowledge/record_binding",
+        "storage/drive",
+        "storage/folder",
+        "storage/file",
+        "integrate/integration",
+        "messaging/thread",
+        "knowledge/vault",
+        "knowledge/record_binding",
     ):
         assert f"definition {definition}" in projects
     assert "relation channel: integrate/integration // rebac:field=channel" in messaging
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
+
+
+@pytest.mark.parametrize("storage", ("denormalized", "registry"))
+def test_task_chatter_inherits_live_record_read(project_access_schema: Any, storage: str) -> None:
+    """The task's read gate grants chatter read and revokes it when narrowed."""
+
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+        call_command("rebac", "sync", verbosity=0)
+        user = apps.get_model("iam", "User").objects.create_user(username="task-chatter-reader")
+        with system_context(reason="tests.projects.task_chatter"):
+            project = Project.objects.create(title="Thread project")
+            task = Task.objects.create(project=project)
+            attachment = ThreadAttachment.objects.ensure_for_record(task)
+            write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(user))])
+        thread = attachment.thread
+        assert thread.with_actor(user).has_access("read")
+        assert Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
+        assert not thread.with_actor(user).has_access("write")
+        with system_context(reason="tests.projects.task_narrow"):
+            task.set_visibility("restricted")
+        assert not thread.with_actor(user).has_access("read")
+        assert not Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
 
 
 @pytest.fixture
@@ -74,6 +105,46 @@ def project_access_schema(tmp_path: Path, transactional_db: None) -> Any:
                 config.rebac_schema = original
 
 
+@pytest.mark.parametrize("storage", ("denormalized", "registry"))
+def test_bound_vault_requires_share_to_bind_another_project(project_access_schema: Any, storage: str) -> None:
+    """A source project writer cannot expose its vault to another project's readers."""
+
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+        call_command("rebac", "sync", verbosity=0)
+        manager = create_user("vault-project-manager")
+        owner = create_user("vault-owner")
+        writer = create_user("vault-project-writer")
+        reader = create_user("vault-destination-reader")
+        admin = create_platform_admin("vault-administrator")
+        with system_context(reason="tests.projects.vault_binding"):
+            team = Group.objects.create(name="Project team", slug="vault-project-team")
+            Membership.objects.create(
+                group=team,
+                party=Person.objects.for_user(writer),
+                role="moderator",
+                is_confirmed=True,
+            )
+            source = Project.objects.create(title="Source", owner=manager, team=team)
+            destination = Project.objects.create(title="Destination", owner=writer)
+            vault = Vault.objects.create(name="Bound vault", owner=owner)
+            bind(project=source, target=vault)
+            write_relationships([RelationshipTuple(to_object_ref(destination), "reader", to_subject_ref(reader))])
+        assert source.with_actor(writer).has_access("write")
+        assert not source.has_access("share")
+        assert vault.with_actor(writer).has_access("write")
+        assert not vault.has_access("share")
+        with pytest.raises(PermissionDenied, match="Share access to the resource"):
+            bind(project=destination.with_actor(writer), target=vault)
+        assert not vault.with_actor(reader).has_access("read")
+        assert not ProjectBinding._base_manager.filter(project=destination).exists()
+        for sharer in (owner, manager, admin):
+            assert vault.with_actor(sharer).has_access("share")
+            assert Vault.objects.with_actor(sharer).with_action("share").filter(pk=vault.pk).exists()
+        unbind(project=source.with_actor(manager), target=vault.with_actor(manager))
+        assert not vault.with_actor(manager).has_access("share")
+        assert vault.with_actor(owner).has_access("share")
+
+
 @pytest.mark.django_db(transaction=True)
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
 def test_project_binding_grants_and_revokes_thread_message_access(
@@ -96,16 +167,18 @@ def test_project_binding_grants_and_revokes_thread_message_access(
         binding = bind(project=project, target=channel)
         assert bind(project=project, target=channel).pk == binding.pk
         assert ProjectBinding.objects.filter(pk=binding.pk, project=project).exists()
-        assert not active_relationship_model().objects.filter(
-            resource_type="integrate/integration",
-            resource_id=str(channel.pk),
-            relation="project",
-            subject_type="projects/project",
-            subject_id=str(project.pk),
-        ).exists()
-        write_relationships(
-            [RelationshipTuple(to_object_ref(project), "editor", to_subject_ref(editor))]
+        assert (
+            not active_relationship_model()
+            .objects.filter(
+                resource_type="integrate/integration",
+                resource_id=str(channel.pk),
+                relation="project",
+                subject_type="projects/project",
+                subject_id=str(project.pk),
+            )
+            .exists()
         )
+        write_relationships([RelationshipTuple(to_object_ref(project), "editor", to_subject_ref(editor))])
     with system_context(reason="tests.project_access.folder"):
         storage_backend = Backend.objects.create(
             slug="project-folder",
@@ -216,15 +289,11 @@ def test_project_drive_access_reaches_folders_and_files(project_access_schema: A
             content_hash="0" * 64,
             storage_path="notes.txt",
         )
-        write_relationships(
-            [RelationshipTuple(to_object_ref(drive), "editor", to_subject_ref(owner))]
-        )
+        write_relationships([RelationshipTuple(to_object_ref(drive), "editor", to_subject_ref(owner))])
     with actor_context(owner):
         project = Project.objects.create(title="Drive cascade")
         bind(project=project, target=drive)
-        write_relationships(
-            [RelationshipTuple(to_object_ref(project), "editor", to_subject_ref(editor))]
-        )
+        write_relationships([RelationshipTuple(to_object_ref(project), "editor", to_subject_ref(editor))])
     with actor_context(editor):
         assert drive.has_access("write")
         assert drive.has_access("share")

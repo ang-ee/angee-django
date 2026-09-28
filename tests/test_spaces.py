@@ -35,9 +35,9 @@ from tests.conftest import (
     installed_field_owners,
     result_data,
 )
+from tests.projects_models import Queue
 from tests.spaces_models import Group, Membership
 from tests.test_messaging import Party, Person, Thread
-from tests.test_productivity_write_behavior import Queue
 
 # These concrete test models register after Django's app population. The lazy
 # string relation resolves when ``Party`` registers, but Django may already have
@@ -268,7 +268,7 @@ def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(spaces_tables: None) 
         Membership.objects.create(group=queue, party=person, is_confirmed=True)
         assert Queue._meta.get_field("owner").model is Group
         assert queue.owner_id == owner.pk
-        assert [entry.party.pk for entry in queue.thread_audience()] == [person.pk]
+        assert [entry.party_id for entry in queue.thread_audience()] == [person.pk]
         queue.delete()
 
         root = Group.objects.create(name="Community")

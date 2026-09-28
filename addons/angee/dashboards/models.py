@@ -16,8 +16,6 @@ from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
     AuditMixin,
-    ConditionalSharedReaderMixin,
-    ConditionalSharedReaderQuerySet,
     CreationKeyMixin,
     CreationKeyQuerySet,
     OptimisticLockMixin,
@@ -389,7 +387,7 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
 
 
 class DashboardQuerySet(
-    CreationKeyQuerySet[Any], ConditionalSharedReaderQuerySet[Any], ArchiveQuerySet[Any], AngeeQuerySet[Any],
+    CreationKeyQuerySet[Any], ArchiveQuerySet[Any], AngeeQuerySet[Any],
 ):
     """Archive scopes layered over actor-scoped dashboard reads."""
 
@@ -592,14 +590,13 @@ DashboardObjects = DashboardManager()
 
 
 class Dashboard(
-    CreationKeyMixin, OptimisticLockMixin, ConditionalSharedReaderMixin,
+    CreationKeyMixin, OptimisticLockMixin,
     ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel,
 ):
     """One installed baseline or actor-owned complete dashboard snapshot."""
 
     runtime = True
     sqid_prefix = "dsh_"
-    shared_reader_policy_fields = ("owner",)
     creation_key_scope = "owner"
     rebac_grantable = {"viewer": "share", "editor": "share"}
 
@@ -666,12 +663,6 @@ class Dashboard(
     def __str__(self) -> str:
         return self.name
 
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Installed baselines are readable by every authenticated actor."""
-
-        return self.owner_id is None
-
     def set_personal_archived(self, *, archived: bool, expected_revision: int) -> Any:
         """Archive one personal dashboard under its revision lock and actor gate."""
 
@@ -737,12 +728,11 @@ class Dashboard(
         source: str,
         publish: bool = False,
     ) -> None:
-        """Reconcile readers and validate snapshots, including unchanged resource rows."""
+        """Validate snapshots, including unchanged resource rows."""
 
         loaded = tuple(instances)
         for instance in loaded:
             dashboard = cast("Dashboard", instance)
-            dashboard.reconcile_shared_reader()
             dashboard.validate_installed_snapshot()
         super().after_resource_load(loaded, tier=tier, source=source, publish=publish)
 

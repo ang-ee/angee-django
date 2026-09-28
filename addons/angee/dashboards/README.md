@@ -5,13 +5,14 @@ The dashboards addon validates their queries against the composed console
 resource metadata after resource loading and when saving a snapshot.
 `@angee/ui` owns the built-in widget renderers.
 
-Installed baselines have no actor owner and receive a shared reader through
-`ConditionalSharedReaderMixin`. Dashboard and widget reads use the same REBAC
-scope as authored dashboards; the shared reader grants no write access. Load
-resources only after `migrate` and `rebac sync`, because reader reconciliation
-validates against the persisted permission schema. `angee provision` already
-runs those steps in that order. When adopting this policy for existing rows,
-sync permissions and reload their declared resources to reconcile readers.
+Installed baselines have no actor owner. Their [permission policy](permissions.zed)
+derives shared reads through a filtered constant over that column, so bulk owner
+changes take effect without tuple reconciliation. Dashboard and widget reads use
+the same REBAC scope as authored dashboards; the shared reader grants no write
+access. The [runtime migration](runtime_migrations/shared_reader_cleanup.py)
+removes the retired wildcard tuples during `migrate`, with no prior permission
+sync required. Sync permissions afterwards to activate the new schema; resource
+reloads are unnecessary for shared access.
 
 ## Declared table columns
 

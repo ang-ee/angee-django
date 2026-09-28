@@ -10,3 +10,8 @@ master = [{ path = "resources/master/010_money.currency.yaml", adopt = "code" }]
 demo = [
   { path = "resources/demo/020_money.currencyrate.yaml", depends_on = "resources/master/010_money.currency.yaml" },
 ]
+
+[[migrations]]
+name = "shared_reader_cleanup"
+app_label = "money"
+module = "runtime_migrations.shared_reader_cleanup"

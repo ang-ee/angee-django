@@ -245,13 +245,13 @@ class TaskProjectionMixin:
     def priority_rank(self) -> int:
         """Return the priority's position in its declared order."""
 
-        return cast(Any, self)._priority_rank
+        return cast(Any, self).priority_rank()
 
     @strawberry_django.field(annotate={"_promoted_phase": lambda info: Task.objects.promoted_phase_expression()})
     def promoted_phase(self) -> str | None:
         """Return only the phase name authorized through read_promoted_phase."""
 
-        return cast(Any, self)._promoted_phase
+        return cast(Any, self).promoted_phase()
 
 
 @strawberry_django.type(Task)

@@ -6,3 +6,8 @@ description = "Composable resource, addon, and personal dashboards"
 keywords = ["dashboards", "analytics", "widgets"]
 category = "Data"
 depends_on = ["angee.iam", "angee.resources", "angee.graphql"]
+
+[[migrations]]
+name = "shared_reader_cleanup"
+app_label = "dashboards"
+module = "runtime_migrations.shared_reader_cleanup"

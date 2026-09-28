@@ -4,31 +4,61 @@ from copy import deepcopy
 
 from django.db import models
 
-from angee.base.mixins import OwnerMixin
+from angee.base.mixins import ImmutableFieldsMixin, OptimisticLockMixin, OwnerMixin
 from angee.base.models import AngeeDataModel
+from angee.messaging.models import ThreadedModelMixin
 from angee.projects.models import Link as AbstractLink
 from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
 from angee.projects.models import Task as AbstractTask
+from angee.projects.models import TaskManager
 from angee.work.models import ProjectWork, TaskWork
+from angee.work.models import Queue as AbstractQueue
+from angee.work.models import Stage as AbstractWorkStage
+from tests import test_sequence  # noqa: F401 -- register the queue's native sequence targets
+from tests.spaces_models import Group
 
 
-class Task(TaskWork, OwnerMixin, AngeeDataModel):
+class Queue(AbstractQueue, Group):
+    """Native work queue shared by task access and lifecycle fixtures."""
+
+    class Meta(AbstractQueue.Meta):
+        abstract = False
+        app_label = "work"
+        db_table = "test_create_work_queue"
+        rebac_resource_type = "work/queue"
+
+
+class Stage(AbstractWorkStage):
+    """Native stage target for the queue's default and lifecycle fixtures."""
+
+    class Meta(AbstractWorkStage.Meta):
+        abstract = False
+        app_label = "work"
+        db_table = "test_create_work_stage"
+        rebac_resource_type = "work/stage"
+
+
+class Task(TaskWork, ImmutableFieldsMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin, AngeeDataModel):
     """Concrete task carrying the production chatter-wake owner."""
 
     sqid_prefix = "tpt_"
     assignee = AbstractTask._meta.get_field("assignee").clone()
     visibility = AbstractTask._meta.get_field("visibility").clone()
+    immutable_fields = AbstractTask.immutable_fields
+    TaskVisibility = AbstractTask.TaskVisibility
+    set_visibility = AbstractTask.set_visibility
+    validate_visibility = AbstractTask.validate_visibility
+    objects = TaskManager()
     links = deepcopy(AbstractTask._meta.get_field("links"))
     file_attachments = deepcopy(AbstractTask._meta.get_field("file_attachments"))
     knowledge_bindings = deepcopy(AbstractTask._meta.get_field("knowledge_bindings"))
 
-    # This source-model graph exercises chatter wake behavior without composing
-    # work's queue lifecycle and its additional model graph.
-    queue = None
-    stage = None
+    # Keep the queue and stage fields used by the native work owner. These
+    # fixtures do not exercise cycle scheduling.
     cycle = None
+    cycle_id = None
     project = models.ForeignKey(
         "projects.Project",
         null=True,

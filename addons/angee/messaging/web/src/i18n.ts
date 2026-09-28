@@ -229,6 +229,7 @@ export const enMessagingMessages: Record<string, string> = {
   "activity.markDone": "Mark done",
   "activity.cancel": "Cancel activity",
   "activity.stateDone": "Done",
+  "activity.recordedOn": "Recorded {day}",
   "activity.stateCanceled": "Canceled",
   "activity.stateOverdue": "Overdue",
   "activity.stateToday": "Today",
