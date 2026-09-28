@@ -6,6 +6,7 @@ name: no private paths
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 

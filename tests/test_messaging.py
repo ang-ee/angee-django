@@ -67,7 +67,6 @@ from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import MergeVeto as AbstractMergeVeto
 from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import PartyHandle as AbstractPartyHandle
-from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.workflows_parties.models import PartyHandle as WorkflowPartyHandleContribution
@@ -83,6 +82,7 @@ from tests.messaging_models import (
     MessageSubtype,
     Part,
     Party,
+    Person,
     Thread,
     ThreadAttachment,
     ThreadFollower,
@@ -94,7 +94,6 @@ from tests.test_agents_graphql import Agent
 
 _PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
 _OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
-_PersonMeta = getattr(AbstractPerson, "Meta", object)
 _AddressMeta = getattr(AbstractAddress, "Meta", object)
 
 
@@ -108,18 +107,6 @@ class Organization(AbstractOrganization, Party):
         app_label = "parties"
         db_table = "test_parties_organization"
         rebac_resource_type = "parties/organization"
-
-
-class Person(AbstractPerson, Party):
-    """Concrete person used when messaging attributes a user-owned handle."""
-
-    class Meta(_PersonMeta):
-        """Django model options for the canonical test person."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_person"
-        rebac_resource_type = "parties/person"
 
 
 class MergeVeto(AbstractMergeVeto):
@@ -3130,9 +3117,8 @@ def test_broadcasting_room_creator_socket_gated_by_membership(composed_tables: N
 def test_first_post_autofollow_seeds_the_author_receipt(composed_tables: None) -> None:
     """An author's FIRST post on an unfollowed record is never unread for them.
 
-    The write path's receipt advance runs before the post's autofollow can create
-    the membership row, so the autofollow seeds the fresh follower's receipt at
-    the just-posted message (the author-auto-read convention).
+    The write path creates the author's follow before advancing its receipt to
+    the just-posted message, in the same transaction.
     """
 
     del composed_tables

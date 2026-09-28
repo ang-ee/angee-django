@@ -54,7 +54,7 @@ import {
   type RailDropPlacement,
 } from "./app-rail-model";
 import { useAppRailPreferences } from "./app-rail-preferences";
-import { readRuntimeRouteShortcuts, useRuntimeBrand, useRuntimeUserPreferences } from "../runtime";
+import { readRuntimeRouteShortcuts, useAppRuntime, useRuntimeBrand, useRuntimeUserPreferences } from "../runtime";
 
 export interface AppRailProps {
   className?: string;
@@ -98,6 +98,7 @@ export function AppRail({
     select: (state) => state.location.pathname,
   });
   const brand = useRuntimeBrand();
+  const { confineTo } = useAppRuntime();
   const runtimeTree = useChromeMenuTree();
   const tree = useMemo(
     () => menuItems ? MenuTree.from(menuItems) : runtimeTree,
@@ -106,8 +107,10 @@ export function AppRail({
   const { railPreferences, setRailPreferences } = useAppRailPreferences();
   const runtimePreferences = useRuntimeUserPreferences();
   const shortcuts = useMemo(
-    () => readRuntimeRouteShortcuts(runtimePreferences.preferences),
-    [runtimePreferences.preferences],
+    () => readRuntimeRouteShortcuts(runtimePreferences.preferences).filter(
+      (shortcut) => !confineTo || tree.activeAppRoot(shortcut.path)?.id === confineTo,
+    ),
+    [confineTo, runtimePreferences.preferences, tree],
   );
   const largeViewport = useMediaQuery(LARGE_VIEWPORT_QUERY);
   const drawerMode = presentation === "drawer";
@@ -125,8 +128,10 @@ export function AppRail({
     [railPreferences.order, tree],
   );
   const [onlyRoot] = items;
-  const singleApp = brand && items.length === 1 && onlyRoot
-    ? { root: onlyRoot, brand }
+  const railBrand = brand ?? (confineTo && onlyRoot
+    ? { name: onlyRoot.displayLabel, mark: onlyRoot.iconName } : null);
+  const singleApp = railBrand && items.length === 1 && onlyRoot
+    ? { root: onlyRoot, brand: railBrand }
     : null;
   const settings = tree.settingsEntry();
   const activeRootId = activePlace.scope === place.scope

@@ -194,6 +194,7 @@ export interface CaptureChromeOptions {
   addons: readonly BaseAddon[];
   path: string;
   home?: string;
+  confineTo?: string;
   schemas?: CreateAppInput["schemas"];
 }
 
@@ -202,6 +203,7 @@ export async function captureChrome({
   addons,
   path,
   home = path,
+  confineTo,
   schemas = TEST_SCHEMAS,
 }: CaptureChromeOptions): Promise<CapturedChrome> {
   const captures: CapturedChromeProps[] = [];
@@ -249,6 +251,7 @@ export async function captureChrome({
     defaultSchema: "console",
     subscriptionSchema: "console",
     home,
+    confineTo,
   }).mount(host);
 
   try {

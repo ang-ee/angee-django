@@ -77,6 +77,9 @@ describe("generated resource wire contract", () => {
         relationModelLabel: null, widget: null,
       }],
       futureResourceFact: { enabled: true },
+      createArguments: [{ name: "client_creation_key", type: "String" }],
+      updateArguments: [{ name: "expected_revision", type: "Int" }],
+      saveArguments: [{ name: "expected_revision", type: "Int" }],
     });
     const wire = { vendor: { retained: true }, angee: { resources: [resource], future: "kept" } };
     expect(defineAngeeSchemaMetadata(wire)).toEqual(wire);
@@ -85,6 +88,12 @@ describe("generated resource wire contract", () => {
   test.each([
     { query: { identity: { field: 42 } } },
     { aggregateMeasures: [{ op: 42 }] },
+    { createArguments: [42] },
+    { createArguments: ["client_creation_key"] },
+    { updateArguments: [{ name: "expected_revision" }] },
+    { saveArguments: [{ name: "expected_revision", type: 42 }] },
+    { updateArguments: {} },
+    { saveArguments: "expected_revision" },
     { linesResource: { field: "lines", modelLabel: "notes.Line", fields: [{ name: "body", kind: "scalar", readable: "yes" }] } },
   ])("rejects malformed nested resource facts: %j", (patch) => {
     expect(() => defineAngeeSchemaMetadata({ angee: { resources: [{ ...testDataResource("notes.Note"), ...patch }] } }))

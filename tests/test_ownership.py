@@ -29,7 +29,9 @@ def test_explicit_owner_wins_without_rewriting_attribution():
     assert (row.owner_id, row.created_by_id) == (owner.pk, actor.pk)
 
 
-def test_system_insert_without_actor_leaves_owner_and_attribution_empty():
+def test_system_insert_without_actor_leaves_owner_and_attribution_empty(monkeypatch):
+    monkeypatch.setattr(OwnedRow, "owner_container", None)
+    assert OwnedRow().container_owns_items() is False
     with system_context(reason="test.ownership.unattended"):
         row = OwnedRow.objects.create()
     assert row.owner_id is row.created_by_id is None
@@ -43,6 +45,7 @@ def test_container_flag_controls_only_the_insert_owner_default(cached, owns_item
     values = {"container": container} if cached else {"container_id": container.pk}
     with actor_context(actor):
         row = OwnedRow.objects.create(**values)
+        assert row.container_owns_items() is owns_items
     assert row.owner_id == (None if owns_items else actor.pk)
     assert row.created_by_id == actor.pk
 

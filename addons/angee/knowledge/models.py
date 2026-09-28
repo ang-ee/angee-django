@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from graphlib import CycleError, TopologicalSorter
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, NamedTuple, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -30,16 +31,23 @@ from rebac import (
     MissingActorError,
     ObjectRef,
     PermissionDenied,
+    RelationshipTuple,
     SubjectRef,
     current_actor,
     system_context,
     to_object_ref,
     to_subject_ref,
+    write_relationships,
 )
+from rebac.backends import LocalBackend
 from rebac.backends import backend as rebac_backend
+from rebac.models import SchemaRelation
 from rebac.resources import model_resource_type
+from rebac.schema.ast import FieldBinding, PermArrow, PermBinOp, PermExpr, Permission, PermNil, PermRef, backing_to_dict
+from rebac.schema.parser import validate_schema
 
 from angee.base.actors import actor_user_id
+from angee.base.identity import instances_from_public_ids, public_id_for
 from angee.base.impl import ImplClassField
 from angee.base.mixins import (
     AuditMixin,
@@ -55,6 +63,7 @@ from angee.base.refs import RecordRef, RecordRefMixin, canonical_record_target
 from angee.knowledge.retrieval import RetrievalBackend
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
+logger = logging.getLogger(__name__)
 
 # CommonMark tokenizer reused for every outline parse; we only consume block
 # tokens' source line spans (``.map``) and the heading inline ``.content``, so a
@@ -277,8 +286,145 @@ class Vault(SqidMixin, OwnerMixin, CreationKeyMixin, AngeeModel, HistoryMixin):
         return backend_class(self)
 
 
+class PageAttributionChange(NamedTuple):
+    """Scalar inventory of attribution loss; ownerless vaults never receive shares."""
+
+    pk: int
+    public_id: str
+    author_id: int
+    loses_read: bool
+    loses_write: bool
+    ownerless_vault: bool
+
+    @property
+    def grants_viewer(self) -> bool:
+        """Whether this entry calls for an explicit read share."""
+
+        return self.loses_read and not self.ownerless_vault
+
+
+def _without_page_owner(expression: PermExpr) -> PermExpr:
+    """Remove only the retired page relation from the installed permission AST."""
+
+    if isinstance(expression, PermRef) and expression.name == "owner":
+        return PermNil()
+    if isinstance(expression, PermArrow) and expression.via == "owner":
+        return PermNil()
+    if isinstance(expression, PermBinOp):
+        return replace(
+            expression,
+            left=_without_page_owner(expression.left),
+            right=_without_page_owner(expression.right),
+        )
+    return expression
+
+
 class PageManager(AngeeManager):
     """Factories for actor-scoped page writes."""
+
+    def migrate_attribution(
+        self, *, apply: bool = False, vaults: Iterable[str] | None = None,
+    ) -> tuple[PageAttributionChange, ...]:
+        """Inventory author-only access, optionally preserving lost reads as shares.
+
+        The stored ``created_by`` owner relation is the sole pending marker.
+        Native post_migrate applies this before permission sync; the command can
+        preview or apply it, optionally restricted to vault public IDs. A fresh
+        install or completed sync returns no inventory. Private native evaluators
+        compare one stored schema snapshot with attribution removed, preserving
+        other permission arms without changing live policy. Invalid extension
+        references fail before writing.
+
+        A parent-derived read needs no direct child share: its attribution-only
+        ancestor is migrated there. Ownerless-vault pages are reported separately
+        and never granted, so cloning cannot give its author access. Only scalar
+        inventory is retained, and only share persistence opens a transaction.
+        No write or delete share is created. Writers must be stopped during the
+        upgrade, as the inventory intentionally does not lock application rows.
+        """
+
+        if not isinstance(rebac_backend(), LocalBackend):
+            logger.debug("Page attribution migration skipped for a non-local REBAC backend.")
+            return ()
+        resource_type = model_resource_type(self.model)
+        owner_backing = FieldBinding("created_by")
+        if not SchemaRelation.objects.filter(
+            definition__resource_type=resource_type, name="owner", backing=backing_to_dict(owner_backing),
+        ).exists():
+            return ()
+        # Pin the stored snapshot only on private evaluators. Public backend
+        # schema freshness and the eventual permission sync remain untouched.
+        installed = LocalBackend()
+        schema = installed.schema()
+        definition = schema.get_definition(str(resource_type))
+        if definition is None or not any(
+            relation.name == "owner" and relation.backing == owner_backing
+            for relation in definition.relations
+        ):
+            return ()
+        installed.set_schema(schema)
+        owner = next(relation for relation in definition.relations if relation.name == "owner")
+        author_type = owner.allowed_subjects[0].type
+        without_owner = replace(
+            definition,
+            relations=tuple(relation for relation in definition.relations if relation.name != "owner"),
+            permissions=tuple(
+                Permission(permission.name, _without_page_owner(permission.expression))
+                for permission in definition.permissions
+            ),
+        )
+        prospective_schema = replace(
+            schema,
+            definitions=[without_owner if item is definition else item for item in schema.definitions],
+        )
+        errors = validate_schema(prospective_schema)
+        if errors:
+            raise ValidationError([
+                "Update installed permission extensions before migrating page attribution.",
+                *errors,
+            ])
+        prospective = LocalBackend()
+        prospective.set_schema(prospective_schema)
+        pages = self.system_context(reason="knowledge.page.migrate_attribution").filter(created_by__isnull=False)
+        if vaults is not None:
+            vault_model = apps.get_model("knowledge", "Vault")
+            requested = tuple(dict.fromkeys(vaults))
+            selected = instances_from_public_ids(vault_model, requested, queryset=vault_model._base_manager.all())
+            missing = set(requested) - selected.keys()
+            if missing:
+                raise ValidationError(f"Vault(s) not found: {', '.join(sorted(missing))}")
+            pages = pages.filter(vault_id__in=[vault.pk for vault in selected.values()])
+        changes = []
+        rows = pages.order_by("pk").values_list("pk", "created_by_id", "parent_id", "vault__owner_id")
+        for pk, author_id, parent_id, vault_owner_id in rows.iterator(chunk_size=500):
+            author = SubjectRef.of(author_type, str(author_id))
+            resource = ObjectRef(definition.resource_type, str(pk))
+            loses_read, loses_write = (
+                installed.has_access(subject=author, resource=resource, action=action)
+                and not prospective.has_access(subject=author, resource=resource, action=action)
+                for action in ("read", "write")
+            )
+            if loses_read and parent_id is not None:
+                loses_read = not installed.has_access(
+                    subject=author, resource=ObjectRef(definition.resource_type, str(parent_id)), action="read",
+                )
+            ownerless = vault_owner_id is None
+            if loses_read or loses_write or ownerless:
+                changes.append(PageAttributionChange(
+                    pk, public_id_for(self.model, pk), author_id, loses_read, loses_write, ownerless,
+                ))
+        if apply:
+            shares = [
+                RelationshipTuple(
+                    resource=ObjectRef(definition.resource_type, str(change.pk)), relation="viewer",
+                    subject=SubjectRef.of(author_type, str(change.author_id)),
+                )
+                for change in changes if change.grants_viewer
+            ]
+            if shares:
+                with transaction.atomic(), system_context(reason="knowledge.page.migrate_attribution"):
+                    write_relationships(shares)
+        return tuple(changes)
 
     def create_in(self, vault: Any, **fields: Any) -> Any:
         """Create a page in ``vault`` after the REBAC create preflight.
@@ -356,10 +502,12 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
     A page is thin identity — title, hierarchy, and the ``kind``
     discriminator. Kind-specific content lives in one-to-one sidecar
     models; this addon ships :class:`MarkdownPage` for markdown-based
-    kinds.
+    kinds. Authorship grants no access: the vault and parent own writes and
+    deletion; explicit viewer shares can additionally grant read access.
     """
 
     runtime = True
+    rebac_grantable = {"viewer": "write"}
 
     sqid_prefix = "pg_"
 
