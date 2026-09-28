@@ -85,8 +85,9 @@ export const enStorageMessages: Record<string, string> = {
   // File detail record form — section + field labels.
   "file.details": "Details",
   "file.filename": "Filename",
-  "file.owner": "Owner",
+  "file.author": "Uploaded by",
   "file.stage": "Stage",
+  "file.visibility": "Audience",
 
   // File-row stage badge.
   "stage.ready": "Ready",
@@ -98,9 +99,10 @@ export const enStorageMessages: Record<string, string> = {
   "column.name": "Name",
   "column.type": "Type",
   "column.stage": "Stage",
+  "column.visibility": "Audience",
   "column.size": "Size",
   "column.count": "Files",
-  "column.owner": "Owner",
+  "column.author": "Uploaded by",
   "column.modified": "Modified",
 
   // Settings admin console sections.

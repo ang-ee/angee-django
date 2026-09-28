@@ -3315,8 +3315,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
 
         Delegates to ``File.objects.ingest_bytes`` — the storage owner's
         server-side byte intake (draft → write → finalize) — so the attachment
-        lands content-addressed and ``Part.file`` resolves. The owner stamps the
-        file's ``created_by`` so the channel owner can read its own attachments.
+        lands content-addressed and ``Part.file`` resolves. Its ``owner`` grants
+        the channel owner access; ``created_by`` remains actor attribution.
         ``filename`` is the resolved part name (the caller derives one when the
         source gave none); on a content-addressed dedup hit the existing File keeps
         its first name, so the reliable per-message name lives on ``Part.name``.

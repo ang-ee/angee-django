@@ -41,7 +41,7 @@ def test_group_access_projects_canonical_subject_identity() -> None:
 def test_share_declarations_and_lineage_head_guard() -> None:
     assert AbstractAgent.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Task.get_rebac_grantable() == {"reader": "share", "editor": "share"}
-    assert Drive.get_rebac_grantable() == {"editor": "write", "viewer": "write"}
+    assert Drive.get_rebac_grantable() == {"editor": "share", "viewer": "share"}
     assert Workflow.get_rebac_grantable() == {"editor": "write", "viewer": "write"}
     Workflow.validate_record_access_target(SimpleNamespace(published_from_id=None))
     with pytest.raises(ValidationError, match="lineage head"):
@@ -59,7 +59,7 @@ def test_subject_picker_resource_matches_the_declared_relation(
     definition = parse_zed(
         "definition storage/drive {\n"
         f"    relation viewer: auth/group#{relation}\n"
-        "    permission write = viewer\n"
+        "    permission share = viewer\n"
         "}\n"
     ).get_definition("storage/drive")
     monkeypatch.setattr(metadata, "effective_rebac_definition", lambda model: definition)
