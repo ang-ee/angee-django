@@ -13,10 +13,12 @@ afterEach(cleanup);
 function IdentityProbe() {
   const brand = useRuntimeBrand();
   const { i18n } = useAppRuntime();
+  const uiCopy = i18n?.getFixedT(null, "ui");
+  const addonCopy = i18n?.getFixedT(null, "notes");
   return <>
     <output aria-label="Brand">{brand ? `${brand.name}/${brand.mark}` : "unbranded"}</output>
-    <output aria-label="Base copy">{i18n?.t("modal.copy", { ns: "ui" })}</output>
-    <output aria-label="Addon copy">{i18n?.t("title", { ns: "notes" })}</output>
+    <output aria-label="Base copy">{String(uiCopy?.("modal.copy") ?? "")}</output>
+    <output aria-label="Addon copy">{String(addonCopy?.("title") ?? "")}</output>
   </>;
 }
 

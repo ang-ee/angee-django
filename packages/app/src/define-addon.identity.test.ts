@@ -53,7 +53,7 @@ describe("addon brand ownership", () => {
 });
 
 describe("addon translation ownership", () => {
-  test.each([{}, { "unused.future.key": "Still reserved" }])(
+  test.each<Record<string, string>>([{}, { "unused.future.key": "Still reserved" }])(
     "refuses the entire ui namespace and names its claimant", (messages) => {
       expect(() => composeAddons([
         { id: "translation-claimant", i18n: { ui: messages } },
