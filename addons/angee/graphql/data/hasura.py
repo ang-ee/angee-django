@@ -667,6 +667,16 @@ def _group_by_expression_provider(
     return expressions
 
 
+def declared_hasura_write_relation_fields(model: type[models.Model]) -> tuple[str, ...]:
+    """Return the writable extension relations that require public-id decoding."""
+
+    fields = dict.fromkeys((
+        *declared_hasura_resource_fields(model, "hasura_insertable_fields"),
+        *declared_hasura_resource_fields(model, "hasura_updatable_fields"),
+    ))
+    return tuple(name for name in fields if model._meta.get_field(name).is_relation)
+
+
 def declared_hasura_resource_fields(
     model: type[models.Model],
     attribute: str,
