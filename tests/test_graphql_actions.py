@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import strawberry
 from django.contrib.auth.models import AnonymousUser, Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
@@ -22,6 +23,7 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
+from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import (
     ActionResult,
@@ -30,6 +32,7 @@ from angee.graphql.actions import (
     authorized_action_target,
     resolve_action_target,
 )
+from angee.graphql.schema import AngeeSchema
 from tests.conftest import create_user
 from tests.linesdemo.models import Document
 
@@ -92,6 +95,38 @@ def test_action_guard_admits_addon_local_errors_and_reraises_others() -> None:
 
     with pytest.raises(RuntimeError, match="boom"):
         submit("other")
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (CreationKeyConflict("private-content"), "CREATION_KEY_CONFLICT"),
+        (StaleRevisionError(1, 2), "STALE_REVISION"),
+    ],
+)
+def test_action_guard_preserves_typed_wire_errors(
+    error: Exception, code: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Authored actions preserve stable codes without exposing exception details."""
+
+    @strawberry.type
+    class Query:
+        ready: bool = True
+
+    @strawberry.type
+    class Mutation:
+        @strawberry.mutation
+        @action_guard("Update failed.", errors=(Exception,))
+        def update_record(self) -> ActionResult:
+            raise error
+
+    result = AngeeSchema(query=Query, mutation=Mutation).execute_sync("mutation { updateRecord { ok } }")
+
+    assert result.errors is not None
+    assert result.errors[0].message == code
+    assert result.errors[0].extensions == {"code": code}
+    assert result.errors[0].original_error is None
+    assert str(error) not in caplog.text
 
 
 def test_action_result_carries_in_band_validation_errors() -> None:

@@ -156,7 +156,7 @@ def test_channel_pairing_renders_every_lifecycle_and_report_state(
     """Lifecycle, claimed identity, report, and live desire keep their precedence."""
 
     del pairing_graphql
-    admin = _platform_admin(f"msg-pairing-state-{expected.lower()}")
+    admin = _platform_admin(f"msg-pairing-state-{expected.lower()}-admin")
     channel = make_integration(
         f"msg-pairing-state-{expected.lower()}",
         model=Channel,

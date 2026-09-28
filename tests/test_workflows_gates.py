@@ -25,7 +25,7 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.base.identity import public_subject_ref
+from angee.base.identity import public_id_for, public_subject_ref
 from angee.dashboards.models import validate_dashboard_queries
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import decision_actions, engine
@@ -2862,8 +2862,8 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
     """
     query = (
         """
-        query DecisionReads($id: String!, $run: String!) {
-          workflow_decisions(where: {step_run__run: {_eq: $run}}, limit: 10) {
+        query DecisionReads($id: String!) {
+          workflow_decisions(where: {id: {_eq: $id}}, limit: 10) {
             id
             source_run_id
             source_execution_id
@@ -2883,7 +2883,22 @@ def test_decision_resources_scope_all_read_shapes_and_guard_journal_links(
         + context_selection
     )
     public = _schema("public")
-    variables = {"id": str(decision.sqid), "run": str(decision.step_run.run.sqid)}
+    variables = {"id": str(decision.sqid)}
+
+    run_filter = """query DecisionsByRun($run: String!) {
+      workflow_decisions(where: {step_run__run: {_eq: $run}}) { id }
+    }"""
+    run_id = str(decision.step_run.run.sqid)
+    unknown_run_id = public_id_for(WorkflowRun, decision.step_run.run_id + 1_000_000)
+    for viewer in (assignee, requester, stranger):
+        hidden = _execute(public, run_filter, {"run": run_id}, user=viewer)
+        unknown = _execute(public, run_filter, {"run": unknown_run_id}, user=viewer)
+        assert hidden.data is unknown.data is None
+        assert hidden.errors and unknown.errors
+        assert [error.formatted for error in hidden.errors] == [error.formatted for error in unknown.errors]
+    assert result_data(_execute(public, run_filter, {"run": run_id}, user=admin)) == {
+        "workflow_decisions": [{"id": str(decision.sqid)}]
+    }
 
     assigned = result_data(_execute(public, query, variables, user=assignee))
     requester_read = result_data(_execute(public, query, variables, user=requester))

@@ -10,7 +10,6 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
@@ -29,7 +28,6 @@ from tests.test_messaging import (
     Party,
     Reaction,
     Thread,
-    ThreadAttachment,
     ThreadedTicket,
 )
 from tests.test_nexus import _grant, _schema
@@ -241,15 +239,9 @@ def test_record_chatter_never_enters_the_inbox_thread_feed() -> None:
     """Even a readable record-attached thread stays behind its record gate."""
 
     owner = User.objects.create_user(username="feed-record")
-    thread, _ = _messages(owner)
     with system_context(reason="test feed record attachment"):
         record = ThreadedTicket._base_manager.create(title="Private record", created_by=owner)
-        ThreadAttachment._base_manager.create(
-            thread=thread,
-            content_type=ContentType.objects.get_for_model(ThreadedTicket),
-            object_id=record.pk,
-            created_by=owner,
-        )
+        thread = record.message_thread()
     assert _query("thread", owner, thread).errors
 
 
@@ -653,13 +645,8 @@ def test_revalidation_projection_prefetch_preserves_related_permissions() -> Non
 
 def test_revalidation_keeps_record_attached_chatter_behind_its_record_gate() -> None:
     owner = User.objects.create_user(username="feed-retained-record")
-    thread, rows = _messages(owner)
     with system_context(reason="test retained attached record"):
         record = ThreadedTicket._base_manager.create(title="Private record", created_by=owner)
-        ThreadAttachment._base_manager.create(
-            thread=thread,
-            content_type=ContentType.objects.get_for_model(ThreadedTicket),
-            object_id=record.pk,
-            created_by=owner,
-        )
-    assert _revalidate("thread", owner, thread, [str(row.sqid) for row in rows]).errors
+        thread = record.message_thread()
+        message = record.message_post("Retained record note")
+    assert _revalidate("thread", owner, thread, [str(message.sqid)]).errors

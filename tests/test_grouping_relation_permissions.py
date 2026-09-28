@@ -308,10 +308,10 @@ def _query(case: Any, actor: SubjectRef, document: str) -> dict[str, Any]:
     return result_data(execute_schema(case.schema, document, user=actor))
 
 
-def test_related_axes_follow_actor_without_changing_group_identity(
+def test_related_axes_merge_unreadable_identities_into_null(
     relation_grouping_case: Any,
 ) -> None:
-    """Labels/scalars redact per actor while identity/count semantics stay stable."""
+    """Unreadable keys merge into null while readable identities stay distinct."""
 
     case = relation_grouping_case
     document = """
@@ -352,8 +352,9 @@ def test_related_axes_follow_actor_without_changing_group_identity(
     alice = _query(case, case.alice, document)
     bob = _query(case, case.bob, document)
 
-    assert alice["exact"] == bob["exact"] == 5
-    assert alice["having_exact"] == bob["having_exact"] == 1
+    assert alice["exact"] == bob["exact"] == 4
+    assert alice["having_exact"] == 2
+    assert bob["having_exact"] == 1
 
     alice_groups = {
         row["key"]["target_id"]: (
@@ -371,41 +372,43 @@ def test_related_axes_follow_actor_without_changing_group_identity(
     }
     assert alice_groups == {
         case.alpha.sqid: ("Alpha", 2),
-        case.beta.sqid: (None, 1),
         case.duplicate_one.sqid: ("Duplicate", 1),
         case.duplicate_two.sqid: ("Duplicate", 1),
-        None: (None, 1),
+        None: (None, 2),
     }
     assert bob_groups == {
-        case.alpha.sqid: (None, 2),
         case.beta.sqid: ("Beta", 1),
         case.duplicate_one.sqid: ("Duplicate", 1),
         case.duplicate_two.sqid: ("Duplicate", 1),
-        None: (None, 1),
+        None: (None, 3),
     }
-    assert alice["having"] == [
-        {
-            "key": {
-                "target_id": case.alpha.sqid,
-                "target__display_name": "Alpha",
+    assert sorted(alice["having"], key=lambda row: str(row["key"]["target_id"])) == sorted(
+        [
+            {"key": {"target_id": None, "target__display_name": None}, "aggregate": {"count": 2}},
+            {
+                "key": {
+                    "target_id": case.alpha.sqid,
+                    "target__display_name": "Alpha",
+                },
+                "aggregate": {"count": 2},
             },
-            "aggregate": {"count": 2},
-        }
-    ]
+        ],
+        key=lambda row: str(row["key"]["target_id"]),
+    )
     assert bob["having"] == [
         {
             "key": {
-                "target_id": case.alpha.sqid,
+                "target_id": None,
                 "target__display_name": None,
             },
-            "aggregate": {"count": 2},
+            "aggregate": {"count": 3},
         }
     ]
     alice_ranks = {row["key"]["metric_target_id"]: row["key"]["metric_target__rank"] for row in alice["ranks"]}
     bob_ranks = {row["key"]["metric_target_id"]: row["key"]["metric_target__rank"] for row in bob["ranks"]}
     assert alice_ranks[case.alpha.sqid] == 10
-    assert alice_ranks[case.beta.sqid] is None
-    assert bob_ranks[case.alpha.sqid] is None
+    assert case.beta.sqid not in alice_ranks and alice_ranks[None] is None
+    assert case.alpha.sqid not in bob_ranks and bob_ranks[None] is None
     assert bob_ranks[case.beta.sqid] == 20
 
 
@@ -441,7 +444,7 @@ def test_nested_protected_hop_and_plain_django_target(
         case.alpha_middle.sqid: "Alpha",
         case.beta_middle.sqid: None,
         # The terminal label is readable, but its intermediate hop is not.
-        case.hidden_middle.sqid: None,
+        None: None,
     }
     assert {row["key"]["middle_id"]: row["key"]["middle__target__display_name"] for row in bob["nested"]} == {
         case.alpha_middle.sqid: None,
@@ -487,4 +490,4 @@ def test_explicit_queryset_actor_owns_related_axis_scope(
     )["pinned_group_parents_groups"]
     labels = {row["key"]["target_id"]: row["key"]["target__display_name"] for row in result}
     assert labels[case.alpha.sqid] == "Alpha"
-    assert labels[case.beta.sqid] is None
+    assert case.beta.sqid not in labels and labels[None] is None

@@ -40,6 +40,7 @@ from angee.graphql.introspection import (
     surface_field_names,
     surface_name,
 )
+from angee.graphql.view_as import ViewAsReadOnlyExtension
 from graphql import GraphQLError, GraphQLSchema
 
 DEFAULT_SCHEMA_NAME = "public"
@@ -47,7 +48,18 @@ DEFAULT_SCHEMA_NAME = "public"
 
 logger = logging.getLogger(__name__)
 _INTERNAL_ERROR_MESSAGE = "An unexpected error occurred."
-_EXPECTED_ERROR_CODES = frozenset({"VALIDATION", "BAD_USER_INPUT", "UNAUTHENTICATED", "PERMISSION_DENIED", "FORBIDDEN"})
+_EXPECTED_ERROR_CODES = frozenset(
+    {
+        "VALIDATION",
+        "BAD_USER_INPUT",
+        "UNAUTHENTICATED",
+        "PERMISSION_DENIED",
+        "FORBIDDEN",
+        "VIEW_AS_READ_ONLY",
+        "STALE_REVISION",
+        "CREATION_KEY_CONFLICT",
+    }
+)
 
 SCHEMA_PART_KEYS: tuple[str, ...] = (
     "query",
@@ -420,6 +432,7 @@ class GraphQLSchemas:
             extensions=cast(
                 list[Any],
                 [
+                    ViewAsReadOnlyExtension,
                     RebacExtension,
                     *parts.extensions,
                     RebacDjangoOptimizerExtension,

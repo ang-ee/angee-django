@@ -26,6 +26,7 @@ from strawberry import auto
 
 from angee.base.identity import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
+from angee.graphql.capabilities import held_permissions
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     SortAlias,
@@ -2218,6 +2219,18 @@ def _record_message_access_cache(info: strawberry.Info | None) -> dict[Any, tupl
     return cache
 
 
+def _record_message_access(record: ThreadedModelMixin, user: Any) -> tuple[bool, bool]:
+    """Compose record predicates with the shared permission evaluator."""
+
+    def permission_check(name: str) -> bool:
+        return name in held_permissions(record, (name,))
+
+    return (
+        record.can_post(user, permission_check=permission_check),
+        record.can_moderate(user, permission_check=permission_check),
+    )
+
+
 def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any]:
     """Pass the actor and the record's access facts to Message's predicates."""
 
@@ -2227,9 +2240,7 @@ def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any
         cache = _record_message_access_cache(info)
         if message.thread_id not in cache:
             record = message.threaded_record()
-            cache[message.thread_id] = (
-                (record.can_post(user), record.can_moderate(user)) if record is not None else (False, False)
-            )
+            cache[message.thread_id] = _record_message_access(record, user) if record is not None else (False, False)
         post_access, moderate_access = cache[message.thread_id]
     return {"post_access": post_access, "moderate_access": moderate_access, "actor_id": getattr(user, "pk", None)}
 
@@ -2329,7 +2340,7 @@ def _record_thread_payload(
     if messages:
         # Posting and moderation are record-level facts shared by the whole page.
         # Prime both through their owner instead of re-walking each message's record.
-        _record_message_access_cache(info)[messages[0].thread_id] = (record.can_post(user), record.can_moderate(user))
+        _record_message_access_cache(info)[messages[0].thread_id] = _record_message_access(record, user)
     if messages and thread is not None and user is not None:
         # One receipt-anchored scan primes the page's needaction flags — the same
         # unread set the badge counts, restricted to the rows on this page.

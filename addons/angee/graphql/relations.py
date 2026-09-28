@@ -10,8 +10,11 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.expressions import Combinable
 from rebac import current_actor
+from rebac.graphql.strawberry_django import optimize
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
+from strawberry.types import Info
+from strawberry_django.utils.typing import get_django_definition, unwrap_type
 
 from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
 from angee.data.field_classification import is_to_one_relation
@@ -30,32 +33,31 @@ def actor_scoped_relation_group_expression(
     Every protected target crossed by the selected to-one path contributes an
     uncorrelated membership guard. The related scalar is projected only when
     all guarded rows are readable by the source queryset's actor; otherwise it
-    becomes SQL ``NULL`` while the parent row and relation identity stay in the
-    group. Paths with no protected target need no override and return ``None``.
+    becomes SQL ``NULL``. Direct relation keys use the same guard, merging every
+    unreadable target into one null bucket without losing source rows. Paths
+    with no protected target need no override and return ``None``.
     """
 
     try:
         fields = fields_for_path(queryset.model, field_path)
     except FieldPathError as error:
         raise ImproperlyConfigured(
-            f"{queryset.model._meta.label}.{field_path} must traverse "
-            "to-one relations to a scalar field"
+            f"{queryset.model._meta.label}.{field_path} must traverse to-one relations to a scalar field"
         ) from error
     terminal = fields[-1]
-    relations = fields[:-1]
-    if not relations or terminal.is_relation:
+    relations = fields if terminal.is_relation else fields[:-1]
+    if not relations:
         return None
     if not all(is_to_one_relation(field) for field in relations):
         raise ImproperlyConfigured(
-            f"{queryset.model._meta.label}.{field_path} must traverse "
-            "to-one relations to a scalar field"
+            f"{queryset.model._meta.label}.{field_path} must traverse to-one relations to a scalar field"
         )
 
     actor = relation_actor(queryset)
     guards: list[models.Q] = []
     traversed: list[str] = []
     parts = field_path.split("__")
-    for part, relation in zip(parts[:-1], relations, strict=True):
+    for part, relation in zip(parts[: len(relations)], relations, strict=True):
         related_model = relation.related_model
         if not model_resource_type(related_model):
             traversed.append(part)
@@ -72,15 +74,7 @@ def actor_scoped_relation_group_expression(
         else:
             lookup = "__".join((*traversed, part, related_model._meta.pk.attname))
             target_name = related_model._meta.pk.attname
-        guards.append(
-            models.Q(
-                **{
-                    f"{lookup}__in": related_queryset.values_list(
-                        target_name, flat=True
-                    )
-                }
-            )
-        )
+        guards.append(models.Q(**{f"{lookup}__in": related_queryset.values_list(target_name, flat=True)}))
         traversed.append(part)
 
     if not guards:
@@ -91,15 +85,18 @@ def actor_scoped_relation_group_expression(
     return models.Case(
         models.When(guard, then=models.F(field_path)),
         default=models.Value(None),
-        output_field=terminal,
+        output_field=terminal.target_field
+        if isinstance(terminal, (models.ForeignKey, models.OneToOneField))
+        else terminal,
     )
 
 
 def actor_scoped_to_one(field_name: str) -> Any:
     """Return a nullable to-one field that redacts targets unreadable by the actor.
 
-    The REBAC optimizer extension scopes and actor-stamps the native prefetch
-    hint. Readable parents hit the cache; unreadable parents cache as ``None``.
+    The native prefetch carries the selected target's optimized queryset;
+    REBAC scopes and actor-stamps it. Readable parents hit the cache;
+    unreadable parents cache as ``None``.
     Unprefetched roots fall back to one actor-scoped lookup per row. The parent
     may be actor-scoped or sudo-loaded; cached targets are reused only for the
     current actor, and ``only`` keeps the parent projection to the FK id.
@@ -132,9 +129,7 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
     def resolve(root: models.Model) -> Any:
         field = root._meta.get_field(field_name)
         if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
-            raise ImproperlyConfigured(
-                f"{root._meta.label}.{field_name} must be a forward to-one relation"
-            )
+            raise ImproperlyConfigured(f"{root._meta.label}.{field_name} must be a forward to-one relation")
 
         fk_id = field.value_from_object(root)
         if fk_id is None:
@@ -167,11 +162,22 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
 def _guarded_to_one_field(field_name: str, resolver: Callable[[models.Model], Any]) -> Any:
     """Bind a relation projection to the native hint scoped by the REBAC optimizer."""
 
+    def prefetch(info: Info) -> models.Prefetch | str:
+        # Resolver-owned hints stop native traversal into child selections.
+        # Optimize the target explicitly so nested hints survive that boundary.
+        definition = get_django_definition(unwrap_type(info.return_type))
+        if definition is None:
+            return field_name
+        return models.Prefetch(
+            field_name,
+            queryset=optimize(definition.model._default_manager.all(), info),
+        )
+
     return strawberry_django.field(
         resolver=resolver,
         field_name=field_name,
         only=[f"{field_name}_id"],
-        prefetch_related=[field_name],
+        prefetch_related=[prefetch],
     )
 
 
@@ -186,22 +192,15 @@ def actor_scoped_to_many(field_name: str) -> Any:
 
     def resolve(root: models.Model) -> Any:
         field = root._meta.get_field(field_name)
-        if not (
-            getattr(field, "many_to_many", False)
-            or getattr(field, "one_to_many", False)
-        ):
-            raise ImproperlyConfigured(
-                f"{root._meta.label}.{field_name} must be a forward or reverse to-many relation"
-            )
+        if not (getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False)):
+            raise ImproperlyConfigured(f"{root._meta.label}.{field_name} must be a forward or reverse to-many relation")
 
         actor = current_actor()
         if actor is None:
             return []
 
         cached = getattr(root, "_prefetched_objects_cache", {}).get(field_name, _UNCACHED)
-        if cached is not _UNCACHED and all(
-            getattr(row, "_rebac_actor", None) == actor for row in cached
-        ):
+        if cached is not _UNCACHED and all(getattr(row, "_rebac_actor", None) == actor for row in cached):
             return cached
 
         related_queryset = getattr(root, field_name).all()

@@ -55,7 +55,7 @@ export const KnowledgePage = graphql(`
   query KnowledgePage($id: String!) {
     pages_by_pk(id: $id) {
       id
-      can_write
+      permissions
       title
       kind
       icon

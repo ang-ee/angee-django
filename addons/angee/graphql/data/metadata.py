@@ -599,10 +599,22 @@ def _finalize_data_resource(
         default_measures=default_measures,
         create_fields=active_create_fields,
         update_fields=active_update_fields,
+        create_arguments=_mutation_arguments(graphql_schema, roots.create_name, ("object",)),
+        update_arguments=_mutation_arguments(graphql_schema, roots.update_name, ("pk_columns", "_set")),
+        save_arguments=_mutation_arguments(graphql_schema, roots.save_name, ("pk", "patch", "lines")),
         required_create_fields=active_required_create_fields,
         revision_fields=revision_fields,
         lines=lines,
     )
+
+
+def _mutation_arguments(schema: GraphQLSchema, root: str | None, inputs: tuple[str, ...]) -> tuple[str, ...]:
+    """Project extra root arguments in their final schema declaration order."""
+
+    mutation = schema.mutation_type
+    if mutation is None or root is None or root not in mutation.fields:
+        return ()
+    return tuple(name for name in mutation.fields[root].args if name not in inputs)
 
 
 def _grantable_relations(

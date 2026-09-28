@@ -45,6 +45,9 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
         type_names=DataResourceTypeNames(node="CatalogItem", filter="catalog_items_bool_exp"),
         contributors=("CatalogItemQuery", "CatalogItemMutation"),
         capabilities=("list", "detail", "create"),
+        create_arguments=("client_creation_key",),
+        update_arguments=("expected_revision",),
+        save_arguments=("expected_revision",),
         fields=(title_field, status_field),
         subtitle=DataResourceSubtitleMetadata(created="created_at", word_count="body.word_count"),
         lines=DataLinesMetadata(field="items", model_label="catalog.line", fields=(title_field,)),
@@ -77,6 +80,9 @@ def test_final_resource_description_serializes_without_projection_types() -> Non
     assert wire["linesResource"]["fields"] == [wire["fields"][0]]
     assert wire["linesResource"]["defaults"] == {}
     assert wire["aggregateFields"] == []
+    assert wire["createArguments"] == ["client_creation_key"]
+    assert wire["updateArguments"] == ["expected_revision"]
+    assert wire["saveArguments"] == ["expected_revision"]
     assert wire["query"]["axes"] == {}
     assert wire["query"]["sort"] == {"default": []}
     assert {"model", "contributors", "nodeType", "filterType", "orderType"}.isdisjoint(wire)
@@ -136,3 +142,4 @@ def test_resource_query_values_use_native_json_serialization() -> None:
         {"from": None, "to": 0},
     ]
     assert wire["linesResource"] is None
+    assert wire["createArguments"] == wire["updateArguments"] == wire["saveArguments"] == []

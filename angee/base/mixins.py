@@ -26,6 +26,7 @@ from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id
+from angee.base.errors import DomainError
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.scoping import system_queryset
@@ -669,8 +670,13 @@ class ImmutableFieldsMixin(models.Model):
             self._allowed_immutable_fields = set()
 
 
-class CreationKeyConflict(Exception):
+class CreationKeyConflict(DomainError):
     """A client creation key was already used for different content."""
+
+    code = "CREATION_KEY_CONFLICT"
+
+    def __init__(self, *args: object) -> None:
+        Exception.__init__(self, *args)
 
 
 class CreationKeyQuerySet(models.QuerySet[_ModelT]):
@@ -721,16 +727,18 @@ class CreationKeyMixin(models.Model):
         )
 
 
-class StaleRevisionError(Exception):
+class StaleRevisionError(DomainError):
     """An update expected a revision that is no longer committed.
 
     ``current`` is ``None`` when the row no longer exists.
     """
 
+    code = "STALE_REVISION"
+
     def __init__(self, expected: int | None, current: int | None) -> None:
         self.expected = expected
         self.current = current
-        super().__init__(f"Expected revision {expected}; current revision is {current}.")
+        Exception.__init__(self, f"Expected revision {expected}; current revision is {current}.")
 
 
 def validate_revision(value: Any) -> None:

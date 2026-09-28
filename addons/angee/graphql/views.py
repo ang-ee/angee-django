@@ -6,13 +6,14 @@ from functools import cache
 from typing import Any
 
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied
 from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 from strawberry.django.views import GraphQLView
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.view_as import ViewAs
 
 
 @cache
@@ -26,14 +27,20 @@ def _get_view(schema_name: str) -> Any:
     )
 
 
-def graphql_endpoint(request: object, schema_name: str) -> HttpResponse:
+def graphql_endpoint(request: HttpRequest, schema_name: str) -> HttpResponse:
     """Dispatch an HTTP request to the named GraphQL schema view."""
 
     try:
         view = _get_view(schema_name)
     except ImproperlyConfigured as error:
         raise Http404(str(error)) from error
-    return view(request)
+    try:
+        preview = ViewAs.from_request(request)
+    except PermissionDenied:
+        return JsonResponse(
+            {"errors": [{"message": "View-as is not permitted.", "extensions": {"code": "FORBIDDEN"}}]}, status=403
+        )
+    return view(request) if preview is None else preview.dispatch(request, view, schema_name=schema_name)
 
 
 @ensure_csrf_cookie

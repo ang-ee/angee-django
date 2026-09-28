@@ -22,7 +22,7 @@ The write path lives on the managers.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -836,28 +836,30 @@ class ThreadedModelMixin(models.Model):
                 tracking_values=tuple(create_changes),
             )
 
-    def can_post(self, user: Any = None) -> bool:
+    def can_post(self, user: Any = None, *, permission_check: Callable[[str], bool] | None = None) -> bool:
         """Return whether the actor may post or react through the declared permission."""
 
         if user is not None and getattr(user, "is_authenticated", True) is False:
             return False
-        return self._message_post_allowed()
+        return self._message_post_allowed(permission_check=permission_check)
 
-    def can_moderate(self, user: Any = None) -> bool:
+    def can_moderate(self, user: Any = None, *, permission_check: Callable[[str], bool] | None = None) -> bool:
         """Return whether the actor may moderate comments as a record writer."""
 
         if user is not None and getattr(user, "is_authenticated", True) is False:
             return False
         has_access = getattr(self, "has_access", None)
-        return bool(has_access("write")) if callable(has_access) else True
+        check = permission_check if model_resource_type(self) else None
+        return bool((check or has_access)("write")) if callable(has_access) else True
 
-    def _message_post_allowed(self) -> bool:
+    def _message_post_allowed(self, *, permission_check: Callable[[str], bool] | None = None) -> bool:
         """Return whether the ambient actor can post to this row."""
 
         has_access = getattr(self, "has_access", None)
         if not callable(has_access):
             return True
-        return bool(has_access(self.thread_post_access))
+        check = permission_check if model_resource_type(self) else None
+        return bool((check or has_access)(self.thread_post_access))
 
     def _message_read_allowed(self) -> bool:
         """Return whether the ambient actor can read personal chatter state."""

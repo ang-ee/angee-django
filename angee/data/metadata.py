@@ -365,6 +365,9 @@ class DataResourceMetadata:
     default_measures: tuple[DataAggregateMeasureMetadata, ...] = ()
     create_fields: tuple[str, ...] = ()
     update_fields: tuple[str, ...] = ()
+    create_arguments: tuple[str, ...] = ()
+    update_arguments: tuple[str, ...] = ()
+    save_arguments: tuple[str, ...] = ()
     required_create_fields: tuple[str, ...] = ()
     revision_fields: tuple[str, ...] = ()
     lines: Annotated[DataLinesMetadata | None, Field(serialization_alias="linesResource")] = None

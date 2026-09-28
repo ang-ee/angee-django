@@ -36,7 +36,8 @@ function KnowledgePageContent({
     models: PAGE_READ_MODELS,
   });
   const detail = query.data?.pages_by_pk;
-  if (editing && detail && !detail.can_write) {
+  const canWrite = detail?.permissions.includes("write") ?? false;
+  if (editing && detail && !canWrite) {
     restoreEditFocus.current = false;
     setEditing(false);
   }
@@ -46,7 +47,7 @@ function KnowledgePageContent({
     return null;
   }
 
-  return editing && detail.can_write ? (
+  return editing && canWrite ? (
     <PageEditor
       detail={detail}
       onDelete={onDelete}
@@ -58,7 +59,7 @@ function KnowledgePageContent({
   ) : (
     <PageReader
       detail={detail}
-      onEdit={detail.can_write ? () => setEditing(true) : undefined}
+      onEdit={canWrite ? () => setEditing(true) : undefined}
       editButtonRef={editButtonRef}
       onDelete={onDelete}
     />

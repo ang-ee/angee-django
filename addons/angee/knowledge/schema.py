@@ -19,6 +19,7 @@ from angee.base.identity import instance_from_public_id
 from angee.base.scoping import write_scoped_queryset
 from angee.data.metadata import DataResourceSubtitleMetadata
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     hasura_model_resource,
@@ -153,11 +154,7 @@ class PageType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["id"])
-    def can_write(self) -> bool:
-        """Evaluate the ambient actor per row; system context is unscoped (always true)."""
-
-        return cast(Any, self).has_access("write")
+    permissions = permissions_field(("write",))
 
     @strawberry_django.field(only=["vault_id"])
     def vault(self) -> strawberry.ID:
@@ -320,7 +317,7 @@ def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
 class VaultWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
         """Create a vault owned by the requesting user."""
 
         user = getattr(info.context.request, "user", None)
@@ -330,7 +327,7 @@ class VaultWriteBackend(AngeeHasuraWriteBackend):
 class PageWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for pages: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
         """Create a page in a vault the requesting user can write."""
 
         del info

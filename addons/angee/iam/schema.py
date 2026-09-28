@@ -36,6 +36,7 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.graphql.view_as import ViewAs
 from angee.graphql.writes import write_queryset
 from angee.iam.identity import user_label
 from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT
@@ -86,10 +87,10 @@ User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
 
 
-def _view_as(info: strawberry.Info) -> Any | None:
+def _view_as(info: strawberry.Info) -> ViewAs | None:
     """Read the optional view-as carrier owned by the GraphQL transport."""
 
-    return getattr(_request(info), "view_as", None)
+    return cast(ViewAs | None, getattr(_request(info), "view_as", None))
 
 
 def _preference_object(user: Any) -> JSON:
