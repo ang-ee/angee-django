@@ -28,3 +28,13 @@ module = "runtime_migrations.notification_read_at"
 name = "owner_column"
 app_label = "messaging"
 module = "runtime_migrations.owner_column"
+
+[[migrations]]
+name = "channel_ownerless"
+app_label = "messaging"
+module = "runtime_migrations.channel_ownerless"
+
+[[migrations]]
+name = "activity_type_key"
+app_label = "messaging"
+module = "runtime_migrations.activity_type_key"

@@ -21,6 +21,7 @@ from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
+from angee.parties.models import Person as AbstractPerson
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.projects.models import ThreadProjects
 from angee.spaces.models import ChannelSpace, ThreadSpace
@@ -65,6 +66,18 @@ class Party(AbstractParty):
         app_label = "parties"
         db_table = "test_parties_party"
         rebac_resource_type = "parties/party"
+
+
+class Person(AbstractPerson, Party):
+    """Concrete identity required by party-keyed messaging followers."""
+
+    class Meta(AbstractPerson.Meta):
+        """Django model options for the canonical test person."""
+
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_person"
+        rebac_resource_type = "parties/person"
 
 
 class Handle(WorkflowHandleContribution, AbstractHandle):
@@ -128,6 +141,7 @@ class ActivityType(AbstractActivityType):
         abstract = False
         app_label = "messaging"
         db_table = "test_messaging_activity_type"
+        rebac_resource_type = "messaging/activity_type"
 
 
 class MessageSubtype(AbstractMessageSubtype):

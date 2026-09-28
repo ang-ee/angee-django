@@ -706,7 +706,7 @@ class RecordThreadActivityType(AngeeNode):
 
     user: "UserType | None" = actor_scoped_to_one("user")
     created_by: "UserType | None" = actor_scoped_to_one("created_by")
-    activity_type: auto
+    activity_type: str = strawberry_django.field(field_name="activity_type_id")
     summary: auto
     note: auto
     due_date: auto
@@ -774,7 +774,7 @@ class ThreadActivityType(AngeeNode):
     thread: "ThreadType | None" = actor_scoped_to_one("thread")
     attachment: "ThreadAttachmentType | None" = actor_scoped_to_one("attachment")
     user: "UserType | None" = actor_scoped_to_one("user")
-    activity_type: auto
+    activity_type: str = strawberry_django.field(field_name="activity_type_id")
     summary: auto
     note: auto
     due_date: auto
@@ -836,7 +836,7 @@ class AgendaActivityType(AngeeNode):
     """
 
     user: "UserType | None" = actor_scoped_to_one("user")
-    activity_type: auto
+    activity_type: str = strawberry_django.field(field_name="activity_type_id")
     summary: auto
     note: auto
     due_date: auto
@@ -1663,7 +1663,6 @@ class MessagingMutation:
         if record is None:
             return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
         try:
-            record = authorized_permission_target(info, type(record), input.record_id, record.thread_activity_access)
             activity = record.activity_log(input.activity_type, input.occurred_on, input.note)
         except (PermissionDenied, ValueError, ValidationError) as error:
             return RecordActivityPayload.from_error(error, invalid_code="BAD_ACTIVITY")
@@ -2316,6 +2315,20 @@ def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
         follower._meta.get_field("party").set_cached_value(follower, parties.get(follower.party_id))
 
 
+def _prime_activity_identities(activities: list[Any], actor: Any) -> None:
+    """Load readable activity accounts once for both guarded identity fields."""
+
+    if not activities:
+        return
+    ids = {value for row in activities for value in (row.user_id, row.created_by_id) if value is not None}
+    users = {
+        row.pk: row for row in get_user_model().objects.with_actor(actor).filter(pk__in=ids)
+    } if actor is not None else {}
+    for row in activities:
+        for name in ("user", "created_by"):
+            row._meta.get_field(name).set_cached_value(row, users.get(getattr(row, f"{name}_id")))
+
+
 def _record_thread_payload(
     record: Any,
     info: strawberry.Info | None,
@@ -2348,8 +2361,13 @@ def _record_thread_payload(
     followers = list(cast(Any, record).message_followers()) if thread is not None else []
     _prime_follower_identities(followers, current_actor())
     activities = (
-        list(cast(Any, record).activity_ids().select_related("user", "created_by")) if thread is not None else []
+        ThreadActivity.objects.for_record_window(
+            record, role=role, search=search, limit=message_limit,
+            messages=messages, message_count=message_result_count,
+            bounded=any(value not in (None, "") for value in (before, after, around)),
+        ) if thread is not None else []
     )
+    _prime_activity_identities(activities, current_actor())
     attachment_count = (
         apps.get_model("messaging", "Part").objects.filter(message__thread=thread).attachments().count()
         if thread is not None

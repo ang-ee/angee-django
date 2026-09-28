@@ -1812,6 +1812,34 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             queryset = queryset.open()
         return queryset
 
+    def for_record_window(
+        self, record: Any, *, role: str, search: str, limit: int,
+        messages: list[Any], message_count: int, bounded: bool,
+    ) -> list[Any]:
+        """Return at most one page of activities within the displayed message dates.
+
+        The latest page has no upper cut, so newly logged exchanges can appear
+        before a subsequent message. Cursor pages stay inside their message dates;
+        an empty cursor page has no activities. A search also matches activity text.
+        """
+
+        if bounded and not messages:
+            return []
+        queryset = self.for_record(record, role=role).annotate(
+            _occurred_on=models.functions.Coalesce(
+                "due_date", models.functions.TruncDate("completed_at"), models.functions.TruncDate("created_at"),
+            ),
+        )
+        for term in strip_null_bytes(search or "").split():
+            queryset = queryset.filter(models.Q(summary__icontains=term) | models.Q(note__icontains=term))
+        if messages:
+            if bounded or message_count > len(messages):
+                queryset = queryset.filter(_occurred_on__gte=timezone.localdate(messages[0].chronological_key[0]))
+            if bounded:
+                queryset = queryset.filter(_occurred_on__lte=timezone.localdate(messages[-1].chronological_key[0]))
+        rows = list(queryset.order_by("-_occurred_on", "-completed_at", "-pk")[:max(1, min(limit or 50, 200))])
+        return list(reversed(rows))
+
     def schedule(
         self,
         record: Any,
@@ -1843,7 +1871,7 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             thread_id=attachment.thread.pk,
             attachment_id=attachment.pk if attachment is not None else None,
             user_id=resolved_user_id,
-            activity_type=strip_null_bytes(activity_type or "todo"),
+            activity_type_id=strip_null_bytes(activity_type or "todo"),
             summary=summary,
             note=strip_null_bytes(note or ""),
             due_date=due_date or timezone.localdate(),
@@ -1860,13 +1888,14 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
         user_id = actor_user_id(current_actor())
         if user_id is None:
             raise PermissionDenied("Logging an activity requires an account.")
-        summary = note.splitlines()[0][:256] if note else ""
-        if not summary.strip():
+        note = strip_null_bytes(note or "")
+        summary = note.splitlines()[0].strip()[:256] if note else ""
+        if not summary:
             raise ValidationError({"note": "An activity note needs a nonempty first line."})
         if occurred_on is None:
             raise ValidationError({"due_date": "The occurrence date is required."})
         activity = self.model(
-            activity_type=activity_type, due_date=occurred_on, summary=summary,
+            activity_type_id=strip_null_bytes(activity_type), due_date=occurred_on, summary=summary,
             note=note, user_id=user_id, status=self.model.ActivityStatus.DONE,
             completed_at=timezone.now(), created_by_id=user_id,
         )

@@ -1,25 +1,56 @@
 """Canonical concrete project models for bare-Django access-cascade tests."""
 
-from django.contrib.contenttypes.models import ContentType
+from copy import deepcopy
+
 from django.db import models
 
-from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.mixins import OwnerMixin
 from angee.base.models import AngeeDataModel
+from angee.messaging.models import ThreadedModelMixin
+from angee.projects.models import Link as AbstractLink
+from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
+from angee.projects.models import Task as AbstractTask
 from angee.work.models import ProjectWork, TaskWork
+from angee.work.models import Queue as AbstractQueue
+from angee.work.models import Stage as AbstractWorkStage
+from tests import test_sequence  # noqa: F401 -- register the queue's native sequence targets
+from tests.spaces_models import Group
 
 
-class Task(TaskWork, AuditMixin, AngeeDataModel):
+class Queue(AbstractQueue, Group):
+    """Native work queue shared by task access and lifecycle fixtures."""
+
+    class Meta(AbstractQueue.Meta):
+        abstract = False
+        app_label = "work"
+        db_table = "test_create_work_queue"
+        rebac_resource_type = "work/queue"
+
+
+class Stage(AbstractWorkStage):
+    """Native stage target for the queue's default and lifecycle fixtures."""
+
+    class Meta(AbstractWorkStage.Meta):
+        abstract = False
+        app_label = "work"
+        db_table = "test_create_work_stage"
+        rebac_resource_type = "work/stage"
+
+
+class Task(TaskWork, OwnerMixin, ThreadedModelMixin, AngeeDataModel):
     """Concrete task carrying the production chatter-wake owner."""
 
     sqid_prefix = "tpt_"
+    assignee = AbstractTask._meta.get_field("assignee").clone()
+    visibility = AbstractTask._meta.get_field("visibility").clone()
+    links = deepcopy(AbstractTask._meta.get_field("links"))
 
-    # This source-model graph exercises chatter wake behavior without composing
-    # work's queue lifecycle and its additional model graph.
-    queue = None
-    stage = None
+    # Keep the queue and stage fields used by the native work owner. These
+    # fixtures do not exercise cycle scheduling.
     cycle = None
+    cycle_id = None
     project = models.ForeignKey(
         "projects.Project",
         null=True,
@@ -35,21 +66,18 @@ class Task(TaskWork, AuditMixin, AngeeDataModel):
         rebac_resource_type = "projects/task"
 
 
-class Link(SqidMixin, models.Model):
-    """Minimal concrete target required by Project.links."""
+class Link(AbstractLink):
+    """Concrete link carrying the production generic target and query paths."""
 
-    sqid_prefix = "tpl_"
-
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
-    object_id = models.PositiveBigIntegerField()
-
-    class Meta:
+    class Meta(AbstractLink.Meta):
+        abstract = False
         app_label = "projects"
         db_table = "test_projects_link"
+        rebac_resource_type = "projects/link"
 
 
 class Project(ProjectWork, AbstractProject):
-    """Concrete project composing the folder lifecycle and work team donor."""
+    """Concrete project carrying the production owners and the work team donor."""
 
     rebac_grantable = {
         **AbstractProject.rebac_grantable,
@@ -64,10 +92,20 @@ class Project(ProjectWork, AbstractProject):
 
 
 class ProjectBinding(AbstractProjectBinding):
-    """Concrete explicit binding carrying the production reconciliation owner."""
+    """Concrete explicit binding carrying the production authorization owner."""
 
     class Meta(AbstractProjectBinding.Meta):
         abstract = False
         app_label = "projects"
         db_table = "test_projects_binding"
         rebac_resource_type = "projects/project_binding"
+
+
+class Milestone(AbstractMilestone):
+    """Concrete phase target for the production project's current milestone."""
+
+    class Meta(AbstractMilestone.Meta):
+        abstract = False
+        app_label = "projects"
+        db_table = "test_projects_milestone"
+        rebac_resource_type = "projects/milestone"

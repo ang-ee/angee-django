@@ -67,7 +67,6 @@ from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import MergeVeto as AbstractMergeVeto
 from angee.parties.models import Organization as AbstractOrganization
 from angee.parties.models import PartyHandle as AbstractPartyHandle
-from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.workflows_parties.models import PartyHandle as WorkflowPartyHandleContribution
@@ -83,6 +82,7 @@ from tests.messaging_models import (
     MessageSubtype,
     Part,
     Party,
+    Person,
     Thread,
     ThreadAttachment,
     ThreadFollower,
@@ -94,7 +94,6 @@ from tests.test_agents_graphql import Agent
 
 _PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
 _OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
-_PersonMeta = getattr(AbstractPerson, "Meta", object)
 _AddressMeta = getattr(AbstractAddress, "Meta", object)
 
 
@@ -108,18 +107,6 @@ class Organization(AbstractOrganization, Party):
         app_label = "parties"
         db_table = "test_parties_organization"
         rebac_resource_type = "parties/organization"
-
-
-class Person(AbstractPerson, Party):
-    """Concrete person used when messaging attributes a user-owned handle."""
-
-    class Meta(_PersonMeta):
-        """Django model options for the canonical test person."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_person"
-        rebac_resource_type = "parties/person"
 
 
 class MergeVeto(AbstractMergeVeto):
@@ -1958,7 +1945,7 @@ def test_threaded_model_schedules_and_completes_activity(composed_tables: None) 
     assert activity.summary == "Call customer"
     assert activity.note == "Ask about the rollout."
     assert activity.due_date == _AT.date()
-    assert activity.activity_type == "call"
+    assert activity.activity_type_id == "call"
     assert activity.status == "todo"
     with actor_context(user):
         assert list(ticket.activity_ids()) == [activity]
@@ -1991,7 +1978,7 @@ def test_threaded_model_schedules_and_completes_activity(composed_tables: None) 
     assert logged.user_id == logged.created_by_id == user.pk
     assert logged.due_date == _AT.date()
     assert logged.completed_at is not None
-    assert logged.summary == "  Agreed next steps."
+    assert logged.summary == "Agreed next steps."
     assert logged.note == note
     assert Message._base_manager.count() == before
 

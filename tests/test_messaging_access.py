@@ -2,26 +2,105 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 from django.apps import apps
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.db import connection
 from django.test import override_settings
-from rebac import system_context
+from django.test.utils import CaptureQueriesContext
+from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac.backends import backend
+from rebac.backends.local_query import LocalQueryScope
+from rebac.evaluator import evaluator_scope
 
-from tests.conftest import Vendor
-from tests.messaging_models import Channel, Message, Thread
+from angee.compose.permissions import apply_schema_paths, extension_source_map
+from angee.fs import write_atomic
+from tests.chatterdemo.models import ChatterDoc
+from tests.conftest import Vendor, installed_field_owners
+from tests.messaging_models import Channel, Message, Thread, ThreadAttachment
 
 
 @pytest.fixture(params=("denormalized", "registry"))
-def messaging_access_schema(request: pytest.FixtureRequest) -> Any:
+def messaging_access_schema(request: pytest.FixtureRequest, tmp_path: Path, transactional_db: None) -> Any:
     """Synchronize messaging's field-backed access chain in either local store."""
 
-    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
-        call_command("rebac", "sync", verbosity=0)
-        yield request.param
+    configs = list(apps.get_app_configs())
+    originals = {config: getattr(config, "rebac_schema", None) for config in configs}
+    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
+    runtime = tmp_path / "messaging-access-runtime"
+    for relative, source in sources.items():
+        write_atomic(runtime / relative, source)
+    apply_schema_paths(configs, runtime, sources=sources)
+    try:
+        with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
+            call_command("rebac", "sync", verbosity=0)
+            yield request.param
+    finally:
+        for config, original in originals.items():
+            if original is None:
+                if hasattr(config, "rebac_schema"):
+                    delattr(config, "rebac_schema")
+            else:
+                config.rebac_schema = original
+
+
+def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_access_schema: str) -> None:
+    """Record readers inherit read alone, through the filtered chatter attachment."""
+
+    with system_context(reason="tests.messaging.record_arm"):
+        users = [apps.get_model("iam", "User").objects.create_user(username=f"record-arm-{i}") for i in range(5)]
+        reader, writer, owner, outsider, other_reader = users
+        record = ChatterDoc.objects.create(title="Record A")
+        other = ChatterDoc.objects.create(title="Record B")
+        write_relationships([
+            RelationshipTuple(to_object_ref(record), role, to_subject_ref(actor))
+            for role, actor in (("reader", reader), ("writer", writer), ("owner", owner))
+        ] + [RelationshipTuple(to_object_ref(other), "reader", to_subject_ref(other_reader))])
+        attachment = ThreadAttachment.objects.for_record(record)
+        chatter = record.message_thread()
+        other_chatter = other.message_thread()
+        source = Thread.objects.create()
+        ThreadAttachment.objects.create(
+            thread=source, content_type_id=attachment.content_type_id, object_id=record.pk, role="source",
+        )
+        unattached = Thread.objects.create()
+        message = Message._base_manager.filter(thread=chatter).first()
+
+    for actor in (*users, AnonymousUser()):
+        subject = to_subject_ref(actor)
+        expected = actor in (reader, writer, owner)
+        for row, readable in (
+            (chatter, expected), (other_chatter, actor == other_reader), (source, False), (unattached, False),
+            (attachment, expected), (message, expected),
+        ):
+            for action in ("read", "write", "delete") + (("share", "transfer") if isinstance(row, Thread) else ()):
+                allowed = readable and action == "read"
+                assert backend().check_access(
+                    subject=subject, action=action, resource=to_object_ref(row),
+                ).allowed == allowed
+                scoped = type(row).objects.with_actor(actor).with_action(action).scoped()
+                assert scoped.filter(pk=row.pk).exists() == allowed
+
+    with evaluator_scope():
+        scope = LocalQueryScope(backend(), to_subject_ref(reader), "default")
+        predicate = scope.predicate(Thread, "read", "messaging/thread")
+        with CaptureQueriesContext(connection) as captured:
+            sql, params = Thread._base_manager.filter(predicate).order_by().query.sql_with_params()
+        assert len(captured) == 0
+        assert "test_chatterdemo_doc" in sql and "chatter" in params
+        assert Thread._base_manager.filter(predicate, pk=chatter.pk).exists()
+        assert not Thread._base_manager.filter(predicate, pk=source.pk).exists()
+        # These paths include attachment -> thread -> task -> project -> group.
+        for name in ("ThreadFollower", "ThreadNotification", "ThreadActivity", "Part", "Reaction"):
+            model = apps.get_model("messaging", name)
+            assert backend().queryset_filter(
+                model=model, subject=to_subject_ref(reader), action="read", using="default",
+            ) is not None, (messaging_access_schema, name)
 
 
 @pytest.mark.django_db(transaction=True)

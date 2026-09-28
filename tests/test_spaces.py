@@ -35,9 +35,9 @@ from tests.conftest import (
     installed_field_owners,
     result_data,
 )
+from tests.projects_models import Queue
 from tests.spaces_models import Group, Membership
 from tests.test_messaging import Party, Person, Thread
-from tests.test_productivity_write_behavior import Queue
 
 # These concrete test models register after Django's app population. The lazy
 # string relation resolves when ``Party`` registers, but Django may already have

@@ -13,7 +13,6 @@ from django.test import override_settings
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
-    SubjectRef,
     actor_context,
     system_context,
     to_object_ref,
@@ -24,8 +23,7 @@ from rebac.models import active_relationship_model
 
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.fs import write_atomic
-from angee.projects import signals as project_signals
-from angee.projects.access import bind, resync_project_access, unbind
+from angee.projects.access import bind, unbind
 from tests.conftest import (
     Backend,
     Drive,
@@ -34,8 +32,8 @@ from tests.conftest import (
     Vendor,
     installed_field_owners,
 )
-from tests.messaging_models import Channel, Message, Thread
-from tests.projects_models import Project, ProjectBinding
+from tests.messaging_models import Channel, Message, Thread, ThreadAttachment
+from tests.projects_models import Project, ProjectBinding, Task
 
 
 def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
@@ -48,6 +46,28 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
         assert f"definition {definition}" in projects
     assert "relation channel: integrate/integration // rebac:field=channel" in messaging
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
+
+
+@pytest.mark.parametrize("storage", ("denormalized", "registry"))
+def test_task_chatter_inherits_live_record_read(project_access_schema: Any, storage: str) -> None:
+    """The task's read gate grants chatter read and revokes it when narrowed."""
+
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+        call_command("rebac", "sync", verbosity=0)
+        user = apps.get_model("iam", "User").objects.create_user(username="task-chatter-reader")
+        with system_context(reason="tests.projects.task_chatter"):
+            project = Project.objects.create(title="Thread project")
+            task = Task.objects.create(project=project)
+            attachment = ThreadAttachment.objects.ensure_for_record(task)
+            write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(user))])
+        thread = attachment.thread
+        assert thread.with_actor(user).has_access("read")
+        assert Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
+        assert not thread.with_actor(user).has_access("write")
+        with system_context(reason="tests.projects.task_narrow"):
+            Task._base_manager.filter(pk=task.pk).update(visibility="restricted")
+        assert not thread.with_actor(user).has_access("read")
+        assert not Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
 
 
 @pytest.fixture
@@ -94,7 +114,8 @@ def test_project_binding_grants_and_revokes_thread_message_access(
         message = Message.objects.create(thread=thread)
         binding = bind(project=project, target=channel)
         assert bind(project=project, target=channel).pk == binding.pk
-        assert active_relationship_model().objects.filter(
+        assert ProjectBinding.objects.filter(pk=binding.pk, project=project).exists()
+        assert not active_relationship_model().objects.filter(
             resource_type="integrate/integration",
             resource_id=str(channel.pk),
             relation="project",
@@ -134,18 +155,26 @@ def test_project_binding_grants_and_revokes_thread_message_access(
         with pytest.raises(RuntimeError, match="rollback"):
             with transaction.atomic():
                 bind(project=project, target=rolled_back)
+                assert rolled_back.with_actor(editor).has_access("write")
                 raise RuntimeError("rollback")
-        write_relationships(
-            [RelationshipTuple(to_object_ref(rolled_back), "project", SubjectRef(to_object_ref(project)))]
+        assert not rolled_back.with_actor(editor).has_access("write")
+        # Seed pre-upgrade evidence directly: native writes reject backed relations.
+        leftover = active_relationship_model().objects.create(
+            resource_type="messaging/thread",
+            resource_id=str(rolled_back.pk),
+            relation="project",
+            subject_type="projects/project",
+            subject_id=str(project.pk),
         )
-        resync_project_access()
     assert not rolled_back.with_actor(editor).has_access("write")
+    assert active_relationship_model().objects.filter(pk=leftover.pk).exists()
     assert channel.with_actor(editor).has_access("write")
-    unbind(project=project.with_actor(owner), target=channel.with_actor(owner))
-    assert not channel.with_actor(editor).has_access("write")
-    assert not thread.with_actor(editor).has_access("write")
-    assert not message.with_actor(editor).has_access("read")
-    assert not message.with_actor(editor).has_access("write")
+    with transaction.atomic():
+        unbind(project=project.with_actor(owner), target=channel.with_actor(owner))
+        assert not channel.with_actor(editor).has_access("write")
+        assert not thread.with_actor(editor).has_access("write")
+        assert not message.with_actor(editor).has_access("read")
+        assert not message.with_actor(editor).has_access("write")
     assert binding.pk is not None
 
 
@@ -222,14 +251,11 @@ def test_project_drive_access_reaches_folders_and_files(project_access_schema: A
 
 
 def test_projects_app_ready_does_not_require_composed_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The source addon wires class-prepared discovery without eager model lookup."""
+    """Native deletion dispatch starts without looking up composed models or data."""
 
-    connected: list[str] = []
-    monkeypatch.setattr(project_signals.apps, "get_models", lambda: ())
-    monkeypatch.setattr(
-        project_signals.class_prepared,
-        "connect",
-        lambda receiver, *, dispatch_uid: connected.append(dispatch_uid),
-    )
-    project_signals.connect()
-    assert connected == ["projects.access.class_prepared"]
+    def refuse_model_lookup(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Project startup must not look up composed models.")
+
+    monkeypatch.setattr(apps, "get_model", refuse_model_lookup)
+    monkeypatch.setattr(apps, "get_models", refuse_model_lookup)
+    apps.get_app_config("projects").ready()

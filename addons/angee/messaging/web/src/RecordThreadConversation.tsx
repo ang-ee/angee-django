@@ -410,19 +410,31 @@ function transcriptEntries(
   messages: readonly RecordMessageRow[],
   activities: readonly RecordActivityRow[],
 ): TranscriptEntry[] {
-  const entries: TranscriptEntry[] = messages.map((message) => {
+  const messageEntries: TranscriptEntry[] = messages.map((message) => {
     const at = message.sent_at ?? message.created_at;
     return { kind: "message", message, at, day: formatDateStorage(dateFromValue(at)) ?? "" };
   });
-  for (const activity of activities) {
-    if (activity.status !== "DONE") continue;
-    const at = activity.completed_at ?? "";
-    entries.push({
-      kind: "activity", activity, at,
-      day: activity.due_date ?? formatDateStorage(dateFromValue(at)) ?? "",
-    });
+  const activityEntries: TranscriptEntry[] = activities
+    .filter((activity) => activity.status === "DONE")
+    .map((activity) => ({
+      kind: "activity", activity, at: activity.completed_at ?? "",
+      day: activity.due_date ?? formatDateStorage(dateFromValue(activity.completed_at)) ?? "",
+    }));
+  const entries: TranscriptEntry[] = [];
+  let nextActivity = 0;
+  for (const messageEntry of messageEntries) {
+    while (nextActivity < activityEntries.length) {
+      const activityEntry = activityEntries[nextActivity]!;
+      const dayOrder = activityEntry.day.localeCompare(messageEntry.day);
+      if (dayOrder > 0 || (dayOrder === 0 &&
+        Date.parse(activityEntry.at) > Date.parse(messageEntry.at))) break;
+      entries.push(activityEntry);
+      nextActivity += 1;
+    }
+    entries.push(messageEntry);
   }
-  return entries.sort((left, right) => left.day.localeCompare(right.day) || left.at.localeCompare(right.at));
+  entries.push(...activityEntries.slice(nextActivity));
+  return entries;
 }
 
 function CompletedActivityRow({ activity, type, recordedOn }: {
@@ -434,7 +446,7 @@ function CompletedActivityRow({ activity, type, recordedOn }: {
   const occurredDay = activity.due_date ?? recordedDay;
   return (
     <MessageRow
-      avatar={<Glyph decorative name={type?.glyph || "activity"} />}
+      avatar={<Glyph decorative name={type?.glyph || "activity"} fallbackName="activity" />}
       author={activity.created_by ? userDisplayName(activity.created_by, "") : undefined}
       channel={<span className="text-13 font-medium">{type?.name ?? activity.activity_type}</span>}
       meta={<>

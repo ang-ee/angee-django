@@ -22,18 +22,9 @@ from django.core.validators import MaxValueValidator, MinValueValidator, RegexVa
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
-from rebac import (
-    RelationshipTuple,
-    SubjectRef,
-    current_actor,
-    delete_relationships,
-    system_context,
-    to_object_ref,
-    write_relationships,
-)
+from rebac import current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
-from rebac.types import RelationshipFilter
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
@@ -1532,32 +1523,13 @@ class TaskWork(StagedModelMixin):
                 object_id=canonical_target.object_id,
             ).values_list("url", flat=True)
         )
-        relation = link_model.objects.target_relation(canonical)
-        canonical_subject = SubjectRef(to_object_ref(canonical))
         for link in source_links:
             if link.url in canonical_urls:
                 link.delete()
                 continue
-            resource = to_object_ref(link)
-            delete_relationships(
-                RelationshipFilter(
-                    resource_type=resource.resource_type,
-                    resource_id=resource.resource_id,
-                    relation=relation,
-                )
-            )
             link.content_type = canonical_target.content_type
             link.object_id = canonical_target.object_id
             link.save(update_fields=("content_type", "object_id", "updated_at"))
-            write_relationships(
-                [
-                    RelationshipTuple(
-                        resource=resource,
-                        relation=relation,
-                        subject=canonical_subject,
-                    )
-                ]
-            )
             canonical_urls.add(link.url)
 
     def _move_followers_to(self, canonical: models.Model) -> None:

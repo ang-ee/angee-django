@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { RecordActivityRow, RecordMessageRow } from "./documents";
@@ -83,7 +83,15 @@ function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
   } as unknown as RecordMessageRow;
 }
 
-function threadPayload(messages: RecordMessageRow[], activities: RecordActivityRow[] = []): unknown {
+function activity(overrides: Partial<RecordActivityRow> = {}): RecordActivityRow {
+  return {
+    id: "activity_1", activity_type: "call", summary: "Exchange", note: "Exchange note",
+    due_date: "2026-07-06", completed_at: "2026-07-06T12:00:00Z", feedback: "",
+    status: "DONE", state: "done", user: null, created_by: null, ...overrides,
+  };
+}
+
+function threadPayload(messages: RecordMessageRow[], activities: RecordActivityRow[] = [], glyph = "phone"): unknown {
   return {
     record_thread: {
       error: null,
@@ -105,7 +113,7 @@ function threadPayload(messages: RecordMessageRow[], activities: RecordActivityR
       followers: [],
       activity_count: activities.length,
       activities,
-      activity_types: [{ id: "act_call", key: "call", name: "Call", glyph: "phone" }],
+      activity_types: [{ id: "act_call", key: "call", name: "Call", glyph }],
     },
   };
 }
@@ -132,6 +140,34 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("RecordThreadConversation", () => {
+  test("merges exchanges without reordering equal instants from the server", () => {
+    mocks.threadData = threadPayload([
+      message({ id: "first", preview: "First from server", parts: [], sent_at: "2026-07-06T12:00:00+02:00" }),
+      message({ id: "second", preview: "Second from server", parts: [], sent_at: "2026-07-06T10:00:00Z" }),
+    ], [activity({ due_date: "2026-07-05" })]);
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    const text = screen.getByRole("list", { name: "Comments" }).textContent ?? "";
+    expect(text.indexOf("Exchange note")).toBeLessThan(text.indexOf("First from server"));
+    expect(text.indexOf("First from server")).toBeLessThan(text.indexOf("Second from server"));
+  });
+
+  test("uses the activity glyph when the catalog glyph is unknown", () => {
+    mocks.threadData = threadPayload([], [activity()], "unknown-catalog-glyph");
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    expect(screen.getByRole("list", { name: "Comments" }).querySelector("svg.glyph")).not.toBeNull();
+  });
+
+  test("clears exchanges when the server returns an empty search window", async () => {
+    mocks.threadData = threadPayload([], [activity()]);
+    const { rerender } = render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    expect(screen.getByText("Exchange note")).toBeTruthy();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "absent" } });
+    mocks.threadData = threadPayload([]);
+    rerender(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    await waitFor(() => expect(screen.getByText("No matching comments")).toBeTruthy());
+    expect(screen.queryByText("Exchange note")).toBeNull();
+  });
+
   test("renders the record-thread transcript for the given record", () => {
     mocks.threadData = threadPayload([message()], [{
       id: "activity_1", activity_type: "call", summary: "Earlier exchange",

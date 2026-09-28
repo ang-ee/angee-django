@@ -26,6 +26,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from itertools import batched
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -47,7 +48,6 @@ from rebac import (
     SubjectRef,
     current_actor,
     system_context,
-    to_object_ref,
     to_subject_ref,
 )
 from rebac.backends import backend
@@ -754,7 +754,11 @@ class ThreadedModelMixin(models.Model):
         activity_type: str = "todo",
         metadata: dict[str, object] | None = None,
     ) -> models.Model:
-        """Schedule an activity on this row's chatter thread."""
+        """Schedule an activity using an installed catalog key.
+
+        The default ``todo`` key comes from messaging's master resources; custom
+        keys must also be loaded before scheduling. Missing keys fail validation.
+        """
 
         if not self._message_activity_allowed():
             raise PermissionDenied(
@@ -898,23 +902,9 @@ class ThreadedModelMixin(models.Model):
         return bool(has_access(self.thread_activity_access))
 
     def thread_reader_allowed(self, user: Any) -> bool:
-        """Check one recipient against this record's read owner, independently of the posting actor.
+        """Check one recipient through the same explicit-account audience gate."""
 
-        Hosts without REBAC retain the mixin's permissive read contract. Protected
-        hosts check the recipient explicitly even during system-context fan-out.
-        """
-
-        if not callable(getattr(self, "has_access", None)) or not model_resource_type(self):
-            return True
-        return (
-            backend()
-            .check_access(
-                subject=to_subject_ref(user),
-                action=self.thread_read_access,
-                resource=to_object_ref(self),
-            )
-            .allowed
-        )
+        return user.pk in self.thread_reader_ids((user,))
 
     def thread_reader_ids(self, accounts: Iterable[models.Model]) -> set[Any]:
         """Evaluate the audience against this record's native read scopes once.
@@ -922,7 +912,8 @@ class ThreadedModelMixin(models.Model):
         Each EXISTS arm pins its account even under system-context fan-out. Only
         recipient IDs selected by the record's complete permission are returned;
         no relationship or visibility rule is reconstructed here. The native
-        evaluator scope shares schema reads across all arms.
+        evaluator scope shares schema reads across all arms. Fifty accounts per
+        statement bound SQL expression depth and size independently of the audience.
         """
 
         accounts = tuple(accounts)
@@ -931,27 +922,29 @@ class ThreadedModelMixin(models.Model):
         if not callable(getattr(self, "has_access", None)) or not model_resource_type(self):
             return {account.pk for account in accounts}
         using = self._state.db or router.db_for_read(type(self), instance=self)
+        allowed: set[Any] = set()
         with evaluator_scope():
-            readers = models.Q(pk__in=[])
-            for account in accounts:
-                predicate = backend().queryset_filter(
-                    model=type(self), subject=to_subject_ref(account),
-                    action=self.thread_read_access, using=using,
+            for chunk in batched(accounts, 50):
+                readers = models.Q(pk__in=[])
+                for account in chunk:
+                    predicate = backend().queryset_filter(
+                        model=type(self), subject=to_subject_ref(account),
+                        action=self.thread_read_access, using=using,
+                    )
+                    # The native predicate avoids a grants-all probe per account;
+                    # unsupported scopes retain the evaluator fallback.
+                    scope = (
+                        type(self)._base_manager.using(using).filter(predicate, pk=self.pk).order_by()
+                        if predicate is not None else
+                        type(self)._default_manager.using(using).with_actor(account)
+                        .with_action(self.thread_read_access).filter(pk=self.pk).order_by().scoped()
+                    )
+                    readers |= models.Q(pk=account.pk) & models.Q(models.Exists(scope))
+                allowed.update(
+                    get_user_model()._base_manager.using(using)
+                    .filter(readers).values_list("pk", flat=True)
                 )
-                # Ask the native SQL scope directly: queryset.scoped() first
-                # evaluates its grants-all shortcut separately for each actor.
-                # Unsupported scopes retain the library's evaluator fallback.
-                scope = (
-                    type(self)._base_manager.using(using).filter(predicate, pk=self.pk).order_by()
-                    if predicate is not None else
-                    type(self)._default_manager.using(using).with_actor(account)
-                    .with_action(self.thread_read_access).filter(pk=self.pk).order_by().scoped()
-                )
-                readers |= models.Q(pk=account.pk) & models.Q(models.Exists(scope))
-            return set(
-                get_user_model()._base_manager.using(using)
-                .filter(readers).values_list("pk", flat=True)
-            )
+        return allowed
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:
@@ -1579,7 +1572,10 @@ class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.CASCADE,
         related_name="+",
     )
-    activity_type = models.CharField(max_length=64, default="todo")
+    activity_type = models.ForeignKey(
+        "messaging.ActivityType", to_field="key", db_column="activity_type",
+        on_delete=models.PROTECT, default="todo", related_name="activities",
+    )
     summary = models.CharField(max_length=256)
     note = models.TextField(blank=True, default="")
     due_date = models.DateField(null=True, blank=True, db_index=True)
@@ -1607,7 +1603,7 @@ class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
 
         super().clean()
         catalog = apps.get_model("messaging", "ActivityType")
-        if not catalog.system_queryset().filter(key=self.activity_type).exists():
+        if not catalog.system_queryset().filter(key=self.activity_type_id).exists():
             raise ValidationError({"activity_type": "Declare this activity type in the catalog first."})
 
     @property
