@@ -37,6 +37,7 @@ from tests.conftest import (
 )
 from tests.spaces_models import Group, Membership
 from tests.test_messaging import Party, Person, Thread
+from tests.test_productivity_write_behavior import Queue
 
 # These concrete test models register after Django's app population. The lazy
 # string relation resolves when ``Party`` registers, but Django may already have
@@ -159,10 +160,10 @@ def test_group_create_ignores_roster_backings_unused_by_create(spaces_tables: No
 
 
 @pytest.mark.django_db(transaction=True)
-def test_group_console_insert_establishes_private_creator_access(
+def test_group_console_insert_establishes_private_owner_access(
     spaces_tables: None,
 ) -> None:
-    """A non-admin creator can create/read/write its private group; an outsider cannot read it."""
+    """The new group's owner can read and write it; an outsider cannot read it."""
 
     del spaces_tables
     creator = create_user("spaces-group-creator")
@@ -206,10 +207,10 @@ def test_group_console_insert_establishes_private_creator_access(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_membership_console_insert_inherits_group_creator_access(
+def test_membership_console_insert_inherits_group_owner_access(
     spaces_tables: None,
 ) -> None:
-    """A non-admin can create/read/write its group membership; an outsider cannot read it."""
+    """A group's owner can create, read and write roster rows; an outsider cannot."""
 
     del spaces_tables
     creator = create_user("spaces-membership-creator")
@@ -258,10 +259,18 @@ def test_membership_console_insert_inherits_group_creator_access(
 
 
 def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(spaces_tables: None) -> None:
-    """Groups persist, update, delete, reject duplicate slugs, and nest without a scope."""
+    """Groups support hierarchy and share ownership and audience with concrete children."""
 
     del spaces_tables
+    owner, person = _person_for("spaces-child-owner")
     with system_context(reason="spaces group crud"):
+        queue = Queue.objects.create(name="Dispatch", key="DSP", created_by=owner)
+        Membership.objects.create(group=queue, party=person, is_confirmed=True)
+        assert Queue._meta.get_field("owner").model is Group
+        assert queue.owner_id == owner.pk
+        assert [entry.party.pk for entry in queue.thread_audience()] == [person.pk]
+        queue.delete()
+
         root = Group.objects.create(name="Community")
         sibling = Group.objects.create(name="Community")
         child = Group.objects.create(name="Moderators", parent=root)
@@ -333,6 +342,9 @@ def test_membership_lifecycle_filters_live_roles(
 
     def assert_roles(group: Group, expected: set[str]) -> None:
         assert _role_relations(group, user) == expected
+        assert backend().check_access(
+            subject=to_subject_ref(user), action="set_notifications", resource=to_object_ref(membership),
+        ).allowed == bool(expected)
         for role in ("owner", "moderator", "member", "viewer"):
             scoped = Group.objects.with_actor(user).with_action(f"roster_{role}").filter(pk=group.pk)
             assert scoped.exists() == (role in expected), str(scoped.query)
@@ -366,8 +378,8 @@ def test_membership_lifecycle_filters_live_roles(
         assert_roles(group, set())
 
 
-def test_membership_repoint_revokes_the_stored_subject(spaces_tables: None) -> None:
-    """Moving a confirmed roster row revokes the old user before granting the new one."""
+def test_membership_repoint_changes_the_live_holder(spaces_tables: None) -> None:
+    """Moving a confirmed roster row makes its new user's live role replace the old one."""
 
     del spaces_tables
     old_user, old_person = _person_for("spaces-old-member")
@@ -383,8 +395,8 @@ def test_membership_repoint_revokes_the_stored_subject(spaces_tables: None) -> N
     assert _role_relations(group, new_user) == {"member"}
 
 
-def test_unrelated_membership_save_writes_no_mirror_tuple(spaces_tables: None) -> None:
-    """A confidence-only save leaves roster access entirely field-backed."""
+def test_confidence_only_save_leaves_pending_membership_without_roles(spaces_tables: None) -> None:
+    """Changing confidence does not grant a pending member any roster role."""
 
     del spaces_tables
     _user, person = _person_for("spaces-unchanged-member")
@@ -397,8 +409,8 @@ def test_unrelated_membership_save_writes_no_mirror_tuple(spaces_tables: None) -
         assert _role_relations(group, _user) == set()
 
 
-def test_person_user_change_reconciles_membership_subject(spaces_tables: None) -> None:
-    """Changing Person.user migrates each confirmed membership grant to the new user."""
+def test_person_user_change_changes_the_live_roster_holder(spaces_tables: None) -> None:
+    """Changing Person.user immediately changes who holds each confirmed roster role."""
 
     del spaces_tables
     old_user, person = _person_for("spaces-person-old-user")
@@ -450,20 +462,22 @@ def test_moderator_can_confirm_membership_but_outsider_cannot(spaces_tables: Non
 
 
 def test_membership_without_a_platform_user_grants_nothing(spaces_tables: None) -> None:
-    """A valid party roster row with no Person.user identity never writes an access tuple."""
+    """A party without Person.user supplies no holder to the real roster relations."""
 
     del spaces_tables
+    user = create_user("spaces-unlinked-party-observer")
     with system_context(reason="spaces membership without user"):
         group = Group.objects.create(name="Community", slug="community")
         party = Party.objects.create(display_name="External contact")
         membership = Membership.objects.create(group=group, party=party)
         membership.confirm()
 
-    assert not active_relationship_model().objects.filter(
-        resource_type="spaces/group",
-        resource_id=str(group.pk),
-        relation__in=("owner", "moderator", "member", "viewer"),
-    ).exists()
+    for role in ("owner", "moderator", "member", "viewer"):
+        assert SchemaRelation.objects.filter(
+            definition__resource_type="spaces/group", name=f"roster_{role}",
+        ).exists()
+        assert not Group.objects.with_actor(user).with_action(f"roster_{role}").filter(pk=group.pk).exists()
+    assert _role_relations(group, user) == set()
 
 
 def test_public_visibility_reconciles_the_wildcard_reader(spaces_tables: None) -> None:
@@ -524,8 +538,8 @@ def test_visibility_double_flip_is_idempotent(spaces_tables: None) -> None:
         assert _group_relationship_count(group) == 0
 
 
-def test_group_delete_revokes_membership_and_group_relationships(spaces_tables: None) -> None:
-    """Deleting a public group removes its wildcard and every roster role tuple."""
+def test_group_delete_removes_roster_rows_and_public_reader(spaces_tables: None) -> None:
+    """Deleting a public group removes its wildcard tuple and canonical roster rows."""
 
     del spaces_tables
     user, person = _person_for("spaces-delete-member")
@@ -625,7 +639,7 @@ def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
 
 
 def test_spaces_fragment_merges_only_read_and_write_into_messaging_thread() -> None:
-    """The composed messaging definition carries the group relation and only legal arms."""
+    """The composed thread derives group access only from its selected groups."""
 
     app_configs = list(apps.get_app_configs())
     field_owners = installed_field_owners(app_configs)
@@ -633,13 +647,14 @@ def test_spaces_fragment_merges_only_read_and_write_into_messaging_thread() -> N
     messaging = merged["angee.messaging"]
     definition = messaging.get_definition("messaging/thread")
     assert definition is not None
-    assert {relation.name for relation in definition.relations} >= {"group"}
+    assert {relation.name for relation in definition.relations} >= {"selected_group"}
+    assert "group" not in {relation.name for relation in definition.relations}
 
     rendered = render_zed("angee.messaging", messaging)
-    assert "relation group: spaces/group" in rendered
+    assert "relation group: spaces/group" not in rendered
     assert "relation selected_group: spaces/group // rebac:field=groups" in rendered
-    assert "group->read" in rendered
-    assert "group->post" in rendered
+    assert "selected_group->read" in rendered
+    assert "selected_group->post" in rendered
 
     thread_block = rendered.split("definition messaging/thread {", maxsplit=1)[1].split(
         "\n}", maxsplit=1

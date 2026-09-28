@@ -1,4 +1,4 @@
-import { Glyph, formatSize, isHeicMime, isImageMime, textRoleVariants } from "@angee/ui";
+import { Glyph, formatSize, isHeicMime, isImageMime, textRoleVariants, useEnumOptions, useResolvedWidget } from "@angee/ui";
 import type { ReactElement } from "react";
 
 import type { StorageFileRow } from "../data/file-rows";
@@ -8,6 +8,12 @@ import type { StorageFileRow } from "../data/file-rows";
  * an image the browser can't render in an `<img>`, so it shows the glyph here —
  * the preview pane decodes it on demand. */
 export function fileGalleryCard(row: StorageFileRow): ReactElement {
+  return <FileGalleryCard row={row} />;
+}
+
+function FileGalleryCard({ row }: { row: StorageFileRow }): ReactElement {
+  const Audience = useResolvedWidget("statusBadge")?.read;
+  const audienceOptions = useEnumOptions("storage.File", "visibility", { casing: "upper" });
   const mime = row.mime_type?.mime_type ?? "";
   const mimeLabel = row.mime_type?.label || mime || "—";
   const icon = row.mime_type?.icon_key || "file";
@@ -31,6 +37,7 @@ export function fileGalleryCard(row: StorageFileRow): ReactElement {
         <p className={textRoleVariants({ role: "caption", truncate: true })}>
           {mimeLabel} · {formatSize(row.size_bytes)}
         </p>
+        {Audience ? <Audience value={row.visibility} row={row} field={{ options: audienceOptions }} /> : null}
       </div>
     </>
   );

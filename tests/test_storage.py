@@ -1167,7 +1167,8 @@ def test_index_external_creates_updates_and_emits_file_finalized(drive: Any) -> 
         "source": "test",
         "origin": {"path": "docs/report.txt", "rev": 2},
     }
-    assert updated.created_by_id == drive.alice.pk
+    assert updated.owner_id == drive.alice.pk
+    assert updated.created_by_id is None
     assert seen == [created.pk, created.pk]
 
 

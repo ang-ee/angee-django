@@ -129,6 +129,11 @@ export function FileBrowserContent({
         )}
       />
       <Column<StorageFileRow>
+        field="visibility"
+        header={t("column.visibility")}
+        widget="statusBadge"
+      />
+      <Column<StorageFileRow>
         field="size_bytes"
         header={t("column.size")}
         align="right"
@@ -147,7 +152,7 @@ export function FileBrowserContent({
       />
       <Column<StorageFileRow>
         field="created_by_label"
-        header={t("column.owner")}
+        header={t("column.author")}
         render={(row) => row.created_by_label || "—"}
       />
       <Column<StorageFileRow>

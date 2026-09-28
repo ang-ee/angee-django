@@ -10,6 +10,7 @@ import type {
   LiveProvider,
   MetaQuery,
 } from "@refinedev/core";
+import { resourceMutationMeta, type ResourceMutationOperations, type ResourceMutationTarget } from "./operations";
 import type { QueryClient } from "@tanstack/react-query";
 import {
   graphQLWebSocketUrl,
@@ -47,6 +48,8 @@ export interface AngeeHasuraClientOptions {
 export interface AngeeHasuraDataProviderOptions
   extends AngeeHasuraClientOptions {
   providerOptions?: HasuraDataProviderOptions;
+  /** Root-argument capabilities keyed by the provider's list resource name. */
+  mutations?: Readonly<Record<string, ResourceMutationOperations>>;
 }
 
 export type AngeeHasuraWebSocketOptions =
@@ -108,6 +111,27 @@ export function createAngeeHasuraDataProvider(
     getList: (params) => provider.getList({ ...params, meta: readSelection(params.meta) }),
     getOne: (params) => provider.getOne({ ...params, meta: readSelection(params.meta) }),
     getMany: (params) => provider.getMany({ ...params, meta: readSelection(params.meta) }),
+    create: (params) => provider.create({ ...params, meta: mutationSelection(
+      "create", params.resource, options.mutations?.[params.resource]?.create, params.meta,
+    ) }),
+    update: (params) => provider.update({ ...params, meta: mutationSelection(
+      "update", params.resource, options.mutations?.[params.resource]?.update, params.meta, params.id,
+    ) }),
+  };
+}
+
+function mutationSelection(
+  kind: "create" | "update",
+  resource: string,
+  target: ResourceMutationTarget | undefined,
+  meta: MetaQuery | undefined,
+  id?: string | number,
+): MetaQuery | undefined {
+  if (!target?.arguments.length || meta?.gqlMutation || meta?.gqlQuery) return meta;
+  const variables = recordValue(meta?.gqlVariables) ?? {};
+  return {
+    ...meta,
+    ...resourceMutationMeta(kind, resource, target, meta?.fields ?? ["id"], variables, id),
   };
 }
 
@@ -167,6 +191,7 @@ export function publicGraphQLError(value: unknown): PublicGraphQLError | null {
 
 export function isPublicGraphQLErrorCode(code: unknown): boolean {
   return code === "VALIDATION" || code === "BAD_USER_INPUT"
+    || code === "STALE_REVISION" || code === "CREATION_KEY_CONFLICT" || code === "VIEW_AS_READ_ONLY"
     || code === "UNAUTHENTICATED" || code === "PERMISSION_DENIED" || code === "FORBIDDEN";
 }
 

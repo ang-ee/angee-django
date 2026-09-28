@@ -42,6 +42,121 @@ import { statusBadgeWidget } from "@angee/ui/widgets/statusBadge";
 
 afterEach(() => cleanup());
 
+describe("createApp confinement", () => {
+  const addons: readonly BaseAddon[] = [{
+    id: "requests",
+    routes: [
+      { name: "requests.all", path: "/requests", component: EmptyPage },
+      { name: "requests.record", path: "/requests/$id", parent: "requests.all", component: EmptyPage },
+      { name: "files.all", path: "/files", component: EmptyPage },
+      { name: "files.record", path: "/files/$id", parent: "files.all", component: EmptyPage },
+      { name: "account", path: "/account", component: EmptyPage },
+      { name: "public.page", path: "/public-page", layout: "public", component: EmptyPage },
+    ],
+    menus: [
+      { id: "requests", children: [{ id: "requests.all", route: "requests.all" }] },
+      { id: "files", route: "files.all" },
+    ],
+  }];
+
+  test("rejects an unknown root and a home outside the selected root", () => {
+    const input = testAppInput(addons, {
+      console: { requireAuth: false },
+      public: { requireAuth: false },
+    });
+    expect(() => createApp({ ...input, confineTo: "unknown" })).toThrow(/Unknown menu root/);
+    expect(() => createApp({ ...input, confineTo: "requests", home: "files.all" })).toThrow(/must belong/);
+    expect(() => createApp({ ...input, confineTo: "requests", home: "account" })).toThrow(/must belong/);
+  });
+
+  test("accepts a root and first child sharing the resource route", () => {
+    const shared: BaseAddon = {
+      id: "requests",
+      routes: [{ name: "requests.all", path: "/requests", resource: "requests.Request", component: EmptyPage }],
+      menus: [{
+        id: "requests",
+        route: "requests.all",
+        children: [{ id: "requests.all", route: "requests.all" }],
+      }],
+    };
+    const input = {
+      ...testAppInput([shared], { console: { requireAuth: false } }),
+      schemas: testSchemasWithConsoleResources([testDataResource("requests.Request")]),
+    };
+    expect(() => createApp(input)).not.toThrow();
+    expect(() => createApp({ ...input, confineTo: "requests" })).not.toThrow();
+  });
+
+  test("requires explicit menu ownership only when confined route roots disagree", () => {
+    const shared: BaseAddon = {
+      id: "requests",
+      routes: [{ name: "requests.all", path: "/requests", resource: "requests.Request", component: EmptyPage }],
+      menus: [
+        { id: "requests", route: "requests.all" },
+        { id: "files", route: "requests.all" },
+      ],
+    };
+    const input = {
+      ...testAppInput([shared], { console: { requireAuth: false } }),
+      schemas: testSchemasWithConsoleResources([testDataResource("requests.Request")]),
+    };
+    expect(() => createApp(input)).not.toThrow();
+    expect(() => createApp({ ...input, confineTo: "requests" })).toThrow(/different menu roots/);
+    const explicit = {
+      ...shared,
+      routes: shared.routes?.map((route) => ({ ...route, menu: "requests" })),
+    };
+    expect(() => createApp({ ...input, addons: [explicit], confineTo: "requests" })).not.toThrow();
+  });
+
+  test("projects only the confined root into both navigation sources", async () => {
+    const captured = await captureChrome({
+      addons,
+      path: "/requests/item-1",
+      home: "requests.all",
+      confineTo: "requests",
+    });
+    try {
+      const tree = MenuTree.from(captured.props().menus);
+      expect(tree.railMenuItems().map((item) => item.id)).toEqual(["requests"]);
+      expect(tree.navigableItems().map(({ item }) => item.id)).toEqual(["requests.all"]);
+    } finally {
+      captured.cleanup();
+    }
+  });
+
+  test("redirects other roots while preserving public and unowned chrome routes", async () => {
+    history.replaceState(null, "", "/files");
+    const app = createApp({
+      ...testAppInput(addons, {
+        console: { requireAuth: false },
+        public: { requireAuth: false },
+      }),
+      confineTo: "requests",
+      home: "requests.all",
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = app.mount(host);
+    try {
+      const length = history.length;
+      await waitFor(() => expect(window.location.pathname).toBe("/requests"));
+      expect(history.length).toBe(length);
+      await app.router.navigate({ to: "/public-page" });
+      expect(window.location.pathname).toBe("/public-page");
+      await app.router.navigate({ to: "/requests/item-1" });
+      expect(window.location.pathname).toBe("/requests/item-1");
+      await app.router.navigate({ to: "/account" });
+      expect(window.location.pathname).toBe("/account");
+      await app.router.navigate({ to: "/files/item-1" });
+      expect(window.location.pathname).toBe("/requests");
+    } finally {
+      root.unmount();
+      host.remove();
+    }
+  });
+});
+
 type AuthoredQueryDocument = Parameters<typeof useAuthoredQuery>[0];
 
 function typedDocument(source: string): AuthoredQueryDocument {

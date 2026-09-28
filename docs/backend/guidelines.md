@@ -1610,13 +1610,21 @@ Their docstrings own the exact behavior.
   `angee.E023` requires the declared uniqueness constraint.
 - **Ownership:** a grant root composes `OwnerMixin`, so `owner` is transferable
   access and `created_by` remains attribution. Its Zed backs `owner` with that
-  column and declares `transfer` (`angee.E022`). Change it through
+  column and declares its transfer permission (`angee.E022`); its
+  `write__owner` gate names that permission (`angee.E027`). Change it through
   `transfer_ownership`; bulk release belongs only to an owning verb that already
   authorized it. See the [example notes](../../examples/addons/example/notes/permissions.zed);
   remaining `rebac:field=created_by` owner relations are unconverted, not a pattern.
+- **Delegated field gates:** a definition that delegates to a parent re-declares
+  the parent's field gates through that relation, as enforced for ownership by
+  [the base checks](../../angee/base/checks.py). Re-save a fresh, unreloaded
+  instance with `update_fields`: without a loaded snapshot, a full save writes
+  every column, including `owner`, and must pass every applicable field gate.
 - **Owning containers:** a container composing `ItemOwnershipMixin` can own its
   newly inserted items, which then reach access through it; items name it with
-  `owner_container` (`angee.E025`). Changing the flag affects later inserts only.
+  `owner_container` (`angee.E025`) and ask
+  [`OwnerMixin.container_owns_items()`](../../angee/base/mixins.py) for its policy.
+  Changing the flag affects later inserts only.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
 

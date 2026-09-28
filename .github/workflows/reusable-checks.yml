@@ -24,7 +24,7 @@ on:
         type: boolean
         default: true
       stack-enabled:
-        description: Run addon fragment and pytest checks against a full composition.
+        description: Run composed addon fragment checks and optional bridge source tests.
         required: false
         type: boolean
         default: false
@@ -65,6 +65,7 @@ jobs:
   uv:
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:17
@@ -84,7 +85,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
-      - run: uv run pytest -q ${{ inputs.pytest-extra-args }}
+      - run: uv run pytest -q -n auto --dist loadfile --durations=25 ${{ inputs.pytest-extra-args }}
       - name: Verify workflow concurrency contracts execute on PostgreSQL
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
@@ -106,6 +107,7 @@ jobs:
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v5
@@ -126,13 +128,14 @@ jobs:
   # The composed-stack lane dogfoods the two-command install path: install the
   # released angee CLI, render the in-repo framework-dev stack template,
   # compose it (angee build + schema + web codegen — no database needed), then
-  # typecheck/test addon fragments and run pytest against the
-  # real composition (the stack root's runtime/ is the @angee/gql fixture).
+  # typecheck/test addon fragments (the stack root's runtime/ is the @angee/gql
+  # fixture), and run the optional bridge source tests.
   # The consolidated checkout supplies core, packages, addons, examples, and
   # templates. Only the optional full-profile bridges remain external.
   stack:
     if: ${{ inputs.stack-enabled }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
@@ -194,9 +197,6 @@ jobs:
         run: |
           pnpm -r typecheck
           pnpm -r test
-      - name: Pytest against the composed stack
-        working-directory: stack/workspaces/src/angee
-        run: uv run pytest -q ${{ inputs.pytest-extra-args }}
       - name: Pytest the bridge source contracts
         if: ${{ inputs.addons-profile == 'full' }}
         working-directory: stack/workspaces/src/angee-messaging-bridges

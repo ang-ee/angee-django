@@ -78,10 +78,10 @@ class PartyType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a party (the unified contact)."""
 
     display_name: auto
-    notes: auto
-    handle_count: auto
-    first_met_note: auto
-    introduced_by: "PartyType | None"
+    notes: str | None
+    handle_count: int | None
+    first_met_note: str | None
+    introduced_by: "PartyType | None" = actor_scoped_to_one("introduced_by")
     created_at: auto
     updated_at: auto
 
@@ -108,10 +108,10 @@ class PersonType(PartyType):
     additional_name: auto
     family_name: auto
     name_suffix: auto
-    nickname: auto
+    nickname: str | None
     birthday: auto
     anniversary: auto
-    folder: "ContactFolderType | None"
+    folder: "ContactFolderType | None" = actor_scoped_to_one("folder")
 
     @strawberry_django.field(only=["id"])
     def circle_names(self) -> list[str]:
@@ -604,12 +604,11 @@ _PARTY_RESOURCE = hasura_model_resource(
     ),
     sortable=[
         "display_name",
-        "handle_count",
         "created_at",
         "updated_at",
         *declared_hasura_resource_fields(Party, "hasura_sortable_fields"),
     ],
-    aggregatable=["id", "handle_count"],
+    aggregatable=["id"],
     groupable=list(
         dict.fromkeys(
             [
@@ -633,10 +632,7 @@ _PERSON_RESOURCE = hasura_model_resource(
                 "display_name",
                 "given_name",
                 "family_name",
-                "nickname",
                 "folder",
-                "birthday",
-                "anniversary",
                 "created_at",
                 "updated_at",
                 *declared_hasura_resource_fields(Person, "hasura_filterable_fields"),

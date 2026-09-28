@@ -180,12 +180,10 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.list_name == "channels"
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
-    # A channel is created by a bespoke connect flow, but its operator label is the one
-    # fact a human owns (update), and deleting it purges everything it ingested — the
-    # generic delete root lights the button, the authored `delete_channel` root drives
-    # the purge-accurate cascade preview + confirm.
+    # Connect owns channel creation. Updates include the operator label and the
+    # spaces donor's team; the authored delete root previews and confirms the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
-    assert channel.update_fields == ("display_name",)
+    assert channel.update_fields == ("display_name", "team")
     assert channel.roots.delete_name == "delete_channels_by_pk"
     assert channel.roots.delete_preview_name == "delete_channel"
     assert channel.roots.changes_name == "channelChanged"
@@ -1047,7 +1045,10 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
             schema,
             """
             mutation PostRecordMessage($model: String!, $id: ID!, $body: String!) {
-              post_record_message(input: {model_label: $model, record_id: $id, body: $body}) {
+              post_record_message(
+                input: {model_label: $model, record_id: $id, body: $body}
+                client_creation_key: "comment-request"
+              ) {
                 error_code
                 follower_count
                 is_following
@@ -1130,6 +1131,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
             mutation PostRecordNote($model: String!, $id: ID!, $body: String!) {
               post_record_message(
                 input: {model_label: $model, record_id: $id, body: $body, kind: "note"}
+                client_creation_key: "note-request"
               ) {
                 error
                 error_code
@@ -3023,27 +3025,27 @@ def _replace_with_nested_part_tree(message: Any, owner: Any) -> None:
     fragment_kind = fragment_model.FragmentKind
     owner_id = owner.pk
     fragments = {
-        "title": fragment_model.objects.upsert(text="Depth subject", owner_id=owner_id),
+        "title": fragment_model.objects.upsert(text="Depth subject", created_by_id=owner_id),
         "list_id": fragment_model.objects.upsert(
             text="List-ID: updates.example",
             kind=fragment_kind.HEADER,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
         "unsubscribe": fragment_model.objects.upsert(
             text="<mailto:unsubscribe@example.com>",
             kind=fragment_kind.HEADER,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
-        "body": fragment_model.objects.upsert(text="Body paragraph.", owner_id=owner_id),
+        "body": fragment_model.objects.upsert(text="Body paragraph.", created_by_id=owner_id),
         "quote": fragment_model.objects.upsert(
             text="Quoted reply.",
             kind=fragment_kind.QUOTE,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
         "signature": fragment_model.objects.upsert(
             text="Regards, Ada",
             kind=fragment_kind.SIGNATURE,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
     }
     part_model._base_manager.filter(message=message).delete()

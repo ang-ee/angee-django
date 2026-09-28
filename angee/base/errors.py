@@ -1,10 +1,13 @@
 """Transport-independent domain refusals."""
 
+from django.core.exceptions import ValidationError
+
 
 class DomainError(Exception):
-    """A refusal with a stable wire code and no detail.
+    """A refusal with a stable wire code.
 
     Raise concrete subclasses with a nonempty code, never this base directly.
+    Subclasses may carry detail for logs; detail is never projected to the wire.
     """
 
     code: str
@@ -17,3 +20,12 @@ class DomainError(Exception):
 
     def __init__(self) -> None:
         super().__init__(self.code)
+
+
+class RecordAccessSubjectRefused(DomainError, ValidationError):
+    """The record's invariant refuses a holder, without exposing subject details."""
+
+    code = "RECORD_ACCESS_SUBJECT_REFUSED"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(self, self.code, code=self.code)

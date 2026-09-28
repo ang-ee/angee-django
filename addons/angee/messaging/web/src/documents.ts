@@ -446,6 +446,7 @@ export const PostRecordMessageDocument = graphql(`
     $attachmentIds: [ID!] = []
     $recipientUserIds: [ID!] = []
     $autofollowRecipients: Boolean = false
+    $clientCreationKey: String = null
   ) {
     post_record_message(
       input: {
@@ -458,6 +459,7 @@ export const PostRecordMessageDocument = graphql(`
         recipient_user_ids: $recipientUserIds
         autofollow_recipients: $autofollowRecipients
       }
+      client_creation_key: $clientCreationKey
     ) {
       error
       error_code
