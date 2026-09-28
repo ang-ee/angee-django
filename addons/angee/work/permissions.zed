@@ -13,6 +13,7 @@ definition work/queue {
     permission read   = group->write + (group->read - withheld)
     permission post   = group->post
     permission write  = group->write
+    permission write__owner = group->transfer
     permission delete = group->delete
 }
 

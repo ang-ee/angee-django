@@ -38,7 +38,7 @@ from django.contrib.postgres.search import SearchVectorField
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -56,7 +56,7 @@ from rebac.resources import model_resource_type
 from angee.base.actors import actor_user_id
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, OwnerMixin, SqidMixin
+from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
@@ -82,7 +82,11 @@ from angee.parties.models import Handle
 
 
 def _actor_user_id(instance: models.Model) -> Any | None:
-    """Return the user FK id for this model's effective REBAC actor."""
+    """Return attribution for the record-bound actor, falling back to ambient.
+
+    Posting uses the same precedence for replay identity unless the caller supplies
+    ``creation_actor`` explicitly. That override does not change attribution or access.
+    """
 
     actor_getter = getattr(instance, "actor", None)
     actor = actor_getter() if callable(actor_getter) else None
@@ -307,12 +311,16 @@ class ThreadedModelMixin(models.Model):
         message_type: Message.MessageKind | None = None,
         subtype_key: str = "comment",
         parent: models.Model | None = None,
+        client_creation_key: str | None = None,
+        creation_actor: SubjectRef | None = None,
     ) -> models.Model:
         """Post an internal comment on this row's chatter thread.
 
         ``message_type`` defaults to :attr:`Message.MessageKind.COMMENT` (resolved by
         the message write path), keeping the enum the single source of truth. A chatter
         comment carries no title of its own — the thread's title fragment is the label.
+        ``creation_actor`` supplies replay identity for a keyed system job; otherwise
+        the record-bound actor takes precedence over the ambient actor.
         """
 
         return self._message_post(
@@ -325,6 +333,8 @@ class ThreadedModelMixin(models.Model):
             parent=parent,
             tracking_values=(),
             autofollow_author=self.thread_autofollow_author,
+            client_creation_key=client_creation_key,
+            creation_actor=creation_actor,
         )
 
     def message_log(
@@ -336,11 +346,15 @@ class ThreadedModelMixin(models.Model):
         tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
         attachments: tuple[models.Model, ...] = (),
         parent: models.Model | None = None,
+        client_creation_key: str | None = None,
+        creation_actor: SubjectRef | None = None,
     ) -> models.Model:
         """Log a structured system note on this row's chatter thread.
 
         Defaults to the :attr:`Message.MessageKind.NOTIFICATION` kind; callers logging
         a tracked change (``message_track``) pass ``AUTO_COMMENT``.
+        ``creation_actor`` sets replay identity with the same precedence as
+        :meth:`message_post`, including named non-user subjects for system jobs.
         """
 
         message_model = apps.get_model("messaging", "Message")
@@ -354,6 +368,8 @@ class ThreadedModelMixin(models.Model):
             recipient_user_ids=(),
             autofollow_recipients=False,
             autofollow_author=False,
+            client_creation_key=client_creation_key,
+            creation_actor=creation_actor,
         )
 
     def message_track(
@@ -481,6 +497,8 @@ class ThreadedModelMixin(models.Model):
         recipient_user_ids: tuple[Any, ...],
         autofollow_recipients: bool,
         autofollow_author: bool,
+        client_creation_key: str | None = None,
+        creation_actor: SubjectRef | None = None,
     ) -> models.Model:
         """Post one user-authored chatter message after enforcing this row's post policy.
 
@@ -492,7 +510,7 @@ class ThreadedModelMixin(models.Model):
 
         if not self.can_post():
             raise PermissionDenied(f"Posting on {self._meta.label} requires {self.thread_post_access!r} access.")
-        message = self._message_system_post(
+        return self._message_system_post(
             body=body,
             attachments=attachments,
             message_type=message_type,
@@ -500,37 +518,13 @@ class ThreadedModelMixin(models.Model):
             parent=parent,
             tracking_values=tracking_values,
             recipient_user_ids=recipient_user_ids,
+            autofollow_author=autofollow_author,
+            autofollow_recipients=autofollow_recipients,
+            client_creation_key=client_creation_key,
+            creation_actor=creation_actor,
         )
-        created_by_id = _actor_user_id(self)
-        follower_model = apps.get_model("messaging", "ThreadFollower")
-        # Autofollow is messaging-owned bookkeeping reacting to an already-
-        # authorized post (the thread_post_access gate above): it runs under
-        # system_context so a non-user actor species (an agent posting through
-        # its service user) cannot be denied on the private follower rows —
-        # the same elevation rule as the delete cascade. The user-facing
-        # follow verb (message_subscribe) stays actor-gated.
-        if autofollow_author and created_by_id is not None:
-            with system_context(reason="messaging.autofollow"):
-                follower_model.objects.subscribe(
-                    self,
-                    user_id=created_by_id,
-                    role=self.thread_attachment_role,
-                )
-                # A first post on an unfollowed record: the write path's own receipt
-                # advance ran before this autofollow existed, so seed the fresh
-                # follower's receipt at the just-posted message — an author never
-                # sees their own post as unread.
-                follower_model.objects.mark_read_up_to(message.thread, user_id=created_by_id, message=message)
-        if autofollow_recipients:
-            with system_context(reason="messaging.autofollow"):
-                for user_id in recipient_user_ids:
-                    follower_model.objects.subscribe(
-                        self,
-                        user_id=user_id,
-                        role=self.thread_attachment_role,
-                    )
-        return message
 
+    @transaction.atomic
     def _message_system_post(
         self,
         *,
@@ -541,6 +535,10 @@ class ThreadedModelMixin(models.Model):
         parent: models.Model | None = None,
         tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
         recipient_user_ids: tuple[Any, ...] = (),
+        autofollow_author: bool = False,
+        autofollow_recipients: bool = False,
+        client_creation_key: str | None = None,
+        creation_actor: SubjectRef | None = None,
     ) -> models.Model:
         """Write one automatic system message on this row's chatter thread.
 
@@ -550,9 +548,10 @@ class ThreadedModelMixin(models.Model):
         :meth:`can_post` / :attr:`thread_post_access`: an actor authorized to change a
         tracked field but not to post comments must still get the change logged rather
         than have its save rolled back by a post-access denial. User-authored posts go
-        through :meth:`_message_post`, which adds the post gate and the follower fan-out.
+        through :meth:`_message_post`, which adds the post gate and autofollow policy.
         """
 
+        scope_actor = creation_actor or self.actor() or current_actor()
         attachment = self.message_thread_attachment(create=True)
         if attachment is None:
             raise ValueError("Cannot post a message without a thread.")
@@ -573,6 +572,10 @@ class ThreadedModelMixin(models.Model):
                 parent=parent,
                 tracking_values=tracking_values,
                 recipient_user_ids=recipient_user_ids,
+                autofollow_author=autofollow_author,
+                autofollow_recipients=autofollow_recipients,
+                client_creation_key=client_creation_key,
+                creation_actor=scope_actor,
             )
 
     def _system_post_pipeline(
@@ -587,6 +590,10 @@ class ThreadedModelMixin(models.Model):
         parent: models.Model | None,
         tracking_values: tuple[TrackingChange | dict[str, Any], ...],
         recipient_user_ids: tuple[Any, ...],
+        autofollow_author: bool,
+        autofollow_recipients: bool,
+        client_creation_key: str | None,
+        creation_actor: SubjectRef | None,
     ) -> models.Model:
         """Run the elevated system-post write; split out for readability only."""
 
@@ -595,6 +602,7 @@ class ThreadedModelMixin(models.Model):
             body=body,
             created_by_id=_actor_user_id(self),
             attachment=attachment,
+            record=self,
             attachments=attachments,
             message_type=message_type,
             subtype_key=subtype_key,
@@ -602,6 +610,10 @@ class ThreadedModelMixin(models.Model):
             parent=parent,
             tracking_values=tracking_values,
             recipient_user_ids=recipient_user_ids,
+            autofollow_author=autofollow_author,
+            autofollow_recipients=autofollow_recipients,
+            client_creation_key=client_creation_key,
+            creation_actor=creation_actor,
         )
 
     def message_subscribe(
@@ -813,7 +825,7 @@ class ThreadedModelMixin(models.Model):
         follower_model = apps.get_model("messaging", "ThreadFollower")
         if self.thread_create_autofollow_author and created_by_id is not None:
             # System bookkeeping on an already-authorized create; see the
-            # autofollow elevation note in _message_post.
+            # autofollow elevation note in MessageManager.post_to_thread.
             with system_context(reason="messaging.autofollow"):
                 follower_model.objects.subscribe(
                     self,
@@ -1646,7 +1658,7 @@ class WebformSubmission:
     unverified_submitter_email: str | None
 
 
-class Message(SqidMixin, AuditMixin, AngeeModel):
+class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
     """One message — the unit of a thread. The root post is itself a Message.
 
     Dedup key is ``(channel, external_id)`` — one row per provider event per
@@ -1668,6 +1680,9 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
 
     runtime = True
     rebac_grantable = {"reader": "write"}
+    creation_key_scope = "creation_actor"
+    creation_actor = models.CharField(max_length=512, null=True, blank=True, editable=False)
+    """REBAC actor identity for keyed posts, independent of nullable user attribution."""
 
     class Direction(models.TextChoices):
         """Whether a message came in, went out, or is internal."""
@@ -1763,6 +1778,7 @@ class Message(SqidMixin, AuditMixin, AngeeModel):
         ordering = ("-sent_at", "sqid")
         rebac_resource_type = "messaging/message"
         constraints = (
+            CreationKeyMixin.creation_key_constraint(scope="creation_actor"),
             # Channel-scoped idempotency over a fixed digest: the ingest manager
             # looks rows up through the same MD5 expression so this index serves
             # both the constraint and the hot resync lookup.

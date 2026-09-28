@@ -39,11 +39,12 @@ T0 = datetime(2026, 1, 10, 12, tzinfo=UTC)
 User = get_user_model()
 
 
-def _messages(owner: Any, *, size: int = 5) -> tuple[Any, list[Any]]:
-    """Seed one owner-visible inbox thread with equal send times."""
+def _messages(owner: Any, *, size: int = 5, thread: Any = None) -> tuple[Any, list[Any]]:
+    """Seed equal send times in an existing thread or a new owner-visible one."""
 
     with system_context(reason="test message feed seed"):
-        thread = Thread._base_manager.create(created_by=owner, platform="email")
+        if thread is None:
+            thread = Thread._base_manager.create(created_by=owner, platform="email")
         rows = [
             Message._base_manager.create(
                 thread=thread,
@@ -240,12 +241,10 @@ def test_record_chatter_never_enters_the_inbox_thread_feed() -> None:
     """Even a readable record-attached thread stays behind its record gate."""
 
     owner = User.objects.create_user(username="feed-record")
-    thread, _ = _messages(owner)
-    with system_context(reason="test feed record attachment"):
-        record = ThreadedTicket._base_manager.create(title="Private record", created_by=owner)
-        attachment = record.message_thread_attachment()
-        attachment.thread = thread
-        attachment.save(update_fields=["thread"])
+    with actor_context(owner):
+        record = ThreadedTicket.objects.create(title="Private record")
+        thread, _ = _messages(owner, thread=record.message_thread())
+        assert Thread.objects.filter(pk=thread.pk).exists()
     assert _query("thread", owner, thread).errors
 
 
@@ -675,10 +674,8 @@ def test_revalidation_projection_prefetch_preserves_related_permissions() -> Non
 
 def test_revalidation_keeps_record_attached_chatter_behind_its_record_gate() -> None:
     owner = User.objects.create_user(username="feed-retained-record")
-    thread, rows = _messages(owner)
-    with system_context(reason="test retained attached record"):
-        record = ThreadedTicket._base_manager.create(title="Private record", created_by=owner)
-        attachment = record.message_thread_attachment()
-        attachment.thread = thread
-        attachment.save(update_fields=["thread"])
+    with actor_context(owner):
+        record = ThreadedTicket.objects.create(title="Private record")
+        thread, rows = _messages(owner, thread=record.message_thread())
+        assert Thread.objects.filter(pk=thread.pk).exists()
     assert _revalidate("thread", owner, thread, [str(row.sqid) for row in rows]).errors

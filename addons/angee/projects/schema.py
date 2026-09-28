@@ -8,11 +8,13 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from graphql import GraphQLError
+from rebac import current_actor
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
+from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -79,6 +81,17 @@ _PROJECT_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 )
 
 
+_MILESTONE_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_filterable_fields")
+_MILESTONE_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_insertable_fields")
+_MILESTONE_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_updatable_fields")
+_MILESTONE_EXTENSION_WRITE_FIELDS = tuple(
+    dict.fromkeys((*_MILESTONE_EXTENSION_INSERT_FIELDS, *_MILESTONE_EXTENSION_UPDATE_FIELDS))
+)
+_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS = tuple(
+    name for name in _MILESTONE_EXTENSION_WRITE_FIELDS if Milestone._meta.get_field(name).is_relation
+)
+
+
 _TASK_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
     Task,
     "hasura_readable_fields",
@@ -117,6 +130,8 @@ _TASK_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 
 DroppedReason = Task._meta.get_field("dropped_reason").choices_enum
 strawberry.enum(cast(Any, DroppedReason))
+TaskVisibility = Task._meta.get_field("visibility").choices_enum
+strawberry.enum(cast(Any, TaskVisibility))
 
 
 @strawberry.input
@@ -135,6 +150,21 @@ class ProjectResourceTargetInput:
     record_id: PublicID = strawberry.field(name="record_id")
 
 
+def selectable_project_milestones(root: Any, info: strawberry.Info) -> list["MilestoneType"]:
+    """Detail-only eligible phases; list ancestors are rejected before querying.
+
+    Resolve through a single-project field such as projects_by_pk. Contributor
+    eligibility is row-specific and cannot be safely replaced by a broad prefetch.
+    """
+
+    actor = current_actor()
+    if actor is None:
+        return []
+    if any(isinstance(key, int) for key in info.path.as_list()):
+        raise GraphQLError("selectable_milestones is available only on a project detail selection.")
+    return root.selectable_milestones().with_actor(actor)
+
+
 @strawberry_django.type(Project)
 class ProjectType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a bounded project."""
@@ -148,6 +178,13 @@ class ProjectType(AuthoredRefMixin, AngeeNode):
     target_date_resolution: auto
     created_at: auto
     updated_at: auto
+    revision: auto
+
+    owner: UserType | None = actor_scoped_to_one("owner")
+    owns_items: auto
+    current_milestone: "MilestoneType | None" = actor_scoped_to_one("current_milestone")
+
+    selectable_milestones: list["MilestoneType"] = strawberry_django.field(resolver=selectable_project_milestones)
 
     folder: FolderType | None = actor_scoped_to_one("folder")
     converted_from: "TaskType | None" = actor_scoped_to_one("converted_from")
@@ -172,6 +209,13 @@ class ConsoleProjectType(AuthoredRefMixin, AngeeNode):
     target_date_resolution: auto
     created_at: auto
     updated_at: auto
+    revision: auto
+
+    owner: UserType | None = actor_scoped_to_one("owner")
+    owns_items: auto
+    current_milestone: "MilestoneType | None" = actor_scoped_to_one("current_milestone")
+
+    selectable_milestones: list["MilestoneType"] = strawberry_django.field(resolver=selectable_project_milestones)
 
     folder: FolderType | None = actor_scoped_to_one("folder")
     converted_from: "ConsoleTaskType | None" = actor_scoped_to_one("converted_from")
@@ -184,10 +228,14 @@ class MilestoneType(AuthoredRefMixin, AngeeNode):
 
     name: auto
     description: auto
+    start_date: auto
+    reached_at: auto
+    reached_by: UserType | None = actor_scoped_to_one("reached_by")
     target_date: auto
     sort_order: auto
     created_at: auto
     updated_at: auto
+    revision: auto
 
     project: ProjectType | None = actor_scoped_to_one("project")
 
@@ -204,6 +252,8 @@ class TaskType(AuthoredRefMixin, AngeeNode):
     title: auto
     note: auto
     status: auto
+    visibility: auto
+    owner: UserType | None = actor_scoped_to_one("owner")
     dropped_reason: auto
     priority: auto
     due_date: auto
@@ -214,6 +264,7 @@ class TaskType(AuthoredRefMixin, AngeeNode):
     dropped_at: auto
     created_at: auto
     updated_at: auto
+    revision: auto
 
     project: ProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
@@ -251,6 +302,8 @@ class ConsoleTaskType(AuthoredRefMixin, AngeeNode):
     title: auto
     note: auto
     status: auto
+    visibility: auto
+    owner: UserType | None = actor_scoped_to_one("owner")
     dropped_reason: auto
     priority: auto
     due_date: auto
@@ -261,6 +314,7 @@ class ConsoleTaskType(AuthoredRefMixin, AngeeNode):
     dropped_at: auto
     created_at: auto
     updated_at: auto
+    revision: auto
 
     project: ConsoleProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
@@ -356,38 +410,40 @@ class ProjectTaskActionMutation:
 
     @strawberry.mutation
     @action_guard("Pause project failed.")
-    def pause_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+    def pause_project(self, info: strawberry.Info, id: PublicID, expected_revision: int | None = None) -> ActionResult:
         """Pause one writable project."""
 
         target = authorized_action_target(info, Project, id, "write")
-        target.pause()
+        target.pause(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Project paused.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Resume project failed.")
-    def resume_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+    def resume_project(self, info: strawberry.Info, id: PublicID, expected_revision: int | None = None) -> ActionResult:
         """Resume one writable project."""
 
         target = authorized_action_target(info, Project, id, "write")
-        target.resume()
+        target.resume(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Project resumed.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Complete project failed.")
-    def complete_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+    def complete_project(
+        self, info: strawberry.Info, id: PublicID, expected_revision: int | None = None
+    ) -> ActionResult:
         """Complete one writable project."""
 
         target = authorized_action_target(info, Project, id, "write")
-        target.complete()
+        target.complete(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Project completed.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Drop project failed.")
-    def drop_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+    def drop_project(self, info: strawberry.Info, id: PublicID, expected_revision: int | None = None) -> ActionResult:
         """Drop one writable project."""
 
         target = authorized_action_target(info, Project, id, "write")
-        target.drop()
+        target.drop(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Project dropped.", id=target.sqid)
 
     @strawberry.mutation
@@ -424,12 +480,90 @@ class ProjectTaskActionMutation:
 
     @strawberry.mutation
     @action_guard("Promote task to project failed.")
-    def promote_task_to_project(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+    def promote_task_to_project(
+        self, info: strawberry.Info, id: PublicID, expected_revision: int | None = None
+    ) -> ActionResult:
         """Promote one writable task while retaining its identity and provenance."""
 
         target = authorized_action_target(info, Task, id, "write")
-        project = target.promote_to_project()
+        project = target.promote_to_project(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Task promoted to project.", id=project.sqid)
+
+    @strawberry.mutation
+    @action_guard("Change task visibility failed.")
+    def set_task_visibility(
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        visibility: TaskVisibility,  # type: ignore[valid-type]
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Change a task audience through its narrowing or widening permission."""
+
+        permission = "narrow" if visibility == TaskVisibility.RESTRICTED else "widen"
+        target = authorized_permission_target(info, Task, id, permission)
+        target.set_visibility(visibility, expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Task visibility changed.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Mark milestone reached failed.")
+    def mark_milestone_reached(
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Record the first reached receipt on an authorized milestone."""
+
+        target = authorized_permission_target(info, Milestone, id, "reach")
+        target.mark_reached(expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Milestone reached.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Select project phase failed.")
+    def set_project_current_milestone(
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        milestone: PublicID,
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Select an eligible milestone through the project owner."""
+
+        target = authorized_action_target(info, Project, id, "write")
+        selected = authorized_permission_target(info, Milestone, milestone, "read")
+        target.set_current_milestone(selected, expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Project phase selected.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Transfer project ownership failed.")
+    def transfer_project_ownership(
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        owner: PublicID | None = None,
+    ) -> ActionResult:
+        """Transfer or clear the project's owner while retaining attribution."""
+
+        target = authorized_permission_target(info, Project, id, "transfer")
+        user = authorized_permission_target(info, User, owner, "read") if owner is not None else None
+        target.transfer_ownership(user)
+        return ActionResult(ok=True, message="Project ownership transferred.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Transfer task ownership failed.")
+    def transfer_task_ownership(
+        self,
+        info: strawberry.Info,
+        id: PublicID,
+        owner: PublicID | None = None,
+    ) -> ActionResult:
+        """Transfer or clear the task's owner while retaining attribution."""
+
+        target = authorized_permission_target(info, Task, id, "transfer")
+        user = authorized_permission_target(info, User, owner, "read") if owner is not None else None
+        target.transfer_ownership(user)
+        return ActionResult(ok=True, message="Task ownership transferred.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Promote activity to task failed.")
@@ -476,7 +610,7 @@ class ProjectTaskActionMutation:
     ) -> ActionResult:
         """Bind one writable resource to a shareable project."""
 
-        project = authorized_action_target(info, Project, project_id, "share")
+        project = authorized_permission_target(info, Project, project_id, "share")
         target_model = model_for_resource_type(target.resource_type)
         if target_model is None:
             raise ValueError(f"Unknown resource type {target.resource_type!r}.")
@@ -494,7 +628,7 @@ class ProjectTaskActionMutation:
     ) -> ActionResult:
         """Remove one explicit resource binding from a shareable project."""
 
-        project = authorized_action_target(info, Project, project_id, "share")
+        project = authorized_permission_target(info, Project, project_id, "share")
         target_model = model_for_resource_type(target.resource_type)
         if target_model is None:
             raise ValueError(f"Unknown resource type {target.resource_type!r}.")
@@ -514,7 +648,10 @@ def _project_resource(node_type: type) -> Any:
             "id",
             "title",
             "status",
+            "owns_items",
             "lead",
+            "owner",
+            "current_milestone",
             "start_date",
             "start_date_resolution",
             "target_date",
@@ -545,6 +682,7 @@ def _project_resource(node_type: type) -> Any:
             *_PROJECT_EXTENSION_GROUP_FIELDS,
         ],
         insertable=[
+            "owns_items",
             "title",
             "body",
             "status",
@@ -557,6 +695,7 @@ def _project_resource(node_type: type) -> Any:
             *_PROJECT_EXTENSION_INSERT_FIELDS,
         ],
         updatable=[
+            "owns_items",
             "title",
             "body",
             "lead",
@@ -569,6 +708,8 @@ def _project_resource(node_type: type) -> Any:
         ],
         field_id_decode={
             "lead": public_pk_decoder(User),
+            "owner": public_pk_decoder(User),
+            "current_milestone": public_pk_decoder(Milestone),
             "folder": public_pk_decoder(Folder),
             "converted_from": public_pk_decoder(Task),
             **{
@@ -590,14 +731,61 @@ _MILESTONE_RESOURCE = hasura_model_resource(
     MilestoneType,
     model=Milestone,
     name="project_milestones",
-    filterable=["id", "project", "name", "target_date", "created_at", "updated_at"],
-    sortable=["project", "sort_order", "name", "target_date", "created_at", "updated_at"],
+    filterable=[
+        "id",
+        "project",
+        "name",
+        "start_date",
+        "target_date",
+        "reached_at",
+        "reached_by",
+        "created_at",
+        "updated_at",
+        *_MILESTONE_EXTENSION_FILTER_FIELDS,
+    ],
+    sortable=[
+        "project",
+        "sort_order",
+        "name",
+        "start_date",
+        "target_date",
+        "reached_at",
+        "reached_by",
+        "created_at",
+        "updated_at",
+    ],
     aggregatable=["id", "sort_order"],
-    groupable=["project", "target_date"],
-    insertable=["project", "name", "description", "target_date", "sort_order"],
-    updatable=["project", "name", "description", "target_date", "sort_order"],
-    field_id_decode={"project": public_pk_decoder(Project)},
-    write_backend=AngeeHasuraWriteBackend(Milestone, public_id_fields=("project",)),
+    groupable=["project", "start_date", "target_date"],
+    insertable=[
+        "project",
+        "name",
+        "description",
+        "start_date",
+        "target_date",
+        "sort_order",
+        *_MILESTONE_EXTENSION_INSERT_FIELDS,
+    ],
+    updatable=[
+        "project",
+        "name",
+        "description",
+        "start_date",
+        "target_date",
+        "sort_order",
+        *_MILESTONE_EXTENSION_UPDATE_FIELDS,
+    ],
+    field_id_decode={
+        "project": public_pk_decoder(Project),
+        "reached_by": public_pk_decoder(User),
+        **{
+            name: public_pk_decoder(Milestone._meta.get_field(name).related_model)
+            for name in _MILESTONE_EXTENSION_PUBLIC_ID_FIELDS
+        },
+    },
+    write_backend=AngeeHasuraWriteBackend(
+        Milestone,
+        public_id_fields=("project", *_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS),
+    ),
 )
 
 
@@ -609,12 +797,14 @@ def _task_resource(node_type: type) -> Any:
         model=Task,
         name="project_tasks",
         filterable=[
+            "owner",
             "id",
             "project",
             "milestone",
             "parent",
             "title",
             "status",
+            "visibility",
             "dropped_reason",
             "assignee",
             "delegate",
@@ -636,6 +826,7 @@ def _task_resource(node_type: type) -> Any:
             "sub_sort_order",
             "title",
             "status",
+            "visibility",
             "priority",
             "due_date",
             "done_at",
@@ -651,6 +842,7 @@ def _task_resource(node_type: type) -> Any:
             *_TASK_EXTENSION_AGGREGATE_FIELDS,
         ],
         groupable=[
+            "visibility",
             "project",
             "milestone",
             "parent",
@@ -672,6 +864,7 @@ def _task_resource(node_type: type) -> Any:
                     "title",
                     "note",
                     "status",
+                    "visibility",
                     "dropped_reason",
                     "assignee",
                     "delegate",
@@ -701,6 +894,7 @@ def _task_resource(node_type: type) -> Any:
             *_TASK_EXTENSION_UPDATE_FIELDS,
         ],
         field_id_decode={
+            "owner": public_pk_decoder(User),
             "project": public_pk_decoder(Project),
             "milestone": public_pk_decoder(Milestone),
             "parent": public_pk_decoder(Task),
