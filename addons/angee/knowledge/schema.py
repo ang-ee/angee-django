@@ -18,6 +18,7 @@ from strawberry import auto
 from angee.base.identity import instance_from_public_id
 from angee.base.scoping import write_scoped_queryset
 from angee.data.metadata import DataResourceSubtitleMetadata
+from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     hasura_model_resource,
@@ -151,6 +152,12 @@ class PageType(AuthoredRefMixin, AngeeNode):
     icon: auto
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["id"])
+    def can_write(self) -> bool:
+        """Evaluate the ambient actor per row; system context is unscoped (always true)."""
+
+        return cast(Any, self).has_access("write")
 
     @strawberry_django.field(only=["vault_id"])
     def vault(self) -> strawberry.ID:
@@ -478,7 +485,16 @@ class KnowledgeQuery:
 
 @strawberry.type
 class KnowledgeMutation:
-    """Markdown body writes that belong to the Knowledge domain."""
+    """Vault, binding and markdown writes owned by knowledge."""
+
+    @strawberry.mutation(name="create_vault_from")
+    @action_guard("Could not create the vault from this template.", errors=(UnsupportedPageKindError,))
+    def create_vault_from(self, info: strawberry.Info, template: PublicID, name: str) -> ActionResult:
+        """Create an actor-owned copy of a readable template vault."""
+
+        source = authorized_permission_target(info, Vault, template, "read")
+        vault = Vault._default_manager.create_from(source, name=name)
+        return ActionResult(ok=True, message="Vault created.", id=require_public_id(Vault, vault.pk))
 
     @strawberry.mutation(name="bind_knowledge_record")
     def bind_knowledge_record(self, input: RecordBindingInput) -> RecordBindingType:

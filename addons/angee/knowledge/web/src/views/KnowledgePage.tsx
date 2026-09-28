@@ -1,5 +1,5 @@
-import { useAuthoredQuery } from "@angee/refine";
-import { useCallback, useMemo, useState, type ReactElement } from "react";
+import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
+import { useCallback, useMemo, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import {
@@ -9,8 +9,9 @@ import {
   KnowledgePage as KnowledgePageQuery,
   KnowledgePages,
   KnowledgeVaults,
+  PAGE_MODEL,
+  PAGE_READ_MODELS,
   type Backlink,
-  type KnowledgePageDetail,
   type KnowledgePageRow,
 } from "../data/documents";
 import {
@@ -24,10 +25,9 @@ import {
   type PageDragData,
 } from "../data/page-rows";
 import { usePageActions } from "../data/use-page-actions";
+import { KnowledgePageView } from "../KnowledgePageView";
 import { BacklinksPanel } from "./BacklinksPanel";
 import { NewPageControl, type NewPageKind } from "./NewPageControl";
-import { PageEditor } from "./PageEditor";
-import { PageReader } from "./PageReader";
 import { useKnowledgeT } from "../i18n";
 
 // One safety-capped read each of vaults/pages; the browser scopes the set
@@ -49,20 +49,16 @@ type KnowledgeExplorerController = ScopedExplorerController<
  */
 export function KnowledgePage(): ReactElement {
   const t = useKnowledgeT();
-  const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const variables = useMemo(
     () => ({ offset: 0, limit: KNOWLEDGE_LIST_LIMIT }),
     [],
   );
-  const vaultsQuery = useAuthoredQuery(KnowledgeVaults, variables);
-  const pagesQuery = useAuthoredQuery(KnowledgePages, variables);
+  const invalidateModels = useInvalidateAuthoredModels();
+  const vaultsQuery = useAuthoredQuery(KnowledgeVaults, variables, { models: ["knowledge.Vault"] });
+  const pagesQuery = useAuthoredQuery(KnowledgePages, variables, { models: [PAGE_MODEL] });
 
   const vaults = vaultsQuery.data?.vaults ?? [];
   const pages = pagesQuery.data?.pages ?? [];
-  // The query `refetch`es are stable (`useCallback`), unlike the result objects;
-  // depend on them so handlers/published nodes keep a stable identity.
-  const { refetch: refetchVaults } = vaultsQuery;
-  const { refetch: refetchPages } = pagesQuery;
 
   // The open page is route state: `/knowledge/$id` reads that page into the
   // content + aside; `/knowledge` is the empty reader.
@@ -71,13 +67,11 @@ export function KnowledgePage(): ReactElement {
   const openPageId = useRouteRecordId() ?? null;
   const openPage = useCallback(
     (id: string) => {
-      setEditingPageId(null);
       void navigate({ to: routeHref("knowledge.page", { id }) });
     },
     [navigate, routeHref],
   );
   const closePage = useCallback(() => {
-    setEditingPageId(null);
     void navigate({ to: routeHref("knowledge.home") });
   }, [navigate, routeHref]);
 
@@ -87,8 +81,10 @@ export function KnowledgePage(): ReactElement {
   );
   const detailQuery = useAuthoredQuery(KnowledgePageQuery, detailVariables, {
     enabled: openPageId !== null,
+    models: PAGE_READ_MODELS,
   });
   const detail = detailQuery.data?.pages_by_pk ?? null;
+  const pageNotFound = !detailQuery.isPending && detailQuery.data?.pages_by_pk === null;
   const detailBacklinks = detail?.backlinks ?? EMPTY_BACKLINKS;
   const backlinkSignature = useMemo(
     () => backlinksSignature(detailBacklinks),
@@ -99,14 +95,9 @@ export function KnowledgePage(): ReactElement {
     [backlinkSignature],
   );
 
-  // A title write retitles its tree node; refetch the navigator set.
-  const handleTitleSaved = useCallback(() => {
-    void refetchPages();
-  }, [refetchPages]);
-
   const confirm = useConfirm();
   const { busy: actionsBusy, createPage, deletePage, movePage } =
-    usePageActions({ onChanged: handleTitleSaved });
+    usePageActions();
   const activePage = pageById(pages, openPageId);
   // Stable accessors: the explorer memoizes `rootOptions`/`treeRows` on these, and
   // the navigator published into the shell's primary pane keys on those memos.
@@ -147,11 +138,11 @@ export function KnowledgePage(): ReactElement {
       searchPlaceholder: t("vault.searchPlaceholder"),
       create: { resource: "knowledge.Vault" },
       onCreated: () => {
-        void refetchVaults();
+        invalidateModels(["knowledge.Vault"]);
         closePage();
       },
     }),
-    [closePage, refetchVaults, t],
+    [closePage, invalidateModels, t],
   );
   const renderTree = useCallback(
     (controller: KnowledgeExplorerController) => (
@@ -255,12 +246,8 @@ export function KnowledgePage(): ReactElement {
           controller={controller}
           pages={pages}
           openPageId={openPageId}
-          detail={detail}
-          detailFetching={detailQuery.isFetching}
-          editingPageId={editingPageId}
-          onEditingPageChange={setEditingPageId}
           onOpenPage={openPage}
-          onTitleSaved={handleTitleSaved}
+          pageNotFound={pageNotFound}
           onDeletePage={handleDeletePage}
         />
       )}
@@ -272,23 +259,15 @@ function KnowledgeExplorerContent({
   controller,
   pages,
   openPageId,
-  detail,
-  detailFetching,
-  editingPageId,
-  onEditingPageChange,
   onOpenPage,
-  onTitleSaved,
+  pageNotFound,
   onDeletePage,
 }: {
   controller: KnowledgeExplorerController;
   pages: readonly KnowledgePageRow[];
   openPageId: string | null;
-  detail: KnowledgePageDetail | null;
-  detailFetching: boolean;
-  editingPageId: string | null;
-  onEditingPageChange: (id: string | null) => void;
   onOpenPage: (id: string) => void;
-  onTitleSaved: () => void;
+  pageNotFound: boolean;
   onDeletePage: () => Promise<void>;
 }): ReactElement {
   const t = useKnowledgeT();
@@ -306,34 +285,18 @@ function KnowledgeExplorerContent({
 
   return (
     <WikilinkProvider resolve={resolveWikilink}>
-      {openPageId ? (
-        detail && detail.id === openPageId ? (
-          editingPageId === openPageId ? (
-            <PageEditor
-              key={openPageId}
-              detail={detail}
-              onTitleSaved={onTitleSaved}
-              onDelete={onDeletePage}
-              onDone={() => onEditingPageChange(null)}
-            />
-          ) : (
-            <PageReader
-              key={openPageId}
-              detail={detail}
-              onEdit={() => onEditingPageChange(openPageId)}
-              onDelete={onDeletePage}
-            />
-          )
-        ) : detailFetching || detail ? (
-          <LoadingPanel message={t("page.loading")} />
-        ) : (
-          <EmptyState
-            fill
-            icon="note"
-            title={t("page.notFoundTitle")}
-            description={t("page.notFoundDescription")}
-          />
-        )
+      {openPageId && pageNotFound ? (
+        <EmptyState
+          fill
+          icon="note"
+          title={t("page.notFoundTitle")}
+          description={t("page.notFoundDescription")}
+        />
+      ) : openPageId ? (
+        <KnowledgePageView
+          pageId={openPageId}
+          onDelete={onDeletePage}
+        />
       ) : (
         <EmptyState
           fill

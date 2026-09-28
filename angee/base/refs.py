@@ -149,8 +149,9 @@ class RecordRefMixin(models.Model):
     def record_ref(self) -> RecordRef:
         """Return this row's referenced record identity without loading the target."""
 
-        content_type_id = getattr(self, self._record_ref_content_type_id_attr(), None)
-        object_id = getattr(self, self._record_ref_object_id_field_name(), None)
+        ct_field, oid_field = self.record_ref_fields()
+        content_type_id = getattr(self, type(self)._meta.get_field(ct_field).attname)
+        object_id = getattr(self, oid_field)
         if content_type_id in (None, "") or object_id in (None, ""):
             return _empty_record_ref(object_id)
         model = ContentType.objects.get_for_id(content_type_id).model_class()
@@ -171,28 +172,13 @@ class RecordRefMixin(models.Model):
         return self.record_ref.public_id
 
     @classmethod
-    def _record_ref_content_type_field_name(cls) -> str:
-        """Return the content-type FK field that backs this reference."""
+    def record_ref_fields(cls) -> tuple[str, str]:
+        """Return the content-type and object-id field names for this reference."""
 
         prefix = cls.record_ref_field_prefix
         if prefix == "target":
-            return "content_type"
-        return f"{prefix}_content_type"
-
-    @classmethod
-    def _record_ref_content_type_id_attr(cls) -> str:
-        """Return the stored content-type id attribute name."""
-
-        return f"{cls._record_ref_content_type_field_name()}_id"
-
-    @classmethod
-    def _record_ref_object_id_field_name(cls) -> str:
-        """Return the object-id field that backs this reference."""
-
-        prefix = cls.record_ref_field_prefix
-        if prefix == "target":
-            return "object_id"
-        return f"{prefix}_object_id"
+            return "content_type", "object_id"
+        return f"{prefix}_content_type", f"{prefix}_object_id"
 
 
 def _record_ref_from_model(model: type[models.Model], object_id: Any) -> RecordRef:

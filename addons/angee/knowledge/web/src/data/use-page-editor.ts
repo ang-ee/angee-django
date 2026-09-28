@@ -4,13 +4,13 @@ import {
   useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 
 import { useDebouncedCallback } from "use-debounce";
-import { refineFieldsFromPaths, useAuthoredMutation } from "@angee/refine";
+import { refineFieldsFromPaths, useAuthoredMutation, useInvalidateAuthoredModels } from "@angee/refine";
 import {
   refineResourceName,
   useModelMetadata,
 } from "@angee/metadata";
 
-import { KnowledgeUpdatePageBody } from "./documents";
+import { KnowledgeUpdatePageBody, PAGE_MODEL, PAGE_READ_MODELS } from "./documents";
 
 export type SaveStatus = "idle" | "saving" | "saved" | "error";
 
@@ -27,7 +27,6 @@ export interface PageEditorState {
 }
 
 const AUTOSAVE_MS = 700;
-const PAGE_MODEL = "knowledge.Page";
 
 /**
  * Editing state for one page. The title persists through `updatePage` on commit;
@@ -38,7 +37,6 @@ const PAGE_MODEL = "knowledge.Page";
 export function usePageEditor(
   pageId: string,
   initial: { title: string; body: string; bodyHash: string },
-  onTitleSaved: () => void,
 ): PageEditorState {
   const [title, setTitleState] = useState(initial.title);
   const [body, setBodyState] = useState(initial.body);
@@ -47,12 +45,8 @@ export function usePageEditor(
   const savedBodyRef = useRef(initial.body);
   const savedTitleRef = useRef(initial.title);
   const mountedRef = useRef(true);
-  // Held in a ref so the title-save callback stays stable across an unstable
-  // caller (e.g. an inline refetch closure).
-  const onTitleSavedRef = useRef(onTitleSaved);
-  useEffect(() => {
-    onTitleSavedRef.current = onTitleSaved;
-  }, [onTitleSaved]);
+  const pendingTitleRef = useRef<string | null>(null);
+  const invalidateModels = useInvalidateAuthoredModels();
 
   const metadata = useModelMetadata(PAGE_MODEL);
   const resource = metadata?.resource ?? null;
@@ -62,7 +56,10 @@ export function usePageEditor(
     meta: { fields: refineFieldsFromPaths(["title"]) },
     invalidates: ["list", "many", "detail"],
   });
-  const [updateBody] = useAuthoredMutation(KnowledgeUpdatePageBody);
+  const [updateBody] = useAuthoredMutation(KnowledgeUpdatePageBody, {
+    invalidateModels: PAGE_READ_MODELS,
+    shouldInvalidate: (data) => data?.update_page_body.ok === true,
+  });
 
   const setSafeStatus = useCallback((next: SaveStatus) => {
     if (mountedRef.current) setStatus(next);
@@ -77,9 +74,8 @@ export function usePageEditor(
           body: next,
           expected_hash: bodyHashRef.current || null,
         });
-        const payload = data?.update_page_body;
-        if (payload?.ok && payload.markdown) {
-          bodyHashRef.current = payload.markdown.body_hash;
+        if (data?.update_page_body.ok && data.update_page_body.markdown) {
+          bodyHashRef.current = data.update_page_body.markdown.body_hash;
           savedBodyRef.current = next;
           setSafeStatus("saved");
         } else {
@@ -109,16 +105,20 @@ export function usePageEditor(
 
   const commitTitle = useCallback(() => {
     const trimmed = title.trim();
-    if (!trimmed || trimmed === savedTitleRef.current) return;
-    savedTitleRef.current = trimmed;
+    if (!trimmed || trimmed === savedTitleRef.current || trimmed === pendingTitleRef.current) return;
+    pendingTitleRef.current = trimmed;
     setStatus("saving");
     void updatePage.mutateAsync({ id: pageId, values: { title: trimmed } })
       .then(() => {
+        savedTitleRef.current = trimmed;
         setSafeStatus("saved");
-        onTitleSavedRef.current();
+        invalidateModels([PAGE_MODEL]);
       })
-      .catch(() => setSafeStatus("error"));
-  }, [title, pageId, updatePage.mutateAsync, setSafeStatus]);
+      .catch(() => setSafeStatus("error"))
+      .finally(() => {
+        if (pendingTitleRef.current === trimmed) pendingTitleRef.current = null;
+      });
+  }, [title, pageId, updatePage.mutateAsync, setSafeStatus, invalidateModels]);
 
   // Flush a pending body save when the page switches (the editor unmounts).
   useEffect(() => {

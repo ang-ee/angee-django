@@ -13,19 +13,24 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from graphlib import CycleError, TopologicalSorter
 from typing import Any, ClassVar, cast
 
+from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
+from django.db.models.signals import post_save
 from markdown_it import MarkdownIt
 from rebac import (
     MissingActorError,
     ObjectRef,
     PermissionDenied,
+    SubjectRef,
     current_actor,
     system_context,
     to_object_ref,
@@ -34,6 +39,7 @@ from rebac import (
 from rebac.backends import backend as rebac_backend
 from rebac.resources import model_resource_type
 
+from angee.base.actors import actor_user_id
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
@@ -98,7 +104,50 @@ class VaultManager(AngeeManager):
         actor = self.check_create()
         if owner is None or to_subject_ref(owner) != actor:
             raise PermissionDenied(f"Denied: {actor} cannot create a vault owned by {owner!r}")
-        vault = self.model(owner=owner, **fields)
+        return self._create_for_actor(actor, **fields)
+
+    def create_from(self, template: Vault, *, name: str) -> Vault:
+        """Clone a readable vault's page tree and markdown bodies for the actor.
+
+        Requires vault create and template read. New identities and attribution
+        belong to the actor; grants and record bindings are never copied. Unknown
+        sidecar kinds are refused rather than copied without their content.
+        Ownerless cloning (``owned=False``) and ``client_creation_key`` replay
+        arrive with the nullable-owner contract in step 7.
+        """
+
+        actor = self.check_create()
+        page_model = apps.get_model("knowledge", "Page")
+        markdown_model = apps.get_model("knowledge", "MarkdownPage")
+        with transaction.atomic():
+            source = self.with_actor(actor).get(pk=template.pk)
+            pages = {
+                page.pk: page
+                for page in page_model._default_manager.with_actor(actor).filter(vault=source).order_by("pk")
+            }
+            for page in pages.values():
+                if page.kind not in (*markdown_model.page_kinds, Page.Kind.FOLDER):
+                    raise UnsupportedPageKindError(f"Cannot clone pages of kind {page.kind!r}.")
+            bodies = list(markdown_model._default_manager.with_actor(actor).filter(page__vault=source))
+            vault = self._create_for_actor(
+                actor,
+                name=name,
+                description=source.description,
+                icon=source.icon,
+                accent=source.accent,
+                retrieval_class=source.retrieval_class,
+            )
+            copies = page_model._default_manager._copy_tree_in(vault, pages)
+            markdown_model._default_manager._copy_bodies(bodies, copies, actor=actor)
+            return vault
+
+    def _create_for_actor(self, actor: SubjectRef, **fields: Any) -> Any:
+        """Persist an owned vault after its caller's create preflight."""
+
+        owner_id = actor_user_id(actor)
+        if owner_id is None:
+            raise PermissionDenied("An actor-owned vault requires a user actor.")
+        vault = self.model(owner_id=owner_id, **fields)
         vault.full_clean()
         vault.sudo(reason="knowledge.vault.create").save()
         return vault.with_actor(actor)
@@ -195,6 +244,52 @@ class PageManager(AngeeManager):
         page.full_clean()
         page.sudo(reason="knowledge.page.create").save()
         return page.with_actor(actor)
+
+    def _copy_tree_in(self, vault: Vault, pages: Mapping[Any, Page]) -> dict[Any, Page]:
+        """Copy template pages after one destination-vault create preflight.
+
+        The clone owner supplies actor-readable source pages. Their unchanged
+        scalar values retain source validation; tree edges are checked here and
+        database constraints still apply. Save notifications preserve native
+        history and other subscribers after each level's bulk insert.
+        """
+
+        actor = self.check_create({"vault": (vault,)})
+        user_id = actor_user_id(actor)
+        for page in pages.values():
+            if page.parent_id is not None and page.parent_id not in pages:
+                raise ValidationError("A template page's parent is unavailable or unreadable in this vault.")
+        tree = TopologicalSorter({
+            pk: (page.parent_id,) if page.parent_id is not None else ()
+            for pk, page in pages.items()
+        })
+        try:
+            tree.prepare()
+        except CycleError as error:
+            raise ValidationError("Template page parents must form a tree.") from error
+        copies: dict[Any, Page] = {}
+        while tree.is_active():
+            ready = tree.get_ready()
+            batch = [
+                self.model(
+                    vault=vault,
+                    parent=copies[pages[pk].parent_id] if pages[pk].parent_id is not None else None,
+                    title=pages[pk].title,
+                    kind=pages[pk].kind,
+                    icon=pages[pk].icon,
+                    created_by_id=user_id,
+                    updated_by_id=user_id,
+                )
+                for pk in ready
+            ]
+            self.sudo(reason="knowledge.page.clone").bulk_create(batch)
+            for pk, page in zip(ready, batch, strict=True):
+                copies[pk] = page.with_actor(actor)
+                post_save.send(
+                    sender=self.model, instance=page, created=True, raw=False, using=self.db, update_fields=None,
+                )
+            tree.done(*ready)
+        return copies
 
 
 class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
@@ -647,6 +742,47 @@ class MarkdownPageManager(AngeeManager):
             markdown.save(update_fields=("body",))
             return markdown
 
+    def _copy_bodies(
+        self,
+        bodies: Iterable[MarkdownPage],
+        pages: Mapping[Any, Page],
+        *,
+        actor: SubjectRef,
+    ) -> None:
+        """Insert bodies for pages authorized by the clone's tree-copy preflight.
+
+        Audit stamps belong to the initiating actor, derived fields use the body
+        owner, and native save notifications retain revision/change subscribers.
+        Backlinks are rebuilt once for the batch before those notifications.
+        """
+
+        user_id = actor_user_id(actor)
+        batch = [
+            self.model(
+                page=pages[body.page_id],
+                body=body.body,
+                created_by_id=user_id,
+                updated_by_id=user_id,
+            )
+            for body in bodies
+        ]
+        for body in batch:
+            body.refresh_body_metadata()
+        self.sudo(reason="knowledge.markdown_page.clone").bulk_create(batch)
+        link_model = apps.get_model("knowledge", "Link")
+        link_model._default_manager.rebuild_many(batch)
+        for body in batch:
+            body.with_actor(actor)
+            post_save.send(
+                sender=self.model,
+                instance=body,
+                created=True,
+                raw=False,
+                using=self.db,
+                update_fields=None,
+                knowledge_backlinks_rebuilt=True,
+            )
+
     def _create_body(self, page: Any, body: str) -> Any:
         """Insert the first body row, or ``None`` when a concurrent writer won."""
 
@@ -974,11 +1110,16 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
             joined.extend(block)
         return joined
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the body together with its derived hash and word count."""
+    def refresh_body_metadata(self) -> None:
+        """Derive hash and word count for both single and batch body writes."""
 
         self.body_hash = self.hash_body(self.body)
         self.word_count = len(self.body.split())
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the body together with its derived hash and word count."""
+
+        self.refresh_body_metadata()
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             field_names = set(update_fields)
@@ -1006,26 +1147,38 @@ class LinkManager(AngeeManager):
         created after the link still resolves on the source page's next save.
         """
 
-        page = markdown.page
-        assert page is not None
-        wanted = parse_wikilinks(markdown.body)
-        pages = type(page)._base_manager
+        self.rebuild_many((markdown,))
+
+    def rebuild_many(self, bodies: Iterable[MarkdownPage]) -> None:
+        """Replace a batch's wikilinks, resolving titles once per source vault."""
+
+        batch = list(bodies)
+        if not batch:
+            return
+        page_model = apps.get_model("knowledge", "Page")
+        vault_ids = {body.page.vault_id for body in batch}
         links = self.model._base_manager
         with system_context(reason="knowledge.backlinks"), transaction.atomic():
-            resolved = dict(pages.filter(vault_id=page.vault_id).exclude(pk=page.pk).values_list("title", "pk"))
-            links.filter(source_page=page).delete()
-            links.bulk_create(
-                [
-                    self.model(
-                        source_page=page,
-                        target_page_id=resolved.get(target),
+            resolved = {
+                (vault_id, title): pk
+                for vault_id, title, pk in page_model._base_manager.filter(vault_id__in=vault_ids)
+                .values_list("vault_id", "title", "pk")
+            }
+            links.filter(source_page_id__in=[body.page_id for body in batch]).delete()
+            rows = []
+            for body in batch:
+                for target, display in parse_wikilinks(body.body).items():
+                    target_id = resolved.get((body.page.vault_id, target))
+                    if target_id == body.page_id:
+                        target_id = None
+                    rows.append(self.model(
+                        source_page_id=body.page_id,
+                        target_page_id=target_id,
                         target_text=target,
                         display_text=display,
-                        is_resolved=target in resolved,
-                    )
-                    for target, display in wanted.items()
-                ]
-            )
+                        is_resolved=target_id is not None,
+                    ))
+            links.bulk_create(rows)
 
 
 class Link(SqidMixin, AngeeModel):

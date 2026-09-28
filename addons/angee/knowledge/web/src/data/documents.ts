@@ -6,6 +6,10 @@
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+export const PAGE_MODEL = "knowledge.Page";
+export const MARKDOWN_PAGE_MODEL = "knowledge.MarkdownPage";
+export const PAGE_READ_MODELS = [PAGE_MODEL, MARKDOWN_PAGE_MODEL] as const;
+
 export const KnowledgeUpdatePageBody = graphql(`
   mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expected_hash: String) {
     update_page_body(page: $page, body: $body, expected_hash: $expected_hash) {
@@ -51,6 +55,7 @@ export const KnowledgePage = graphql(`
   query KnowledgePage($id: String!) {
     pages_by_pk(id: $id) {
       id
+      can_write
       title
       kind
       icon
