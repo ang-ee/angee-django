@@ -18,6 +18,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
+from angee.intake.models import NeedAccessAction
 from angee.messaging.schema import ChannelType, MessageType
 from angee.parties.schema import PartyType
 from angee.projects.schema import ProjectType, TaskType
@@ -35,6 +36,7 @@ NeedImportance = Need._meta.get_field("importance").choices_enum
 strawberry.enum(cast(Any, NeedImportance))
 NeedAccessVerdict = Need._meta.get_field("access_verdict").choices_enum
 strawberry.enum(cast(Any, NeedAccessVerdict))
+strawberry.enum(cast(Any, NeedAccessAction))
 
 
 @strawberry.input
@@ -126,7 +128,7 @@ class IntakeActionMutation:
         self,
         info: strawberry.Info,
         need: PublicID,
-        action: str,
+        action: NeedAccessAction,
         reason: str = "",
         expected_revision: int | None = None,
     ) -> ActionResult:

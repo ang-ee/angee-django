@@ -45,8 +45,11 @@ def backwards(apps, schema_editor):
     immediate_constraints(schema_editor)
     rows = apps.get_model("intake", "Need")._base_manager.using(schema_editor.connection.alias).order_by()
     rows.filter(task__isnull=True).update(targets_project=True)
-    for pk, project_id in rows.filter(task__isnull=False).values_list("pk", "task__project_id").iterator():
-        rows.filter(pk=pk).update(project_id=project_id, targets_project=False)
+    tasks = apps.get_model("projects", "Task")._base_manager.using(schema_editor.connection.alias).order_by()
+    rows.filter(task__isnull=False).update(
+        project_id=models.Subquery(tasks.filter(pk=models.OuterRef("task_id")).values("project_id")[:1]),
+        targets_project=False,
+    )
 
 
 class Migration(migrations.Migration):

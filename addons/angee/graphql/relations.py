@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
+import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.expressions import Combinable
 from rebac import current_actor
+from rebac.graphql.strawberry_django import optimize
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
+from strawberry_django.fields.field import StrawberryDjangoField
 
 from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
 from angee.data.field_classification import is_to_one_relation
@@ -102,7 +105,8 @@ def actor_scoped_to_one(field_name: str) -> Any:
     hint. Readable parents hit the cache; unreadable parents cache as ``None``.
     Unprefetched roots fall back to one actor-scoped lookup per row. The parent
     may be actor-scoped or sudo-loaded; cached targets are reused only for the
-    current actor, and ``only`` keeps the parent projection to the FK id.
+    current actor, and ``only`` keeps the parent projection to the FK id. The
+    target prefetch retains the selected type's nested optimizer hints.
     """
 
     return _guarded_to_one_field(field_name, _actor_scoped_to_one_resolver(field_name))
@@ -167,11 +171,21 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
 def _guarded_to_one_field(field_name: str, resolver: Callable[[models.Model], Any]) -> Any:
     """Bind a relation projection to the native hint scoped by the REBAC optimizer."""
 
+    def prefetch(info: strawberry.Info) -> models.Prefetch | str:
+        related_model = cast(StrawberryDjangoField, info._field).django_model
+        if related_model is None:
+            # A public-ID scalar has no nested model projection to optimize.
+            return field_name
+        queryset = read_scoped_queryset(related_model, current_actor())
+        if queryset is None:
+            queryset = related_model._default_manager.none()
+        return models.Prefetch(field_name, queryset=optimize(queryset, info))
+
     return strawberry_django.field(
         resolver=resolver,
         field_name=field_name,
         only=[f"{field_name}_id"],
-        prefetch_related=[field_name],
+        prefetch_related=[prefetch],
     )
 
 

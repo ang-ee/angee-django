@@ -149,7 +149,7 @@ class CreateNeed(AbstractNeed):
     task = models.ForeignKey(CreateTask, null=True, blank=True, on_delete=models.CASCADE)
     project = models.ForeignKey(CreateProject, null=True, blank=True, on_delete=models.CASCADE)
     original_task = models.ForeignKey(CreateTask, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
-    party = models.ForeignKey("iam.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    party = models.ForeignKey("parties.Party", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     source_message = None
 
     class Meta:

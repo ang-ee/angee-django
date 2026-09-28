@@ -7,7 +7,9 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from rebac import PermissionDenied
 
+from angee.base.errors import DomainError
 from angee.messaging.events import message_ingested
 
 logger = logging.getLogger(__name__)
@@ -26,8 +28,8 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
     """Resolve the channel and isolate intake capture from primary message ingest.
 
     Messaging sends this signal synchronously inside its ingest transaction, so
-    successful capture remains atomic with the message. Capture failures must not
-    propagate: doing so rolls back the primary message and poisons bridge retries.
+    successful capture remains atomic with the message. Expected domain refusals
+    retain primary ingest; programming errors propagate so retries can recover.
     """
 
     del sender, kwargs
@@ -42,16 +44,10 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
         return
     try:
         instance.transport_channel(reason="intake.capture.channel").capture_ingested_message(instance)
-    except ValidationError as error:
+    except (DomainError, ValidationError, PermissionDenied) as error:
         logger.warning(
             "Skipped intake capture for message %s on channel %s: %s",
             instance.pk,
             instance.channel_id,
             error,
-        )
-    except Exception:
-        logger.exception(
-            "Intake capture failed for message %s on channel %s; primary ingest will continue.",
-            instance.pk,
-            instance.channel_id,
         )

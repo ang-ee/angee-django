@@ -23,7 +23,14 @@ def applies(project_state: ProjectState) -> bool:
 
 def forwards(apps, schema_editor):
     rows = apps.get_model("intake", "Need")._base_manager.using(schema_editor.connection.alias).order_by()
-    rows.filter(access_verdict="pending", party__person__user__isnull=False).update(
+    untouched_source = models.Q(updated_by_id=models.F("source_message__updated_by_id")) | models.Q(
+        updated_by_id__isnull=True, source_message__updated_by_id__isnull=True,
+    )
+    unconfirmed_copy = models.Q(
+        source_message__sender__party_link_confirmed=False,
+        party_id=models.F("source_message__sender__party_id"),
+    ) & untouched_source
+    rows.filter(access_verdict="pending", party__person__user__isnull=False).exclude(unconfirmed_copy).update(
         access_verdict="completed", access_resolution={"action": "approve", "reason": ""},
     )
 

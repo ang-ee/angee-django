@@ -127,9 +127,12 @@ describe("resource-view model", () => {
     expect(resourceViewSearchToState({}, initial).pagination.pageIndex).toBe(2);
   });
 
-  test("round-trips cleared seeded filter, group, and sort through search", () => {
+  test.each([
+    { kind: { exact: "lead" } },
+    { NOT: { status: { exact: "DROPPED" } } },
+  ])("round-trips cleared seeded filter %j, group, and sort through search", (filter) => {
     const initial = {
-      filter: { kind: { exact: "lead" } },
+      filter,
       group: { field: "stage" },
       sort: { field: "createdAt", dir: "desc" as const },
     };

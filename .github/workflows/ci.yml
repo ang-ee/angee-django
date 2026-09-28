@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -9,6 +10,7 @@ permissions:
 
 jobs:
   checks:
+    # Reusable-workflow callers cannot set timeout-minutes; each called job does.
     uses: ./.github/workflows/reusable-checks.yml
     secrets: inherit
     with:

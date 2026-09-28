@@ -12,10 +12,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
-from django.db.models.functions import Coalesce, NullIf
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, current_actor, system_context
-from strawberry_django_hasura import SortAlias
 
 from angee.base.actors import actor_user_id, instance_actor
 from angee.base.errors import DomainError
@@ -40,6 +38,13 @@ class NeedAccessVerdict(models.TextChoices):
     PENDING = "pending", "Pending"
     COMPLETED = "completed", "Approved"
     REJECTED = "rejected", "Denied"
+
+
+class NeedAccessAction(models.TextChoices):
+    """Authored transitions for request access."""
+
+    APPROVE = "approve", "Approve"
+    DENY = "deny", "Deny"
 
 
 class NeedQuerySet(AngeeQuerySet):
@@ -178,9 +183,8 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             )
             need = self.model(
                 task=task,
-                party_id=self._resolved_sender_party_id(locked_message),
                 claimed_name=claimed_name,
-                claimed_email=(submission.claimed_email or "") if submission else "",
+                claimed_email=(submission.unverified_submitter_email or "") if submission else "",
                 source_message=locked_message,
                 importance=NeedImportance.NORMAL,
                 created_by_id=locked_message.created_by_id,
@@ -190,21 +194,21 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             need.sudo(reason="intake.need.capture_message.create").save()
             attachment_model = apps.get_model("messaging", "ThreadAttachment")
             attachment_model.objects.bind_source_thread(task, locked_message.thread)
-            if need.party_id is None and need.claimed_email and channel.intake_requester_domains:
-                try:
-                    # A failed identity factory rolls back its own work, never the capture.
-                    with transaction.atomic():
+            try:
+                # Identity refusals roll back linking, never the captured evidence.
+                with transaction.atomic():
+                    need.party_id = self._resolved_sender_party_id(locked_message)
+                    if need.party_id is None and need.claimed_email and channel.intake_requester_domains:
                         need._link_requester(
                             allow_create=need.claimed_email.rsplit("@", 1)[-1].lower()
                             in channel.intake_requester_domains,
                             system_reason=f"intake.requester_domain:{channel.slug}",
                         )
-                except (DomainError, ValidationError):
-                    logger.info("Requester linking was refused for need %s; capture is retained.", need.pk)
-                    need.refresh_from_db()
-                except Exception:
-                    logger.exception("Requester linking failed for need %s; capture is retained.", need.pk)
-                    need.refresh_from_db()
+                    if need.party_id is not None:
+                        need.save(update_fields=("party",))
+            except DomainError, ValidationError, PermissionDenied:
+                logger.info("Requester linking was refused for need %s; capture is retained.", need.pk)
+                need.refresh_from_db()
             return need
 
     def _create_triage_task(
@@ -270,30 +274,36 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
     def reconcile_parties(self, *, apply: bool = False) -> Iterator[dict[str, Any]]:
         """Report legacy source matches; clear only untouched, unconfirmed copies."""
 
-        with system_context(reason="intake.reconcile_parties"):
-            candidates = self.filter(source_message__isnull=False, party__isnull=False).order_by("pk")
-            for pk in candidates.values_list("pk", flat=True).iterator():
-                with transaction.atomic():
-                    need = self.lock_if_supported().select_related("source_message__sender", "party").get(pk=pk)
-                    source = need.source_message
-                    sender = source.sender
-                    eligible = (
-                        sender is not None
-                        and not sender.party_link_confirmed
-                        and need.party_id == sender.party_id
-                        and need.updated_by_id == source.updated_by_id
-                    )
-                    user = apps.get_model("parties", "Party").objects.user_for(need.party)
-                    report = {
-                        "need": need.sqid,
-                        "account": user.sqid if user is not None else None,
-                        "eligible": eligible,
-                        "applied": apply and eligible,
-                    }
-                    if apply and eligible:
-                        need.party = None
-                        need.save(update_fields=("party",))
-                yield report
+        candidates = (
+            self.sudo(reason="intake.reconcile_parties.candidates")
+            .filter(
+                source_message__isnull=False,
+                party__isnull=False,
+            )
+            .order_by("pk")
+        )
+        for pk in candidates.values_list("pk", flat=True).iterator():
+            with system_context(reason="intake.reconcile_parties"), transaction.atomic():
+                need = self.lock_if_supported().select_related("source_message__sender", "party").get(pk=pk)
+                source = need.source_message
+                sender = source.sender
+                eligible = (
+                    sender is not None
+                    and not sender.party_link_confirmed
+                    and need.party_id == sender.party_id
+                    and need.updated_by_id == source.updated_by_id
+                )
+                user = apps.get_model("parties", "Party").objects.user_for(need.party)
+                report = {
+                    "need": need.sqid,
+                    "account": user.sqid if user is not None else None,
+                    "eligible": eligible,
+                    "applied": apply and eligible,
+                }
+                if apply and eligible:
+                    need.party = None
+                    need.save(update_fields=("party",))
+            yield report
 
 
 class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
@@ -326,11 +336,17 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
     claimed_name = models.TextField(blank=True, default="", editable=False)
     claimed_email = models.TextField(blank=True, default="", editable=False)
     access_verdict = StateField(
-        choices_enum=NeedAccessVerdict, default=NeedAccessVerdict.PENDING, editable=False,
+        choices_enum=NeedAccessVerdict,
+        default=NeedAccessVerdict.PENDING,
+        editable=False,
     )
     access_resolved_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, null=True, blank=True, editable=False,
-        on_delete=audit_set_null, related_name="+",
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=audit_set_null,
+        related_name="+",
     )
     access_resolved_at = models.DateTimeField(null=True, blank=True, editable=False)
     access_resolution = models.JSONField(default=dict, blank=True, editable=False)
@@ -401,12 +417,18 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         if not elevated and not self.target.with_actor(actor).has_access("share"):
             raise PermissionDenied("Setting a request's party requires target share permission.")
         if self.party_id is not None:
-            party_model = self._meta.get_field("party").remote_field.model
-            with system_context(reason="intake.need.party_subject"):
-                party = party_model._base_manager.get(pk=self.party_id)
-                user = party_model.objects.user_for(party)
+            user = self._account_for_party(self.party_id)
             if user is not None:
                 self.validate_record_access_subject("party", user)
+
+    def _account_for_party(self, party_id: Any) -> Any | None:
+        """Resolve an assignment through the parties identity owner."""
+
+        if party_id is None:
+            return None
+        party_model = self._meta.get_field("party").remote_field.model
+        with system_context(reason="intake.need.party_subject"):
+            return party_model.objects.user_for(party_model._base_manager.get(pk=party_id))
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """A request's holder must also satisfy the target's holder invariant."""
@@ -414,21 +436,44 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         super().validate_record_access_subject(relation, subject)
         self.target.validate_record_access_subject(relation, subject)
 
-    def save(self, **kwargs: Any) -> None:
-        """Validate the persisted assignment and follow it in the same transaction."""
+    def save(self, *, _access_decision: bool = False, **kwargs: Any) -> None:
+        """Validate assignment, reset its old decision, and follow atomically.
+
+        Only ``decide_access`` supplies ``_access_decision``: its authorized
+        decision already describes the newly assigned account in this save.
+        """
 
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:
             update_fields = set(update_fields)
             kwargs["update_fields"] = update_fields
-            if not update_fields:
+            if not update_fields or (
+                not self._state.adding
+                and not update_fields.intersection(
+                    {
+                        "task",
+                        "task_id",
+                        "project",
+                        "project_id",
+                        "party",
+                        "party_id",
+                    }
+                )
+            ):
                 super().save(**kwargs)
                 return
         with transaction.atomic():
-            previous = None if self._state.adding else (
-                type(self).objects.sudo(reason="intake.need.assignment_before")
-                .lock_if_supported().filter(pk=self.pk)
-                .values("task_id", "project_id", "party_id").first()
+            previous = (
+                None
+                if self._state.adding
+                else (
+                    type(self)
+                    .objects.sudo(reason="intake.need.assignment_before")
+                    .lock_if_supported()
+                    .filter(pk=self.pk)
+                    .values("task_id", "project_id", "party_id")
+                    .first()
+                )
             )
             values = {
                 name: getattr(self, name)
@@ -436,26 +481,42 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
                 else previous[name]
                 for name in ("task_id", "project_id", "party_id")
             }
-            if (values["task_id"] is None) == (values["project_id"] is None):
-                raise ValidationError("Exactly one of task or project must be targeted.")
+            candidate = type(self)(pk=self.pk, **values)
+            candidate.clean()
             assignment_changed = values != previous and (
                 values["party_id"] is not None or (previous is not None and previous["party_id"] is not None)
             )
             if assignment_changed:
-                candidate = type(self)(pk=self.pk, **values)
                 actor, elevated = self.effective_actor()
                 if elevated:
                     candidate.sudo(reason="intake.need.assignment")
                 else:
                     candidate.with_actor(actor)
                 candidate.validate_party_assignment()
+            if previous is not None and values["party_id"] != previous["party_id"] and not _access_decision:
+                old_user = self._account_for_party(previous["party_id"])
+                new_user = self._account_for_party(values["party_id"])
+                if values["party_id"] is None or old_user != new_user:
+                    self.access_verdict = self._meta.get_field("access_verdict").get_default()
+                    self.access_resolved_by_id = None
+                    self.access_resolved_at = None
+                    self.access_resolution = {}
+                    if update_fields is not None:
+                        update_fields.update(
+                            {
+                                "access_verdict",
+                                "access_resolved_by",
+                                "access_resolved_at",
+                                "access_resolution",
+                            }
+                        )
             super().save(**kwargs)
             if assignment_changed and values["task_id"] is not None and values["party_id"] is not None:
                 with system_context(reason="intake.need.follow_requester"):
                     candidate.target.message_subscribe(party=candidate.party)
 
     def _link_requester(self, *, allow_create: bool, system_reason: str | None = None) -> Any:
-        """Resolve the claimed account; capture or the decision authorizes this act.
+        """Resolve and assign the account; the caller persists it atomically.
 
         Ingress uses its channel's authorization and a named IAM system reason.
         The decision uses IAM's actor-gated factory. No credential or membership
@@ -463,11 +524,20 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         """
 
         users = get_user_model().objects
+        existing = self._account_for_party(self.party_id)
+        if existing is not None and not existing.is_active:
+            raise ValidationError({"conflict": "The assigned account is inactive."})
         email = users.normalize_email(self.claimed_email)
         if not email:
+            if existing is not None:
+                return existing
             raise ValidationError({"conflict": "This request has no claimed email."})
         validate_email(email)
         user = users.person_for_email(email)
+        if existing is not None:
+            if user != existing:
+                raise ValidationError({"conflict": "The claimed email does not name the assigned account."})
+            return existing
         if user is not None and not user.is_active:
             raise ValidationError({"conflict": "The matching account is inactive."})
         if user is None:
@@ -482,21 +552,19 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             handle = apps.get_model("parties", "Handle").objects.upsert(platform="email", value=email)
             apps.get_model("parties", "PartyHandle").objects.link(party, handle, is_confirmed=False)
             self.party = party
-            self.sudo(reason="intake.need.link_requester").save(update_fields=("party",))
         return user
 
     def decide_access(self, action: str, reason: str = "", expected_revision: int | None = None) -> Any:
         """Approve or deny access, retaining a Decision-compatible resolution."""
 
-        if action not in {"approve", "deny"}:
+        if action not in NeedAccessAction.values:
             raise ValidationError({"action": "Choose approve or deny."})
         actor = instance_actor(self)
         with actor_context(actor), transaction.atomic():
             locked = type(self).objects.sudo(reason="intake.need.decide_access.lock").locked_get(pk=self.pk)
             # Authorization uses the actor; the locked copy retains unredacted facts.
-            if (
-                not self.with_actor(actor).has_access("write")
-                or not locked.target.with_actor(actor).has_access("share")
+            if not self.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
+                "share"
             ):
                 raise PermissionDenied("Deciding request access requires need write and target share.")
             if action == "approve":
@@ -507,24 +575,31 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
             if locked.access_verdict == verdict:
                 if action == "deny":
                     return None
-                with system_context(reason="intake.need.decide_access.replay"):
-                    parties = apps.get_model("parties", "Party").objects
-                    return parties.user_for(locked.party) if locked.party_id else None
+                return locked._account_for_party(locked.party_id)
             if locked.access_verdict == NeedAccessVerdict.COMPLETED:
                 raise ValidationError({"action": "Approved access is final."})
             user = None
             if action == "approve":
                 try:
                     user = locked._link_requester(allow_create=True)
-                except (DomainError, ValidationError) as error:
-                    raise ValidationError({"conflict": str(error)}) from error
+                except ValidationError:
+                    raise
+                except DomainError as error:
+                    raise ValidationError({"conflict": error.code}) from error
             locked.access_verdict = verdict
             locked.access_resolution = {"action": action, "reason": reason}
             locked.access_resolved_by_id = actor_user_id(actor)
             locked.access_resolved_at = timezone.now()
-            locked.save(update_fields=(
-                "access_verdict", "access_resolution", "access_resolved_by", "access_resolved_at",
-            ))
+            locked.save(
+                _access_decision=True,
+                update_fields=(
+                    "party",
+                    "access_verdict",
+                    "access_resolution",
+                    "access_resolved_by",
+                    "access_resolved_at",
+                ),
+            )
         self.refresh_from_db()
         return user
 
@@ -559,7 +634,6 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         bind_actor(task, actor)
         self.refresh_from_db()
         return task
-
 
 
 class ChannelIntake(models.Model):
@@ -644,9 +718,17 @@ class ChannelIntake(models.Model):
                 DomainNameValidator()(domain)
             except ValidationError as error:
                 raise ValidationError({"intake_requester_domains": "Enter valid domain names."}) from error
-        previous = [] if self._state.adding else type(self)._base_manager.filter(pk=self.pk).values_list(
-            "intake_requester_domains", flat=True,
-        ).get()
+        previous = (
+            []
+            if self._state.adding
+            else type(self)
+            ._base_manager.filter(pk=self.pk)
+            .values_list(
+                "intake_requester_domains",
+                flat=True,
+            )
+            .get()
+        )
         if previous != domains:
             actor, elevated = self.effective_actor()
             if not elevated:
@@ -681,7 +763,7 @@ class ChannelIntake(models.Model):
             model = need_model if target == "claimed_name" else task_model
             try:
                 values[target] = model._meta.get_field(target).clean(value, model())
-            except (ValidationError, TypeError, ValueError, OverflowError):
+            except ValidationError, TypeError, ValueError, OverflowError:
                 logger.warning("Invalid intake value for %s on message %s; using its default.", target, message.pk)
         return values
 
@@ -705,33 +787,3 @@ class ChannelIntake(models.Model):
             return None
         need_model = apps.get_model("intake", "Need")
         return need_model.objects.capture_from_message(message, queue=self.intake_queue)
-
-
-class TaskIntake(models.Model):
-    """Task sort vocabulary backed by its first request's recorded identity."""
-
-    extends = "projects.Task"
-    runtime = False
-
-    @staticmethod
-    def filer_name_expression(info: Any, queryset: Any) -> models.Subquery:
-        """Sort on the first need's party name, then its claimed name, else NULL."""
-
-        needs = apps.get_model("intake", "Need").objects.with_actor(queryset.actor() or current_actor())
-        first = (
-            needs.scoped_for_aggregate().filter(task_id=models.OuterRef("pk"))
-            .order_by("created_at", "pk")
-            .annotate(_filer_name=Coalesce(
-                NullIf("party__display_name", models.Value("")),
-                NullIf("claimed_name", models.Value("")),
-                output_field=models.TextField(),
-            ))
-        )
-        return models.Subquery(first.values("_filer_name")[:1], output_field=models.TextField())
-
-    hasura_sortable_aliases = {"filer_name": SortAlias("_filer_name", filer_name_expression)}
-
-    class Meta:
-        """Abstract donor options folded into the concrete task table."""
-
-        abstract = True
