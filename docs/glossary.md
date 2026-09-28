@@ -191,6 +191,26 @@ boundaries instead of importing it, to avoid import cycles.
 `schemas` mapping in an addon's conventional `schema.py`. Each named schema
 contributes to fixed buckets, and Angee builds one Strawberry `Schema` per name.
 
+## Decisions
+
+**Decision** — a retained question put to people, with a frozen form and a final
+answer or closure. Its lifecycle belongs to `angee.decisions`, independently of
+any waiting owner.
+
+**Kind** — the decision's content key, identifying the question's presentation.
+
+**Action** — a named answer offered by a decision, with a Pydantic form and a
+terminal verdict.
+
+**Decision group** — related decisions that settle together under one policy.
+Waiting owners retain a reference to the group and observe its outcome.
+
+**Seat** — one requested decision with its own assignees, requester, actions,
+basis, and context. Any authorized assignee can supply that seat's answer.
+
+**Inbox** — the person's readable decisions, filtered by assignment or requester
+to distinguish questions they can answer from questions they issued.
+
 ## Relationship Management
 
 **Party** — the universal supertype for a person, organization, or other actor

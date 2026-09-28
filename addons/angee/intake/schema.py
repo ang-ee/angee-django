@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, cast
 
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.mixins import StaleRevisionError
+from angee.decisions.exceptions import RetryableDecisionError
+from angee.decisions.schema import DecisionVerdict, HumanDecisionType
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
@@ -34,8 +38,7 @@ Queue = apps.get_model("work", "Queue")
 
 NeedImportance = Need._meta.get_field("importance").choices_enum
 strawberry.enum(cast(Any, NeedImportance))
-NeedAccessVerdict = Need._meta.get_field("access_verdict").choices_enum
-strawberry.enum(cast(Any, NeedAccessVerdict))
+NeedAccessVerdict = DecisionVerdict
 strawberry.enum(cast(Any, NeedAccessAction))
 
 
@@ -56,9 +59,16 @@ class NeedType(AngeeNode):
     revision: auto
     claimed_name: auto
     claimed_email: str | None
-    access_verdict: NeedAccessVerdict | None  # type: ignore[valid-type]
-    access_resolved_at: auto
-    access_resolution: JSON | None
+    access_decision: HumanDecisionType | None = actor_scoped_to_one("access_decision")
+    access_verdict: NeedAccessVerdict | None = strawberry_django.field(  # type: ignore[valid-type]
+        only=["access_decision_id"], prefetch_related=["access_decision"],
+    )
+    access_resolved_at: datetime | None = strawberry_django.field(
+        only=["access_decision_id"], prefetch_related=["access_decision"],
+    )
+    access_resolution: JSON | None = strawberry_django.field(
+        only=["access_decision_id"], prefetch_related=["access_decision"],
+    )
     created_at: auto
     updated_at: auto
 
@@ -67,7 +77,9 @@ class NeedType(AngeeNode):
     project: ProjectType | None = actor_scoped_to_one("project")
     source_message: MessageType | None = actor_scoped_to_one("source_message")
     original_task: TaskType | None = actor_scoped_to_one("original_task")
-    access_resolved_by: UserType | None = actor_scoped_to_one("access_resolved_by")
+    access_resolved_by: UserType | None = strawberry_django.field(
+        only=["access_decision_id"], prefetch_related=["access_decision__resolved_by"],
+    )
 
 
 @strawberry_django.type(Channel, name="ChannelType", extend=True)
@@ -123,7 +135,7 @@ class IntakeActionMutation:
         return ActionResult(ok=True, message="Need converted to task.", id=task.sqid)
 
     @strawberry.mutation
-    @action_guard("Request access decision failed.", errors=(StaleRevisionError,))
+    @action_guard("Request access decision failed.")
     def decide_need_access(
         self,
         info: strawberry.Info,
@@ -135,7 +147,10 @@ class IntakeActionMutation:
         """Apply the need owner's access decision and return the approved account."""
 
         target = authorized_permission_target(info, Need, need, "write")
-        user = target.decide_access(action, reason=reason, expected_revision=expected_revision)
+        try:
+            user = target.decide_access(action, reason=reason, expected_revision=expected_revision)
+        except (StaleRevisionError, RetryableDecisionError) as error:
+            raise ValidationError({"conflict": error.code}) from error
         return ActionResult(ok=True, message="Request access decided.", id=user.sqid if user is not None else None)
 
 

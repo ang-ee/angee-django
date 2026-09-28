@@ -1,7 +1,7 @@
 // Authorization schema for external-request evidence.
 // @rebac_package: intake
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 definition intake/need {
     relation task:    projects/task    // rebac:field=task
@@ -14,8 +14,6 @@ definition intake/need {
 
     permission write__party = task->share + project->share
     permission read__claimed_email = task->write + project->write
-    permission read__access_verdict = task->share + project->share
-    permission read__access_resolved_by = task->share + project->share
-    permission read__access_resolved_at = task->share + project->share
-    permission read__access_resolution = task->share + project->share
+    permission share = task->share + project->share
+    permission read__access_decision = share
 }

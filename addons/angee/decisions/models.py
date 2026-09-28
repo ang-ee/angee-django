@@ -1,0 +1,213 @@
+"""Abstract decision sources; one decision is one seat's retained question."""
+
+from typing import Any
+
+from django.apps import apps
+from django.conf import settings
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
+from django.db.models.deletion import Collector, ProtectedError, RestrictedError
+from rebac import system_context
+
+from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
+from angee.base.mixins import OptimisticLockMixin
+from angee.base.models import AngeeDataModel
+from angee.base.refs import RecordRefMixin
+from angee.base.scoping import system_queryset
+from angee.decisions.managers import DecisionEvidenceManager, DecisionGroupManager, DecisionManager
+from angee.decisions.policies import DecisionPolicy
+from angee.decisions.states import OPEN_DECISION, ClosedReason, Verdict
+
+
+class DecisionGroup(AngeeDataModel):
+    """A policy and its seats; waiter references point here from their own addon."""
+
+    runtime = True
+    sqid_prefix = "dcg_"
+    policy = ImplClassField(
+        base_class=DecisionPolicy, registry_setting="ANGEE_DECISION_POLICY_CLASSES", default="first",
+    )
+    issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
+    settled_at = models.DateTimeField(null=True, blank=True)
+    objects = DecisionGroupManager()
+
+    class Meta:
+        """Compose the group as a retained permission resource."""
+
+        abstract = True
+        rebac_resource_type = "decisions/group"
+
+    def is_settled_by(self, decisions: list[Any]) -> bool:
+        """Unanswered closure settles immediately; otherwise apply the chosen policy."""
+        if any(d.closed_reason in ClosedReason.unanswered_values() for d in decisions):
+            return True
+        policy = self._meta.get_field("policy").resolve_for(self)
+        return policy.settled(decisions)
+
+    @property
+    def outcome(self) -> str | None:
+        """Return expired, superseded or canceled; None leaves answer handling to the waiter."""
+        if self.settled_at is None:
+            return None
+        reason = (system_queryset(self.decisions.model).filter(group_id=self.pk).unanswered()
+                  .order_by("index").values_list("closed_reason", flat=True).first())
+        return "expired" if reason in (ClosedReason.EXPIRED, ClosedReason.INVALID_ATTEMPTS) else reason
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Admit immutable group facts; only the settle verb can set its final timestamp."""
+        if not self._state.adding or self.settled_at is not None:
+            raise ValidationError("Use group manager verbs; group facts and settlement cannot be edited.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Lock the group before collector cascades, preserving native delete authorization."""
+        with transaction.atomic():
+            with type(self).objects.hold(self.pk) as group:
+                if not group.is_deletable:
+                    raise ProtectedError("Only settled, unreferenced decision groups can be deleted.", [self])
+            # The outer transaction retains the lock after the system context ends.
+            return super().delete(*args, **kwargs)
+
+    @property
+    def is_deletable(self) -> bool:
+        """Settled, unreferenced groups may go; protected answers remain retained."""
+        if self.settled_at is None:
+            return False
+        for relation in self._meta.related_objects:
+            if relation.get_accessor_name() != "decisions" and system_queryset(relation.related_model).filter(
+                **{relation.field.name: self.pk},
+            ).exists():
+                return False
+        try:
+            collector = Collector(using=self._state.db or "default")
+            collector.collect([self])
+        except (ProtectedError, RestrictedError):
+            return False
+        with system_context(reason="decisions.retention_check"):
+            records = [record for rows in collector.data.values() for record in rows]
+            if apps.get_model("decisions", "DecisionEvidence").objects.for_records(records).exists():
+                return False
+        return True
+
+
+class Decision(OptimisticLockMixin, RecordRefMixin, AngeeDataModel):
+    """One immutable question and its conditional, final answer."""
+
+    runtime = True
+    sqid_prefix = "dcn_"
+    record_ref_field_prefix = "subject"
+    group = models.ForeignKey("decisions.DecisionGroup", on_delete=models.CASCADE, related_name="decisions")
+    index = models.PositiveIntegerField()
+    kind = models.CharField(max_length=200)
+    requester = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                  related_name="+")
+    assignees = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="+")
+    subject_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT, null=True, blank=True)
+    subject_object_id = models.PositiveBigIntegerField(null=True, blank=True)
+    subject = GenericForeignKey("subject_content_type", "subject_object_id")
+    form_schema = models.JSONField()
+    basis = models.JSONField(default=dict)
+    context = models.JSONField(default=dict)
+    verdict = StateField(choices_enum=Verdict, default=Verdict.PENDING, db_index=False)
+    closed_reason = StateField(choices_enum=ClosedReason, null=True, blank=True, db_index=False)
+    superseded_by = models.ForeignKey("decisions.Decision", on_delete=models.SET_NULL, null=True, blank=True,
+                                     related_name="+")
+    supersede = models.BooleanField(default=False)
+    resolution = models.JSONField(default=dict)
+    resolved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                   related_name="+")
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    invalid_attempts = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField()
+    expires_at = models.DateTimeField(null=True, blank=True)
+    objects = DecisionManager()
+
+    class Meta:
+        """Constrain retained answers and exclusive open superseding questions."""
+
+        abstract = True
+        rebac_resource_type = "decisions/decision"
+        constraints = [
+            models.UniqueConstraint(fields=("kind", "subject_content_type", "subject_object_id"),
+                condition=OPEN_DECISION & models.Q(supersede=True), name="decisions_open_subject_unique"),
+            models.UniqueConstraint(fields=("group", "index"), name="decisions_group_index"),
+            models.CheckConstraint(condition=models.Q(max_attempts__gt=0), name="decisions_positive_attempts"),
+            models.CheckConstraint(condition=(
+                models.Q(verdict=Verdict.PENDING, resolved_at__isnull=True, resolved_by__isnull=True)
+                & (models.Q(closed_reason__isnull=True) | models.Q(closed_reason__in=[
+                    reason for reason in ClosedReason.values
+                    if reason not in (ClosedReason.RESOLVED, ClosedReason.IMPORTED)
+                ]))
+            ) | models.Q(verdict__in=[v for v in Verdict.values if v != Verdict.PENDING],
+                         resolved_at__isnull=False, resolved_by__isnull=False,
+                         closed_reason__isnull=False, closed_reason=ClosedReason.RESOLVED)
+                | models.Q(verdict__in=[v for v in Verdict.values if v != Verdict.PENDING],
+                           resolved_at__isnull=True, resolved_by__isnull=True,
+                           closed_reason__isnull=False, closed_reason=ClosedReason.IMPORTED),
+                name="decisions_resolution_consistent"),
+        ]
+        indexes = [
+            models.Index(fields=("expires_at",), condition=OPEN_DECISION, name="decisions_open_expiry"),
+            models.Index(fields=("kind", "subject_content_type", "subject_object_id"), name="decisions_subject"),
+        ]
+
+    @property
+    def is_open(self) -> bool:
+        """Return whether this snapshot still accepts an answer."""
+        return self.verdict == Verdict.PENDING and self.closed_reason is None
+
+    def decide(self, *, actor: Any, revision: int, action: str, values: dict[str, Any]) -> Any:
+        """Dispatch an answer; consumer donors may compose an atomic domain action.
+
+        The manager remains the sole owner of the locked, conditional transition.
+        A donor wrapping this entrypoint must delegate that transition to it.
+        """
+        return type(self).objects.decide(self.pk, actor=actor, revision=revision, action=action, values=values)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Admit new rows; retained questions change only through manager verbs."""
+        if not self._state.adding:
+            raise ValidationError("Use decision manager verbs; retained questions and answers cannot be edited.")
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        """Identify a seat by its authored kind."""
+        return self.kind
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Retain individual seats until their owning group can be deleted."""
+        raise ValidationError("Delete the settled decision group, not an individual decision.")
+
+
+class DecisionEvidence(RecordRefMixin, AngeeDataModel):
+    """Indexed projection of context references, authored only at admission."""
+
+    runtime = True
+    sqid_prefix = "dce_"
+    decision = models.ForeignKey("decisions.Decision", on_delete=models.CASCADE, related_name="evidence")
+    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
+    object_id = models.PositiveBigIntegerField()
+    record = GenericForeignKey("content_type", "object_id")
+    objects = DecisionEvidenceManager()
+
+    class Meta:
+        """Index the canonical evidence identity once per decision."""
+
+        abstract = True
+        rebac_resource_type = "decisions/evidence"
+        constraints = [models.UniqueConstraint(fields=("decision", "content_type", "object_id"),
+                                               name="decisions_evidence_unique")]
+        indexes = [models.Index(fields=("content_type", "object_id"), name="decisions_evidence_record")]
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Admit evidence once; its retained target cannot be rewritten."""
+        if not self._state.adding:
+            raise ValidationError("Decision evidence cannot be edited.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Retain evidence until its owning group can be deleted."""
+        raise ValidationError("Decision evidence cannot be deleted independently.")

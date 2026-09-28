@@ -1,0 +1,35 @@
+// @rebac_package: decisions
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+definition decisions/group {
+    relation issuer: auth/user // rebac:field=issuer
+    relation assignee: auth/user // rebac:field=decisions__assignees
+    relation admin: angee/role // rebac:const=admin
+    permission create = admin->member
+    permission read = issuer + assignee + admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition decisions/decision {
+    relation assignee: auth/user // rebac:field=assignees
+    relation requester: auth/user // rebac:field=requester
+    relation issuer: auth/user // rebac:field=group__issuer
+    relation person: iam/kind // rebac:const=person
+    relation admin: angee/role // rebac:const=admin
+    permission create = admin->member
+    permission read = assignee + issuer + admin->member
+    permission act = ((assignee - requester) + admin->member) & person->active_member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition decisions/evidence {
+    relation decision: decisions/decision // rebac:field=decision
+    relation admin: angee/role // rebac:const=admin
+    permission create = admin->member
+    permission read = decision->read
+    permission write = admin->member
+    permission delete = admin->member
+}

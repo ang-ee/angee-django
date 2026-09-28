@@ -1,28 +1,69 @@
-"""Retain linked accounts as approved request access without inventing a resolver."""
+"""Backfill access seats after decisions and Need.access_decision are materialized.
 
-from django.conf import settings
+Build/makemigrations creates the new schema; the next build attaches this data
+step to those leaves. Historical models only; neither relationship store is
+touched. Imported approvals invent neither a resolver nor a resolution time.
+"""
+
 from django.db import migrations, models
 from django.db.migrations.exceptions import IrreversibleError
 from django.db.migrations.state import ProjectState
+from django.utils import timezone
 
-from angee.base.fields import StateField
-from angee.base.mixins import audit_set_null
-
-FIELDS = {"access_verdict", "access_resolution", "access_resolved_by", "access_resolved_at"}
+# Frozen output of the approve/deny Pydantic action contract at adoption.
+FORM_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {"action": {
+        "type": "string", "enum": ["approve", "deny"],
+        "options": [
+            {"value": "approve", "label": "Approve", "verdict": "completed"},
+            {"value": "deny", "label": "Deny", "verdict": "rejected"},
+        ],
+    }},
+    "required": ["action"],
+    "discriminator": {"propertyName": "action"},
+    "oneOf": [
+        {
+            "additionalProperties": False,
+            "description": "Approve the request's account, with an optional explanation.",
+            "properties": {
+                "reason": {"default": "", "title": "Reason", "type": "string"},
+                "action": {"type": "string", "const": "approve"},
+            },
+            "title": "ApproveNeedAccess", "type": "object", "required": ["action"],
+        },
+        {
+            "additionalProperties": False,
+            "description": "Decline access without changing the request's account.",
+            "properties": {
+                "reason": {"default": "", "title": "Reason", "type": "string"},
+                "action": {"type": "string", "const": "deny"},
+            },
+            "title": "DenyNeedAccess", "type": "object", "required": ["action"],
+        },
+    ],
+}
 
 
 def applies(project_state: ProjectState) -> bool:
     need = project_state.models.get(("intake", "need"))
-    if need is None:
+    decision = project_state.models.get(("decisions", "decision"))
+    if need is None or decision is None:
         return False
-    present = FIELDS.intersection(need.fields)
-    if present and present != FIELDS:
-        raise ValueError("Need has a partial access-decision transition; reconcile its migration history.")
-    return not present
+    if {"access_verdict", "access_resolution", "access_resolved_by", "access_resolved_at"} & need.fields.keys():
+        raise ValueError("Remove the unmaterialized access-column transition before decision adoption.")
+    return "access_decision" in need.fields and "intake_need" in decision.fields
 
 
 def forwards(apps, schema_editor):
-    rows = apps.get_model("intake", "Need")._base_manager.using(schema_editor.connection.alias).order_by()
+    alias = schema_editor.connection.alias
+    rows = apps.get_model("intake", "Need")._base_manager.using(alias).order_by()
+    groups = apps.get_model("decisions", "DecisionGroup")._base_manager.using(alias).order_by()
+    decisions = apps.get_model("decisions", "Decision")._base_manager.using(alias).order_by()
+    content_type, _ = apps.get_model("contenttypes", "ContentType")._base_manager.using(alias).get_or_create(
+        app_label="intake", model="need",
+    )
     untouched_source = models.Q(updated_by_id=models.F("source_message__updated_by_id")) | models.Q(
         updated_by_id__isnull=True, source_message__updated_by_id__isnull=True,
     )
@@ -30,39 +71,29 @@ def forwards(apps, schema_editor):
         source_message__sender__party_link_confirmed=False,
         party_id=models.F("source_message__sender__party_id"),
     ) & untouched_source
-    rows.filter(access_verdict="pending", party__person__user__isnull=False).exclude(unconfirmed_copy).update(
-        access_verdict="completed", access_resolution={"action": "approve", "reason": ""},
+    eligible = rows.filter(party__person__user__is_active=True).exclude(unconfirmed_copy)
+    pending = rows.filter(access_decision__isnull=True).annotate(
+        approved=models.Exists(eligible.filter(pk=models.OuterRef("pk"))),
     )
+    for need in pending.iterator():
+        group = groups.create(policy="first", issuer_id=None, settled_at=timezone.now() if need.approved else None)
+        decision = decisions.create(
+            group_id=group.pk, index=0, kind="intake.access", requester_id=None,
+            subject_content_type_id=content_type.pk, subject_object_id=need.pk,
+            intake_need_id=need.pk, form_schema=FORM_SCHEMA,
+            basis={"migration": "intake.need_access_decision"}, context={"facts": [], "references": []},
+            supersede=True, max_attempts=3, revision=1,
+            verdict="completed" if need.approved else "pending",
+            closed_reason="imported" if need.approved else None,
+            resolution={"action": "approve", "reason": ""} if need.approved else {},
+        )
+        rows.filter(pk=need.pk, access_decision__isnull=True).update(access_decision_id=decision.pk)
 
 
 def backwards(apps, schema_editor):
-    rows = apps.get_model("intake", "Need")._base_manager.using(schema_editor.connection.alias).order_by()
-    if rows.filter(access_resolved_at__isnull=False).exists():
-        raise IrreversibleError("Decided request access cannot be discarded.")
+    raise IrreversibleError("Retained access decisions cannot be discarded.")
 
 
 class Migration(migrations.Migration):
-    dependencies = [migrations.swappable_dependency(settings.AUTH_USER_MODEL), ("parties", "__latest__")]
-    operations = [
-        migrations.AddField(
-            "need", "access_verdict",
-            StateField(
-                choices=[("pending", "Pending"), ("completed", "Approved"), ("rejected", "Denied")],
-                default="pending", editable=False,
-            ),
-        ),
-        migrations.AddField(
-            "need", "access_resolved_by",
-            models.ForeignKey(
-                settings.AUTH_USER_MODEL, null=True, blank=True, editable=False,
-                on_delete=audit_set_null, related_name="+",
-            ),
-        ),
-        migrations.AddField(
-            "need", "access_resolved_at", models.DateTimeField(null=True, blank=True, editable=False),
-        ),
-        migrations.AddField(
-            "need", "access_resolution", models.JSONField(default=dict, blank=True, editable=False),
-        ),
-        migrations.RunPython(forwards, backwards),
-    ]
+    dependencies = [("decisions", "__latest__"), ("parties", "__latest__"), ("contenttypes", "__latest__")]
+    operations = [migrations.RunPython(forwards, backwards)]
