@@ -15,7 +15,6 @@ from rebac import (
     PermissionDenied,
     RelationshipTuple,
     SubjectRef,
-    current_actor,
     delete_relationships,
     system_context,
     to_object_ref,
@@ -25,7 +24,7 @@ from rebac.managers import RebacQuerySet
 from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
-from angee.base.actors import actor_user_id
+from angee.base.actors import actor_user_id, instance_actor
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.scoping import system_queryset
@@ -60,14 +59,6 @@ def audit_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model],
 
     del using
     collector.add_field_update(field, None, list(sub_objs))
-
-
-def _instance_actor(instance: models.Model) -> SubjectRef | None:
-    """Use an instance's pinned actor before the ambient actor for defaults and audit."""
-
-    actor_getter = getattr(instance, "actor", None)
-    actor = actor_getter() if callable(actor_getter) else None
-    return actor if actor is not None else current_actor()
 
 
 def _shared_reader_policy_field_spellings(model: type[models.Model]) -> frozenset[str]:
@@ -287,7 +278,7 @@ class AuditMixin(models.Model):
                 super().save(*args, **kwargs)
                 return
 
-        user_id = actor_user_id(_instance_actor(self))
+        user_id = actor_user_id(instance_actor(self))
         touched: set[str] = set()
         if user_id is not None:
             if self._state.adding:
@@ -338,8 +329,9 @@ class ItemOwnershipMixin(models.Model):
 class OwnerMixin(AuditMixin):
     """Give a grant root transferable ownership independent of its audit attribution.
 
-    A non-null owner wins. Otherwise an owning container leaves the owner empty;
-    other inserts default to ``created_by`` and then the pinned acting user.
+    A non-null owner wins. Otherwise an owning container or ``save(ownerless=True)``
+    leaves the owner empty; other inserts default to ``created_by`` and then the
+    pinned acting user.
     A cached, saved container supplies its flag; an uncached container costs one
     query per insert. ``bulk_create`` bypasses this instance-save default.
     Compose :class:`OwnerQuerySet` when an owning verb needs bulk release.
@@ -361,10 +353,17 @@ class OwnerMixin(AuditMixin):
     class Meta:
         abstract = True
 
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Apply the insert-only owner default before the audit and permission hooks."""
+    def save(self, *args: Any, ownerless: bool = False, **kwargs: Any) -> None:
+        """Apply the insert-only owner default before the audit and permission hooks.
 
-        if self._state.adding and self.owner_id is None:
+        ``ownerless=True`` requires a new row with no owner and skips only the
+        owner default. Native audit, permission, history and save signals still
+        run. To clear an existing owner, use ``transfer_ownership(None)``.
+        """
+
+        if ownerless and (not self._state.adding or self.owner_id is not None):
+            raise ValidationError({"owner": "Ownerless insertion requires a new row with no owner."})
+        if self._state.adding and self.owner_id is None and not ownerless:
             container_owns_items = False
             if self.owner_container is not None:
                 field = self._meta.get_field(self.owner_container)
@@ -378,7 +377,7 @@ class OwnerMixin(AuditMixin):
                     ).exists()
             if not container_owns_items:
                 self.owner_id = (
-                    self.created_by_id if self.created_by_id is not None else actor_user_id(_instance_actor(self))
+                    self.created_by_id if self.created_by_id is not None else actor_user_id(instance_actor(self))
                 )
         super().save(*args, **kwargs)
 
@@ -387,6 +386,8 @@ class OwnerMixin(AuditMixin):
 
         Even ambient ``system_context`` must supply a resolvable actor: this verb
         owns an actor-authorized transfer, not an unattended ownership backfill.
+        A concrete parent owns authorization when it declares the owner field.
+        Constraints are validated against all rows before writing the new owner.
         A full save and refresh let composed mixins own their updated fields.
         """
 
@@ -394,16 +395,24 @@ class OwnerMixin(AuditMixin):
             raise ValidationError("Ownership transfer requires a saved row.")
         if user is not None and user.pk is None:
             raise ValidationError({"owner": "The new owner must be a saved user."})
-        actor = _instance_actor(self)
+        actor = instance_actor(self)
         if actor is None:
             raise PermissionDenied("Ownership transfer requires an acting user.")
         with transaction.atomic():
-            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
-            if not locked.with_actor(actor).has_access(self.owner_transfer_permission):
+            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk).with_actor(actor)
+            owner_model = locked._meta.get_field("owner").model
+            target = locked
+            if owner_model is not type(locked):
+                target = system_queryset(owner_model).get(pk=locked._get_pk_val(owner_model._meta)).with_actor(actor)
+            if not target.has_access(target.owner_transfer_permission):
                 raise PermissionDenied("You cannot transfer ownership of this row.")
+            if user is not None:
+                locked.validate_record_access_subject(relation="owner", subject=user)
             owner_id = user.pk if user is not None else None
             if locked.owner_id != owner_id:
                 locked.owner = user
+                with system_context(reason="ownership.transfer.validate_constraints"):
+                    locked.validate_constraints()
                 locked.sudo(reason="ownership.transfer").save()
             self.refresh_from_db()
         return self

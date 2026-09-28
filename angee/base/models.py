@@ -410,6 +410,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         permission = declaration_owner.record_access_permission(relation)
         self._require_record_access(permission)
+        self.validate_record_access_subject(relation, subject)
         write_relationships(
             [
                 RelationshipTuple(
@@ -490,6 +491,17 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
     def validate_record_access_target(self) -> None:
         """Validate model-owned constraints on the record that receives direct grants."""
+
+        return None
+
+    def validate_record_access_subject(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Validate the record's invariant before a grant, assignment, or admission.
+
+        Overrides call ``super()`` first and raise
+        :class:`angee.base.errors.RecordAccessSubjectRefused` to refuse a holder.
+        The default accepts every subject. This hook decides no visibility and
+        is never asked when revoking access or clearing ownership.
+        """
 
         return None
 
