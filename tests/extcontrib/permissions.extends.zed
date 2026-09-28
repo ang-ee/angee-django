@@ -1,6 +1,6 @@
 // Additive REBAC extension — contributes to a definition owned by another addon.
 // @rebac_package: extcontrib
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 // `scopedemo/doc` is owned by `tests.scopedemo`; this fragment contributes a
 // `reviewer` relation and unions it into the `read` arm without editing the
@@ -10,4 +10,13 @@ definition scopedemo/doc {
     relation reviewer: auth/user
 
     permission read = reviewer
+}
+
+// Account actions follow the bound team's live roster. Preview authority stays
+// with the target's seat paths; this constant deliberately contributes no arm.
+definition auth/user {
+    relation manager: extcontrib/role // rebac:const=manager
+
+    permission create = manager->effective_member
+    permission issue_password = manager->effective_member
 }
