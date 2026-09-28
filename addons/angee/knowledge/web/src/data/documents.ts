@@ -10,6 +10,27 @@ export const PAGE_MODEL = "knowledge.Page";
 export const MARKDOWN_PAGE_MODEL = "knowledge.MarkdownPage";
 export const PAGE_READ_MODELS = [PAGE_MODEL, MARKDOWN_PAGE_MODEL] as const;
 
+export const KnowledgeCreateVaultFrom = graphql(`
+  mutation KnowledgeCreateVaultFrom(
+    $template: ID!
+    $name: String!
+    $owned: Boolean! = true
+    $client_creation_key: String
+  ) {
+    create_vault_from(
+      template: $template
+      name: $name
+      owned: $owned
+      client_creation_key: $client_creation_key
+    ) {
+      ok
+      message
+      validation_errors
+      id
+    }
+  }
+`);
+
 export const KnowledgeUpdatePageBody = graphql(`
   mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expected_hash: String) {
     update_page_body(page: $page, body: $body, expected_hash: $expected_hash) {
