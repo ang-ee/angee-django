@@ -22,7 +22,7 @@ import pytest
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext
@@ -783,6 +783,7 @@ def test_threaded_model_unlinks_chatter_message(composed_tables: None) -> None:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("delete_args", [(), ("default",)])
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, delete_args: tuple[str, ...]) -> None:
     """Hard-deleting a chattered record collects its whole private thread subtree (M1).
 
@@ -828,6 +829,7 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tables: None) -> None:
     """Deleting a permitted parent record removes its private chatter implementation rows."""
 
@@ -907,6 +909,7 @@ def test_record_denied_delete_does_not_teardown_private_chatter_graph(composed_t
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: None) -> None:
     """A bulk ``QuerySet.delete()`` tears down the thread subtree too, not just the row (M1).
 
@@ -976,6 +979,7 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_lists_assignee_activities_across_records(composed_tables: None) -> None:
     """The actor's assigned activities across records, ordered by due date, windowed (F-act).
 
@@ -1022,6 +1026,7 @@ def test_activity_agenda_lists_assignee_activities_across_records(composed_table
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_excludes_done_unless_included(composed_tables: None) -> None:
     """Done/canceled rows drop out of the agenda by default and return under include_done (F-act)."""
 
@@ -1046,6 +1051,7 @@ def test_activity_agenda_excludes_done_unless_included(composed_tables: None) ->
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_row_reports_overdue_state_without_stored_flag(composed_tables: None) -> None:
     """An overdue agenda row derives ``state == "overdue"`` from its due date, storing no flag (F-act)."""
 
@@ -1065,6 +1071,7 @@ def test_activity_agenda_row_reports_overdue_state_without_stored_flag(composed_
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_record_pointer_batches_without_per_row_fanout(composed_tables: None) -> None:
     """Projecting the agenda's record pointer is one batch, not a per-row lazy-load (D5).
 
@@ -1584,6 +1591,7 @@ def test_threaded_model_delivery_error_counts_for_author(composed_tables: None) 
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_model_activity_completion_notifies_activity_followers(composed_tables: None) -> None:
     """Activity completion delivers to email followers subscribed to that subtype."""
 
@@ -1607,6 +1615,7 @@ def test_threaded_model_activity_completion_notifies_activity_followers(composed
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_agent_activity_completion_posts_system_message_with_service_user(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1912,6 +1921,7 @@ def test_threaded_model_autotracking_respects_update_fields(composed_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_model_schedules_and_completes_activity(composed_tables: None) -> None:
     """A threaded model row owns Odoo-style scheduled activities."""
 
@@ -1935,7 +1945,7 @@ def test_threaded_model_schedules_and_completes_activity(composed_tables: None) 
     assert activity.summary == "Call customer"
     assert activity.note == "Ask about the rollout."
     assert activity.due_date == _AT.date()
-    assert activity.activity_type == "call"
+    assert activity.activity_type_id == "call"
     assert activity.status == "todo"
     with actor_context(user):
         assert list(ticket.activity_ids()) == [activity]
@@ -1958,6 +1968,19 @@ def test_threaded_model_schedules_and_completes_activity(composed_tables: None) 
     assert Part._base_manager.select_related("fragment").get(message=message).fragment.text == (
         "Activity done: Call customer\n\nCustomer confirmed."
     )
+    before = Message._base_manager.count()
+    note = "  Agreed next steps.\nKeep the original spacing.\n"
+    with actor_context(user):
+        logged = ticket.activity_log("call", _AT.date(), note)
+        with pytest.raises(ValidationError, match="activity_type"):
+            ticket.activity_log("undeclared", _AT.date(), note)
+    assert logged.status == "done"
+    assert logged.user_id == logged.created_by_id == user.pk
+    assert logged.due_date == _AT.date()
+    assert logged.completed_at is not None
+    assert logged.summary == "Agreed next steps."
+    assert logged.note == note
+    assert Message._base_manager.count() == before
 
 
 @pytest.mark.django_db(transaction=True)

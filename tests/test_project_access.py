@@ -32,8 +32,8 @@ from tests.conftest import (
     Vendor,
     installed_field_owners,
 )
-from tests.messaging_models import Channel, Message, Thread
-from tests.projects_models import Project, ProjectBinding
+from tests.messaging_models import Channel, Message, Thread, ThreadAttachment
+from tests.projects_models import Project, ProjectBinding, Task
 
 
 def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
@@ -46,6 +46,28 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
         assert f"definition {definition}" in projects
     assert "relation channel: integrate/integration // rebac:field=channel" in messaging
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
+
+
+@pytest.mark.parametrize("storage", ("denormalized", "registry"))
+def test_task_chatter_inherits_live_record_read(project_access_schema: Any, storage: str) -> None:
+    """The task's read gate grants chatter read and revokes it when narrowed."""
+
+    with override_settings(REBAC_LOCAL_BACKEND_STORAGE=storage):
+        call_command("rebac", "sync", verbosity=0)
+        user = apps.get_model("iam", "User").objects.create_user(username="task-chatter-reader")
+        with system_context(reason="tests.projects.task_chatter"):
+            project = Project.objects.create(title="Thread project")
+            task = Task.objects.create(project=project)
+            attachment = ThreadAttachment.objects.ensure_for_record(task)
+            write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(user))])
+        thread = attachment.thread
+        assert thread.with_actor(user).has_access("read")
+        assert Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
+        assert not thread.with_actor(user).has_access("write")
+        with system_context(reason="tests.projects.task_narrow"):
+            Task._base_manager.filter(pk=task.pk).update(visibility="restricted")
+        assert not thread.with_actor(user).has_access("read")
+        assert not Thread.objects.with_actor(user).with_action("read").scoped().filter(pk=thread.pk).exists()
 
 
 @pytest.fixture

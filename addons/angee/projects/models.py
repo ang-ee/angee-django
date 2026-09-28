@@ -862,7 +862,7 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
         if self.assignee_id is not None:
             person = system_queryset(apps.get_model("parties", "Person")).filter(user_id=self.assignee_id).first()
             if person is not None:
-                yield AudienceMember(party=person)
+                yield AudienceMember(party_id=person.pk)
 
     def _normalize_insert_lifecycle(self) -> None:
         """Stamp coherent close state while rejecting contradictory inserts."""

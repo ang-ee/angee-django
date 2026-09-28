@@ -6,15 +6,40 @@ from django.db import models
 
 from angee.base.mixins import OwnerMixin
 from angee.base.models import AngeeDataModel
+from angee.messaging.models import ThreadedModelMixin
 from angee.projects.models import Link as AbstractLink
 from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
 from angee.projects.models import Task as AbstractTask
 from angee.work.models import ProjectWork, TaskWork
+from angee.work.models import Queue as AbstractQueue
+from angee.work.models import Stage as AbstractWorkStage
+from tests import test_sequence  # noqa: F401 -- register the queue's native sequence targets
+from tests.spaces_models import Group
 
 
-class Task(TaskWork, OwnerMixin, AngeeDataModel):
+class Queue(AbstractQueue, Group):
+    """Native work queue shared by task access and lifecycle fixtures."""
+
+    class Meta(AbstractQueue.Meta):
+        abstract = False
+        app_label = "work"
+        db_table = "test_create_work_queue"
+        rebac_resource_type = "work/queue"
+
+
+class Stage(AbstractWorkStage):
+    """Native stage target for the queue's default and lifecycle fixtures."""
+
+    class Meta(AbstractWorkStage.Meta):
+        abstract = False
+        app_label = "work"
+        db_table = "test_create_work_stage"
+        rebac_resource_type = "work/stage"
+
+
+class Task(TaskWork, OwnerMixin, ThreadedModelMixin, AngeeDataModel):
     """Concrete task carrying the production chatter-wake owner."""
 
     sqid_prefix = "tpt_"
@@ -22,11 +47,10 @@ class Task(TaskWork, OwnerMixin, AngeeDataModel):
     visibility = AbstractTask._meta.get_field("visibility").clone()
     links = deepcopy(AbstractTask._meta.get_field("links"))
 
-    # This source-model graph exercises chatter wake behavior without composing
-    # work's queue lifecycle and its additional model graph.
-    queue = None
-    stage = None
+    # Keep the queue and stage fields used by the native work owner. These
+    # fixtures do not exercise cycle scheduling.
     cycle = None
+    cycle_id = None
     project = models.ForeignKey(
         "projects.Project",
         null=True,

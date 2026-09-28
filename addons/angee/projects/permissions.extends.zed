@@ -1,6 +1,6 @@
 // Project-owned container access contributed to upstream resource definitions.
 // @rebac_package: projects
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 definition storage/drive {
     relation project: projects/project // rebac:field=project_bindings__project
@@ -29,7 +29,9 @@ definition integrate/integration {
 
 definition messaging/thread {
     relation project: projects/project // rebac:field=project_bindings__project
+    relation record_project: projects/project // rebac:field={"path":"attachments__projects_project","filters":{"attachments__role":"chatter"}}
+    relation record_task: projects/task // rebac:field={"path":"attachments__projects_task","filters":{"attachments__role":"chatter"}}
 
-    permission read = project->read
+    permission read = project->read + record_project->read + record_task->read
     permission write = project->write
 }

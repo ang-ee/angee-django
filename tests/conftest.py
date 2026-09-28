@@ -69,6 +69,16 @@ from tests.integrate_models import Integration
 pytest_plugins = ("angee.testing.fixtures", "tests.workflows")
 
 
+@pytest.fixture
+def activity_catalog(composed_tables: None) -> None:
+    """Declare the activity keys used by existing scheduling scenarios."""
+
+    del composed_tables
+    with system_context(reason="tests.messaging.activity_catalog"):
+        messaging_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
+        messaging_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
+
+
 def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:
     """Use the source composition's field ownership in installed-schema callers."""
 
