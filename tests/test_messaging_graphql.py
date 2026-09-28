@@ -1047,7 +1047,10 @@ def test_record_chatter_query_and_post(composed_tables: None) -> None:
             schema,
             """
             mutation PostRecordMessage($model: String!, $id: ID!, $body: String!) {
-              post_record_message(input: {model_label: $model, record_id: $id, body: $body}) {
+              post_record_message(
+                input: {model_label: $model, record_id: $id, body: $body}
+                client_creation_key: "comment-request"
+              ) {
                 error_code
                 follower_count
                 is_following
@@ -1130,6 +1133,7 @@ def test_record_chatter_post_note(composed_tables: None) -> None:
             mutation PostRecordNote($model: String!, $id: ID!, $body: String!) {
               post_record_message(
                 input: {model_label: $model, record_id: $id, body: $body, kind: "note"}
+                client_creation_key: "note-request"
               ) {
                 error
                 error_code
