@@ -16,6 +16,17 @@ from django.db import models
 from angee.money.fields import MoneyField
 from angee.money.models import Currency as AbstractCurrency
 from angee.money.models import CurrencyRate as AbstractCurrencyRate
+from angee.money.models import MoneyRole as AbstractMoneyRole
+
+
+class MoneyRole(AbstractMoneyRole):
+    """Native role anchor needed by actor-scoped rate reads."""
+
+    class Meta(AbstractMoneyRole.Meta):
+        abstract = False
+        managed = False
+        app_label = "money"
+        rebac_resource_type = "money/role"
 
 
 class Currency(AbstractCurrency):
