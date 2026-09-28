@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from rebac import (
@@ -37,7 +36,6 @@ from tests.test_messaging import (
     Party,
     Person,
     Thread,
-    ThreadAttachment,
     ThreadedTicket,
 )
 
@@ -332,12 +330,7 @@ def test_recompute_excludes_record_chatter_and_public_threads(composed_tables: N
         alice_handle = _handle(alice, "alice@example.com")
         bob_handle = _handle(bob, "bob@example.com")
         ticket = ThreadedTicket._base_manager.create(title="Private record")
-        chatter = Thread._base_manager.create(platform="email")
-        ThreadAttachment._base_manager.create(
-            thread=chatter,
-            content_type=ContentType.objects.get_for_model(ThreadedTicket),
-            object_id=ticket.pk,
-        )
+        chatter = ticket.message_thread()
         public = Thread._base_manager.create(
             platform="facebook",
             modality=Thread.Modality.PUBLIC_THREAD,

@@ -276,7 +276,7 @@ def make_integration(
         material = {"access_token": "token"} if kind == CredentialKind.OAUTH else {"api_key": "x"}
     user_model = get_user_model()
     with system_context(reason="test integrate integration setup"):
-        user = user_model.objects.create_user(username=f"{slug}-owner", email=f"{slug}@example.com")
+        user = user_model.objects.create_user(username=f"{slug}-owner", email=f"{slug}-owner@example.com")
         oauth_client = OAuthClient.objects.create(
             slug=slug,
             display_name=slug.title(),
