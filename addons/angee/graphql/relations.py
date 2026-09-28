@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import strawberry_django
@@ -14,6 +15,7 @@ from rebac.resources import model_resource_type
 
 from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
 from angee.data.field_classification import is_to_one_relation
+from angee.graphql.ids import PublicID, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path
 
 _UNCACHED = object()
@@ -96,13 +98,36 @@ def actor_scoped_relation_group_expression(
 def actor_scoped_to_one(field_name: str) -> Any:
     """Return a nullable to-one field that redacts targets unreadable by the actor.
 
-    The parent may be actor-scoped or sudo-loaded: a cached related object is used
-    only when REBAC stamped it for the current actor; otherwise the stored FK value
-    is re-gated through the target model's actor-scoped manager. Missing access
-    returns ``None`` rather than raising. Strawberry-Django's native prefetch hint
-    batches a selected relation once per parent list, while ``only`` keeps the
-    parent projection to the FK id this resolver reads.
+    The REBAC optimizer extension scopes and actor-stamps the native prefetch
+    hint. Readable parents hit the cache; unreadable parents cache as ``None``.
+    Unprefetched roots fall back to one actor-scoped lookup per row. The parent
+    may be actor-scoped or sudo-loaded; cached targets are reused only for the
+    current actor, and ``only`` keeps the parent projection to the FK id.
     """
+
+    return _guarded_to_one_field(field_name, _actor_scoped_to_one_resolver(field_name))
+
+
+def actor_scoped_public_id(field_name: str) -> Any:
+    """Return a related public id, or ``None`` when its target is unreadable.
+
+    Uses the native prefetch hint scoped and stamped by the REBAC optimizer,
+    sharing :func:`actor_scoped_to_one`'s readable-parent cache, unreadable-parent
+    ``None``, and per-row scoped fallback for unprefetched roots. Only the
+    readable target's public id is projected.
+    """
+
+    resolve = _actor_scoped_to_one_resolver(field_name)
+
+    def resolve_public_id(root: models.Model) -> PublicID | None:
+        related = resolve(root)
+        return to_public_id(type(related), related.pk) if related is not None else None
+
+    return _guarded_to_one_field(field_name, resolve_public_id)
+
+
+def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], Any]:
+    """Build the shared cached-target resolver with an actor-scoped fallback."""
 
     def resolve(root: models.Model) -> Any:
         field = root._meta.get_field(field_name)
@@ -136,8 +161,14 @@ def actor_scoped_to_one(field_name: str) -> Any:
         target_field = field.target_field
         return with_actor(actor).filter(**{target_field.attname: fk_id}).first()
 
+    return resolve
+
+
+def _guarded_to_one_field(field_name: str, resolver: Callable[[models.Model], Any]) -> Any:
+    """Bind a relation projection to the native hint scoped by the REBAC optimizer."""
+
     return strawberry_django.field(
-        resolver=resolve,
+        resolver=resolver,
         field_name=field_name,
         only=[f"{field_name}_id"],
         prefetch_related=[field_name],

@@ -61,7 +61,7 @@ export interface StorageFileRow extends Record<string, unknown> {
   updated_at: string;
   created_by_label: string | null;
   url: string;
-  drive: string;
+  drive: string | null;
   folder: string | null;
   mime_type: {
     mime_type: string;

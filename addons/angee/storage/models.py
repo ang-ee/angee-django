@@ -53,19 +53,27 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.text import get_valid_filename
 from rebac import (
+    ActorLike,
+    NoActorResolvedError,
+    ObjectRef,
     PermissionDenied,
     RelationshipTuple,
+    SubjectRef,
     current_actor,
+    require_permission,
     system_context,
     to_object_ref,
     to_subject_ref,
     write_relationships,
 )
+from rebac.actors import is_sudo
 from rebac.backends import backend as rebac_backend
 from rebac.managers import RebacManager
+from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
+from angee.base.identity import canonical_subject_ref, public_subject_ref
 from angee.base.impl import ImplClassField
 from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, role_anchor
@@ -1061,11 +1069,11 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
     def for_download_token(self, token: str) -> Any:
         """Return the READY file a signed proxy download token addresses.
 
-        The mirror of :meth:`for_upload_token`. The token is a capability: it is
-        minted on the file's ``url`` field, which only resolves for an actor that
-        already read the row, so the download view re-validates the signature and
-        expiry alone (no second actor check). Trashed or unfinished rows have no
-        servable bytes, so they are excluded here.
+        The mirror of :meth:`for_upload_token`: re-check ``read`` for the token's
+        actor after the elevated lookup. The request needs no credentials: any
+        bearer may use the token until it expires or its actor loses access.
+        Tokens without an actor claim are rejected. Trashed and unfinished
+        rows have no servable bytes.
         """
 
         try:
@@ -1075,8 +1083,13 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         except signing.BadSignature as error:
             raise exceptions.UploadDenied("invalid download token") from error
         file_id = str(payload.get("file") or "")
+        actor_claim = str(payload.get("actor") or "")
         if not file_id:
             raise exceptions.UploadDenied("invalid download token")
+        try:
+            actor = canonical_subject_ref(actor_claim)
+        except ValueError as error:
+            raise exceptions.UploadDenied("invalid download token") from error
         row = (
             self.system_context(reason="storage.download.proxy")
             .select_related("mime_type")
@@ -1085,6 +1098,9 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         )
         if row is None:
             raise exceptions.UploadTargetNotFound("file not found")
+        row.with_actor(actor)
+        if not row.has_access("read"):
+            raise exceptions.UploadDenied("read access to the file is required")
         return row
 
     def _drive_for(self, *, drive_id: str, drive_slug: str) -> Any:
@@ -1279,23 +1295,30 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         presigned = storage.presigned_get(self.storage_path, expires_in=DOWNLOAD_URL_TTL_SECONDS)
         return presigned or storage.url(self.storage_path)
 
-    def issue_download_token(self) -> str:
-        """Return a TTL-limited signed token authorizing a proxy download.
+    def issue_download_token(self, actor: ActorLike | None = None) -> str:
+        """Sign a reusable download token for the given or ambient actor.
 
-        The mirror of :meth:`issue_upload_token`, minus the nonce — a download is
-        idempotent (re-fetchable, range-requestable) within the token's life, so
-        it is a reusable capability rather than one-shot. Expiry rides on the
+        An actor is required even in system context; missing actor state raises
+        ``NoActorResolvedError``. The claim uses the actor's public identity.
+        The token remains a bearer capability; download lookup re-checks that
+        actor's ``read`` permission on every request. Expiry rides on the
         signature (``DOWNLOAD_TOKEN_MAX_AGE``).
         """
 
-        return signing.dumps({"file": str(self.sqid)}, salt=DOWNLOAD_TOKEN_SALT)
+        subject = current_actor() if actor is None else to_subject_ref(actor)
+        if subject is None:
+            raise NoActorResolvedError("an actor is required to issue a download token")
+        return signing.dumps(
+            {"file": str(self.sqid), "actor": str(public_subject_ref(subject))}, salt=DOWNLOAD_TOKEN_SALT
+        )
 
     def download_url(self, request: Any | None = None) -> str:
         """Return the token-authenticated proxy download URL for this file.
 
         The filename rides in the path (so the browser saves under it and the URL
-        reads cleanly); the signed ``token`` identifies the row. Built absolute
-        against ``request`` when one is given, otherwise root-relative.
+        reads cleanly); the signed ``token`` identifies the row and the ambient
+        actor whose read permission is re-checked. Built absolute against
+        ``request`` when one is given, otherwise root-relative.
         """
 
         query = urlencode({"token": self.issue_download_token()})
@@ -1585,19 +1608,38 @@ class FileAttachmentManager(AngeeManager):
     target's canonical record target (:func:`angee.base.refs.canonical_record_target`), so
     a record and each of its REBAC-typed MTI ancestors share one attachment set instead of
     splitting it. Only the canonical target/file locks and ``get_or_create`` run
-    elevated — ``storage/file_attachment`` declares no ``create`` permission (rows enter
-    through gated call sites that already resolved the file and record), and a pre-insert
-    check has no row id to gate on; ``created_by`` still stamps from the ambient actor,
-    which elevation preserves.
+    elevated, after ``attach`` checks target write and file read for the ambient
+    actor. ``storage/file_attachment`` declares no ``create`` permission because
+    a pre-insert check has no edge id. Elevation preserves the actor for
+    ``created_by``; the returned edge is rebound to that actor.
     """
 
+    @require_permission("read", resource_arg="file")
     def attach(self, file: Any, record: models.Model, *, label: str = "") -> Any:
-        """Attach ``file`` to ``record``, idempotently per (file, canonical target) edge."""
+        """Attach a readable file to a writable record, idempotently per edge.
 
+        Target write checks the canonical identity used by the edge. Both
+        permissions use the ambient actor, regardless of how the supplied rows
+        were loaded. System context bypasses these checks. Outside system
+        context, a target without a REBAC identity raises ``PermissionDenied``.
+        """
+
+        actor = current_actor()
         target = canonical_record_target(record)
         target_model = target.content_type.model_class()
         if target_model is None:
             raise ValueError("File attachment target model is unavailable.")
+        if not is_sudo():
+            resource_type = model_resource_type(target_model)
+            if resource_type is None:
+                raise PermissionDenied("File attachments require a REBAC-typed target.")
+            # The file-read decorator requires an actor outside system context.
+            if not rebac_backend().check_access(
+                subject=cast(SubjectRef, actor),
+                action="write",
+                resource=ObjectRef(resource_type, str(target.object_id)),
+            ).allowed:
+                raise PermissionDenied("write access to the attachment target is required")
         with system_context(reason="storage.file_attachment.attach"), transaction.atomic():
             target_model._base_manager.select_for_update().get(pk=target.object_id)
             file = type(file)._base_manager.select_for_update().get(pk=file.pk)
@@ -1607,6 +1649,8 @@ class FileAttachmentManager(AngeeManager):
                 object_id=target.object_id,
                 defaults={"label": label},
             )
+        if actor is not None:
+            attachment.with_actor(actor)
         return attachment
 
 
@@ -1619,8 +1663,8 @@ class FileAttachment(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
     accessor. Declare that reverse relation on the same topmost REBAC-typed MTI ancestor
     the canonical write keys on (:func:`angee.base.refs.canonical_record_target`), so the
     delete collector filters at the write content type — the placement invariant in
-    :mod:`angee.base.refs`. Access control rides entirely on the file parent — see
-    ``permissions.zed``.
+    :mod:`angee.base.refs`. Existing-edge access follows the file parent in
+    ``permissions.zed``; :meth:`FileAttachmentManager.attach` owns the creation gate.
     """
 
     runtime = True

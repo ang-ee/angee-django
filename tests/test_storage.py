@@ -898,7 +898,8 @@ def test_proxy_download_sets_content_cache_headers_and_honors_etag(
     from angee.storage.uploads import DOWNLOAD_TOKEN_HEADER, DOWNLOAD_TOKEN_MAX_AGE
 
     row = _proxy_upload(drive, PNG_BYTES)
-    token = row.issue_download_token()
+    with actor_context(drive.alice):
+        token = row.issue_download_token()
     request = RequestFactory().get(f"/storage/download/{row.filename}?token={token}")
 
     ok = views.download(request, row.filename)
