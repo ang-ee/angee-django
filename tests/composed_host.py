@@ -13,9 +13,44 @@ import argparse
 import json
 import os
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+
+def run_composed_tests(tmp_path: Path, test_label: str, *, app: str) -> None:
+    """Run a native contract group without sharing pytest's source-model registry."""
+
+    root = Path(__file__).resolve().parents[1]
+    report = tmp_path / "composed-tests.json"
+    env = dict(os.environ)
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / "tests/composed_host.py"),
+            "--runtime-dir",
+            str(tmp_path / "runtime"),
+            "--app",
+            app,
+            "--no-examples",
+            "--action",
+            "tests",
+            "--test-label",
+            test_label,
+            "--output",
+            str(report),
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert result.returncode == 0, f"composed tests failed:\n{result.stdout}\n{result.stderr}"
+    assert json.loads(report.read_text()) == {"failures": 0}
 
 
 def boot(

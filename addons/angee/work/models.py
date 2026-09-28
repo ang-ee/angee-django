@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
@@ -318,8 +318,8 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
         stage = stage_model._base_manager.get(pk=self.default_stage_id)
         if self.pk is None or stage.queue_id != self.pk:
             raise ValidationError({"default_stage": "Default stage must belong to this queue."})
-        if stage.entry_reserved:
-            raise ValidationError({"default_stage": "Default stage cannot reserve entry for a verb or rule."})
+        if stage.entry_reserved or not stage.ordinary_entry_available:
+            raise ValidationError({"default_stage": "Default stage must allow ordinary entry."})
 
     def _validate_estimate_settings(self) -> None:
         """Reject a default that conflicts with the queue's estimate policy."""
@@ -348,9 +348,7 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         DUPLICATE = "duplicate", "Duplicate"
 
     SYSTEM_CATEGORIES = frozenset((StageCategory.TRIAGE, StageCategory.DUPLICATE))
-    # Category-based hand verbs share these exclusions; later stage flags add
-    # one predicate here, without changing the verbs or their lookup logic.
-    MANUAL_CATEGORY_FILTERS: ClassVar[dict[str, Any]] = {"rule_owned": False}
+    MANUAL_CATEGORY_FILTERS: ClassVar[dict[str, Any]] = {"rule_owned": False, "conceals": False}
 
     queue = models.ForeignKey(
         "work.Queue",
@@ -359,6 +357,7 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
     )
     category = StateField(choices_enum=StageCategory, default=StageCategory.UNSTARTED)
     rule_owned = models.BooleanField(default=False)
+    conceals = models.BooleanField(default=False)
 
     class Meta:
         """Django model options for queue stages."""
@@ -377,6 +376,12 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
                 name="uq_work_stage_queue_system_category",
             ),
         )
+
+    @property
+    def ordinary_entry_available(self) -> bool:
+        """Whether this stage allows entry by ordinary work verbs."""
+
+        return not self.rule_owned and not self.conceals
 
     @property
     def entry_reserved(self) -> bool:
@@ -423,36 +428,59 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         return cls.for_container(container).filter(category=category, **cls.MANUAL_CATEGORY_FILTERS)
 
     @classmethod
-    def resolve_default(cls, container: models.Model) -> Any | None:
-        """Use the explicit queue default, falling back to an unstarted stage."""
+    def resolve_default_fallback(cls, stages: models.QuerySet[Any]) -> Any | None:
+        """Choose an ordinary unstarted stage when the queue has no explicit default."""
 
-        default_id = getattr(container, f"{cls.default_stage_field_name}_id", None)
-        if default_id is not None:
-            configured = cls.for_container(container).filter(pk=default_id).first()
-            if configured is not None:
-                return configured
-        return cls.for_manual_category(container, cast(str, cls.StageCategory.UNSTARTED)).first()
+        return stages.filter(category=cls.StageCategory.UNSTARTED, **cls.MANUAL_CATEGORY_FILTERS).first()
+
+    def validate_rule_stage(self, queue_id: Any | None) -> None:
+        """Require an active-phase mapping to name a non-concealing rule stage in its queue."""
+
+        if queue_id is not None and self.queue_id != queue_id:
+            raise ValidationError({"active_stage": "Active stage must belong to the source task's queue."})
+        if not self.rule_owned or self.conceals:
+            raise ValidationError({"active_stage": "Active stage must be rule-owned and must not conceal tasks."})
 
     def clean(self) -> None:
         """Keep the queue's current default available for ordinary entry."""
 
         super().clean()
-        self._validate_default_reservation()
+        self._validate_configuration()
 
-    def _validate_default_reservation(self) -> None:
-        """Reject reserving a stage that its queue currently uses as the default."""
+    def _validate_configuration(self) -> None:
+        """Keep stage edits consistent with defaults, phase mappings and promoted tasks."""
 
-        if self._state.adding or not self.entry_reserved:
+        if self.conceals and self.rule_owned:
+            raise ValidationError({"conceals": "A rule-owned stage cannot conceal tasks."})
+        if self._state.adding:
             return
-        queue_model = self._meta.get_field("queue").related_model
-        if queue_model._base_manager.filter(pk=self.queue_id, default_stage_id=self.pk).exists():
-            field = "rule_owned" if self.rule_owned else "category"
-            raise ValidationError({field: "The queue's default stage cannot reserve entry for a verb or rule."})
+        if self.entry_reserved or not self.ordinary_entry_available:
+            queue_model = self._meta.get_field("queue").related_model
+            if queue_model._base_manager.filter(default_stage_id=self.pk).exists():
+                field = "conceals" if self.conceals else "rule_owned" if self.rule_owned else "category"
+                raise ValidationError({field: "The queue's default stage must allow ordinary entry."})
+        # MilestoneWork owns this optional reverse relation in composed model graphs.
+        try:
+            milestones = self._meta.get_field("active_milestones").related_model
+        except FieldDoesNotExist:
+            pass
+        else:
+            mappings = milestones._base_manager.filter(active_stage_id=self.pk)
+            if (not self.rule_owned or self.conceals) and mappings.exists():
+                raise ValidationError({"rule_owned": "A mapped stage must remain rule-owned and non-concealing."})
+            if mappings.filter(project__converted_from__queue__isnull=False).exclude(
+                project__converted_from__queue_id=self.queue_id
+            ).exists():
+                raise ValidationError({"queue": "A mapped stage must remain in its source task's queue."})
+        if self.conceals:
+            project_model = apps.get_model("projects", "Project")
+            if project_model._base_manager.filter(converted_from__stage_id=self.pk).exists():
+                raise ValidationError({"conceals": "A stage holding a promoted source task cannot conceal tasks."})
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Protect system-stage identity and keep the queue's default enterable."""
 
-        self._validate_default_reservation()
+        self._validate_configuration()
         if not is_sudo():
             persisted = None
             if not self._state.adding:
@@ -748,6 +776,70 @@ class ProjectWork(models.Model):
 
         abstract = True
 
+    @transaction.atomic
+    def sync_source_task_stage(self) -> None:
+        """Apply the current project rule inside its lifecycle event transaction."""
+
+        if self.converted_from_id is None:
+            return
+        task_model = self._meta.get_field("converted_from").related_model
+        with system_context(reason="work.project.source_task_stage"):
+            task = task_model.objects.lock_if_supported().get(pk=self.converted_from_id)
+            stage = task.rule_stage(self)
+            if stage is None or task.stage_id == stage.pk:
+                return
+            task.stage = stage
+            with task._work_verb_write():
+                task.save(update_fields=("stage", "updated_at"))
+
+
+class MilestoneWork(models.Model):
+    """Map a project's current phase to its source task's rule-owned stage."""
+
+    extends = "projects.Milestone"
+
+    hasura_readable_fields = ("active_stage",)
+    hasura_filterable_fields = hasura_readable_fields
+    hasura_insertable_fields = hasura_readable_fields
+    hasura_updatable_fields = hasura_readable_fields
+
+    active_stage = models.ForeignKey(
+        "work.Stage",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="active_milestones",
+    )
+
+    class Meta:
+        """Abstract contribution folded into the concrete milestone table."""
+
+        abstract = True
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Validate phase mappings once at persistence, including generated writes."""
+
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or {"active_stage", "active_stage_id", "project", "project_id"}.intersection(
+            update_fields
+        ):
+            self._validate_active_stage()
+        super().save(*args, **kwargs)
+
+    def _validate_active_stage(self) -> None:
+        """Ask the stage owner to validate the source queue and rule reservation."""
+
+        if self.active_stage_id is None:
+            return
+        project_model = self._meta.get_field("project").related_model
+        queue_id = (
+            project_model._base_manager.filter(pk=self.project_id)
+            .values_list("converted_from__queue_id", flat=True)
+            .first()
+        )
+        stage_model = self._meta.get_field("active_stage").related_model
+        stage_model._base_manager.get(pk=self.active_stage_id).validate_rule_stage(queue_id)
+
 
 class TaskWork(StagedModelMixin):
     """Same-row work contribution folded into ``projects.Task``."""
@@ -755,6 +847,7 @@ class TaskWork(StagedModelMixin):
     extends = "projects.Task"
     runtime = False
     stage_container_field_name = "queue"
+    thread_team_field = "queue"
 
     if TYPE_CHECKING:
         queue_id: Any | None
@@ -779,6 +872,7 @@ class TaskWork(StagedModelMixin):
     hasura_sortable_fields = (
         "queue",
         "stage",
+        "stage__position",
         "cycle",
         "number",
         "estimate",
@@ -1353,12 +1447,16 @@ class TaskWork(StagedModelMixin):
         target_id = target.pk if target is not None else self.stage_id
         if not stage_written:
             target_id = previous_id
-        stages = {
-            stage.pk: stage
-            for stage in self.stage_model()._base_manager.filter(pk__in=(previous_id, target_id))
-        }
+        stages = {stage.pk: stage for stage in self.stage_model()._base_manager.filter(pk__in=(previous_id, target_id))}
         previous = stages.get(previous_id)
         following = stages.get(target_id)
+        changed = previous_id != target_id
+        if changed and manual and following is not None and not following.ordinary_entry_available:
+            raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned or concealing stage."})
+        if changed and following is not None and following.conceals and not self._state.adding:
+            project_model = apps.get_model("projects", "Project")
+            if project_model._base_manager.filter(converted_from_id=self.pk).exists():
+                raise ValidationError({"stage": "A task with a promoted project cannot enter a concealing stage."})
         if manual or not (getattr(self, "_work_internal_status", False) or is_sudo()):
             Stage.validate_transition(
                 previous, following, allow_system_entry=allow_system_entry, adding=self._state.adding
@@ -1499,6 +1597,33 @@ class TaskWork(StagedModelMixin):
         if stage is None:
             raise ValidationError({"stage": f"Queue has no {category} stage."})
         return cast(Stage, stage)
+
+    def rule_stage(self, project: Any) -> Stage | None:
+        """Resolve the source-task stage from cancellation or the current phase, never receipts."""
+
+        if self.queue_id is None:
+            return None
+        if project.converted_from_id != self.pk:
+            raise ValidationError({"project": "The project must have been promoted from this task."})
+        category = "canceled" if project.status == project.ProjectStatus.DROPPED else "started"
+        if category == "started" and project.current_milestone_id is not None:
+            milestone_model = project._meta.get_field("current_milestone").related_model
+            stage_id = (
+                milestone_model._base_manager.filter(pk=project.current_milestone_id)
+                .values_list("active_stage_id", flat=True)
+                .get()
+            )
+            if stage_id is not None:
+                stage = self.stage_model()._base_manager.get(pk=stage_id)
+                stage.validate_rule_stage(self.queue_id)
+                return cast(Stage, stage)
+        return cast(
+            Stage | None,
+            self.stage_model()
+            .for_container(self.queue)
+            .filter(category=category, rule_owned=True, conceals=False)
+            .first(),
+        )
 
     def _move_links_to(self, canonical: models.Model) -> None:
         """Re-key source links to ``canonical``, deleting URL collisions."""

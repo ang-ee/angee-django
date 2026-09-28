@@ -20,6 +20,7 @@ from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     SortAlias,
     declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
     hasura_model_resource,
     public_pk_decoder,
 )
@@ -50,10 +51,6 @@ User = get_user_model()
 _PROJECT_PERMISSIONS = ("write", "share", "delete")
 _TASK_PERMISSIONS = (*_PROJECT_PERMISSIONS, "narrow", "widen", "comment")
 
-_PROJECT_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
-    Project,
-    "hasura_readable_fields",
-)
 _PROJECT_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
     Project,
     "hasura_filterable_fields",
@@ -78,18 +75,15 @@ _PROJECT_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
     Project,
     "hasura_updatable_fields",
 )
-_PROJECT_EXTENSION_WRITE_FIELDS = tuple(
-    dict.fromkeys((*_PROJECT_EXTENSION_INSERT_FIELDS, *_PROJECT_EXTENSION_UPDATE_FIELDS))
-)
-_PROJECT_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name for name in _PROJECT_EXTENSION_WRITE_FIELDS if Project._meta.get_field(name).is_relation
-)
+_PROJECT_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Project)
 
 
-_TASK_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
-    Task,
-    "hasura_readable_fields",
-)
+_MILESTONE_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_filterable_fields")
+_MILESTONE_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_insertable_fields")
+_MILESTONE_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_updatable_fields")
+_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Milestone)
+
+
 _TASK_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
     Task,
     "hasura_filterable_fields",
@@ -117,10 +111,7 @@ _TASK_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
 _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS = set(
     declared_hasura_resource_fields(Task, "hasura_forbidden_insertable_fields")
 )
-_TASK_EXTENSION_WRITE_FIELDS = tuple(dict.fromkeys((*_TASK_EXTENSION_INSERT_FIELDS, *_TASK_EXTENSION_UPDATE_FIELDS)))
-_TASK_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name for name in _TASK_EXTENSION_WRITE_FIELDS if Task._meta.get_field(name).is_relation
-)
+_TASK_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Task)
 
 DroppedReason = Task._meta.get_field("dropped_reason").choices_enum
 strawberry.enum(cast(Any, DroppedReason))
@@ -757,6 +748,7 @@ _MILESTONE_RESOURCE = hasura_model_resource(
         "reached_by",
         "created_at",
         "updated_at",
+        *_MILESTONE_EXTENSION_FILTER_FIELDS,
     ],
     sortable=[
         "project",
@@ -771,10 +763,36 @@ _MILESTONE_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id", "sort_order"],
     groupable=["project", "start_date", "target_date"],
-    insertable=["project", "name", "description", "start_date", "target_date", "sort_order"],
-    updatable=["project", "name", "description", "start_date", "target_date", "sort_order"],
-    field_id_decode={"project": public_pk_decoder(Project), "reached_by": public_pk_decoder(User)},
-    write_backend=AngeeHasuraWriteBackend(Milestone, public_id_fields=("project",)),
+    insertable=[
+        "project",
+        "name",
+        "description",
+        "start_date",
+        "target_date",
+        "sort_order",
+        *_MILESTONE_EXTENSION_INSERT_FIELDS,
+    ],
+    updatable=[
+        "project",
+        "name",
+        "description",
+        "start_date",
+        "target_date",
+        "sort_order",
+        *_MILESTONE_EXTENSION_UPDATE_FIELDS,
+    ],
+    field_id_decode={
+        "project": public_pk_decoder(Project),
+        "reached_by": public_pk_decoder(User),
+        **{
+            name: public_pk_decoder(Milestone._meta.get_field(name).related_model)
+            for name in _MILESTONE_EXTENSION_PUBLIC_ID_FIELDS
+        },
+    },
+    write_backend=AngeeHasuraWriteBackend(
+        Milestone,
+        public_id_fields=("project", *_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS),
+    ),
 )
 
 
