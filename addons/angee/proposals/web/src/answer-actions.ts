@@ -16,12 +16,12 @@ export function useAnswerActions(): readonly ActionDescriptor[] {
     {
       id: "answer-visibility", label: t("answer.action.visibility"),
       args: [{ name: "visibility", label: t("answer.action.visibility"), widget: "select", options: [
-        { value: "round", label: t("answer.visibility.round") },
-        { value: "responder", label: t("answer.visibility.responder") },
-        { value: "sealed", label: t("answer.visibility.sealed") },
+        { value: "ROUND", label: t("answer.visibility.round") },
+        { value: "RESPONDER", label: t("answer.visibility.responder") },
+        { value: "SEALED", label: t("answer.visibility.sealed") },
       ] }],
       submit: async (values, context) => {
-        if (typeof context.record?.id !== "string" || typeof values.visibility !== "string") return;
+        if (typeof context.record?.id !== "string" || !isAnswerVisibility(values.visibility)) return;
         return extractActionOutcome(await visibility({
           answer: context.record.id, revision: recordRevision(context.record), visibility: values.visibility,
         }), "set_proposal_answer_visibility");
@@ -41,4 +41,8 @@ export function useAnswerActions(): readonly ActionDescriptor[] {
       visibleWhen: (record) => holdsPermission(record, shared ? "manage" : "narrow") && record.shared_with_responders !== shared,
     })),
   ];
+}
+
+function isAnswerVisibility(value: unknown): value is "ROUND" | "RESPONDER" | "SEALED" {
+  return value === "ROUND" || value === "RESPONDER" || value === "SEALED";
 }

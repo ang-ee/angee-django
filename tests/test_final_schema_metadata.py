@@ -1,7 +1,8 @@
 from graphql import build_schema
 
-from angee.data.metadata import DataResourceRoots, DataResourceTypeNames
+from angee.data.metadata import DataMutationArgument, DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.final_schema import final_schema_references
+from angee.graphql.data.metadata import _finalize_data_resource
 
 
 def test_final_schema_references_intersect_roots_types_and_capabilities() -> None:
@@ -19,7 +20,7 @@ def test_final_schema_references_intersect_roots_types_and_capabilities() -> Non
           resource_query: ResourceQuery
         }
         type Mutation {
-          create_resource: ResourceNode!
+          create_resource(object: ResourceFilter!, client_creation_key: String, reason: String): ResourceNode!
           preview_resource_delete(id: ID!): Boolean!
         }
         type Subscription { resource_changes: ResourceNode! }
@@ -74,6 +75,16 @@ def test_final_schema_references_intersect_roots_types_and_capabilities() -> Non
         "deletePreview",
         "changes",
     )
+    metadata = _finalize_data_resource(
+        graphql_schema=schema,
+        model_label="catalog.resource",
+        public_id_field="id",
+        roots=roots,
+        type_names=type_names,
+        capabilities=capabilities,
+    )
+    assert metadata.create_arguments == ()
+    assert metadata.update_arguments == metadata.save_arguments == ()
 
 
 def test_final_schema_references_use_each_root_operation_owner() -> None:
@@ -92,3 +103,34 @@ def test_final_schema_references_use_each_root_operation_owner() -> None:
     assert roots == DataResourceRoots(list_name="shared")
     assert type_names == DataResourceTypeNames(query="MissingQueryFragment")
     assert capabilities == ("list",)
+
+
+def test_mutation_argument_metadata_uses_final_exposed_root_arguments() -> None:
+    schema = build_schema(
+        """
+        type ResourceNode { id: ID! }
+        input ResourceInput { name: String }
+        type Query { ready: Boolean! }
+        type Mutation {
+          create_resource(object: ResourceInput!, client_creation_key: String): ResourceNode!
+          update_resource(pk_columns: ID!, _set: ResourceInput!, expected_revision: Int): ResourceNode!
+          save_resource(pk: ID!, patch: ResourceInput, lines: [ResourceInput!], expected_revision: Int): ResourceNode!
+        }
+        """
+    )
+    metadata = _finalize_data_resource(
+        graphql_schema=schema,
+        model_label="catalog.resource",
+        public_id_field="id",
+        roots=DataResourceRoots(
+            create_name="create_resource", update_name="update_resource", save_name="save_resource"
+        ),
+        type_names=DataResourceTypeNames(node="ResourceNode"),
+        capabilities=("create", "update", "save"),
+        create_argument_names=("client_creation_key", "removed_argument"),
+        update_argument_names=("expected_revision",),
+        save_argument_names=("expected_revision",),
+    )
+
+    assert metadata.create_arguments == (DataMutationArgument("client_creation_key", "String"),)
+    assert metadata.update_arguments == metadata.save_arguments == (DataMutationArgument("expected_revision", "Int"),)

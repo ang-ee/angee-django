@@ -654,7 +654,7 @@ function StorageExplorerContent({
     <>
       {openFileId ? (
         <ControlBand>
-          {openFile && !openFile.is_trashed && openFile.url !== "" ? (
+          {openFile && !openFile.is_trashed && openFile.url ? (
             <a
               className={buttonVariants({ variant: "secondary", size: "sm" })}
               href={openFile.url}

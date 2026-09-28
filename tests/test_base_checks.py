@@ -17,8 +17,25 @@ from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from angee.base import checks as base_checks
 from angee.base.apps import BaseConfig
 from angee.base.checks import check_hierarchy_queryset_order, check_ownership, check_rebac_database
+from angee.base.fields import StateField
 from angee.base.mixins import HierarchyQuerySet, OwnerMixin
 from angee.base.models import AngeeModel
+from tests.proposals_models import Round
+
+
+@pytest.mark.parametrize("value", ("names", "values", "labels", "choices"))
+def test_state_field_rejects_values_that_cannot_be_reconstructed(value: str) -> None:
+    """Migration-state cloning must not generate a reserved enum member name."""
+    enum = models.TextChoices("ReservedValue", {"MEMBER": (value, "Label")})
+    field = StateField(choices_enum=enum)
+    assert any(error.id == "angee.E028" and value in error.msg for error in field.check())
+
+
+def test_named_roster_state_survives_historical_reconstruction() -> None:
+    field = Round._meta.get_field("roster_visibility")
+    assert field.clone().choices == field.choices
+    assert "named" in field.choices_enum.values
+    assert not field.check()
 
 
 @pytest.mark.parametrize("write_alias", [None, "default", "external"])

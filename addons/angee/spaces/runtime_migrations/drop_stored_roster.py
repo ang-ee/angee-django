@@ -21,6 +21,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import migrations, models, router
 from django.db.migrations.state import ProjectState
+from django.db.models.functions import Cast
 
 logger = logging.getLogger(__name__)
 ROLE_STRENGTH = {"owner": 3, "moderator": 2, "member": 1, "viewer": 0}
@@ -160,15 +161,19 @@ def forwards(apps, schema_editor):
                         if group_pk is None or party_pk is None:
                             counts["skipped_subjects"] += 1
                             continue
-                        row, created = rosters.get_or_create(
-                            group_id=group_pk, party_id=party_pk,
-                            defaults={"role": role, "is_confirmed": True, "is_dismissed": False},
-                        )
-                        if created:
+                        # Historical choices may no longer exist in the current enum.
+                        row = rosters.filter(group_id=group_pk, party_id=party_pk).values(
+                            "is_confirmed", "is_dismissed", stored_role=Cast("role", models.TextField()),
+                        ).first()
+                        if row is None:
+                            rosters.create(
+                                group_id=group_pk, party_id=party_pk,
+                                role=role, is_confirmed=True, is_dismissed=False,
+                            )
                             counts["roster_rows_created"] += 1
                         elif (
-                            row.is_confirmed and not row.is_dismissed
-                            and ROLE_STRENGTH.get(row.role, -1) >= ROLE_STRENGTH[role]
+                            row["is_confirmed"] and not row["is_dismissed"]
+                            and ROLE_STRENGTH.get(row["stored_role"], -1) >= ROLE_STRENGTH[role]
                         ):
                             counts["roster_rows_existing_sufficient"] += 1
                         else:

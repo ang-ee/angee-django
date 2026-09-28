@@ -242,7 +242,7 @@ def test_record_chatter_never_enters_the_inbox_thread_feed() -> None:
 
     owner = User.objects.create_user(username="feed-record")
     with actor_context(owner):
-        record = ThreadedTicket.objects.create(title="Private record")
+        record = ThreadedTicket.objects.create(title="Private record", created_by=owner)
         thread, _ = _messages(owner, thread=record.message_thread())
         assert Thread.objects.filter(pk=thread.pk).exists()
     assert _query("thread", owner, thread).errors
@@ -675,7 +675,7 @@ def test_revalidation_projection_prefetch_preserves_related_permissions() -> Non
 def test_revalidation_keeps_record_attached_chatter_behind_its_record_gate() -> None:
     owner = User.objects.create_user(username="feed-retained-record")
     with actor_context(owner):
-        record = ThreadedTicket.objects.create(title="Private record")
+        record = ThreadedTicket.objects.create(title="Private record", created_by=owner)
         thread, rows = _messages(owner, thread=record.message_thread())
         assert Thread.objects.filter(pk=thread.pk).exists()
     assert _revalidate("thread", owner, thread, [str(row.sqid) for row in rows]).errors

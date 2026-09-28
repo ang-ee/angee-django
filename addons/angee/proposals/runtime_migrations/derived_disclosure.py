@@ -1,6 +1,6 @@
 """Retain opening disclosure while moving its evidence to receipt columns."""
 
-from django.db import migrations, models
+from django.db import migrations, models, router
 from django.db.migrations.state import ProjectState
 
 
@@ -15,7 +15,10 @@ def applies(state: ProjectState) -> bool:
 
 
 def forwards(apps, schema_editor):
-    proposals = apps.get_model("proposals", "Proposal")._base_manager.using(
+    model = apps.get_model("proposals", "Proposal")
+    if not router.allow_migrate_model(schema_editor.connection.alias, model):
+        return
+    proposals = model._base_manager.using(
         schema_editor.connection.alias,
     ).order_by()
     eligible = proposals.filter(

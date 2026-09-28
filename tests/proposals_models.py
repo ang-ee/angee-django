@@ -15,6 +15,8 @@ from tests import (
 class Round(AbstractRound):
     """Concrete solicitation Round used by access tests."""
 
+    rebac_grantable = AbstractRound.rebac_grantable
+
     class Meta(AbstractRound.Meta):
         abstract = False
         app_label = "proposals"
@@ -35,6 +37,8 @@ class Topic(AbstractTopic):
 class Proposal(AbstractProposal):
     """Concrete sealed proposal used by access tests."""
 
+    rebac_grantable = AbstractProposal.rebac_grantable
+
     class Meta(AbstractProposal.Meta):
         abstract = False
         app_label = "proposals"
@@ -44,6 +48,8 @@ class Proposal(AbstractProposal):
 
 class Answer(AbstractAnswer):
     """Concrete answer used by access tests."""
+
+    rebac_grantable = AbstractAnswer.rebac_grantable
 
     class Meta(AbstractAnswer.Meta):
         abstract = False

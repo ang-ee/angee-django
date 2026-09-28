@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
@@ -15,6 +16,7 @@ from rebac import (
     ObjectRef,
     PermissionDenied,
     RelationshipTuple,
+    SubjectRef,
     actor_context,
     system_context,
     to_object_ref,
@@ -22,10 +24,11 @@ from rebac import (
     write_relationships,
 )
 
-from tests.conftest import create_platform_admin
+from angee.base.mixins import CreationKeyConflict, StaleRevisionError
+from tests.conftest import Backend, Drive, create_platform_admin
+from tests.messaging_models import Person  # noqa: F401 -- resolve requester and roster person backings
 from tests.projects_models import Project, Task
 from tests.proposals_models import Answer, Proposal, Round, Topic
-from tests.test_messaging import Person  # noqa: F401 -- resolve requester and roster person backings
 from tests.test_project_access import project_access_schema as project_access_schema
 
 
@@ -253,13 +256,181 @@ def test_task_proposal_donor_preserves_deferred_save() -> None:
 
     with system_context(reason="tests.proposals.task_deferred_save"):
         row = Task.objects.create(clarification_creation_key="retained")
-        deferred = Task.objects.only("pk", "shared_with_responders").get(pk=row.pk)
-        deferred.shared_with_responders = True
+        deferred = Task.objects.only("pk", "note").get(pk=row.pk)
+        deferred.note = "Changed note"
         with CaptureQueriesContext(connection) as queries:
             deferred.save()
         updates = [query["sql"] for query in queries if query["sql"].startswith("UPDATE ")]
         assert len(updates) == 1
         assert '"clarification_creation_key" =' not in updates[0]
         stored = Task.objects.get(pk=row.pk)
-        assert stored.shared_with_responders is True
+        assert stored.note == "Changed note"
         assert stored.clarification_creation_key == "retained"
+
+
+def _review_round(admin, *, policy="drafts_and_tracks"):
+    with actor_context(admin):
+        project = Project.objects.create(title="Round target")
+        now = timezone.now()
+        round = Round(
+            project=project,
+            facilitator=admin,
+            name="Review round",
+            opening_policy=policy,
+            last_call_at=now + timedelta(days=1),
+            submission_deadline=now + timedelta(days=2),
+        )
+        round.sudo(reason="tests.proposals.review_round").save()
+    return round
+
+
+@pytest.mark.django_db(transaction=True)
+def test_disclosure_excludes_preopening_withdrawal_and_hides_peer_identity(proposal_schema):
+    admin = create_platform_admin("disclosure-manager")
+    user_model = apps.get_model("iam", "User")
+    alice = user_model.objects.create_user(username="disclosure-alice")
+    bob = user_model.objects.create_user(username="disclosure-bob")
+    carla = user_model.objects.create_user(username="disclosure-carla")
+    round = _review_round(admin)
+    with actor_context(admin):
+        alice_proposal = round.with_actor(admin).admit(alice)
+        bob_proposal = round.admit(bob)
+        round.admit(carla)
+    with actor_context(alice):
+        alice_proposal.with_actor(alice).submit()
+        alice_proposal.with_actor(alice).withdraw()
+    with actor_context(admin):
+        revision = round.revision
+        assert round.with_actor(admin).can_admit()
+        round.open(expected_revision=revision)
+        with pytest.raises(StaleRevisionError):
+            round.open(expected_revision=revision)
+    with system_context(reason="tests.proposals.receipts"):
+        alice_proposal.refresh_from_db()
+        bob_proposal.refresh_from_db()
+    assert alice_proposal.disclosed_at is None
+    assert bob_proposal.disclosed_at is not None
+    assert bob_proposal.with_actor(carla).has_access("read")
+    assert not bob_proposal.with_actor(carla).has_access("read__responder")
+    assert bob_proposal.with_actor(bob).has_access("read__responder")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_retirement_cleans_peer_tracks_and_excludes_group_shared_answers(proposal_schema, settings):
+    admin = create_platform_admin("retirement-manager")
+    user_model = apps.get_model("iam", "User")
+    alice = user_model.objects.create_user(username="retirement-alice")
+    bob = user_model.objects.create_user(username="retirement-bob")
+    round = _review_round(admin)
+    with actor_context(admin), system_context(reason="tests.proposals.drive"):
+        backend = Backend.objects.create(slug="proposal-backend", backend_class="local")
+        Drive.objects.create(slug="proposal-default", name="Default", prefix="default", backend=backend)
+        settings.ANGEE_STORAGE_DEFAULT_DRIVE = "proposal-default"
+    with actor_context(admin):
+        own = round.with_actor(admin).admit(alice, track=True)
+        peer = round.admit(bob, track=True)
+        assert own.track.owner_id is None
+        assert peer.create_track().pk == peer.track_id
+        assert peer.track.owns_items
+    with actor_context(admin), system_context(reason="tests.proposals.retirement_shares"):
+        peer_task = Task.objects.create(project=peer.track, title="Peer task", owner=alice, assignee=alice)
+        drive = Drive.objects.get(project_bindings__project=peer.track)
+        topic = Topic.objects.create(round=round, key="response", name="Response")
+        answer = Answer.objects.create(proposal=peer, topic=topic)
+        group = apps.get_model("iam", "Group").objects.create(name="Reviewers")
+        _grant(group, "member", alice)
+        group_subject = SubjectRef.of("auth/group", str(group.pk), "member")
+        _grant(answer, "reader", group_subject)
+        _grant(drive, "viewer", alice)
+        _grant(peer.track, "editor", alice)
+    assert answer.with_actor(alice).has_access("read")
+    with actor_context(admin):
+        report = round.with_actor(admin).remove_responder(alice, expected_revision=round.revision)
+    assert report["removed"]
+    assert report["reported"]
+    assert not answer.with_actor(alice).has_access("read")
+    assert not peer.track.with_actor(alice).has_access("read")
+    assert not drive.with_actor(alice).has_access("read")
+    with system_context(reason="tests.proposals.retirement_result"):
+        peer_task.refresh_from_db()
+    assert peer_task.owner_id is None
+    assert peer_task.assignee_id is None
+    with actor_context(admin), pytest.raises(ValidationError, match="not admitted"):
+        round.with_actor(admin).remove_responder(admin)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
+    admin = create_platform_admin("question-manager")
+    user_model = apps.get_model("iam", "User")
+    asker = user_model.objects.create_user(username="question-asker")
+    recipient = user_model.objects.create_user(username="question-recipient")
+    round = _review_round(admin)
+    with actor_context(admin):
+        round.with_actor(admin).admit(asker)
+        round.admit(recipient)
+    with actor_context(asker):
+        question = round.with_actor(asker).ask(
+            "Question", "Body", audience="managers", client_creation_key="question-1"
+        )
+        assert round.ask("Question", "Body", audience="managers", client_creation_key="question-1").pk == question.pk
+        with pytest.raises(CreationKeyConflict):
+            round.ask("Changed", "Body", audience="managers", client_creation_key="question-1")
+    with actor_context(admin):
+        with pytest.raises(ValidationError, match="surrendered"):
+            round.with_actor(admin).pass_clarification(question, recipient)
+        passed = round.pass_clarification(question, recipient, audience="asker")
+        assert passed.clarification_waiting() == [{"id": recipient.pk, "name": recipient.username}]
+    assert passed.created_by_id is None
+    assert passed.updated_by_id is None
+    with system_context(reason="tests.proposals.immutable_donors"):
+        row = Task.objects.get(pk=question.pk)
+        row.visibility = "inherited"
+        with pytest.raises(ValidationError, match="immutable"):
+            row.save(update_fields=("visibility",))
+        row.refresh_from_db()
+        row.clarification_creation_key = "replacement"
+        with pytest.raises(ValidationError, match="immutable"):
+            row.save(update_fields=("clarification_creation_key",))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_answer_insert_cannot_widen_responder_audience(proposal_schema):
+    admin = create_platform_admin("answer-manager")
+    responder = apps.get_model("iam", "User").objects.create_user(username="answer-responder")
+    round = _review_round(admin)
+    with actor_context(admin):
+        proposal = round.with_actor(admin).admit(responder)
+    with system_context(reason="tests.proposals.answer_topic"):
+        topic = Topic.objects.create(round=round, key="answer", name="Answer")
+    with actor_context(responder), pytest.raises(PermissionDenied, match="manager"):
+        Answer(proposal=proposal, topic=topic, shared_with_responders=True).sudo(reason="tests.proposals.insert").save()
+    with actor_context(admin):
+        answer = Answer(proposal=proposal, topic=topic, shared_with_responders=True)
+        answer.sudo(reason="tests.proposals.manager_insert").save()
+    assert answer.shared_with_responders
+
+
+@pytest.mark.django_db(transaction=True)
+def test_facilitator_only_publication_does_not_admit_peer_to_track(proposal_schema, settings):
+    admin = create_platform_admin("private-track-manager")
+    user_model = apps.get_model("iam", "User")
+    alice = user_model.objects.create_user(username="private-track-alice")
+    bob = user_model.objects.create_user(username="private-track-bob")
+    round = _review_round(admin, policy="facilitator_only")
+    with actor_context(admin), system_context(reason="tests.proposals.private_drive"):
+        backend = Backend.objects.create(slug="private-backend", backend_class="local")
+        Drive.objects.create(slug="private-default", name="Default", prefix="default", backend=backend)
+        settings.ANGEE_STORAGE_DEFAULT_DRIVE = "private-default"
+    with actor_context(admin):
+        alice_proposal = round.with_actor(admin).admit(alice, track=True)
+        bob_proposal = round.admit(bob)
+        bob_proposal.submit()
+        round.open()
+        alice_proposal.publish_track()
+    assert not alice_proposal.with_actor(bob).has_access("read_track")
+    assert alice_proposal.with_actor(alice).has_access("read_track")
+    with actor_context(alice), pytest.raises(PermissionDenied, match="manager"):
+        Task(project=alice_proposal.track, title="Shared task", shared_with_responders=True).sudo(
+            reason="tests.proposals.shared_task_insert",
+        ).save()

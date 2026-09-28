@@ -94,6 +94,8 @@ describe("generated resource wire contract", () => {
     { saveArguments: [{ name: "expected_revision", type: 42 }] },
     { updateArguments: {} },
     { saveArguments: "expected_revision" },
+    { updateArguments: "expected_revision" },
+    { saveArguments: [false] },
     { linesResource: { field: "lines", modelLabel: "notes.Line", fields: [{ name: "body", kind: "scalar", readable: "yes" }] } },
   ])("rejects malformed nested resource facts: %j", (patch) => {
     expect(() => defineAngeeSchemaMetadata({ angee: { resources: [{ ...testDataResource("notes.Note"), ...patch }] } }))

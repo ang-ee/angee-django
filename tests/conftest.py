@@ -27,6 +27,7 @@ from angee.compose.model_composition import ModelComposition
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
+from angee.intake.models import Need as AbstractNeed
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
 from angee.integrate.models import ExternalAccount as AbstractExternalAccount
@@ -52,7 +53,8 @@ from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
-from angee.projects.models import DriveProjects, FolderProjects
+from angee.projects.models import DriveProjects, FolderProjects, VaultProjects
+from angee.proposals.models import DriveProposalAccess, FileProposalAccess
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
@@ -67,6 +69,16 @@ from tests.extcontrib.models import Role
 from tests.integrate_models import Integration
 
 pytest_plugins = ("angee.testing.fixtures", "tests.workflows")
+
+
+@pytest.fixture
+def activity_catalog(composed_tables: None) -> None:
+    """Declare the activity keys used by existing scheduling scenarios."""
+
+    del composed_tables
+    with system_context(reason="tests.messaging.activity_catalog"):
+        messaging_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
+        messaging_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
 
 
 def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:
@@ -140,7 +152,7 @@ class WebhookSubscription(AbstractWebhookSubscription):
         rebac_resource_type = "integrate/webhook_subscription"
 
 
-class Vault(AbstractVault):
+class Vault(VaultProjects, AbstractVault):
     """Concrete knowledge vault used by source-addon tests."""
 
     class Meta(AbstractVault.Meta):
@@ -438,7 +450,7 @@ class Backend(AbstractStorageBackend):
         rebac_resource_type = "storage/backend"
 
 
-class Drive(DriveProjects, AbstractDrive):
+class Drive(DriveProjects, DriveProposalAccess, AbstractDrive):
     """Concrete storage drive used by source-addon tests."""
 
     rebac_grantable = AbstractDrive.rebac_grantable
@@ -475,7 +487,7 @@ class MimeType(AbstractMimeType):
         db_table = "test_storage_mimetype"
 
 
-class File(AbstractFile):
+class File(FileProposalAccess, AbstractFile):
     """Concrete storage file used by source-addon tests."""
 
     rebac_grantable = AbstractFile.rebac_grantable
@@ -535,6 +547,16 @@ class ExtcontribRole(Role):
 # Register the projects concretes only after their storage FK targets above.
 # Proposal concretes depend on the project graph and register their role anchor.
 from tests import projects_models, proposals_models  # noqa: E402, F401
+
+
+class Need(AbstractNeed):
+    """Canonical intake edges required by the merged party/task permission graph."""
+
+    class Meta(AbstractNeed.Meta):
+        abstract = False
+        app_label = "intake"
+        db_table = "test_intake_need"
+        rebac_resource_type = "intake/need"
 
 
 def make_mount(

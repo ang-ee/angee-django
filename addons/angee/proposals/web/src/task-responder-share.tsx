@@ -28,7 +28,7 @@ export function TaskResponderShareAction(): ReactElement | null {
         task: task.id, revision: task.revision, shared: !task.shared_with_responders,
       }), "set_task_responder_share"));
     }}>
-      {t(task.shared_with_responders ? "answer.action.unshare" : "answer.action.share")}
+      {t(task.shared_with_responders ? "task.action.unshare" : "task.action.share")}
     </Button>
   );
 }

@@ -22,7 +22,7 @@ import pytest
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext
@@ -57,7 +57,6 @@ from angee.messaging.models import MessageEdge as AbstractMessageEdge
 from angee.messaging.models import MessageStar as AbstractMessageStar
 from angee.messaging.models import Participant as AbstractParticipant
 from angee.messaging.models import Reaction as AbstractReaction
-from angee.messaging.models import ThreadActivity as AbstractThreadActivity
 from angee.messaging.models import ThreadedModelMixin
 from angee.parties.managers import HandleAssociationStatus
 from angee.parties.mixins import LinkSource
@@ -76,6 +75,7 @@ from tests.conftest import (
     File as StorageFile,
 )
 from tests.messaging_models import (
+    Channel,
     Fragment,
     Handle,
     Message,
@@ -84,6 +84,7 @@ from tests.messaging_models import (
     Party,
     Person,
     Thread,
+    ThreadActivity,
     ThreadAttachment,
     ThreadFollower,
     ThreadNotification,
@@ -191,18 +192,6 @@ class Relationship(AbstractRelationship):
         app_label = "parties"
         db_table = "test_parties_relationship"
         rebac_resource_type = "parties/relationship"
-
-
-class ThreadActivity(AbstractThreadActivity):
-    """Concrete record-thread activity used by messaging tests."""
-
-    class Meta(AbstractThreadActivity.Meta):
-        """Django model options for the canonical test thread activity."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_thread_activity"
-        rebac_resource_type = "messaging/thread_activity"
 
 
 class Reaction(AbstractReaction):
@@ -318,10 +307,10 @@ _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 @pytest.fixture
 def channel(composed_tables: None) -> Any:
-    """Provide an Integration row to stand in as the ingest channel."""
+    """Provide the real channel composition consumed by message-ingested receivers."""
 
     del composed_tables
-    return make_integration("msgchan")
+    return make_integration("msgchan", model=Channel, backend_class="manual")
 
 
 def _parsed(
@@ -509,7 +498,7 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
             )[0]
             assert first.parent_id is None
             # An unrelated record with the same source ID cannot become its parent.
-            other_channel = make_integration("other-source")
+            other_channel = make_integration("other-source", model=Channel, backend_class="manual")
             Message.objects.ingest(
                 [parent], channel=other_channel, explicit_thread=other, historical=True, quote_edges=False
             )
@@ -783,6 +772,7 @@ def test_threaded_model_unlinks_chatter_message(composed_tables: None) -> None:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("delete_args", [(), ("default",)])
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, delete_args: tuple[str, ...]) -> None:
     """Hard-deleting a chattered record collects its whole private thread subtree (M1).
 
@@ -828,6 +818,7 @@ def test_threaded_record_delete_tears_down_chatter_graph(composed_tables: None, 
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_authorized_delete_tears_down_private_chatter_graph(composed_tables: None) -> None:
     """Deleting a permitted parent record removes its private chatter implementation rows."""
 
@@ -907,6 +898,7 @@ def test_record_denied_delete_does_not_teardown_private_chatter_graph(composed_t
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: None) -> None:
     """A bulk ``QuerySet.delete()`` tears down the thread subtree too, not just the row (M1).
 
@@ -976,6 +968,7 @@ def test_threaded_mti_child_delete_leaves_no_attachment_row(composed_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_lists_assignee_activities_across_records(composed_tables: None) -> None:
     """The actor's assigned activities across records, ordered by due date, windowed (F-act).
 
@@ -1022,6 +1015,7 @@ def test_activity_agenda_lists_assignee_activities_across_records(composed_table
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_excludes_done_unless_included(composed_tables: None) -> None:
     """Done/canceled rows drop out of the agenda by default and return under include_done (F-act)."""
 
@@ -1046,6 +1040,7 @@ def test_activity_agenda_excludes_done_unless_included(composed_tables: None) ->
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_row_reports_overdue_state_without_stored_flag(composed_tables: None) -> None:
     """An overdue agenda row derives ``state == "overdue"`` from its due date, storing no flag (F-act)."""
 
@@ -1065,6 +1060,7 @@ def test_activity_agenda_row_reports_overdue_state_without_stored_flag(composed_
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_record_pointer_batches_without_per_row_fanout(composed_tables: None) -> None:
     """Projecting the agenda's record pointer is one batch, not a per-row lazy-load (D5).
 
@@ -1584,6 +1580,7 @@ def test_threaded_model_delivery_error_counts_for_author(composed_tables: None) 
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_model_activity_completion_notifies_activity_followers(composed_tables: None) -> None:
     """Activity completion delivers to email followers subscribed to that subtype."""
 
@@ -1607,6 +1604,7 @@ def test_threaded_model_activity_completion_notifies_activity_followers(composed
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_agent_activity_completion_posts_system_message_with_service_user(
     composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -1693,7 +1691,7 @@ def test_unnamed_media_ingest_names_the_file_from_its_mime(composed_tables: None
     with system_context(reason="test unnamed media ingest setup"):
         user = user_model.objects.create_user(username="wa-media", email="wa-media@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("wa-media-chan")
+    channel = make_integration("wa-media-chan", model=Channel, backend_class="manual")
 
     parsed = ParsedMessage(
         external_id="wa-media/1",
@@ -1723,7 +1721,7 @@ def test_nameless_chat_part_names_from_the_message_id(composed_tables: None, tmp
     with system_context(reason="test chat media ingest setup"):
         user = user_model.objects.create_user(username="chat-media", email="chat-media@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("chat-media-chan")
+    channel = make_integration("chat-media-chan", model=Channel, backend_class="manual")
 
     parsed = ParsedMessage(
         external_id="4917000001@s.whatsapp.net/3EB0STANZA",
@@ -1756,7 +1754,7 @@ def test_nameless_email_inline_part_names_from_the_content_id(composed_tables: N
     with system_context(reason="test inline media ingest setup"):
         user = user_model.objects.create_user(username="mail-inline", email="mail-inline@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("mail-inline-chan")
+    channel = make_integration("mail-inline-chan", model=Channel, backend_class="manual")
 
     parsed = ParsedMessage(
         external_id="cafe1234@mail.example.com",
@@ -1790,7 +1788,7 @@ def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(composed_ta
     with system_context(reason="test dedup media ingest setup"):
         user = user_model.objects.create_user(username="dedup-media", email="dedup-media@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("dedup-media-chan")
+    channel = make_integration("dedup-media-chan", model=Channel, backend_class="manual")
 
     def _chat_message(external_id: str) -> ParsedMessage:
         return ParsedMessage(
@@ -1912,6 +1910,7 @@ def test_threaded_model_autotracking_respects_update_fields(composed_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_model_schedules_and_completes_activity(composed_tables: None) -> None:
     """A threaded model row owns Odoo-style scheduled activities."""
 
@@ -1935,7 +1934,7 @@ def test_threaded_model_schedules_and_completes_activity(composed_tables: None) 
     assert activity.summary == "Call customer"
     assert activity.note == "Ask about the rollout."
     assert activity.due_date == _AT.date()
-    assert activity.activity_type == "call"
+    assert activity.activity_type_id == "call"
     assert activity.status == "todo"
     with actor_context(user):
         assert list(ticket.activity_ids()) == [activity]
@@ -1958,6 +1957,19 @@ def test_threaded_model_schedules_and_completes_activity(composed_tables: None) 
     assert Part._base_manager.select_related("fragment").get(message=message).fragment.text == (
         "Activity done: Call customer\n\nCustomer confirmed."
     )
+    before = Message._base_manager.count()
+    note = "  Agreed next steps.\nKeep the original spacing.\n"
+    with actor_context(user):
+        logged = ticket.activity_log("call", _AT.date(), note)
+        with pytest.raises(ValidationError, match="activity_type"):
+            ticket.activity_log("undeclared", _AT.date(), note)
+    assert logged.status == "done"
+    assert logged.user_id == logged.created_by_id == user.pk
+    assert logged.due_date == _AT.date()
+    assert logged.completed_at is not None
+    assert logged.summary == "Agreed next steps."
+    assert logged.note == note
+    assert Message._base_manager.count() == before
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2323,7 +2335,7 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     # Counters bump only for a newly created message, so a re-sync never inflates them.
     assert thread.message_count == 1
 
-    other_channel = make_integration("msgchan-b")
+    other_channel = make_integration("msgchan-b", model=Channel, backend_class="manual")
     assert _ingest([parsed], channel=other_channel) == 1
     rows = list(Message._base_manager.filter(external_id="m1").order_by("pk"))
     assert len(rows) == 2
@@ -3197,7 +3209,7 @@ def test_ingest_named_thread_fills_a_missing_title_but_never_renames(channel: An
 
 @pytest.mark.django_db(transaction=True)
 def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) -> None:
-    other = make_integration("other-chats")
+    other = make_integration("other-chats", model=Channel, backend_class="manual")
     _ingest(
         [
             replace(_parsed("n-1", subject=""), thread=ParsedThread(external_id="g-1", modality="group")),

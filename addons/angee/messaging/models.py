@@ -24,8 +24,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
+from itertools import batched
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -38,7 +39,7 @@ from django.contrib.postgres.search import SearchVectorField
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.utils.text import capfirst
@@ -47,10 +48,10 @@ from rebac import (
     SubjectRef,
     current_actor,
     system_context,
-    to_object_ref,
     to_subject_ref,
 )
 from rebac.backends import backend
+from rebac.evaluator import evaluator_scope
 from rebac.resources import model_resource_type
 
 from angee.base.actors import actor_user_id
@@ -58,7 +59,8 @@ from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, SqidMixin
 from angee.base.models import AngeeModel
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import RecordRefMixin, canonical_record_model
+from angee.base.scoping import system_queryset
 from angee.integrate.models import Bridge
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
@@ -146,9 +148,9 @@ class NotificationPreference:
 
 @dataclass(frozen=True, kw_only=True)
 class AudienceMember(NotificationPreference):
-    """A party to notify, under its policy and subtype selection."""
+    """A party key and notification preference, without loading its contact row."""
 
-    party: models.Model
+    party_id: Any
 
 
 class ThreadAudienceMixin(models.Model):
@@ -184,6 +186,25 @@ class ThreadedModelMixin(models.Model):
 
     thread_attachment_role: ClassVar[str] = "chatter"
     """The attachment role used for the model's primary chatter thread."""
+
+    @classmethod
+    def thread_messages_expression(cls, record_id: Any) -> models.QuerySet:
+        """Return messages of the record's primary thread for a SQL subquery.
+
+        This is a structural, unscoped expression. The calling projection owns
+        authorization of the information derived from these message rows.
+        """
+
+        owner = canonical_record_model(cls)
+        content_type = ContentType.objects.filter(
+            app_label=owner._meta.app_label,
+            model=owner._meta.model_name,
+        ).values("pk")[:1]
+        return system_queryset(apps.get_model("messaging", "Message")).filter(
+            thread__attachments__content_type_id=models.Subquery(content_type),
+            thread__attachments__object_id=record_id,
+            thread__attachments__role=cls.thread_attachment_role,
+        )
 
     thread_post_access: ClassVar[str] = "write"
     """Record permission required to post a chatter message."""
@@ -233,6 +254,7 @@ class ThreadedModelMixin(models.Model):
         "messaging.ThreadAttachment",
         content_type_field="content_type",
         object_id_field="object_id",
+        related_query_name="%(app_label)s_%(class)s",
     )
     """Reverse edge to this row's chatter attachments.
 
@@ -244,6 +266,14 @@ class ThreadedModelMixin(models.Model):
     attachment's FK cannot cascade *up* to) runs on both delete paths through the
     ``pre_delete`` receiver messaging wires onto every threaded model
     (``angee.messaging.signals``), inside the delete collector's own transaction.
+
+    Record owners contribute read access in their ``permissions.extends.zed``:
+    declare a relation on ``messaging/thread`` backed by
+    ``attachments__<app_label>_<model_name>``, filtered by
+    ``attachments__role: chatter``, then add ``<relation>->read`` (or the
+    declared ``thread_read_access``). The filter excludes source evidence edges.
+    Use the canonical MTI ancestor's name. Messaging never imports record owners
+    or copies their relationships into grants.
     """
 
     class Meta:
@@ -756,7 +786,11 @@ class ThreadedModelMixin(models.Model):
         activity_type: str = "todo",
         metadata: dict[str, object] | None = None,
     ) -> models.Model:
-        """Schedule an activity on this row's chatter thread."""
+        """Schedule an activity using an installed catalog key.
+
+        The default ``todo`` key comes from messaging's master resources; custom
+        keys must also be loaded before scheduling. Missing keys fail validation.
+        """
 
         if not self._message_activity_allowed():
             raise PermissionDenied(
@@ -782,6 +816,18 @@ class ThreadedModelMixin(models.Model):
             self,
             role=self.thread_attachment_role,
             include_done=include_done,
+        )
+
+    def activity_log(self, activity_type: str, occurred_on: date, note: str) -> models.Model:
+        """Record a completed exchange, without also posting a completion message."""
+
+        if not self._message_activity_allowed():
+            raise PermissionDenied(
+                f"Logging activities on {self._meta.label} requires {self.thread_activity_access!r} access."
+            )
+        return apps.get_model("messaging", "ThreadActivity").objects.log(
+            self, activity_type=activity_type, occurred_on=occurred_on, note=note,
+            role=self.thread_attachment_role,
         )
 
     def activity_feedback(self, activity: models.Model, *, feedback: str = "") -> models.Model:
@@ -888,23 +934,51 @@ class ThreadedModelMixin(models.Model):
         return bool(has_access(self.thread_activity_access))
 
     def thread_reader_allowed(self, user: Any) -> bool:
-        """Check one recipient against this record's read owner, independently of the posting actor.
+        """Check one recipient through the same explicit-account audience gate."""
 
-        Hosts without REBAC retain the mixin's permissive read contract. Protected
-        hosts check the recipient explicitly even during system-context fan-out.
+        return actor_user_id(to_subject_ref(user)) in self.thread_reader_ids((user,))
+
+    def thread_reader_ids(self, accounts: Iterable[models.Model | SubjectRef]) -> set[Any]:
+        """Evaluate the audience against this record's native read scopes once.
+
+        Each EXISTS arm pins its account even under system-context fan-out. Only
+        recipient IDs selected by the record's complete permission are returned;
+        no relationship or visibility rule is reconstructed here. The native
+        evaluator scope shares schema reads across all arms. Fifty accounts per
+        statement bound SQL expression depth and size independently of the audience.
         """
 
+        subjects = (to_subject_ref(account) for account in accounts)
+        account_subjects = {actor_user_id(subject): subject for subject in subjects}
+        account_subjects.pop(None, None)
+        if not account_subjects:
+            return set()
         if not callable(getattr(self, "has_access", None)) or not model_resource_type(self):
-            return True
-        return (
-            backend()
-            .check_access(
-                subject=to_subject_ref(user),
-                action=self.thread_read_access,
-                resource=to_object_ref(self),
-            )
-            .allowed
-        )
+            return set(account_subjects)
+        using = self._state.db or router.db_for_read(type(self), instance=self)
+        allowed: set[Any] = set()
+        with evaluator_scope():
+            for chunk in batched(account_subjects.items(), 50):
+                readers = models.Q(pk__in=[])
+                for account_id, account in chunk:
+                    predicate = backend().queryset_filter(
+                        model=type(self), subject=account,
+                        action=self.thread_read_access, using=using,
+                    )
+                    # The native predicate avoids a grants-all probe per account;
+                    # unsupported scopes retain the evaluator fallback.
+                    scope = (
+                        type(self)._base_manager.using(using).filter(predicate, pk=self.pk).order_by()
+                        if predicate is not None else
+                        type(self)._default_manager.using(using).with_actor(account)
+                        .with_action(self.thread_read_access).filter(pk=self.pk).order_by().scoped()
+                    )
+                    readers |= models.Q(pk=account_id) & models.Q(models.Exists(scope))
+                allowed.update(
+                    get_user_model()._base_manager.using(using)
+                    .filter(readers).values_list("pk", flat=True)
+                )
+        return allowed
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[Any]:
@@ -1266,6 +1340,10 @@ class Thread(SqidMixin, OwnerMixin, AngeeModel):
                 condition=~models.Q(external_id=""),
                 name="uq_thread_platform_external_id",
             ),
+            models.CheckConstraint(
+                condition=models.Q(channel__isnull=True) | models.Q(owner__isnull=True),
+                name="ck_thread_channel_ownerless",
+            ),
         )
 
     def __str__(self) -> str:
@@ -1273,6 +1351,16 @@ class Thread(SqidMixin, OwnerMixin, AngeeModel):
 
         title = self.title.text if self.title_id else ""
         return title or f"thread:{self.public_id}"
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Channel threads inherit access and cannot carry personal ownership."""
+
+        if self.channel_id is not None:
+            if self.owner_id is not None:
+                raise ValidationError({"owner": "A channel-bound thread cannot have an owner."})
+            if self._state.adding:
+                kwargs["ownerless"] = True
+        super().save(*args, **kwargs)
 
     def is_record_attached(self) -> bool:
         """Whether this thread is bound to a model row through a ``ThreadAttachment``.
@@ -1472,6 +1560,24 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
         )
 
 
+class ActivityType(SqidMixin, AuditMixin, AngeeModel):
+    """Resource-declared exchange types; activity rows retain the stable key."""
+
+    runtime = True
+    sqid_prefix = "act_"
+    key = models.SlugField(max_length=64, unique=True)
+    name = models.CharField(max_length=160)
+    glyph = models.CharField(max_length=128, blank=True, default="")
+
+    class Meta:
+        abstract = True
+        ordering = ("name", "key")
+        rebac_resource_type = "messaging/activity_type"
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
     """A scheduled activity attached to a model chatter thread."""
 
@@ -1500,7 +1606,10 @@ class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
         on_delete=models.CASCADE,
         related_name="+",
     )
-    activity_type = models.CharField(max_length=64, default="todo")
+    activity_type = models.ForeignKey(
+        "messaging.ActivityType", to_field="key", db_column="activity_type",
+        on_delete=models.PROTECT, default="todo", related_name="activities",
+    )
     summary = models.CharField(max_length=256)
     note = models.TextField(blank=True, default="")
     due_date = models.DateField(null=True, blank=True, db_index=True)
@@ -1522,6 +1631,14 @@ class ThreadActivity(SqidMixin, AuditMixin, AngeeModel):
             models.Index(fields=("attachment", "status", "due_date")),
             models.Index(fields=("user", "status", "due_date")),
         )
+
+    def clean(self) -> None:
+        """Accept only activity keys declared by the installed catalog."""
+
+        super().clean()
+        catalog = apps.get_model("messaging", "ActivityType")
+        if not catalog.system_queryset().filter(key=self.activity_type_id).exists():
+            raise ValidationError({"activity_type": "Declare this activity type in the catalog first."})
 
     @property
     def activity_state(self) -> str:
@@ -1724,7 +1841,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
         "messaging.Thread",
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         related_name="messages",
         # Covered: every composite index below leads with thread (the Zulip
         # covered-FK rule — a redundant single-column index can misprice plans).
@@ -1839,7 +1956,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
             return "Only comment messages can be edited."
         if self.direction != self.Direction.INTERNAL:
             return "Only internally authored comments can be edited."
-        if self.tracking_values.exists():
+        if self.tracking_values.model.system_queryset().filter(message_id=self.pk).exists():
             return "Messages with tracking values cannot be edited."
         return None
 
@@ -1848,7 +1965,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
 
         if self.message_type != self.MessageKind.COMMENT:
             return "Only comment messages can be deleted."
-        if self.tracking_values.exists():
+        if self.tracking_values.model.system_queryset().filter(message_id=self.pk).exists():
             return "Messages with tracking values cannot be deleted."
         return None
 

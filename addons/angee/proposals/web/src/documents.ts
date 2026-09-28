@@ -60,13 +60,13 @@ export const ADMIT_RESPONDER = graphql(`
 export const REMOVE_RESPONDER = graphql(`
   mutation RemoveProposalResponder($round: ID!, $revision: Int, $responder: ID!) {
     remove_proposal_round_responder(round: $round, expected_revision: $revision, responder: $responder) {
-      ok message id code validation_errors removed_shares reported_shares
+      ok message id code validation_errors removed_shares { resource relation subject } reported_shares { resource relation subject }
     }
   }
 `);
 
 export const WIDEN_ROUND = graphql(`
-  mutation WidenProposalRound($round: ID!, $revision: Int, $policy: String!) {
+  mutation WidenProposalRound($round: ID!, $revision: Int, $policy: RoundOpeningPolicy!) {
     widen_proposal_round_opening_policy(round: $round, expected_revision: $revision, policy: $policy) {
       ok message id code validation_errors
     }
@@ -98,7 +98,7 @@ export const PUBLISH_TRACK = graphql(`
 `);
 
 export const ANSWER_VISIBILITY = graphql(`
-  mutation SetProposalAnswerVisibility($answer: ID!, $revision: Int, $visibility: String!) {
+  mutation SetProposalAnswerVisibility($answer: ID!, $revision: Int, $visibility: AnswerVisibility!) {
     set_proposal_answer_visibility(answer: $answer, expected_revision: $revision, visibility: $visibility) {
       ok message id code validation_errors
     }

@@ -26,7 +26,8 @@ export function ProjectPhaseControl({ recordId }: { recordId: string }): React.R
     records: [{ model: PROJECT_MODEL, id: recordId }],
   });
   const project = query.data?.projects_by_pk;
-  const eligibleIds = project?.selectable_milestones.map((row) => row.id) ?? [];
+  const canWrite = project?.permissions.includes("write") ?? false;
+  const eligibleIds = canWrite ? project?.selectable_milestones.map((row) => row.id) ?? [] : [];
   const { options, list } = useRelationOptions(milestoneRelation, {
     enabled: eligibleIds.length > 0,
     filters: [{ field: "id", operator: "in", value: eligibleIds }],
@@ -43,7 +44,7 @@ export function ProjectPhaseControl({ recordId }: { recordId: string }): React.R
     value={project.current_milestone?.id ?? ""}
     options={eligibleIds.length > 0 ? options : []}
     placeholder={project.current_milestone?.name ?? t("project.phase.none")}
-    readOnly={state.fetching || query.isFetching || eligibleIds.length === 0}
+    readOnly={!canWrite || state.fetching || query.isFetching || eligibleIds.length === 0}
     searchState={{ pending: list.fetching, error: list.error, retry: list.refetch }}
     onChange={async (id) => {
       const selected = options.find((option) => option.value === id);

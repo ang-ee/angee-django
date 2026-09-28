@@ -111,7 +111,7 @@ export function useRoundCeremonyActions(
           round: actionRecordId(context.record, t("round.action.failed")),
           responder: requiredId(values.responder, t("round.action.responder")), track: values.track === true,
         }), "admit_proposal_round_responder"),
-        visibleWhen: (record) => holdsPermission(record, "write") && (isCollectingRound(record) || (isOpenedRound(record) && String(record.opening_policy).toLowerCase() === "drafts_and_tracks")),
+        visibleWhen: (record) => record.can_admit === true,
       },
       remove: {
         id: "remove-responder", label: t("round.action.remove"), danger: true,
@@ -125,13 +125,13 @@ export function useRoundCeremonyActions(
       widen: {
         id: "widen-round", label: t("round.action.widen"),
         args: [{ name: "policy", widget: "select", options: [
-          { value: "answers", label: t("round.action.open.answers") },
-          { value: "answers_and_tracks", label: t("round.action.open.answersAndTracks") },
-          { value: "drafts_and_tracks", label: t("round.action.open.draftsAndTracks") },
+          { value: "ANSWERS", label: t("round.policy.answers") },
+          { value: "ANSWERS_AND_TRACKS", label: t("round.policy.answersAndTracks") },
+          { value: "DRAFTS_AND_TRACKS", label: t("round.policy.draftsAndTracks") },
         ] }],
         submit: async (values, context) => extractActionOutcome(await widen({
           round: actionRecordId(context.record, t("round.action.failed")), revision: recordRevision(context.record),
-          policy: requiredId(values.policy, t("round.action.failed")),
+          policy: openingPolicyValue(values.policy),
         }), "widen_proposal_round_opening_policy"),
         visibleWhen: (record) => holdsPermission(record, "write") && isOpenedRound(record),
       },
@@ -323,4 +323,9 @@ export function recordRevision(record: Row | null): number | undefined {
 
 function idList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+}
+
+function openingPolicyValue(value: unknown): "ANSWERS" | "ANSWERS_AND_TRACKS" | "DRAFTS_AND_TRACKS" {
+  if (value === "ANSWERS" || value === "ANSWERS_AND_TRACKS" || value === "DRAFTS_AND_TRACKS") return value;
+  throw new Error("Choose an opening policy.");
 }

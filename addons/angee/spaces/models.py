@@ -83,13 +83,12 @@ class Group(ConditionalSharedReaderMixin, ThreadAudienceMixin, HierarchyMixin, S
                     membership_model.MembershipRole.MEMBER,
                 ),
             )
-            .select_related("party")
-            .only("party__id", "notification_policy", "subtype_keys")
+            .only("party_id", "notification_policy", "subtype_keys")
             .order_by("pk")
         )
         for row in rows.iterator():
             yield AudienceMember(
-                party=row.party,
+                party_id=row.party_id,
                 notification_policy=NotificationPolicy(row.notification_policy),
                 subtype_keys=tuple(row.subtype_keys),
             )

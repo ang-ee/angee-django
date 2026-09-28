@@ -70,6 +70,15 @@ definition messaging/thread_follower {
     permission delete = user + thread->write + attachment->write + admin->member
 }
 
+definition messaging/activity_type {
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = authenticated
+    permission create = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}
+
 definition messaging/thread_activity {
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment

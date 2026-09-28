@@ -79,7 +79,7 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
   const answerResource = answerMetadata?.resource ?? null;
 
   const roundFields = React.useMemo(
-    () => refineFieldsFromPaths(["id", "name", "status", "opening_policy", "permissions", "can_open", "revision"]),
+    () => refineFieldsFromPaths(["id", "name", "status", "opening_policy", "permissions", "can_open", "can_admit", "revision"]),
     [],
   );
   const topicFields = React.useMemo(

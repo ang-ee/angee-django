@@ -1,11 +1,11 @@
 // Request relationships are derived from Need.party; following grants no access.
 // @rebac_package: intake
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition projects/task {
     relation requester: auth/user // rebac:field=needs__party__person__user
-    permission comment = requester
+    permission comment_granted = requester
 }
 
 definition parties/party {

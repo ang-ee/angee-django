@@ -1,7 +1,7 @@
 // Authorization schema for proposal rounds.
 // @rebac_package: proposals
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 6
 
 definition proposals/role {
     relation member: auth/user | auth/group#member | angee/role:admin#member
@@ -19,7 +19,7 @@ definition proposals/round {
     relation retired: auth/user // rebac:field={"path":"proposals__responder","filters":{"proposals__retired_at__isnull":false}}
     relation recipient: auth/user // rebac:field={"path":"proposals__responder","filters":{"proposals__disclosed_at__isnull":false,"proposals__retired_at__isnull":true}}
     relation track_recipient: auth/user // rebac:field={"path":"proposals__responder","filters":{"proposals__submitted_at__isnull":false,"proposals__retired_at__isnull":true}}
-    relation roster_names: auth/user // rebac:field={"path":"proposals__responder","filters":{"roster_visibility":"names","proposals__retired_at__isnull":true}}
+    relation roster_names: auth/user // rebac:field={"path":"proposals__responder","filters":{"roster_visibility":"named","proposals__retired_at__isnull":true}}
     relation roster_status: auth/user // rebac:field={"path":"proposals__responder","filters":{"roster_visibility":"status","proposals__retired_at__isnull":true}}
     relation requester: auth/user // rebac:field={"path":"requester_party__person__user"}
     relation reader: auth/user | auth/group#member
@@ -60,6 +60,7 @@ definition proposals/proposal {
     relation round: proposals/round // rebac:field=round
     relation disclosed_round: proposals/round // rebac:field={"path":"round","filters":{"disclosed_at__isnull":false}}
     relation published_round: proposals/round // rebac:field={"path":"round","filters":{"track_published_at__isnull":false}}
+    relation private_round: proposals/round // rebac:field={"path":"round","filters":{"round__opening_policy":"facilitator_only"}}
     relation reader: auth/user | auth/group#member
     permission manage = round->manage
     permission oversee = (reader + round->evaluate + round->requester + round->view_proposals) - round->retired
@@ -75,7 +76,7 @@ definition proposals/proposal {
     permission publish = publisher + round->manage
     permission withdraw = responder + round->manage
     permission write_track = responder + round->manage
-    permission read_track = round->manage + responder + published_round->receive_track
+    permission read_track = round->manage + responder + (published_round->receive_track - private_round->receive_track)
     permission read_track_status = read_track + round->roster_status
     permission read_offer = round->manage + responder + ((round->evaluate + round->requester) - round->retired)
     permission read__cost = read_offer
@@ -87,9 +88,11 @@ definition proposals/proposal {
     permission read__valid_until = read_offer
     permission read__source_message = read_offer
     permission read__statement = read_offer
+    permission read__responder = responder + round->manage + round->see_roster
 }
 
 definition proposals/answer {
+    relation round: proposals/round // rebac:field={"path":"proposal__round"}
     relation proposal: proposals/proposal // rebac:field=proposal
     relation shared: proposals/proposal // rebac:field={"path":"proposal","filters":{"visibility":"round"}}
     relation narrowed: proposals/proposal // rebac:field={"path":"proposal","filters":{"visibility":"responder"}}
@@ -97,7 +100,7 @@ definition proposals/answer {
     relation responder_shared_round: proposals/round // rebac:field={"path":"proposal__round","filters":{"shared_with_responders":true}}
     permission manage = proposal->manage
     permission narrow = manage + shared->responder + narrowed->responder
-    permission read = manage + shared->read_answers + narrowed->read_narrowed + reader + responder_shared_round->respond
+    permission read = manage + ((shared->read_answers + narrowed->read_narrowed + reader + responder_shared_round->respond) - round->retired)
     permission create = proposal->write
     permission write = proposal->manage + shared->drafter + narrowed->drafter
     permission delete = proposal->manage + shared->drafter + narrowed->drafter

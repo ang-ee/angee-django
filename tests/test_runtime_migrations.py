@@ -24,7 +24,179 @@ from django.db.migrations.writer import MigrationWriter
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.compose.migrations import RuntimeMigrations
+from angee.proposals.runtime_migrations import derived_disclosure, legacy_disclosure
 from tests.conftest import make_addon, write_addon_manifest
+
+
+def _proposal_disclosure_history() -> ProjectState:
+    """The upgrade floor uses historical fields, never today's model methods."""
+    state = ProjectState()
+
+    def add(label, name, fields):
+        state.add_model(ModelState(label, name, {"id": models.AutoField(primary_key=True), **fields}))
+
+    add(
+        "iam",
+        "User",
+        {
+            "username": models.CharField(max_length=100),
+            "first_name": models.CharField(max_length=100, default=""),
+            "last_name": models.CharField(max_length=100, default=""),
+        },
+    )
+    add(
+        "parties",
+        "Person",
+        {
+            "user_id": models.IntegerField(),
+            "display_name": models.CharField(max_length=100),
+            "created_by_id": models.IntegerField(null=True),
+        },
+    )
+    add(
+        "proposals",
+        "Round",
+        {
+            "opened_at": models.DateTimeField(null=True),
+            "updated_at": models.DateTimeField(),
+            "opening_policy": models.CharField(max_length=30),
+            "facilitator_id": models.IntegerField(),
+            "requester_party_id": models.IntegerField(null=True),
+        },
+    )
+    add(
+        "proposals",
+        "Proposal",
+        {
+            "round": models.ForeignKey("proposals.Round", on_delete=models.CASCADE),
+            "responder_id": models.IntegerField(null=True),
+            "track_id": models.IntegerField(null=True),
+            "state": models.CharField(max_length=30, default="draft"),
+            "submitted_at": models.DateTimeField(null=True),
+            "decided_at": models.DateTimeField(null=True),
+        },
+    )
+    add(
+        "rebac",
+        "RebacResource",
+        {
+            "resource_type": models.CharField(max_length=100),
+            "resource_id": models.CharField(max_length=100),
+        },
+    )
+    shared = {
+        "relation": models.CharField(max_length=100),
+        "optional_subject_relation": models.CharField(max_length=100, default=""),
+        "caveat_name": models.CharField(max_length=100, default=""),
+        "expires_at": models.DateTimeField(null=True),
+    }
+    add(
+        "rebac",
+        "Relationship",
+        {
+            **{name: field.clone() for name, field in shared.items()},
+            **{
+                name: models.CharField(max_length=100)
+                for name in (
+                    "resource_type",
+                    "resource_id",
+                    "subject_type",
+                    "subject_id",
+                )
+            },
+        },
+    )
+    add(
+        "rebac",
+        "RelationshipRegistry",
+        {
+            **{name: field.clone() for name, field in shared.items()},
+            "resource_fk": models.ForeignKey("rebac.RebacResource", on_delete=models.CASCADE, related_name="+"),
+            "subject_fk": models.ForeignKey("rebac.RebacResource", on_delete=models.CASCADE, related_name="+"),
+        },
+    )
+    return state
+
+
+@pytest.mark.django_db(transaction=True)
+def test_proposal_disclosure_history_preserves_rows_and_converts_both_stores(isolated_upgrade_database, caplog):
+    """Replay the receipt and grant migrations with live legacy rows, twice."""
+    before = _proposal_disclosure_history()
+    assert derived_disclosure.applies(before)
+    assert not legacy_disclosure.applies(before)
+    with connection.schema_editor() as editor:
+        for model in before.apps.get_models():
+            editor.create_model(model)
+    stamp = datetime(2026, 1, 2, tzinfo=UTC)
+    earlier = datetime(2026, 1, 1, tzinfo=UTC)
+    later = datetime(2026, 1, 3, tzinfo=UTC)
+    users = before.apps.get_model("iam", "User").objects
+    for pk in range(1, 7):
+        users.create(pk=pk, username=f"responder-{pk}")
+    rounds = before.apps.get_model("proposals", "Round").objects
+    round = rounds.create(opened_at=stamp, updated_at=stamp, opening_policy="answers", facilitator_id=6)
+    proposals = before.apps.get_model("proposals", "Proposal").objects
+    submitted = proposals.create(round=round, responder_id=1, state="submitted", submitted_at=earlier, track_id=10)
+    withdrawn_before = proposals.create(
+        round=round, responder_id=2, state="withdrawn", submitted_at=earlier, decided_at=earlier
+    )
+    withdrawn_after = proposals.create(
+        round=round, responder_id=3, state="withdrawn", submitted_at=earlier, decided_at=later
+    )
+
+    def grant(store, resource_type, resource_id, relation, subject_type, subject_id, optional_subject_relation=""):
+        values = dict(relation=relation, optional_subject_relation=optional_subject_relation)
+        if store == "Relationship":
+            values.update(
+                resource_type=resource_type,
+                resource_id=str(resource_id),
+                subject_type=subject_type,
+                subject_id=str(subject_id),
+            )
+        else:
+            resources = before.apps.get_model("rebac", "RebacResource").objects
+            values["resource_fk"], _ = resources.get_or_create(
+                resource_type=resource_type, resource_id=str(resource_id)
+            )
+            values["subject_fk"], _ = resources.get_or_create(resource_type=subject_type, resource_id=str(subject_id))
+        return before.apps.get_model("rebac", store).objects.create(**values)
+
+    for store in ("Relationship", "RelationshipRegistry"):
+        grant(store, "proposals/round", round.pk, "responder", "auth/group", 5, "member")
+        grant(store, "auth/group", 5, "member", "auth/user", 4)
+        grant(store, "proposals/round", round.pk, "requester", "auth/user", 2)
+        grant(store, "proposals/round", round.pk, "requester", "auth/user", 3)
+        grant(store, "proposals/proposal", submitted.pk, "editor", "auth/user", 1)
+        grant(store, "projects/project", 10, "reader", "auth/user", 1)
+        grant(store, "projects/project", 10, "editor", "auth/user", 6)
+        grant(store, "projects/project", 10, "editor", "auth/user", 99)
+    migration = derived_disclosure.Migration("0002_derived_disclosure", "proposals")
+    with connection.schema_editor() as editor:
+        after = migration.apply(before, editor)
+        derived_disclosure.forwards(after.apps, editor)
+    assert not derived_disclosure.applies(after)
+    assert legacy_disclosure.applies(after)
+    upgraded = after.apps.get_model("proposals", "Proposal").objects
+    assert upgraded.get(pk=submitted.pk).disclosed_at == stamp
+    assert upgraded.get(pk=withdrawn_before.pk).disclosed_at is None
+    assert upgraded.get(pk=withdrawn_after.pk).disclosed_at == stamp
+    with caplog.at_level(logging.WARNING):
+        preview = list(legacy_disclosure.transition(after.apps, "default"))
+        assert preview
+        assert upgraded.count() == 3
+        with connection.schema_editor() as editor:
+            legacy_disclosure.forwards(after.apps, editor)
+            legacy_disclosure.forwards(after.apps, editor)
+    assert upgraded.count() == 4
+    assert upgraded.get(responder_id=4).round_id == round.pk
+    assert upgraded.get(pk=submitted.pk).track_published_at == stamp
+    assert rounds.get(pk=round.pk).requester_party_id is None
+    assert "Unresolved proposal requesters" in caplog.text
+    assert "users=['2', '3']" in caplog.text
+    for store in ("Relationship", "RelationshipRegistry"):
+        remaining = after.apps.get_model("rebac", store).objects
+        assert set(remaining.values_list("relation", flat=True)) == {"member", "editor"}
+        assert remaining.filter(relation="editor").count() == 1
 
 
 def _write_module(path: Path, text: str = "") -> None:

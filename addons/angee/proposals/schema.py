@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any, cast
 
 import strawberry
 import strawberry_django
-from angee.graphql.capabilities import permissions_field
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -15,24 +15,27 @@ from rebac import current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
     authorized_action_target,
     authorized_permission_target,
 )
+from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
-from angee.iam.identity import user_label, user_public_id
+from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.messaging.schema import MessageType
 from angee.money.schema import CurrencyType
 from angee.parties.schema import PartyType
 from angee.projects.schema import MilestoneType, ProjectType, TaskType
+from angee.proposals.models import AnswerVisibility, PassAudience, QuestionAudience, RoundOpeningPolicy
 from angee.spaces.schema import SpaceGroupType
 
 Round = apps.get_model("proposals", "Round")
@@ -51,6 +54,13 @@ User = get_user_model()
 
 RoundOutcome = Round._meta.get_field("outcome").choices_enum
 strawberry.enum(cast(Any, RoundOutcome))
+for enum in (RoundOpeningPolicy, AnswerVisibility, QuestionAudience, PassAudience):
+    strawberry.enum(cast(Any, enum))
+
+
+def _roster_permission_annotation(permission: str, info: strawberry.Info) -> Any:
+    del info
+    return permission_annotations(Round, (permission,))[f"_angee_permission_{permission}"]
 
 
 def _user_id(value: Any | None) -> strawberry.ID | None:
@@ -78,26 +88,34 @@ class ClarificationRecipient:
 
 def _clarification_waiting(self: Any) -> list[ClarificationRecipient]:
     return [
-        ClarificationRecipient(user=_user_id(value["id"]), name=user_label(User(**value)))
-        for value in self.clarification_waiting()
+        ClarificationRecipient(user=_user_id(value["id"]), name=value["name"]) for value in self.clarification_waiting()
     ]
 
 
 @strawberry.type
+class RemovedShare:
+    """One share identified by its canonical resource, relation and subject."""
+
+    resource: str
+    relation: str
+    subject: str
+
+
+@strawberry.type
 class ResponderRemovalResult(ActionResult):
-    """Retirement outcome with deleted shares and wider shares retained for review."""
+    """Retirement outcome with shares removed and retained for review."""
 
-    _share_report: strawberry.Private[dict[str, Any]] = strawberry.field(default_factory=dict)
-
-    @strawberry.field
-    def removed_shares(self) -> JSON:
-        """Return only the shares removed by this operation."""
-        return getattr(self, "_share_report", {}).get("removed", [])
+    _removed: strawberry.Private[list[RemovedShare]] = strawberry.field(default_factory=list)
+    _reported: strawberry.Private[list[RemovedShare]] = strawberry.field(default_factory=list)
 
     @strawberry.field
-    def reported_shares(self) -> JSON:
-        """Return wider shares requiring a manager's explicit decision."""
-        return getattr(self, "_share_report", {}).get("reported", [])
+    def removed_shares(self) -> list[RemovedShare]:
+        # The shared guard returns a base ActionResult on domain failure.
+        return self._removed if isinstance(self, ResponderRemovalResult) else []
+
+    @strawberry.field
+    def reported_shares(self) -> list[RemovedShare]:
+        return self._reported if isinstance(self, ResponderRemovalResult) else []
 
 
 @strawberry_django.type(Round)
@@ -112,21 +130,32 @@ class ProposalRoundType(AuthoredRefMixin, AngeeNode):
     opens_after: MilestoneType | None = actor_scoped_to_one("opens_after")
     clarifications_shared_until: MilestoneType | None = actor_scoped_to_one("clarifications_shared_until")
 
-    @strawberry_django.field(only=["status", "opens_after_id", "project_id", "task_id"])
+    @strawberry_django.field(annotate={"_can_open": lambda info: Round.can_open_expression(current_actor())})
     def can_open(self) -> bool:
-        """Report the owning verb's permission and phase predicate."""
-        return cast(Any, self).can_open()
+        """Read the owning verb's predicate from the optimized list query."""
+        return cast(Any, self)._can_open
 
-    @strawberry_django.field
+    @strawberry_django.field(annotate={"_can_admit": lambda info: Round.can_admit_expression(current_actor())})
+    def can_admit(self) -> bool:
+        """Read shell admission eligibility from its owner."""
+        return cast(Any, self)._can_admit
+
+    @strawberry_django.field(
+        annotate={
+            "_angee_permission_actor": lambda info: permission_annotations(Round, ())["_angee_permission_actor"],
+            **{
+                f"_angee_permission_{name}": partial(_roster_permission_annotation, name)
+                for name in ("see_roster", "roster_status")
+            },
+        },
+        prefetch_related=lambda info: Round.roster_prefetch(),
+    )
     def roster(self) -> list[RoundRosterEntry]:
-        """Expose only the gated roster projection."""
+        """Compose batched native gates with the round's prefetched roster."""
+        held = held_permissions(cast(Any, self), ("see_roster", "roster_status"))
         return [
-            RoundRosterEntry(
-                user=optional_public_id(user_public_id(row.user.pk)),
-                name=user_label(row.user),
-                track_status=row.track_status,
-            )
-            for row in cast(Any, self).roster()
+            RoundRosterEntry(user=_user_id(row.user_id), name=row.name, track_status=row.track_status)
+            for row in cast(Any, self).roster(permitted="see_roster" in held, status="roster_status" in held)
         ]
 
     name: auto
@@ -205,7 +234,7 @@ class ProposalTopicType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Proposal)
-class ProposalType(AuthoredRefMixin, AngeeNode):
+class ProposalFields(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a field-gated structured response."""
 
     revision: auto
@@ -215,10 +244,10 @@ class ProposalType(AuthoredRefMixin, AngeeNode):
     retired_at: auto
     permissions = permissions_field(("write", "publish", "withdraw"))
 
-    @strawberry_django.field(only=["track_id"])
+    @strawberry_django.field(annotate={"_track_status": lambda info: Proposal.track_status_expression(current_actor())})
     def track_status(self) -> str | None:
         """Read the gated scalar without exposing the track."""
-        return cast(Any, self).track_status()
+        return cast(Any, self)._track_status
 
     state: auto
     cost: auto
@@ -242,12 +271,6 @@ class ProposalType(AuthoredRefMixin, AngeeNode):
     track: ProjectType | None = actor_scoped_to_one("track")
     currency: CurrencyType | None = actor_scoped_to_one("currency")
 
-    @strawberry_django.field(only=["responder_id"])
-    def responder(self) -> strawberry.ID | None:
-        """Return the responder's public id."""
-
-        return _user_id(cast(Any, self).responder_id)
-
     @strawberry_django.field(only=["retired_by_id"])
     def retired_by(self) -> strawberry.ID | None:
         """Return the retirement actor's public id."""
@@ -268,59 +291,38 @@ class ProposalType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Proposal)
-class ConsoleProposalType(AuthoredRefMixin, AngeeNode):
-    """Console proposal projection with a label-bearing responder relation."""
+class ProposalType(ProposalFields):
+    """Public response with a roster-gated scalar responder reference."""
 
-    revision: auto
-    statement: str | None
-    disclosed_at: auto
-    track_published_at: auto
-    retired_at: auto
-    permissions = permissions_field(("write", "publish", "withdraw"))
+    @strawberry_django.field(
+        only=["responder_id"],
+        annotate={
+            "_angee_permission_actor": lambda info: permission_annotations(Proposal, ())["_angee_permission_actor"],
+            "_angee_permission_read__responder": lambda info: permission_annotations(
+                Proposal,
+                ("read__responder",),
+            )["_angee_permission_read__responder"],
+        },
+    )
+    def responder(self) -> strawberry.ID | None:
+        """Return the responder's public id."""
 
-    @strawberry_django.field(only=["track_id"])
-    def track_status(self) -> str | None:
-        """Read the gated scalar without exposing the track."""
-        return cast(Any, self).track_status()
+        return (
+            _user_id(cast(Any, self).responder_id)
+            if "read__responder"
+            in held_permissions(
+                cast(Any, self),
+                ("read__responder",),
+            )
+            else None
+        )
 
-    state: auto
-    cost: auto
-    staffing: str | None
-    timeframe_start: auto
-    timeframe_end: auto
-    confidence: auto
-    valid_until: auto
-    capture_payload_hash: auto
-    capture_parser_version: auto
-    submitted_at: auto
-    decided_at: auto
-    created_at: auto
-    updated_at: auto
 
-    round: ProposalRoundType | None = actor_scoped_to_one("round")
-    party: PartyType | None = actor_scoped_to_one("party")
-    source_message: MessageType | None = actor_scoped_to_one("source_message")
-    track: ProjectType | None = actor_scoped_to_one("track")
-    currency: CurrencyType | None = actor_scoped_to_one("currency")
+@strawberry_django.type(Proposal)
+class ConsoleProposalType(ProposalFields):
+    """Console response with the same roster gate on its responder relation."""
+
     responder: UserType | None = actor_scoped_to_one("responder")
-
-    @strawberry_django.field(only=["retired_by_id"])
-    def retired_by(self) -> strawberry.ID | None:
-        """Return the retirement actor's public id."""
-
-        return _user_id(cast(Any, self).retired_by_id)
-
-    @strawberry_django.field(only=["submitted_by_id"])
-    def submitted_by(self) -> strawberry.ID | None:
-        """Return the submission actor's public id."""
-
-        return _user_id(cast(Any, self).submitted_by_id)
-
-    @strawberry_django.field(only=["decided_by_id"])
-    def decided_by(self) -> strawberry.ID | None:
-        """Return the decision actor's public id."""
-
-        return _user_id(cast(Any, self).decided_by_id)
 
 
 @strawberry_django.type(Project, name="ProjectType", extend=True)
@@ -380,18 +382,21 @@ class ProposalActionMutation:
     def provision_proposal_round(
         self,
         info: strawberry.Info,
-        target: PublicID,
         template: JSON,
         facilitator: PublicID,
         responders: list[PublicID],
-        target_model: str = "projects.Project",
+        project: PublicID | None = None,
+        task: PublicID | None = None,
         team: PublicID | None = None,
     ) -> ActionResult:
         """Resolve authorized inputs and delegate replay-safe setup."""
-        model = {"projects.Project": Project, "projects.Task": Task}.get(target_model)
-        if model is None:
-            raise ValidationError({"target_model": "Choose projects.Project or projects.Task."})
-        target_row = authorized_permission_target(info, model, target, "write")
+        if (project is None) == (task is None):
+            raise ValidationError({"project": "Choose exactly one project or task."})
+        target_id = project if project is not None else task
+        assert target_id is not None
+        target_row = authorized_permission_target(
+            info, Project if project is not None else Task, target_id, "write"
+        )
         facilitator_row = authorized_permission_target(info, User, facilitator, "read")
         responder_rows = [authorized_permission_target(info, User, user, "read") for user in responders]
         team_row = authorized_permission_target(info, Team, team, "read") if team else None
@@ -416,7 +421,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Responder admitted.", id=proposal.sqid)
 
     @strawberry.mutation
-    @action_guard("Responder removal failed.")
+    @action_guard("Responder removal failed.", errors=(StaleRevisionError,))
     def remove_proposal_round_responder(
         self,
         info: strawberry.Info,
@@ -436,16 +441,17 @@ class ProposalActionMutation:
             f"{len(report['reported'])} wider shares remain for review.",
             id=row.sqid,
         )
-        result._share_report = report
+        result._removed = [RemovedShare(**value) for value in report["removed"]]
+        result._reported = [RemovedShare(**value) for value in report["reported"]]
         return result
 
     @strawberry.mutation
-    @action_guard("Opening policy change failed.")
+    @action_guard("Opening policy change failed.", errors=(StaleRevisionError,))
     def widen_proposal_round_opening_policy(
         self,
         info: strawberry.Info,
         round: PublicID,
-        policy: str,
+        policy: RoundOpeningPolicy,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Widen the round's disclosure policy."""
@@ -454,12 +460,12 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Opening policy widened.", id=row.sqid)
 
     @strawberry.mutation
-    @action_guard("Answer visibility change failed.")
+    @action_guard("Answer visibility change failed.", errors=(StaleRevisionError,))
     def set_proposal_answer_visibility(
         self,
         info: strawberry.Info,
         answer: PublicID,
-        visibility: str,
+        visibility: AnswerVisibility,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Select an answer audience through its owner."""
@@ -468,7 +474,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Answer audience changed.", id=row.sqid)
 
     @strawberry.mutation
-    @action_guard("Answer responder sharing failed.")
+    @action_guard("Answer responder sharing failed.", errors=(StaleRevisionError,))
     def set_proposal_answer_responder_share(
         self,
         info: strawberry.Info,
@@ -482,7 +488,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Answer responder audience changed.", id=row.sqid)
 
     @strawberry.mutation
-    @action_guard("Task responder sharing failed.")
+    @action_guard("Task responder sharing failed.", errors=(StaleRevisionError,))
     def set_task_responder_share(
         self,
         info: strawberry.Info,
@@ -496,24 +502,27 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Task responder audience changed.", id=row.sqid)
 
     @strawberry.mutation
-    @action_guard("Question creation failed.")
+    @action_guard("Question creation failed.", errors=(CreationKeyConflict,))
     def ask_proposal_round(
         self,
         info: strawberry.Info,
         round: PublicID,
         title: str,
         body: str,
-        audience: str = "default",
-        recipient: str | None = None,
+        audience: QuestionAudience = QuestionAudience("default"),
+        recipient: PublicID | None = None,
+        responders: bool = False,
         client_creation_key: str | None = None,
     ) -> ActionResult:
         """Return only the question id, including replays after surrender."""
         row = authorized_permission_target(info, Round, round, "ask")
-        task = row.ask(title, body, audience, _clarification_recipient(info, recipient), client_creation_key)
+        task = row.ask(
+            title, body, audience, _clarification_recipient(info, recipient, responders), client_creation_key
+        )
         return ActionResult(ok=True, message="Question asked.", id=task.sqid)
 
     @strawberry.mutation
-    @action_guard("Question edit failed.")
+    @action_guard("Question edit failed.", errors=(StaleRevisionError,))
     def edit_proposal_round_clarification(
         self,
         info: strawberry.Info,
@@ -521,7 +530,7 @@ class ProposalActionMutation:
         task: PublicID,
         title: str,
         body: str,
-        audience: str | None = None,
+        audience: QuestionAudience | None = None,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Dispatch pre-pass editing to the round."""
@@ -533,14 +542,15 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Question updated.", id=result.sqid)
 
     @strawberry.mutation
-    @action_guard("Passing question failed.")
+    @action_guard("Passing question failed.", errors=(StaleRevisionError,))
     def pass_proposal_round_clarification(
         self,
         info: strawberry.Info,
         round: PublicID,
         task: PublicID,
-        recipient: str,
-        audience: str = "default",
+        recipient: PublicID | None = None,
+        responders: bool = False,
+        audience: PassAudience = PassAudience("default"),
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Assign and pass the existing question without copying its content."""
@@ -550,14 +560,14 @@ class ProposalActionMutation:
             raise ValidationError({"task": "Question was not found."})
         result = row.pass_clarification(
             question,
-            _clarification_recipient(info, recipient),
+            _clarification_recipient(info, recipient, responders),
             audience,
             expected_revision,
         )
         return ActionResult(ok=True, message="Question passed.", id=result.sqid)
 
     @strawberry.mutation
-    @action_guard("Open round failed.")
+    @action_guard("Open round failed.", errors=(StaleRevisionError,))
     def open_proposal_round(
         self, info: strawberry.Info, round: PublicID, expected_revision: int | None = None
     ) -> ActionResult:
@@ -568,7 +578,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Proposal round opened.", id=target.sqid)
 
     @strawberry.mutation
-    @action_guard("Close round failed.")
+    @action_guard("Close round failed.", errors=(StaleRevisionError,))
     def close_proposal_round(
         self,
         info: strawberry.Info,
@@ -587,7 +597,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Proposal round closed.", id=target.sqid)
 
     @strawberry.mutation
-    @action_guard("Cancel round failed.")
+    @action_guard("Cancel round failed.", errors=(StaleRevisionError,))
     def cancel_proposal_round(
         self, info: strawberry.Info, round: PublicID, expected_revision: int | None = None
     ) -> ActionResult:
@@ -598,7 +608,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Proposal round cancelled.", id=target.sqid)
 
     @strawberry.mutation
-    @action_guard("Transfer facilitation failed.")
+    @action_guard("Transfer facilitation failed.", errors=(StaleRevisionError,))
     def transfer_proposal_round_facilitation(
         self,
         info: strawberry.Info,
@@ -616,7 +626,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Round facilitation transferred.", id=target.sqid)
 
     @strawberry.mutation
-    @action_guard("Submit proposal failed.")
+    @action_guard("Submit proposal failed.", errors=(StaleRevisionError,))
     def submit_proposal(
         self, info: strawberry.Info, proposal: PublicID, expected_revision: int | None = None
     ) -> ActionResult:
@@ -627,7 +637,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Proposal submitted.", id=target.sqid)
 
     @strawberry.mutation
-    @action_guard("Withdraw proposal failed.")
+    @action_guard("Withdraw proposal failed.", errors=(StaleRevisionError,))
     def withdraw_proposal(
         self, info: strawberry.Info, proposal: PublicID, expected_revision: int | None = None
     ) -> ActionResult:
@@ -662,7 +672,7 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Proposal track created.", id=track.sqid)
 
     @strawberry.mutation
-    @action_guard("Publish proposal track failed.")
+    @action_guard("Publish proposal track failed.", errors=(StaleRevisionError,))
     def publish_proposal_track(
         self, info: strawberry.Info, proposal: PublicID, expected_revision: int | None = None
     ) -> ActionResult:
@@ -690,11 +700,13 @@ class ProposalActionMutation:
         return ActionResult(ok=True, message="Proposal captured.", id=proposal.sqid)
 
 
-def _clarification_recipient(info: strawberry.Info, value: str | None) -> Any:
-    """Decode a user reference or the explicit all-responders target."""
-    if value is None or value == "responders":
-        return value
-    return authorized_permission_target(info, User, cast(PublicID, value), "read")
+def _clarification_recipient(info: strawberry.Info, recipient: PublicID | None, responders: bool) -> Any:
+    """Decode one explicit user or the round-wide responder audience."""
+    if recipient is not None and responders:
+        raise ValidationError({"recipient": "Choose a user or all responders, not both."})
+    if responders:
+        return "responders"
+    return authorized_permission_target(info, User, recipient, "read") if recipient is not None else None
 
 
 _ROUND_RESOURCE = hasura_model_resource(
@@ -813,7 +825,6 @@ def _proposal_resource(node_type: type) -> Any:
         filterable=[
             "id",
             "round",
-            "responder",
             "party",
             "state",
             "track",
@@ -833,7 +844,7 @@ def _proposal_resource(node_type: type) -> Any:
             "updated_at",
         ],
         aggregatable=["id"],
-        groupable=["round", "responder", "party", "state", "track"],
+        groupable=["round", "party", "state", "track"],
         insertable=[
             "round",
             "responder",

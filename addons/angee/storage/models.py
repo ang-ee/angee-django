@@ -219,6 +219,35 @@ class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
         return instance
 
 
+class DriveManager(AngeeManager.from_queryset(StorageMasterQuerySet)):  # type: ignore[misc]
+    """Provision independent volumes on the configured default backend."""
+
+    def create_on_default_backend(self, *, slug: str, name: str, owns_items: bool = False) -> Any:
+        """Create an ownerless drive with its own key namespace.
+
+        The caller must hold native drive creation authority. Reading the
+        infrastructure backend is elevated, while insertion retains its caller's
+        permissions and attribution.
+        """
+
+        default = system_queryset(self.model).filter(slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE).first()
+        if default is None:
+            raise ValidationError({"drive": "Configure an existing default drive before creating a volume."})
+        drive = self.model(
+            slug=slug,
+            name=name,
+            backend_id=default.backend_id,
+            prefix=f"drives/{slug}",
+            owns_items=owns_items,
+        )
+        try:
+            with transaction.atomic():
+                drive.save(ownerless=True)
+        except IntegrityError as error:
+            raise ValidationError({"slug": "This drive slug or key namespace is already in use."}) from error
+        return drive
+
+
 class Drive(SqidMixin, OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeModel):
     """Addressable storage volume on top of a backend.
 
@@ -243,7 +272,7 @@ class Drive(SqidMixin, OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeModel)
     description = models.TextField(blank=True)
     prefix = models.CharField(max_length=512, blank=True)
 
-    objects = StorageMasterManager()
+    objects = DriveManager()
     unscoped_objects = AngeeUnscopedManager()
 
     class Meta:

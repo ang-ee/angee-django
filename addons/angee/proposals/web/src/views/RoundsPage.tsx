@@ -100,6 +100,7 @@ export function RoundsPage(): React.ReactElement {
         <Field name="permissions" hidden readOnly />
         <Field name="revision" hidden readOnly />
         <Field name="can_open" hidden readOnly />
+        <Field name="can_admit" hidden readOnly />
         <Field name="name" title />
         <Group columns={2}>
           <Field name="team" />

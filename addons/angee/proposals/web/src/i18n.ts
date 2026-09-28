@@ -2,6 +2,11 @@ import { createNamespaceT } from "@angee/ui";
 
 export const enProposalsMessages: Record<string, string> = {
   "common.name": "Name",
+  "task.action.share": "Share with responders",
+  "task.action.unshare": "Clear responder sharing",
+  "round.policy.answers": "Answers",
+  "round.policy.answersAndTracks": "Answers and tracks",
+  "round.policy.draftsAndTracks": "Drafts and tracks",
   "task.audience.failed": "The task audience could not be loaded.",
   "common.status": "Status",
   "common.state": "State",

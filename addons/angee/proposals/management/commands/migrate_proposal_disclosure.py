@@ -1,31 +1,26 @@
-"""Inspect or apply the proposal disclosure transition before permission sync."""
+"""Preview the addon-owned historical proposal disclosure transition."""
 
-from django.core.exceptions import ValidationError
-from django.core.management.base import BaseCommand, CommandError
+from django.apps import apps
+from django.core.management.base import BaseCommand
+from django.db.migrations.state import ProjectState
 
-from angee.proposals.disclosure import DisclosureTransition
+from angee.proposals.runtime_migrations.legacy_disclosure import transition
 
 
 class Command(BaseCommand):
     """Dispatch transition policy to its owner."""
 
-    help = "Preview or migrate legacy proposal ceremony tuples."
+    help = "Preview legacy proposal ceremony conversion; Django migrations apply it."
     requires_system_checks: list[str] = []
 
     def add_arguments(self, parser):
-        mode = parser.add_mutually_exclusive_group(required=True)
-        mode.add_argument("--check", action="store_true")
-        mode.add_argument("--apply", action="store_true")
+        parser.add_argument("--check", action="store_true", required=True)
+        parser.add_argument("--database", default="default")
 
     def handle(self, *args, **options):
-        transition = DisclosureTransition()
-        try:
-            changes = transition.apply() if options["apply"] else transition.changes()
-            count = 0
-            for change in changes:
-                prefix = "BLOCKED" if change.blocker else change.operation
-                self.stdout.write(f"{prefix}: {change.resource} {change.subject}")
-                count += 1
-        except ValidationError as error:
-            raise CommandError(str(error)) from error
-        self.stdout.write(f"{count} transition operations {'applied' if options['apply'] else 'identified'}.")
+        historical = ProjectState.from_apps(apps).apps
+        count = 0
+        for operation, resource, subject in transition(historical, options["database"]):
+            self.stdout.write(f"{operation}: {resource} {subject}")
+            count += 1
+        self.stdout.write(f"{count} transition operations identified.")

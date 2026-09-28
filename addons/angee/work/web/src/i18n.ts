@@ -10,6 +10,7 @@ export const enWorkMessages: Record<string, string> = {
   "common.order": "Order",
   "common.tone": "Tone",
   "common.ruleOwned": "Rule owned",
+  "common.conceals": "Conceals tasks",
   "queue.group.identity": "Identity",
   "queue.group.triage": "Triage",
   "queue.group.cadence": "Cycle cadence",

@@ -33,12 +33,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 
-from angee.base.mixins import (
-    ArchiveMixin,
-    ArchiveQuerySet,
-    ConditionalSharedReaderMixin,
-    ConditionalSharedReaderQuerySet,
-)
+from angee.base.mixins import ArchiveMixin, ArchiveQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.numeric import quantize
 from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_model
@@ -166,11 +161,7 @@ class Currency(ArchiveMixin, AngeeDataModel):
         )
 
 
-class CurrencyRateQuerySet(
-    ConditionalSharedReaderQuerySet[Any],
-    ArchiveQuerySet[Any],
-    AngeeQuerySet[Any],
-):
+class CurrencyRateQuerySet(ArchiveQuerySet[Any], AngeeQuerySet[Any]):
     """Protect contextual identity fields that also govern rate visibility."""
 
     _identity_fields = {
@@ -327,12 +318,7 @@ class CurrencyRateManager(AngeeManager.from_queryset(CurrencyRateQuerySet)):  # 
         )
 
 
-class CurrencyRate(
-    RecordRefMixin,
-    ConditionalSharedReaderMixin,
-    ArchiveMixin,
-    AngeeDataModel,
-):
+class CurrencyRate(RecordRefMixin, ArchiveMixin, AngeeDataModel):
     """One dated global or exact-context exchange rate per reference unit.
 
     A global row has no context or explicit reference and remains relative to
@@ -372,11 +358,6 @@ class CurrencyRate(
         related_name="contextual_rates",
     )
     source_priority = models.PositiveSmallIntegerField(default=0, editable=False)
-    shared_reader_policy_fields = (
-        "context_content_type",
-        "context_object_id",
-        "reference_currency",
-    )
 
     objects = CurrencyRateManager()
 
@@ -427,16 +408,6 @@ class CurrencyRate(
                 condition=models.Q(context_content_type__isnull=False),
                 name="%(app_label)s_rate_context_currency_date",
             ),
-        )
-
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Only native global configured-reference rates receive a wildcard reader."""
-
-        return (
-            self.context_content_type_id is None
-            and not self.context_object_id
-            and self.reference_currency_id is None
         )
 
     def save(self, *args: Any, **kwargs: Any) -> None:

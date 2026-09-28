@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.postgres.search import SearchQuery, SearchVector
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.query import ModelIterable
@@ -824,7 +824,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         :func:`_external_id_q`; the create side relies on the expression unique
         constraint to serialise a concurrent first insert, re-reading on conflict —
         the same converge-on-unique contract the old column constraint provided.
-        Channel-bound inserts release personal ownership within that transaction;
+        Channel-bound inserts skip personal ownership through the model's save;
         their access follows the channel while creation attribution remains intact.
         """
 
@@ -840,9 +840,6 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         try:
             with transaction.atomic():
                 thread = self.model._base_manager.create(platform=platform, external_id=external_id, **defaults)
-                if thread.channel_id is not None and thread.owner_id is not None:
-                    self.filter(pk=thread.pk).release(get_user_model()(pk=thread.owner_id))
-                    thread.owner = None
                 return thread, True
         except IntegrityError:
             existing = queryset.first()
@@ -854,13 +851,12 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         """Purge every thread and message that belongs to ``channel``.
 
         Deleting a channel is a purge, not an orphan: its threads and messages FK the
-        shared ``integrate.Integration`` parent with ``SET_NULL`` (so a message can
-        outlive a merged thread, and a bulk integration teardown never cascades into
-        unrelated messages), which means deleting the channel row alone would leave 13k+
-        rows behind pointing at nothing. This deletes them explicitly instead — messages
-        first (their ``SET_NULL`` thread FK would otherwise churn as each thread goes),
-        then threads — so their ``CASCADE`` subtrees (parts, reactions, participants,
-        followers, activities, notifications, attachments) go with them. Only *this*
+        shared ``integrate.Integration`` parent with ``SET_NULL`` (so a bulk integration
+        teardown never cascades into unrelated messages), which means deleting the
+        channel row alone would leave its conversation rows behind pointing at nothing.
+        This deletes messages first (including messages without a thread), then threads,
+        so their ``CASCADE`` subtrees (parts, reactions, participants, followers,
+        activities, notifications, attachments) go with them. Only *this*
         channel's ``(channel, external_id)`` message rows are touched, so the same
         logical message reached through another channel — a separate row in that
         channel — survives, and a body ``Fragment`` shared with it is spared (parts FK it
@@ -1060,7 +1056,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         Source edges are removed without deleting their shared conversation. A private
         chatter graph is deleted only when no other attachment retains its thread;
-        messages are removed explicitly because their thread FK uses ``SET_NULL``.
+        its messages and dependent rows follow the thread's native cascade.
         The parent record delete is the authorization boundary, so cleanup runs under
         the same system-context pattern as other messaging bookkeeping writes.
         """
@@ -1072,7 +1068,6 @@ class ThreadAttachmentManager(AngeeManager):
         if target_model is None:
             return
         thread_model = self.model._meta.get_field("thread").related_model
-        message_model = apps.get_model("messaging", "Message")
         with system_context(reason="messaging.record_thread.teardown"), transaction.atomic():
             target_model._base_manager.select_for_update().filter(pk=object_id).exists()
             attachments = list(
@@ -1094,7 +1089,6 @@ class ThreadAttachmentManager(AngeeManager):
                 if not self.model._base_manager.filter(thread_id=thread_id).exists()
             ]
             if orphaned_chatter_ids:
-                message_model._base_manager.filter(thread_id__in=orphaned_chatter_ids).delete()
                 thread_model._base_manager.filter(pk__in=orphaned_chatter_ids).delete()
 
 
@@ -1674,7 +1668,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
             team = record.thread_team()
             sources = (*team.thread_audience(),) if team is not None else ()
             for member in (*sources, *record.thread_audience_members()):
-                party_id = member.party.pk
+                party_id = member.party_id
                 follower = followers.get(party_id)
                 if follower is not None and follower.notification_policy == policy_type.MUTED:
                     continue
@@ -1707,12 +1701,15 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
             accounts[account.pk] = account
             deliveries.setdefault(account.pk, (policy_type.INBOX, None))
 
+        eligible = {
+            key: account for key, account in accounts.items()
+            if created_by_id is None or str(key) != str(created_by_id)
+        }
+        reader_ids = record.thread_reader_ids(eligible.values()) if record is not None else set(eligible)
         existing = {row.user_id: row for row in self.model._base_manager.filter(message=message)}
         new_rows: list[Any] = []
         for user_id, (policy, follower) in deliveries.items():
-            if created_by_id is not None and str(user_id) == str(created_by_id):
-                continue
-            if record is not None and not record.thread_reader_allowed(accounts[user_id]):
+            if user_id not in reader_ids:
                 continue
             values = {
                 "thread_id": message.thread_id,
@@ -1801,15 +1798,45 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
     """Owns scheduled activities attached to model chatter threads."""
 
     def for_record(self, record: Any, *, role: str = "chatter", include_done: bool = True) -> Any:
-        """Return activities for ``record`` and ``role``."""
+        """Read activities through the record's gate; agenda keeps its own scope."""
 
+        if not record._message_read_allowed():
+            raise PermissionDenied("Reading activities requires record read access.")
         attachment = _record_attachment(record, role=role)
         if attachment is None:
             return self.none()
-        queryset = self.filter(attachment=attachment)
+        queryset = self.sudo(reason="messaging.activity.for_record").filter(attachment=attachment)
         if not include_done:
             queryset = queryset.open()
         return queryset
+
+    def for_record_window(
+        self, record: Any, *, role: str, search: str, limit: int,
+        messages: list[Any], message_count: int, bounded: bool,
+    ) -> list[Any]:
+        """Return at most one page of activities within the displayed message dates.
+
+        The latest page has no upper cut, so newly logged exchanges can appear
+        before a subsequent message. Cursor pages stay inside their message dates;
+        an empty cursor page has no activities. A search also matches activity text.
+        """
+
+        if bounded and not messages:
+            return []
+        queryset = self.for_record(record, role=role).annotate(
+            _occurred_on=models.functions.Coalesce(
+                "due_date", models.functions.TruncDate("completed_at"), models.functions.TruncDate("created_at"),
+            ),
+        )
+        for term in strip_null_bytes(search or "").split():
+            queryset = queryset.filter(models.Q(summary__icontains=term) | models.Q(note__icontains=term))
+        if messages:
+            if bounded or message_count > len(messages):
+                queryset = queryset.filter(_occurred_on__gte=timezone.localdate(messages[0].chronological_key[0]))
+            if bounded:
+                queryset = queryset.filter(_occurred_on__lte=timezone.localdate(messages[-1].chronological_key[0]))
+        rows = list(queryset.order_by("-_occurred_on", "-completed_at", "-pk")[:max(1, min(limit or 50, 200))])
+        return list(reversed(rows))
 
     def schedule(
         self,
@@ -1838,17 +1865,47 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             role=role,
             title=_record_thread_title(record),
         )
-        return self.create(
+        activity = self.model(
             thread_id=attachment.thread.pk,
             attachment_id=attachment.pk if attachment is not None else None,
             user_id=resolved_user_id,
-            activity_type=strip_null_bytes(activity_type or "todo"),
+            activity_type_id=strip_null_bytes(activity_type or "todo"),
             summary=summary,
             note=strip_null_bytes(note or ""),
             due_date=due_date or timezone.localdate(),
             metadata=metadata or {},
             created_by_id=created_by_id,
         )
+        activity.clean()
+        activity.save()
+        return activity
+
+    def log(self, record: Any, *, activity_type: str, occurred_on: date, note: str, role: str = "chatter") -> Any:
+        """Insert one completed exchange under the record's activity authority."""
+
+        user_id = actor_user_id(current_actor())
+        if user_id is None:
+            raise PermissionDenied("Logging an activity requires an account.")
+        note = strip_null_bytes(note or "")
+        summary = note.splitlines()[0].strip()[:256] if note else ""
+        if not summary:
+            raise ValidationError({"note": "An activity note needs a nonempty first line."})
+        if occurred_on is None:
+            raise ValidationError({"due_date": "The occurrence date is required."})
+        activity = self.model(
+            activity_type_id=strip_null_bytes(activity_type), due_date=occurred_on, summary=summary,
+            note=note, user_id=user_id, status=self.model.ActivityStatus.DONE,
+            completed_at=timezone.now(), created_by_id=user_id,
+        )
+        activity.clean()
+        with transaction.atomic(), system_context(reason="messaging.activity.log"):
+            attachment = apps.get_model("messaging", "ThreadAttachment").objects.ensure_for_record(
+                record, role=role, title=_record_thread_title(record),
+            )
+            activity.thread_id = attachment.thread_id
+            activity.attachment_id = attachment.pk
+            activity.save()
+        return activity
 
     def complete(self, activity: Any, *, feedback: str = "", post_message: bool = True) -> Any:
         """Mark an activity done and optionally log that completion to the thread."""
@@ -2594,8 +2651,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         fingerprint = ""
         if client_creation_key is not None:
             self.model._meta.get_field("client_creation_key").clean(client_creation_key, None)
-            if not client_creation_key or "\x00" in client_creation_key:
-                raise ValueError("A client creation key must be nonempty and contain no null bytes.")
+            if not client_creation_key.strip() or "\x00" in client_creation_key:
+                raise ValidationError({"client_creation_key": "Creation keys must not be blank or contain null bytes."})
             actor = creation_actor or current_actor()
             if actor is None or is_anonymous_actor(actor):
                 raise ValueError("A keyed message requires an actor.")
@@ -2614,9 +2671,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 "autofollow_recipients": autofollow_recipients,
             }
             fingerprint = canonical_json_sha256(content)
-            existing = self.for_creation_key(creation_scope, client_creation_key, fingerprint)
-            if existing is not None:
-                return existing
         if not body and not attachments and not tracking_rows:
             raise ValueError("Message body, attachment, or tracking value is required.")
         if parent is not None and parent.thread_id != thread.pk:
@@ -2634,28 +2688,27 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 model_label=subtype_model_label,
                 created_by_id=created_by_id,
             )
-            try:
-                with transaction.atomic():
-                    message = self.create(
-                        thread_id=thread.pk,
-                        platform=thread.platform,
-                        direction=self.model.Direction.INTERNAL,
-                        status=self.model.MessageStatus.SENT,
-                        message_type=kind,
-                        subtype_id=subtype.pk if subtype is not None else None,
-                        parent_id=parent.pk if parent is not None else None,
-                        preview=body[:280] if body else _tracking_preview(tracking_values),
-                        sent_at=sent_at,
-                        created_by_id=created_by_id,
-                        creation_actor=creation_scope,
-                        client_creation_key=client_creation_key,
-                        creation_fingerprint=fingerprint,
-                    )
-            except IntegrityError:
-                existing = self.for_creation_key(creation_scope, client_creation_key, fingerprint)
-                if existing is None:
-                    raise
-                return existing
+
+            def insert() -> Any:
+                return self.create(
+                    thread_id=thread.pk,
+                    platform=thread.platform,
+                    direction=self.model.Direction.INTERNAL,
+                    status=self.model.MessageStatus.SENT,
+                    message_type=kind,
+                    subtype_id=subtype.pk if subtype is not None else None,
+                    parent_id=parent.pk if parent is not None else None,
+                    preview=body[:280] if body else _tracking_preview(tracking_values),
+                    sent_at=sent_at,
+                    created_by_id=created_by_id,
+                    creation_actor=creation_scope,
+                    client_creation_key=client_creation_key,
+                    creation_fingerprint=fingerprint,
+                )
+
+            message, created = self.replay_or_insert(creation_scope, client_creation_key, fingerprint, insert)
+            if not created:
+                return message
             position = 0
             if body:
                 fragment = fragment_model.objects.upsert(
@@ -3204,8 +3257,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         # message whenever it is a fresh row or a re-sync re-resolved an existing message
         # onto a *different* thread (e.g. a References parent that only just landed). The
         # losing thread is recounted from its survivors — but only when there was one:
-        # the prior thread may be NULL (its thread was deleted, ``SET_NULL``-ing the
-        # message), in which case the winner still gains the message and there is no
+        # the prior thread may be NULL (a standalone provider event), in which case
+        # the winner still gains the message and there is no
         # loser to recount. Gating the winner's bump on ``created`` alone dropped exactly
         # that NULL-prior re-home; an idempotent re-sync into the same thread is a no-op.
         thread_changed = prior is not None and prior["thread_id"] != thread.pk
@@ -3448,7 +3501,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
         Record chatter surfaces only through the record-gated payloads; a part
         whose message's thread is record-attached stays off the generic surface
-        (a thread-less message is an inbox message whose thread merged away).
+        (a thread-less provider event has no chatter attachment).
         """
 
         return cast(

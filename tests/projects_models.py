@@ -1,33 +1,51 @@
 """Canonical concrete project models for bare-Django access-cascade tests."""
 
-from copy import deepcopy
-
 from django.db import models
 
-from angee.base.mixins import OwnerMixin
-from angee.base.models import AngeeDataModel
 from angee.projects.models import Link as AbstractLink
 from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
 from angee.projects.models import Task as AbstractTask
-from angee.proposals.models import TaskProposalAccess
+from angee.proposals.models import ProjectProposalAccess, TaskProposalAccess
 from angee.work.models import ProjectWork, TaskWork
+from angee.work.models import Queue as AbstractQueue
+from angee.work.models import Stage as AbstractWorkStage
+from tests import test_sequence  # noqa: F401 -- register the queue's native sequence targets
+from tests.spaces_models import Group
 
 
-class Task(TaskProposalAccess, TaskWork, OwnerMixin, AngeeDataModel):
+class Queue(AbstractQueue, Group):
+    """Native work queue shared by task access and lifecycle fixtures."""
+
+    class Meta(AbstractQueue.Meta):
+        abstract = False
+        app_label = "work"
+        db_table = "test_create_work_queue"
+        rebac_resource_type = "work/queue"
+
+
+class Stage(AbstractWorkStage):
+    """Native stage target for the queue's default and lifecycle fixtures."""
+
+    class Meta(AbstractWorkStage.Meta):
+        abstract = False
+        app_label = "work"
+        db_table = "test_create_work_stage"
+        rebac_resource_type = "work/stage"
+
+
+class Task(TaskWork, TaskProposalAccess, AbstractTask):
     """Concrete task carrying the production chatter-wake owner."""
 
     sqid_prefix = "tpt_"
-    assignee = AbstractTask._meta.get_field("assignee").clone()
-    visibility = AbstractTask._meta.get_field("visibility").clone()
-    links = deepcopy(AbstractTask._meta.get_field("links"))
+    immutable_fields = AbstractTask.immutable_fields
+    rebac_grantable = {**AbstractTask.rebac_grantable, **TaskProposalAccess.rebac_grantable}
 
-    # This source-model graph exercises chatter wake behavior without composing
-    # work's queue lifecycle and its additional model graph.
-    queue = None
-    stage = None
+    # Keep the queue and stage fields used by the native work owner. These
+    # fixtures do not exercise cycle scheduling.
     cycle = None
+    cycle_id = None
     project = models.ForeignKey(
         "projects.Project",
         null=True,
@@ -36,9 +54,10 @@ class Task(TaskProposalAccess, TaskWork, OwnerMixin, AngeeDataModel):
         related_name="tasks",
     )
 
-    class Meta:
+    class Meta(AbstractTask.Meta, TaskProposalAccess.Meta):
         abstract = False
         app_label = "projects"
+        constraints = (*AbstractTask.Meta.constraints, *TaskProposalAccess.Meta.constraints)
         db_table = "test_projects_task"
         rebac_resource_type = "projects/task"
 
@@ -53,7 +72,7 @@ class Link(AbstractLink):
         rebac_resource_type = "projects/link"
 
 
-class Project(ProjectWork, AbstractProject):
+class Project(ProjectWork, ProjectProposalAccess, AbstractProject):
     """Concrete project carrying the production owners and the work team donor."""
 
     rebac_grantable = {

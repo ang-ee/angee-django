@@ -22,8 +22,7 @@ from angee.portfolio.models import Update as AbstractUpdate
 from angee.projects.models import TaskRelation as AbstractTaskRelation
 from angee.work.models import Cycle as AbstractCycle
 from tests.conftest import Backend, Drive
-from tests.projects_models import Project, ProjectBinding
-from tests.test_productivity_write_behavior import Queue, Stage
+from tests.projects_models import Project, ProjectBinding, Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema
 from tests.test_task_relation_freshness import FreshnessTask
 
