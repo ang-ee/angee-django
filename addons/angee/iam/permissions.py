@@ -15,11 +15,11 @@ import strawberry
 from django.contrib.auth.models import AnonymousUser
 from django.db import models
 from django.http import HttpRequest
-from rebac import ObjectRef, PermissionDenied, app_settings, current_actor
-from rebac import backend as rebac_backend
+from rebac import ObjectRef, PermissionDenied, current_actor
 from strawberry.permission import BasePermission
 
 from angee.base.scoping import read_scoped_queryset
+from angee.iam.roles import platform_admin_role, subject_has_role
 
 
 def request_from_info(info: strawberry.Info) -> HttpRequest:
@@ -65,29 +65,14 @@ def is_platform_admin(user: Any) -> bool:
 
     if not is_authenticated(user):
         return False
-    role = _platform_admin_role()
+    role = platform_admin_role()
     return role is not None and current_actor_has_role(role)
 
 
 def current_actor_has_role(role: ObjectRef) -> bool:
     """Return whether the ambient REBAC actor is an effective member of ``role``."""
 
-    actor = current_actor()
-    if actor is None:
-        return False
-    result = rebac_backend().check_access(
-        subject=actor,
-        action="effective_member",
-        resource=role,
-    )
-    return bool(result.allowed)
-
-
-def _platform_admin_role() -> ObjectRef | None:
-    """Return the configured platform-admin role object, if any."""
-
-    role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
-    return ObjectRef.parse(role) if role else None
+    return subject_has_role(current_actor(), role)
 
 
 def require_platform_admin(info: strawberry.Info) -> Any:

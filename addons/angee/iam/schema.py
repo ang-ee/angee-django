@@ -30,6 +30,7 @@ from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id, public_subject_ref
 from angee.graphql.access import ActorSelfChangeReadGate
+from angee.graphql.actions import authorized_permission_target
 from angee.graphql.data import hasura_model_resource, hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
@@ -85,6 +86,12 @@ User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
 
 
+def _view_as(info: strawberry.Info) -> Any | None:
+    """Read the optional view-as carrier owned by the GraphQL transport."""
+
+    return getattr(_request(info), "view_as", None)
+
+
 def _preference_object(user: Any) -> JSON:
     """Return a safe UI preference object for user projections."""
 
@@ -131,7 +138,7 @@ class UserType(AngeeNode):
 
 @strawberry_django.type(User)
 class CurrentUserType(AngeeNode):
-    """GraphQL projection of the session user, including private role refs."""
+    """GraphQL identity projection, including the identity's private role refs."""
 
     username: auto
     first_name: auto
@@ -470,6 +477,13 @@ class LoginPayload:
     user: UserType | None = None
 
 
+@strawberry.type
+class IssuedUserPassword:
+    """A newly issued credential returned only by the issue mutation."""
+
+    password: str
+
+
 def _permission_hub_roles() -> list[IAMRoleType]:
     """Return roles visible from active role relationship rows."""
 
@@ -570,17 +584,12 @@ def _delete_user_preview(value: str, *, confirm: bool) -> DeletePreview:
 
 
 class IAMUserWriteBackend:
-    """Admin write semantics for the Hasura ``users`` resource."""
+    """Person creation and administrator updates for the Hasura user resource."""
 
     def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create one user through Django's password-hashing manager."""
+        """Delegate account creation to IAM's actor-gated person factory."""
 
-        require_platform_admin(info)
-        payload = dict(data)
-        password = payload.pop("password")
-
-        with transaction.atomic():
-            return User.objects.create_user(password=password, **payload)
+        return User.objects.create_person(**data)
 
     def update(
         self, info: strawberry.Info, pk: str, data: dict[str, Any],
@@ -707,13 +716,25 @@ _USER_RESOURCE = hasura_model_resource(
     sortable=["username", "email", "first_name", "last_name", "is_staff", "is_active"],
     aggregatable=["id"],
     groupable=["is_staff", "is_active"],
-    writable=["username", "password", "email", "first_name", "last_name", "is_staff", "is_active"],
+    insertable=["username", "email", "first_name", "last_name"],
+    updatable=["username", "password", "email", "first_name", "last_name", "is_staff", "is_active"],
     get_queryset=_user_queryset,
     write_backend=IAMUserWriteBackend(),
     id_column="sqid",
     model_label="iam.User",
     subject_field="assignment_subject",
 )
+
+
+@strawberry.input(name="users_insert_input", extend=True)
+class UserPasswordInsertInput:
+    """Optional raw credential consumed only by the person factory.
+
+    The stored hash is required by Django; the creation credential is optional.
+    Native input extension keeps those distinct without altering the model field.
+    """
+
+    password: str | None = strawberry.UNSET
 
 
 _GROUP_RESOURCE = hasura_model_resource(
@@ -769,9 +790,11 @@ class IAMQuery:
 
     @strawberry.field
     def current_user(self, info: strawberry.Info) -> CurrentUserType | None:
-        """Return the authenticated session user, if any."""
+        """Return the viewed identity, or the authenticated session identity."""
 
-        user = getattr(_request(info), "user", None)
+        request = _request(info)
+        view_as = _view_as(info)
+        user = view_as.target if view_as is not None else getattr(request, "user", None)
         if isinstance(user, AnonymousUser) or not getattr(
             user,
             "is_authenticated",
@@ -784,6 +807,13 @@ class IAMQuery:
 @strawberry.type
 class IAMConsoleQuery:
     """Session identity reads and admin permission-hub queries."""
+
+    @strawberry.field
+    def real_user(self, info: strawberry.Info) -> CurrentUserType | None:
+        """Return the real identity during preview, and null otherwise."""
+
+        view_as = _view_as(info)
+        return cast(CurrentUserType, view_as.real_user) if view_as is not None else None
 
     @strawberry.field
     def colleagues(
@@ -800,6 +830,19 @@ class IAMConsoleQuery:
         """
 
         return cast(list[UserType], User.objects.visible_people(session_user(info), search=search, limit=limit))
+
+    @strawberry.field
+    def viewable_people(
+        self,
+        info: strawberry.Info,
+        search: str = "",
+        limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
+    ) -> list[UserType]:
+        """List permitted preview targets for the real actor, even during preview."""
+
+        view_as = _view_as(info)
+        actor = view_as.real_user if view_as is not None else session_user(info)
+        return cast(list[UserType], User.objects.viewable_people(actor, search=search, limit=limit))
 
     @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def roles(self) -> list[IAMRoleType]:
@@ -881,6 +924,18 @@ class IAMMutation:
         user = session_user(info)
         user.update_preferences(cast(dict[str, Any], preferences))
         return cast(CurrentUserType, user)
+
+
+@strawberry.type
+class IAMUserPasswordMutation:
+    """Account access actions gated by the target user's zed permissions."""
+
+    @strawberry.mutation
+    def issue_user_password(self, info: strawberry.Info, id: PublicID) -> IssuedUserPassword:
+        """Return a credential once after the account owner's checks succeed."""
+
+        user = authorized_permission_target(info, User, id, "issue_password")
+        return IssuedUserPassword(password=user.issue_password())
 
 
 @strawberry.type
@@ -990,6 +1045,7 @@ schemas = {
         ],
     },
     "console": {
+        "input_extensions": [UserPasswordInsertInput],
         "query": [
             IAMQuery,
             IAMConsoleQuery,
@@ -1004,6 +1060,7 @@ schemas = {
             _USER_RESOURCE.mutation,
             _GROUP_RESOURCE.mutation,
             IAMUserDeletePreviewMutation,
+            IAMUserPasswordMutation,
             IAMPermissionHubMutation,
             IAMGroupMembershipMutation,
         ],

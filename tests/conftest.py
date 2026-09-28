@@ -60,6 +60,7 @@ from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
 from tests import messaging_models  # noqa: F401 -- register the managed posts FK targets before database setup
+from tests.extcontrib.models import Role
 from tests.integrate_models import Integration
 
 pytest_plugins = ("angee.testing.fixtures", "tests.workflows")
@@ -504,6 +505,18 @@ class StorageRole(AbstractStorageRole):
         managed = False
         app_label = "storage"
         rebac_resource_type = "storage/role"
+
+
+class ExtcontribRole(Role):
+    """Concrete tableless anchor for the source harness's extension example."""
+
+    class Meta(Role.Meta):
+        """Retain the example's REBAC namespace without creating a table."""
+
+        abstract = False
+        managed = False
+        app_label = "extcontrib"
+        rebac_resource_type = "extcontrib/role"
 
 
 # Register the projects concretes only after their storage FK targets above.

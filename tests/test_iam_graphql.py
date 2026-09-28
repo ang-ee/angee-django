@@ -837,9 +837,7 @@ def test_user_crud_create_update_delete_are_admin_only(
             password: "first-secret",
             email: "console-user@example.com",
             first_name: "Console",
-            last_name: "User",
-            is_staff: true,
-            is_active: true
+            last_name: "User"
           }) {
             username
             email
@@ -854,13 +852,22 @@ def test_user_crud_create_update_delete_are_admin_only(
 
     assert _execute(console_schema, create_user, user=plain).errors is not None
 
+    for field in ("is_staff", "is_active"):
+        rejected = _execute(
+            console_schema,
+            create_user.replace('last_name: "User"', f'last_name: "User", {field}: true'),
+            user=admin,
+        )
+        assert rejected.errors is not None
+        assert f"Field '{field}' is not defined by type 'users_insert_input'" in rejected.errors[0].message
+
     created = _data(_execute(console_schema, create_user, user=admin))["insert_users_one"]
     assert created == {
         "username": "console-user",
         "email": "console-user@example.com",
         "first_name": "Console",
         "last_name": "User",
-        "is_staff": True,
+        "is_staff": False,
         "is_active": True,
         "full_name": "Console User",
     }
@@ -868,6 +875,7 @@ def test_user_crud_create_update_delete_are_admin_only(
     assert "password" not in _sdl_block(console_schema.as_str(), "type UserType")
     with system_context(reason="test.iam.user_crud.create"):
         user = User.objects.get(username="console-user")
+        # Requires strawberry-django-hasura >= 0.12.1 input-extension forwarding.
         assert user.check_password("first-secret")
     user_id = _user_public_id(user)
 
