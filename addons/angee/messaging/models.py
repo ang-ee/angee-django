@@ -56,7 +56,7 @@ from rebac.resources import model_resource_type
 from angee.base.actors import actor_user_id
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, SqidMixin
+from angee.base.mixins import AuditMixin, OwnerMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
@@ -81,7 +81,7 @@ from angee.messaging.webforms import WebformSpec, default_webform_schema
 from angee.parties.models import Handle
 
 
-def _owner_user_id(instance: models.Model) -> Any | None:
+def _actor_user_id(instance: models.Model) -> Any | None:
     """Return the user FK id for this model's effective REBAC actor."""
 
     actor_getter = getattr(instance, "actor", None)
@@ -396,7 +396,7 @@ class ThreadedModelMixin(models.Model):
         if error := message.content_edit_error():
             raise ValueError(error)
         return apps.get_model("messaging", "Message").objects.update_content(
-            message, body=body, owner_id=_owner_user_id(self)
+            message, body=body, edited_by_id=_actor_user_id(self)
         )
 
     def message_unlink(self, message: models.Model) -> models.Model:
@@ -501,7 +501,7 @@ class ThreadedModelMixin(models.Model):
             tracking_values=tracking_values,
             recipient_user_ids=recipient_user_ids,
         )
-        owner_id = _owner_user_id(self)
+        created_by_id = _actor_user_id(self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
         # Autofollow is messaging-owned bookkeeping reacting to an already-
         # authorized post (the thread_post_access gate above): it runs under
@@ -509,18 +509,18 @@ class ThreadedModelMixin(models.Model):
         # its service user) cannot be denied on the private follower rows —
         # the same elevation rule as the delete cascade. The user-facing
         # follow verb (message_subscribe) stays actor-gated.
-        if autofollow_author and owner_id is not None:
+        if autofollow_author and created_by_id is not None:
             with system_context(reason="messaging.autofollow"):
                 follower_model.objects.subscribe(
                     self,
-                    user_id=owner_id,
+                    user_id=created_by_id,
                     role=self.thread_attachment_role,
                 )
                 # A first post on an unfollowed record: the write path's own receipt
                 # advance ran before this autofollow existed, so seed the fresh
                 # follower's receipt at the just-posted message — an author never
                 # sees their own post as unread.
-                follower_model.objects.mark_read_up_to(message.thread, user_id=owner_id, message=message)
+                follower_model.objects.mark_read_up_to(message.thread, user_id=created_by_id, message=message)
         if autofollow_recipients:
             with system_context(reason="messaging.autofollow"):
                 for user_id in recipient_user_ids:
@@ -593,7 +593,7 @@ class ThreadedModelMixin(models.Model):
         return message_model.objects.post_to_thread(
             attachment.thread,
             body=body,
-            owner_id=_owner_user_id(self),
+            created_by_id=_actor_user_id(self),
             attachment=attachment,
             attachments=attachments,
             message_type=message_type,
@@ -809,15 +809,15 @@ class ThreadedModelMixin(models.Model):
     def _message_after_create(self) -> None:
         """Run Odoo-style chatter side effects after this row is first saved."""
 
-        owner_id = _owner_user_id(self)
+        created_by_id = _actor_user_id(self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        if self.thread_create_autofollow_author and owner_id is not None:
+        if self.thread_create_autofollow_author and created_by_id is not None:
             # System bookkeeping on an already-authorized create; see the
             # autofollow elevation note in _message_post.
             with system_context(reason="messaging.autofollow"):
                 follower_model.objects.subscribe(
                     self,
-                    user_id=owner_id,
+                    user_id=created_by_id,
                     role=self.thread_attachment_role,
                 )
         message_model = apps.get_model("messaging", "Message")
@@ -827,7 +827,7 @@ class ThreadedModelMixin(models.Model):
                 message_type=message_model.MessageKind.NOTIFICATION,
                 subtype_key=self.thread_creation_subtype_key,
             )
-        create_changes = self._field_tracker().create_changes() if owner_id is not None else ()
+        create_changes = self._field_tracker().create_changes() if created_by_id is not None else ()
         if create_changes:
             self._message_system_post(
                 body="",
@@ -1159,7 +1159,7 @@ class ChannelWebform(models.Model):
         )
 
 
-class Thread(SqidMixin, AuditMixin, AngeeModel):
+class Thread(SqidMixin, OwnerMixin, AngeeModel):
     """An aggregation of related messages — an email conversation or a social post.
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /

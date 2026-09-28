@@ -2755,6 +2755,8 @@ def test_resync_with_changed_body_appends_edit_history(channel: Any) -> None:
     (entry,) = message.edit_history
     assert prior_body_hash in entry["prev_fragment_hashes"]
     assert entry["edited_at"]
+    assert "edited_by_id" not in entry
+    assert message.created_by_id == channel.owner_id
 
     _ingest([_parsed("m1", text="Edited provider body.", sent_at=_AT)], channel=channel)
     message.refresh_from_db()
@@ -3092,29 +3094,20 @@ def test_stale_broadcast_flag_heals_on_next_activity(composed_tables: None) -> N
 
 @pytest.mark.django_db(transaction=True)
 def test_broadcasting_room_creator_socket_gated_by_membership(composed_tables: None) -> None:
-    """A broadcasting room's thread is system-owned, so membership is the only live gate.
-
-    A member who *created* the room thread would otherwise keep ``thread.read`` forever
-    through the field-backed ``owner`` (``created_by``) arm, so an expelled creator's
-    ``threadChanged`` socket would never go dark. Minting a broadcasting host's thread
-    system-owned (``created_by=None``) makes ``reader`` + admin the live gate.
-    """
+    """Broadcasting threads release ownership but retain their creator attribution."""
 
     del composed_tables
-    user_model = get_user_model()
-    with system_context(reason="test expelled-creator seed"):
-        creator = user_model.objects.create_user(username="room-creator", email="room-creator@example.com")
-        room = BroadcastRoom.objects.create(title="creator-room")
-
-    # The creator mints the thread under their own actor, so the audit stamp would set
-    # created_by=creator; minting a broadcasting host's thread system-owned clears it.
+    creator = get_user_model().objects.create_user(username="room-creator", email="room-creator@example.com")
     with actor_context(creator):
+        room = BroadcastRoom.objects.create(title="creator-room")
         thread = room.message_thread(create=True)
-    assert thread.created_by_id is None
+    assert thread.owner_id is None
+    assert thread.created_by_id == creator.pk
 
     with system_context(reason="test expelled-creator read"):
         thread.refresh_from_db()
-        assert thread.created_by_id is None
+        assert thread.owner_id is None
+        assert thread.created_by_id == creator.pk
 
         change = ChangePayload.from_instance(thread, action="update", update_fields=None)
         creator_subject = to_subject_ref(creator)
