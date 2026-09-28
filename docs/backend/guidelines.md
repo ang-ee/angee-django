@@ -1233,10 +1233,12 @@ and current contracts before applying a historical example to a new deployment.
   projector. Reuse `angee.graphql.actions.ActionResult` and `action_guard` when
   their error contract fits; changing an existing error envelope is a separate
   API migration, not a mechanical refactor.
+  In-band refusals preserve the error's declared `DomainError` or `ValidationError`
+  code in nullable `ActionResult.code`, with `null` when the error carries none.
 - **Domain refusals are typed.** Raise a subclass of
   [`DomainError`](../../angee/base/errors.py) with a stable `code`; the
-  [GraphQL sanitizer](../../addons/angee/graphql/schema.py) maps it by type to
-  that code without detail. Never add a domain code to the sanitizer's
+  [GraphQL sanitizer](../../addons/angee/graphql/schema.py) maps non-validation
+  refusals by type to that code without detail. Never add a domain code to the sanitizer's
   expected-code allow-list.
 - **Resolvers never inspect `info.selected_fields` to choose annotations.** A sort
   alias that needs an annotation is declared on `hasura_model_resource`. Lazy

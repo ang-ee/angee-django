@@ -16,6 +16,7 @@ export const CaptureNeedDocument = graphql(`
       ok
       message
       id
+      code
       validation_errors
     }
   }

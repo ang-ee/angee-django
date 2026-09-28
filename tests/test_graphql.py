@@ -253,7 +253,7 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
         calls["write_model"] = model
         return sentinel_queryset
 
-    def fake_instance_from_public_id(
+    def fake_require_instance_for_id(
         model: type[models.Model],
         value: str,
         *,
@@ -263,7 +263,7 @@ def test_hasura_write_backend_decodes_public_relations_through_write_queryset(
         return related
 
     monkeypatch.setattr(hasura_data, "write_queryset", fake_write_queryset)
-    monkeypatch.setattr(hasura_data, "instance_from_public_id", fake_instance_from_public_id)
+    monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))
 
@@ -285,7 +285,7 @@ def test_hasura_write_backend_create_delegates_prepared_insertion(
     related = SimpleNamespace(pk=7)
     created: dict[str, Any] = {}
 
-    def fake_instance_from_public_id(
+    def fake_require_instance_for_id(
         model: type[models.Model],
         value: str,
         *,
@@ -308,7 +308,7 @@ def test_hasura_write_backend_create_delegates_prepared_insertion(
         created["row"] = instance
         return instance
 
-    monkeypatch.setattr(hasura_data, "instance_from_public_id", fake_instance_from_public_id)
+    monkeypatch.setattr(hasura_data, "require_instance_for_id", fake_require_instance_for_id)
     monkeypatch.setattr(hasura_data.mutation_resolvers, "create", fake_create)
 
     backend = AngeeHasuraWriteBackend(GatedWriteThing, public_id_fields=("owner",))

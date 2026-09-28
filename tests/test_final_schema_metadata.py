@@ -1,8 +1,21 @@
+import strawberry
 from graphql import build_schema
 
 from angee.data.metadata import DataMutationArgument, DataResourceRoots, DataResourceTypeNames
+from angee.graphql.actions import ActionResult
 from angee.graphql.data.final_schema import final_schema_references
 from angee.graphql.data.metadata import _finalize_data_resource
+from angee.graphql.schema import AngeeSchema
+
+
+def test_action_result_sdl_exposes_nullable_code() -> None:
+    @strawberry.type
+    class Query:
+        result: ActionResult
+
+    schema = build_schema(AngeeSchema(query=Query).as_str())
+
+    assert str(schema.get_type("ActionResult").fields["code"].type) == "String"
 
 
 def test_final_schema_references_intersect_roots_types_and_capabilities() -> None:
