@@ -388,15 +388,19 @@ Use these owners instead of maintaining another contract in an addon:
   listed in the `type_extensions` bucket — Strawberry owns the extension merge and
   strawberry-django resolves any relation projection from its model registry (e.g.
   `iam_integrate_oidc` adds fields to `OAuthClientType` without `integrate`
-  importing it); add *fields onto another addon's handwritten GraphQL input* with
-  native `strawberry.input(name="UpstreamInput", extend=True)` listed in
+  importing it); add *fields onto another addon's GraphQL input*, including a
+  generated Hasura input, with native
+  `strawberry.input(name="UpstreamInput", extend=True)` listed in
   `input_extensions`. Input extensions are the write-side equivalent: they name the
   target input and add fields only; Strawberry merges multiple donors additively in
-  addon order and fails fast on field-name collisions. Type and input extensions
-  are global-additive, like a model `extends`: the field lands on the target
-  wherever it appears (the bucket only gates registration), so reference a field
-  type that some bucket lacks and that bucket's build fails loudly rather than
-  leaking.
+  addon order and fails fast on field-name collisions. strawberry-django-hasura
+  forwards extension values in the resource's write data, so the resource's write
+  owner must consume them, as IAM's
+  [`UserPasswordInsertInput`](../../addons/angee/iam/schema.py) does. Type and
+  input extensions are global-additive, like a model `extends`: the field lands
+  on the target wherever it appears (the bucket only gates registration), so
+  reference a field type that some bucket lacks and that bucket's build fails
+  loudly rather than leaking.
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
 
@@ -407,6 +411,11 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 `REBAC_SUPERUSER_BYPASS=False`, so every actor — superusers included — reaches
 data through REBAC, never a queryset bypass.
 
+- **The local backend is the only supported REBAC backend.** Base
+  [autoconfig](../../angee/base/autoconfig.py) selects it because field- and
+  const-backed relations, `authenticated`, and SQL read scopes are evaluated
+  against the Django rows themselves, which no remote tuple store can see. Do not
+  mirror column facts into tuples to keep another backend viable.
 - **One user identity for authorization and attribution.** Every person and
   agent acts as its own `AUTH_USER_MODEL` row. An agent's `kind=service` account
   is selected by `Agent.principal_subject()`; permissions and audit stamps use
@@ -421,8 +430,11 @@ data through REBAC, never a queryset bypass.
   owned by the model's public-ID field, not alternate authorization identities.
   Transport subject strings pass through
   [the public identity boundary](../../angee/base/identity.py) before reaching
-  REBAC, and outputs encode the PK there. Tableless role anchors keep named IDs.
-  Changing a public prefix or codec must never change grants.
+  REBAC, and outputs encode the PK there. Signed tokens are transport too: a
+  download token carries its issuing actor's public subject, and
+  [`FileManager.for_download_token`](../../addons/angee/storage/models.py)
+  re-checks that actor's `read` on every request. Tableless role anchors keep
+  named IDs. Changing a public prefix or codec must never change grants.
 - **Container inheritance belongs to the resource and scope owners.** A
   resource's FK relations and arrows live in its own Zed definition. A scope
   contributes additional relations and arrows through its own
@@ -475,9 +487,7 @@ data through REBAC, never a queryset bypass.
   audit history intact. It removes record shares, group memberships, role
   assignments, and every other stored grant; declarative resource grants are
   recreated by the final resource load. Include `--include-demo` only when that
-  deployment normally loads demo resources. This procedure applies to the local
-  REBAC stores; a deployment using a remote backend must reset that backend
-  through its native administration procedure.
+  deployment normally loads demo resources.
 - **Membership has one store and one writer.** Use `rebac.memberships` for
   direct memberships in groups and role containers. IAM's model and hub own
   authorization and subject-existence policy; the library owns tuple
@@ -492,6 +502,14 @@ data through REBAC, never a queryset bypass.
   authorization backends without its own superuser shortcut. An additional
   backend may grant codenames through normal Django chaining, so removing the
   REBAC backend alone is not a global fail-closed guarantee.
+- **Person accounts have one factory.** Actor-requested accounts go through
+  [`UserManager.create_person`](../../addons/angee/iam/models.py), whose `create`
+  permission owns admission; ingress without an actor uses
+  `create_person_as_system` with a named reason, once its channel owner has
+  required channel `write` and account `create` to enable that ingress.
+  `User.issue_password` issues a credential once, only to
+  an active, non-staff person without a usable password. `create_user` stays the
+  trusted bootstrap and OIDC path.
 - **Read derived facts from their owner.** Native live ORM backing exposes
   user kind/activity, roster roles and selected tools without tuple mirrors.
   Platform administration is an ordinary `angee/role:admin#member` grant to a
@@ -532,6 +550,9 @@ data through REBAC, never a queryset bypass.
   filter. Scope roles live on the scope definition, and scoped models derive
   arms from them (`scope->viewer` for read, `scope->editor` for write).
 - A `read__<field>`-gated field is never filterable, sortable, groupable, or aggregatable.
+  A field gate is not creation policy: the library enforces `write__<field>` on
+  update only, so keep a protected creation value out of generated insert inputs
+  and let its owning verb supply it.
 - **Following is notification state, never access.** Messaging's
   `ThreadFollower` is keyed by party; follow/unfollow write no relationship
   tuples. Explicit `Thread.grant_reader` / `revoke_reader` remain shares governed
@@ -539,12 +560,26 @@ data through REBAC, never a queryset bypass.
   contracts; they are not copied into followers. See
   [`ThreadedModelMixin`](../../addons/angee/messaging/models.py) and
   [`ThreadNotificationManager`](../../addons/angee/messaging/managers.py).
-- **Posture is data, not schema.** `permissions.extends.zed` fragments are
-  additive-only, so narrowable defaults ship as seeded tuples (the shared
-  wildcard pattern). Platform-wide tuple-driven visibility uses a const-backed
-  singleton relation on each row (for example, `auth/user#directory` →
-  `iam/directory:main`) plus a seed on that singleton (`iam/directory:main#reader`),
-  never base schema arms or per-row fan-out a deployment cannot omit.
+- **Posture is data, not schema.** `permissions.extends.zed` fragments union
+  permission arms and add no permission other than an owned field gate, so
+  narrowable defaults ship as seeded tuples. Platform-wide tuple-driven visibility
+  uses a const-backed singleton relation on each row (for example,
+  `auth/user#directory` → `iam/directory:main`) plus a seed on that singleton
+  (`iam/directory:main#reader`), never base schema arms or per-row fan-out a
+  deployment cannot omit. Row-dependent public visibility composes
+  [`ConditionalSharedReaderMixin`](../../angee/base/mixins.py).
+- **Always-shared reference data reads through `authenticated`.** A resource
+  every signed-in subject reads unions the library's `authenticated` builtin into
+  `read` and stores no wildcard tuple; [`tags/tag`](../../addons/angee/tags/permissions.zed)
+  is the reference. `authenticated` also admits non-user subjects. It is safe only
+  where the permission compiles to a SQL scope, so no permission that reaches it,
+  directly or through an arrow, may contain or arrow into a self-recursive role
+  arm (`includes->effective_member`); [`angee.E026`](../../angee/base/checks.py)
+  refuses that schema.
+- **Caveated relations are refused.** [`angee.E024`](../../angee/base/checks.py)
+  rejects caveated subjects in every effective schema: the local backend cannot
+  compile them into SQL read scopes and would fall back to enumerating readable
+  records. Express the condition as a live field-backed relation.
 - Bracket every server-side read/write in `system_context`/`asystem_context` and
   resolve the actor with `@rebac_subject`; a bare `Model.objects.create()` under
   an actor is denied.
@@ -565,9 +600,8 @@ data through REBAC, never a queryset bypass.
   with `permission … = manager->effective_member` (mirror of `admin->member`).
   A stored, per-resource relationship may instead restrict its allowed subject
   to a fixed plain role (`relation manager: storage/role:storage_admin`) and
-  arrow through `manager->effective_member`; this retains the tuple and any
-  caveat. Appending the computed `#effective_member` permission to that allowed
-  subject is invalid.
+  arrow through `manager->effective_member`; this retains the tuple. Appending
+  the computed `#effective_member` permission to that allowed subject is invalid.
   The const *target* role namespace needs its own `definition` + `managed=False`
   anchor model (like the resource's const admin), because a **non-member** check
   walks the arrow into `<ns>/role#admin`; without the anchor that const cannot
@@ -590,6 +624,11 @@ data through REBAC, never a queryset bypass.
   library change. The merge fails fast on a relation-name collision (base or two
   contributors), an arm whose permission the base does not declare, and a target
   no installed package declares; contributors merge in sorted package order.
+  The only new permission a fragment may declare is a field gate,
+  `read__<field>` or `write__<field>`, on a concrete column that the same
+  package's donor contributes to the target model; no other package may extend
+  that gate. `ModelComposition.field_gate_owners` supplies the ownership map to
+  [`angee.compose.permissions`](../../angee/compose/permissions.py).
   Functional drift is caught by `rebac sync` (content hash) and `angee build
   --check` (the emitted file); the contribution is revisioned by the contributing
   addon (`@rebac_schema_revision` in its fragment, echoed into the merged file's
@@ -602,8 +641,11 @@ data through REBAC, never a queryset bypass.
   and bulk-updated active superusers have const-admin reach immediately.
 - Never `select_related` a REBAC-guarded relation into an actor-scoped queryset —
   it fails live ("loaded N rows outside actor scope") while passing unit tests.
-  Resolve the field elevated by FK id under `system_context`, and verify by
-  rendering the live page, not just the test.
+  Project a guarded to-one through
+  [`actor_scoped_to_one` or `actor_scoped_public_id`](../../addons/angee/graphql/relations.py),
+  which redact an unreadable target, including its id, to null; resolve elevated
+  by FK id only for server-side work whose result never reaches the caller. Verify
+  by rendering the live page, not just the test.
 - The relationship store has two storage modes: composed projects run the
   FK-backed `registry` mode (`angee.base` autoconfig) while bare
   `tests/settings.py` runs the library's `denormalized` default — a
@@ -759,6 +801,13 @@ and current contracts before applying a historical example to a new deployment.
   the unapplied `workflows` migrations generated after it, then running
   `angee build` and `makemigrations` to materialize the fixed body under the
   same name. Never delete an applied node.
+- **Person email normalization and its uniqueness are one declared transition.**
+  IAM's [`normalize_person_emails`](../../addons/angee/iam/runtime_migrations/normalize_person_emails.py)
+  refuses before writing when normalized person emails collide, reporting only
+  their count, then normalizes and adds the stored-email constraint. Resolve the
+  accounts that the read-only `manage.py iam_email_collisions` lists, then rerun
+  `migrate`. A separately generated constraint without this transition needs
+  history reconciliation, never a skipped normalization.
 - **Row updates followed by DDL on the same tables need immediate constraints.**
   PostgreSQL queues deferred foreign-key checks for rows a migration updates and
   refuses a later `ALTER TABLE` or index build in the same atomic migration.
@@ -848,13 +897,24 @@ and current contracts before applying a historical example to a new deployment.
   on every values/values_list distinct read.
 - **Seeded rows selected by clients carry a resource-assigned stable key.**
   Select them by that stable key, never by a mutable display name.
-- **Foreign write paths defer parties bookkeeping until commit and contain its
-  failures.** Follow the OIDC/ingest precedent: schedule the parties-owned work
-  with `transaction.on_commit`, catch and log callback failures, and let the
-  already-successful foreign write continue.
+- **Parties bookkeeping follows its writer's transaction contract.** IAM's person
+  factory links the party inside its own transaction by design:
+  [`person_created`](../../addons/angee/iam/events.py) fires before commit, so a
+  linkage failure rolls the account back. Foreign writes that only enrich parties
+  treat that work as best effort: ingest defers it with `transaction.on_commit`,
+  OIDC login contains its handle claim, and both log failures and let the foreign
+  write continue.
+- **IAM stores the canonical person email.**
+  [`UserManager.normalize_email`](../../addons/angee/iam/models.py) owns the rule,
+  and saves that write `email` apply it, so lookups and the person-email unique
+  constraint compare the stored column without SQL transforms. `bulk_create` and
+  queryset `update()` bypass it; normalize before writing email through them.
 - **Polymorphic edges write at the canonical MTI level.** Route their targets
   through `angee.base.canonical_record_target`; compose `ThreadedModelMixin` and
-  reverse `GenericRelation`s on that same canonical ancestor.
+  reverse `GenericRelation`s on that same canonical ancestor. The edge owner
+  authorizes that canonical target: [`FileAttachmentManager.attach`](../../addons/angee/storage/models.py)
+  requires its `write` and fails closed, outside system context, for a target
+  without a REBAC type.
 - **Derived columns have two drift classes and two owners.** Signals own instance
   saves/deletes, cascades, and queryset deletes; idempotent repair passes own
   `bulk_create` and queryset `update` paths, where signals do not run.
@@ -939,6 +999,12 @@ and current contracts before applying a historical example to a new deployment.
   [`WorkflowDefinitionResource`](../../addons/angee/workflows/resources.py) is the
   facet-reconciliation example. Source omission and explicit null must remain
   distinguishable through dataset normalization.
+- **A resource row references any record through its record-reference prefix
+  column.** For a model composing [`RecordRefMixin`](../../angee/base/refs.py),
+  the loader adds a column named by `record_ref_field_prefix` whose xref
+  [`RecordRefWidget`](../../addons/angee/resources/widgets.py) resolves through
+  the ledger to the canonical record target. Never combine it with the backing
+  content-type/object-id columns.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.
@@ -1155,6 +1221,11 @@ and current contracts before applying a historical example to a new deployment.
   projector. Reuse `angee.graphql.actions.ActionResult` and `action_guard` when
   their error contract fits; changing an existing error envelope is a separate
   API migration, not a mechanical refactor.
+- **Domain refusals are typed.** Raise a subclass of
+  [`DomainError`](../../angee/base/errors.py) with a stable `code`; the
+  [GraphQL sanitizer](../../addons/angee/graphql/schema.py) maps it by type to
+  that code without detail. Never add a domain code to the sanitizer's
+  expected-code allow-list.
 - **Resolvers never inspect `info.selected_fields` to choose annotations.** A sort
   alias that needs an annotation is declared on `hasura_model_resource`. Lazy
   preparation belongs in `strawberry-django-hasura` at its resolved `order_by`
@@ -1515,6 +1586,30 @@ from the composition addon to both owners; integrate never imports workflows.
   declare `changes()` for the model to join the change feed.
 
 ## Framework Contracts
+
+### Persistence primitives
+
+[Base mixins](../../angee/base/mixins.py) own these row contracts and their
+system checks; compose them instead of a local column, comparison, or guard.
+Their docstrings own the exact behavior.
+
+- **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
+  accepts a client's `expected_revision` passes it to `save()` and maps
+  `StaleRevisionError` to its conflict result; queryset updates never bump.
+- **Creation keys:** `CreationKeyMixin` stores a scoped client creation key and
+  content fingerprint. Replays go through `CreationKeyQuerySet.for_creation_key`;
+  `angee.E023` requires the declared uniqueness constraint.
+- **Ownership:** a grant root composes `OwnerMixin`, so `owner` is transferable
+  access and `created_by` remains attribution. Its Zed backs `owner` with that
+  column and declares `transfer` (`angee.E022`). Change it through
+  `transfer_ownership`; bulk release belongs only to an owning verb that already
+  authorized it. See the [example notes](../../examples/addons/example/notes/permissions.zed);
+  remaining `rebac:field=created_by` owner relations are unconverted, not a pattern.
+- **Owning containers:** a container composing `ItemOwnershipMixin` can own its
+  newly inserted items, which then reach access through it; items name it with
+  `owner_container` (`angee.E025`). Changing the flag affects later inserts only.
+- **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
+  fields; only an authorized owning verb grants the next save an allowance.
 
 ### Direct record access
 

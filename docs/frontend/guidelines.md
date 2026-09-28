@@ -178,6 +178,11 @@ history uses native Query pages with domain-owned
   composition. One greppable seam per addon — never annotate a bare
   `const x: BaseAddon = {…}`. These contracts and the packages that own them are
   described under [Package Layering](#package-layering).
+- **Product identity is declared once.** At most one addon declares
+  `brand: { name, mark }`, with `mark` a registered glyph; composition rejects a
+  second claim. Rail, login, public mark and document title read it through
+  `useRuntimeBrand`; shell components hard-code no identity. See
+  [`AddonManifest.brand`](../../packages/app/src/define-addon.ts).
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
   the default `"console"` layout. An explicit `detailComponent` gets a native
@@ -385,7 +390,11 @@ history uses native Query pages with domain-owned
   surface owns discovery and paging; board components render its results.
   Explicit `laneSource` boards retain their relation-catalogue contract for empty
   lanes, drag ordering and lane creation; bounded local collections keep native
-  client grouping.
+  client grouping. The read-only `gantt` view kind composes both owners: a
+  `ListView` declaring `gantt` and `laneSource` pages its rows, empty ones
+  included, through the board's relation-options owner and loads their bars
+  through the list's resource query and batch transport. See
+  [`GanttCollectionSurface`](../../packages/ui/src/views/gantt/gantt-collection-surface.tsx).
 - **Resolve resource queries before adapting them to a library.** Use the
   resource's `ResourceQuery` for allowed comparisons, group identities, drill
   predicates and required selections. Hand-building a resource view's Hasura
@@ -675,6 +684,12 @@ Hard-won traps — the wise learn from others' mistakes
   changed vs a persisted marker — a source edit re-optimizes, an unchanged tree
   stays cached. The in-repo example excludes `@angee/*` (linked source, HMR) so
   this never applies there.
+- **Vendored third-party UI records its provenance beside the code.** Keep the
+  upstream license and an `UPSTREAM.md` naming the pinned source, original file
+  hashes and every local adaptation, and list both in the package's published
+  `files`. Adapt primitives, glyphs, tokens and types; leave upstream algorithms
+  intact. The [ReUI Gantt](../../packages/ui/src/views/gantt/UPSTREAM.md) is the
+  reference.
 - **Start new addon web packages from `templates/addons/web`.** The Copier template
   owns the current ceremony: `defineBaseAddon`, `resourcePageRoutes`, lazy routed
   pages, `createNamespaceT`, `expectValidBaseAddon`, and package/test wiring.
@@ -707,6 +722,10 @@ Hard-won traps — the wise learn from others' mistakes
   activation; modified clicks keep the browser default). Workbench primary
   panes are reserved for page-published explorers; `TopMenuTabs` is reserved
   for explicit collection-view state, not derived menu children.
+  [`MenuTree.appRoots()`](../../packages/ui/src/chrome/menu-tree.ts) alone selects
+  app roots: explicit `appRoot` declarations win, otherwise every root is an app,
+  and `appRoot` on a non-root item throws. A branded single-root rail shows the
+  brand and that root's children instead of the app chooser.
   A route referenced by more than one menu item must set `route.menu` (the owning
   item's id) or the chrome derivation throws "referenced by multiple menu items" —
   or make the root route-less so it inherits its target through a descendant and the
