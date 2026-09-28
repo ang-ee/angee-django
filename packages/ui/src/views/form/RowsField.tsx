@@ -58,6 +58,7 @@ export function RowsField({
   field,
   messages = [],
   readOnly = false,
+  disabled,
   onChange,
   onCommit,
   controlRef,
@@ -81,6 +82,7 @@ export function RowsField({
         dialogValues={row}
         messages={messagesForDottedPath(messages, cellPath)}
         readOnly={readOnly || column.readOnly}
+        disabled={disabled}
         showLabel={Boolean(rowTitle)}
         showDescription={Boolean(rowTitle)}
         onChange={(next) => onChange?.(rows.map((current, currentIndex) =>

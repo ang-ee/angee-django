@@ -20,7 +20,9 @@ import { relationFieldInfoForResource } from "../resource/model-metadata-default
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { useActionForm } from "./use-action-form";
+import { ActionFormProvider } from "./ActionFormProvider";
 import { actionOutcomeSubmitResult } from "./validation-errors";
+import { fieldErrorMessages } from "./form-view-model";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from "../page";
 
 export interface ActionFormDialogProps {
@@ -74,7 +76,6 @@ export function ActionFormDialog({
     fieldNames: argNames,
   });
   const {
-    fieldErrors: serverErrors,
     formError,
     submitting,
     clearFieldError: clearServerError,
@@ -106,6 +107,7 @@ export function ActionFormDialog({
   );
 
   return (
+    <ActionFormProvider {...form}>
     <DialogForm
       open={open}
       onOpenChange={onOpenChange}
@@ -118,11 +120,11 @@ export function ActionFormDialog({
           key={arg.name}
           control={form.control}
           name={arg.name}
-          render={({ field }) => (
+          render={({ field, fieldState }) => (
             <ActionArgRow
               arg={arg}
               value={field.value}
-              messages={serverErrors[arg.name]}
+              messages={fieldState.error ? fieldErrorMessages([fieldState.error]) : []}
               readOnly={submitting}
               onChange={(next) => {
                 clearServerError(arg.name);
@@ -134,6 +136,7 @@ export function ActionFormDialog({
       ))}
       <ErrorBanner description={formError} />
     </DialogForm>
+    </ActionFormProvider>
   );
 }
 
@@ -241,7 +244,7 @@ function ActionArgControl({
     <FieldDescriptorControl
       field={arg}
       value={value}
-      readOnly={readOnly}
+      disabled={readOnly}
       onChange={onChange}
     />
   );
@@ -270,7 +273,7 @@ function ActionRelationControl({
       <FieldDescriptorControl
         field={arg}
         value={value}
-        readOnly={readOnly}
+        disabled={readOnly}
         onChange={onChange}
       />
     );
@@ -309,7 +312,7 @@ function ActionRelationListControl({
       <FieldDescriptorControl
         field={arg}
         value={value}
-        readOnly={readOnly}
+        disabled={readOnly}
         onChange={onChange}
       />
     );

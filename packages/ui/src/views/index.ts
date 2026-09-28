@@ -110,6 +110,7 @@ export {
   type UseActionFormOptions,
   type UseActionFormResult,
 } from "./form/use-action-form";
+export { ActionFormProvider } from "./form/ActionFormProvider";
 export {
   actionFormSubmitResult,
   actionOutcomeSubmitResult,

@@ -15,6 +15,7 @@ import {
   RecordChromeProvider,
 } from "../resource/record-chrome-context";
 import { RecordActionBar } from "./RecordActionBar";
+import { ActionFormProvider } from "./ActionFormProvider";
 import type {
   FieldDescriptor,
   PageFieldKind,
@@ -122,29 +123,15 @@ export function FormView(props: FormViewProps): React.ReactElement {
 }
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
+  const surface = useFormViewSurface(props);
+  return <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>;
+}
+
+function FormViewContent({ surface, ...props }: FormViewProps & {
+  surface: ReturnType<typeof useFormViewSurface>;
+}): React.ReactElement {
   const {
-    resource,
-    id,
     readOnly = false,
-    fields,
-    groups,
-    children,
-    actions,
-    returning,
-    defaultValues,
-    acknowledgedSource,
-    onSaved,
-    submit,
-    createSubmit,
-    readOnlyWhen,
-    onFieldInteractionStart,
-    onFieldInteractionCommit,
-    onDiscarded,
-    recordTabs,
-    recordTab,
-    onRecordTabChange,
-    deleteAction,
-    deleteVisibleWhen,
     submitLabel,
     toolbarStart,
     toolbar,
@@ -160,36 +147,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     lineSupplementalColumns,
     lineRelationFilters,
     recordPresentation = "document",
-    defaultRecordTab,
     overviewTab,
     publishBreadcrumbLabel = false,
     className,
   } = props;
-  const surface = useFormViewSurface({
-    resource,
-    id,
-    readOnly,
-    fields,
-    groups,
-    children,
-    actions,
-    returning,
-    defaultValues,
-    acknowledgedSource,
-    onSaved,
-    submit,
-    createSubmit,
-    readOnlyWhen,
-    onFieldInteractionStart,
-    onFieldInteractionCommit,
-    onDiscarded,
-    recordTabs,
-    recordTab,
-    onRecordTabChange,
-    defaultRecordTab,
-    deleteAction,
-    deleteVisibleWhen,
-  });
   const {
     t,
     activeRecordTab,

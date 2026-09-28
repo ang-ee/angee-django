@@ -16,6 +16,106 @@ test("FormSpec registers only its presentation annotations with JSON Schema vali
 });
 
 describe("deserializeFormSpec", () => {
+  test("projects declared objects through nested fields while keeping explicit JSON opaque", () => {
+    const schema = { type: "object", properties: {
+      identity: { type: "string", title: "Identity", readOnly: true, default: "retained" },
+      note: { type: "string", title: "Note" },
+    } };
+    const [structured, opaque] = deserializeFormSpec({ properties: {
+      details: schema, raw: { ...schema, widget: "json" },
+    } }, defaultWidgets);
+    expect(structured).toMatchObject({ widget: "object", objectTemplate: [
+      { name: "identity", readOnly: true, defaultValue: "retained" },
+      { name: "note", label: "Note" },
+    ] });
+    expect(opaque).toMatchObject({ widget: "json" });
+    expect(opaque?.objectTemplate).toBeUndefined();
+  });
+
+  test("projects nullable object children with their immutable defaults and outer annotations", () => {
+    const fields = deserializeFormSpec({ properties: {
+      details: {
+        title: "Retained details", description: "Review the details", default: null,
+        anyOf: [{ type: "object", title: "Inner title", required: ["identity"], properties: {
+          identity: { type: "string", readOnly: true, default: "retained", const: "retained" },
+          note: { type: "string", minLength: 3 },
+        } }, { type: "null" }],
+      },
+    } }, defaultWidgets);
+    expect(fields[0]).toMatchObject({
+      widget: "object", nullable: true, label: "Retained details", description: "Review the details",
+      defaultValue: null, objectTemplate: [
+        { name: "identity", readOnly: true, required: true, defaultValue: "retained" },
+        { name: "note", minLength: 3 },
+      ],
+    });
+    expect(formSpecInitialValues(fields, {})).toEqual({ details: null });
+    expect(formSpecInitialValues(fields, { details: { note: "Updated" } })).toEqual({
+      details: { identity: "retained", note: "Updated" },
+    });
+    expect(normalizeFormSpecValues(fields, { details: null })).toEqual({ details: null });
+  });
+
+  test("projects nullable object lists through references without losing their item controls", () => {
+    const schema = { $defs: {
+      Entries: { type: "array", minItems: 1, items: { type: "object", properties: {
+        identity: { type: "string", readOnly: true, default: "retained" },
+        note: { type: "string", title: "Note" },
+      } } },
+    }, properties: {
+      entries: { anyOf: [{ $ref: "#/$defs/Entries" }, { type: "null" }],
+        title: "Entries", widget: "list", default: [{ identity: "retained", note: "Initial" }] },
+    } };
+    const original = structuredClone(schema);
+    const fields = deserializeFormSpec(schema, defaultWidgets);
+    expect(fields[0]).toMatchObject({ widget: "list", nullable: true, label: "Entries", minItems: 1,
+      itemTemplate: { widget: "object", objectTemplate: [
+        { name: "identity", readOnly: true, defaultValue: "retained" },
+        { name: "note", label: "Note" },
+      ] },
+    });
+    const initial = formSpecInitialValues(fields, {});
+    expect(initial).toEqual({ entries: [{ identity: "retained", note: "Initial" }] });
+    expect(normalizeFormSpecValues(fields, initial)).toEqual(initial);
+    expect(formSpecInitialValues(fields, { entries: null })).toEqual({ entries: null });
+    expect(schema).toEqual(original);
+  });
+
+  test("projects choices inside nullable alternatives and preserves their JSON value types", () => {
+    const fields = deserializeFormSpec({ properties: {
+      choice: { anyOf: [{ type: "integer", enum: [1, 2], default: 1 }, { type: "null" }],
+        title: "Choice", default: null },
+      state: { anyOf: [{ type: "string", enum: ["first", "second"] }, { type: "null" }],
+        options: [{ value: "second", label: "Second choice" }] },
+    } }, defaultWidgets);
+    expect(fields[0]).toMatchObject({ widget: "select", nullable: true, label: "Choice", defaultValue: null,
+      options: [{ value: "0", label: "1" }, { value: "1", label: "2" }],
+    });
+    expect(fields[0]?.valueCodec?.fromControl("1")).toBe(2);
+    expect(fields[0]?.valueCodec?.toControl(1)).toBe("0");
+    expect(fields[1]).toMatchObject({ widget: "select", nullable: true,
+      options: [{ value: "second", label: "Second choice" }],
+    });
+  });
+
+  test("does not choose between multiple non-null alternatives", () => {
+    expect(deserializeFormSpec({ properties: {
+      choice: { anyOf: [
+        { type: "string", enum: ["first"] }, { type: "string", enum: ["second"] }, { type: "null" },
+      ] },
+    } }, defaultWidgets)).toEqual([{ name: "choice", kind: "string", widget: "text", nullable: true }]);
+  });
+
+  test("uses JSON Schema titles for labels while preserving explicit label precedence", () => {
+    expect(deserializeFormSpec({ properties: {
+      subject: { type: "string", title: "Subject" },
+      note: { type: "string", title: "Schema title", label: "Authored label" },
+    } }, defaultWidgets)).toEqual([
+      { name: "subject", kind: "string", widget: "text", label: "Subject" },
+      { name: "note", kind: "string", widget: "text", label: "Authored label" },
+    ]);
+  });
+
   test("retains hidden schema fields through initialization and normalized submission", () => {
     const fields = deserializeFormSpec({
       type: "object",
@@ -349,18 +449,27 @@ describe("deserializeFormSpec", () => {
     } }, defaultWidgets)).toThrow(/Invalid source.layout/);
   });
 
-  test("rejects enum values the string-valued select cannot preserve", () => {
-    expect(() =>
-      deserializeFormSpec(
-        {
-          type: "object",
-          properties: { priority: { enum: [1, 2] } },
-        },
-        defaultWidgets,
-      ),
-    ).toThrowError(
-      "Invalid priority.enum.0: form-spec select values must be strings.",
-    );
+  test("keeps typed JSON choices distinct through stable control tokens", () => {
+    const values = [0, 1, "1", false, null, { first: 1, second: 2 }];
+    const field = deserializeFormSpec({ properties: { choice: { enum: values } } }, defaultWidgets)[0]!;
+    expect(field.options?.map(({ label }) => label)).toEqual(["0", "1", "1", "false", "null", '{"first":1,"second":2}']);
+    for (const [index, value] of values.entries()) {
+      const token = field.valueCodec?.toControl(value);
+      expect(token).toBe(String(index));
+      expect(field.valueCodec?.fromControl(token)).toEqual(value);
+    }
+    expect(field.valueCodec?.toControl({ second: 2, first: 1 })).toBe("5");
+    expect(field.valueCodec?.toControl(undefined)).toBeUndefined();
+    expect(field.valueCodec?.fromControl("unknown")).toBeUndefined();
+    expect(field.valueCodec?.fromControl("5")).not.toBe(values[5]);
+  });
+
+  test("retains numeric values for an explicitly authored numeric widget", () => {
+    const [field] = deserializeFormSpec({ properties: {
+      count: { type: "integer", widget: "integer", enum: [0, 1] },
+    } }, defaultWidgets);
+    expect(field).toMatchObject({ widget: "integer" });
+    expect(field?.valueCodec).toBeUndefined();
   });
 
   test("throws instead of silently falling back for an unknown widget", () => {

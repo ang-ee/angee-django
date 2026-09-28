@@ -60,9 +60,11 @@ const onChange = vi.fn();
 function Browser({
   value = "",
   readOnly = false,
+  invalid = false,
 }: {
   value?: unknown;
   readOnly?: boolean;
+  invalid?: boolean;
 }): React.ReactElement {
   return (
     <>
@@ -72,6 +74,7 @@ function Browser({
         id="mount-source"
         value={value}
         readOnly={readOnly}
+        invalid={invalid}
         describedBy="mount-help"
         labelledBy="mount-source-label"
         dialogValues={{}}
@@ -128,6 +131,13 @@ describe("MountSourceBrowser", () => {
     expect(input.getAttribute("aria-label")).toBeNull();
     expect(input.getAttribute("aria-labelledby")).toBe("mount-source-label");
     expect(screen.getByRole("button", { name: "Use this folder" })).toBeTruthy();
+  });
+
+  test("passes the descriptor error association to the manual source input", () => {
+    render(<Browser invalid />);
+    const input = screen.getByRole("textbox", { name: "Source folder" });
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe("mount-help");
   });
 
   test("keeps the group label when the backend has no manual token input", () => {

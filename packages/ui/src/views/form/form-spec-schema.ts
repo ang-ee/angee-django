@@ -47,6 +47,7 @@ const RelationSchema = v.object({
 const FieldKeywordSchema = v.object({
   type: v.optional(JsonFieldTypeSchema),
   required: v.optional(v.array(v.string())),
+  title: v.optional(v.string()),
   description: v.optional(NonEmptyString),
   readOnly: v.optional(v.boolean()),
   nullable: v.optional(v.boolean()),
@@ -60,7 +61,7 @@ const FieldKeywordSchema = v.object({
   const: v.optional(JsonValueSchema),
   format: v.optional(NonEmptyString),
   pattern: v.optional(v.string()),
-  enum: v.optional(v.array(v.string("form-spec select values must be strings."))),
+  enum: v.optional(v.array(JsonValueSchema)),
 });
 const FieldAnnotationSchema = v.object({
   propertyOrder: v.optional(v.array(NonEmptyString)),
@@ -80,7 +81,7 @@ const FieldAnnotationSchema = v.object({
     // JSON Pointer uses the empty string for the root document. It is a valid
     // authored choice value even though human-facing option labels stay
     // non-empty.
-    value: v.string(),
+    value: JsonValueSchema,
     label: NonEmptyString,
     disabled: v.optional(v.boolean()),
   }))),

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { FormProvider, set, useForm, useWatch, type FieldErrors } from "react-hook-form";
+import { set, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { stringValue as wireStringValue } from "@angee/refine";
 import { format } from "date-fns";
 
@@ -13,6 +13,8 @@ import { dateFromUnknown } from "../../widgets/date-format";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
 import { DescriptorFieldList, resolveDescriptorFields, type DescriptorField } from "./DescriptorFieldList";
 import { applyFormErrors, formSubmitError, invalidFormSubmit, type FormSubmitResult, type ValidationErrors } from "./validation-errors";
+import { useFieldValidation } from "./use-field-validation";
+import { ActionFormProvider } from "./ActionFormProvider";
 
 export {
   LabeledDescriptorField,
@@ -179,6 +181,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
 }): React.ReactElement {
   const t = useUiT();
   const toast = useToast();
+  const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<Record<string, unknown>>({
     defaultValues: initialDialogValues(fields, initialValues),
     mode: "onChange",
@@ -193,9 +196,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
         }
         return field.required && emptyDialogValue(formValues[field.name]) ? [field.name] : [];
       });
-      return missing.length ? {
-        values: {}, errors: requiredDialogErrors(missing, t("form.required")),
-      } : { values: formValues, errors: {} };
+      const errors = requiredDialogErrors(missing, t("form.required"));
+      validateFields(formValues, (name, error) => set(errors, name, error));
+      return Object.keys(errors).length ? { values: {}, errors } : { values: formValues, errors: {} };
     },
   });
   const session = React.useRef(0);
@@ -309,9 +312,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       placement={placement}
       trigger={trigger}
     >
-      <FormProvider {...form}>
+      <ActionFormProvider {...{ ...form, registerFieldValidation }}>
         <DescriptorFieldList resolvedFields={visibleFields} />
-      </FormProvider>
+      </ActionFormProvider>
       <ErrorBanner description={error} />
     </DialogForm>
   );

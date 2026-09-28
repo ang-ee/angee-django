@@ -37,6 +37,7 @@ export function MountSourceBrowser({
   backendClass,
   id,
   readOnly,
+  invalid,
   describedBy,
   labelledBy,
   value,
@@ -82,6 +83,7 @@ export function MountSourceBrowser({
       role="group"
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
+      aria-invalid={invalid || undefined}
       className="grid gap-3"
     >
       <div className="flex items-center justify-between gap-3">
@@ -104,6 +106,8 @@ export function MountSourceBrowser({
         <Input
           id={id}
           aria-labelledby={labelledBy}
+          aria-describedby={describedBy}
+          invalid={invalid}
           placeholder={t("mount.browse.manualHint")}
           value={manualToken}
           disabled={readOnly}

@@ -185,6 +185,35 @@ test("validates native values through the resolver without resetting dirty or to
   expect(result.current.form.formState.defaultValues).toEqual({ title: "" });
 });
 
+test.each([false, true])("shows editor errors together with field validation (resolver: %s)", async (withResolver) => {
+  const submit = vi.fn().mockResolvedValue({ status: "ok", data: undefined });
+  const { result } = renderHook(() => useActionForm<{ title: string; payload: string }>({
+    defaultValues: { title: "", payload: "retained" },
+    resolver: withResolver ? (values): ResolverResult<{ title: string; payload: string }> => values.title
+      ? { values, errors: {} }
+      : { values: {}, errors: { title: { type: "required", message: "Enter a title." } } }
+      : undefined,
+    submit,
+  }), { wrapper });
+  result.current.form.register("title", { required: "Enter a title." });
+  const editorValidation = vi.fn((): string | undefined => "Complete the draft.");
+  const unregister = result.current.form.registerFieldValidation("payload", editorValidation);
+
+  await act(async () => { expect(await result.current.run()).toBe(false); });
+  expect(submit).not.toHaveBeenCalled();
+  expect(editorValidation).toHaveBeenCalledTimes(1);
+  expect(editorValidation).toHaveBeenCalledWith("retained", { title: "", payload: "retained" });
+  expect(result.current.form.getFieldState("title").error?.message).toBe("Enter a title.");
+  expect(result.current.form.getFieldState("payload").error?.message).toBe("Complete the draft.");
+
+  act(() => result.current.form.setValue("title", "Ready"));
+  editorValidation.mockReturnValue(undefined);
+  await act(async () => { expect(await result.current.run()).toBe(true); });
+  expect(submit).toHaveBeenCalledWith({ title: "Ready", payload: "retained" });
+  expect(result.current.form.formState.errors).toEqual({});
+  unregister();
+});
+
 test.each(["invalid", "conflict"] as const)("retains the draft after %s and clears stale errors for a successful retry", async (status) => {
   const failed = status === "invalid"
     ? { status, issues: { fieldErrors: { title: ["Choose another title."] }, formErrors: [] } }

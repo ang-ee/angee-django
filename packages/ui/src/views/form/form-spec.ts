@@ -1,4 +1,5 @@
 import * as React from "react";
+import { stableSerialize } from "@angee/refine";
 
 import { useAppRuntime, type WidgetMap } from "../../runtime";
 import {
@@ -23,7 +24,8 @@ export type FormSpecRelationCreate = Pick<
  * Descriptor produced from a backend-emitted JSON form schema.
  * `type`/`properties`/`required`/`items`/`enum`/`const` are the recursive schema
  * vocabulary. Presentation extensions live on each property: string-only
- * `widget`/`label`/`description`/`placeholder`, list `addLabel`/`removeLabel`,
+ * `widget`/`label`/`description`/`placeholder` (`label` overrides JSON Schema
+ * `title`), list `addLabel`/`removeLabel`,
  * `readOnly`, `hidden` (retained in values without a control), JSON `defaultValue`
  * (overriding the standard schema `default` when both are supplied),
  * string-labelled `options`, and the pure-data `relation` config. A property's
@@ -31,9 +33,13 @@ export type FormSpecRelationCreate = Pick<
  * Arrays of objects resolve to the registered fixed-N `rows` view composer.
  * Properties and items may reference root-local `$defs` or `definitions`;
  * reference siblings override presentation metadata on the referenced schema.
+ * A nullable `anyOf` with one non-null alternative projects that alternative's
+ * controls while retaining the outer annotations and nullability.
+ * String-valued choice widgets use a descriptor codec for JSON-valued choices;
+ * the form retains the original JSON types throughout editing and submission.
  */
 export interface FormSpecFieldDescriptor extends DescriptorField {
-  /** Approval layout intent; ordinary forms and unspecified fields remain inputs. */
+  /** Form layout intent; ordinary forms and unspecified fields remain inputs. */
   layout?: "context" | "input";
   rowTemplate?: readonly FormSpecFieldDescriptor[];
   objectTemplate?: readonly FormSpecFieldDescriptor[];
@@ -184,20 +190,28 @@ export function resolveSchemaReference<T>(
   return definitions[name]!;
 }
 
-/** Resolve only projected nodes: opaque context schemas need no finite template. */
-function resolveFieldReferences(
+/** Resolve references and unambiguous nullable wrappers only for projected nodes. */
+function resolveFieldSchema(
   field: FormSpecWire,
   root: FormSpecWire,
   path: string,
   references: readonly FormSpecWire[],
 ): { field: FormSpecWire; references: readonly FormSpecWire[] } {
   const chain: FormSpecWire[] = [];
-  while (field.$ref !== undefined) {
-    const { $ref, ...siblings } = field;
-    const target = resolveSchemaReference($ref, root, path);
-    if (chain.includes(target)) throw new Error(`Invalid ${path}: cyclic reference "${$ref}".`);
-    chain.push(target);
-    field = { ...target, ...siblings };
+  while (true) {
+    if (field.$ref !== undefined) {
+      const { $ref, ...siblings } = field;
+      const target = resolveSchemaReference($ref, root, path);
+      if (chain.includes(target)) throw new Error(`Invalid ${path}: cyclic reference "${$ref}".`);
+      chain.push(target);
+      field = { ...target, ...siblings };
+      continue;
+    }
+    if (!field.anyOf?.some((alternative) => alternative.type === "null")) break;
+    const alternatives = field.anyOf.filter((alternative) => alternative.type !== "null");
+    if (alternatives.length !== 1) break;
+    const { anyOf: _alternatives, ...siblings } = field;
+    field = { ...alternatives[0], ...siblings, nullable: true };
   }
   return { field, references: [...references, ...chain] };
 }
@@ -239,7 +253,7 @@ function deserializeField(
   ancestors: readonly FormSpecWire[],
 ): FormSpecFieldDescriptor {
   const path = parentPath === "form spec" ? name : `${parentPath}.${name}`;
-  const { field, references } = resolveFieldReferences(schema, root, path, ancestors);
+  const { field, references } = resolveFieldSchema(schema, root, path, ancestors);
   const type = formSpecFieldType(field.type, field.anyOf);
   const nullable = field.nullable
     || field.type === "null"
@@ -247,13 +261,15 @@ function deserializeField(
     || field.anyOf?.some((alternative) => alternative.type === "null");
   const variableList = type === "array" && field.widget === "list";
   const items = type === "array" && field.items && field.layout !== "context"
-    ? resolveFieldReferences(field.items, root, `${path}[]`, references)
+    ? resolveFieldSchema(field.items, root, `${path}[]`, references)
     : undefined;
   const rowTemplate = items && !variableList
     && formSpecFieldType(items.field.type, items.field.anyOf) === "object"
     ? deserializeObjectFields(items.field, widgets, path, root, items.references)
     : undefined;
-  const objectTemplate = type === "object" && field.widget === "object" && field.layout !== "context"
+  const structuredObject = type === "object" && (field.widget === "object"
+    || (field.widget === undefined && field.properties !== undefined));
+  const objectTemplate = structuredObject && field.layout !== "context"
     ? deserializeObjectFields(field, widgets, path, root, references)
     : undefined;
   if (variableList && items) assertFiniteTemplate(references, path);
@@ -261,10 +277,12 @@ function deserializeField(
     ? deserializeField("item", items.field, true, widgets, `${path}[]`, root, items.references)
     : undefined;
   const {
-    relation, widget: authoredWidget, label, addLabel, removeLabel,
+    relation, widget: authoredWidget, addLabel, removeLabel,
     description, placeholder, readOnly, hidden, layout,
   } = field;
-  const options = optionsFrom(field);
+  const label = field.label ?? field.title;
+  const choices = optionsFrom(field);
+  const options = choices?.options;
   if (rowTemplate && authoredWidget && authoredWidget !== "rows") {
     throw new Error(
       `Invalid form spec field "${path}": an array of objects uses widget "rows".`,
@@ -272,7 +290,7 @@ function deserializeField(
   }
   const widget = rowTemplate
     ? "rows"
-    : authoredWidget ?? (relation ? "many2one" : options ? "select" : TYPE_WIDGETS[type]);
+    : authoredWidget ?? (relation ? "many2one" : options ? "select" : objectTemplate ? "object" : TYPE_WIDGETS[type]);
   if (!isWidgetDefinition(widgets[widget])) {
     throw new Error(
       `Unknown form spec widget "${widget}" for field "${path}". Register it in AppRuntime.widgets.`,
@@ -303,6 +321,8 @@ function deserializeField(
     ...(Object.hasOwn(field, "defaultValue") ? { defaultValue: field.defaultValue, hasDefault: true }
       : Object.hasOwn(field, "default") ? { defaultValue: field.default, hasDefault: true } : {}),
     ...(options ? { options } : {}),
+    ...(choices?.valueCodec && (widget === "select" || widget === "selection" || widget === "combobox")
+      ? { valueCodec: choices.valueCodec } : {}),
     ...(relation ? { relation } : {}),
     ...(rowTemplate ? { rowTemplate } : {}),
     ...(objectTemplate ? { objectTemplate } : {}),
@@ -327,11 +347,27 @@ function formSpecFieldType(
   return alternativeTypes.length === 1 ? alternativeTypes[0]! : "any";
 }
 
-function optionsFrom(field: FormSpecWire): readonly WidgetOption[] | undefined {
-  if (field.options) {
-    return field.options.map(({ value, label, disabled }) => ({
-      value, label, ...(disabled ? { disabled: true } : {}),
-    }));
-  }
-  return field.enum?.map((value) => ({ value, label: value }));
+/** Ordinal control tokens distinguish choices such as the number 1 and string "1". */
+function optionsFrom(field: FormSpecWire): Pick<FormSpecFieldDescriptor, "options" | "valueCodec"> | undefined {
+  const choices = field.options ?? field.enum?.map((value) => ({
+    value, label: typeof value === "string" ? value : JSON.stringify(value), disabled: false,
+  }));
+  if (!choices) return undefined;
+  const typed = choices.some(({ value }) => typeof value !== "string");
+  const options: readonly WidgetOption[] = choices.map(({ value, label, disabled }, index) => ({
+    value: !typed && typeof value === "string" ? value : String(index),
+    label, ...(disabled ? { disabled: true } : {}),
+  }));
+  if (!typed) return { options };
+  const keys = choices.map(({ value }) => stableSerialize(value));
+  return { options, valueCodec: {
+    toControl(value) {
+      const index = keys.indexOf(stableSerialize(value));
+      return index < 0 ? undefined : String(index);
+    },
+    fromControl(value) {
+      const index = options.findIndex((option) => option.value === value);
+      return index < 0 ? undefined : structuredClone(choices[index]!.value);
+    },
+  } };
 }

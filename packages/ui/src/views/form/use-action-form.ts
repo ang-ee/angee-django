@@ -1,10 +1,11 @@
 import * as React from "react";
-import { useForm, type FieldValues, type DefaultValues, type UseFormReturn, type Path, type Resolver } from "react-hook-form";
+import { useForm, type FieldValues, type DefaultValues, type Path, type Resolver } from "react-hook-form";
 
 import { useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import { applyFormErrors, serverErrorsFromForm, formSubmitError, type FormSubmitResult } from "./validation-errors";
+import { useFieldValidation, type FieldValidationForm } from "./use-field-validation";
 
 /** RHF owns collection and validation; the callback owns the authored submission. */
 export interface UseActionFormOptions<TValues extends FieldValues, TData = unknown, TSubmitValues extends FieldValues = TValues> {
@@ -21,7 +22,8 @@ export interface UseActionFormOptions<TValues extends FieldValues, TData = unkno
 }
 
 export interface UseActionFormResult<TValues extends FieldValues, TSubmitValues extends FieldValues = TValues> {
-  form: UseFormReturn<TValues, unknown, TSubmitValues>;
+  /** Pass to ActionFormProvider to bind controlled-editor draft validation. */
+  form: FieldValidationForm<TValues, unknown, TSubmitValues>;
   /** Validate and submit the native form's current values. */
   run: () => Promise<boolean>;
   submitting: boolean;
@@ -38,6 +40,7 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
 ): UseActionFormResult<TValues, TSubmitValues> {
   const t = useUiT();
   const toast = useToast();
+  const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<TValues, unknown, TSubmitValues>({ defaultValues: options.defaultValues, resolver: options.resolver });
   const { handleSubmit, clearErrors } = form;
   const optionsRef = useLatestRef(options);
@@ -49,8 +52,10 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
     submittingRef.current = true;
     clearErrors();
     let succeeded = false;
+    const validateEditors = () => validateFields(form.getValues(), (name, error) => form.setError(name as Path<TValues>, error));
     try {
       await handleSubmit(async (collected) => {
+        if (validateEditors()) return;
         const { submit, onSuccess, toastSuccess = true, fieldNames, genericErrorMessage } = optionsRef.current;
         const fallback = genericErrorMessage ?? t("error.generic");
         const result = await Promise.resolve().then(() => submit(collected))
@@ -60,13 +65,13 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
         if (toastSuccess && result.message) toast.success({ title: result.message });
         succeeded = true;
         onSuccess?.(collected, result.data);
-      })();
+      }, () => { validateEditors(); })();
     } finally { submittingRef.current = false; }
     return succeeded;
-  }, [clearErrors, form, handleSubmit, t, toast]);
+  }, [clearErrors, form, handleSubmit, t, toast, validateFields]);
   const clearFieldError = React.useCallback((name: string) => clearErrors(name as Path<TValues>), [clearErrors]);
   return {
-    form, run,
+    form: { ...form, registerFieldValidation }, run,
     submitting: form.formState.isSubmitting,
     fieldErrors: serverErrorsFromForm(form.formState.errors),
     formError: form.formState.errors.root?.server?.message ?? null,

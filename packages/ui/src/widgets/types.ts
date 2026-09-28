@@ -112,6 +112,7 @@ export interface WidgetControlProps {
   "aria-describedby"?: string;
   "aria-labelledby"?: string;
   "aria-required"?: boolean;
+  "aria-invalid"?: boolean;
   min?: number;
   max?: number;
   minLength?: number;
@@ -131,6 +132,8 @@ export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   /** Validation messages scoped to this widget's descriptor field. */
   messages?: readonly string[];
   readOnly?: boolean;
+  /** Temporarily lock a mounted editor while retaining its local draft. */
+  disabled?: boolean;
   onChange?: (value: TValue) => void;
   /** Atomically patch sibling fields of this editable line; stale rows are ignored. */
   onRowChange?: (patch: Record<string, unknown>) => void;

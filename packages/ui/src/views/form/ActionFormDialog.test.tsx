@@ -11,6 +11,7 @@ import {
 } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -25,6 +26,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { useState, type ReactElement } from "react";
+import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -265,6 +267,29 @@ describe("serializeActionArgValues", () => {
 });
 
 describe("ActionFormDialog", () => {
+  test("retains invalid JSON and blocks submission until the editor is corrected", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
+    renderDialog({
+      id: "collect", label: "Collect", submit,
+      args: [{ name: "payload", widget: "json", label: "Payload", defaultValue: { note: "Retained" } }],
+    });
+    const content = await screen.findByRole("textbox", { name: "Payload" });
+    const editor = EditorView.findFromDOM(content)!;
+    act(() => {
+      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: "{" } });
+      fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+    });
+    await screen.findByText("Enter a valid value.");
+    expect(submit).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Payload" })).toBe(content);
+    expect(editor.state.doc.toString()).toBe("{");
+    act(() => {
+      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: '{"note":"Updated"}' } });
+      fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+    });
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ payload: { note: "Updated" } }, context));
+  });
+
   test("passes normalized relation-list values to a custom submit", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Done." });
     renderDialog({

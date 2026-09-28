@@ -37,6 +37,15 @@ export interface DescriptorField extends FieldDescriptor {
   /** Disable editing for this field against the current form values. */
   readOnlyWhen?: (values: Record<string, unknown>) => boolean;
   /**
+   * Describe the fields and initial values belonging to one discriminator value.
+   * DescriptorFieldList removes the old/new branch paths before seeding the new
+   * branch. Other form values and the discriminator itself remain untouched.
+   */
+  branchReset?: (value: unknown) => {
+    fields: readonly string[];
+    values: Record<string, unknown>;
+  };
+  /**
    * Render this field as a searchable relation picker over `relation.resource`
    * instead of through the widget registry; the value is the selected row's
    * public id. Selection and in-place creation keep the surrounding form open.
@@ -63,6 +72,8 @@ export interface DescriptorFieldControlProps {
   id: string;
   value: unknown;
   readOnly: boolean;
+  /** Whether the control has a displayed validation error. */
+  invalid?: boolean;
   controlRef?: (target: WidgetFocusTarget | null) => void;
   describedBy: string | undefined;
   /** Present when the custom control declares `controlLabelMode: "group"`. */
@@ -97,10 +108,21 @@ export function DescriptorFieldList({ fields, resolvedFields, readOnly = false }
             [fieldState.error],
             isCompositeFieldDescriptor(field) ? field.name : undefined,
           ) : []}
-          readOnly={readOnly || form.formState.isSubmitting || field.readOnly || field.readOnlyWhen?.(values)}
+          readOnly={readOnly || field.readOnly || field.readOnlyWhen?.(values)}
+          disabled={form.formState.isSubmitting}
           controlRef={control.ref}
           onCommit={control.onBlur}
           onChange={(next) => {
+            if (field.branchReset && !Object.is(next, control.value)) {
+              const previous = field.branchReset(control.value);
+              const branch = field.branchReset(next);
+              form.unregister([...new Set([...previous.fields, ...branch.fields])].filter((name) => name !== field.name));
+              for (const name of branch.fields) {
+                if (name !== field.name && Object.hasOwn(branch.values, name)) {
+                  form.setValue(name, branch.values[name]);
+                }
+              }
+            }
             form.clearErrors(field.name);
             control.onChange(next);
             const seeds = field.prefill?.(next);
@@ -139,10 +161,11 @@ export function LabeledDescriptorField({
   value,
   dialogValues,
   readOnly,
+  disabled,
   messages = [],
   showLabel = true,
   showDescription = true,
-  onChange,
+  onChange: changeValue,
   onCommit,
   controlRef,
 }: {
@@ -157,6 +180,7 @@ export function LabeledDescriptorField({
   /** The sibling form values a `field.control` may scope itself by. */
   dialogValues?: Record<string, unknown>;
   readOnly?: boolean;
+  disabled?: boolean;
   messages?: readonly string[];
   showLabel?: boolean;
   showDescription?: boolean;
@@ -166,6 +190,9 @@ export function LabeledDescriptorField({
 }): React.ReactElement | null {
   const generatedId = React.useId();
   if (field.hidden) return null;
+  const onChange = (next: unknown) => {
+    if (!readOnly && !disabled) changeValue(next);
+  };
   const controlId = `mutation-field-${generatedId}`;
   const labelId = `${controlId}-label`;
   const isCompositeField = isCompositeFieldDescriptor(field);
@@ -173,17 +200,18 @@ export function LabeledDescriptorField({
   const displayedMessages = isCompositeField
     ? directDottedPathMessages(messages, field.name)
     : messages;
+  const invalid = displayedMessages.length > 0;
   const descriptionId = showDescription && field.description
     ? `${controlId}-description`
     : undefined;
-  const errorId = displayedMessages.length > 0
+  const errorId = invalid
     ? `${controlId}-error`
     : undefined;
   const describedBy =
     [descriptionId, errorId].filter(Boolean).join(" ") || undefined;
 
   return (
-    <FieldRoot invalid={displayedMessages.length > 0}>
+    <FieldRoot invalid={invalid}>
       {showLabel ? (
         <FieldLabel
           id={groupLabel ? labelId : undefined}
@@ -193,12 +221,13 @@ export function LabeledDescriptorField({
           {field.label ?? field.name}
         </FieldLabel>
       ) : null}
-      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
+      <DescriptorPresenceControl field={field} value={value} readOnly={readOnly || disabled} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
       {field.control ? (
         field.control({
           id: controlId,
           value,
-          readOnly: Boolean(readOnly),
+          readOnly: Boolean(readOnly || disabled),
+          invalid,
           controlRef,
           describedBy,
           labelledBy: groupLabel ? labelId : undefined,
@@ -210,10 +239,11 @@ export function LabeledDescriptorField({
         <DescriptorRelationControl
           controlId={controlId}
           describedBy={describedBy}
+          invalid={invalid}
           field={field}
           relation={field.relation}
           value={value}
-          readOnly={readOnly}
+          readOnly={readOnly || disabled}
           onChange={onChange}
           onCommit={onCommit}
           controlRef={controlRef}
@@ -224,8 +254,10 @@ export function LabeledDescriptorField({
           value={value}
           messages={messages}
           readOnly={readOnly}
+          disabled={disabled}
           controlProps={{
             id: controlId,
+            "aria-invalid": invalid || undefined,
             ...(describedBy ? { "aria-describedby": describedBy } : {}),
             ...(groupLabel ? { "aria-labelledby": labelId } : {}),
             ...(field.required ? { "aria-required": true } : {}),
@@ -239,7 +271,7 @@ export function LabeledDescriptorField({
       {showDescription && field.description ? (
         <FieldDescription id={descriptionId}>{field.description}</FieldDescription>
       ) : null}
-      {displayedMessages.length > 0 ? (
+      {invalid ? (
         <FieldError id={errorId} match>
           {displayedMessages.join(", ")}
         </FieldError>
@@ -258,6 +290,7 @@ export function LabeledDescriptorField({
 function DescriptorRelationControl({
   controlId,
   describedBy,
+  invalid,
   field,
   relation,
   value,
@@ -268,6 +301,7 @@ function DescriptorRelationControl({
 }: {
   controlId: string;
   describedBy?: string;
+  invalid: boolean;
   field: DescriptorField;
   relation: DescriptorFieldRelation;
   value: unknown;
@@ -332,6 +366,7 @@ function DescriptorRelationControl({
         placeholder={field.placeholder}
         aria-label={typeof field.label === "string" ? field.label : field.name}
         aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
         aria-required={field.required || undefined}
         onChange={onChange}
         onCommit={onCommit}
@@ -350,6 +385,7 @@ function DescriptorRelationControl({
       placeholder={field.placeholder}
       aria-label={typeof field.label === "string" ? field.label : field.name}
       aria-describedby={describedBy}
+      aria-invalid={invalid || undefined}
       aria-required={field.required || undefined}
       {...(create ? { create } : {})}
       onCreated={() => picker.list.refetch()}
