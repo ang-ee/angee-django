@@ -335,6 +335,9 @@ class OwnerMixin(AuditMixin):
     A cached, saved container supplies its flag; an uncached container costs one
     query per insert. ``bulk_create`` bypasses this instance-save default.
     Compose :class:`OwnerQuerySet` when an owning verb needs bulk release.
+    The owning model declares ``write__owner = <owner_transfer_permission>`` in
+    Zed; multi-table children delegate that gate through their parent relation.
+    Direct saves and queryset updates require the same transfer permission.
     """
 
     owner_transfer_permission: ClassVar[str] = "transfer"
@@ -353,6 +356,24 @@ class OwnerMixin(AuditMixin):
     class Meta:
         abstract = True
 
+    def container_owns_items(self) -> bool:
+        """Return the declared container's item-ownership policy, or false without one.
+
+        Reuse a cached, saved container; otherwise read its flag through the
+        system scope because this persistence rule is independent of read access.
+        """
+
+        if self.owner_container is None:
+            return False
+        field = self._meta.get_field(self.owner_container)
+        container_id = getattr(self, field.attname)
+        container = field.get_cached_value(self, default=None)
+        if container is not None and not container._state.adding:
+            return bool(container.owns_items)
+        return container_id is not None and system_queryset(field.related_model).filter(
+            pk=container_id, owns_items=True,
+        ).exists()
+
     def save(self, *args: Any, ownerless: bool = False, **kwargs: Any) -> None:
         """Apply the insert-only owner default before the audit and permission hooks.
 
@@ -364,18 +385,7 @@ class OwnerMixin(AuditMixin):
         if ownerless and (not self._state.adding or self.owner_id is not None):
             raise ValidationError({"owner": "Ownerless insertion requires a new row with no owner."})
         if self._state.adding and self.owner_id is None and not ownerless:
-            container_owns_items = False
-            if self.owner_container is not None:
-                field = self._meta.get_field(self.owner_container)
-                container_id = getattr(self, field.attname)
-                container = field.get_cached_value(self, default=None)
-                if container is not None and not container._state.adding:
-                    container_owns_items = container.owns_items
-                elif container_id is not None:
-                    container_owns_items = system_queryset(field.related_model).filter(
-                        pk=container_id, owns_items=True,
-                    ).exists()
-            if not container_owns_items:
+            if not self.container_owns_items():
                 self.owner_id = (
                     self.created_by_id if self.created_by_id is not None else actor_user_id(instance_actor(self))
                 )

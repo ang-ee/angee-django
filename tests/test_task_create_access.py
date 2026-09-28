@@ -96,9 +96,12 @@ def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]
     extra = parse_zed(
         """
         definition scopedemo/project_access_task {
+            relation owner: auth/user // rebac:field=owner
             permission create = authenticated
             permission read = authenticated
             permission write = authenticated
+            permission transfer = owner
+            permission write__owner = transfer
         }
         """
     )
@@ -217,7 +220,7 @@ def test_task_move_requires_destination_project_write(
     with system_context(reason="tests.task_create_access.move"):
         source = Scope.objects.create(name="Source project")
         task = ProjectAccessTask.objects.create(title="Moving task", project=source)
-    task.with_actor(admin if allowed else reader)
+    task = ProjectAccessTask.objects.with_actor(admin if allowed else reader).get(pk=task.pk)
     assert task.has_access("write")
     initial_history = task.history.count()
     initial_revision = task.revision
