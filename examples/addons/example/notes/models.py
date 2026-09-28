@@ -9,8 +9,8 @@ from django.db import models, transaction
 
 from angee.base.fields import StateField
 from angee.base.mixins import (
-    AuditMixin,
     HistoryMixin,
+    OwnerMixin,
     RevisionMixin,
     SqidMixin,
 )
@@ -18,7 +18,7 @@ from angee.base.models import AngeeModel
 from angee.messaging.models import ThreadedModelMixin
 
 
-class Note(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, RevisionMixin):
+class Note(SqidMixin, OwnerMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, RevisionMixin):
     """A short note used to exercise backend composition.
 
     Metadata changes are audited through ``history``; the ``body`` field is

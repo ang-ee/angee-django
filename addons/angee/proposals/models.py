@@ -14,7 +14,7 @@ import json
 from collections.abc import Iterable, Mapping
 from datetime import date
 from decimal import Decimal
-from typing import Any, ClassVar, Self, cast
+from typing import Any, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -38,7 +38,7 @@ from rebac.types import RelationshipFilter, SubjectRef
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin
+from angee.base.mixins import AuditMixin, ImmutableFieldsMixin
 from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
 from angee.base.scoping import bind_actor
 from angee.base.transitions import StateTransitions, save_state, transition
@@ -129,45 +129,6 @@ def _relationship_key(value: RelationshipTuple) -> tuple[str, str, str, str, str
         str(value.subject.subject_id),
         str(value.subject.optional_relation or ""),
     )
-
-
-class ImmutableFieldsMixin(models.Model):
-    """Reject identity/receipt changes except through an owning model verb."""
-
-    immutable_fields: ClassVar[tuple[str, ...]] = ()
-
-    class Meta:
-        """Django options for the addon-local invariant mixin."""
-
-        abstract = True
-
-    def allow_immutable_save(self, *field_names: str) -> None:
-        """Allow the next save to change named immutable attnames."""
-
-        allowed = set(getattr(self, "_proposals_allowed_immutable_fields", set()))
-        allowed.update(field_names)
-        self._proposals_allowed_immutable_fields = allowed
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist after comparing immutable facts with the committed row."""
-
-        allowed = set(getattr(self, "_proposals_allowed_immutable_fields", set()))
-        try:
-            if self.pk is not None and not self._state.adding:
-                checked = tuple(name for name in self.immutable_fields if name not in allowed)
-                if checked:
-                    # Compare committed identities without loading unrelated deferred columns.
-                    with system_context(reason=f"proposals.{self._meta.model_name}.immutable_fields"):
-                        persisted = type(self)._base_manager.filter(pk=self.pk).values(*checked).first()
-                    if persisted is not None:
-                        changed = [name for name in checked if persisted[name] != getattr(self, name)]
-                        if changed:
-                            raise ValidationError(
-                                {name.removesuffix("_id"): "This identity or receipt is immutable." for name in changed}
-                            )
-            super().save(*args, **kwargs)
-        finally:
-            self._proposals_allowed_immutable_fields = set()
 
 
 class Round(ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel):

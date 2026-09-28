@@ -26,3 +26,8 @@ demo = [
   { path = "resources/demo/102_workflows.edge.yaml", depends_on = "resources/demo/101_workflows.step.yaml" },
   { path = "resources/demo/103_workflows.trigger.yaml", depends_on = "resources/demo/100_workflows.workflow.yaml" },
 ]
+
+[[migrations]]
+name = "owner_column"
+app_label = "notes"
+module = "runtime_migrations.owner_column"

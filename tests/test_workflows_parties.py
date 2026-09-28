@@ -36,6 +36,7 @@ from angee.workflows.testing.drivers import advance_once, execute_started, run_t
 from angee.workflows.testing.models import Decision, StepAttempt, StepRun, WorkflowDispatch
 from angee.workflows_parties.autoconfig import SETTINGS as WORKFLOWS_PARTIES_SETTINGS
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, IdentityApplyStepImpl, IdentityReviewStepImpl
+from tests.conftest import installed_field_owners
 from tests.test_messaging import (
     Address,
     Handle,
@@ -61,7 +62,7 @@ def workflows_parties_tables(transactional_db: Any, tmp_path: Path) -> None:
     del transactional_db
     app_configs = list(apps.get_app_configs())
     runtime_dir = tmp_path / "permissions"
-    source_map = extension_source_map(app_configs)
+    source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)

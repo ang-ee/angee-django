@@ -25,7 +25,10 @@ class NotesQueryBudgetTests(TransactionTestCase):
             owner = get_user_model().objects.create_user(username="label-owner")
             outsider = get_user_model().objects.create_user(username="label-outsider")
             notes = note_model.objects.bulk_create(
-                [note_model(title=f"Note {index:02}", created_by=owner, updated_by=owner) for index in range(25)]
+                [
+                    note_model(title=f"Note {index:02}", owner=owner, created_by=owner, updated_by=owner)
+                    for index in range(25)
+                ]
             )
             note_model.objects.create(title="Hidden", created_by=outsider, updated_by=outsider)
             self.client.force_login(owner, backend="angee.iam.auth.ModelBackend")
@@ -66,7 +69,7 @@ class NotesQueryBudgetTests(TransactionTestCase):
             editors = [user_model.objects.create_user(username=f"editor-{index}") for index in range(25)]
             note_model.objects.bulk_create(
                 [
-                    note_model(title=f"Note {index:02}", created_by=owner, updated_by=editor)
+                    note_model(title=f"Note {index:02}", owner=owner, created_by=owner, updated_by=editor)
                     for index, editor in enumerate(editors)
                 ]
             )

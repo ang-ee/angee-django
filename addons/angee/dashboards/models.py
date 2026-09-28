@@ -18,6 +18,9 @@ from angee.base.mixins import (
     AuditMixin,
     ConditionalSharedReaderMixin,
     ConditionalSharedReaderQuerySet,
+    CreationKeyMixin,
+    CreationKeyQuerySet,
+    OptimisticLockMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.resources.mixins import ResourceLoadMixin
@@ -33,7 +36,7 @@ MAX_FILTER_CLAUSES = 100
 
 
 class DashboardConflictError(Exception):
-    """The caller's persisted identity or revision is no longer current."""
+    """The caller's persisted dashboard identity is no longer current."""
 
     def __init__(self, current_revision: int | None = None) -> None:
         self.current_revision = current_revision
@@ -385,7 +388,9 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
                 _invalid_query(f"{path}.source.refresh.seconds", "interval must be from 5 to 3600 seconds")
 
 
-class DashboardQuerySet(ConditionalSharedReaderQuerySet[Any], ArchiveQuerySet[Any], AngeeQuerySet[Any]):
+class DashboardQuerySet(
+    CreationKeyQuerySet[Any], ConditionalSharedReaderQuerySet[Any], ArchiveQuerySet[Any], AngeeQuerySet[Any],
+):
     """Archive scopes layered over actor-scoped dashboard reads."""
 
 
@@ -409,23 +414,31 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
             raise PermissionDenied("A personal dashboard can only be created for the acting user.")
         if not client_creation_key:
             raise ValidationError({"client_creation_key": "A client creation key is required."})
-        existing = self.filter(owner=owner, client_creation_key=client_creation_key).first()
+        name = name.strip() or "Untitled dashboard"
+        existing = self.for_creation_key(owner, client_creation_key, "")
         if existing is not None:
             return existing
         dashboard = self.model(
             owner=owner,
             scope="personal",
             scope_key=None,
-            name=name.strip() or "Untitled dashboard",
+            name=name,
             description=description,
             client_creation_key=client_creation_key,
         )
         try:
             with transaction.atomic():
-                dashboard.full_clean()
+                # Validate fields first so excluding the key from constraint
+                # checks doesn't skip its field validation. Its unique constraint
+                # arbitrates concurrent creations through the typed replay below.
+                dashboard.full_clean(validate_constraints=False)
+                dashboard.validate_constraints(exclude={"client_creation_key"})
                 dashboard.sudo(reason="dashboards.create_personal").save()
         except IntegrityError:
-            return self.get(owner=owner, client_creation_key=client_creation_key)
+            existing = self.for_creation_key(owner, client_creation_key, "")
+            if existing is None:
+                raise
+            return existing
         return dashboard.with_actor(actor)
 
     def save_snapshot(
@@ -459,8 +472,9 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                     raise DashboardConflictError()
                 if scope != "personal" and current.owner_id != owner.pk:
                     raise DashboardConflictError()
-                if current.revision != expected_revision:
+                if expected_revision is None:
                     raise DashboardConflictError(current.revision)
+                current.require_revision(expected_revision)
                 if current.scope != scope or current.scope_key != scope_key:
                     raise DashboardConflictError(current.revision)
             else:
@@ -556,9 +570,8 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
             if changed:
                 current.columns = canonical["columns"]
                 current.declaration_revision = declaration_revision
-                current.revision += 1
                 current.sudo(reason="dashboards.save_snapshot").save(
-                    update_fields=["columns", "declaration_revision", "revision", *dashboard_fields],
+                    update_fields=["columns", "declaration_revision", *dashboard_fields],
                 )
             return current.with_actor(actor)
 
@@ -566,8 +579,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
         actor = current_actor()
         with transaction.atomic(), system_context(reason="dashboards.reset_snapshot"):
             locked = cast(Any, self.model).system_queryset(lock=("self",)).get(pk=dashboard.pk)
-            if locked.revision != expected_revision:
-                raise DashboardConflictError(locked.revision)
+            locked.require_revision(expected_revision)
             if (
                 locked.scope == "personal" or actor is None
                 or to_subject_ref(locked.owner) != actor
@@ -579,12 +591,16 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
 DashboardObjects = DashboardManager()
 
 
-class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel):
+class Dashboard(
+    CreationKeyMixin, OptimisticLockMixin, ConditionalSharedReaderMixin,
+    ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataModel,
+):
     """One installed baseline or actor-owned complete dashboard snapshot."""
 
     runtime = True
     sqid_prefix = "dsh_"
     shared_reader_policy_fields = ("owner",)
+    creation_key_scope = "owner"
     rebac_grantable = {"viewer": "share", "editor": "share"}
 
     class Scope(models.TextChoices):
@@ -605,9 +621,7 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
     description = models.TextField(blank=True, default="")
     columns = models.PositiveSmallIntegerField(default=12)
     spec_version = models.PositiveSmallIntegerField(default=DASHBOARD_SCHEMA_VERSION)
-    revision = models.PositiveIntegerField(default=1)
     declaration_revision = models.CharField(max_length=128, blank=True, default="")
-    client_creation_key = models.CharField(max_length=128, null=True, blank=True)
 
     objects = DashboardObjects
 
@@ -646,11 +660,7 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
                 condition=models.Q(owner__isnull=True),
                 name="dashboard_installed_scoped_target",
             ),
-            models.UniqueConstraint(
-                fields=("owner", "client_creation_key"),
-                condition=models.Q(client_creation_key__isnull=False),
-                name="dashboard_owner_creation_key",
-            ),
+            CreationKeyMixin.creation_key_constraint(scope="owner", name="dashboard_owner_creation_key"),
         )
 
     def __str__(self) -> str:
@@ -672,13 +682,11 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
             raise PermissionDenied("You cannot archive this dashboard.")
         with transaction.atomic(), system_context(reason="dashboards.archive"):
             locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
-            if locked.revision != expected_revision:
-                raise DashboardConflictError(locked.revision)
+            locked.require_revision(expected_revision)
             if locked.is_archived != archived:
                 locked.is_archived = archived
-                locked.revision += 1
                 locked.sudo(reason="dashboards.archive").save(
-                    update_fields=["is_archived", "revision"]
+                    update_fields=["is_archived"]
                 )
         return locked.with_actor(actor)
 

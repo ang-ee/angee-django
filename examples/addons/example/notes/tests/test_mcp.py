@@ -157,7 +157,7 @@ class NotesMCPServerTests(MCPStreamableHTTPMixin, TransactionTestCase):
         call_command("resources", "load", include_demo=True, allow_non_dev=True, verbosity=0)
         with system_context(reason="test-setup"):
             self.alice = User.objects.get(username="alice")
-            self.owned = {str(note.sqid) for note in Note.objects.filter(created_by=self.alice)}
+            self.owned = {str(note.sqid) for note in Note.objects.filter(owner=self.alice)}
 
     def test_round_trip_scoped_to_the_authenticated_actor(self) -> None:
         """``tools/list`` advertises the tools; calls run scoped to the bearer's actor."""

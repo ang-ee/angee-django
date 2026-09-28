@@ -32,6 +32,7 @@ from tests.conftest import (
     File,
     Folder,
     Vendor,
+    installed_field_owners,
 )
 from tests.messaging_models import Channel, Message, Thread
 from tests.projects_models import Project, ProjectBinding
@@ -55,7 +56,7 @@ def project_access_schema(tmp_path: Path, transactional_db: None) -> Any:
 
     configs = list(apps.get_app_configs())
     originals = {config: getattr(config, "rebac_schema", None) for config in configs}
-    sources = extension_source_map(configs)
+    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
     runtime = tmp_path / "project-access-runtime"
     for relative, source in sources.items():
         write_atomic(runtime / relative, source)

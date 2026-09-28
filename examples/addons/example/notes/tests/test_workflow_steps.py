@@ -160,6 +160,8 @@ class NoteWorkflowStepTests(TransactionTestCase):
         with system_context(reason="revoke note workflow owner"):
             note.created_by = self.other
             note.save(update_fields={"created_by"})
+        self.assertTrue(note.with_actor(self.owner).has_access("write"))
+        note.transfer_ownership(self.other)
 
         with self.assertRaisesMessage(ValidationError, "no longer has permission"):
             NotePublishStep().run(step_run, now=datetime.now(UTC))

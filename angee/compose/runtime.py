@@ -150,7 +150,7 @@ class Runtime:
                 self.composition, label, runtime_module=self.runtime_module,
             )
         sources.update(WebRuntime(self.addons, runtime_dir=self.runtime_dir).render_sources())
-        sources.update(extension_source_map(self.addons))
+        sources.update(extension_source_map(self.addons, field_owners=self.composition.field_gate_owners()))
         return sources
 
     def _emit(self, tree: GeneratedTree) -> None:

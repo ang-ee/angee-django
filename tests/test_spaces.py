@@ -32,6 +32,7 @@ from tests.conftest import (
     assert_private_hasura_insert_access,
     create_user,
     execute_schema,
+    installed_field_owners,
     result_data,
 )
 from tests.spaces_models import Group, Membership
@@ -51,7 +52,7 @@ def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
     del transactional_db
     app_configs = list(apps.get_app_configs())
     runtime_dir = tmp_path / "runtime"
-    source_map = extension_source_map(app_configs)
+    source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
 
@@ -626,7 +627,9 @@ def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
 def test_spaces_fragment_merges_only_read_and_write_into_messaging_thread() -> None:
     """The composed messaging definition carries the group relation and only legal arms."""
 
-    merged = merged_schemas(apps.get_app_configs())
+    app_configs = list(apps.get_app_configs())
+    field_owners = installed_field_owners(app_configs)
+    merged = merged_schemas(app_configs, field_owners=field_owners)
     messaging = merged["angee.messaging"]
     definition = messaging.get_definition("messaging/thread")
     assert definition is not None
@@ -643,4 +646,4 @@ def test_spaces_fragment_merges_only_read_and_write_into_messaging_thread() -> N
     )[0]
     delete_line = next(line for line in thread_block.splitlines() if "permission delete" in line)
     assert "group" not in delete_line
-    assert merged_schema_relpath("angee.messaging") in extension_source_map(apps.get_app_configs())
+    assert merged_schema_relpath("angee.messaging") in extension_source_map(app_configs, field_owners=field_owners)

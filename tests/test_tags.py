@@ -12,11 +12,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import (
+    SubjectRef,
     actor_context,
     system_context,
 )
@@ -56,24 +57,18 @@ class TagAssignment(AbstractTagAssignment):
 
 
 class ScopeFlagTag(AbstractTag):
-    """Concrete tag whose shared row fact is backed by a local boolean field."""
+    """Concrete tag with an ordinary consumer marker unrelated to visibility."""
 
     shared_marker = models.BooleanField(default=True)
-    shared_reader_policy_fields = ("shared_marker",)
 
     class Meta(AbstractTag.Meta):
-        """Django model options for the shared-scope fact regression tag."""
+        """Django model options for the consumer marker tag."""
 
         abstract = False
         app_label = "tags"
         db_table = "test_tags_scope_flag_tag"
         rebac_resource_type = "tags/tag"
 
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Return whether the row's declared policy admits the wildcard reader."""
-
-        return bool(self.shared_marker)
 
 
 class TagRole(AbstractTagRole):
@@ -159,173 +154,147 @@ def test_the_same_tag_attaches_once_per_target(composed_tables: None) -> None:
             TagAssignment.objects.create(tag=tag, content_type=content_type, object_id=party.pk)
 
 
+def _assert_authenticated_reads(tag: Any) -> None:
+    with actor_context(SubjectRef.of("auth/user", "1")):
+        assert type(tag).objects.filter(pk=tag.pk).exists()
+    with actor_context(AnonymousUser()):
+        assert not type(tag).objects.filter(pk=tag.pk).exists()
+    assert not _shared_reader_exists(tag)
+
+
 def test_base_tag_is_always_shared_and_declares_no_policy_fields(composed_tables: None) -> None:
-    """The framework tag is shared vocabulary; consumers may extend scope later."""
+    """The vocabulary uses authenticated membership without a row-level policy."""
 
     del composed_tables
-
     tag_relation_fields = {
         field.name
         for field in Tag._meta.fields
         if field.is_relation and field.name not in {"created_by", "updated_by"}
     }
-    assert Tag.shared_reader_policy_fields == ()
     assert tag_relation_fields == set()
-    assert Tag(name="Framework").shared_reader_eligible is True
+    with system_context(reason="tags vocabulary setup"):
+        tag = Tag.objects.create(name="Framework")
+    _assert_authenticated_reads(tag)
 
 
-def test_shared_scope_fact_controls_the_wildcard_reader(composed_tables: None) -> None:
-    """The wildcard reader reconciles from declared eligibility, not a hardcoded FK."""
+def test_consumer_marker_does_not_control_authenticated_reads(composed_tables: None) -> None:
+    """An ordinary consumer marker does not restrict shared vocabulary."""
 
     del composed_tables
-    with system_context(reason="tags test scope fact"):
+    with system_context(reason="tags marker setup"):
         shared = ScopeFlagTag.objects.create(name="Everyone", shared_marker=True)
         scoped = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
+    _assert_authenticated_reads(shared)
+    _assert_authenticated_reads(scoped)
 
-    assert _shared_reader_exists(shared)
-    assert not _shared_reader_exists(scoped)
 
-
-def test_deleting_a_shared_tag_removes_its_wildcard_tuple(composed_tables: None) -> None:
-    """The base REBAC delete seam removes a deleted tag's resource relationships."""
+def test_deleting_a_tag_removes_the_row_without_wildcard_tuples(composed_tables: None) -> None:
+    """Shared vocabulary has no per-row grant to reconcile on deletion."""
 
     del composed_tables
-    with system_context(reason="tags delete relationship cleanup"):
+    with system_context(reason="tags delete setup"):
         tag = ScopeFlagTag.objects.create(name="Temporary")
-        resource_id = str(tag.pk)
-        assert _shared_reader_exists(tag)
+    _assert_authenticated_reads(tag)
+    resource_id = str(tag.pk)
+    with system_context(reason="tags delete"):
         tag.delete()
-
+    with actor_context(SubjectRef.of("auth/user", "1")):
+        assert not ScopeFlagTag.objects.filter(pk=resource_id).exists()
     assert not active_relationship_model().objects.filter(
-        resource_type="tags/tag",
-        resource_id=resource_id,
+        resource_type="tags/tag", resource_id=resource_id,
     ).exists()
 
 
-def test_flipping_shared_scope_reconciles_the_wildcard_reader(composed_tables: None) -> None:
-    """A same-instance double flip grants and revokes the wildcard every time."""
+def test_flipping_consumer_marker_keeps_authenticated_reads(composed_tables: None) -> None:
+    """Partial and full saves leave authenticated visibility unchanged."""
 
     del composed_tables
-    with system_context(reason="tags test rescope"):
-        created = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
-        tag = ScopeFlagTag.objects.get(pk=created.pk)
-        tag.shared_marker = True
-        tag.save(update_fields={"shared_marker"})
-        assert _shared_reader_exists(tag)
-
-        tag.shared_marker = False
-        tag.save(update_fields={"shared_marker"})
-        assert not _shared_reader_exists(tag)
-
-        tag.shared_marker = True
-        tag.save()
-        assert _shared_reader_exists(tag)
-
-        tag.shared_marker = False
-        tag.save()
-        assert not _shared_reader_exists(tag)
+    with system_context(reason="tags marker setup"):
+        tag = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
+    for update_fields in ({"shared_marker"}, None):
+        for marker in (True, False):
+            with system_context(reason="tags marker update"):
+                tag.shared_marker = marker
+                tag.save(update_fields=update_fields)
+            _assert_authenticated_reads(tag)
 
 
-def test_shared_scope_fact_controls_actor_scoped_reads(composed_tables: None) -> None:
-    """Actor-scoped reads allow shared rows and deny marker-off rows."""
+def test_authenticated_reads_ignore_consumer_marker(composed_tables: None) -> None:
+    """A signed-in user reads both marker states; anonymous reads neither."""
 
     del composed_tables
     reader = create_user("tags-scope-reader")
     with system_context(reason="tags test actor scope setup"):
         shared = ScopeFlagTag.objects.create(name="Everyone", shared_marker=True)
         scoped = ScopeFlagTag.objects.create(name="Local", shared_marker=False)
-
     with actor_context(reader):
-        assert ScopeFlagTag.objects.filter(pk=shared.pk).exists()
-        assert not ScopeFlagTag.objects.filter(pk=scoped.pk).exists()
+        assert set(ScopeFlagTag.objects.values_list("pk", flat=True)) == {shared.pk, scoped.pk}
+    with actor_context(AnonymousUser()):
+        assert not ScopeFlagTag.objects.exists()
 
 
-def test_deferred_scope_source_field_stays_deferred_on_load(composed_tables: None) -> None:
-    """Loading a tag does not evaluate its conditional-reader policy eagerly."""
+def test_deferred_marker_stays_deferred_on_load(composed_tables: None) -> None:
+    """Loading shared vocabulary preserves Django's deferred-field behavior."""
 
     del composed_tables
-    with system_context(reason="tags test deferred scope setup"):
+    with system_context(reason="tags test deferred marker setup"):
         tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=False)
         with CaptureQueriesContext(connection) as ctx:
             loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
-
     assert len(ctx.captured_queries) == 1
-    # Pin native deferred loading without evaluating the reader policy.
     assert loaded.get_deferred_fields() == {"shared_marker"}
 
 
-def test_deferred_scope_source_field_save_resyncs_idempotently(composed_tables: None) -> None:
-    """A row loaded without its scope source falls back to an idempotent resync."""
+def test_deferred_marker_save_preserves_authenticated_reads(composed_tables: None) -> None:
+    """Saving a deferred row needs no grant synchronization."""
 
     del composed_tables
-    with system_context(reason="tags test deferred scope save"):
+    with system_context(reason="tags test deferred marker save"):
         tag = ScopeFlagTag.objects.create(name="Deferred", shared_marker=True)
         loaded = ScopeFlagTag.objects.defer("shared_marker").get(pk=tag.pk)
         loaded.name = "Deferred renamed"
         loaded.save()
+    _assert_authenticated_reads(tag)
 
-    assert _shared_reader_exists(tag)
 
-
-def test_unrelated_save_repairs_wildcard_from_persisted_policy(composed_tables: None) -> None:
-    """A full save reconciles canonical persisted facts and repairs missing grants."""
+def test_unrelated_save_keeps_authenticated_reads_without_tuples(composed_tables: None) -> None:
+    """A full save does not materialize authenticated membership."""
 
     del composed_tables
-    with system_context(reason="tags test complete scope snapshot"):
+    with system_context(reason="tags test complete save"):
         tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
-        active_relationship_model().objects.filter(
-            resource_type="tags/tag",
-            resource_id=str(tag.pk),
-            relation="shared",
-            subject_type="auth/user",
-            subject_id="*",
-        ).delete()
         loaded = ScopeFlagTag.objects.get(pk=tag.pk)
         loaded.name = "Still stable"
         loaded.save()
+    _assert_authenticated_reads(tag)
 
-    assert _shared_reader_exists(tag)
 
-
-def test_targeted_content_save_skips_shared_reader_reconciliation(composed_tables: None) -> None:
-    """A targeted save outside policy fields avoids tuple reads and writes."""
+def test_targeted_content_save_needs_no_reader_reconciliation(composed_tables: None) -> None:
+    """A targeted save avoids tuple reads and writes."""
 
     del composed_tables
     with system_context(reason="tags test targeted content save"):
         tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
-        active_relationship_model().objects.filter(
-            resource_type="tags/tag",
-            resource_id=str(tag.pk),
-            relation="shared",
-            subject_type="auth/user",
-            subject_id="*",
-        ).delete()
         tag.name = "Renamed"
         with CaptureQueriesContext(connection) as queries:
             tag.save(update_fields={"name"})
-
-    assert not _shared_reader_exists(tag)
+    _assert_authenticated_reads(tag)
     assert not [
-        query
-        for query in queries.captured_queries
-        if "rebac" in query["sql"].lower()
-        and "relationship" in query["sql"].lower()
+        query for query in queries.captured_queries
+        if "rebac" in query["sql"].lower() and "relationship" in query["sql"].lower()
     ]
 
 
-def test_policy_bulk_writes_cannot_bypass_reader_reconciliation(composed_tables: None) -> None:
-    """Queryset overrides reject policy writes and allow unrelated content edits."""
+def test_marker_bulk_writes_need_no_reader_reconciliation(composed_tables: None) -> None:
+    """Bulk edits and inserts preserve authenticated reads without wildcard grants."""
 
     del composed_tables
-    with system_context(reason="tags bulk policy writes"):
+    with system_context(reason="tags bulk marker writes"):
         tag = ScopeFlagTag.objects.create(name="Stable", shared_marker=True)
-        with pytest.raises(ValidationError, match="native owner"):
-            ScopeFlagTag.objects.filter(pk=tag.pk).update(shared_marker=False)
-        tag.shared_marker = False
-        with pytest.raises(ValidationError, match="native owner"):
-            ScopeFlagTag.objects.bulk_update([tag], ["shared_marker"])
-        with pytest.raises(ValidationError, match="native owner"):
-            ScopeFlagTag.objects.bulk_create([ScopeFlagTag(name="Bulk")])
+        assert ScopeFlagTag.objects.filter(pk=tag.pk).update(shared_marker=False) == 1
+        tag.shared_marker = True
+        assert ScopeFlagTag.objects.bulk_update([tag], ["shared_marker"]) == 1
+        [bulk] = ScopeFlagTag.objects.bulk_create([ScopeFlagTag(name="Bulk")])
         assert ScopeFlagTag.objects.filter(pk=tag.pk).update(name="Renamed") == 1
         tag.refresh_from_db()
         assert tag.shared_marker is True
@@ -334,7 +303,8 @@ def test_policy_bulk_writes_cannot_bypass_reader_reconciliation(composed_tables:
         assert ScopeFlagTag.objects.bulk_update([tag], ["name"]) == 1
         tag.refresh_from_db()
         assert tag.name == "Bulk renamed"
-    assert _shared_reader_exists(tag)
+    _assert_authenticated_reads(tag)
+    _assert_authenticated_reads(bulk)
 
 
 @pytest.fixture()
@@ -420,6 +390,9 @@ def test_for_target_returns_the_targets_edges(party_edge: SimpleNamespace) -> No
         objects.attach(*party_edge.party_address, [party_edge.tag.sqid])
         assert objects.for_target(*party_edge.party_address).count() == 1
         assert objects.for_target("nope/nope", "whatever").count() == 0
+        assert objects.get().has_access("read")
+    with actor_context(AnonymousUser()):
+        assert not objects.exists()
 
 
 def test_attaching_across_mti_levels_shares_one_edge(composed_tables: None) -> None:

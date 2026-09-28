@@ -1,6 +1,5 @@
 # Demo tags (demo tier). These are shared vocabulary readable by every
-# authenticated actor; the `shared@auth/user:*` wildcard reader is written by
-# Tag.save on load.
+# authenticated actor through the `authenticated` read permission.
 # Party assignments are created through the authored `tag` mutation (the polymorphic
 # edge is not an ordinary resource insert), so they are not seeded here.
 # Idempotency is the resource ledger's (source_addon, xref) identity.
