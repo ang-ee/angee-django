@@ -121,12 +121,12 @@ class CreateTask(TaskWork, AuditMixin, AngeeDataModel):
 
 
 class CreateNeed(AbstractNeed):
-    """Production target normalization with explicit test-graph relations."""
+    """Production target exclusivity with explicit test-graph relations."""
 
     task = models.ForeignKey(CreateTask, null=True, blank=True, on_delete=models.CASCADE)
     project = models.ForeignKey(CreateProject, null=True, blank=True, on_delete=models.CASCADE)
     original_task = models.ForeignKey(CreateTask, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
-    party = None
+    party = models.ForeignKey("parties.Party", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     source_message = None
 
     class Meta:
@@ -144,7 +144,6 @@ class CreateTaskType(AngeeNode):
 @strawberry_django.type(CreateNeed)
 class CreateNeedType(AngeeNode):
     body: auto
-    targets_project: auto
 
 
 @strawberry_django.type(Stage)
@@ -275,18 +274,16 @@ def test_graphql_need_create_preserves_task_target_provenance(productivity_creat
             schema,
             """
             mutation CreateNeed($task: ID!) {
-              insert_create_needs_one(object: {task: $task, body: "Task request"}) { id targets_project }
+              insert_create_needs_one(object: {task: $task, body: "Task request"}) { id }
             }
             """,
             {"task": task.sqid},
             user=actor,
         )
     )["insert_create_needs_one"]
-    assert created["targets_project"] is False
     need = CreateNeed.objects.as_user(actor).get(sqid=created["id"])
     assert need.task_id == task.pk
-    assert need.project_id == project.pk
-    assert need.targets_project is False
+    assert need.project_id is None
 
 
 @pytest.mark.parametrize("category", ("TRIAGE", "DUPLICATE"))

@@ -202,6 +202,7 @@ describe("RecordThreadConversation", () => {
     expect(post?.vars.modelLabel).toBe("discuss/room");
     expect(post?.vars.recordId).toBe("rom_1");
     expect(post?.vars.body).toBe("Hello room");
+    expect(post?.vars.clientCreationKey).toEqual(expect.any(String));
   });
 
   test("offers visible people from IAM colleagues as message recipients", async () => {
@@ -291,5 +292,11 @@ describe("RecordThreadConversation", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Network down");
+    const first = mocks.mutateCalls.find((call) => call.op === "MessagingPostRecordMessage");
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByRole("alert");
+    const posts = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage");
+    expect(posts).toHaveLength(2);
+    expect(posts[1].vars.clientCreationKey).toBe(first?.vars.clientCreationKey);
   });
 });

@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 
 
-def test_composed_intake_capture(tmp_path: Path) -> None:
+def run_intake_tests(tmp_path: Path, test_class: str) -> None:
+    """Run one intake contract group against real emitted models in isolation."""
     root = Path(__file__).resolve().parents[1]
     report = tmp_path / "intake-capture.json"
     env = dict(os.environ)
@@ -24,7 +25,7 @@ def test_composed_intake_capture(tmp_path: Path) -> None:
             "--action",
             "tests",
             "--test-label",
-            "tests.native_intake_capture",
+            f"tests.native_intake_capture.{test_class}",
             "--output",
             str(report),
         ],
@@ -37,3 +38,7 @@ def test_composed_intake_capture(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, f"composed intake capture failed:\n{result.stdout}\n{result.stderr}"
     assert json.loads(report.read_text()) == {"failures": 0}
+
+
+def test_composed_intake_capture(tmp_path: Path) -> None:
+    run_intake_tests(tmp_path, "ChannelIntakeCaptureTests")

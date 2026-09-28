@@ -63,9 +63,11 @@ def test_inbox_excludes_owned_thread_when_its_record_is_inaccessible() -> None:
         record = ChatterDoc.objects.create(title="Inaccessible record")
         attached = record.message_thread(create=False)
         attached.owner = owner
-        attached.created_by = owner
-        attached.save(update_fields=("owner", "created_by"))
-        ordinary = Thread.objects.create(created_by=owner)
+        attached.save(update_fields=("owner",))
+        ordinary = Thread.objects.create(owner=owner)
+
+    assert attached.channel_id is None
+    assert attached.created_by_id is None
 
     with actor_context(owner):
         assert not ChatterDoc.objects.filter(pk=record.pk).exists()

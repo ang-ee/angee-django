@@ -20,6 +20,7 @@ export {
   type BreadcrumbProps,
 } from "./Breadcrumb";
 export { DocumentTitle } from "./DocumentTitle";
+export { ViewAsBanner, ViewAsPicker } from "./ViewAs";
 export { CommandPalette, type CommandPaletteProps } from "./CommandPalette";
 export {
   AppRailTree,

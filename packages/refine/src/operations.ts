@@ -9,7 +9,73 @@ import {
   recordValue,
   stringValue,
 } from "./dialect/wire";
-import type { MetaQuery } from "@refinedev/core";
+import type { Fields, MetaQuery } from "@refinedev/core";
+import { parse, parseType, print } from "graphql";
+import { selectionText } from "./selections";
+
+/** Write preconditions are root arguments, never editable object fields. */
+export interface MutationRootArguments {
+  expected_revision?: number | null;
+  client_creation_key?: string | null;
+}
+
+/** Executable mutation facts supplied by the metadata edge. */
+export interface ResourceMutationTarget {
+  root: string;
+  inputType: string;
+  arguments: readonly { name: string; type: string }[];
+}
+
+export interface ResourceMutationOperations {
+  create?: ResourceMutationTarget;
+  update?: ResourceMutationTarget;
+}
+
+/** Native Hasura overrides preserve CRUD lifecycle and result extraction. */
+export function resourceMutationMeta(
+  kind: "create" | "update",
+  resource: string,
+  target: ResourceMutationTarget,
+  fields: Fields,
+  values: Readonly<Record<string, unknown>>,
+  id?: string | number,
+): MetaQuery {
+  const root = operationName(target.root);
+  const operation = operationName(resource);
+  const input = operationName(target.inputType);
+  const alias = kind === "create" ? `insert_${operation}_one` : `update_${operation}_by_pk`;
+  const variableDefinitions = [`$object: ${input}!`];
+  const argumentsList = [kind === "create" ? "object: $object" : "_set: $object"];
+  const variables: Record<string, unknown> = {};
+  if (kind === "update") {
+    variableDefinitions.push(`$pk_columns: ${operation}_pk_columns_input!`);
+    argumentsList.push("pk_columns: $pk_columns");
+    variables.pk_columns = { id };
+  }
+  for (const { name, type } of target.arguments) {
+    const value = values[name];
+    switch (name) {
+      case "client_creation_key":
+        if (value !== undefined && value !== null && typeof value !== "string") {
+          throw new TypeError("client_creation_key must be a string or null.");
+        }
+        break;
+      case "expected_revision":
+        if (value !== undefined && value !== null && (typeof value !== "number" || !Number.isInteger(value))) {
+          throw new TypeError("expected_revision must be an integer or null.");
+        }
+        break;
+      default:
+        throw new Error(`Unknown mutation root argument "${name}" on "${root}".`);
+    }
+    variableDefinitions.push(`$${name}: ${print(parseType(type))}`);
+    argumentsList.push(`${name}: $${name}`);
+    if (value !== undefined) variables[name] = value;
+  }
+  return mutationMeta(parse(
+    `mutation ResourceWrite(${variableDefinitions.join(", ")}) { ${alias}: ${root}(${argumentsList.join(", ")}) { ${selectionText(fields.length ? fields : ["id"])} } }`,
+  ), variables);
+}
 
 export const AGGREGATE_MEASURE_OPERATORS = [
   "sum",
@@ -227,6 +293,7 @@ export interface LineInput extends Record<string, unknown> {
 /** Variables for the authored `<resource>_save(pk, patch, lines)` diff-apply mutation (F6). */
 export interface ResourceSaveVariables extends Record<string, unknown> {
   pk: string;
+  expected_revision?: number | null;
   patch?: Record<string, unknown>;
   lines?: readonly LineInput[];
 }
@@ -254,6 +321,7 @@ export function saveRequest(
     root: operation.root,
     meta: mutationMeta(options.document, {
       pk: variables.pk,
+      ...(variables.expected_revision !== undefined ? { expected_revision: variables.expected_revision } : {}),
       ...(variables.patch !== undefined ? { patch: variables.patch } : {}),
       ...(variables.lines !== undefined ? { lines: variables.lines } : {}),
     }),

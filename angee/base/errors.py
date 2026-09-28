@@ -4,9 +4,10 @@ from django.core.exceptions import ValidationError
 
 
 class DomainError(Exception):
-    """A refusal with a stable wire code and no detail.
+    """A refusal with a stable wire code.
 
     Raise concrete subclasses with a nonempty code, never this base directly.
+    Subclasses may carry detail for logs; detail is never projected to the wire.
     """
 
     code: str

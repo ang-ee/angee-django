@@ -25,6 +25,54 @@ afterEach(() => {
 });
 
 describe("Angee Hasura provider defaults", () => {
+  test("sends typed creation and revision arguments through native CRUD documents", async () => {
+    const requests: { query: string; variables: Record<string, unknown> }[] = [];
+    const provider = createAngeeHasuraDataProvider({
+      url: "https://example.invalid/graphql", auth: (request) => request,
+      mutations: { notes: {
+        create: { root: "insert_notes_one", inputType: "notes_insert_input", arguments: [{ name: "client_creation_key", type: "String!" }] },
+        update: { root: "update_notes_by_pk", inputType: "notes_set_input", arguments: [{ name: "expected_revision", type: "Int!" }] },
+      } },
+      fetch: async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ insert_notes_one: { id: "note-1" }, update_notes_by_pk: { id: "note-1", revision: 4 } });
+      },
+    });
+    const created = await provider.create({ resource: "notes", variables: { title: "New" },
+      meta: { fields: ["id"], gqlVariables: { client_creation_key: "session-key", expected_revision: 99 } } });
+    expect(created.data.id).toBe("note-1");
+    const updated = await provider.update({ resource: "notes", id: "note-1", variables: { title: "Changed" },
+      meta: { fields: ["id", "revision"], gqlVariables: { expected_revision: 3 } } });
+    expect(updated.data.revision).toBe(4);
+    expect(requests[0]?.variables).toMatchObject({ object: { title: "New" }, client_creation_key: "session-key" });
+    expect(requests[0]?.query).toContain("$client_creation_key: String!");
+    expect(requests[0]?.variables).not.toHaveProperty("expected_revision");
+    expect(requests[1]?.variables).toMatchObject({ object: { title: "Changed" }, pk_columns: { id: "note-1" }, expected_revision: 3 });
+    expect(requests[1]?.query).toContain("$expected_revision: Int!");
+    expect(requests[1]?.query).toContain("expected_revision: $expected_revision");
+  });
+
+  test.each(["STALE_REVISION", "CREATION_KEY_CONFLICT", "VIEW_AS_READ_ONLY"])("preserves the public %s code", (code) => {
+    const error = boundedGraphQLTransportError({ response: { errors: [{ message: "Write refused.", extensions: { code } }] } });
+    expect(error).toMatchObject({ graphQLErrors: [{ extensions: { code } }] });
+  });
+
+  test("fails on an unknown advertised argument before sending a write", async () => {
+    const fetch = vi.fn();
+    const provider = createAngeeHasuraDataProvider({
+      url: "https://example.invalid/graphql",
+      auth: (request) => request,
+      mutations: { notes: { create: {
+        root: "insert_notes_one", inputType: "notes_insert_input",
+        arguments: [{ name: "unknown_argument", type: "String" }],
+      } } },
+      fetch,
+    });
+    await expect(async () => provider.create({ resource: "notes", variables: {} }))
+      .rejects.toThrow('Unknown mutation root argument "unknown_argument"');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });

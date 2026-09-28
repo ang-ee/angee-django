@@ -41,15 +41,16 @@ from django.db import IntegrityError, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.query import ModelIterable
 from django.utils import timezone
-from rebac import PermissionDenied, current_actor, system_context
-from rebac.actors import is_sudo
+from rebac import PermissionDenied, SubjectRef, current_actor, system_context
+from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.relation_loading import relation_actor
 
 from angee.base.actors import actor_user_id
-from angee.base.mixins import OwnerQuerySet
+from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_target
+from angee.base.serialization import canonical_json_sha256
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.events import message_ingested
@@ -2263,7 +2264,7 @@ class ReactionManager(AngeeManager):
         return len(rows)
 
 
-class MessageQuerySet(AngeeQuerySet[Any]):
+class MessageQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
     """Chainable read scopes for chatter/ingest messages."""
 
     @staticmethod
@@ -2618,6 +2619,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         body: str,
         created_by_id: Any = None,
         attachment: Any | None = None,
+        record: Any | None = None,
         attachments: tuple[Any, ...] = (),
         message_type: Message.MessageKind | None = None,
         subtype_key: str = "comment",
@@ -2625,6 +2627,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         parent: Any | None = None,
         tracking_values: tuple[TrackingChange | dict[str, Any], ...] = (),
         recipient_user_ids: tuple[Any, ...] = (),
+        autofollow_author: bool = False,
+        autofollow_recipients: bool = False,
+        client_creation_key: str | None = None,
+        creation_actor: SubjectRef | None = None,
     ) -> Any:
         """Create an internal user-authored message in ``thread`` and bump thread counters.
 
@@ -2633,14 +2639,50 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         A chatter message carries no title part — the thread's title fragment labels
         the conversation. The poster's own read receipt advances to the new message,
         so an author never sees their own post as unread.
+
+        Keys belong to the initiating REBAC actor, including non-user actors;
+        ``created_by_id`` remains attribution. An exact replay returns the original
+        message without repeating posting side effects. Changed posting inputs
+        raise ``CreationKeyConflict``. Keyed calls require an explicit or ambient
+        non-anonymous actor. Hard deletion frees the key for a new message.
         """
 
         body = strip_null_bytes(body or "").strip()
         tracking_rows = tuple(_normalise_tracking_value(value, index) for index, value in enumerate(tracking_values))
+        kind = strip_null_bytes(message_type or self.model.MessageKind.COMMENT)
+        creation_scope = None
+        fingerprint = ""
+        if client_creation_key is not None:
+            self.model._meta.get_field("client_creation_key").clean(client_creation_key, None)
+            if not client_creation_key or "\x00" in client_creation_key:
+                raise ValueError("A client creation key must be nonempty and contain no null bytes.")
+            actor = creation_actor or current_actor()
+            if actor is None or is_anonymous_actor(actor):
+                raise ValueError("A keyed message requires an actor.")
+            creation_scope = str(actor)
+            self.model._meta.get_field("creation_actor").clean(creation_scope, None)
+            content = {
+                "thread": str(thread.pk),
+                "attachment": str(attachment.pk) if attachment is not None else None,
+                "body": body,
+                "attachments": [str(file.pk) for file in attachments],
+                "message_type": kind,
+                "subtype_key": strip_null_bytes(subtype_key or "").strip(),
+                "parent": str(parent.pk) if parent is not None else None,
+                "tracking_values": tracking_rows,
+                "recipient_user_ids": sorted({str(user_id) for user_id in recipient_user_ids}),
+                "autofollow_recipients": autofollow_recipients,
+            }
+            fingerprint = canonical_json_sha256(content)
+            existing = self.for_creation_key(creation_scope, client_creation_key, fingerprint)
+            if existing is not None:
+                return existing
         if not body and not attachments and not tracking_rows:
             raise ValueError("Message body, attachment, or tracking value is required.")
         if parent is not None and parent.thread_id != thread.pk:
             raise ValueError("Parent message does not belong to this thread.")
+        if (autofollow_author or autofollow_recipients) and (record is None or attachment is None):
+            raise ValueError("Autofollow requires the record and its thread attachment.")
         part_model = apps.get_model("messaging", "Part")
         fragment_model = apps.get_model("messaging", "Fragment")
         notification_model = apps.get_model("messaging", "ThreadNotification")
@@ -2652,18 +2694,28 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 model_label=subtype_model_label,
                 created_by_id=created_by_id,
             )
-            message = self.create(
-                thread_id=thread.pk,
-                platform=thread.platform,
-                direction=self.model.Direction.INTERNAL,
-                status=self.model.MessageStatus.SENT,
-                message_type=strip_null_bytes(message_type or self.model.MessageKind.COMMENT),
-                subtype_id=subtype.pk if subtype is not None else None,
-                parent_id=parent.pk if parent is not None else None,
-                preview=body[:280] if body else _tracking_preview(tracking_values),
-                sent_at=sent_at,
-                created_by_id=created_by_id,
-            )
+            try:
+                with transaction.atomic():
+                    message = self.create(
+                        thread_id=thread.pk,
+                        platform=thread.platform,
+                        direction=self.model.Direction.INTERNAL,
+                        status=self.model.MessageStatus.SENT,
+                        message_type=kind,
+                        subtype_id=subtype.pk if subtype is not None else None,
+                        parent_id=parent.pk if parent is not None else None,
+                        preview=body[:280] if body else _tracking_preview(tracking_values),
+                        sent_at=sent_at,
+                        created_by_id=created_by_id,
+                        creation_actor=creation_scope,
+                        client_creation_key=client_creation_key,
+                        creation_fingerprint=fingerprint,
+                    )
+            except IntegrityError:
+                existing = self.for_creation_key(creation_scope, client_creation_key, fingerprint)
+                if existing is None:
+                    raise
+                return existing
             position = 0
             if body:
                 fragment = fragment_model.objects.upsert(
@@ -2703,10 +2755,18 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 created_by_id=created_by_id,
                 recipient_user_ids=recipient_user_ids,
             )
+            follower_model = apps.get_model("messaging", "ThreadFollower")
+            if attachment is not None and (autofollow_author or autofollow_recipients):
+                # The record already authorized the post. Keep its follow bookkeeping
+                # in the same transaction, after fan-out, and never repeat it on replay.
+                with system_context(reason="messaging.autofollow"):
+                    if autofollow_author and created_by_id is not None:
+                        follower_model.objects.subscribe(record, user_id=created_by_id, role=attachment.role)
+                    if autofollow_recipients:
+                        for user_id in recipient_user_ids:
+                            follower_model.objects.subscribe(record, user_id=user_id, role=attachment.role)
             if created_by_id is not None:
-                apps.get_model("messaging", "ThreadFollower").objects.mark_read_up_to(
-                    thread, user_id=created_by_id, message=message
-                )
+                follower_model.objects.mark_read_up_to(thread, user_id=created_by_id, message=message)
             self._advance_thread(thread, sent_at)
             message._meta.get_field("thread").set_cached_value(message, thread)
             message_ingested.send(sender=self.model, instance=message)

@@ -775,9 +775,9 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
                 super().save(*args, **kwargs)
                 # The persisted candidate lets REBAC evaluate every composed share arm.
                 # A refusal rolls the insert and its transactional side effects back.
-                # Consume OwnerMixin.save's default until OwnerMixin.container_owns_items() is exposed.
                 if assignment_actor is not None and (
-                    self.owner_id is None or self.assignee_id != actor_user_id(assignment_actor)
+                    self.container_owns_items() or self.owner_id is None
+                    or self.assignee_id != actor_user_id(assignment_actor)
                 ) and not self.has_access("share"):
                     raise PermissionDenied("Share access to the task is required to assign it.")
             return

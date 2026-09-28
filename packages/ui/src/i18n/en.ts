@@ -2,6 +2,15 @@
 // the active translations; these are the defaults used when a key is missing.
 
 export const enUiMessages: Record<string, string> = {
+  "form.staleRevision": "This record changed since you started editing. Reload it before saving again.",
+  "form.reloadStaleRevision": "Reload and discard edits",
+  "form.revisionUnavailable": "Reload this record to load its revision before saving.",
+  "form.creationKeyConflict": "This creation key was already used for different values. Review your draft and submit again to create a new record.",
+  "viewAs.title": "Previewing as {name}",
+  "viewAs.readOnly": "This preview is read-only.",
+  "viewAs.realUser": "Signed in as {name}.",
+  "viewAs.exit": "Exit preview",
+  "viewAs.pick": "Preview as a person",
   "modal.copy": "Copy",
   "modal.copied": "Copied",
   "modal.copyFailed": "Could not copy. Select and copy the value manually.",
