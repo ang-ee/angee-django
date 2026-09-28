@@ -16,9 +16,15 @@ class Command(BaseCommand):
         """Print each colliding account through IAM's normalization owner."""
 
         del args, options
+        user_model = get_user_model()
+        collisions = user_model.objects.person_email_collisions()
+        users = user_model._base_manager.in_bulk([pk for pks in collisions.values() for pk in pks])
         count = 0
-        for email, users in get_user_model().objects.person_email_collisions().items():
-            for user in users:
+        for email, pks in collisions.items():
+            for pk in pks:
+                user = users.get(pk)
+                if user is None:
+                    continue
                 self.stdout.write(
                     f"{email}\tid={user.pk}\tusername={user.username}"
                     f"\tactive={user.is_active}\tstaff={user.is_staff}"

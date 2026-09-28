@@ -1,4 +1,4 @@
-"""Normalize retained person emails before the host adds their unique constraint.
+"""Normalize retained person emails and then add their unique constraint.
 
 Resolve collisions with iam_email_collisions before applying this transition.
 Rollback retains the normalized values; original casing and whitespace are lost.
@@ -17,15 +17,9 @@ def applies(project_state: ProjectState) -> bool:
     for constraint in model.options.get("constraints", []):
         if constraint.name != "iam_user_person_email_unique":
             continue
-        if (
-            isinstance(constraint, models.UniqueConstraint)
-            and constraint.fields == ("email",)
-            and constraint.condition == (models.Q(kind="person") & ~models.Q(email=""))
-        ):
-            return False
         raise ValueError(
-            "Person email uniqueness has a partial transition; "
-            "normalize person emails before adding the stored-email constraint."
+            "The person email constraint precedes its normalization migration; "
+            "reconcile that history before materializing normalize_person_emails."
         )
     return True
 
@@ -40,18 +34,33 @@ def forwards(apps, schema_editor):
         apps.get_model("iam", "User")._base_manager.using(schema_editor.connection.alias)
         .filter(kind="person").order_by()
     )
-    normalized = [(pk, normalize_email(email)) for pk, email in rows.values_list("pk", "email").iterator()]
-    counts = Counter(email for _, email in normalized if email)
+    counts = Counter()
+    for _pk, email in rows.values_list("pk", "email").iterator():
+        key = normalize_email(email)
+        if key:
+            counts[key] += 1
     collision_count = sum(count > 1 for count in counts.values())
     if collision_count:
         raise RuntimeError(
             f"{collision_count} normalized person email addresses collide; "
             "resolve iam_email_collisions before migrating."
         )
-    for pk, email in normalized:
-        rows.filter(pk=pk).update(email=email)
+    for pk, email in rows.values_list("pk", "email").iterator():
+        key = normalize_email(email)
+        if key != email:
+            rows.filter(pk=pk).update(email=key)
 
 
 class Migration(migrations.Migration):
     dependencies: list[tuple[str, str]] = []
-    operations = [migrations.RunPython(forwards, migrations.RunPython.noop)]
+    operations = [
+        migrations.RunPython(forwards, migrations.RunPython.noop),
+        migrations.AddConstraint(
+            "user",
+            models.UniqueConstraint(
+                fields=["email"],
+                condition=models.Q(kind="person") & ~models.Q(email=""),
+                name="iam_user_person_email_unique",
+            ),
+        ),
+    ]

@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import logging
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, Self, cast
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import UnicodeUsernameValidator
-from django.core.checks import CheckMessage, Error
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, connections, models, router, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import Exists, OuterRef, Q, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
@@ -231,6 +230,8 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
 
         Django lowercases only the domain. Python owns whitespace stripping and
         Unicode lowercasing; the stored email is the key, with no SQL transform.
+        ``bulk_create`` and queryset ``update()`` bypass normalization; callers
+        writing emails through them must normalize first.
         """
 
         return (email or "").strip().lower()
@@ -256,19 +257,19 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         return matches[0] if matches else None
 
     def person_email_collisions(self) -> dict[str, list[Any]]:
-        """Group legacy person rows by their Python-normalized nonempty email.
+        """Group legacy person primary keys by Python-normalized nonempty email.
 
-        Upgrade checks and the operator command use unfiltered base-manager
-        reads, without system scope or REBAC audit writes. Stored rows may
-        predate normalization; SQL case conversion cannot reproduce this key.
+        The operator inventory reads only primary key and email through the base
+        manager, without system scope or REBAC audit writes. Full user rows may
+        require columns that the database has not yet migrated.
         """
 
         groups: dict[str, list[Any]] = {}
         rows = self.model._base_manager.filter(kind=UserKind.PERSON).order_by("pk")
-        for person in rows.iterator():
-            key = self.normalize_email(person.email)
+        for pk, email in rows.values_list("pk", "email").iterator():
+            key = self.normalize_email(email)
             if key:
-                groups.setdefault(key, []).append(person)
+                groups.setdefault(key, []).append(pk)
         return {key: groups[key] for key in sorted(groups) if len(groups[key]) > 1}
 
     def get_by_natural_key(self, username: str) -> Any:
@@ -544,36 +545,6 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
             ),
         ]
 
-    @classmethod
-    def check(cls, **kwargs: Any) -> list[Any]:
-        """Check person-email collisions when Django requests database checks."""
-
-        return [*super().check(**kwargs), *cls._check_person_email_collisions(kwargs.get("databases"))]
-
-    @classmethod
-    def _check_person_email_collisions(cls, databases: Sequence[str] | None) -> list[CheckMessage]:
-        """Read upgrade collisions without actor scope or REBAC audit writes.
-
-        An absent table is normal before the host's initial migration. Once
-        present, every migrate database check refuses unresolved collisions.
-        """
-
-        if databases is None or DEFAULT_DB_ALIAS not in databases or cls._meta.abstract or cls._meta.swapped:
-            return []
-        connection = connections[DEFAULT_DB_ALIAS]
-        if not cls._meta.can_migrate(connection) or not router.allow_migrate_model(DEFAULT_DB_ALIAS, cls):
-            return []
-        if cls._meta.db_table not in connection.introspection.table_names():
-            return []
-        if not cls.objects.person_email_collisions():
-            return []
-        return [Error(
-            "Person accounts have colliding normalized email addresses.",
-            hint="Run iam_email_collisions and resolve every collision before migrating.",
-            obj=cls,
-            id="iam.E001",
-        )]
-
     def clean(self) -> None:
         """Normalize username and email before validation."""
 
@@ -581,16 +552,20 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
         self.email = type(self).objects.normalize_email(self.email)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Store the Python email key and keep service principals passwordless."""
+        """Normalize email only when saving it; keep service principals passwordless.
 
-        self.email = type(self).objects.normalize_email(self.email)
+        Partial saves excluding email neither load nor rewrite that field.
+        ``bulk_create`` and queryset ``update()`` bypass this normalization;
+        callers writing emails through them must normalize first.
+        """
+
         update_fields = kwargs.get("update_fields")
         update_field_names = None
         if update_fields is not None:
             update_field_names = {update_fields} if isinstance(update_fields, str) else set(update_fields)
-            if update_field_names:
-                update_field_names.add("email")
-                kwargs["update_fields"] = update_field_names
+            kwargs["update_fields"] = update_field_names
+        if update_field_names is None or "email" in update_field_names:
+            self.email = type(self).objects.normalize_email(self.email)
         if str(self.kind) == str(UserKind.SERVICE) and self.has_usable_password():
             self.set_unusable_password()
             if update_field_names is not None:
