@@ -4,7 +4,7 @@ from copy import deepcopy
 
 from django.db import models
 
-from angee.base.mixins import OwnerMixin
+from angee.base.mixins import ImmutableFieldsMixin, OptimisticLockMixin, OwnerMixin
 from angee.base.models import AngeeDataModel
 from angee.messaging.models import ThreadedModelMixin
 from angee.projects.models import Link as AbstractLink
@@ -12,6 +12,7 @@ from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
 from angee.projects.models import Task as AbstractTask
+from angee.projects.models import TaskManager
 from angee.work.models import ProjectWork, TaskWork
 from angee.work.models import Queue as AbstractQueue
 from angee.work.models import Stage as AbstractWorkStage
@@ -39,13 +40,20 @@ class Stage(AbstractWorkStage):
         rebac_resource_type = "work/stage"
 
 
-class Task(TaskWork, OwnerMixin, ThreadedModelMixin, AngeeDataModel):
+class Task(TaskWork, ImmutableFieldsMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin, AngeeDataModel):
     """Concrete task carrying the production chatter-wake owner."""
 
     sqid_prefix = "tpt_"
     assignee = AbstractTask._meta.get_field("assignee").clone()
     visibility = AbstractTask._meta.get_field("visibility").clone()
+    immutable_fields = AbstractTask.immutable_fields
+    TaskVisibility = AbstractTask.TaskVisibility
+    set_visibility = AbstractTask.set_visibility
+    validate_visibility = AbstractTask.validate_visibility
+    objects = TaskManager()
     links = deepcopy(AbstractTask._meta.get_field("links"))
+    file_attachments = deepcopy(AbstractTask._meta.get_field("file_attachments"))
+    knowledge_bindings = deepcopy(AbstractTask._meta.get_field("knowledge_bindings"))
 
     # Keep the queue and stage fields used by the native work owner. These
     # fixtures do not exercise cycle scheduling.
