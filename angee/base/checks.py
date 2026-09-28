@@ -13,7 +13,7 @@ from rebac.backends.local import LocalBackend
 from rebac.backends.local_query import LocalQueryScope, UnsupportedScope
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from rebac.resources import model_resource_type
-from rebac.schema import FieldBinding, PermRef, Schema, permission_sources
+from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef, Schema, permission_sources
 from rebac.types import SubjectRef
 
 from angee.base.mixins import CreationKeyMixin, HierarchyQuerySet, ItemOwnershipMixin, OwnerMixin
@@ -143,9 +143,8 @@ def check_ownership(
     for model in models:
         if not issubclass(model, OwnerMixin):
             continue
-        if model._meta.get_field("owner").model is not model:
-            continue
-        if model.owner_container is not None:
+        owner_model = model._meta.get_field("owner").model
+        if owner_model is model and model.owner_container is not None:
             try:
                 field = model._meta.get_field(model.owner_container)
             except FieldDoesNotExist:
@@ -163,27 +162,53 @@ def check_ownership(
                     )
                 )
         definition = effective_rebac_definition(model)
-        if definition is None or (
+        if owner_model is model and (definition is None or (
             not any(permission.name == model.owner_transfer_permission for permission in definition.permissions)
             or not any(
                 relation.name == "owner" and relation.backing == FieldBinding(path="owner")
                 for relation in definition.relations
             )
-            or not any(
-                permission.name == "write__owner"
-                and permission.expression == PermRef(model.owner_transfer_permission)
-                for permission in definition.permissions
-            )
-        ):
+        )):
             errors.append(
                 checks.Error(
                     f"{model._meta.label} must declare an owner relation backed by owner "
-                    f"and permission {model.owner_transfer_permission!r}, "
-                    f"with write__owner = {model.owner_transfer_permission}.",
-                    hint="Declare ownership, transfer and its owner field gate on the grant root's "
-                    "effective permissions.zed.",
+                    f"and permission {model.owner_transfer_permission!r}.",
+                    hint="Declare ownership and transfer on the grant root's effective permissions.zed.",
                     obj=model,
                     id="angee.E022",
+                )
+            )
+        transfer = owner_model.owner_transfer_permission
+        expected_gates: tuple[PermRef | PermArrow, ...] = (PermRef(transfer),)
+        expected_expression = transfer
+        if owner_model is not model:
+            parent_path = "__".join(
+                path.join_field.name for path in model._meta.get_path_to_parent(owner_model)
+            )
+            parent_type = model_resource_type(owner_model)
+            parent_gates = tuple(
+                PermArrow(relation.name, transfer)
+                for relation in definition.relations if (
+                    relation.backing == FieldBinding(path=parent_path)
+                    and relation.allowed_subjects == (AllowedSubject(type=parent_type or ""),)
+                )
+            ) if definition is not None else ()
+            expected_gates = parent_gates
+            expected_expression = " or ".join(f"{gate.via}->{gate.target}" for gate in parent_gates) or (
+                f"<relation to {parent_type} backed by {parent_path}>->{transfer}"
+            )
+        if definition is None or not any(
+            permission.name == "write__owner" and permission.expression in expected_gates
+            for permission in definition.permissions
+        ):
+            errors.append(
+                checks.Error(
+                    f"{model._meta.label}: definition {model_resource_type(model)!r} must declare "
+                    f"write__owner = {expected_expression}.",
+                    hint="Gate owner writes on the owning model's transfer permission; "
+                    "multi-table children delegate through their field-backed parent relation.",
+                    obj=model,
+                    id="angee.E027",
                 )
             )
     return errors

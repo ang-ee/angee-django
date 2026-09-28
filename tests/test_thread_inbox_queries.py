@@ -29,14 +29,15 @@ def test_inbox_antijoin_preserves_title_projection_and_null_timestamp_ties() -> 
             for index, timestamp in enumerate((None, at, at + timedelta(days=1), None, at + timedelta(days=1)))
         ]
         record = ChatterDoc.objects.create(title="Private record")
-        attached = Thread.objects.create(last_message_at=at + timedelta(days=2))
-        for role in ("chatter", "source"):
-            ThreadAttachment.objects.create(
-                thread=attached,
-                content_type=ContentType.objects.get_for_model(record),
-                object_id=record.pk,
-                role=role,
-            )
+        attached = record.message_thread()
+        attached.last_message_at = at + timedelta(days=2)
+        attached.save(update_fields=["last_message_at"])
+        ThreadAttachment.objects.create(
+            thread=attached,
+            content_type=ContentType.objects.get_for_model(record),
+            object_id=record.pk,
+            role="source",
+        )
 
         inbox = Thread.objects.inbox().select_related("title").only("id", "last_message_at", "title__text")
         with CaptureQueriesContext(connection) as captured:
@@ -60,13 +61,13 @@ def test_inbox_excludes_owned_thread_when_its_record_is_inaccessible() -> None:
     owner = get_user_model().objects.create_user(username="inbox-structural-owner")
     with system_context(reason="test.thread.inbox.record.seed"):
         record = ChatterDoc.objects.create(title="Inaccessible record")
-        attached = Thread.objects.create(created_by=owner)
-        ordinary = Thread.objects.create(created_by=owner)
-        ThreadAttachment.objects.create(
-            thread=attached,
-            content_type=ContentType.objects.get_for_model(record),
-            object_id=record.pk,
-        )
+        attached = record.message_thread()
+        attached.owner = owner
+        attached.save(update_fields=["owner"])
+        ordinary = Thread.objects.create(owner=owner)
+
+    assert attached.channel_id is None
+    assert attached.created_by_id is None
 
     with actor_context(owner):
         assert not ChatterDoc.objects.filter(pk=record.pk).exists()

@@ -12,5 +12,6 @@ rows:
       due_date: 2026-11-27
       sort_order: 4096.0
       sub_sort_order: 1024.0
+      owner: iam.user_alice
       created_by: iam.user_alice
       updated_by: iam.user_alice

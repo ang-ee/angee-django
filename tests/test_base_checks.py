@@ -16,8 +16,9 @@ from rebac.models import RebacResource, Relationship, RelationshipRegistry
 
 from angee.base import checks as base_checks
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_hierarchy_queryset_order, check_rebac_database
-from angee.base.mixins import HierarchyQuerySet
+from angee.base.checks import check_hierarchy_queryset_order, check_ownership, check_rebac_database
+from angee.base.mixins import HierarchyQuerySet, OwnerMixin
+from angee.base.models import AngeeModel
 
 
 @pytest.mark.parametrize("write_alias", [None, "default", "external"])
@@ -136,3 +137,55 @@ def test_rebac_database_check_covers_relationship_and_resource_stores(store_mode
 
     assert error.id == "angee.E020"
     assert error.obj is store_model
+
+
+@pytest.mark.parametrize("mutation", ["valid", "missing", "wrong", "widened", "stored-parent", "wrong-parent"])
+def test_inherited_owner_gate_uses_the_concrete_parents_transfer_permission(tmp_path, monkeypatch, mutation):
+    with isolate_apps("django.contrib.contenttypes") as isolated:
+        class OwnedParent(OwnerMixin, AngeeModel):
+            owner_transfer_permission = "reassign"
+
+            class Meta:
+                app_label = "contenttypes"
+                rebac_resource_type = "tests/owned_parent"
+
+        class OwnedChild(OwnedParent):
+            owner_transfer_permission = "unused_child_transfer"
+
+            class Meta:
+                app_label = "contenttypes"
+                rebac_resource_type = "tests/owned_child"
+
+        source = """
+definition tests/owned_parent {
+    relation owner: auth/user // rebac:field=owner
+    permission reassign = owner
+    permission write__owner = reassign
+}
+definition tests/owned_child {
+    relation parent: tests/owned_parent // rebac:field=ownedparent_ptr
+    permission write__owner = parent->reassign
+}
+"""
+        if mutation == "missing":
+            source = source.replace("permission write__owner = parent->reassign", "")
+        elif mutation == "wrong":
+            source = source.replace("parent->reassign", "parent->write")
+        elif mutation == "widened":
+            source = source.replace("parent->reassign", "parent->reassign + authenticated")
+        elif mutation == "stored-parent":
+            source = source.replace(" // rebac:field=ownedparent_ptr", "")
+        elif mutation == "wrong-parent":
+            source = source.replace("relation parent: tests/owned_parent", "relation parent: tests/other_parent")
+        path = tmp_path / "ownership.zed"
+        path.write_text(source)
+        monkeypatch.setattr(apps.get_app_config("contenttypes"), "rebac_schema", str(path), raising=False)
+        errors = check_ownership([isolated.get_app_config("contenttypes")])
+
+    if mutation == "valid":
+        assert errors == []
+    else:
+        [error] = errors
+        assert error.id == "angee.E027" and error.obj is OwnedChild
+        assert "contenttypes.OwnedChild" in error.msg and "tests/owned_child" in error.msg
+        assert "->reassign" in error.msg

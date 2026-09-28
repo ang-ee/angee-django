@@ -26,6 +26,7 @@ def ownership_schema(tmp_path, monkeypatch):
     path = tmp_path / "ownership.zed"
     path.write_text(OWNERSHIP_SCHEMA)
     monkeypatch.setattr(config, "rebac_schema", str(path), raising=False)
+    monkeypatch.setattr(config, "get_models", lambda **kwargs: iter([OwnedRow]))
     return config, path
 
 
@@ -33,7 +34,7 @@ def ownership_schema(tmp_path, monkeypatch):
     "valid", "no-definition", "no-transfer", "stored-owner", "audit-owner",
     "no-owner-gate", "wrong-owner-gate", "widened-owner-gate",
 ])
-def test_e022_requires_transfer_and_the_owner_column(ownership_schema, mutation):
+def test_ownership_requires_transfer_backing_and_the_owner_gate(ownership_schema, mutation):
     config, path = ownership_schema
     text = OWNERSHIP_SCHEMA
     if mutation == "no-definition":
@@ -54,17 +55,27 @@ def test_e022_requires_transfer_and_the_owner_column(ownership_schema, mutation)
     errors = check_ownership([config])
     if mutation == "valid":
         assert errors == []
+    elif mutation == "no-definition":
+        assert [error.id for error in errors] == ["angee.E022", "angee.E027"]
+        assert all(error.obj is OwnedRow for error in errors)
     else:
         [error] = errors
-        assert error.id == "angee.E022" and error.obj is OwnedRow
+        assert error.obj is OwnedRow
+        if mutation.endswith("owner-gate"):
+            assert error.id == "angee.E027"
+            assert error.msg == (
+                "scopedemo.OwnedRow: definition 'scopedemo/owned_row' must declare write__owner = transfer."
+            )
+        else:
+            assert error.id == "angee.E022"
 
 
-def test_e022_honors_the_models_declared_transfer_permission(ownership_schema, monkeypatch):
+def test_ownership_honors_the_models_declared_transfer_permission(ownership_schema, monkeypatch):
     config, path = ownership_schema
     monkeypatch.setattr(OwnedRow, "owner_transfer_permission", "reassign")
-    assert [error.id for error in check_ownership([config])] == ["angee.E022"]
+    assert [error.id for error in check_ownership([config])] == ["angee.E022", "angee.E027"]
     path.write_text(OWNERSHIP_SCHEMA.replace("permission transfer", "permission reassign"))
-    assert [error.id for error in check_ownership([config])] == ["angee.E022"]
+    assert [error.id for error in check_ownership([config])] == ["angee.E027"]
     path.write_text(OWNERSHIP_SCHEMA.replace("transfer", "reassign"))
     assert check_ownership([config]) == []
 

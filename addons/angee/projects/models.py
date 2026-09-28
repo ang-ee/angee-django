@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 from django.apps import apps
@@ -15,62 +15,80 @@ from django.db.models import F, Q
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
-    RelationshipTuple,
-    SubjectRef,
     current_actor,
     system_context,
-    to_object_ref,
-    write_relationships,
 )
 
+from angee.base.actors import actor_user_id
 from angee.base.fields import FractionalRankField, StateField
-from angee.base.mixins import AuditMixin, HistoryMixin, RevisionMixin
+from angee.base.mixins import (
+    AuditMixin,
+    CreationKeyMixin,
+    CreationKeyQuerySet,
+    HistoryMixin,
+    ImmutableFieldsMixin,
+    ItemOwnershipMixin,
+    OptimisticLockMixin,
+    OwnerMixin,
+    OwnerQuerySet,
+    RevisionMixin,
+)
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin, canonical_record_model, canonical_record_target
-from angee.base.scoping import bind_actor
-from angee.messaging.models import ThreadedModelMixin
+from angee.base.scoping import bind_actor, system_queryset
+from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
+from angee.projects.events import (
+    milestone_reached,
+    project_phase_changed,
+    project_status_changed,
+    task_promoted,
+)
 from angee.scheduling.fields import RecurrenceField
 
 
-class ProjectQuerySet(AngeeQuerySet[Any]):
-    """Project collection writes that preserve folder access mirrors."""
+class ProjectQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
+    """Project rows with the shared ownership release contract."""
 
     def update(self, **kwargs: Any) -> int:
-        """Reject folder changes that bypass instance lifecycle reconciliation."""
+        """Keep home-folder access changes on the both-end authorization path."""
 
         if {"folder", "folder_id"}.intersection(kwargs):
-            raise ValueError("Project.folder must be updated through instance save().")
+            raise ValueError("Project.folder requires both-end authorization through save().")
         return super().update(**kwargs)
 
-    def bulk_update(self, objs: Any, fields: Any, **kwargs: Any) -> int:
-        """Reject bulk folder edits that bypass instance lifecycle reconciliation."""
+    def bulk_update(self, objs: Any, fields: Any, *args: Any, **kwargs: Any) -> int:
+        """Refuse folder changes that bypass instance authorization."""
 
         if {"folder", "folder_id"}.intersection(fields):
-            raise ValueError("Project.folder must be updated through instance save().")
-        return super().bulk_update(objs, fields, **kwargs)
+            raise ValueError("Project.folder requires both-end authorization through save().")
+        return super().bulk_update(objs, fields, *args, **kwargs)
+
+    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+        """Require target authorization for every new home-folder attachment."""
+
+        objs = tuple(objs)
+        if any(project.folder_id is not None for project in objs):
+            raise ValueError("Projects with folders require instance authorization through save().")
+        return super().bulk_create(objs, *args, **kwargs)
 
 
 class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: ignore[misc]
     """Own the idempotent Task-to-Project maturation write."""
 
-    def bulk_create(self, objs: Any, **kwargs: Any) -> Any:
-        """Reject a write path that cannot mirror Project.folder safely."""
-
-        objs = tuple(objs)
-        if any(project.folder_id is not None for project in objs):
-            raise ValueError("Projects with folders must be saved individually so access is reconciled.")
-        return super().bulk_create(objs, **kwargs)
-
-    def from_task(self, task: models.Model) -> models.Model:
+    def from_task(self, task: Any, *, expected_revision: int | None = None) -> models.Model:
         """Return the one project promoted from ``task``, creating it if needed."""
 
         if task.pk is None:
             raise ValidationError("A task must be saved before it can be promoted.")
-        actor = current_actor()
+        actor, bypass = task.effective_actor(strict=True)
         with transaction.atomic():
+            locked_task = system_queryset(type(task), lock=("self",)).get(pk=task.pk)
+            if not bypass and not locked_task.with_actor(actor).has_access("write"):
+                raise PermissionDenied("Write access to the task is required to promote it.")
+            if expected_revision is not None:
+                locked_task.require_revision(expected_revision)
             with system_context(reason="projects.project.promote_from_task.lookup"):
-                locked_task = type(task).objects.lock_if_supported().get(pk=task.pk)
                 existing = self.filter(converted_from_id=task.pk).first()
             if existing is not None:
                 bind_actor(existing, actor)
@@ -91,11 +109,23 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
             except IntegrityError:
                 with system_context(reason="projects.project.promote_from_task.concurrent_lookup"):
                     project = self.get(converted_from_id=task.pk)
+            else:
+                locked_task.sudo(reason="projects.task.promoted").save_without_historical_record(
+                    update_fields=("revision",),
+                )
+                bind_actor(locked_task.unsudo(), actor)
+                bind_actor(project.unsudo(), verified_actor)
+                task_promoted.send(sender=type(locked_task), task=locked_task, project=project)
+            task.refresh_from_db()
             bind_actor(project, verified_actor)
             return project
 
 
-class TaskManager(AngeeManager):
+class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any]):
+    """Task rows with shared creation replay and ownership release contracts."""
+
+
+class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[misc]
     """Own idempotent task promotion from a ThreadActivity."""
 
     def from_activity(self, activity: models.Model) -> models.Model:
@@ -134,7 +164,7 @@ class TaskManager(AngeeManager):
 
 
 class LinkManager(AngeeManager):
-    """Own URL-keyed upserts and target-derived ReBAC relations."""
+    """Own URL-keyed upserts on live project and task targets."""
 
     TARGET_RELATIONS = {
         "projects.project": "project",
@@ -187,15 +217,6 @@ class LinkManager(AngeeManager):
                     setattr(link, name, value)
                 link.sudo(reason="projects.link.upsert.update").save(update_fields=(*values, "updated_at"))
                 bind_actor(link, actor)
-            write_relationships(
-                [
-                    RelationshipTuple(
-                        resource=to_object_ref(link),
-                        relation=relation,
-                        subject=SubjectRef(to_object_ref(target)),
-                    )
-                ]
-            )
         return link
 
     @classmethod
@@ -217,31 +238,27 @@ class LinkManager(AngeeManager):
         return apps.get_model(normalized_label)
 
 
-class ProjectBindingManager(AngeeManager):
-    """Own creation and removal of explicit project-container evidence."""
-
-    def bulk_create(self, objs: Any, **kwargs: Any) -> Any:
-        """Keep bulk writes from bypassing canonicalization and tuple reconciliation."""
-
-        del objs, kwargs
-        raise ValueError("Project bindings must be created through bind().")
-
-    def bulk_update(self, objs: Any, fields: Any, **kwargs: Any) -> Any:
-        """Keep bulk edits from bypassing binding-key reconciliation."""
-
-        del objs, fields, kwargs
-        raise ValueError("Project bindings must be replaced through unbind() and bind().")
-
-
 class ProjectBindingQuerySet(AngeeQuerySet[Any]):
-    """Explicit binding collection with fail-fast key mutation rules."""
+    """Explicit bindings whose deletion requires authority over both ends."""
 
     def update(self, **kwargs: Any) -> int:
-        """Reject key edits that cannot preserve old and new tuple evidence."""
+        """Keep binding identity edits on the both-end authorization path."""
 
-        if {"project", "project_id", "content_type", "content_type_id", "object_id"}.intersection(kwargs):
-            raise ValueError("Project bindings must be replaced through unbind() and bind().")
+        if self.model.binding_fields.intersection(kwargs):
+            raise ValueError("Project binding identities require authorization through save().")
         return super().update(**kwargs)
+
+    def bulk_update(self, objs: Any, fields: Any, *args: Any, **kwargs: Any) -> int:
+        """Refuse identity edits that bypass instance authorization."""
+
+        if self.model.binding_fields.intersection(fields):
+            raise ValueError("Project binding identities require authorization through save().")
+        return super().bulk_update(objs, fields, *args, **kwargs)
+
+    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+        """Require instance authorization before creating access-bearing bindings."""
+
+        raise ValueError("Project bindings require both-end authorization through bind() or save().")
 
     def delete(self) -> tuple[int, dict[str, int]]:
         """Require canonical unbind authority for every explicit bulk deletion."""
@@ -255,7 +272,15 @@ class ProjectBindingQuerySet(AngeeQuerySet[Any]):
         return super().delete()
 
 
-class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, AngeeDataModel):
+class Project(
+    OwnerMixin,
+    ItemOwnershipMixin,
+    OptimisticLockMixin,
+    ThreadedModelMixin,
+    HistoryMixin,
+    RevisionMixin,
+    AngeeDataModel,
+):
     """A bounded endeavor whose access is owned by direct ReBAC grants."""
 
     runtime = True
@@ -314,10 +339,19 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
         on_delete=models.SET_NULL,
         related_name="promoted_projects",
     )
+    current_milestone = models.ForeignKey(
+        "projects.Milestone",
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.RESTRICT,
+        related_name="current_for_projects",
+    )
     links = GenericRelation(
         "projects.Link",
         content_type_field="content_type",
         object_id_field="object_id",
+        related_query_name="project",
     )
 
     objects = ProjectManager()
@@ -350,9 +384,6 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
         if not self._state.adding and folder_is_written:
             previous = type(self)._base_manager.filter(pk=self.pk).only("folder").first()
             previous_folder_id = previous.folder_id if previous is not None else None
-            self._projects_previous_folder_id = previous_folder_id
-        else:
-            self.__dict__.pop("_projects_previous_folder_id", None)
         folder_changed = folder_is_written and (self._state.adding or previous_folder_id != self.folder_id)
         if folder_changed:
             if self._state.adding and self.folder_id is not None:
@@ -365,41 +396,110 @@ class Project(AuditMixin, ThreadedModelMixin, HistoryMixin, RevisionMixin, Angee
                     require_binding_access(project=self, target=self.folder)
         super().save(*args, **kwargs)
 
-    def pause(self) -> Project:
+    def pause(self, *, expected_revision: int | None = None) -> Project:
         """Pause this project, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.PAUSED))
+        return self._set_status(str(self.ProjectStatus.PAUSED), expected_revision=expected_revision)
 
-    def resume(self) -> Project:
+    def resume(self, *, expected_revision: int | None = None) -> Project:
         """Return this project to open work, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.OPEN))
+        return self._set_status(str(self.ProjectStatus.OPEN), expected_revision=expected_revision)
 
-    def complete(self) -> Project:
+    def complete(self, *, expected_revision: int | None = None) -> Project:
         """Complete this project, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.DONE))
+        return self._set_status(str(self.ProjectStatus.DONE), expected_revision=expected_revision)
 
-    def drop(self) -> Project:
+    def drop(self, *, expected_revision: int | None = None) -> Project:
         """Drop this project, idempotently."""
 
-        return self._set_status(str(self.ProjectStatus.DROPPED))
+        return self._set_status(str(self.ProjectStatus.DROPPED), expected_revision=expected_revision)
 
-    def _set_status(self, status: str) -> Project:
-        """Persist one lifecycle target while preserving exact replay no-ops."""
+    def _set_status(self, status: str, *, expected_revision: int | None = None) -> Project:
+        """Persist and announce one authorized lifecycle change in one transaction."""
 
-        if self.status == status:
-            return self
-        cast(Any, self).status = status
-        self.save(update_fields=("status", "updated_at"))
+        actor, bypass = self.effective_actor(strict=True)
+        with transaction.atomic():
+            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            if not bypass and not locked.with_actor(actor).has_access("write"):
+                raise PermissionDenied("Write access to the project is required to change its status.")
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            if locked.status != status:
+                previous_status = locked.status
+                locked.status = status
+                locked.sudo(reason="projects.project.set_status").save(update_fields=("status", "updated_at"))
+                bind_actor(locked.unsudo(), actor)
+                project_status_changed.send(
+                    sender=type(locked),
+                    project=locked,
+                    previous_status=previous_status,
+                    status=status,
+                )
+            self.refresh_from_db()
+        return self
+
+    def selectable_milestones(self) -> models.QuerySet[Any]:
+        """Return this project's phase choices; contributors may narrow eligibility."""
+
+        return self.milestones.all()
+
+    def set_current_milestone(
+        self,
+        milestone: models.Model,
+        *,
+        expected_revision: int | None = None,
+    ) -> Project:
+        """Select an eligible phase without changing planned dates or historical receipts."""
+
+        actor, bypass = self.effective_actor(strict=True)
+        with transaction.atomic():
+            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            if not bypass and not locked.with_actor(actor).has_access("write"):
+                raise PermissionDenied("Write access to the project is required to select its phase.")
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            eligible = locked.selectable_milestones().system_context(reason="projects.project.phase_eligibility")
+            if milestone.pk is None or not eligible.filter(pk=milestone.pk, project_id=locked.pk).exists():
+                raise ValidationError({"milestone": "Choose an eligible milestone of this project."})
+            if locked.current_milestone_id != milestone.pk:
+                previous = locked.current_milestone
+                locked.current_milestone = milestone
+                locked.sudo(reason="projects.project.set_current_milestone").save(
+                    update_fields=("current_milestone", "updated_at"),
+                )
+                if locked.status == self.ProjectStatus.DONE:
+                    if not bypass:
+                        bind_actor(locked, actor)
+                    locked._set_status(str(self.ProjectStatus.OPEN))
+                bind_actor(locked.unsudo(), actor)
+                if previous is not None:
+                    bind_actor(previous.unsudo(), actor)
+                bind_actor(milestone.unsudo(), actor)
+                project_phase_changed.send(
+                    sender=type(locked),
+                    project=locked,
+                    previous_milestone=previous,
+                    milestone=milestone,
+                )
+            self.refresh_from_db()
         return self
 
 
-class Milestone(AuditMixin, AngeeDataModel):
+class MilestoneQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
+    """Milestone rows with the shared creation replay contract."""
+
+
+class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
     """A named marker reached within one project."""
 
     runtime = True
     sqid_prefix = "mls_"
+    immutable_fields = ("reached_at", "reached_by_id")
+    creation_key_scope = "project"
+
+    objects = AngeeManager.from_queryset(MilestoneQuerySet)()
 
     project = models.ForeignKey(
         "projects.Project",
@@ -408,6 +508,16 @@ class Milestone(AuditMixin, AngeeDataModel):
     )
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
+    start_date = models.DateField(null=True, blank=True, db_index=True)
+    reached_at = models.DateTimeField(null=True, blank=True, editable=False, db_index=True)
+    reached_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
     target_date = models.DateField(null=True, blank=True, db_index=True)
     sort_order = FractionalRankField()
 
@@ -418,6 +528,13 @@ class Milestone(AuditMixin, AngeeDataModel):
         ordering = ("project", "sort_order", "sqid")
         rebac_resource_type = "projects/milestone"
         constraints = (
+            CreationKeyMixin.creation_key_constraint(scope="project"),
+            models.CheckConstraint(
+                condition=Q(start_date__isnull=True)
+                | Q(target_date__isnull=True)
+                | Q(start_date__lte=F("target_date")),
+                name="ck_projects_milestone_dates",
+            ),
             models.UniqueConstraint(
                 fields=("project", "sort_order"),
                 name="uq_projects_milestone_project_rank",
@@ -429,14 +546,63 @@ class Milestone(AuditMixin, AngeeDataModel):
 
         return self.name
 
+    def clean(self) -> None:
+        """Reject a planned finish before the planned start."""
 
-class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
+        super().clean()
+        if self.start_date is not None and self.target_date is not None and self.start_date > self.target_date:
+            raise ValidationError({"target_date": "The target date must be on or after the start date."})
+
+    def mark_reached(self, *, expected_revision: int | None = None) -> Milestone:
+        """Stamp and announce the first historical receipt, retaining it on replay."""
+
+        actor, bypass = self.effective_actor(strict=True)
+        with transaction.atomic():
+            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            if not bypass and not locked.with_actor(actor).has_access("reach"):
+                raise PermissionDenied("Reach access to the milestone is required.")
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            if locked.reached_at is None:
+                locked.reached_at = timezone.now()
+                locked.reached_by_id = actor_user_id(actor)
+                locked.allow_immutable_save("reached_at", "reached_by_id")
+                locked.sudo(reason="projects.milestone.mark_reached").save(
+                    update_fields=("reached_at", "reached_by", "updated_at"),
+                )
+                bind_actor(locked.unsudo(), actor)
+                milestone_reached.send(sender=type(locked), milestone=locked)
+            self.refresh_from_db()
+        return self
+
+    def validate_deletion(self, *, origin: models.Model | models.QuerySet[Any] | None) -> None:
+        """Retain receipts while their project exists; allow its native cascade."""
+
+        if isinstance(origin, Project) and origin.pk == self.project_id:
+            return
+        if isinstance(origin, models.QuerySet) and issubclass(origin.model, Project):
+            return
+        if self.reached_at is not None:
+            raise ValidationError("A reached milestone cannot be deleted.")
+
+
+class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
     """The platform's one table for a discrete human action."""
 
     runtime = True
     sqid_prefix = "tsk_"
-    thread_tracking_fields = ("status", "assignee", "due_date", "priority")
+    thread_tracking_fields = ("status", "assignee", "due_date", "priority", "visibility")
+    thread_post_access = "comment"
+    owner_container = "project"
     rebac_grantable = {"reader": "share", "editor": "share"}
+
+    class TaskVisibility(models.TextChoices):
+        """Whether this task inherits its containers' access."""
+
+        INHERITED = "inherited", "Inherited"
+        RESTRICTED = "restricted", "Restricted"
+
+    visibility = StateField(choices_enum=TaskVisibility, default=TaskVisibility.INHERITED)
 
     class TaskStatus(models.TextChoices):
         """Coarse task lifecycle states."""
@@ -522,6 +688,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         "projects.Link",
         content_type_field="content_type",
         object_id_field="object_id",
+        related_query_name="task",
     )
 
     objects = TaskManager()
@@ -547,6 +714,7 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
                 fields=("converted_from_activity",),
                 name="uq_projects_task_converted_activity",
             ),
+            CreationKeyMixin.creation_key_constraint(),
         )
 
     def __str__(self) -> str:
@@ -569,15 +737,34 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         self._validate_structure(lock=False)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Authorize project attachment on insert and revalidate mutable structure."""
+        """Authorize project moves and assignment before revalidating task structure."""
 
-        if self._state.adding and self.project_id is not None:
+        update_fields = kwargs.get("update_fields")
+        deferred = self.get_deferred_fields()
+        project_is_written = (
+            update_fields is None and "project_id" not in deferred
+        ) or (update_fields is not None and bool({"project", "project_id"}.intersection(update_fields)))
+        assignee_is_written = (
+            update_fields is None and "assignee_id" not in deferred
+        ) or (update_fields is not None and bool({"assignee", "assignee_id"}.intersection(update_fields)))
+        previous_project_id, previous_assignee_id = None, None
+        if not self._state.adding and (project_is_written or assignee_is_written):
+            previous_project_id, previous_assignee_id = (
+                system_queryset(type(self)).filter(pk=self.pk).values_list("project_id", "assignee_id").get()
+            )
+        if project_is_written and self.project_id is not None:
+            if self._state.adding or self.project_id != previous_project_id:
+                actor, bypass = self.effective_actor(strict=True)
+                if not bypass and not self.project.with_actor(actor).has_access("write"):
+                    raise PermissionDenied("Write access to the project is required to add a task.")
+        if assignee_is_written and self.assignee_id is not None:
+            if self._state.adding or self.assignee_id != previous_assignee_id:
+                self.validate_record_access_subject("assignee", self.assignee)
+        assignment_actor = None
+        if self._state.adding and self.assignee_id is not None:
             actor, bypass = self.effective_actor(strict=True)
             if not bypass:
-                assert actor is not None
-                project = cast(Project, self.project).with_actor(actor)
-                if not project.has_access("write"):
-                    raise PermissionDenied("Write access to the project is required to add a task.")
+                assignment_actor = actor
 
         self._normalize_insert_lifecycle()
         update_fields = kwargs.get("update_fields")
@@ -586,6 +773,13 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
             with transaction.atomic():
                 self._validate_structure(lock=True)
                 super().save(*args, **kwargs)
+                # The persisted candidate lets REBAC evaluate every composed share arm.
+                # A refusal rolls the insert and its transactional side effects back.
+                if assignment_actor is not None and (
+                    self.container_owns_items() or self.owner_id is None
+                    or self.assignee_id != actor_user_id(assignment_actor)
+                ) and not self.has_access("share"):
+                    raise PermissionDenied("Share access to the task is required to assign it.")
             return
         super().save(*args, **kwargs)
 
@@ -634,11 +828,41 @@ class Task(AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
         self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
         return self
 
-    def promote_to_project(self) -> models.Model:
+    def promote_to_project(self, *, expected_revision: int | None = None) -> models.Model:
         """Return the one project matured from this task."""
 
         project_model = apps.get_model("projects", "Project")
-        return project_model.objects.from_task(self)
+        return project_model.objects.from_task(self, expected_revision=expected_revision)
+
+    def set_visibility(self, value: str, *, expected_revision: int | None = None) -> Task:
+        """Narrow or widen the task through its dedicated permission."""
+
+        try:
+            visibility = self.TaskVisibility(value)
+        except ValueError as error:
+            raise ValidationError({"visibility": "Choose inherited or restricted."}) from error
+        actor, bypass = self.effective_actor(strict=True)
+        permission = "narrow" if visibility == self.TaskVisibility.RESTRICTED else "widen"
+        with transaction.atomic():
+            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            if not bypass and not locked.with_actor(actor).has_access(permission):
+                raise PermissionDenied(f"{permission.title()} access to the task is required.")
+            if expected_revision is not None:
+                locked.require_revision(expected_revision)
+            if locked.visibility != visibility:
+                locked.visibility = visibility
+                locked.sudo(reason="projects.task.set_visibility").save(update_fields=("visibility", "updated_at"))
+            self.refresh_from_db()
+        return self
+
+    def thread_audience_members(self) -> Iterable[AudienceMember]:
+        """Notify the current assignee's existing party without creating a follower."""
+
+        yield from super().thread_audience_members()
+        if self.assignee_id is not None:
+            person = system_queryset(apps.get_model("parties", "Person")).filter(user_id=self.assignee_id).first()
+            if person is not None:
+                yield AudienceMember(party=person)
 
     def _normalize_insert_lifecycle(self) -> None:
         """Stamp coherent close state while rejecting contradictory inserts."""
@@ -826,6 +1050,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
 
     runtime = True
     sqid_prefix = "pbd_"
+    binding_fields = frozenset({"project", "project_id", "content_type", "content_type_id", "object_id"})
     allowed_target_models = frozenset(
         {
             "messaging.channel",
@@ -845,7 +1070,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
 
-    objects = ProjectBindingManager.from_queryset(ProjectBindingQuerySet)()
+    objects = AngeeManager.from_queryset(ProjectBindingQuerySet)()
 
     class Meta:
         """Django model options for explicit project resource bindings."""
@@ -895,9 +1120,8 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
         if target is None:
             raise ValidationError({"target": "A project binding target is required."})
         self.validate_target(target)
-        key_fields = {"project", "project_id", "content_type", "content_type_id", "object_id"}
         update_fields = kwargs.get("update_fields")
-        key_is_written = update_fields is None or bool(key_fields.intersection(update_fields))
+        key_is_written = update_fields is None or bool(self.binding_fields.intersection(update_fields))
         canonical = canonical_record_target(target)
         if key_is_written:
             if not self._state.adding:

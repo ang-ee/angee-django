@@ -335,8 +335,9 @@ class OwnerMixin(AuditMixin):
     A cached, saved container supplies its flag; an uncached container costs one
     query per insert. ``bulk_create`` bypasses this instance-save default.
     Compose :class:`OwnerQuerySet` when an owning verb needs bulk release.
-    Adopters declare ``write__owner = <owner_transfer_permission>`` in Zed so
-    direct saves and queryset updates require the same transfer permission.
+    The owning model declares ``write__owner = <owner_transfer_permission>`` in
+    Zed; multi-table children delegate that gate through their parent relation.
+    Direct saves and queryset updates require the same transfer permission.
     """
 
     owner_transfer_permission: ClassVar[str] = "transfer"
