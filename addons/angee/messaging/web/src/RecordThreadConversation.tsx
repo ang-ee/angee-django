@@ -1076,11 +1076,13 @@ function recipientOptionsFrom(
     });
   }
   for (const follower of followers) {
+    const party = follower.party;
     const user = follower.user;
+    if (!party || !user || user.is_active === false) continue;
     const previous = byId.get(user.id);
     byId.set(user.id, {
       id: user.id,
-      label: userDisplayName(user, userFallback),
+      label: previous?.label ?? (party.display_name || userFallback),
       detail: previous?.detail || user.username || "",
       follower: true,
       suggested: previous?.suggested ?? false,

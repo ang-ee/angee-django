@@ -52,6 +52,7 @@ def public_webform(request: HttpRequest, slug: str) -> JsonResponse:
                 "title": str(channel.display_name or channel.slug),
                 "schema_version": int(channel.form_schema_version),
                 "form_schema": channel.form_schema,
+                "honeypot_field": _webform_policy(slug).honeypot_field,
             }
         )
         response["Cache-Control"] = "no-store"
