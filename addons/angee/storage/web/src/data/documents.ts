@@ -115,6 +115,7 @@ export const StorageFileById = graphql(`
       size_bytes
       content_hash
       upload_state
+      visibility
       is_trashed
       updated_at
       created_by_label

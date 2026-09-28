@@ -922,6 +922,7 @@ function file(
     size_bytes: 128,
     content_hash: "hash",
     upload_state: "ready",
+    visibility: "inherited",
     is_trashed: false,
     updated_at: updatedAt,
     created_by_label: "Alex",
