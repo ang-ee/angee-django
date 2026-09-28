@@ -39,6 +39,7 @@ export interface ComparisonProposal extends Row {
   responder?: unknown;
   party?: { display_name?: unknown } | null;
   state?: unknown;
+  statement?: unknown;
   cost?: unknown;
   currency?: { code?: unknown } | null;
   staffing?: unknown;
@@ -53,6 +54,8 @@ export interface ComparisonAnswer extends Row {
   proposal?: { id?: string } | null;
   topic?: { id?: string } | null;
   body?: unknown;
+  visibility?: unknown;
+  shared_with_responders?: unknown;
 }
 
 export interface RoundComparisonState {
@@ -76,7 +79,7 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
   const answerResource = answerMetadata?.resource ?? null;
 
   const roundFields = React.useMemo(
-    () => refineFieldsFromPaths(["id", "name", "status", "opening_policy"]),
+    () => refineFieldsFromPaths(["id", "name", "status", "opening_policy", "permissions", "can_open", "can_admit", "revision"]),
     [],
   );
   const topicFields = React.useMemo(
@@ -91,6 +94,7 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
         "responder.display_name",
         "party.display_name",
         "state",
+        "statement",
         "cost",
         "currency.code",
         "staffing",
@@ -102,7 +106,7 @@ export function useRoundComparisonData(roundId: string): RoundComparisonState {
     [],
   );
   const answerFields = React.useMemo(
-    () => refineFieldsFromPaths(["id", "proposal.id", "topic.id", "body"]),
+    () => refineFieldsFromPaths(["id", "proposal.id", "topic.id", "body", "visibility", "shared_with_responders"]),
     [],
   );
 

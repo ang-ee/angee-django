@@ -54,6 +54,7 @@ from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
 from angee.projects.models import DriveProjects, FolderProjects, VaultProjects
+from angee.proposals.models import DriveProposalAccess, FileProposalAccess
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
@@ -449,7 +450,7 @@ class Backend(AbstractStorageBackend):
         rebac_resource_type = "storage/backend"
 
 
-class Drive(DriveProjects, AbstractDrive):
+class Drive(DriveProjects, DriveProposalAccess, AbstractDrive):
     """Concrete storage drive used by source-addon tests."""
 
     rebac_grantable = AbstractDrive.rebac_grantable
@@ -486,7 +487,7 @@ class MimeType(AbstractMimeType):
         db_table = "test_storage_mimetype"
 
 
-class File(AbstractFile):
+class File(FileProposalAccess, AbstractFile):
     """Concrete storage file used by source-addon tests."""
 
     rebac_grantable = AbstractFile.rebac_grantable

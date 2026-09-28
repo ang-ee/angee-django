@@ -57,7 +57,6 @@ from angee.messaging.models import MessageEdge as AbstractMessageEdge
 from angee.messaging.models import MessageStar as AbstractMessageStar
 from angee.messaging.models import Participant as AbstractParticipant
 from angee.messaging.models import Reaction as AbstractReaction
-from angee.messaging.models import ThreadActivity as AbstractThreadActivity
 from angee.messaging.models import ThreadedModelMixin
 from angee.parties.managers import HandleAssociationStatus
 from angee.parties.mixins import LinkSource
@@ -85,6 +84,7 @@ from tests.messaging_models import (
     Party,
     Person,
     Thread,
+    ThreadActivity,
     ThreadAttachment,
     ThreadFollower,
     ThreadNotification,
@@ -192,18 +192,6 @@ class Relationship(AbstractRelationship):
         app_label = "parties"
         db_table = "test_parties_relationship"
         rebac_resource_type = "parties/relationship"
-
-
-class ThreadActivity(AbstractThreadActivity):
-    """Concrete record-thread activity used by messaging tests."""
-
-    class Meta(AbstractThreadActivity.Meta):
-        """Django model options for the canonical test thread activity."""
-
-        abstract = False
-        app_label = "messaging"
-        db_table = "test_messaging_thread_activity"
-        rebac_resource_type = "messaging/thread_activity"
 
 
 class Reaction(AbstractReaction):

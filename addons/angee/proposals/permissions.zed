@@ -1,103 +1,117 @@
-// Authorization schema for sealed proposal rounds.
+// Authorization schema for proposal rounds.
 // @rebac_package: proposals
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 4
+// @rebac_schema_revision: 6
 
-// Global proposal visibility is ordinary role membership. The IAM Permissions
-// Hub writes `proposals/role:proposal_viewer#member@<subject>`; scoped grants
-// use the proposal_viewer relations on Round, Project, or Task below.
 definition proposals/role {
-    relation member:   auth/user | auth/group#member | angee/role:admin#member
-    relation includes: proposals/role
-    relation admin:    angee/role // rebac:const=admin
-
-    permission effective_member = member + includes->effective_member + admin->member
+    relation member: auth/user | auth/group#member | angee/role:admin#member
+    relation admin: angee/role // rebac:const=admin
+    permission effective_member = member + admin->member
 }
 
 definition proposals/round {
-    relation task:             projects/task    // rebac:field=task
-    relation project:          projects/project // rebac:field=project
-    relation task_project:     projects/project // rebac:field={"path":"task__project"}
-    relation facilitator:      auth/user        // rebac:field=facilitator
-    relation responder:        auth/user | auth/group#member
-    relation reader:           auth/user | auth/group#member
-    relation evaluator:        auth/user | auth/group#member
-    relation requester:        auth/user | auth/group#member
-    relation proposal_viewer:  auth/user | auth/group#member
-    relation global_viewer:    proposals/role // rebac:const=proposal_viewer
-    relation person:           iam/kind       // rebac:const=person
-    relation admin:            angee/role     // rebac:const=admin
-
-    permission facilitate = facilitator & person->active_member
+    relation task: projects/task // rebac:field=task
+    relation project: projects/project // rebac:field=project
+    relation task_project: projects/project // rebac:field={"path":"task__project","filters":{"task__visibility":"inherited"}}
+    relation team: spaces/group // rebac:field=team
+    relation facilitator: auth/user // rebac:field=facilitator
+    relation responder: auth/user // rebac:field={"path":"proposals__responder","filters":{"proposals__retired_at__isnull":true}}
+    relation retired: auth/user // rebac:field={"path":"proposals__responder","filters":{"proposals__retired_at__isnull":false}}
+    relation recipient: auth/user // rebac:field={"path":"proposals__responder","filters":{"proposals__disclosed_at__isnull":false,"proposals__retired_at__isnull":true}}
+    relation track_recipient: auth/user // rebac:field={"path":"proposals__responder","filters":{"proposals__submitted_at__isnull":false,"proposals__retired_at__isnull":true}}
+    relation roster_names: auth/user // rebac:field={"path":"proposals__responder","filters":{"roster_visibility":"named","proposals__retired_at__isnull":true}}
+    relation roster_status: auth/user // rebac:field={"path":"proposals__responder","filters":{"roster_visibility":"status","proposals__retired_at__isnull":true}}
+    relation requester: auth/user // rebac:field={"path":"requester_party__person__user"}
+    relation reader: auth/user | auth/group#member
+    relation evaluator: auth/user | auth/group#member
+    relation proposal_viewer: auth/user | auth/group#member
+    relation global_viewer: proposals/role // rebac:const=proposal_viewer
+    relation person: iam/kind // rebac:const=person
+    relation admin: angee/role // rebac:const=admin
+    permission manage = ((facilitator + team->write) & person->active_member) + admin->member
     permission evaluate = evaluator & person->active_member
-    permission manage = facilitate + admin->member
     permission respond = responder
-    permission view_proposals = proposal_viewer
-                              + project->proposal_viewer
-                              + task->proposal_viewer
-                              + task_project->proposal_viewer
-                              + global_viewer->effective_member
-                              + admin->member
+    permission ask = manage + respond
+    permission discuss_clarification = authenticated
+    permission see_roster = roster_names + roster_status
+    permission receive_track = recipient + track_recipient
+    permission view_proposals = proposal_viewer + project->proposal_viewer + task->proposal_viewer + task_project->proposal_viewer + global_viewer->effective_member + admin->member
     permission create = task->write + project->write + admin->member
-    permission read   = manage + respond + reader + evaluate + requester + view_proposals
-    permission write  = manage
-    permission share  = manage
+    permission read = manage + team->post + ((respond + reader + evaluate + requester + view_proposals) - retired)
+    permission write = manage
+    permission share = manage
     permission delete = manage
+    permission read__roster_visibility = manage
+    permission read__clarification_askers = manage
 }
 
 definition proposals/topic {
     relation round: proposals/round // rebac:field=round
-
+    permission read = round->read
     permission create = round->write
-    permission read   = round->read
-    permission write  = round->write
+    permission write = round->write
     permission delete = round->write
 }
 
 definition proposals/proposal {
-    relation responder: auth/user       // rebac:field=responder
-    relation round:     proposals/round // rebac:field=round
-    relation editor:    auth/user
-    relation reader:    auth/user | auth/group#member
-
-    permission create   = (responder & round->respond) + round->manage
-    permission read     = responder + reader + round->manage + round->evaluate
-                        + round->requester + round->view_proposals
-    permission write    = editor + round->manage
-    permission share    = round->share
+    relation responder: auth/user // rebac:field={"path":"responder","filters":{"retired_at__isnull":true}}
+    relation drafter: auth/user // rebac:field={"path":"responder","filters":{"retired_at__isnull":true,"state":"draft","round__closed_at__isnull":true}}
+    relation publisher: auth/user // rebac:field={"path":"responder","filters":{"retired_at__isnull":true,"round__status":"opened"}}
+    relation round: proposals/round // rebac:field=round
+    relation disclosed_round: proposals/round // rebac:field={"path":"round","filters":{"disclosed_at__isnull":false}}
+    relation published_round: proposals/round // rebac:field={"path":"round","filters":{"track_published_at__isnull":false}}
+    relation private_round: proposals/round // rebac:field={"path":"round","filters":{"round__opening_policy":"facilitator_only"}}
+    relation reader: auth/user | auth/group#member
+    permission manage = round->manage
+    permission oversee = (reader + round->evaluate + round->requester + round->view_proposals) - round->retired
+    permission read_narrowed = responder + oversee
+    permission peer_read = disclosed_round->recipient
+    permission read_answers = round->manage + read_narrowed + peer_read
+    permission read = read_answers
+    permission create = round->manage
+    permission write = drafter + round->manage
+    permission delete = drafter + round->manage
+    permission share = round->share
     permission evaluate = round->evaluate + round->manage
-    permission publish  = responder + round->manage
+    permission publish = publisher + round->manage
     permission withdraw = responder + round->manage
-    permission delete   = editor + round->manage
-
-    // A proposal_viewer can discover and read the proposal document, while the
-    // sealed commercial fields remain limited to the participants below.
-    permission read__cost            = responder + round->manage + round->evaluate + round->requester
-    permission read__currency        = responder + round->manage + round->evaluate + round->requester
-    permission read__staffing        = responder + round->manage + round->evaluate + round->requester
-    permission read__confidence      = responder + round->manage + round->evaluate + round->requester
-    permission read__timeframe_start = responder + round->manage + round->evaluate + round->requester
-    permission read__timeframe_end   = responder + round->manage + round->evaluate + round->requester
-    permission read__valid_until     = responder + round->manage + round->evaluate + round->requester
-    permission read__source_message  = responder + round->manage + round->evaluate + round->requester
+    permission write_track = responder + round->manage
+    permission read_track = round->manage + responder + (published_round->receive_track - private_round->receive_track)
+    permission read_track_status = read_track + round->roster_status
+    permission read_offer = round->manage + responder + ((round->evaluate + round->requester) - round->retired)
+    permission read__cost = read_offer
+    permission read__currency = read_offer
+    permission read__staffing = read_offer
+    permission read__confidence = read_offer
+    permission read__timeframe_start = read_offer
+    permission read__timeframe_end = read_offer
+    permission read__valid_until = read_offer
+    permission read__source_message = read_offer
+    permission read__statement = read_offer
+    permission read__responder = responder + round->manage + round->see_roster
 }
 
 definition proposals/answer {
+    relation round: proposals/round // rebac:field={"path":"proposal__round"}
     relation proposal: proposals/proposal // rebac:field=proposal
-
+    relation shared: proposals/proposal // rebac:field={"path":"proposal","filters":{"visibility":"round"}}
+    relation narrowed: proposals/proposal // rebac:field={"path":"proposal","filters":{"visibility":"responder"}}
+    relation reader: auth/user | auth/group#member
+    relation responder_shared_round: proposals/round // rebac:field={"path":"proposal__round","filters":{"shared_with_responders":true}}
+    permission manage = proposal->manage
+    permission narrow = manage + shared->responder + narrowed->responder
+    permission read = manage + ((shared->read_answers + narrowed->read_narrowed + reader + responder_shared_round->respond) - round->retired)
     permission create = proposal->write
-    permission read   = proposal->read
-    permission write  = proposal->write
-    permission delete = proposal->write
+    permission write = proposal->manage + shared->drafter + narrowed->drafter
+    permission delete = proposal->manage + shared->drafter + narrowed->drafter
 }
 
 definition proposals/review {
     relation proposal: proposals/proposal // rebac:field=proposal
-    relation reviewer: auth/user          // rebac:field=reviewer
+    relation reviewer: auth/user // rebac:field=reviewer
     relation person: iam/kind // rebac:const=person
-
     permission create = reviewer & proposal->evaluate
-    permission read   = reviewer + proposal->evaluate
-    permission write  = reviewer & person->active_member
+    permission read = reviewer + proposal->evaluate
+    permission write = reviewer & person->active_member
     permission delete = reviewer & person->active_member
 }

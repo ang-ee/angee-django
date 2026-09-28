@@ -59,7 +59,8 @@ from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, SqidMixin
 from angee.base.models import AngeeModel
-from angee.base.refs import RecordRefMixin
+from angee.base.refs import RecordRefMixin, canonical_record_model
+from angee.base.scoping import system_queryset
 from angee.integrate.models import Bridge
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
@@ -185,6 +186,25 @@ class ThreadedModelMixin(models.Model):
 
     thread_attachment_role: ClassVar[str] = "chatter"
     """The attachment role used for the model's primary chatter thread."""
+
+    @classmethod
+    def thread_messages_expression(cls, record_id: Any) -> models.QuerySet:
+        """Return messages of the record's primary thread for a SQL subquery.
+
+        This is a structural, unscoped expression. The calling projection owns
+        authorization of the information derived from these message rows.
+        """
+
+        owner = canonical_record_model(cls)
+        content_type = ContentType.objects.filter(
+            app_label=owner._meta.app_label,
+            model=owner._meta.model_name,
+        ).values("pk")[:1]
+        return system_queryset(apps.get_model("messaging", "Message")).filter(
+            thread__attachments__content_type_id=models.Subquery(content_type),
+            thread__attachments__object_id=record_id,
+            thread__attachments__role=cls.thread_attachment_role,
+        )
 
     thread_post_access: ClassVar[str] = "write"
     """Record permission required to post a chatter message."""

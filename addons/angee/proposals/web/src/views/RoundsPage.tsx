@@ -95,9 +95,20 @@ export function RoundsPage(): React.ReactElement {
       <Form
         resource={ROUND_MODEL}
         layout="tabs"
-        actions={[actions.open, actions.close, actions.transfer, actions.cancel]}
+        actions={[actions.open, actions.close, actions.transfer, actions.cancel, actions.admit, actions.remove, actions.widen]}
       >
+        <Field name="permissions" hidden readOnly />
+        <Field name="revision" hidden readOnly />
+        <Field name="can_open" hidden readOnly />
+        <Field name="can_admit" hidden readOnly />
         <Field name="name" title />
+        <Group columns={2}>
+          <Field name="team" />
+          <Field name="roster_visibility" />
+          <Field name="clarification_askers" />
+          <Field name="opens_after" />
+          <Field name="clarifications_shared_until" />
+        </Group>
         <Field name="status" widget="statusbar" readOnly />
         {recordId === "new" ? (
           <>

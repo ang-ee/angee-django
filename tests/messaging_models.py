@@ -13,6 +13,7 @@ from angee.messaging.models import Message as AbstractMessage
 from angee.messaging.models import MessageSubtype as AbstractMessageSubtype
 from angee.messaging.models import Part as AbstractPart
 from angee.messaging.models import Thread as AbstractThread
+from angee.messaging.models import ThreadActivity as AbstractThreadActivity
 from angee.messaging.models import ThreadAttachment as AbstractThreadAttachment
 from angee.messaging.models import ThreadFollower as AbstractThreadFollower
 from angee.messaging.models import ThreadNotification as AbstractThreadNotification
@@ -231,3 +232,15 @@ class TrackingValue(AbstractTrackingValue):
         app_label = "messaging"
         db_table = "test_messaging_tracking_value"
         rebac_resource_type = "messaging/tracking_value"
+
+
+class ThreadActivity(AbstractThreadActivity):
+    """Concrete record-thread activity used by messaging tests."""
+
+    class Meta(AbstractThreadActivity.Meta):
+        """Django model options for the canonical test thread activity."""
+
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_thread_activity"
+        rebac_resource_type = "messaging/thread_activity"

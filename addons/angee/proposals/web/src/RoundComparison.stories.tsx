@@ -14,7 +14,7 @@ import type {
   ComparisonRound,
   ComparisonTopic,
 } from "./comparison-data";
-import { RoundComparisonGrid } from "./views/RoundComparisonPage";
+import { RoundComparisonGrid } from "./comparison-grid";
 
 const round: ComparisonRound = {
   id: "rnd_competitive",

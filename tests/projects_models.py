@@ -1,18 +1,13 @@
 """Canonical concrete project models for bare-Django access-cascade tests."""
 
-from copy import deepcopy
-
 from django.db import models
 
-from angee.base.mixins import ImmutableFieldsMixin, OptimisticLockMixin, OwnerMixin
-from angee.base.models import AngeeDataModel
-from angee.messaging.models import ThreadedModelMixin
 from angee.projects.models import Link as AbstractLink
 from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
 from angee.projects.models import Task as AbstractTask
-from angee.projects.models import TaskManager
+from angee.proposals.models import ProjectProposalAccess, TaskProposalAccess
 from angee.work.models import ProjectWork, TaskWork
 from angee.work.models import Queue as AbstractQueue
 from angee.work.models import Stage as AbstractWorkStage
@@ -40,20 +35,12 @@ class Stage(AbstractWorkStage):
         rebac_resource_type = "work/stage"
 
 
-class Task(TaskWork, ImmutableFieldsMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin, AngeeDataModel):
+class Task(TaskWork, TaskProposalAccess, AbstractTask):
     """Concrete task carrying the production chatter-wake owner."""
 
     sqid_prefix = "tpt_"
-    assignee = AbstractTask._meta.get_field("assignee").clone()
-    visibility = AbstractTask._meta.get_field("visibility").clone()
     immutable_fields = AbstractTask.immutable_fields
-    TaskVisibility = AbstractTask.TaskVisibility
-    set_visibility = AbstractTask.set_visibility
-    validate_visibility = AbstractTask.validate_visibility
-    objects = TaskManager()
-    links = deepcopy(AbstractTask._meta.get_field("links"))
-    file_attachments = deepcopy(AbstractTask._meta.get_field("file_attachments"))
-    knowledge_bindings = deepcopy(AbstractTask._meta.get_field("knowledge_bindings"))
+    rebac_grantable = {**AbstractTask.rebac_grantable, **TaskProposalAccess.rebac_grantable}
 
     # Keep the queue and stage fields used by the native work owner. These
     # fixtures do not exercise cycle scheduling.
@@ -67,9 +54,10 @@ class Task(TaskWork, ImmutableFieldsMixin, OwnerMixin, OptimisticLockMixin, Thre
         related_name="tasks",
     )
 
-    class Meta:
+    class Meta(AbstractTask.Meta, TaskProposalAccess.Meta):
         abstract = False
         app_label = "projects"
+        constraints = (*AbstractTask.Meta.constraints, *TaskProposalAccess.Meta.constraints)
         db_table = "test_projects_task"
         rebac_resource_type = "projects/task"
 
@@ -84,7 +72,7 @@ class Link(AbstractLink):
         rebac_resource_type = "projects/link"
 
 
-class Project(ProjectWork, AbstractProject):
+class Project(ProjectWork, ProjectProposalAccess, AbstractProject):
     """Concrete project carrying the production owners and the work team donor."""
 
     rebac_grantable = {
@@ -110,7 +98,7 @@ class ProjectBinding(AbstractProjectBinding):
 
 
 class Milestone(AbstractMilestone):
-    """Concrete phase target for the production project's current milestone."""
+    """Concrete phase target for project progress and proposal boundaries."""
 
     class Meta(AbstractMilestone.Meta):
         abstract = False

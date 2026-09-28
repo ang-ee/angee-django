@@ -54,6 +54,7 @@ describe("proposals addon manifest", () => {
       "proposals.proposals",
     ]);
     expect(proposals.slots?.map((slot) => slot.id)).toEqual([
+      "proposals.task-responder-share",
       "proposals.project-rounds",
       "proposals.task-rounds",
     ]);

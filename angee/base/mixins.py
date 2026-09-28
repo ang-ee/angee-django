@@ -523,7 +523,11 @@ class RevisionMixin(models.Model):
 
 
 class ImmutableFieldsMixin(models.Model):
-    """Reject identity/receipt changes except through an owning model verb."""
+    """Reject changes to loaded immutable attnames declared anywhere in the MRO.
+
+    Donors contribute plain tuples. An owning verb permits its next write through
+    ``allow_immutable_save``; unloaded deferred values remain untouched.
+    """
 
     immutable_fields: ClassVar[tuple[str, ...]] = ()
 
@@ -545,7 +549,10 @@ class ImmutableFieldsMixin(models.Model):
         allowed = set(getattr(self, "_allowed_immutable_fields", set()))
         try:
             if self.pk is not None and not self._state.adding:
-                checked = tuple(name for name in self.immutable_fields if name not in allowed)
+                declared = dict.fromkeys(
+                    name for base in type(self).__mro__ for name in base.__dict__.get("immutable_fields", ())
+                )
+                checked = tuple(name for name in declared if name not in allowed and name in self.__dict__)
                 if checked:
                     # Compare committed identities without loading unrelated deferred columns.
                     with system_context(reason=f"{self._meta.label_lower}.immutable_fields"):

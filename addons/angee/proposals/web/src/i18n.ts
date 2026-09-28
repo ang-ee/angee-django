@@ -2,6 +2,12 @@ import { createNamespaceT } from "@angee/ui";
 
 export const enProposalsMessages: Record<string, string> = {
   "common.name": "Name",
+  "task.action.share": "Share with responders",
+  "task.action.unshare": "Clear responder sharing",
+  "round.policy.answers": "Answers",
+  "round.policy.answersAndTracks": "Answers and tracks",
+  "round.policy.draftsAndTracks": "Drafts and tracks",
+  "task.audience.failed": "The task audience could not be loaded.",
   "common.status": "Status",
   "common.state": "State",
   "common.responder": "Responder",
@@ -25,6 +31,16 @@ export const enProposalsMessages: Record<string, string> = {
     "The answers policy reveals submitted topic answers to the round's responders; offer facts remain private.",
   "round.action.open.answersAndTracks":
     "The answers-and-tracks policy reveals submitted topic answers and publishes eligible proposal tracks; offer facts remain private.",
+  "round.action.open.draftsAndTracks": "This reveals current responders' draft answers and tracks. Offer facts remain private.",
+  "round.action.admit": "Admit responder",
+  "round.action.remove": "Remove responder",
+  "round.action.responder": "Responder",
+  "round.action.track": "Create a private track",
+  "round.action.widen": "Widen opening policy",
+  "answer.action.visibility": "Change audience",
+  "answer.action.share": "Share with responders",
+  "answer.action.unshare": "Clear responder sharing",
+  "comparison.fact.statement": "Statement",
   "round.action.open.unknown":
     "The server will apply the round's selected opening policy.",
   "round.action.close": "Close round",
@@ -50,6 +66,9 @@ export const enProposalsMessages: Record<string, string> = {
   "proposal.tabs.answers": "Answers",
   "proposal.tabs.reviews": "Reviews",
   "proposal.answers.empty": "No topic answers yet.",
+  "answer.visibility.round": "Round audience",
+  "answer.visibility.responder": "Responder and managers",
+  "answer.visibility.sealed": "Managers only",
   "proposal.reviews.mine.title": "Your review",
   "proposal.reviews.mine.description":
     "Create or update your own evaluator assessment.",

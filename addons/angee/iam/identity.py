@@ -13,7 +13,8 @@ from typing import Any
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db.models import Q, QuerySet
+from django.db.models import CharField, Q, QuerySet, Value
+from django.db.models.functions import Coalesce, Concat, NullIf, Trim
 from django.http import HttpRequest
 from rebac import system_context
 
@@ -32,6 +33,13 @@ def user_label_queryset() -> QuerySet[Any]:
     reason = "iam.identity.user_label"
     with system_context(reason=reason):
         return get_user_model().objects.system_context(reason=reason).only("first_name", "last_name", "username")
+
+
+def user_label_expression(prefix: str = "") -> Coalesce:
+    """Project the auth user's display label in SQL, including through a relation."""
+
+    full_name = Trim(Concat(f"{prefix}first_name", Value(" "), f"{prefix}last_name"))
+    return Coalesce(NullIf(full_name, Value("")), f"{prefix}username", output_field=CharField())
 
 
 def user_public_id(user_id: Any) -> str | None:

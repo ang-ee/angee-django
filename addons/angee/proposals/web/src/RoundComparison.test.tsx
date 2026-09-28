@@ -10,7 +10,7 @@ import type {
   ComparisonProposal,
   ComparisonTopic,
 } from "./comparison-data";
-import { RoundComparisonGrid } from "./views/RoundComparisonPage";
+import { RoundComparisonGrid } from "./comparison-grid";
 
 describe("RoundComparisonGrid", () => {
   test("renders readable columns, aligned markdown answers, money, and empty redactions", async () => {
