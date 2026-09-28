@@ -158,7 +158,7 @@ def test_channel_pairing_renders_every_lifecycle_and_report_state(
     del pairing_graphql
     admin = _platform_admin(f"msg-pairing-state-{expected.lower()}")
     channel = make_integration(
-        f"msg-pairing-state-{expected.lower()}",
+        f"msg-pairing-state-{expected.lower()}-channel",
         model=Channel,
         backend_class=FakePairingBackend.key,
         lifecycle=lifecycle,

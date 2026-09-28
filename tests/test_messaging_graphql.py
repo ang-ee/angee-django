@@ -180,12 +180,10 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.list_name == "channels"
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
-    # A channel is created by a bespoke connect flow, but its operator label is the one
-    # fact a human owns (update), and deleting it purges everything it ingested — the
-    # generic delete root lights the button, the authored `delete_channel` root drives
-    # the purge-accurate cascade preview + confirm.
+    # Connect owns channel creation. Updates include the operator label and the
+    # spaces donor's team; the authored delete root previews and confirms the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
-    assert channel.update_fields == ("display_name",)
+    assert channel.update_fields == ("display_name", "team")
     assert channel.roots.delete_name == "delete_channels_by_pk"
     assert channel.roots.delete_preview_name == "delete_channel"
     assert channel.roots.changes_name == "channelChanged"

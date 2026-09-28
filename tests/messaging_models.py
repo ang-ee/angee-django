@@ -22,7 +22,7 @@ from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.projects.models import ThreadProjects
-from angee.spaces.models import ThreadSpace
+from angee.spaces.models import ChannelSpace, ThreadSpace
 from angee.workflows_parties.models import Handle as WorkflowHandleContribution
 from tests import spaces_models  # noqa: F401 -- register Thread's group relation target
 from tests.integrate_models import Integration
@@ -94,7 +94,7 @@ class Fragment(AbstractFragment):
         db_table = "test_messaging_fragment"
 
 
-class Channel(ImapChannelSampling, AbstractChannel, Integration):
+class Channel(ChannelSpace, ImapChannelSampling, AbstractChannel, Integration):
     """Concrete Integration child used to verify channel-owned message access."""
 
     class Meta(AbstractChannel.Meta):
