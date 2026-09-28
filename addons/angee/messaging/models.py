@@ -1821,7 +1821,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
         "messaging.Thread",
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         related_name="messages",
         # Covered: every composite index below leads with thread (the Zulip
         # covered-FK rule — a redundant single-column index can misprice plans).
