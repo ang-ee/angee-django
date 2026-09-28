@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -20,14 +20,19 @@ from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import OperationalError
+from django.test import RequestFactory
 from rebac import actor_context, system_context
 from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
+from rebac.middleware import ActorMiddleware
 from rebac.roles import grant
+from strawberry.django.views import GraphQLView
 
+from angee.base.identity import public_id_of
 from angee.base.mixins import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
 from angee.base.refs import canonical_record_target
 from angee.data.field_classification import is_archive_field
+from angee.graphql.views import graphql_endpoint
 from angee.storage import exceptions
 from angee.storage import models as storage_models
 from angee.storage.models import FileManager, UploadState
@@ -860,10 +865,6 @@ def test_proxy_upload_view_streams_for_actor_and_rejects_reuse_and_anon(drive: A
     here the actor is pinned directly.
     """
 
-    import json
-
-    from django.test import RequestFactory
-
     from angee.storage import views
 
     with actor_context(drive.alice):
@@ -893,8 +894,6 @@ def test_proxy_download_sets_content_cache_headers_and_honors_etag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Content-addressed downloads advertise and honor validators."""
-
-    from django.test import RequestFactory
 
     from angee.storage import views
     from angee.storage.uploads import DOWNLOAD_TOKEN_HEADER, DOWNLOAD_TOKEN_MAX_AGE
@@ -1444,11 +1443,43 @@ def test_attachment_locks_canonical_target_and_file_before_creation(
     assert stored.content_type_id == canonical.content_type.pk
 
 
-def test_storage_preview_does_not_mint_download_urls() -> None:
-    row = SimpleNamespace(upload_state=UploadState.READY, download_url=Mock(side_effect=AssertionError("minted")))
-    info = SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace(view_as=object())))
-    assert storage_schema.FileType.url.get_result(row, info=info, args=[], kwargs={}) is None
-    row.download_url.assert_not_called()
+def test_storage_preview_does_not_mint_download_urls(
+    drive: Any, monkeypatch: pytest.MonkeyPatch, settings: Any,
+) -> None:
+    """A real preview query reaches the nullable file field without minting a bearer."""
+
+    settings.ROOT_URLCONF = "angee.storage.urls"
+    row = _proxy_upload(drive, PNG_BYTES)
+    admin = create_platform_admin("storage-preview-admin")
+    view = GraphQLView.as_view(schema=addon_schema(storage_schema.schemas, "public"))
+    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    payload = {
+        "query": "query PreviewFile($id: String!) { files_by_pk(id: $id) { id url } }",
+        "variables": {"id": str(row.sqid)},
+    }
+    request = RequestFactory().post(
+        "/graphql/public/", data=payload, content_type="application/json",
+        HTTP_X_ANGEE_VIEW_AS=public_id_of(drive.alice),
+    )
+    request.user = admin
+    with patch.object(File, "issue_download_token", autospec=True, side_effect=AssertionError("minted")) as mint:
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        assert response.status_code == 200
+        assert json.loads(response.content) == {"data": {"files_by_pk": {"id": str(row.sqid), "url": None}}}
+        mint.assert_not_called()
+    assert request.user is admin
+    assert not hasattr(request, "view_as")
+
+    # The same field on an ordinary request still reaches the real token owner.
+    request = RequestFactory().post("/graphql/public/", data=payload, content_type="application/json")
+    request.user = drive.alice
+    with patch.object(File, "issue_download_token", autospec=True, side_effect=File.issue_download_token) as mint:
+        response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+        assert response.status_code == 200
+        data = json.loads(response.content)
+        assert "errors" not in data
+        assert data["data"]["files_by_pk"]["url"].startswith("/storage/download/")
+        mint.assert_called_once()
 
 
 def test_folder_create_refuses_unsupported_creation_keys() -> None:
