@@ -748,14 +748,11 @@ def _public_instance(
     if value in (None, ""):
         return None
     active_queryset = queryset if queryset is not None else system_queryset(model, lock=None)
-    instance = instance_from_public_id(
+    return require_instance_for_id(
         model,
         str(value),
         queryset=active_queryset,
     )
-    if instance is None:
-        raise ValidationError("The requested record was not found.", code="not_found")
-    return instance
 
 
 def _relation_group_key_encoders(

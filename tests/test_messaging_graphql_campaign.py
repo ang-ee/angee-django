@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 from django.contrib.contenttypes.models import ContentType
 from rebac import RelationshipTuple, actor_context, delete_relationship, system_context, to_object_ref, to_subject_ref
+from rebac.models import active_relationship_model
 
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import File as StorageFile
@@ -221,11 +222,30 @@ def test_unlisted_projection_types_regate_sudo_cached_relations(activity_catalog
 
 def test_deleting_a_native_thread_does_not_leave_admin_only_message_orphans(composed_tables, campaign_schema):
     owner = make_user("thread-teardown-owner")
+    reader = make_user("thread-teardown-reader")
     with system_context(reason="test.messaging.graphql.thread-teardown"):
         thread = Thread.objects.create(owner=owner)
         message = Message.objects.create(thread=thread)
-    result = result_data(execute_schema(campaign_schema, """
+        part = Part.objects.create(message=message, position=0)
+        follower = ThreadFollower.objects.create(thread=thread, party=Party.objects.for_user(reader))
+    grant(thread, "reader", reader)
+    grant(message, "reader", reader)
+    relationships = active_relationship_model().objects
+    grants = [relationships.filter(resource_type=ref.resource_type, resource_id=ref.resource_id)
+              for ref in (to_object_ref(thread), to_object_ref(message))]
+    assert all(rows.exists() for rows in grants)
+    query = """
         mutation Delete($id: String!) { delete_threads_by_pk(id: $id) { id } }
-    """, {"id": thread.sqid}, user=owner))
+    """
+    denied = execute_schema(campaign_schema, query, {"id": thread.sqid}, user=reader)
+    assert denied.errors
+    assert [error.extensions["code"] for error in denied.errors] == ["PERMISSION_DENIED"]
+    assert all(type(row)._base_manager.filter(pk=row.pk).exists() for row in (thread, message, part, follower))
+    assert all(rows.exists() for rows in grants)
+    result = result_data(execute_schema(campaign_schema, query, {"id": thread.sqid}, user=owner))
     assert result["delete_threads_by_pk"] == {"id": thread.sqid}
     assert not Message._base_manager.filter(pk=message.pk).exists()
+    assert not Thread._base_manager.filter(pk=thread.pk).exists()
+    assert not Part._base_manager.filter(pk=part.pk).exists()
+    assert not ThreadFollower._base_manager.filter(pk=follower.pk).exists()
+    assert not any(rows.exists() for rows in grants)
