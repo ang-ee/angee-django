@@ -18,6 +18,7 @@ from angee.graphql.actions import ActionResult, action_guard, authorized_action_
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
     hasura_model_resource,
     public_pk_decoder,
 )
@@ -45,10 +46,6 @@ Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
 User = get_user_model()
 
-_PROJECT_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
-    Project,
-    "hasura_readable_fields",
-)
 _PROJECT_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
     Project,
     "hasura_filterable_fields",
@@ -73,29 +70,15 @@ _PROJECT_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
     Project,
     "hasura_updatable_fields",
 )
-_PROJECT_EXTENSION_WRITE_FIELDS = tuple(
-    dict.fromkeys((*_PROJECT_EXTENSION_INSERT_FIELDS, *_PROJECT_EXTENSION_UPDATE_FIELDS))
-)
-_PROJECT_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name for name in _PROJECT_EXTENSION_WRITE_FIELDS if Project._meta.get_field(name).is_relation
-)
+_PROJECT_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Project)
 
 
 _MILESTONE_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_filterable_fields")
 _MILESTONE_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_insertable_fields")
 _MILESTONE_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_updatable_fields")
-_MILESTONE_EXTENSION_WRITE_FIELDS = tuple(
-    dict.fromkeys((*_MILESTONE_EXTENSION_INSERT_FIELDS, *_MILESTONE_EXTENSION_UPDATE_FIELDS))
-)
-_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name for name in _MILESTONE_EXTENSION_WRITE_FIELDS if Milestone._meta.get_field(name).is_relation
-)
+_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Milestone)
 
 
-_TASK_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
-    Task,
-    "hasura_readable_fields",
-)
 _TASK_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
     Task,
     "hasura_filterable_fields",
@@ -123,10 +106,7 @@ _TASK_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
 _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS = set(
     declared_hasura_resource_fields(Task, "hasura_forbidden_insertable_fields")
 )
-_TASK_EXTENSION_WRITE_FIELDS = tuple(dict.fromkeys((*_TASK_EXTENSION_INSERT_FIELDS, *_TASK_EXTENSION_UPDATE_FIELDS)))
-_TASK_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name for name in _TASK_EXTENSION_WRITE_FIELDS if Task._meta.get_field(name).is_relation
-)
+_TASK_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Task)
 
 DroppedReason = Task._meta.get_field("dropped_reason").choices_enum
 strawberry.enum(cast(Any, DroppedReason))

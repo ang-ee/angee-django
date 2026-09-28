@@ -7,6 +7,7 @@ from typing import Any
 from django.apps import apps
 
 from angee.messaging.events import message_ingested
+from angee.projects.events import project_phase_changed, project_status_changed, task_promoted
 
 
 def connect() -> None:
@@ -16,14 +17,6 @@ def connect() -> None:
         wake_snoozed_task,
         dispatch_uid="work.wake_snoozed_task.message_ingested",
     )
-    try:
-        apps.get_model("projects", "Project")
-    except LookupError:
-        # Bare source profiles have no concrete project lifecycle to follow.
-        return
-    # Resolve the upstream lifecycle module only after its runtime model exists.
-    from angee.projects.events import project_phase_changed, project_status_changed, task_promoted
-
     for event in (task_promoted, project_phase_changed, project_status_changed):
         event.connect(
             follow_project,

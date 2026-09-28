@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.core.exceptions import ValidationError
 
+from angee.base.errors import RecordAccessSubjectRefused
 from angee.intake import signals
 
 
@@ -41,10 +43,21 @@ def test_capture_runs_on_the_messages_transport_channel(composed_models: None) -
     assert captured == [message]
 
 
-def test_capture_failure_never_reaches_primary_ingest(composed_models: None, caplog: pytest.LogCaptureFixture) -> None:
-    signals.capture_channel_message(sender=None, instance=_Message(LookupError("channel row is gone")))
+@pytest.mark.parametrize("error", [ValidationError("No triage stage"), RecordAccessSubjectRefused()])
+def test_capture_refusal_retains_primary_ingest(
+    composed_models: None,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    signals.capture_channel_message(sender=None, instance=_Message(error))
 
-    assert "primary ingest will continue" in caplog.text
+    assert "Skipped intake capture" in caplog.text
+
+
+@pytest.mark.parametrize("error", [AttributeError("Missing accessor"), TypeError("Wrong contract")])
+def test_programming_errors_propagate(composed_models: None, error: Exception) -> None:
+    with pytest.raises(type(error), match=str(error)):
+        signals.capture_channel_message(sender=None, instance=_Message(error))
 
 
 def test_capture_is_inert_without_a_channel(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
@@ -318,8 +318,8 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
         stage = stage_model._base_manager.get(pk=self.default_stage_id)
         if self.pk is None or stage.queue_id != self.pk:
             raise ValidationError({"default_stage": "Default stage must belong to this queue."})
-        if stage.entry_reserved:
-            raise ValidationError({"default_stage": "Default stage cannot reserve entry for a verb or rule."})
+        if stage.entry_reserved or not stage.ordinary_entry_available:
+            raise ValidationError({"default_stage": "Default stage must allow ordinary entry."})
 
     def _validate_estimate_settings(self) -> None:
         """Reject a default that conflicts with the queue's estimate policy."""
@@ -376,6 +376,12 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
                 name="uq_work_stage_queue_system_category",
             ),
         )
+
+    @property
+    def ordinary_entry_available(self) -> bool:
+        """Whether this stage allows entry by ordinary work verbs."""
+
+        return not self.rule_owned and not self.conceals
 
     @property
     def entry_reserved(self) -> bool:
@@ -439,22 +445,42 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         """Keep the queue's current default available for ordinary entry."""
 
         super().clean()
-        self._validate_default_reservation()
+        self._validate_configuration()
 
-    def _validate_default_reservation(self) -> None:
-        """Reject reserving a stage that its queue currently uses as the default."""
+    def _validate_configuration(self) -> None:
+        """Keep stage edits consistent with defaults, phase mappings and promoted tasks."""
 
-        if self._state.adding or not self.entry_reserved:
+        if self.conceals and self.rule_owned:
+            raise ValidationError({"conceals": "A rule-owned stage cannot conceal tasks."})
+        if self._state.adding:
             return
-        queue_model = self._meta.get_field("queue").related_model
-        if queue_model._base_manager.filter(pk=self.queue_id, default_stage_id=self.pk).exists():
-            field = "rule_owned" if self.rule_owned else "category"
-            raise ValidationError({field: "The queue's default stage cannot reserve entry for a verb or rule."})
+        if self.entry_reserved or not self.ordinary_entry_available:
+            queue_model = self._meta.get_field("queue").related_model
+            if queue_model._base_manager.filter(default_stage_id=self.pk).exists():
+                field = "conceals" if self.conceals else "rule_owned" if self.rule_owned else "category"
+                raise ValidationError({field: "The queue's default stage must allow ordinary entry."})
+        # MilestoneWork owns this optional reverse relation in composed model graphs.
+        try:
+            milestones = self._meta.get_field("active_milestones").related_model
+        except FieldDoesNotExist:
+            pass
+        else:
+            mappings = milestones._base_manager.filter(active_stage_id=self.pk)
+            if (not self.rule_owned or self.conceals) and mappings.exists():
+                raise ValidationError({"rule_owned": "A mapped stage must remain rule-owned and non-concealing."})
+            if mappings.filter(project__converted_from__queue__isnull=False).exclude(
+                project__converted_from__queue_id=self.queue_id
+            ).exists():
+                raise ValidationError({"queue": "A mapped stage must remain in its source task's queue."})
+        if self.conceals:
+            project_model = apps.get_model("projects", "Project")
+            if project_model._base_manager.filter(converted_from__stage_id=self.pk).exists():
+                raise ValidationError({"conceals": "A stage holding a promoted source task cannot conceal tasks."})
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Protect system-stage identity and keep the queue's default enterable."""
 
-        self._validate_default_reservation()
+        self._validate_configuration()
         if not is_sudo():
             persisted = None
             if not self._state.adding:
@@ -790,14 +816,8 @@ class MilestoneWork(models.Model):
 
         abstract = True
 
-    def clean(self) -> None:
-        """Reject an invalid phase-to-stage mapping before applying a phase rule."""
-
-        super().clean()
-        self._validate_active_stage()
-
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Keep generated writes subject to the same mapping invariant as cleaning."""
+        """Validate phase mappings once at persistence, including generated writes."""
 
         update_fields = kwargs.get("update_fields")
         if update_fields is None or {"active_stage", "active_stage_id", "project", "project_id"}.intersection(
@@ -1430,7 +1450,10 @@ class TaskWork(StagedModelMixin):
         stages = {stage.pk: stage for stage in self.stage_model()._base_manager.filter(pk__in=(previous_id, target_id))}
         previous = stages.get(previous_id)
         following = stages.get(target_id)
-        if following is not None and following.conceals and not self._state.adding:
+        changed = previous_id != target_id
+        if changed and manual and following is not None and not following.ordinary_entry_available:
+            raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned or concealing stage."})
+        if changed and following is not None and following.conceals and not self._state.adding:
             project_model = apps.get_model("projects", "Project")
             if project_model._base_manager.filter(converted_from_id=self.pk).exists():
                 raise ValidationError({"stage": "A task with a promoted project cannot enter a concealing stage."})

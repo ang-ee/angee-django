@@ -94,6 +94,10 @@ interface DynamicI18nKeyFamily {
 }
 
 const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
+  frameworkCriticalExport("useRuntimeBrand", "@angee/ui", "src/runtime/runtime.ts"),
+  frameworkCriticalExport("DocumentTitle", "@angee/ui", "src/chrome/DocumentTitle.tsx"),
+  frameworkCriticalExport("GanttView", "@angee/ui", "src/views/gantt/GanttView.tsx"),
+  frameworkCriticalExport("useRuntimeViewAs", "@angee/ui", "src/runtime/runtime.ts"),
   frameworkCriticalExport("StatusToneMap", "@angee/ui", "src/widgets/status-tones.ts"),
   frameworkCriticalExport("statusTone", "@angee/ui", "src/widgets/status-tones.ts"),
   frameworkCriticalExport("useStatusTone", "@angee/ui", "src/widgets/use-status-tone.ts"),
