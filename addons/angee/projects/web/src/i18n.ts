@@ -1,6 +1,14 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enProjectsMessages: Record<string, string> = {
+  "common.visibility": "Visibility",
+  "task.action.visibility": "Change visibility",
+  "milestone.action.reach": "Mark reached",
+  "project.phase.select": "Select current phase",
+  "project.phase.none": "No current phase",
+  "project.phase.loading": "Loading phases…",
+  "project.phase.unavailable": "The project phases could not be loaded.",
+  "project.phase.confirm": "Change the current phase from {previous} to {selected}? A finished project will reopen.",
   "common.project": "Project",
   "common.status": "Status",
   "common.lead": "Lead",
