@@ -89,6 +89,7 @@ definition scopedemo/owned_row {
     permission write = owner
     permission delete = owner
     permission transfer = owner
+    permission write__owner = transfer
 }
 """
 

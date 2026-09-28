@@ -1,7 +1,7 @@
 // Authorization schema for the knowledge addon.
 // @rebac_package: knowledge
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 5
+// @rebac_schema_revision: 6
 
 // Role namespace for knowledge-wide grants. Membership in a role object
 // (knowledge/role:vault_viewer, :vault_editor, :vault_admin,
@@ -39,6 +39,7 @@ definition knowledge/vault {
                       + vault_admin->member + knowledge_admin->member
                       + admin->member
     permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 
 // Pages inherit read/write from their vault and from their parent page

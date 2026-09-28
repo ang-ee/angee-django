@@ -1,7 +1,7 @@
 // Authorization schema for dashboard snapshots and their widgets.
 // @rebac_package: dashboards
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 definition dashboards/dashboard {
     relation shared: auth/user:*
@@ -17,6 +17,8 @@ definition dashboards/dashboard {
     permission share   = owner + admin->member
     permission archive = owner + admin->member
     permission delete  = owner + admin->member
+    permission transfer = owner + admin->member
+    permission write__owner = transfer
 }
 definition dashboards/widget {
     relation dashboard: dashboards/dashboard // rebac:field=dashboard

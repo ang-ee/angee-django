@@ -43,6 +43,7 @@ def test_container_flag_controls_only_the_insert_owner_default(cached, owns_item
     values = {"container": container} if cached else {"container_id": container.pk}
     with actor_context(actor):
         row = OwnedRow.objects.create(**values)
+        assert row.container_owns_items() is owns_items
     assert row.owner_id == (None if owns_items else actor.pk)
     assert row.created_by_id == actor.pk
 

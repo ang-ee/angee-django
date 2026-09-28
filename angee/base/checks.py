@@ -13,7 +13,7 @@ from rebac.backends.local import LocalBackend
 from rebac.backends.local_query import LocalQueryScope, UnsupportedScope
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from rebac.resources import model_resource_type
-from rebac.schema import FieldBinding, Schema, permission_sources
+from rebac.schema import FieldBinding, PermRef, Schema, permission_sources
 from rebac.types import SubjectRef
 
 from angee.base.mixins import CreationKeyMixin, HierarchyQuerySet, ItemOwnershipMixin, OwnerMixin
@@ -131,7 +131,7 @@ def check_ownership(
     app_configs: Sequence[AppConfig] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
-    """Require grant roots to declare ownership backing and the transfer permission."""
+    """Require grant roots to back ownership and gate owner writes on transfer."""
 
     del kwargs
     models = (
@@ -169,12 +169,19 @@ def check_ownership(
                 relation.name == "owner" and relation.backing == FieldBinding(path="owner")
                 for relation in definition.relations
             )
+            or not any(
+                permission.name == "write__owner"
+                and permission.expression == PermRef(model.owner_transfer_permission)
+                for permission in definition.permissions
+            )
         ):
             errors.append(
                 checks.Error(
                     f"{model._meta.label} must declare an owner relation backed by owner "
-                    f"and permission {model.owner_transfer_permission!r}.",
-                    hint="Declare ownership and transfer on the grant root's effective permissions.zed.",
+                    f"and permission {model.owner_transfer_permission!r}, "
+                    f"with write__owner = {model.owner_transfer_permission}.",
+                    hint="Declare ownership, transfer and its owner field gate on the grant root's "
+                    "effective permissions.zed.",
                     obj=model,
                     id="angee.E022",
                 )

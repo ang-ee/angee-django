@@ -29,7 +29,10 @@ def ownership_schema(tmp_path, monkeypatch):
     return config, path
 
 
-@pytest.mark.parametrize("mutation", ["valid", "no-definition", "no-transfer", "stored-owner", "audit-owner"])
+@pytest.mark.parametrize("mutation", [
+    "valid", "no-definition", "no-transfer", "stored-owner", "audit-owner",
+    "no-owner-gate", "wrong-owner-gate", "widened-owner-gate",
+])
 def test_e022_requires_transfer_and_the_owner_column(ownership_schema, mutation):
     config, path = ownership_schema
     text = OWNERSHIP_SCHEMA
@@ -41,6 +44,12 @@ def test_e022_requires_transfer_and_the_owner_column(ownership_schema, mutation)
         text = text.replace(" // rebac:field=owner", "")
     elif mutation == "audit-owner":
         text = text.replace("rebac:field=owner", "rebac:field=created_by")
+    elif mutation == "no-owner-gate":
+        text = text.replace("permission write__owner = transfer", "")
+    elif mutation == "wrong-owner-gate":
+        text = text.replace("write__owner = transfer", "write__owner = write")
+    elif mutation == "widened-owner-gate":
+        text = text.replace("write__owner = transfer", "write__owner = transfer + write")
     path.write_text(text)
     errors = check_ownership([config])
     if mutation == "valid":
@@ -55,6 +64,8 @@ def test_e022_honors_the_models_declared_transfer_permission(ownership_schema, m
     monkeypatch.setattr(OwnedRow, "owner_transfer_permission", "reassign")
     assert [error.id for error in check_ownership([config])] == ["angee.E022"]
     path.write_text(OWNERSHIP_SCHEMA.replace("permission transfer", "permission reassign"))
+    assert [error.id for error in check_ownership([config])] == ["angee.E022"]
+    path.write_text(OWNERSHIP_SCHEMA.replace("transfer", "reassign"))
     assert check_ownership([config]) == []
 
 
