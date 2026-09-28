@@ -22,18 +22,9 @@ from django.core.validators import MaxValueValidator, MinValueValidator, RegexVa
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
-from rebac import (
-    RelationshipTuple,
-    SubjectRef,
-    current_actor,
-    delete_relationships,
-    system_context,
-    to_object_ref,
-    write_relationships,
-)
+from rebac import current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
-from rebac.types import RelationshipFilter
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
@@ -357,9 +348,7 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         DUPLICATE = "duplicate", "Duplicate"
 
     SYSTEM_CATEGORIES = frozenset((StageCategory.TRIAGE, StageCategory.DUPLICATE))
-    # Category-based hand verbs share these exclusions; later stage flags add
-    # one predicate here, without changing the verbs or their lookup logic.
-    MANUAL_CATEGORY_FILTERS: ClassVar[dict[str, Any]] = {"rule_owned": False}
+    MANUAL_CATEGORY_FILTERS: ClassVar[dict[str, Any]] = {"rule_owned": False, "conceals": False}
 
     queue = models.ForeignKey(
         "work.Queue",
@@ -368,6 +357,7 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
     )
     category = StateField(choices_enum=StageCategory, default=StageCategory.UNSTARTED)
     rule_owned = models.BooleanField(default=False)
+    conceals = models.BooleanField(default=False)
 
     class Meta:
         """Django model options for queue stages."""
@@ -432,15 +422,18 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         return cls.for_container(container).filter(category=category, **cls.MANUAL_CATEGORY_FILTERS)
 
     @classmethod
-    def resolve_default(cls, container: models.Model) -> Any | None:
-        """Use the explicit queue default, falling back to an unstarted stage."""
+    def resolve_default_fallback(cls, stages: models.QuerySet[Any]) -> Any | None:
+        """Choose an ordinary unstarted stage when the queue has no explicit default."""
 
-        default_id = getattr(container, f"{cls.default_stage_field_name}_id", None)
-        if default_id is not None:
-            configured = cls.for_container(container).filter(pk=default_id).first()
-            if configured is not None:
-                return configured
-        return cls.for_manual_category(container, cast(str, cls.StageCategory.UNSTARTED)).first()
+        return stages.filter(category=cls.StageCategory.UNSTARTED, **cls.MANUAL_CATEGORY_FILTERS).first()
+
+    def validate_rule_stage(self, queue_id: Any | None) -> None:
+        """Require an active-phase mapping to name a non-concealing rule stage in its queue."""
+
+        if queue_id is not None and self.queue_id != queue_id:
+            raise ValidationError({"active_stage": "Active stage must belong to the source task's queue."})
+        if not self.rule_owned or self.conceals:
+            raise ValidationError({"active_stage": "Active stage must be rule-owned and must not conceal tasks."})
 
     def clean(self) -> None:
         """Keep the queue's current default available for ordinary entry."""
@@ -757,6 +750,76 @@ class ProjectWork(models.Model):
 
         abstract = True
 
+    @transaction.atomic
+    def sync_source_task_stage(self) -> None:
+        """Apply the current project rule inside its lifecycle event transaction."""
+
+        if self.converted_from_id is None:
+            return
+        task_model = self._meta.get_field("converted_from").related_model
+        with system_context(reason="work.project.source_task_stage"):
+            task = task_model.objects.lock_if_supported().get(pk=self.converted_from_id)
+            stage = task.rule_stage(self)
+            if stage is None or task.stage_id == stage.pk:
+                return
+            task.stage = stage
+            with task._work_verb_write():
+                task.save(update_fields=("stage", "updated_at"))
+
+
+class MilestoneWork(models.Model):
+    """Map a project's current phase to its source task's rule-owned stage."""
+
+    extends = "projects.Milestone"
+
+    hasura_readable_fields = ("active_stage",)
+    hasura_filterable_fields = hasura_readable_fields
+    hasura_insertable_fields = hasura_readable_fields
+    hasura_updatable_fields = hasura_readable_fields
+
+    active_stage = models.ForeignKey(
+        "work.Stage",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="active_milestones",
+    )
+
+    class Meta:
+        """Abstract contribution folded into the concrete milestone table."""
+
+        abstract = True
+
+    def clean(self) -> None:
+        """Reject an invalid phase-to-stage mapping before applying a phase rule."""
+
+        super().clean()
+        self._validate_active_stage()
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Keep generated writes subject to the same mapping invariant as cleaning."""
+
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or {"active_stage", "active_stage_id", "project", "project_id"}.intersection(
+            update_fields
+        ):
+            self._validate_active_stage()
+        super().save(*args, **kwargs)
+
+    def _validate_active_stage(self) -> None:
+        """Ask the stage owner to validate the source queue and rule reservation."""
+
+        if self.active_stage_id is None:
+            return
+        project_model = self._meta.get_field("project").related_model
+        queue_id = (
+            project_model._base_manager.filter(pk=self.project_id)
+            .values_list("converted_from__queue_id", flat=True)
+            .first()
+        )
+        stage_model = self._meta.get_field("active_stage").related_model
+        stage_model._base_manager.get(pk=self.active_stage_id).validate_rule_stage(queue_id)
+
 
 class TaskWork(StagedModelMixin):
     """Same-row work contribution folded into ``projects.Task``."""
@@ -764,6 +827,7 @@ class TaskWork(StagedModelMixin):
     extends = "projects.Task"
     runtime = False
     stage_container_field_name = "queue"
+    thread_team_field = "queue"
 
     if TYPE_CHECKING:
         queue_id: Any | None
@@ -788,6 +852,7 @@ class TaskWork(StagedModelMixin):
     hasura_sortable_fields = (
         "queue",
         "stage",
+        "stage__position",
         "cycle",
         "number",
         "estimate",
@@ -1362,12 +1427,13 @@ class TaskWork(StagedModelMixin):
         target_id = target.pk if target is not None else self.stage_id
         if not stage_written:
             target_id = previous_id
-        stages = {
-            stage.pk: stage
-            for stage in self.stage_model()._base_manager.filter(pk__in=(previous_id, target_id))
-        }
+        stages = {stage.pk: stage for stage in self.stage_model()._base_manager.filter(pk__in=(previous_id, target_id))}
         previous = stages.get(previous_id)
         following = stages.get(target_id)
+        if following is not None and following.conceals and not self._state.adding:
+            project_model = apps.get_model("projects", "Project")
+            if project_model._base_manager.filter(converted_from_id=self.pk).exists():
+                raise ValidationError({"stage": "A task with a promoted project cannot enter a concealing stage."})
         if manual or not (getattr(self, "_work_internal_status", False) or is_sudo()):
             Stage.validate_transition(
                 previous, following, allow_system_entry=allow_system_entry, adding=self._state.adding
@@ -1509,6 +1575,33 @@ class TaskWork(StagedModelMixin):
             raise ValidationError({"stage": f"Queue has no {category} stage."})
         return cast(Stage, stage)
 
+    def rule_stage(self, project: Any) -> Stage | None:
+        """Resolve the source-task stage from cancellation or the current phase, never receipts."""
+
+        if self.queue_id is None:
+            return None
+        if project.converted_from_id != self.pk:
+            raise ValidationError({"project": "The project must have been promoted from this task."})
+        category = "canceled" if project.status == project.ProjectStatus.DROPPED else "started"
+        if category == "started" and project.current_milestone_id is not None:
+            milestone_model = project._meta.get_field("current_milestone").related_model
+            stage_id = (
+                milestone_model._base_manager.filter(pk=project.current_milestone_id)
+                .values_list("active_stage_id", flat=True)
+                .get()
+            )
+            if stage_id is not None:
+                stage = self.stage_model()._base_manager.get(pk=stage_id)
+                stage.validate_rule_stage(self.queue_id)
+                return cast(Stage, stage)
+        return cast(
+            Stage | None,
+            self.stage_model()
+            .for_container(self.queue)
+            .filter(category=category, rule_owned=True, conceals=False)
+            .first(),
+        )
+
     def _move_links_to(self, canonical: models.Model) -> None:
         """Re-key source links to ``canonical``, deleting URL collisions."""
 
@@ -1532,32 +1625,13 @@ class TaskWork(StagedModelMixin):
                 object_id=canonical_target.object_id,
             ).values_list("url", flat=True)
         )
-        relation = link_model.objects.target_relation(canonical)
-        canonical_subject = SubjectRef(to_object_ref(canonical))
         for link in source_links:
             if link.url in canonical_urls:
                 link.delete()
                 continue
-            resource = to_object_ref(link)
-            delete_relationships(
-                RelationshipFilter(
-                    resource_type=resource.resource_type,
-                    resource_id=resource.resource_id,
-                    relation=relation,
-                )
-            )
             link.content_type = canonical_target.content_type
             link.object_id = canonical_target.object_id
             link.save(update_fields=("content_type", "object_id", "updated_at"))
-            write_relationships(
-                [
-                    RelationshipTuple(
-                        resource=resource,
-                        relation=relation,
-                        subject=canonical_subject,
-                    )
-                ]
-            )
             canonical_urls.add(link.url)
 
     def _move_followers_to(self, canonical: models.Model) -> None:

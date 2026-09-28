@@ -1,6 +1,6 @@
 // Additive task and project authorization contributed by the work addon.
 // @rebac_package: work
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 5
 
 definition projects/project {
     relation team: spaces/group // rebac:field=team
@@ -12,7 +12,12 @@ definition projects/project {
 
 definition projects/task {
     relation queue: work/queue // rebac:field=queue
+    relation inherited_queue: work/queue // rebac:field={"path":"queue","filters":{"visibility":"inherited","stage__conceals":false}}
+    relation concealing_stage: work/stage // rebac:field={"path":"stage","filters":{"stage__conceals":true}}
 
-    permission read  = queue->read
-    permission write = queue->write
+    permission read_granted = inherited_queue->read
+    permission withheld = concealing_stage->conceal
+    permission write = inherited_queue->write
+    permission share = inherited_queue->write
+    permission comment = inherited_queue->post
 }
