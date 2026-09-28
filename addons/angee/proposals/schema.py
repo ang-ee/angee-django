@@ -58,9 +58,9 @@ for enum in (RoundOpeningPolicy, AnswerVisibility, QuestionAudience, PassAudienc
     strawberry.enum(cast(Any, enum))
 
 
-def _roster_permission_annotation(permission: str, info: strawberry.Info) -> Any:
+def _permission_annotation(model: Any, permission: str, info: strawberry.Info) -> Any:
     del info
-    return permission_annotations(Round, (permission,))[f"_angee_permission_{permission}"]
+    return permission_annotations(model, (permission,))[f"_angee_permission_{permission}"]
 
 
 def _user_id(value: Any | None) -> strawberry.ID | None:
@@ -144,7 +144,7 @@ class ProposalRoundType(AuthoredRefMixin, AngeeNode):
         annotate={
             "_angee_permission_actor": lambda info: permission_annotations(Round, ())["_angee_permission_actor"],
             **{
-                f"_angee_permission_{name}": partial(_roster_permission_annotation, name)
+                f"_angee_permission_{name}": partial(_permission_annotation, Round, name)
                 for name in ("see_roster", "roster_status")
             },
         },
@@ -207,6 +207,19 @@ class TaskProposalsFields:
         resolver=_clarification_waiting,
         annotate={"_clarification_waiting": lambda info: Task.clarification_waiting_expression(current_actor())},
     )
+
+    @strawberry_django.field(
+        annotate={
+            "_angee_permission_actor": lambda info: permission_annotations(Task, ())["_angee_permission_actor"],
+            "_angee_permission_widen": partial(_permission_annotation, Task, "widen"),
+            "_clarification_widen_blocker": lambda info: Task.clarification_widen_blocker_expression(),
+        },
+    )
+    def clarification_widen_blocker(self) -> str | None:
+        """Explain blocked publication only to a viewer allowed to widen."""
+        if "widen" not in held_permissions(cast(Any, self), ("widen",)):
+            return None
+        return cast(Any, self)._clarification_widen_blocker
 
 
 @strawberry_django.type(Task, name="TaskType", extend=True)

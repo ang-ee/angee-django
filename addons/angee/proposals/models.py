@@ -38,7 +38,7 @@ from rebac.relationships import delete_relationships
 from rebac.types import RelationshipFilter, SubjectRef
 
 from angee.base.actors import actor_user_id, instance_actor
-from angee.base.errors import RecordAccessSubjectRefused
+from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, CreationKeyConflict, ImmutableFieldsMixin, OptimisticLockMixin, OwnerQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
@@ -56,6 +56,32 @@ _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
 
 _CLARIFICATION_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "clarification")
 """Anonymous attribution shared by clarification content and nested history."""
+
+
+class ClarificationWidenBlocked(DomainError, ValidationError):
+    """Sharing an asker's message would reveal an identity the round keeps hidden."""
+
+    code = "HIDDEN_ASKER_IN_THREAD"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(
+            self,
+            {"visibility": ValidationError(
+                "A message by this question's hidden asker cannot be shared.", code=self.code,
+            )},
+        )
+
+
+class PublishedQuestion(DomainError, ValidationError):
+    """Responders invited to a shared question must retain its shared audience."""
+
+    code = "PUBLISHED_QUESTION"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(
+            self,
+            {"visibility": ValidationError("A published question cannot be narrowed.", code=self.code)},
+        )
 
 
 class RoundOpeningPolicy(models.TextChoices):
@@ -2252,6 +2278,71 @@ class TaskProposalAccess(ImmutableFieldsMixin):
                 ):
                     raise ValidationError("A passed question's content cannot be edited.")
         super().save(*args, **kwargs)
+
+    @classmethod
+    def _hidden_clarification_asker_condition(cls) -> models.Q:
+        return models.Q(
+            clarification_round__clarification_askers=ClarificationAskers.HIDDEN,
+            clarification_by_manager=False,
+            clarification_asker_id__isnull=False,
+        )
+
+    @classmethod
+    def clarification_widen_blocker_expression(cls) -> models.Expression:
+        """Compute the publication blocker; callers must authorize its disclosure."""
+        messages = cls.thread_messages_expression(models.OuterRef("pk")).filter(
+            created_by_id=models.OuterRef("clarification_asker_id"),
+        )
+        return models.Case(
+            models.When(
+                cls._hidden_clarification_asker_condition() & models.Q(models.Exists(messages)),
+                then=models.Value("hidden_asker_message"),
+            ),
+            default=models.Value(None),
+            output_field=models.CharField(),
+        )
+
+    def validate_visibility(self, value: str) -> None:
+        """Keep question publication safe under projects' task-row lock."""
+        super().validate_visibility(value)
+        if self.clarification_round_id is None:
+            return
+        if value == "restricted" and self.visibility == "inherited" and self.clarification_passed_at is not None:
+            raise PublishedQuestion()
+        if value == "inherited":
+            blocker = (
+                system_queryset(type(self))
+                .filter(pk=self.pk)
+                .annotate(_blocker=self.clarification_widen_blocker_expression())
+                .values_list("_blocker", flat=True)
+                .get()
+            )
+            if blocker is not None:
+                raise ClarificationWidenBlocked()
+
+    def _message_post(self, body: str, **kwargs: Any) -> models.Model:
+        """Serialize user comments and notes with publication on the task row.
+
+        Automatic system logs use messaging's separate native write path. Keep
+        the original record's actor for both authorization and attribution.
+        """
+        if self.clarification_round_id is None:
+            return super()._message_post(body, **kwargs)
+        with transaction.atomic():
+            locked = (
+                system_queryset(type(self), lock=("self",))
+                .annotate(
+                    _hidden_asker=models.Case(
+                        models.When(self._hidden_clarification_asker_condition(), then="clarification_asker_id"),
+                        default=models.Value(None),
+                    ),
+                )
+                .get(pk=self.pk)
+            )
+            poster_id = actor_user_id(instance_actor(self))
+            if locked.visibility == "inherited" and poster_id is not None and poster_id == locked._hidden_asker:
+                raise ClarificationWidenBlocked()
+            return super()._message_post(body, **kwargs)
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Delegate track-holder validation; ordinary tasks and questions stay native."""
