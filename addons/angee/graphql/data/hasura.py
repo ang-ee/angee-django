@@ -16,7 +16,7 @@ import strawberry
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
-from django.db.models.expressions import Combinable
+from django.db.models.expressions import Combinable, CombinedExpression
 from rebac import PermissionDenied, current_actor, system_context
 from rebac.resources import model_resource_type
 from strawberry_django.mutations import resolvers as mutation_resolvers
@@ -678,7 +678,8 @@ def declared_hasura_resource_fields(
     setting ``attribute`` on their source model class. The composed runtime model
     inherits those bases; this helper gathers only directly declared attributes
     from the MRO so a downstream extension can contribute without the base addon
-    importing it.
+    importing it. Sortable declarations also accept scalar/to-one ORM paths;
+    other declarations retain their concrete-field contract.
     """
 
     fields: list[str] = []
@@ -693,15 +694,84 @@ def declared_hasura_resource_fields(
         for item in value:
             field = str(item)
             try:
-                model._meta.get_field(field)
-            except FieldDoesNotExist as error:
+                if attribute == "hasura_sortable_fields":
+                    require_field_for_path(model, field)
+                else:
+                    model._meta.get_field(field)
+            except (FieldDoesNotExist, FieldPathError) as error:
                 raise ImproperlyConfigured(
-                    f"{cls.__module__}.{cls.__name__}.{attribute} declares unknown field {field!r} "
+                    f"{cls.__module__}.{cls.__name__}.{attribute} declares invalid field {field!r} "
                     f"on {model._meta.label}."
                 ) from error
+            if attribute == "hasura_sortable_fields":
+                field = field.replace(".", "__")
             if field not in fields:
                 fields.append(field)
     return tuple(fields)
+
+
+def _declared_sortable_aliases(model: type[models.Model]) -> dict[str, SortAlias]:
+    """Collect model-owned ``hasura_sortable_aliases`` into native lazy aliases.
+
+    Each directly declared mapping contributes wire names and Django expressions,
+    e.g. ``{"label": NullIf(F("party__display_name"), Value(""))}``. Expressions
+    compose ``F``, ``Value``, ``Func`` and arithmetic; opaque SQL, subqueries and
+    predicate trees are refused because their read paths cannot be validated by
+    this contract. Every referenced path is checked for field gates and guarded
+    by the same actor-scoped expression as grouping and filtering. An unreadable
+    hop makes the entire alias NULL, including expressions with fallbacks.
+
+    Aliases are automatically sortable. Duplicate MRO declarations fail rather
+    than letting an extension silently replace another extension's expression.
+    """
+
+    aliases: dict[str, SortAlias] = {}
+    for cls in reversed(model.__mro__):
+        declaration = cls.__dict__.get("hasura_sortable_aliases", {})
+        if not isinstance(declaration, Mapping):
+            raise ImproperlyConfigured(f"{cls.__name__}.hasura_sortable_aliases must be a mapping.")
+        for name, expression in declaration.items():
+            if name in aliases:
+                raise ImproperlyConfigured(f"{model._meta.label} declares duplicate sortable alias {name!r}.")
+            if not isinstance(expression, (models.F, models.Expression)):
+                raise ImproperlyConfigured(f"{model._meta.label} sortable alias {name!r} must be a Django expression.")
+            paths: set[str] = set()
+            for part in (expression,) if isinstance(expression, models.F) else expression.flatten():
+                if isinstance(part, models.F):
+                    try:
+                        require_field_for_path(model, part.name)
+                    except FieldPathError as error:
+                        raise ImproperlyConfigured(
+                            f"{model._meta.label} sortable alias {name!r} declares invalid path {part.name!r}."
+                        ) from error
+                    paths.add(part.name)
+                elif not isinstance(part, (models.Func, models.Value, CombinedExpression)):
+                    raise ImproperlyConfigured(
+                        f"{model._meta.label} sortable alias {name!r} must compose F, Value, Func or arithmetic."
+                    )
+            assert_no_gated_read_fields(
+                model, paths, f"sortable alias {name!r}", "field-gated reads cannot be query axes",
+            )
+            aliases[name] = SortAlias(
+                f"_angee_sort_{name}", partial(_sortable_alias_expression, expression, tuple(sorted(paths))),
+            )
+    return aliases
+
+
+def _sortable_alias_expression(
+    expression: Combinable,
+    paths: tuple[str, ...],
+    info: strawberry.Info,
+    queryset: models.QuerySet[Any],
+) -> Combinable:
+    """Guard a declared value at native Hasura's resolved ordering boundary."""
+
+    del info
+    for path in paths:
+        guarded = actor_scoped_relation_group_expression(queryset, path, value=expression)
+        if guarded is not None:
+            expression = guarded
+    return expression
 
 
 def _public_pk(model: type[models.Model], value: Any) -> Any:
@@ -836,8 +906,17 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``record_search_fields`` declares the readable filterable String fields relation
     pickers search together; resources that omit it retain the standard single
     representation-field search.
+
+    Model ``hasura_sortable_aliases`` mappings contribute named Django expression
+    sorts automatically, including from extension bases. They use native lazy
+    ``SortAlias`` preparation with protected relation hops redacted to NULL.
     """
 
+    model_aliases = _declared_sortable_aliases(model)
+    if collisions := model_aliases.keys() & (sortable_aliases or {}).keys():
+        raise ImproperlyConfigured(f"{model._meta.label} declares duplicate sortable aliases: {sorted(collisions)}.")
+    sortable = tuple(dict.fromkeys((*sortable, *model_aliases)))
+    sortable_aliases = {**model_aliases, **(sortable_aliases or {})}
     active_groupable = relation_group_by_fields(node, model, tuple(groupable))
     for axis, fields in (
         ("filterable", filterable),

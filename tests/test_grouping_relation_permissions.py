@@ -11,7 +11,9 @@ from unittest.mock import patch
 
 import pytest
 import strawberry_django
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
+from django.db.models.functions import Coalesce, NullIf
 from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
@@ -27,7 +29,7 @@ from strawberry import auto
 
 from angee.base.models import AngeeDataModel
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
@@ -82,6 +84,11 @@ class GroupParent(AngeeDataModel):
     """Readable parent spanning direct, scalar, nested, and plain axes."""
 
     sqid_prefix = "grp_"
+    hasura_sortable_fields = ("metric_target__rank",)
+    hasura_sortable_aliases = {
+        "label_name": NullIf(models.F("target__display_name"), models.Value(""), output_field=models.TextField()),
+        "nested_name": Coalesce(models.F("middle__target__display_name"), models.Value("fallback")),
+    }
     kind = models.CharField(max_length=16)
     amount = models.IntegerField(default=1)
     target = models.ForeignKey(
@@ -181,7 +188,7 @@ def relation_grouping_case(transactional_db: None):
                 filterable=[
                     "kind", "target", "metric_target__rank", "target__display_name", "middle__target__display_name",
                 ],
-                sortable=["kind", "id", "metric_target__rank"],
+                sortable=["kind", "id", *declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields")],
                 aggregatable=["amount"],
                 groupable=[
                     "target",
@@ -212,7 +219,7 @@ def relation_grouping_case(transactional_db: None):
                 model=GroupParent,
                 name="pinned_group_parents",
                 filterable=["kind", "target__display_name"],
-                sortable=["kind", "metric_target__rank"],
+                sortable=["kind", "id", *declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields")],
                 aggregatable=["amount"],
                 groupable=["target"],
                 get_queryset=lambda info: GroupParent.objects.with_actor(alice),
@@ -547,15 +554,23 @@ def test_scalar_relation_filters_redact_every_protected_hop(
     assert len(bob["hidden"]) == bob["groups"] == len(bob["range"]) == 1
 
 
-def test_scalar_relation_sort_cannot_order_by_hidden_values(relation_grouping_case: Any) -> None:
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_scalar_relation_sort_cannot_order_by_hidden_values(relation_grouping_case: Any, direction: str) -> None:
     case = relation_grouping_case
     document = """
         query {
-          group_parents(where: {kind: {_eq: "target"}}, order_by: [{metric_target__rank: desc}, {id: asc}]) { id }
+          group_parents(where: {kind: {_eq: "target"}}, order_by: [{metric_target__rank: DIRECTION}, {id: asc}]) { id }
         }
-    """
+    """.replace("DIRECTION", direction)
     before = _query(case, case.alice, document)
     assert len(before["group_parents"]) == 6
+    ids = [row["id"] for row in before["group_parents"]]
+    readable_indexes = [0, 1, 3, 4] if direction == "asc" else [4, 3, 0, 1]
+    null_ids = [str(case.parents[index].sqid) for index in (2, 5)]
+    assert [value for value in ids if value not in null_ids] == [
+        str(case.parents[index].sqid) for index in readable_indexes
+    ]
+    assert ids[ids.index(null_ids[0]):ids.index(null_ids[0]) + 2] == null_ids
     with system_context(reason="test.related.hidden_sort_value"):
         GroupLabel.objects.filter(pk=case.beta.pk).update(rank=-100)
     assert _query(case, case.alice, document) == before
@@ -565,6 +580,105 @@ def test_scalar_relation_sort_cannot_order_by_hidden_values(relation_grouping_ca
         user=case.bob,
     ))
     assert pinned["pinned_group_parents"] == []
+    pinned_order = result_data(execute_schema(
+        case.pinned_schema, document.replace("group_parents(", "pinned_group_parents("), user=case.bob,
+    ))
+    assert pinned_order["pinned_group_parents"] == before["group_parents"]
+
+
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_declared_sort_alias_redacts_hidden_parents_and_preserves_empty_names(
+    relation_grouping_case: Any, direction: str,
+) -> None:
+    """Declared expressions order lazily and hidden/empty/missing labels tie."""
+
+    case = relation_grouping_case
+    with system_context(reason="test.sort_alias.empty_name"):
+        GroupLabel.objects.filter(pk=case.duplicate_one.pk).update(display_name="")
+    document = """
+        { group_parents(where: {kind: {_eq: "target"}}, order_by: [{label_name: DIRECTION}]) { id } }
+    """.replace("DIRECTION", direction)
+    before = _query(case, case.alice, document)["group_parents"]
+    ids = [row["id"] for row in before]
+    null_ids = [str(case.parents[index].sqid) for index in (2, 3, 5)]
+    readable_indexes = [0, 1, 4] if direction == "asc" else [4, 0, 1]
+    assert [value for value in ids if value not in null_ids] == [
+        str(case.parents[index].sqid) for index in readable_indexes
+    ]
+    assert ids[ids.index(null_ids[0]):ids.index(null_ids[0]) + 3] == null_ids
+    with system_context(reason="test.sort_alias.hidden_name"):
+        GroupLabel.objects.filter(pk=case.beta.pk).update(display_name="ZZZ")
+    assert _query(case, case.alice, document)["group_parents"] == before
+    bob = _query(case, case.bob, document)["group_parents"]
+    assert bob != before
+    pinned = result_data(execute_schema(
+        case.pinned_schema, document.replace("group_parents(", "pinned_group_parents("), user=case.bob,
+    ))
+    assert pinned["pinned_group_parents"] == before
+
+
+def test_declared_sort_alias_guards_every_hop_and_its_fallback(relation_grouping_case: Any) -> None:
+    case = relation_grouping_case
+    document = """
+        { group_parents(where: {kind: {_eq: "nested"}}, order_by: [{nested_name: desc}]) { id } }
+    """
+    before = _query(case, case.alice, document)
+    null_ids = [str(case.parents[index].sqid) for index in (7, 8)]
+    ids = [row["id"] for row in before["group_parents"]]
+    assert ids[ids.index(null_ids[0]):ids.index(null_ids[0]) + 2] == null_ids
+    with system_context(reason="test.sort_alias.hidden_hops"):
+        GroupLabel.objects.filter(pk__in=[case.beta.pk, case.duplicate_one.pk]).update(display_name="ZZZ")
+    assert _query(case, case.alice, document) == before
+
+
+@pytest.mark.parametrize("path", ["middle__parents__kind", "target__absent", "kind__value"])
+def test_declared_sort_paths_reject_to_many_and_unknown_fields(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    monkeypatch.setattr(GroupParent, "hasura_sortable_fields", (path,))
+    with pytest.raises(ImproperlyConfigured, match="invalid field"):
+        declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields")
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [models.F("middle__parents__kind"), models.F("target__absent"), models.expressions.RawSQL("1", ())],
+)
+def test_declared_sort_alias_rejects_unverifiable_expressions(
+    monkeypatch: pytest.MonkeyPatch, expression: Any,
+) -> None:
+    monkeypatch.setattr(GroupParent, "hasura_sortable_aliases", {"bad_alias": expression})
+    with pytest.raises(ImproperlyConfigured, match="sortable alias"):
+        hasura_model_resource(
+            GroupParentType, model=GroupParent, filterable=[], sortable=[], aggregatable=[],
+            insert=False, update=False, delete=False,
+        )
+
+
+def test_declared_sort_alias_rejects_field_gated_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    definition = parse_zed("""
+        definition auth/user {}
+        definition tests/group_label {
+            relation reader: auth/user
+            permission read = reader
+            permission read__display_name = reader
+        }
+    """)
+    monkeypatch.setattr(
+        "angee.graphql.access.effective_rebac_definition",
+        lambda model: definition.get_definition(model_resource_type(model)),
+    )
+    with pytest.raises(ImproperlyConfigured, match="field-gated reads"):
+        hasura_model_resource(
+            GroupParentType, model=GroupParent, filterable=[], sortable=[], aggregatable=[],
+            insert=False, update=False, delete=False,
+        )
+
+
+def test_declared_sort_alias_rejects_resource_collision() -> None:
+    with pytest.raises(ImproperlyConfigured, match="duplicate sortable aliases"):
+        hasura_model_resource(
+            GroupParentType, model=GroupParent, filterable=[], sortable=[], aggregatable=[],
+            sortable_aliases={"label_name": "_other_label"}, insert=False, update=False, delete=False,
+        )
 
 
 def test_permissions_remain_batched_through_guarded_relations(relation_grouping_case: Any) -> None:

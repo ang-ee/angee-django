@@ -28,6 +28,8 @@ _UNCACHED = object()
 def actor_scoped_relation_group_expression(
     queryset: models.QuerySet[Any],
     field_path: str,
+    *,
+    value: Combinable | None = None,
 ) -> Combinable | None:
     """Return a read-safe scalar expression for grouping, filtering and ordering.
 
@@ -37,6 +39,8 @@ def actor_scoped_relation_group_expression(
     becomes SQL ``NULL``. Direct relation keys use the same guard, merging every
     unreadable target into one null bucket without losing source rows. Paths
     with no protected target need no override and return ``None``.
+    ``value`` substitutes a model-owned expression for the path's scalar value;
+    sort aliases compose the same guard around each referenced path.
     """
 
     try:
@@ -85,12 +89,13 @@ def actor_scoped_relation_group_expression(
     guard = models.Q()
     for item in guards:
         guard &= item
+    output_field = (
+        terminal.target_field if isinstance(terminal, (models.ForeignKey, models.OneToOneField)) else terminal
+    )
     return models.Case(
-        models.When(guard, then=models.F(field_path)),
+        models.When(guard, then=models.F(field_path) if value is None else value),
         default=models.Value(None),
-        output_field=terminal.target_field
-        if isinstance(terminal, (models.ForeignKey, models.OneToOneField))
-        else terminal,
+        output_field=output_field if value is None else None,
     )
 
 
