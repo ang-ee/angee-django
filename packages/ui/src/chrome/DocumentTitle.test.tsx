@@ -2,6 +2,7 @@
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { StrictMode } from "react";
 
 import { AppRuntimeProvider } from "../runtime";
 import { Breadcrumb, BreadcrumbLabelProvider, useBreadcrumbLeafLabel, useBreadcrumbItems } from "./Breadcrumb";
@@ -82,6 +83,36 @@ describe("DocumentTitle and breadcrumb identity", () => {
     const mounted = render(page(true));
     expect(document.title).toBe("Notes · Notebook");
     mounted.rerender(page(false));
+    expect(document.title).toBe("Notes · Notebook");
+    mounted.unmount();
+    expect(document.title).toBe("Host title");
+  });
+
+  test("retains publisher order during updates and restores the remaining publisher's current title", () => {
+    const page = (parent: boolean, nested: boolean, name: string) => <AppRuntimeProvider runtime={{ brand: { name, mark: "book" } }}>
+      {parent ? <DocumentTitle /> : null}
+      <section><AppRuntimeProvider runtime={{ brand: { name: "Archive", mark: "book" } }}>
+        {nested ? <DocumentTitle /> : null}
+      </AppRuntimeProvider></section>
+    </AppRuntimeProvider>;
+    const mounted = render(page(true, true, "Notebook"));
+    expect(document.title).toBe("Notes · Archive");
+    mounted.rerender(page(true, true, "Renamed notebook"));
+    expect(document.title).toBe("Notes · Archive");
+    mounted.rerender(page(true, false, "Renamed notebook"));
+    expect(document.title).toBe("Notes · Renamed notebook");
+    mounted.rerender(page(true, true, "Renamed notebook"));
+    mounted.rerender(page(false, true, "Renamed notebook"));
+    expect(document.title).toBe("Notes · Archive");
+    mounted.unmount();
+    expect(document.title).toBe("Host title");
+  });
+
+  test.each([false, true])("restores the host when all overlapping titles unmount (StrictMode=%s)", (strict) => {
+    const page = <AppRuntimeProvider runtime={{ brand: { name: "Notebook", mark: "book" } }}>
+      <DocumentTitle /><section><DocumentTitle /></section>
+    </AppRuntimeProvider>;
+    const mounted = render(strict ? <StrictMode>{page}</StrictMode> : page);
     expect(document.title).toBe("Notes · Notebook");
     mounted.unmount();
     expect(document.title).toBe("Host title");

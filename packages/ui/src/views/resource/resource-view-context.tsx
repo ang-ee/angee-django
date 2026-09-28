@@ -59,6 +59,11 @@ function groupsForQuery(current: ResourceViewGroups, query: string, order: strin
   };
 }
 
+interface ResourceViewGroupUpdateOptions {
+  /** Initial default reconciliation preserves the restored page and selection. */
+  resetScope?: boolean;
+}
+
 export interface ResourceViewContextValue {
   /** Resource whose collection state this provider owns. */
   resource?: string;
@@ -74,8 +79,8 @@ export interface ResourceViewContextValue {
   setRowSelection: OnChangeFn<RowSelectionState>;
   setFilter: (filter: ResourceViewFilter) => void;
   resetQuery: () => void;
-  setGroup: (group: ResourceViewGroup | null) => void;
-  setGroupStack: (groupStack: readonly ResourceViewGroup[]) => void;
+  setGroup: (group: ResourceViewGroup | null, options?: ResourceViewGroupUpdateOptions) => void;
+  setGroupStack: (groupStack: readonly ResourceViewGroup[], options?: ResourceViewGroupUpdateOptions) => void;
   toggleSelectedId: (id: string, selected?: boolean) => void;
   clearSelectedIds: () => void;
   setView: (view: ResourceViewKind) => void;
@@ -418,16 +423,17 @@ function useResourceViewContextValue({
     [resetScope],
   );
   const setGroupStack = useCallback(
-    (groups: readonly ResourceViewGroup[]) => {
+    (groups: readonly ResourceViewGroup[], options?: ResourceViewGroupUpdateOptions) => {
       const groupStack = normaliseGroupStack(groups);
-      resetScope((current) => ({
+      const update = options?.resetScope === false ? updateState : resetScope;
+      update((current) => ({
         ...current,
         group: groupStack[0] ?? null,
         groupStack,
         groupDefaultCleared: groupStack.length === 0,
       }));
     },
-    [resetScope],
+    [resetScope, updateState],
   );
   return useMemo(
     () => ({
@@ -458,8 +464,8 @@ function useResourceViewContextValue({
           groupDefaultCleared: true,
           queryError: null,
         })),
-      setGroup: (group: ResourceViewGroup | null) =>
-        setGroupStack(group ? [group] : []),
+      setGroup: (group: ResourceViewGroup | null, options?: ResourceViewGroupUpdateOptions) =>
+        setGroupStack(group ? [group] : [], options),
       setGroupStack,
       toggleSelectedId: (id: string, selected?: boolean) =>
         setRowSelection((current) => ({

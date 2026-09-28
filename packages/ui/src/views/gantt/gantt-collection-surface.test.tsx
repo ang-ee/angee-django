@@ -31,7 +31,7 @@ beforeEach(() => { drawing.props = null; });
 afterEach(() => { cleanup(); clearClients(); });
 
 function renderCollection(options: {
-  rows?: Row[]; total?: number; page?: number; pageSize?: number;
+  rows?: Row[]; total?: number; page?: number; pageSize?: number; strict?: boolean;
   resources?: readonly DataResourceMetadata[];
   getList?: (params: Partial<GetListParams>) => Promise<{ data: Row[]; total: number }>;
   onRowClick?: (row: Row) => void;
@@ -53,7 +53,7 @@ function renderCollection(options: {
     <ResourceViewProvider resource={ganttRecord.modelLabel} scope="local" initialState={{
       view: "gantt", anchor: "2026-09-01", page: options.page ?? 1, pageSize: options.pageSize ?? 10,
     }}><Collection /></ResourceViewProvider>
-  </Provider></RouterContextProvider>);
+  </Provider></RouterContextProvider>, { reactStrictMode: options.strict ?? false });
   return { ...view, getList, state: () => state, barRequests: () => getList.mock.calls.filter(([params]) => params.resource === "schedules") };
 }
 
@@ -69,8 +69,8 @@ describe("Gantt collection over native list data", () => {
     expect(f.getList).toHaveBeenCalledTimes(2);
   });
 
-  test("pages by related rows and fetches every record page for those rows", async () => {
-    const f = renderCollection({ page: 2, pageSize: 10, getList: async ({ resource, pagination }) => {
+  test.each([false, true])("pages by related rows and fetches every record page for those rows (StrictMode=%s)", async (strict) => {
+    const f = renderCollection({ strict, page: 2, pageSize: 10, getList: async ({ resource, pagination }) => {
       if (resource === "lanes") return { data: ganttLanes, total: 21 };
       return {
         data: pagination?.currentPage === 1
@@ -80,21 +80,31 @@ describe("Gantt collection over native list data", () => {
       };
     } });
     await waitFor(() => expect(drawing.props?.events).toHaveLength(MAX_PAGE_SIZE + 1));
-    expect(f.getList).toHaveBeenCalledWith(expect.objectContaining({ resource: "lanes", pagination: { mode: "server", currentPage: 2, pageSize: 10 } }));
+    const catalogueRequests = f.getList.mock.calls.filter(([params]) => params.resource === "lanes");
+    const cataloguePage = { mode: "server", currentPage: 2, pageSize: 10 };
+    // Native Query cancels the pending catalogue read during StrictMode's
+    // simulated unmount and starts it again; neither request may target page 1.
+    expect(catalogueRequests.map(([params]) => params.pagination)).toEqual(strict
+      ? [cataloguePage, cataloguePage]
+      : [cataloguePage]);
+    expect(catalogueRequests.map(([params]) => params.meta?.signal.aborted)).toEqual(strict ? [true, false] : [false]);
     expect(f.barRequests().map(([params]) => params.pagination)).toEqual([
       { mode: "server", currentPage: 1, pageSize: MAX_PAGE_SIZE },
       { mode: "server", currentPage: 2, pageSize: MAX_PAGE_SIZE },
     ]);
     expect(f.barRequests()[1]?.[0].meta?.gqlVariables).toEqual(f.barRequests()[0]?.[0].meta?.gqlVariables);
-    expect(f.getList).toHaveBeenCalledTimes(3);
+    expect(f.getList).toHaveBeenCalledTimes(strict ? 4 : 3);
     expect(f.state().state.pagination.pageIndex).toBe(1);
   });
 
   test("pins the lane group even when another valid group is selected", async () => {
     const f = renderCollection();
     await waitFor(() => expect(f.state().state.groupStack).toEqual([{ field: "lane" }]));
+    act(() => f.state().setPage(2));
+    expect(f.state().state.pagination.pageIndex).toBe(1);
     act(() => f.state().setGroup({ field: "status" }));
     await waitFor(() => expect(f.state().state.groupStack).toEqual([{ field: "lane" }]));
+    expect(f.state().state.pagination.pageIndex).toBe(0);
     expect(screen.queryByRole("button", { name: /group by/i })).toBeNull();
   });
 
