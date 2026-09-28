@@ -830,7 +830,7 @@ addons = [
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
     { name = "strawberry-django-aggregates", specifier = ">=0.13.0" },
-    { name = "strawberry-django-hasura", specifier = ">=0.12.0" },
+    { name = "strawberry-django-hasura", specifier = ">=0.12.1" },
     { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
     { name = "strawberry-graphql-django", specifier = ">=0.89.2" },
     { name = "tablib", specifier = ">=3" },
@@ -2684,7 +2684,7 @@ wheels = [
 
 [[package]]
 name = "strawberry-django-hasura"
-version = "0.12.0"
+version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
@@ -2692,9 +2692,9 @@ dependencies = [
     { name = "strawberry-graphql" },
     { name = "strawberry-graphql-django" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/71/56/912d2c73a3b80cfc1b6379ff031484b87fdf683b56082881d884be911146/strawberry_django_hasura-0.12.0.tar.gz", hash = "sha256:10acdaefc78b7370b94728ee473deac404b652370e13618af0e1a47d740172b9", size = 148136, upload-time = "2026-09-28T15:09:14.725Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/09/72/f038ccca9ead91de9ffa9a3756c7fd2fea6663a67b63e46684609e0a4941/strawberry_django_hasura-0.12.1.tar.gz", hash = "sha256:6e1618ab8715a00ec30e4feb18495a3419f5fa1fe56b8388f5db96c61f8aaa05", size = 148663, upload-time = "2026-09-28T15:33:16.944Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/7a/5eae0112ea08c7e12cf7b94268628f984b4cc698a559493dc7cbc1d3c9e4/strawberry_django_hasura-0.12.0-py3-none-any.whl", hash = "sha256:e6f6cf292afd5419b5e627ce00c6405839250c15767fda2cfef20ed16fae6721", size = 65568, upload-time = "2026-09-28T15:09:13.624Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/45/22631356eaa6e7ff9d47daf642fb197d12e19c45fb188ae3939b88d34c47/strawberry_django_hasura-0.12.1-py3-none-any.whl", hash = "sha256:2ea90e3a36fca8db1d46d730a07680ac845f20463426c56c1d98c386b75097ea", size = 65690, upload-time = "2026-09-28T15:33:15.449Z" },
 ]
 
 [[package]]

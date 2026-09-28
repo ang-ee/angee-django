@@ -12,7 +12,7 @@ dependencies = [
   "channels-redis>=4.2",
   "django-zed-rebac[strawberry-django]>=0.19.0",
   "strawberry-django-aggregates>=0.13.0",
-  "strawberry-django-hasura>=0.12.0",
+  "strawberry-django-hasura>=0.12.1",
   # The GraphQL addon owns the fork pin as a direct reference so every composed
   # host receives the same source through its generated addons group; repeating
   # uv.sources tables in each consumer/template would split that ownership.
