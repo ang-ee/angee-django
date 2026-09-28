@@ -39,6 +39,7 @@ export function TasksPage(): React.ReactElement {
       placement="inline"
       routed
       recordTabs={recordTabs}
+      defaultFilter={{ NOT: { status: { exact: "DROPPED" } } }}
     >
       <List<TaskActionRow>
         resource={TASK_MODEL}
@@ -47,9 +48,11 @@ export function TasksPage(): React.ReactElement {
         rowActions={rowActions}
       >
         <Facet field="project" label={t("common.project")} />
+        <Facet field="visibility" label={t("common.visibility")} />
         <Facet field="assignee" label={t("common.assignee")} />
         <Column field="title" />
         <Column field="project.title" header={t("common.project")} />
+        <Column field="visibility" header={t("common.visibility")} widget="statusBadge" />
         <Column field="status" header={t("common.status")} widget="statusBadge" />
         <Column field="assignee" header={t("common.assignee")} />
         <Column field="priority" header={t("common.priority")} />

@@ -105,6 +105,7 @@ def provision_mount(
             slug=drive_slug,
             name=display_name,
             prefix=prefix,
+            owner_id=user.pk,
             created_by_id=user.pk,
         )
         mount = mount_model.objects.create(

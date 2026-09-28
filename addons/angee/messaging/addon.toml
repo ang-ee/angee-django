@@ -20,3 +20,8 @@ module = "runtime_migrations.follower_party"
 name = "notification_read_at"
 app_label = "messaging"
 module = "runtime_migrations.notification_read_at"
+
+[[migrations]]
+name = "owner_column"
+app_label = "messaging"
+module = "runtime_migrations.owner_column"

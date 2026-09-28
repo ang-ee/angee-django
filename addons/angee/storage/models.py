@@ -41,6 +41,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import signing
 from django.core.exceptions import (
+    ObjectDoesNotExist,
     SuspiciousFileOperation,
     ValidationError,
 )
@@ -57,27 +58,34 @@ from rebac import (
     NoActorResolvedError,
     ObjectRef,
     PermissionDenied,
-    RelationshipTuple,
-    SubjectRef,
     current_actor,
     require_permission,
     system_context,
     to_object_ref,
     to_subject_ref,
-    write_relationships,
 )
 from rebac.actors import is_sudo
 from rebac.backends import backend as rebac_backend
+from rebac.field_backing import resolve_field_backing
 from rebac.managers import RebacManager
 from rebac.resources import model_resource_type
+from rebac.schema.introspection import permission_sources
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref, public_subject_ref
 from angee.base.impl import ImplClassField
-from angee.base.mixins import ArchiveMixin, ArchiveQuerySet, AuditMixin, SqidMixin
+from angee.base.mixins import (
+    ArchiveMixin,
+    ArchiveQuerySet,
+    AuditMixin,
+    ItemOwnershipMixin,
+    OwnerMixin,
+    OwnerQuerySet,
+    SqidMixin,
+)
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, AngeeUnscopedManager, role_anchor
-from angee.base.refs import RecordRefMixin, canonical_record_target
+from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
 from angee.base.scoping import system_queryset
 from angee.storage import exceptions
 from angee.storage.backends import DOWNLOAD_URL_TTL_SECONDS, StorageBackend
@@ -98,6 +106,13 @@ from angee.storage.uploads import (
 _SHA256_HEX = re.compile(r"[a-f0-9]{64}")
 _STORAGE_CACHE_MAX_SIZE = 128
 _OBJECT_KEY_LEAF_MAX_BYTES = 240
+
+
+class FileVisibility(models.TextChoices):
+    """Whether file access inherits its containers or its attached records."""
+
+    INHERITED = "inherited", "Inherited"
+    RECORD = "record", "Record"
 
 
 class UploadState(models.TextChoices):
@@ -204,7 +219,7 @@ class Backend(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
         return instance
 
 
-class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
+class Drive(SqidMixin, OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeModel):
     """Addressable storage volume on top of a backend.
 
     Object keys live under ``{prefix}/…`` inside the parent backend's
@@ -215,7 +230,7 @@ class Drive(SqidMixin, AuditMixin, ArchiveMixin, AngeeModel):
     """
 
     runtime = True
-    rebac_grantable = {"editor": "write", "viewer": "write"}
+    rebac_grantable = {"editor": "share", "viewer": "share"}
 
     sqid_prefix = "drv_"
     backend = models.ForeignKey(
@@ -581,7 +596,7 @@ class MimeType(SqidMixin, AngeeModel):
         return self.mime_type
 
 
-class FileQuerySet(AngeeQuerySet["File"]):
+class FileQuerySet(OwnerQuerySet["File"], AngeeQuerySet["File"]):
     """REBAC-scoped reads for file rows."""
 
     def live(self) -> FileQuerySet:
@@ -595,11 +610,11 @@ class FileQuerySet(AngeeQuerySet["File"]):
         return cast(FileQuerySet, self.filter(is_trashed=True))
 
     def stale_drafts(self, cutoff: datetime) -> FileQuerySet:
-        """Return DRAFT rows reserved before ``cutoff`` that never finalized."""
+        """Return unfinished DRAFT/FAILED rows reserved before ``cutoff``."""
 
         return cast(
             FileQuerySet,
-            self.filter(upload_state=UploadState.DRAFT, created_at__lt=cutoff),
+            self.filter(upload_state__in=(UploadState.DRAFT, UploadState.FAILED), created_at__lt=cutoff),
         )
 
     def expired_trash(self, cutoff: datetime) -> FileQuerySet:
@@ -636,14 +651,20 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         drive_slug: str = "",
         folder_id: str = "",
         content_hash: str = "",
+        visibility: FileVisibility | str = "inherited",
+        record: models.Model | None = None,
+        owner_id: Any = None,
     ) -> Any:
         """Reserve a DRAFT File targeting a backend key, or return the dedup hit.
 
         Content-addressed get-or-create: when ``content_hash`` names bytes the
-        drive already holds READY, that row is returned (restored if trashed)
-        and nothing needs writing — callers branch on ``upload_state``. The
-        actor must hold ``write`` on the drive; that check is the create gate,
-        since a per-row REBAC ``create`` cannot evaluate a not-yet-inserted row.
+        drive already holds READY with inherited visibility, that row is
+        returned (restored if trashed) and nothing needs writing — callers
+        branch on ``upload_state``. New drafts use a unique reservation key,
+        so unverified bytes never overwrite an existing file's backend object.
+        The actor must hold ``write`` on the drive and any named record. A record
+        upload requires a contributed attachment read/write arm and inserts its
+        edge in the same transaction. It never returns an existing dedup row.
         """
 
         drive = self._drive_for(drive_id=drive_id, drive_slug=drive_slug)
@@ -653,48 +674,92 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         if not drive.has_access("write"):
             raise exceptions.UploadDenied("write access to the drive is required")
 
+        try:
+            visibility = FileVisibility(visibility)
+        except ValueError as error:
+            raise exceptions.UploadError("invalid file visibility") from error
+        if visibility == FileVisibility.RECORD and record is None:
+            raise exceptions.UploadError("record visibility requires an attachment record")
+        attachments = self.model._meta.get_field("attachments").related_model._default_manager
+        try:
+            target = attachments.authorized_target(record) if record is not None else None
+        except (PermissionDenied, ObjectDoesNotExist, ValueError) as error:
+            raise exceptions.UploadRecordDenied() from error
+        if visibility == FileVisibility.RECORD and target is not None:
+            self._require_record_arm(target)
+
         digest = _normalized_hash(content_hash) if content_hash else ""
-        if digest:
-            existing = (
-                self
-                .filter(
+        actor = current_actor()
+        # The checked factory owns both writes; attribution keeps the real actor.
+        with transaction.atomic():
+            if target is not None:
+                try:
+                    attachments._lock_target(target)
+                except ObjectDoesNotExist as error:
+                    raise exceptions.UploadRecordDenied() from error
+            if digest and visibility == FileVisibility.INHERITED:
+                existing = self.select_for_update().filter(
                     drive_id=drive.pk,
                     content_hash=digest,
                     upload_state=UploadState.READY,
-                )
-                .first()
+                    visibility=FileVisibility.INHERITED,
+                ).first()
+                if existing is not None:
+                    if target is not None:
+                        attachments._attach_authorized(existing, target)
+                    if existing.is_trashed:
+                        existing.restore()
+                    return existing
+            placeholder = secrets.token_hex(32)
+            mime = _mime_row(self.model, mime_type)
+            row = self.model(
+                drive=drive,
+                owner_id=owner_id,
+                folder_id=folder.pk if folder is not None else None,
+                filename=filename,
+                mime_type_id=mime.pk if mime is not None else None,
+                size_bytes=max(int(size_bytes or 0), 0),
+                content_hash=placeholder,
+                storage_path=drive.object_key(placeholder, filename),
+                upload_state=UploadState.DRAFT,
+                visibility=visibility,
             )
-            if existing is not None:
-                # A trashed hit would be purge-doomed and would block the
-                # re-upload through the dedup constraint — bring it back.
-                if existing.is_trashed:
-                    existing.restore()
-                return existing
-
-        placeholder = secrets.token_hex(32)
-        actor = current_actor()
-        mime = _mime_row(self.model, mime_type)
-        row = self.model(
-            drive_id=drive.pk,
-            folder_id=folder.pk if folder is not None else None,
-            filename=filename,
-            mime_type_id=mime.pk if mime is not None else None,
-            size_bytes=max(int(size_bytes or 0), 0),
-            content_hash=placeholder,
-            storage_path=drive.object_key(digest or placeholder, filename),
-            upload_state=UploadState.DRAFT,
-        )
-        try:
-            row.full_clean()
-        except ValidationError as error:
-            raise exceptions.UploadError(f"invalid file request: {error}") from error
-        # The insert rides per-instance sudo (the gate above already ran) while
-        # the ambient actor still stamps created_by — the file's owner relation.
-        row.sudo(reason="storage.file.draft")
-        row.save()
+            try:
+                row.full_clean()
+            except ValidationError as error:
+                raise exceptions.UploadError(f"invalid file request: {error}") from error
+            row.sudo(reason="storage.file.draft").save()
+            if target is not None:
+                attachments._attach_authorized(row, target)
         if actor is not None:
             row.with_actor(actor)
         return row
+
+    def _require_record_arm(self, target: CanonicalRecordTarget) -> None:
+        """Require the canonical record's declared attachment read/write arms.
+
+        The effective REBAC schema owns this capability. Native introspection
+        and backing resolution validate it without an addon-local registry.
+        """
+
+        schema = rebac_backend().schema()
+        resource_type = model_resource_type(self.model) or ""
+        definition = schema.get_definition(resource_type)
+        if definition is not None:
+            reads = permission_sources(schema, resource_type, "read").arrows
+            writes = permission_sources(schema, resource_type, "write").arrows
+            for relation in definition.relations:
+                if (relation.name, "read") not in reads or (relation.name, "write") not in writes:
+                    continue
+                backing = resolve_field_backing(definition, relation)
+                if (
+                    backing is not None
+                    and backing.path.startswith("attachments__")
+                    and backing.filters == {"visibility": FileVisibility.RECORD}
+                    and backing.target_model is target.content_type.model_class()
+                ):
+                    return
+        raise exceptions.UploadError("record model has no file attachment read/write arm")
 
     def ingest_bytes(
         self,
@@ -709,12 +774,13 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         """Ingest bytes already in hand into a drive and return the READY File.
 
         The server-side sibling of the proxy upload: the bytes are trusted (a
-        sync fetched them), so this writes them to the content-addressed key and
-        finalizes in one call instead of minting an upload token. Idempotent —
-        bytes the drive already holds READY return the existing row. ``owner_id``
-        stamps ``created_by`` (the file's ``owner`` relation); the whole verb runs
+        sync fetched them), so this writes them to a unique reserved key and
+        finalizes in one call instead of minting an upload token. Existing READY
+        bytes with inherited visibility return their row; a record-scoped
+        collision raises ``UploadConflict`` without identifying that row.
+        ``owner_id`` sets ``owner`` independently of attribution; the whole verb runs
         elevated, so a sync needs no per-actor drive grant, and read access is
-        scoped afterwards by the stamped owner.
+        scoped afterwards by that owner.
         """
 
         digest = hashlib.sha256(content).hexdigest()
@@ -744,7 +810,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
     ) -> Any:
         """Ingest a pre-hashed stream without materializing it in memory.
 
-        The caller hashes outside this write path. A READY dedup hit returns
+        The caller hashes outside this write path. An inherited READY hit returns
         before the reader is consumed; otherwise the bytes stream through the
         selected Django storage backend and the normal finalize contract
         verifies the declared digest and size.
@@ -760,16 +826,12 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                 drive_slug=drive_slug,
                 folder_id=folder_id,
                 content_hash=digest,
+                owner_id=owner_id,
             )
             if row.upload_state == UploadState.READY:
                 self._grant_dedup_reach(row, owner_id)
                 self._merge_row_metadata(row, metadata)
                 return row  # content-addressed dedup hit — the bytes already exist
-            if owner_id is not None and row.created_by_id is None:
-                # AuditMixin only stamps created_by when unset, so set the sync's
-                # owner before the elevated context erases the ambient actor.
-                row.created_by_id = owner_id
-                row.save(update_fields=["created_by"])
             storage = row.storage
             saved_path = storage.save(row.storage_path, DjangoFile(reader, name=row.storage_path))
             if saved_path and saved_path != row.storage_path:
@@ -778,6 +840,8 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             try:
                 result = row.finalize(expected_hash=digest, expected_size=expected_size)
             except exceptions.UploadConflict:
+                if row.upload_envelope.get("failure_reason") == "duplicate":
+                    row.sudo(reason="storage.ingest.duplicate").purge()
                 # A concurrent ingest of identical bytes won the dedup race; the
                 # winner is READY, so resolve to it instead of failing the sync.
                 winner = (
@@ -786,6 +850,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                         drive_id=row.drive_id,
                         content_hash=digest,
                         upload_state=UploadState.READY,
+                        visibility=FileVisibility.INHERITED,
                     )
                     .first()
                 )
@@ -860,7 +925,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
                     storage_path=path,
                     metadata=self._merged_metadata({}, metadata_patch),
                     upload_state=UploadState.READY,
-                    created_by_id=owner_id,
+                    owner_id=owner_id,
                 )
                 try:
                     row.full_clean()
@@ -914,8 +979,6 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             }
             if metadata_patch:
                 values["metadata"] = self._merged_metadata(row.metadata, metadata_patch)
-            if owner_id is not None and row.created_by_id is None:
-                values["created_by_id"] = owner_id
             for field, value in values.items():
                 if getattr(row, field) != value:
                     setattr(row, field, value)
@@ -1134,30 +1197,26 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
     def _grant_dedup_reach(self, row: Any, owner_id: Any) -> None:
         """Grant a dedup-hit file read reach to the requested ingest owner."""
 
-        if owner_id is None or str(row.created_by_id or "") == str(owner_id):
-            return
-        user = get_user_model().objects.get(pk=owner_id)
-        write_relationships(
-            [
-                RelationshipTuple(
-                    resource=to_object_ref(row),
-                    relation="viewer",
-                    subject=to_subject_ref(user),
-                )
-            ]
-        )
+        with transaction.atomic():
+            locked = system_queryset(type(row), lock=("self",)).get(pk=row.pk)
+            if locked.visibility != FileVisibility.INHERITED:
+                raise exceptions.UploadConflict("identical bytes already exist")
+            if owner_id is None or str(locked.owner_id or "") == str(owner_id):
+                return
+            user = get_user_model().objects.get(pk=owner_id)
+            locked.grant_record_access("viewer", user)
 
 
-class File(SqidMixin, AuditMixin, AngeeModel):
+class File(SqidMixin, OwnerMixin, AngeeModel):
     """A stored asset, deduplicated per drive by content hash.
 
-    ``created_by`` (stamped by :class:`~angee.base.mixins.AuditMixin`) is the
-    uploader and backs the ``owner`` relation in ``permissions.zed``.
+    ``owner`` grants access; ``created_by`` retains upload attribution.
     ``delete()`` soft-trashes; :meth:`purge` is the real delete.
     """
 
     runtime = True
-    rebac_grantable = {"viewer": "write"}
+    rebac_grantable = {"viewer": "share"}
+    owner_container = "drive"
 
     sqid_prefix = "fil_"
     drive = models.ForeignKey(
@@ -1176,6 +1235,7 @@ class File(SqidMixin, AuditMixin, AngeeModel):
     )
     filename = models.CharField(max_length=512)
     title = models.CharField(max_length=512, blank=True)
+    visibility = StateField(choices_enum=FileVisibility, default=FileVisibility.INHERITED, editable=False)
     content_hash = models.CharField(max_length=64, db_index=True, editable=False)
     size_bytes = models.PositiveBigIntegerField(default=0, editable=False)
     mime_type = models.ForeignKey(
@@ -1245,6 +1305,28 @@ class File(SqidMixin, AuditMixin, AngeeModel):
             )
             if folder is None or folder["is_virtual"] or folder["drive_id"] != self.drive_id:
                 raise ValidationError({"folder": "Folder must be a real folder in this file's drive."})
+
+    def set_visibility(self, value: FileVisibility | str) -> File:
+        """Narrow with file write, or widen with drive share, retaining all grants."""
+
+        try:
+            visibility = FileVisibility(value)
+        except ValueError as error:
+            raise ValidationError({"visibility": "Invalid file visibility."}) from error
+        actor = self.actor() or current_actor()
+        if actor is None:
+            raise PermissionDenied("File visibility requires an acting user.")
+        with transaction.atomic():
+            locked = system_queryset(type(self), lock=("self",)).select_related("drive").get(pk=self.pk)
+            resource = locked.drive if visibility == FileVisibility.INHERITED else locked
+            permission = "share" if visibility == FileVisibility.INHERITED else "write"
+            if not resource.with_actor(actor).has_access(permission):
+                raise PermissionDenied("You cannot change file visibility.")
+            if locked.visibility != visibility:
+                locked.visibility = visibility
+                locked.sudo(reason="storage.file.set_visibility").save(update_fields=["visibility"])
+            self.visibility = locked.visibility
+        return self
 
     @property
     def storage(self) -> StorageBackend:
@@ -1348,8 +1430,8 @@ class File(SqidMixin, AuditMixin, AngeeModel):
     def receive_bytes(self, body: BinaryIO) -> None:
         """Stream a proxied request body into this row's backend key.
 
-        One byte source for the upload flow: the actor must be the uploader
-        (``created_by``) or hold ``write`` on the drive. The one-shot token is
+        One byte source for the upload flow: the actor must hold file ``write``.
+        The one-shot token is
         consumed atomically before the write, the body is capped at
         ``ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES``, and an overflow or backend
         error marks the row FAILED and removes the partial object.
@@ -1383,7 +1465,8 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         ``expected_size`` are asserted against the computed values when a
         source supplies them (the upload path does); a mismatch fails the row
         and raises :class:`exceptions.UploadConflict`. Idempotent on an already
-        READY row; a late READY duplicate restores the winner and conflicts.
+        READY row; a late READY duplicate conflicts and only restores a winner
+        the actor can read.
         """
 
         if self.upload_state == UploadState.READY:
@@ -1472,18 +1555,15 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         return self
 
     def _authorize_push(self) -> None:
-        """Allow the uploader (``created_by``) or any drive writer to push bytes."""
+        """Require an authenticated file writer, including record-derived writers."""
 
         actor = current_actor()
         user_id = actor_user_id(actor)
         if actor is None or user_id is None:
             raise exceptions.UploadDenied("an authenticated user is required")
-        if str(self.created_by_id or "") == str(user_id):
-            return
-        drive = self.drive
-        allowed = rebac_backend().check_access(subject=actor, action="write", resource=to_object_ref(drive))
+        allowed = rebac_backend().check_access(subject=actor, action="write", resource=to_object_ref(self))
         if not allowed.allowed:
-            raise exceptions.UploadDenied("only the uploader may push bytes")
+            raise exceptions.UploadDenied("write access to the file is required")
 
     def _consume_upload_token(self) -> None:
         """Spend the one-shot proxy token atomically, failing closed on reuse.
@@ -1510,21 +1590,19 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         self.upload_envelope = locked.upload_envelope
 
     def _yield_to_duplicate(self, duplicate: File, *, storage: StorageBackend) -> None:
-        """Concede a dedup race: clean our bytes, revive the winner, fail this row.
+        """Fail this row without identifying or restoring an unreadable duplicate.
 
-        Never discards a key the winner shares — on an overwriting backend
-        that would delete the surviving row's bytes. A trashed winner is
-        restored (elevated: it may belong to another owner) so the caller's
-        conflict points at a live row rather than a purge-doomed one.
+        Never discard a key the winner shares: an overwriting backend would
+        otherwise lose the surviving row's bytes.
         """
 
         if duplicate.storage_path != self.storage_path:
             storage.discard(self.storage_path, context="finalize.duplicate")
-        if duplicate.is_trashed:
-            with system_context(reason="storage.finalize.restore_duplicate"):
-                duplicate.restore()
+        actor = self.actor() or current_actor()
+        if duplicate.is_trashed and actor is not None and duplicate.with_actor(actor).has_access("read"):
+            duplicate.sudo(reason="storage.finalize.restore_duplicate").restore()
         self._fail(reason="duplicate")
-        raise exceptions.UploadConflict(f"identical bytes already exist: {duplicate.sqid}")
+        raise exceptions.UploadConflict("identical bytes already exist")
 
     def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
         """Soft-delete into the Trash smart folder; backend bytes stay.
@@ -1559,8 +1637,9 @@ class File(SqidMixin, AuditMixin, AngeeModel):
     def purge(self) -> None:
         """Really delete: remove the row, then the backend object.
 
-        Backend failures never block the row deletion. A failed backend
-        delete is accepted as an orphaned object — rows are the source of
+        A shared key stays until its last file row is purged. Backend failures
+        never block the row deletion. A failed backend delete is accepted as
+        an orphaned object — rows are the source of
         truth and keys are content-addressed, so an orphan can only waste
         space, never serve stale content under a live row.
         """
@@ -1568,7 +1647,8 @@ class File(SqidMixin, AuditMixin, AngeeModel):
         storage = self.storage
         key = self.storage_path
         super().delete()
-        storage.discard(key, context="purge")
+        if not system_queryset(type(self)).filter(drive_id=self.drive_id, storage_path=key).exists():
+            storage.discard(key, context="purge")
 
     def _fail(self, *, reason: str) -> None:
         """Transition this row to FAILED, recording why for audit surfaces."""
@@ -1624,6 +1704,15 @@ class FileAttachmentManager(AngeeManager):
         context, a target without a REBAC identity raises ``PermissionDenied``.
         """
 
+        target = self.authorized_target(record)
+        with transaction.atomic():
+            self._lock_target(target)
+            file = system_queryset(type(file), lock=("self",)).get(pk=file.pk)
+            return self._attach_authorized(file, target, label=label)
+
+    def authorized_target(self, record: models.Model) -> CanonicalRecordTarget:
+        """Resolve and authorize the canonical target before an attachment write."""
+
         actor = current_actor()
         target = canonical_record_target(record)
         target_model = target.content_type.model_class()
@@ -1633,16 +1722,32 @@ class FileAttachmentManager(AngeeManager):
             resource_type = model_resource_type(target_model)
             if resource_type is None:
                 raise PermissionDenied("File attachments require a REBAC-typed target.")
-            # The file-read decorator requires an actor outside system context.
-            if not rebac_backend().check_access(
-                subject=cast(SubjectRef, actor),
+            if actor is None or not rebac_backend().check_access(
+                subject=actor,
                 action="write",
                 resource=ObjectRef(resource_type, str(target.object_id)),
             ).allowed:
                 raise PermissionDenied("write access to the attachment target is required")
-        with system_context(reason="storage.file_attachment.attach"), transaction.atomic():
-            target_model._base_manager.select_for_update().get(pk=target.object_id)
-            file = type(file)._base_manager.select_for_update().get(pk=file.pk)
+        return target
+
+    def _lock_target(self, target: CanonicalRecordTarget) -> None:
+        """Lock the canonical target before a file insert or attachment write."""
+
+        target_model = target.content_type.model_class()
+        if target_model is None:
+            raise ValueError("File attachment target model is unavailable.")
+        system_queryset(target_model, lock=("self",)).get(pk=target.object_id)
+
+    def _attach_authorized(self, file: Any, target: CanonicalRecordTarget, *, label: str = "") -> Any:
+        """Persist an edge after its owning verb has authorized both ends.
+
+        Protected write seam: ``attach`` checks file read and target write;
+        ``draft`` checks drive write and target write before creating the file.
+        The latter encloses the file and edge in one transaction.
+        """
+
+        actor = current_actor()
+        with system_context(reason="storage.file_attachment.attach"):
             attachment, _created = self.get_or_create(
                 file_id=file.pk,
                 content_type_id=target.content_type.pk,

@@ -1,6 +1,14 @@
-// Additive task authorization contributed by the work addon.
+// Additive task and project authorization contributed by the work addon.
 // @rebac_package: work
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 3
+
+definition projects/project {
+    relation team: spaces/group // rebac:field=team
+
+    permission read = team->post
+    permission write = team->write
+    permission write__team = share
+}
 
 definition projects/task {
     relation queue: work/queue // rebac:field=queue

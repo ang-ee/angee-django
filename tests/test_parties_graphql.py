@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -48,15 +49,12 @@ def test_public_resource_metadata_declares_people_surface() -> None:
     assert metadata.roots.delete_name is None
     assert {name for name, field in metadata.query.fields.items() if field.filter} == {
         "display_name",
-        "nickname",
         "created_at",
         "id",
         "family_name",
-        "birthday",
         "folder",
         "given_name",
         "updated_at",
-        "anniversary",
     }
     assert {name for name, field in metadata.query.fields.items() if field.sort} == {
         "display_name",
@@ -466,8 +464,11 @@ def test_contact_resources_accept_declared_consumer_fields(
                 raising=False,
             )
             patch.setattr(party, "hasura_filterable_fields", ("notes",), raising=False)
-            patch.setattr(party, "hasura_sortable_fields", ("notes",), raising=False)
-            patch.setattr(party, "hasura_groupable_fields", ("notes",), raising=False)
+            with pytest.raises(ImproperlyConfigured, match="field-gated reads"):
+                importlib.reload(parties_schema)
+            patch.setattr(party, "hasura_filterable_fields", ("updated_at",), raising=False)
+            patch.setattr(party, "hasura_sortable_fields", ("id",), raising=False)
+            patch.setattr(party, "hasura_groupable_fields", ("updated_at",), raising=False)
             importlib.reload(parties_schema)
             schema = _schema("public")
             resources = {item.model_label: item for item in schema.angee_resources}
@@ -480,13 +481,17 @@ def test_contact_resources_accept_declared_consumer_fields(
                 }
                 assert {"first_met_note", "introduced_by"} <= set(resource.update_fields)
                 filter_fields = schema._schema.get_type(resource.type_names.filter).fields
-                assert "notes" in filter_fields
+                assert "updated_at" in filter_fields
+                assert "notes" not in filter_fields
                 assert "first_met_note" not in filter_fields
                 assert "addresses" not in filter_fields
-                assert "notes" in resource.query.axes
+                assert "updated_at" in resource.query.axes
+                assert "notes" not in resource.query.axes
                 assert "first_met_note" not in resource.query.axes
                 assert "addresses" not in resource.query.axes
-                assert "notes" in schema._schema.get_type(resource.type_names.order).fields
+                order_fields = schema._schema.get_type(resource.type_names.order).fields
+                assert "id" in order_fields
+                assert "notes" not in order_fields
                 if label != "parties.Party":
                     assert "first_met_note" in resources[label].create_fields
 

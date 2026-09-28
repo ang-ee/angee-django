@@ -1,24 +1,31 @@
-import type { ActionFieldName } from "@angee/gql/console/actions";
-import { useCallback, type ReactElement } from "react";
+import { useCallback, useRef, type ReactElement } from "react";
+
+import { useCanonicalResourceModelLabels, useResourceInvalidates } from "@angee/metadata";
+import { extractActionOutcome, useAuthoredMutation } from "@angee/refine";
 
 import {
-  Action, Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
-  useActionOutcomeMutation, type ActionDescriptor } from "@angee/ui";
-import { PAGE_READ_MODELS } from "../data/documents";
+  Action, Column, createClientKey, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
+  type ActionDescriptor } from "@angee/ui";
+import { KnowledgeCreateVaultFrom, PAGE_READ_MODELS } from "../data/documents";
 import { useKnowledgeT } from "../i18n";
 
 const VAULT_MODEL = "knowledge.Vault";
+const CLONE_MODELS = [VAULT_MODEL, ...PAGE_READ_MODELS];
 
 /**
  * The knowledge admin console: a managed list of vaults whose record form opens
- * in a drawer. Create / edit / delete are gated server-side. Vaults carry no
- * immutable fields, so the form is plain full CRUD.
+ * in a drawer. Create / edit / delete are gated server-side; ownership and replay
+ * receipts are managed by their dedicated server contracts.
  */
 export function KnowledgeSettingsPage(): ReactElement {
   const t = useKnowledgeT();
-  const [createFrom] = useActionOutcomeMutation<ActionFieldName>("create_vault_from", {
-    idArgument: "template",
-    invalidateModels: [VAULT_MODEL, ...PAGE_READ_MODELS],
+  const pendingClone = useRef<{ template: string; name: string; key: string } | null>(null);
+  const invalidateModels = useCanonicalResourceModelLabels(CLONE_MODELS);
+  const invalidates = useResourceInvalidates(invalidateModels);
+  const [createFrom] = useAuthoredMutation(KnowledgeCreateVaultFrom, {
+    invalidateModels,
+    invalidates,
+    shouldInvalidate: (data) => data?.create_vault_from.ok === true,
   });
   const cloneSubmit = useCallback<NonNullable<ActionDescriptor["submit"]>>(
     async (values, context) => {
@@ -26,7 +33,16 @@ export function KnowledgeSettingsPage(): ReactElement {
       if (typeof template !== "string" || !template || typeof values.name !== "string") {
         return { ok: false, message: t("vault.cloneFailed") };
       }
-      return createFrom(template, { name: values.name.trim() });
+      const name = values.name.trim();
+      if (pendingClone.current?.template !== template || pendingClone.current.name !== name) {
+        pendingClone.current = { template, name, key: createClientKey() };
+      }
+      const data = await createFrom({
+        template, name, owned: true, client_creation_key: pendingClone.current.key,
+      });
+      const outcome = extractActionOutcome(data, "create_vault_from");
+      if (outcome?.ok) pendingClone.current = null;
+      return outcome;
     },
     [createFrom, t],
   );

@@ -6,8 +6,21 @@ from typing import Any
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from rebac import app_settings
+from django.db import models
+from rebac import SubjectRef, app_settings, current_actor
 from rebac.resources import model_resource_type
+
+
+def instance_actor(instance: models.Model) -> SubjectRef | None:
+    """Return the instance's pinned actor, falling back to the ambient actor.
+
+    Instance verbs and audit defaults share this resolution, including during
+    elevated writes. Plain Django models have only the ambient actor.
+    """
+
+    actor_getter = getattr(instance, "actor", None)
+    actor = actor_getter() if callable(actor_getter) else None
+    return actor if actor is not None else current_actor()
 
 
 def actor_user_id(actor: Any) -> Any | None:

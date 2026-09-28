@@ -9,13 +9,17 @@ import {
   ListView,
   ResourceList,
   useEnumOptions,
-  useRecordActionMutation,
+  useActionResultMutation,
+  useRecordAction,
+  defineRowAction,
+  type StringIdRow,
   useRouteHref,
   type RecordPanelContext,
   type RecordTabDescriptor,
 } from "@angee/ui";
 import * as React from "react";
 
+import { ProjectPhaseControl } from "../project-phase";
 import { useProjectsT } from "../i18n";
 import {
   MILESTONE_MODEL,
@@ -31,22 +35,22 @@ export function ProjectsPage(): React.ReactElement {
   const statusOptions = useEnumOptions(PROJECT_MODEL, "status");
   const startResolutionOptions = useEnumOptions(PROJECT_MODEL, "start_date_resolution");
   const targetResolutionOptions = useEnumOptions(PROJECT_MODEL, "target_date_resolution");
-  const [pauseProject] = useRecordActionMutation("pause_project", {
+  const [pause] = useActionResultMutation("pause_project", {
     invalidateModels: [PROJECT_MODEL],
-    settle: true,
   });
-  const [resumeProject] = useRecordActionMutation("resume_project", {
+  const [resume] = useActionResultMutation("resume_project", {
     invalidateModels: [PROJECT_MODEL],
-    settle: true,
   });
-  const [completeProject] = useRecordActionMutation("complete_project", {
+  const [complete] = useActionResultMutation("complete_project", {
     invalidateModels: [PROJECT_MODEL],
-    settle: true,
   });
-  const [dropProject] = useRecordActionMutation("drop_project", {
+  const [drop] = useActionResultMutation("drop_project", {
     invalidateModels: [PROJECT_MODEL],
-    settle: true,
   });
+  const pauseProject = useRecordAction((id, context) => pause(id, { expected_revision: context.record?.revision }));
+  const resumeProject = useRecordAction((id, context) => resume(id, { expected_revision: context.record?.revision }));
+  const completeProject = useRecordAction((id, context) => complete(id, { expected_revision: context.record?.revision }));
+  const dropProject = useRecordAction((id, context) => drop(id, { expected_revision: context.record?.revision }));
   const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
     () => [
       {
@@ -84,8 +88,12 @@ export function ProjectsPage(): React.ReactElement {
       </List>
       <Form resource={PROJECT_MODEL} layout="tabs">
         <Field name="title" title />
+        <Field name="revision" readOnly hidden />
         <Field name="status" widget="statusbar" options={statusOptions} createOnly />
         <Group label={t("project.group.planning")} columns={2}>
+          <Field name="owner" readOnly />
+          <Field name="owns_items" />
+          <Field name="current_milestone" readOnly />
           <Field name="lead" />
           <Field name="start_date" />
           <Field name="start_date_resolution" options={startResolutionOptions} />
@@ -109,7 +117,7 @@ export function ProjectsPage(): React.ReactElement {
           label={t("project.action.resume")}
           icon="activity"
           run={resumeProject}
-          visibleWhen={(record) => projectStatus(record) === "paused"}
+          visibleWhen={(record) => ["paused", "dropped"].includes(projectStatus(record))}
         />
         <Action
           id="complete"
@@ -163,22 +171,46 @@ function ProjectTasksTab({ recordId }: RecordPanelContext): React.ReactElement {
   );
 }
 
+interface MilestoneRow extends StringIdRow {
+  reached_at?: unknown;
+  revision?: unknown;
+}
+
 function ProjectMilestonesTab({ recordId }: RecordPanelContext): React.ReactElement {
   const t = useProjectsT();
+  const [markReached] = useActionResultMutation("mark_milestone_reached", {
+    invalidateModels: [MILESTONE_MODEL],
+  });
+  const rowActions = React.useMemo(() => [defineRowAction<MilestoneRow>({
+    kind: "page",
+    id: "mark-reached",
+    label: t("milestone.action.reach"),
+    icon: "check",
+    visible: (row) => !row.reached_at,
+    pendingPolicy: "active-row",
+    onSelect: (row) => markReached(row.id, { expected_revision: row.revision }),
+  })], [markReached, t]);
   return (
-    <ListView
-      resource={MILESTONE_MODEL}
-      scope="local"
-      fields={["id", "name", "description", "target_date", "sort_order"]}
-      baseFilter={{ project: { exact: recordId } }}
-      order={{ sort_order: "ASC" }}
-      columns={[
-        { field: "name" },
-        { field: "target_date" },
-        { field: "sort_order" },
-      ]}
-      emptyContent={t("project.empty.milestones")}
-    />
+    <>
+      <ProjectPhaseControl recordId={recordId} />
+      <ListView<MilestoneRow>
+        resource={MILESTONE_MODEL}
+        scope="local"
+        fields={["id", "name", "description", "start_date", "target_date", "reached_at", "reached_by", "revision", "sort_order"]}
+        baseFilter={{ project: { exact: recordId } }}
+        order={{ sort_order: "ASC" }}
+        columns={[
+          { field: "name" },
+          { field: "start_date" },
+          { field: "target_date" },
+          { field: "reached_at" },
+          { field: "reached_by" },
+          { field: "sort_order" },
+        ]}
+        rowActions={rowActions}
+        emptyContent={t("project.empty.milestones")}
+      />
+    </>
   );
 }
 

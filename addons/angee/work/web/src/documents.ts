@@ -19,6 +19,19 @@ export const WorkQueueContextDocument = graphql(`
   }
 `);
 
+export const WorkTaskContextDocument = graphql(`
+  query WorkTaskContext($id: String!) {
+    project_tasks_by_pk(id: $id) {
+      id
+      stage {
+        id
+        category
+        rule_owned
+      }
+    }
+  }
+`);
+
 export const WorkCycleContextDocument = graphql(`
   query WorkCycleContext($id: String!) {
     work_cycles_by_pk(id: $id) {

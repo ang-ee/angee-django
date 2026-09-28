@@ -871,8 +871,8 @@ def test_user_crud_create_update_delete_are_admin_only(
         "is_active": True,
         "full_name": "Console User",
     }
-    # ``password`` is write-only: it is neither a field on ``UserType`` nor in its SDL.
-    assert "password" not in _sdl_block(console_schema.as_str(), "type UserType")
+    # ``password`` is write-only: it is not a field on ``UserType``.
+    assert console_schema.get_field_for_type("password", "UserType") is None
     with system_context(reason="test.iam.user_crud.create"):
         user = User.objects.get(username="console-user")
         # Requires strawberry-django-hasura >= 0.12.1 input-extension forwarding.

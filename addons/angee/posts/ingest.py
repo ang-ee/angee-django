@@ -30,7 +30,7 @@ def land_posts(channel: Any, posts: list[ParsedPost], *, owner_id: Any) -> list[
             for post in posts
         ],
         channel=channel,
-        owner_id=owner_id,
+        created_by_id=owner_id,
         modality=thread_model.Modality.PUBLIC_THREAD,
         visibility=thread_model.Visibility.PUBLIC,
         quote_edges=False,
@@ -67,7 +67,7 @@ def _overlay_engagement(channel: Any, posts: list[ParsedPost], messages: list[An
             for message, post in landed
             for reaction in post.reactions
         ),
-        owner_id=owner_id,
+        created_by_id=owner_id,
     )
 
     targets = _resolve_relation_targets(landed, by_key, channel_id=channel.pk)
@@ -75,7 +75,7 @@ def _overlay_engagement(channel: Any, posts: list[ParsedPost], messages: list[An
         for relation in post.relations:
             target = targets.get((post.message.platform, relation.dst_external_id))
             if target is not None:
-                edge_model.objects.relate(message, target, kind=relation.kind, owner_id=owner_id)
+                edge_model.objects.relate(message, target, kind=relation.kind, created_by_id=owner_id)
 
 
 def _resolve_reaction_handles(landed: list[Any], handle_model: Any, owner_id: Any) -> dict:

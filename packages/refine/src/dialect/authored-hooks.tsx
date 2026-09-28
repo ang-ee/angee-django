@@ -163,6 +163,12 @@ export interface AuthoredMutationOptions<
   TVariables = Record<string, unknown>,
 > extends AuthoredOperationOptions {
   /**
+   * For operations whose result is a secret shown once: observer reset on
+   * settlement; the cache entry is collected on the next tick; single-flight
+   * per hook instance.
+   */
+  transient?: boolean;
+  /**
    * Exact canonical model labels whose registered reads should refetch after
    * success. This metadata-free package exact-matches the strings; callers that
    * accept aliases canonicalize them before this boundary.
@@ -207,6 +213,7 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
   });
   const run = useCustomMutation<BaseRecord, HttpError, Variables>({
     mutationOptions: {
+      ...(options.transient ? { gcTime: 0 } : {}),
       onMutate: captureMutationContext,
       async onSuccess(response, { values }, context) {
         // Refine exposes native mutation context as unknown; this hook supplies it.
@@ -237,27 +244,37 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
     dataProviderName,
     document,
     mutateAsync: run.mutateAsync,
+    reset: run.mutation.reset,
+    transient: options.transient,
   });
   mutationRef.current = {
     dataProviderName,
     document,
     mutateAsync: run.mutateAsync,
+    reset: run.mutation.reset,
+    transient: options.transient,
   };
   const mutate = useCallback<AuthoredMutate<TDocument>>(async (variables) => {
     const {
       dataProviderName,
       document,
       mutateAsync,
+      reset,
+      transient,
     } = mutationRef.current;
     const resolvedVariables = (variables ?? {}) as Variables;
-    const response = await mutateAsync({
-      url: "",
-      method: "post",
-      values: resolvedVariables,
-      dataProviderName,
-      meta: mutationMeta(document, resolvedVariables),
-    });
-    return authoredOperationData<Data>(response.data);
+    try {
+      const response = await mutateAsync({
+        url: "",
+        method: "post",
+        values: resolvedVariables,
+        dataProviderName,
+        meta: mutationMeta(document, resolvedVariables),
+      });
+      return authoredOperationData<Data>(response.data);
+    } finally {
+      if (transient) reset();
+    }
   }, []);
   return [
     mutate,

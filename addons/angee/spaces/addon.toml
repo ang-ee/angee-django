@@ -6,3 +6,13 @@ description = "Shared groups with canonical rosters, role-derived access, and gr
 keywords = ["spaces", "groups", "rosters", "roles"]
 category = "Data"
 depends_on = ["angee.iam", "angee.parties", "angee.messaging"]
+
+[[migrations]]
+name = "drop_stored_roster"
+app_label = "spaces"
+module = "runtime_migrations.drop_stored_roster"
+
+[[migrations]]
+name = "owner_column"
+app_label = "spaces"
+module = "runtime_migrations.owner_column"

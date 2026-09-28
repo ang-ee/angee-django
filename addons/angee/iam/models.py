@@ -573,6 +573,15 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
                 kwargs["update_fields"] = update_field_names
         super().save(*args, **kwargs)
 
+    def password_issue_error(self) -> str | None:
+        """Return the password-issuance eligibility failure, or None."""
+
+        if not self.is_person or not self.is_active or self.is_staff or self.is_superuser:
+            return "Only active, non-staff person accounts can receive a password."
+        if self.has_usable_password():
+            return "This account already has a usable password."
+        return None
+
     def issue_password(self) -> str:
         """Set and return one random credential for a passwordless active person.
 
@@ -591,10 +600,8 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
                 user.sudo(reason="iam.password.issue")
             if not user.has_access("issue_password"):
                 raise PermissionDenied("Password issue permission is required.")
-            if not user.is_person or not user.is_active or user.is_staff or user.is_superuser:
-                raise ValidationError("Only active, non-staff person accounts can receive a password.")
-            if user.has_usable_password():
-                raise ValidationError("This account already has a usable password.")
+            if error := user.password_issue_error():
+                raise ValidationError(error)
             password = secrets.token_urlsafe(24)
             user.set_password(password)
             user.sudo(reason="iam.password.issue").save(update_fields=["password"])

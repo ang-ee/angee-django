@@ -46,7 +46,7 @@ from rebac.actors import is_anonymous_actor, is_sudo
 from rebac.relation_loading import relation_actor
 
 from angee.base.actors import actor_user_id
-from angee.base.mixins import CreationKeyQuerySet
+from angee.base.mixins import CreationKeyQuerySet, OwnerQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_target
@@ -306,7 +306,7 @@ def _external_id_annotated(queryset: Any) -> Any:
     return queryset.annotate(_eid_digest=MD5("external_id"))
 
 
-def _edit_history_entry(*, owner_id: Any, prev_fragment_hashes: list[str]) -> dict[str, Any]:
+def _edit_history_entry(*, edited_by_id: Any, prev_fragment_hashes: list[str]) -> dict[str, Any]:
     """Return one newest-first ``edit_history`` entry — the shape both edit paths share.
 
     The replaced text itself is not copied: content-addressed fragments are
@@ -317,8 +317,8 @@ def _edit_history_entry(*, owner_id: Any, prev_fragment_hashes: list[str]) -> di
         "edited_at": timezone.now().isoformat(),
         "prev_fragment_hashes": prev_fragment_hashes,
     }
-    if owner_id is not None:
-        entry["edited_by_id"] = str(owner_id)
+    if edited_by_id is not None:
+        entry["edited_by_id"] = str(edited_by_id)
     return entry
 
 
@@ -477,7 +477,7 @@ class FragmentManager(AngeeManager):
 
         return SearchQuery(strip_null_bytes(term or "").strip(), search_type=search_type, config=_SEARCH_CONFIG)
 
-    def upsert(self, *, text: str, kind: str = "paragraph", owner_id: Any = None) -> Any:
+    def upsert(self, *, text: str, kind: str = "paragraph", created_by_id: Any = None) -> Any:
         """Get-or-create a fragment by the SHA-256 of its cleaned (null-stripped, trimmed) text.
 
         A new fragment's ``search`` vector is stamped in the same transaction — the
@@ -491,7 +491,7 @@ class FragmentManager(AngeeManager):
         with transaction.atomic():
             fragment, created = self.get_or_create(
                 hash=digest,
-                defaults={"text": text, "kind": kind, "created_by_id": owner_id},
+                defaults={"text": text, "kind": kind, "created_by_id": created_by_id},
             )
             if created and connections[fragment._state.db].vendor == "postgresql":
                 # tsvector is a Postgres type; on other vendors (the SQLite test
@@ -540,7 +540,7 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
     )
 
 
-class ThreadQuerySet(AngeeQuerySet[Any]):
+class ThreadQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
     """Chainable read scopes for message threads."""
 
     def inbox(self) -> ThreadQuerySet:
@@ -629,7 +629,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 
         return f"chat:{channel.pk if channel is not None else ''}:"
 
-    def name_untitled(self, names: Mapping[Any, str], *, owner_id: Any = None) -> int:
+    def name_untitled(self, names: Mapping[Any, str], *, created_by_id: Any = None) -> int:
         """Title threads that have none from source names; never rename one.
 
         ``names`` maps thread pks to names. Each row is re-read under its lock, so
@@ -652,12 +652,12 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                 )
                 if thread is None:
                     continue
-                thread.title_id = fragment_model.objects.upsert(text=text, owner_id=owner_id).pk
+                thread.title_id = fragment_model.objects.upsert(text=text, created_by_id=created_by_id).pk
                 thread.save(update_fields=["title"])
                 named += 1
         return named
 
-    def fill_chat_titles(self, channel: Any, titles: Mapping[str, str], *, owner_id: Any = None) -> int:
+    def fill_chat_titles(self, channel: Any, titles: Mapping[str, str], *, created_by_id: Any = None) -> int:
         """Name a channel's untitled chat threads from source conversation names.
 
         ``titles`` maps a source conversation id (the ``ParsedThread.external_id``)
@@ -671,7 +671,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             .filter(channel_id=channel.pk, title__isnull=True, external_id__in=list(wanted))
             .values_list("pk", "external_id")
         )
-        return self.name_untitled({pk: wanted[external_id] for pk, external_id in untitled}, owner_id=owner_id)
+        return self.name_untitled(
+            {pk: wanted[external_id] for pk, external_id in untitled}, created_by_id=created_by_id,
+        )
 
     def resolve(
         self,
@@ -682,7 +684,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         in_reply_to: str = "",
         references: tuple[str, ...] = (),
         message_external_id: str = "",
-        owner_id: Any = None,
+        created_by_id: Any = None,
         modality: Any = None,
         visibility: Any = None,
         thread: ParsedThread | None = None,
@@ -696,7 +698,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         ``subj:``/``msg:``), so adapters pass raw conversation ids and never
         compose prefixes. Chat threads are **channel-scoped**, unlike email's
         platform-wide merge: two linked accounts that each DM the same person
-        are two private conversations owned by different people, so they must
+        are two private conversations governed by their channels, so they must
         not fuse into one REBAC-shared thread. The hint's ``modality``/
         ``visibility`` land on a newly created thread only — a broadcast source
         names its feed public at the adapter that knows it, instead of every
@@ -726,7 +728,9 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
 
         fragment_model = apps.get_model("messaging", "Fragment")
         if thread is not None and thread.external_id:
-            title = fragment_model.objects.upsert(text=thread.title, owner_id=owner_id) if thread.title else None
+            title = (
+                fragment_model.objects.upsert(text=thread.title, created_by_id=created_by_id) if thread.title else None
+            )
             named, _created = self.get_or_create_by_external_id(
                 platform=platform,
                 external_id=f"{self.chat_key_prefix(channel)}{thread.external_id}",
@@ -736,7 +740,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     "modality": thread.modality or modality or self.model.Modality.DIRECT,
                     "visibility": thread.visibility or visibility or self.model.Visibility.PRIVATE,
                     "metadata": thread.metadata,
-                    "created_by_id": owner_id,
+                    "created_by_id": created_by_id,
                 },
             )
             # Sources may learn a conversation's name after its first message (a
@@ -744,7 +748,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             if (
                 title is not None
                 and named.title_id is None
-                and self.name_untitled({named.pk: thread.title}, owner_id=owner_id)
+                and self.name_untitled({named.pk: thread.title}, created_by_id=created_by_id)
             ):
                 named.refresh_from_db(fields=["title"])
             return named
@@ -792,7 +796,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     if existing is not None:
                         return existing
             deterministic_id = f"subj:{normalized}" if normalized else f"msg:{message_external_id}"
-            title = fragment_model.objects.upsert(text=normalized, owner_id=owner_id) if normalized else None
+            title = fragment_model.objects.upsert(text=normalized, created_by_id=created_by_id) if normalized else None
             thread, _created = self.get_or_create_by_external_id(
                 platform=platform,
                 external_id=deterministic_id,
@@ -801,7 +805,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
                     "title_id": title.pk if title is not None else None,
                     "modality": modality or self.model.Modality.EMAIL_THREAD,
                     "visibility": visibility or self.model.Visibility.PRIVATE,
-                    "created_by_id": owner_id,
+                    "created_by_id": created_by_id,
                 },
             )
             return thread
@@ -820,6 +824,8 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         :func:`_external_id_q`; the create side relies on the expression unique
         constraint to serialise a concurrent first insert, re-reading on conflict —
         the same converge-on-unique contract the old column constraint provided.
+        Channel-bound inserts release personal ownership within that transaction;
+        their access follows the channel while creation attribution remains intact.
         """
 
         # Identity resolution is system bookkeeping (the callers gate reads at their
@@ -833,7 +839,11 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
             return existing, False
         try:
             with transaction.atomic():
-                return self.model._base_manager.create(platform=platform, external_id=external_id, **defaults), True
+                thread = self.model._base_manager.create(platform=platform, external_id=external_id, **defaults)
+                if thread.channel_id is not None and thread.owner_id is not None:
+                    self.filter(pk=thread.pk).release(get_user_model()(pk=thread.owner_id))
+                    thread.owner = None
+                return thread, True
         except IntegrityError:
             existing = queryset.first()
             if existing is None:
@@ -869,10 +879,8 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         if channel.pk is None:
             return
         message_model = apps.get_model("messaging", "Message")
-        # FOLLOW-UP: give messaging/thread + messaging/message a channel/integration-derived
-        # REBAC `delete` arm (mirror integrate_vcs/vcs_bridge) so this elevated cascade is
-        # authorized by schema, not the sync co-ownership invariant. Non-exploitable today
-        # (the teardown runs under system_context behind the channel `delete` preflight).
+        # Channel deletion authorizes its thread teardown even when a thread has
+        # another owner; the thread's own delete gate remains owner/admin-only.
         with system_context(reason="messaging.channel.teardown"), mute_changes(), transaction.atomic():
             message_model.objects.for_channel(channel).delete()
             self.for_channel(channel).delete()
@@ -1035,28 +1043,17 @@ class ThreadAttachmentManager(AngeeManager):
     def _reconcile_broadcast_state(thread: Any, *, host_broadcasts: bool) -> None:
         """Heal a record thread's broadcast state to match its host, in place.
 
-        The host's ``thread_broadcasts_changes`` is stamped onto the thread only in the
-        ``get_or_create`` defaults, so a pre-existing thread — one minted before the host
-        flipped the flag — would keep the stale value; re-stamping it here reconciles it
-        on the next activity. A broadcasting host's thread is also minted system-owned
-        (``created_by`` cleared): membership (``reader``) + admin are then the only live
-        change gate, so an expelled member — even the one who first minted the thread —
-        goes dark instead of keeping ``thread.read`` through the field-backed ``owner``
-        arm. Non-broadcasting record chatter keeps its ``owner`` arm untouched. The update
-        runs only on real drift, so a steady-state post writes nothing here.
+        Broadcasting hosts release personal thread ownership so their live access
+        follows membership. The enclosing record operation owns authorization;
+        the base release seam retains the original creation attribution.
         """
 
-        updates: dict[str, Any] = {}
         if thread.host_broadcasts_changes != host_broadcasts:
-            updates["host_broadcasts_changes"] = host_broadcasts
-        if host_broadcasts and thread.created_by_id is not None:
-            updates["created_by"] = None
-        if not updates:
-            return
-        type(thread)._base_manager.filter(pk=thread.pk).update(**updates)
-        thread.host_broadcasts_changes = host_broadcasts
-        if "created_by" in updates:
-            thread.created_by_id = None
+            type(thread)._base_manager.filter(pk=thread.pk).update(host_broadcasts_changes=host_broadcasts)
+            thread.host_broadcasts_changes = host_broadcasts
+        if host_broadcasts and thread.owner_id is not None:
+            type(thread).objects.filter(pk=thread.pk).release(get_user_model()(pk=thread.owner_id))
+            thread.owner = None
 
     def teardown_for_record(self, record: Any) -> None:
         """Detach ``record`` and delete only its unshared private chatter graph.
@@ -1642,7 +1639,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
         message: Any,
         *,
         attachment: Any | None = None,
-        owner_id: Any = None,
+        created_by_id: Any = None,
         recipient_user_ids: tuple[Any, ...] = (),
     ) -> int:
         """Tell the union of followers, team members and record-named parties once.
@@ -1713,7 +1710,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
         existing = {row.user_id: row for row in self.model._base_manager.filter(message=message)}
         new_rows: list[Any] = []
         for user_id, (policy, follower) in deliveries.items():
-            if owner_id is not None and str(user_id) == str(owner_id):
+            if created_by_id is not None and str(user_id) == str(created_by_id):
                 continue
             if record is not None and not record.thread_reader_allowed(accounts[user_id]):
                 continue
@@ -1737,7 +1734,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
                         user_id=user_id,
                         **values,
                         notification_status=self.model.NotificationStatus.READY,
-                        created_by_id=owner_id,
+                        created_by_id=created_by_id,
                     )
                 )
         self.model._base_manager.bulk_create(new_rows, ignore_conflicts=True)
@@ -1835,7 +1832,7 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
         resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
         if resolved_user_id is None:
             raise ValueError("An assigned user is required for an activity.")
-        owner_id = actor_user_id(current_actor())
+        created_by_id = actor_user_id(current_actor())
         attachment = apps.get_model("messaging", "ThreadAttachment").objects.ensure_for_record(
             record,
             role=role,
@@ -1850,7 +1847,7 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             note=strip_null_bytes(note or ""),
             due_date=due_date or timezone.localdate(),
             metadata=metadata or {},
-            created_by_id=owner_id,
+            created_by_id=created_by_id,
         )
 
     def complete(self, activity: Any, *, feedback: str = "", post_message: bool = True) -> Any:
@@ -1858,7 +1855,7 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
 
         if activity.status == self.model.ActivityStatus.DONE:
             return activity
-        owner_id = actor_user_id(current_actor())
+        created_by_id = actor_user_id(current_actor())
         feedback = strip_null_bytes(feedback or "").strip()
         activity.status = self.model.ActivityStatus.DONE
         activity.completed_at = timezone.now()
@@ -1884,7 +1881,7 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             message_model.objects.post_to_thread(
                 attachment.thread,
                 body=body,
-                owner_id=owner_id,
+                created_by_id=created_by_id,
                 attachment=attachment,
                 message_type=message_model.MessageKind.AUTO_COMMENT,
                 subtype_key="activity_done",
@@ -1992,7 +1989,7 @@ def _message_subtype(
     *,
     subtype_key: str,
     model_label: str = "",
-    owner_id: Any = None,
+    created_by_id: Any = None,
 ) -> Any | None:
     """Return/create the subtype row that classifies a chatter message."""
 
@@ -2011,7 +2008,7 @@ def _message_subtype(
         defaults={
             "name": name,
             "description": description,
-            "created_by_id": owner_id,
+            "created_by_id": created_by_id,
         },
     )
     return subtype
@@ -2183,14 +2180,14 @@ class ReactionManager(AngeeManager):
     ``get_or_create``.
     """
 
-    def attribute(self, reactions: Any, *, owner_id: Any = None) -> int:
+    def attribute(self, reactions: Any, *, created_by_id: Any = None) -> int:
         """Land attributed reactions in one insert; return how many rows were built.
 
         ``reactions`` is an iterable of ``(message, handle, reaction)`` triples. One
         ``bulk_create`` inserts the batch, idempotent on the partial unique
         ``(message, handle, reaction)`` constraint via ``ignore_conflicts`` — so a
         re-sync re-landing the same reactions is a no-op — and every row carries the
-        cleaned reaction content and the ``created_by`` (the field-backed REBAC owner).
+        cleaned reaction content and the ``created_by`` attribution.
         """
 
         rows = [
@@ -2198,7 +2195,7 @@ class ReactionManager(AngeeManager):
                 message_id=message.pk,
                 handle_id=handle.pk,
                 reaction=self.model.clean_reaction(reaction),
-                created_by_id=owner_id,
+                created_by_id=created_by_id,
             )
             for message, handle, reaction in reactions
         ]
@@ -2560,7 +2557,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         thread: Any,
         *,
         body: str,
-        owner_id: Any = None,
+        created_by_id: Any = None,
         attachment: Any | None = None,
         record: Any | None = None,
         attachments: tuple[Any, ...] = (),
@@ -2584,7 +2581,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         so an author never sees their own post as unread.
 
         Keys belong to the initiating REBAC actor, including non-user actors;
-        ``owner_id`` remains attribution. An exact replay returns the original
+        ``created_by_id`` remains attribution. An exact replay returns the original
         message without repeating posting side effects. Changed posting inputs
         raise ``CreationKeyConflict``. Keyed calls require an explicit or ambient
         non-anonymous actor. Hard deletion frees the key for a new message.
@@ -2635,7 +2632,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             subtype = _message_subtype(
                 subtype_key=subtype_key,
                 model_label=subtype_model_label,
-                owner_id=owner_id,
+                created_by_id=created_by_id,
             )
             try:
                 with transaction.atomic():
@@ -2649,7 +2646,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                         parent_id=parent.pk if parent is not None else None,
                         preview=body[:280] if body else _tracking_preview(tracking_values),
                         sent_at=sent_at,
-                        created_by_id=owner_id,
+                        created_by_id=created_by_id,
                         creation_actor=creation_scope,
                         client_creation_key=client_creation_key,
                         creation_fingerprint=fingerprint,
@@ -2662,7 +2659,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             position = 0
             if body:
                 fragment = fragment_model.objects.upsert(
-                    text=body, kind=fragment_model.FragmentKind.PARAGRAPH, owner_id=owner_id
+                    text=body, kind=fragment_model.FragmentKind.PARAGRAPH, created_by_id=created_by_id
                 )
                 part_model.objects.create(
                     message_id=message.pk,
@@ -2671,7 +2668,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     disposition=part_model.Disposition.INLINE,
                     role=part_model.PartRole.BODY,
                     fragment_id=fragment.pk if fragment is not None else None,
-                    created_by_id=owner_id,
+                    created_by_id=created_by_id,
                 )
                 position += 1
             for file in attachments:
@@ -2683,19 +2680,19 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     role=part_model.PartRole.BODY,
                     name=getattr(file, "filename", "") or "attachment",
                     file_id=file.pk if file is not None else None,
-                    created_by_id=owner_id,
+                    created_by_id=created_by_id,
                 )
                 position += 1
             for row in tracking_rows:
                 tracking_model.objects.create(
                     message_id=message.pk,
-                    created_by_id=owner_id,
+                    created_by_id=created_by_id,
                     **row,
                 )
             notification_model.objects.fanout_for_message(
                 message,
                 attachment=attachment,
-                owner_id=owner_id,
+                created_by_id=created_by_id,
                 recipient_user_ids=recipient_user_ids,
             )
             follower_model = apps.get_model("messaging", "ThreadFollower")
@@ -2703,13 +2700,13 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 # The record already authorized the post. Keep its follow bookkeeping
                 # in the same transaction, after fan-out, and never repeat it on replay.
                 with system_context(reason="messaging.autofollow"):
-                    if autofollow_author and owner_id is not None:
-                        follower_model.objects.subscribe(record, user_id=owner_id, role=attachment.role)
+                    if autofollow_author and created_by_id is not None:
+                        follower_model.objects.subscribe(record, user_id=created_by_id, role=attachment.role)
                     if autofollow_recipients:
                         for user_id in recipient_user_ids:
                             follower_model.objects.subscribe(record, user_id=user_id, role=attachment.role)
-            if owner_id is not None:
-                follower_model.objects.mark_read_up_to(thread, user_id=owner_id, message=message)
+            if created_by_id is not None:
+                follower_model.objects.mark_read_up_to(thread, user_id=created_by_id, message=message)
             self._advance_thread(thread, sent_at)
             message._meta.get_field("thread").set_cached_value(message, thread)
             message_ingested.send(sender=self.model, instance=message)
@@ -2744,7 +2741,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 queryset.delete()
         return message
 
-    def update_content(self, message: Any, *, body: str, owner_id: Any = None) -> Any:
+    def update_content(self, message: Any, *, body: str, edited_by_id: Any = None) -> Any:
         """Update a user-authored comment body, preserving Odoo's edit guardrails.
 
         An edit is data, not a shadow row: the replaced text survives as immutable
@@ -2771,7 +2768,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 part_model = apps.get_model("messaging", "Part")
                 fragment_model = apps.get_model("messaging", "Fragment")
                 fragment = fragment_model.objects.upsert(
-                    text=body, kind=fragment_model.FragmentKind.PARAGRAPH, owner_id=owner_id
+                    text=body, kind=fragment_model.FragmentKind.PARAGRAPH, created_by_id=edited_by_id
                 )
                 text_parts = list(
                     part_model._base_manager.select_for_update()
@@ -2797,10 +2794,10 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                         disposition=part_model.Disposition.INLINE,
                         role=part_model.PartRole.BODY,
                         fragment_id=fragment.pk if fragment is not None else None,
-                        created_by_id=owner_id,
+                        created_by_id=edited_by_id,
                     )
                 message.edit_history = [
-                    _edit_history_entry(owner_id=owner_id, prev_fragment_hashes=prior_hashes),
+                    _edit_history_entry(edited_by_id=edited_by_id, prev_fragment_hashes=prior_hashes),
                     *(message.edit_history or []),
                 ]
                 message.preview = body[:280]
@@ -2923,7 +2920,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         parsed_messages: list[ParsedMessage],
         *,
         channel: Any,
-        owner_id: Any = None,
+        created_by_id: Any = None,
         modality: Any = None,
         visibility: Any = None,
         quote_edges: bool = True,
@@ -2964,7 +2961,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         retaining original timestamps, content history and thread counters.
         """
 
-        owner_id = owner_id if owner_id is not None else channel.owner_id
+        created_by_id = created_by_id if created_by_id is not None else channel.owner_id
         thread_model = apps.get_model("messaging", "Thread")
         if explicit_thread is not None:
             if not isinstance(explicit_thread, thread_model) or explicit_thread.pk is None:
@@ -2980,7 +2977,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 message, handles = self._ingest_one(
                     parsed,
                     channel=channel,
-                    owner_id=owner_id,
+                    created_by_id=created_by_id,
                     thread_model=thread_model,
                     modality=modality,
                     visibility=visibility,
@@ -3060,7 +3057,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     child,
                     parent=retained,
                     position=position,
-                    owner_id=retained.created_by_id,
+                    created_by_id=retained.created_by_id,
                     nameless=nameless,
                 )
             return tuple(part_model._base_manager.filter(parent=retained).order_by("position", "sqid"))
@@ -3070,7 +3067,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         parsed: ParsedMessage,
         *,
         channel: Any,
-        owner_id: Any,
+        created_by_id: Any,
         thread_model: Any,
         modality: Any = None,
         visibility: Any = None,
@@ -3090,7 +3087,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 in_reply_to=parsed.in_reply_to,
                 references=parsed.references,
                 message_external_id=parsed.external_id,
-                owner_id=owner_id,
+                created_by_id=created_by_id,
                 modality=modality,
                 visibility=visibility,
                 thread=parsed.thread,
@@ -3101,7 +3098,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             sender = handle_model.objects.upsert(
                 platform=parsed.sender.platform,
                 value=parsed.sender.value,
-                created_by_id=owner_id,
+                created_by_id=created_by_id,
                 display_name=parsed.sender.display_name,
                 external_id=parsed.sender.external_id,
                 metadata=parsed.sender.metadata,
@@ -3166,7 +3163,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         if created:
             try:
                 with transaction.atomic():
-                    message = self.create(external_id=parsed.external_id, created_by_id=owner_id, **defaults)
+                    message = self.create(external_id=parsed.external_id, created_by_id=created_by_id, **defaults)
             except IntegrityError:
                 # A concurrent ingest of the same provider event landed first;
                 # converge on its row and fall through to the update path.
@@ -3189,20 +3186,20 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 setattr(message, field, value)
             message.save()
         message.parts.all().delete()
-        position = self._write_envelope_parts(message, parsed, owner_id=owner_id)
+        position = self._write_envelope_parts(message, parsed, created_by_id=created_by_id)
         if parsed.body is not None:
-            self._build_parts(message, parsed.body, parent=None, position=position, owner_id=owner_id)
+            self._build_parts(message, parsed.body, parent=None, position=position, created_by_id=created_by_id)
         if not created:
             new_hashes = self._content_fragment_hashes(part_model, message)
             if new_hashes != prior_hashes:
                 # A provider edit: the row survives, the parts relinked — record what
                 # was replaced by hash (the old text lives on as shared fragments).
                 message.edit_history = [
-                    _edit_history_entry(owner_id=owner_id, prev_fragment_hashes=prior_hashes),
+                    _edit_history_entry(edited_by_id=None, prev_fragment_hashes=prior_hashes),
                     *(message.edit_history or []),
                 ]
                 message.save(update_fields=("edit_history", "updated_at"))
-        handles = self._write_participants(message, thread, parsed, sender, owner_id)
+        handles = self._write_participants(message, thread, parsed, sender, created_by_id)
         # Reconcile the denormalised thread counters. The winning thread gains the
         # message whenever it is a fresh row or a re-sync re-resolved an existing message
         # onto a *different* thread (e.g. a References parent that only just landed). The
@@ -3263,7 +3260,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             .values_list("fragment__hash", flat=True)
         )
 
-    def _write_envelope_parts(self, message: Any, parsed: ParsedMessage, *, owner_id: Any) -> int:
+    def _write_envelope_parts(self, message: Any, parsed: ParsedMessage, *, created_by_id: Any) -> int:
         """Write the sparse ``TITLE``/``HEADER`` parts; return the next top-level position.
 
         Only messages that *have* a subject or retained headers pay for rows — an
@@ -3277,14 +3274,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         position = 0
         subject = strip_null_bytes(parsed.subject or "").strip()
         if subject:
-            fragment = fragment_model.objects.upsert(text=subject, owner_id=owner_id)
+            fragment = fragment_model.objects.upsert(text=subject, created_by_id=created_by_id)
             part_model.objects.create(
                 message_id=message.pk,
                 position=position,
                 type="text/plain",
                 role=part_model.PartRole.TITLE,
                 fragment_id=fragment.pk if fragment is not None else None,
-                created_by_id=owner_id,
+                created_by_id=created_by_id,
             )
             position += 1
         for name, value in parsed.headers:
@@ -3293,7 +3290,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             if not name or not value:
                 continue
             fragment = fragment_model.objects.upsert(
-                text=value, kind=fragment_model.FragmentKind.HEADER, owner_id=owner_id
+                text=value, kind=fragment_model.FragmentKind.HEADER, created_by_id=created_by_id
             )
             part_model.objects.create(
                 message_id=message.pk,
@@ -3302,7 +3299,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 role=part_model.PartRole.HEADER,
                 name=name,
                 fragment_id=fragment.pk if fragment is not None else None,
-                created_by_id=owner_id,
+                created_by_id=created_by_id,
             )
             position += 1
         return position
@@ -3314,7 +3311,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         *,
         parent: Any,
         position: int,
-        owner_id: Any,
+        created_by_id: Any,
         nameless: list[int] | None = None,
     ) -> None:
         part_model = apps.get_model("messaging", "Part")
@@ -3340,7 +3337,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     index=nameless[0],
                 )
                 nameless[0] += 1
-            file_ref = self._ingest_file(parsed, owner_id, filename=part_name)
+            file_ref = self._ingest_file(parsed, created_by_id, filename=part_name)
         elif parsed.text and not parsed.children:
             part_role = part_model.PartRole
             fragment_kind = fragment_model.FragmentKind
@@ -3353,7 +3350,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                     if parsed.role == part_role.QUOTED
                     else fragment_kind.PARAGRAPH
                 ),
-                owner_id=owner_id,
+                created_by_id=created_by_id,
             )
         part = part_model.objects.create(
             message_id=message.pk,
@@ -3366,18 +3363,20 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             name=part_name,
             fragment_id=fragment.pk if fragment is not None else None,
             file_id=file_ref.pk if file_ref is not None else None,
-            created_by_id=owner_id,
+            created_by_id=created_by_id,
         )
         for index, child in enumerate(parsed.children):
-            self._build_parts(message, child, parent=part, position=index, owner_id=owner_id, nameless=nameless)
+            self._build_parts(
+                message, child, parent=part, position=index, created_by_id=created_by_id, nameless=nameless,
+            )
 
-    def _ingest_file(self, parsed: ParsedPart, owner_id: Any, *, filename: str) -> Any:
+    def _ingest_file(self, parsed: ParsedPart, created_by_id: Any, *, filename: str) -> Any:
         """Persist attachment bytes through the storage File owner; returns the File or None.
 
         Delegates to ``File.objects.ingest_bytes`` — the storage owner's
         server-side byte intake (draft → write → finalize) — so the attachment
-        lands content-addressed and ``Part.file`` resolves. The owner stamps the
-        file's ``created_by`` so the channel owner can read its own attachments.
+        lands content-addressed and ``Part.file`` resolves. Its ``owner`` grants
+        the channel owner access; ``created_by`` remains actor attribution.
         ``filename`` is the resolved part name (the caller derives one when the
         source gave none); on a content-addressed dedup hit the existing File keeps
         its first name, so the reliable per-message name lives on ``Part.name``.
@@ -3389,7 +3388,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         return file_model.objects.ingest_bytes(
             parsed.content,
             filename=filename or fallback_attachment_name(parsed.type),
-            owner_id=owner_id,
+            owner_id=created_by_id,
         )
 
     def _write_participants(
@@ -3398,7 +3397,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         thread: Any,
         parsed: ParsedMessage,
         sender: Any,
-        owner_id: Any,
+        created_by_id: Any,
     ) -> list[Any]:
         participant_model = apps.get_model("messaging", "Participant")
         handle_model = apps.get_model("parties", "Handle")
@@ -3412,14 +3411,14 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 thread_id=thread.pk,
                 handle_id=sender.pk,
                 role=participant_model.ParticipantRole.FROM,
-                created_by_id=owner_id,
+                created_by_id=created_by_id,
             )
             handles.append(sender)
         for recipient in parsed.recipients:
             handle = handle_model.objects.upsert(
                 platform=recipient.handle.platform,
                 value=recipient.handle.value,
-                created_by_id=owner_id,
+                created_by_id=created_by_id,
                 display_name=recipient.handle.display_name,
                 external_id=recipient.handle.external_id,
                 metadata=recipient.handle.metadata,
@@ -3435,7 +3434,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 thread_id=thread.pk,
                 handle_id=handle.pk,
                 role=recipient.role,
-                created_by_id=owner_id,
+                created_by_id=created_by_id,
             )
             handles.append(handle)
         return handles
@@ -3633,7 +3632,7 @@ class PartManager(AngeeManager.from_queryset(PartQuerySet)):  # type: ignore[mis
 class MessageEdgeManager(AngeeManager):
     """Owns the cross-message graph — derived quote edges from shared fragments."""
 
-    def _edge_fields(self, *, owner_id: Any, fragment: Any = None, confidence: float = 1.0) -> dict[str, Any]:
+    def _edge_fields(self, *, created_by_id: Any, fragment: Any = None, confidence: float = 1.0) -> dict[str, Any]:
         """Return the non-key columns of one edge row — the write shape shared by
         :meth:`relate` and the batched quotation builder, so the edge field set and the
         ``created_by`` default live once here with the table owner rather than in each
@@ -3643,7 +3642,7 @@ class MessageEdgeManager(AngeeManager):
         return {
             "fragment_id": getattr(fragment, "pk", fragment),
             "confidence": confidence,
-            "created_by_id": owner_id,
+            "created_by_id": created_by_id,
         }
 
     def for_message(self, message: Any) -> list[Any]:
@@ -3675,7 +3674,7 @@ class MessageEdgeManager(AngeeManager):
         dst: Any,
         *,
         kind: Any,
-        owner_id: Any,
+        created_by_id: Any,
         fragment: Any = None,
         confidence: float = 1.0,
     ) -> Any:
@@ -3692,7 +3691,7 @@ class MessageEdgeManager(AngeeManager):
             src_id=getattr(src, "pk", src),
             dst_id=getattr(dst, "pk", dst),
             kind=kind,
-            defaults=self._edge_fields(owner_id=owner_id, fragment=fragment, confidence=confidence),
+            defaults=self._edge_fields(created_by_id=created_by_id, fragment=fragment, confidence=confidence),
         )
         return edge
 
@@ -3757,7 +3756,7 @@ class MessageEdgeManager(AngeeManager):
                     src_id=src_id,
                     dst_id=dst_id,
                     kind=kind,
-                    **self._edge_fields(owner_id=message.created_by_id, fragment=fragment_id),
+                    **self._edge_fields(created_by_id=message.created_by_id, fragment=fragment_id),
                 )
                 for (src_id, dst_id), fragment_id in fragment_by_pair.items()
                 if (src_id, dst_id) not in existing_pairs

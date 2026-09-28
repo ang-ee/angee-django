@@ -56,7 +56,7 @@ from rebac.resources import model_resource_type
 from angee.base.actors import actor_user_id
 from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
-from angee.base.mixins import AuditMixin, CreationKeyMixin, SqidMixin
+from angee.base.mixins import AuditMixin, CreationKeyMixin, OwnerMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.integrate.models import Bridge
@@ -81,7 +81,7 @@ from angee.messaging.webforms import WebformSpec, default_webform_schema
 from angee.parties.models import Handle
 
 
-def _owner_user_id(instance: models.Model) -> Any | None:
+def _actor_user_id(instance: models.Model) -> Any | None:
     """Return attribution for the record-bound actor, falling back to ambient.
 
     Posting uses the same precedence for replay identity unless the caller supplies
@@ -412,7 +412,7 @@ class ThreadedModelMixin(models.Model):
         if error := message.content_edit_error():
             raise ValueError(error)
         return apps.get_model("messaging", "Message").objects.update_content(
-            message, body=body, owner_id=_owner_user_id(self)
+            message, body=body, edited_by_id=_actor_user_id(self)
         )
 
     def message_unlink(self, message: models.Model) -> models.Model:
@@ -562,16 +562,13 @@ class ThreadedModelMixin(models.Model):
         # non-user actor species (an agent authoring through its service user)
         # must not be denied on messaging-private bookkeeping rows.
         with system_context(reason="messaging.system_post"):
-            return message_model.objects.post_to_thread(
-                attachment.thread,
+            return self._system_post_pipeline(
+                message_model,
+                attachment,
                 body=body,
-                owner_id=_owner_user_id(self),
-                attachment=attachment,
-                record=self,
                 attachments=attachments,
                 message_type=message_type,
                 subtype_key=subtype_key,
-                subtype_model_label=self._meta.label,
                 parent=parent,
                 tracking_values=tracking_values,
                 recipient_user_ids=recipient_user_ids,
@@ -580,6 +577,44 @@ class ThreadedModelMixin(models.Model):
                 client_creation_key=client_creation_key,
                 creation_actor=scope_actor,
             )
+
+    def _system_post_pipeline(
+        self,
+        message_model: type[models.Model],
+        attachment: models.Model,
+        *,
+        body: str,
+        attachments: tuple[models.Model, ...],
+        message_type: Message.MessageKind | None,
+        subtype_key: str,
+        parent: models.Model | None,
+        tracking_values: tuple[TrackingChange | dict[str, Any], ...],
+        recipient_user_ids: tuple[Any, ...],
+        autofollow_author: bool,
+        autofollow_recipients: bool,
+        client_creation_key: str | None,
+        creation_actor: SubjectRef | None,
+    ) -> models.Model:
+        """Run the elevated system-post write; split out for readability only."""
+
+        return message_model.objects.post_to_thread(
+            attachment.thread,
+            body=body,
+            created_by_id=_actor_user_id(self),
+            attachment=attachment,
+            record=self,
+            attachments=attachments,
+            message_type=message_type,
+            subtype_key=subtype_key,
+            subtype_model_label=self._meta.label,
+            parent=parent,
+            tracking_values=tracking_values,
+            recipient_user_ids=recipient_user_ids,
+            autofollow_author=autofollow_author,
+            autofollow_recipients=autofollow_recipients,
+            client_creation_key=client_creation_key,
+            creation_actor=creation_actor,
+        )
 
     def message_subscribe(
         self,
@@ -786,15 +821,15 @@ class ThreadedModelMixin(models.Model):
     def _message_after_create(self) -> None:
         """Run Odoo-style chatter side effects after this row is first saved."""
 
-        owner_id = _owner_user_id(self)
+        created_by_id = _actor_user_id(self)
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        if self.thread_create_autofollow_author and owner_id is not None:
+        if self.thread_create_autofollow_author and created_by_id is not None:
             # System bookkeeping on an already-authorized create; see the
             # autofollow elevation note in MessageManager.post_to_thread.
             with system_context(reason="messaging.autofollow"):
                 follower_model.objects.subscribe(
                     self,
-                    user_id=owner_id,
+                    user_id=created_by_id,
                     role=self.thread_attachment_role,
                 )
         message_model = apps.get_model("messaging", "Message")
@@ -804,7 +839,7 @@ class ThreadedModelMixin(models.Model):
                 message_type=message_model.MessageKind.NOTIFICATION,
                 subtype_key=self.thread_creation_subtype_key,
             )
-        create_changes = self._field_tracker().create_changes() if owner_id is not None else ()
+        create_changes = self._field_tracker().create_changes() if created_by_id is not None else ()
         if create_changes:
             self._message_system_post(
                 body="",
@@ -1136,7 +1171,7 @@ class ChannelWebform(models.Model):
         )
 
 
-class Thread(SqidMixin, AuditMixin, AngeeModel):
+class Thread(SqidMixin, OwnerMixin, AngeeModel):
     """An aggregation of related messages — an email conversation or a social post.
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
@@ -1389,6 +1424,7 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
         "parties.Party",
         on_delete=models.CASCADE,
         related_name="+",
+        related_query_name="thread_followers",
     )
     notification_policy = StateField(choices_enum=NotificationPolicy, default=NotificationPolicy.INBOX)
     subtype_keys = models.JSONField(blank=True, default=list)

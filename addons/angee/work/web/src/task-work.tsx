@@ -9,7 +9,7 @@ export interface WorkTaskRow extends StringIdRow {
   work_key?: unknown;
   estimate?: unknown;
   queue?: unknown;
-  stage?: unknown;
+  stage?: { category?: string | null; rule_owned?: boolean | null } | null;
   cycle?: unknown;
   started_triage_at?: unknown;
   triaged_at?: unknown;
