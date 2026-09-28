@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-def run_composed_tests(tmp_path: Path, test_label: str, *, app: str) -> None:
+def run_composed_tests(tmp_path: Path, test_label: str, *, app: str | tuple[str, ...]) -> None:
     """Run a native contract group without sharing pytest's source-model registry."""
 
     root = Path(__file__).resolve().parents[1]
@@ -32,8 +32,7 @@ def run_composed_tests(tmp_path: Path, test_label: str, *, app: str) -> None:
             str(root / "tests/composed_host.py"),
             "--runtime-dir",
             str(tmp_path / "runtime"),
-            "--app",
-            app,
+            *(argument for name in ((app,) if isinstance(app, str) else app) for argument in ("--app", name)),
             "--no-examples",
             "--action",
             "tests",
