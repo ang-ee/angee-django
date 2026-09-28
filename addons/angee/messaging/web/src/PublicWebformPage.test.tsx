@@ -22,6 +22,7 @@ describe("PublicWebformPage", () => {
           slug: "product-feedback",
           title: "Product feedback",
           schema_version: 1,
+          honeypot_field: "_website",
           form_schema: {
             type: "object",
             required: ["email", "problem"],

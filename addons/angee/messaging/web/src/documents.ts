@@ -324,6 +324,16 @@ export const MessagingRecipientUsersDocument = graphql(`
   }
 `);
 
+export const RecordFollowerFields = graphql(`
+  fragment RecordFollowerFields on RecordThreadFollowerType {
+    id
+    notification_policy
+    subtype_keys
+    party { id display_name }
+    user { id username is_active }
+  }
+`);
+
 export const RecordThreadDocument = graphql(`
   query MessagingRecordThread(
     $modelLabel: String!
@@ -357,12 +367,7 @@ export const RecordThreadDocument = graphql(`
       follower_count
       is_following
       self_follower {
-        id
-        notification_policy
-        subtype_keys
-        user {
-          ...RecordUserFields
-        }
+        ...RecordFollowerFields
       }
       suggested_recipients {
         reason
@@ -397,12 +402,7 @@ export const RecordThreadDocument = graphql(`
         }
       }
       followers {
-        id
-        notification_policy
-        subtype_keys
-        user {
-          ...RecordUserFields
-        }
+        ...RecordFollowerFields
       }
       activity_count
       activities {
@@ -673,9 +673,7 @@ export const SetRecordFollowingDocument = graphql(`
       follower_count
       is_following
       follower {
-        id
-        notification_policy
-        subtype_keys
+        ...RecordFollowerFields
       }
     }
   }

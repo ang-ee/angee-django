@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 10
+// @rebac_schema_revision: 11
 
 // Each messaging row is owned by the user that created it (sync writes set
 // created_by to the channel owner), with platform admins reaching every row via
@@ -66,7 +66,7 @@ definition messaging/thread_attachment {
 definition messaging/thread_follower {
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
-    relation user: auth/user // rebac:field=user
+    relation user: auth/user // rebac:field=party__person__user
     relation owner: auth/user // rebac:field=created_by
     relation admin: angee/role // rebac:const=admin
 
@@ -97,6 +97,7 @@ definition messaging/thread_notification {
     relation owner: auth/user // rebac:field=created_by
     relation admin: angee/role // rebac:const=admin
 
+    permission read_inbox = user
     permission create = authenticated
     permission read   = user + owner + thread->read + attachment->read + message->read + admin->member
     permission write  = user + owner + admin->member

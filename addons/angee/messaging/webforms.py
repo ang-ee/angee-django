@@ -68,7 +68,7 @@ class WebformField:
                 return "Enter a number."
             try:
                 json.dumps(value, allow_nan=False)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 return "Enter a finite number."
         elif self.kind == "boolean" and not isinstance(value, bool):
             return "Choose true or false."
@@ -173,6 +173,8 @@ def validate_submission_id(value: Any) -> str:
 def _deserialize_field(name: Any, value: Any, *, required: bool) -> WebformField:
     if not isinstance(name, str) or not FIELD_NAME_RE.fullmatch(name):
         raise ValidationError({"form_schema": f"Invalid public form field name {name!r}; use a letter-led identifier."})
+    if name in {"answers", "submission_id"}:
+        raise ValidationError({"form_schema": f"Field name {name!r} is reserved for the submission envelope."})
     if not isinstance(value, dict):
         raise ValidationError({"form_schema": f"Field {name!r} must be an object."})
     if "relation" in value:

@@ -1350,14 +1350,14 @@ class TaskWork(StagedModelMixin):
             canonical,
             title=canonical.message_thread_title(),
         )
-        canonical_user_ids = set(
+        canonical_party_ids = set(
             follower_model._base_manager.filter(thread=canonical_attachment.thread).values_list(
-                "user_id",
+                "party_id",
                 flat=True,
             )
         )
         for follower in source_followers:
-            if follower.user_id in canonical_user_ids:
+            if follower.party_id in canonical_party_ids:
                 follower.delete()
                 continue
             follower.thread_id = canonical_attachment.thread_id
@@ -1365,7 +1365,7 @@ class TaskWork(StagedModelMixin):
             # A receipt is positional within its old thread and cannot be moved.
             follower.last_read_message = None
             follower.save(update_fields=("thread", "attachment", "last_read_message", "updated_at"))
-            canonical_user_ids.add(follower.user_id)
+            canonical_party_ids.add(follower.party_id)
 
     def _base_verb(self, name: str, *args: Any) -> Any:
         """Run a projects-only lifecycle verb for a legacy queue-less task."""

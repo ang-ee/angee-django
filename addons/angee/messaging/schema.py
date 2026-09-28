@@ -21,11 +21,11 @@ from django.db import transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
-from rebac import PermissionDenied
+from rebac import PermissionDenied, current_actor
 from strawberry import auto
 
 from angee.base.identity import instance_from_public_id
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     SortAlias,
@@ -36,6 +36,7 @@ from angee.graphql.data import (
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, request_from_info
@@ -45,7 +46,7 @@ from angee.integrate.schema import BridgeTypeMixin, IntegrationType
 from angee.messaging import connect
 from angee.messaging.managers import MessageQuerySet, message_subtype_options
 from angee.messaging.models import ThreadedModelMixin
-from angee.parties.schema import HandleType
+from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
 
 Integration = apps.get_model("integrate", "Integration")
@@ -276,7 +277,7 @@ class FragmentType(AngeeNode):
 
     @strawberry.field(name="part_count")
     def part_count(self) -> int:
-        """How many parts (across all messages) share this fragment — the dedup fact."""
+        """How many actor-readable parts share this fragment."""
 
         return cast(Any, self).part_count()
 
@@ -297,9 +298,9 @@ class PartType(AngeeNode):
     role: auto
     cid: auto
     name: auto
-    parent: "PartType | None"
+    parent: "PartType | None" = actor_scoped_to_one("parent")
     fragment: FragmentType | None
-    file: FileType | None
+    file: FileType | None = actor_scoped_to_one("file")
     created_at: auto
 
 
@@ -337,7 +338,7 @@ class ParticipantType(AngeeNode):
     """GraphQL projection of a thread/message participant."""
 
     role: auto
-    handle: HandleType | None
+    handle: HandleType | None = actor_scoped_to_one("handle")
     joined_at: auto
     left_at: auto
 
@@ -393,7 +394,7 @@ class MessageType(AngeeNode):
     preview: auto
     sent_at: auto
     received_at: auto
-    sender: HandleType | None
+    sender: HandleType | None = actor_scoped_to_one("sender")
 
     @strawberry_django.field(
         only=["sender_id"],
@@ -422,15 +423,15 @@ class MessageType(AngeeNode):
 
         return cast(Any, self).channel_vendor_name()
 
-    parent: "MessageType | None"
+    parent: "MessageType | None" = actor_scoped_to_one("parent")
     subtype: MessageSubtypeType | None
-    thread: "ThreadType | None"
+    thread: "ThreadType | None" = actor_scoped_to_one("thread")
     # The FK targets the Integration MTI parent (a messaging Channel or a posts
     # Feed both produce messages), so the projection is the parent type — a
     # ChannelType declaration would crash resolving a Feed-ingested row.
-    channel: IntegrationType | None
-    tracking_values: list[TrackingValueType]
-    participants: list[ParticipantType]
+    channel: IntegrationType | None = actor_scoped_to_one("channel")
+    tracking_values: list[TrackingValueType] = actor_scoped_to_many("tracking_values")
+    participants: list[ParticipantType] = actor_scoped_to_many("participants")
     created_at: auto
     updated_at: auto
 
@@ -486,29 +487,19 @@ class MessageType(AngeeNode):
             return bool(resolved)
         return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
 
-    @strawberry_django.field(prefetch_related=["tracking_values"])
+    @strawberry_django.field(
+        only=["thread_id", "created_by_id", "message_type", "direction"], prefetch_related=["tracking_values"]
+    )
     def can_edit(self, info: strawberry.Info) -> bool:
-        """Return whether the current actor may edit this message's body.
+        """Return the message-owned edit rule using cached record permissions."""
 
-        Delegates to the message's own :meth:`Message.can_edit` owner (post access plus
-        the mail edit rule), passing the record post access resolved and memoized once
-        per thread by :func:`_message_post_access`. The ``tracking_values`` prefetch
-        hint lets the optimizer batch the edit-rule predicate instead of an ``exists()``
-        per row.
-        """
+        return cast(Any, self).can_edit(**_message_access(self, info))
 
-        return cast(Any, self).can_edit(post_access=_message_post_access(self, info))
-
-    @strawberry.field
+    @strawberry_django.field(only=["thread_id", "created_by_id", "message_type"], prefetch_related=["tracking_values"])
     def can_delete(self, info: strawberry.Info) -> bool:
-        """Return whether the current actor may delete this message.
+        """Return the message-owned deletion rule using cached record permissions."""
 
-        Delegates to :meth:`Message.can_delete` (the record thread's post access;
-        deletion carries no mail-kind restriction of its own), passing the post access
-        memoized once per thread by :func:`_message_post_access`.
-        """
-
-        return cast(Any, self).can_delete(post_access=_message_post_access(self, info))
+        return cast(Any, self).can_delete(**_message_access(self, info))
 
 
 @strawberry_django.type(Message)
@@ -530,8 +521,8 @@ class RecordMessageType(AngeeNode):
     preview: auto
     sent_at: auto
     created_at: auto
-    sender: RecordHandleType | None
-    parent: RecordMessageParentType | None
+    sender: "RecordHandleType | None" = actor_scoped_to_one("sender")
+    parent: "RecordMessageParentType | None" = actor_scoped_to_one("parent")
     subtype: MessageSubtypeType | None
     tracking_values: list[TrackingValueType]
 
@@ -568,17 +559,19 @@ class RecordMessageType(AngeeNode):
             return bool(resolved)
         return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
 
-    @strawberry_django.field(prefetch_related=["tracking_values"])
+    @strawberry_django.field(
+        only=["thread_id", "created_by_id", "message_type", "direction"], prefetch_related=["tracking_values"]
+    )
     def can_edit(self, info: strawberry.Info) -> bool:
         """Return the model-owned edit capability for this record message."""
 
-        return cast(Any, self).can_edit(post_access=_message_post_access(self, info))
+        return cast(Any, self).can_edit(**_message_access(self, info))
 
-    @strawberry.field
+    @strawberry_django.field(only=["thread_id", "created_by_id", "message_type"], prefetch_related=["tracking_values"])
     def can_delete(self, info: strawberry.Info) -> bool:
         """Return the model-owned delete capability for this record message."""
 
-        return cast(Any, self).can_delete(post_access=_message_post_access(self, info))
+        return cast(Any, self).can_delete(**_message_access(self, info))
 
 
 @strawberry_django.type(Thread)
@@ -618,9 +611,9 @@ class ThreadType(AngeeNode):
     message_count: auto
     last_message_at: auto
     # Integration parent, same reason as MessageType.channel.
-    channel: IntegrationType | None
-    messages: list[MessageType]
-    participants: list[ParticipantType]
+    channel: "IntegrationType | None" = actor_scoped_to_one("channel")
+    messages: list[MessageType] = actor_scoped_to_many("messages")
+    participants: list[ParticipantType] = actor_scoped_to_many("participants")
     created_at: auto
     updated_at: auto
 
@@ -640,11 +633,39 @@ class RecordThreadType(AngeeNode):
     updated_at: auto
 
 
+_FOLLOWER_PARTY_FIELD = actor_scoped_to_one("party")
+_PERSON_USER_FIELD = actor_scoped_to_one("user")
+
+
+@strawberry.type
+class FollowerIdentity:
+    """Party identity and an optional readable account, shared by follower projections."""
+
+    party: PartyType | None = _FOLLOWER_PARTY_FIELD
+
+    @strawberry_django.field(only=["party_id"], prefetch_related=["party__person__user"])
+    def user(self) -> UserType | None:
+        """Project the person's account through the shared relation guard; never store it."""
+
+        party = _FOLLOWER_PARTY_FIELD.base_resolver(self)
+        if party is None:
+            return None
+        cached_person = party._state.fields_cache.get("person")
+        if "person" not in party._state.fields_cache or (
+            cached_person is not None and getattr(cached_person, "_rebac_actor", None) != current_actor()
+        ):
+            person = apps.get_model("parties", "Person").objects.with_actor(current_actor()).filter(pk=party.pk).first()
+            party._meta.get_field("person").set_cached_value(party, person)
+        person = party._state.fields_cache["person"]
+        if person is None:
+            return None
+        return cast(UserType | None, _PERSON_USER_FIELD.base_resolver(person))
+
+
 @strawberry_django.type(ThreadFollower)
-class RecordThreadFollowerType(AngeeNode):
+class RecordThreadFollowerType(FollowerIdentity, AngeeNode):
     """Record-scoped follower projection without message or thread backedges."""
 
-    user: UserType
     notification_policy: auto
     subtype_keys: strawberry.scalars.JSON
     metadata: strawberry.scalars.JSON
@@ -656,11 +677,12 @@ class RecordThreadFollowerType(AngeeNode):
 class RecordThreadNotificationType(AngeeNode):
     """Record-scoped notification projection with narrowed message context."""
 
-    message: RecordMessageParentType
-    follower: RecordThreadFollowerType | None
-    user: UserType
+    message: "RecordMessageParentType | None" = actor_scoped_to_one("message")
+    follower: "RecordThreadFollowerType | None" = actor_scoped_to_one("follower")
+    user: "UserType | None" = actor_scoped_to_one("user")
     notification_type: auto
     notification_status: auto
+    read_at: auto
     failure_type: auto
     failure_reason: auto
     metadata: strawberry.scalars.JSON
@@ -672,7 +694,7 @@ class RecordThreadNotificationType(AngeeNode):
 class RecordThreadActivityType(AngeeNode):
     """Record-scoped activity projection without thread or attachment backedges."""
 
-    user: UserType
+    user: "UserType | None" = actor_scoped_to_one("user")
     activity_type: auto
     summary: auto
     note: auto
@@ -698,7 +720,7 @@ class ThreadAttachmentType(AngeeNode):
     role: auto
     label: auto
     metadata: strawberry.scalars.JSON
-    thread: ThreadType
+    thread: "ThreadType | None" = actor_scoped_to_one("thread")
     created_at: auto
     updated_at: auto
 
@@ -721,15 +743,14 @@ class ThreadAttachmentType(AngeeNode):
 
 
 @strawberry_django.type(ThreadFollower)
-class ThreadFollowerType(AngeeNode):
-    """GraphQL projection of a user's thread membership — policy plus read receipt."""
+class ThreadFollowerType(FollowerIdentity, AngeeNode):
+    """GraphQL projection of a party's thread subscription — policy plus read receipt."""
 
-    thread: ThreadType
-    attachment: ThreadAttachmentType | None
-    user: UserType
+    thread: "ThreadType | None" = actor_scoped_to_one("thread")
+    attachment: "ThreadAttachmentType | None" = actor_scoped_to_one("attachment")
     notification_policy: auto
     subtype_keys: strawberry.scalars.JSON
-    last_read_message: MessageType | None
+    last_read_message: "MessageType | None" = actor_scoped_to_one("last_read_message")
     metadata: strawberry.scalars.JSON
     created_at: auto
     updated_at: auto
@@ -739,9 +760,9 @@ class ThreadFollowerType(AngeeNode):
 class ThreadActivityType(AngeeNode):
     """GraphQL projection of a scheduled record chatter activity."""
 
-    thread: ThreadType
-    attachment: ThreadAttachmentType
-    user: UserType
+    thread: "ThreadType | None" = actor_scoped_to_one("thread")
+    attachment: "ThreadAttachmentType | None" = actor_scoped_to_one("attachment")
+    user: "UserType | None" = actor_scoped_to_one("user")
     activity_type: auto
     summary: auto
     note: auto
@@ -775,6 +796,17 @@ class RecordPointerType:
     model_label: str = strawberry.field(name="model_label")
     record_id: strawberry.ID = strawberry.field(name="record_id")
 
+    @classmethod
+    def from_attachment(cls, attachment: Any) -> Self:
+        """Project the attachment owner's stable record identity."""
+
+        record_ref = attachment.record_ref
+        return cls(
+            label=attachment.label,
+            model_label=record_ref.model_label,
+            record_id=cast(strawberry.ID, record_ref.public_id),
+        )
+
 
 @strawberry_django.type(ThreadActivity)
 class AgendaActivityType(AngeeNode):
@@ -792,7 +824,7 @@ class AgendaActivityType(AngeeNode):
     can already read the parent record.
     """
 
-    user: UserType
+    user: "UserType | None" = actor_scoped_to_one("user")
     activity_type: auto
     summary: auto
     note: auto
@@ -824,26 +856,47 @@ class AgendaActivityType(AngeeNode):
         loading or re-gating the target record.
         """
 
-        attachment = cast(Any, self).attachment
-        record_ref = attachment.record_ref
-        return RecordPointerType(
-            label=attachment.label,
-            model_label=record_ref.model_label,
-            record_id=cast(strawberry.ID, record_ref.public_id),
-        )
+        return RecordPointerType.from_attachment(cast(Any, self).attachment)
+
+
+@strawberry_django.type(Message)
+class NotificationMessagePointerType:
+    """Record-readable inbox context without message bodies or generic backedges."""
+
+    id: PublicID = strawberry.field(resolver=AngeeNode.id)
+    message_type: auto
+    subtype: MessageSubtypeType | None
+    created_at: auto
+    sender: RecordHandleType | None = actor_scoped_to_one("sender")
+
+    @strawberry.field
+    def attachment(self) -> RecordPointerType:
+        """Return the same attachment-owned pointer used by the activity agenda."""
+
+        return RecordPointerType.from_attachment(cast(Any, self)._inbox_attachment)
 
 
 @strawberry_django.type(ThreadNotification)
 class ThreadNotificationType(AngeeNode):
-    """GraphQL projection of a per-recipient delivery row (read state lives on receipts)."""
+    """GraphQL projection of a recipient's delivery and per-item acknowledgement."""
 
-    thread: ThreadType
-    attachment: ThreadAttachmentType | None
-    follower: ThreadFollowerType | None
-    message: MessageType
-    user: UserType
+    thread: "ThreadType | None" = actor_scoped_to_one("thread")
+    attachment: "ThreadAttachmentType | None" = actor_scoped_to_one("attachment")
+    follower: "ThreadFollowerType | None" = actor_scoped_to_one("follower")
+
+    @strawberry_django.field(only=["message_id", "attachment_id", "thread_id", "user_id"])
+    def message(self) -> NotificationMessagePointerType | None:
+        """Project only recipient context authorized by the attached record's read owner."""
+
+        row = cast(Any, self)
+        if not hasattr(row, "_inbox_message_pointer"):
+            ThreadNotification.objects.prime_message_pointers([row], current_actor())
+        return cast(NotificationMessagePointerType | None, row._inbox_message_pointer)
+
+    user: "UserType | None" = actor_scoped_to_one("user")
     notification_type: auto
     notification_status: auto
+    read_at: auto
     failure_type: auto
     failure_reason: auto
     metadata: strawberry.scalars.JSON
@@ -857,8 +910,8 @@ class MessageEdgeType(AngeeNode):
 
     kind: auto
     confidence: auto
-    src: "MessageType"
-    dst: "MessageType"
+    src: "MessageType | None" = actor_scoped_to_one("src")
+    dst: "MessageType | None" = actor_scoped_to_one("dst")
     fragment: FragmentType | None
     created_at: auto
 
@@ -868,7 +921,7 @@ class ReactionType(AngeeNode):
     """GraphQL projection of an attributed reaction."""
 
     reaction: auto
-    handle: HandleType | None
+    handle: "HandleType | None" = actor_scoped_to_one("handle")
     created_at: auto
 
 
@@ -876,8 +929,8 @@ class ReactionType(AngeeNode):
 class MessageStarType(AngeeNode):
     """GraphQL projection of a user's starred message marker."""
 
-    message: MessageType
-    user: UserType
+    message: "MessageType | None" = actor_scoped_to_one("message")
+    user: "UserType | None" = actor_scoped_to_one("user")
     created_at: auto
 
 
@@ -1339,6 +1392,16 @@ class MessagingQuery:
 class MessagingMutation:
     """Record-backed chatter mutations."""
 
+    @strawberry.mutation(name="mark_thread_notification_read")
+    def mark_thread_notification_read(self, info: strawberry.Info, id: strawberry.ID) -> ThreadNotificationType:
+        """Acknowledge one item from the recipient-scoped notification resource."""
+
+        actor = _request_user(info)
+        if actor is None:
+            raise PermissionDenied("Authentication required.")
+        notification = authorized_permission_target(info, ThreadNotification, id, "read_inbox")
+        return cast(ThreadNotificationType, ThreadNotification.objects.mark_read(notification, actor))
+
     @strawberry.mutation
     def set_inbox_message_starred(self, info: strawberry.Info, id: strawberry.ID, starred: bool) -> MessageType:
         """Set the viewer's star after authorizing the personal-message read."""
@@ -1668,7 +1731,7 @@ class MessagingMutation:
 
     @strawberry.mutation(name="mark_record_thread_read")
     def mark_record_thread_read(self, info: strawberry.Info, input: RecordReferenceInput) -> RecordThreadPayload:
-        """Mark the current user's notifications on a record thread as read."""
+        """Advance the current follower's record cursor without acknowledging inbox items."""
 
         user = _request_user(info)
         if user is None:
@@ -1952,6 +2015,28 @@ _MESSAGE_EDGE_RESOURCE = hasura_model_resource(
     },
 )
 
+
+def _notification_inbox_queryset(info: strawberry.Info) -> Any:
+    """Pin every generated inbox read, including by-pk and aggregates, to its recipient."""
+
+    del info
+    return ThreadNotification.objects.with_action("read_inbox").with_message_pointers()
+
+
+_NOTIFICATION_INBOX_RESOURCE = hasura_model_resource(
+    ThreadNotificationType,
+    model=ThreadNotification,
+    name="thread_notifications",
+    get_queryset=_notification_inbox_queryset,
+    filterable=["id", "notification_type", "notification_status", "read_at", "created_at"],
+    sortable=["created_at", "read_at"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+
+
 _RESOURCE_TYPES = [
     *_CHANNEL_RESOURCE.types,
     *_MESSAGE_RESOURCE.types,
@@ -1959,6 +2044,7 @@ _RESOURCE_TYPES = [
     *_PART_RESOURCE.types,
     *_PARTICIPANT_RESOURCE.types,
     *_MESSAGE_EDGE_RESOURCE.types,
+    *_NOTIFICATION_INBOX_RESOURCE.types,
 ]
 
 
@@ -1972,6 +2058,7 @@ _MESSAGING_SCHEMA_BUCKET = {
         _PART_RESOURCE.query,
         _PARTICIPANT_RESOURCE.query,
         _MESSAGE_EDGE_RESOURCE.query,
+        _NOTIFICATION_INBOX_RESOURCE.query,
     ],
     "mutation": [
         MessagingPairingMutation,
@@ -2118,47 +2205,58 @@ def _record_message_reaction_groups(message: Any, user: Any | None) -> list[Reco
     ]
 
 
-def _record_post_access_cache(info: strawberry.Info | None) -> dict[Any, bool]:
-    """Return the per-request memo of record post-access keyed by thread id.
-
-    Record post-access is a record-level rebac fact shared by every message in a
-    thread, so it is resolved once per distinct thread per request — the batch key a
-    dataloader would use — instead of re-walking message → record and re-checking
-    rebac for each row. The synchronous query schema has no async dataloader, so the
-    request object owns this per-request cache.
-    """
+def _record_message_access_cache(info: strawberry.Info | None) -> dict[Any, tuple[bool, bool]]:
+    """Memoize record post and moderation permissions once per thread and request."""
 
     request = request_from_info(info) if info is not None else None
     if request is None:
         return {}
-    cache = getattr(request, "_messaging_post_access", None)
+    cache = getattr(request, "_messaging_record_access", None)
     if cache is None:
         cache = {}
-        setattr(request, "_messaging_post_access", cache)
+        setattr(request, "_messaging_record_access", cache)
     return cache
 
 
-def _message_post_access(message: Any, info: strawberry.Info | None) -> bool:
-    """Return whether the request actor may write (edit/delete) this message.
-
-    Reuses the record's own public post-access owner (``ThreadedModelMixin.can_post``)
-    — the exact predicate the update and delete mutations enforce — memoized per thread
-    (see :func:`_record_post_access_cache`) so the rebac fact is resolved once per
-    distinct record per request on every path (auto-CRUD, thread traversal, or the
-    record feed) instead of per row.
-    """
+def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any]:
+    """Pass the actor and the record's access facts to Message's predicates."""
 
     user = _request_user(info)
-    if user is None:
-        return False
-    thread_id = message.thread_id
-    if thread_id is None:
-        return False
-    cache = _record_post_access_cache(info)
-    if thread_id not in cache:
-        record = message.threaded_record()
-        cache[thread_id] = bool(record is not None and cast(Any, record).can_post(user))
-    return cache[thread_id]
+    post_access, moderate_access = False, False
+    if user is not None and message.thread_id is not None:
+        cache = _record_message_access_cache(info)
+        if message.thread_id not in cache:
+            record = message.threaded_record()
+            cache[message.thread_id] = (
+                (record.can_post(user), record.can_moderate(user)) if record is not None else (False, False)
+            )
+        post_access, moderate_access = cache[message.thread_id]
+    return {"post_access": post_access, "moderate_access": moderate_access, "actor_id": getattr(user, "pk", None)}
+
+
+def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
+    """Batch readable identities into Django's relation caches for the shared guards."""
+
+    if not followers or actor is None:
+        return
+    party_model = apps.get_model("parties", "Party")
+    person_model = apps.get_model("parties", "Person")
+    parties = {
+        row.pk: row for row in party_model.objects.with_actor(actor).filter(pk__in={f.party_id for f in followers})
+    }
+    people = {row.pk: row for row in person_model.objects.with_actor(actor).filter(pk__in=parties)}
+    users = {
+        row.pk: row
+        for row in get_user_model()
+        .objects.with_actor(actor)
+        .filter(pk__in={p.user_id for p in people.values() if p.user_id})
+    }
+    for person in people.values():
+        person._meta.get_field("user").set_cached_value(person, users.get(person.user_id))
+    for party in parties.values():
+        party._meta.get_field("person").set_cached_value(party, people.get(party.pk))
+    for follower in followers:
+        follower._meta.get_field("party").set_cached_value(follower, parties.get(follower.party_id))
 
 
 def _record_thread_payload(
@@ -2190,7 +2288,8 @@ def _record_thread_payload(
         if thread is not None
         else ([], 0)
     )
-    followers = list(cast(Any, record).message_followers().select_related("user")) if thread is not None else []
+    followers = list(cast(Any, record).message_followers()) if thread is not None else []
+    _prime_follower_identities(followers, current_actor())
     activities = list(cast(Any, record).activity_ids().select_related("user")) if thread is not None else []
     attachment_count = (
         apps.get_model("messaging", "Part").objects.filter(message__thread=thread).attachments().count()
@@ -2210,7 +2309,8 @@ def _record_thread_payload(
             user=user,
         )
     ]
-    self_follower = next((follower for follower in followers if follower.user_id == user_id), None)
+    self_party_id = ThreadFollower.objects.get_party_id(user=user) if user_id is not None else None
+    self_follower = next((follower for follower in followers if follower.party_id == self_party_id), None)
     is_following = self_follower is not None
     notifications = (
         list(
@@ -2227,11 +2327,9 @@ def _record_thread_payload(
         else 0
     )
     if messages:
-        # Post access is a record-level fact shared by the whole page: prime the
-        # per-request memo once (keyed by this thread) through the public post-access
-        # owner so the can_edit/can_delete resolvers read it instead of re-walking
-        # message → record for every row.
-        _record_post_access_cache(info)[messages[0].thread_id] = bool(cast(Any, record).can_post(user))
+        # Posting and moderation are record-level facts shared by the whole page.
+        # Prime both through their owner instead of re-walking each message's record.
+        _record_message_access_cache(info)[messages[0].thread_id] = (record.can_post(user), record.can_moderate(user))
     if messages and thread is not None and user is not None:
         # One receipt-anchored scan primes the page's needaction flags — the same
         # unread set the badge counts, restricted to the rows on this page.

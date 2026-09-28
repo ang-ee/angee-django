@@ -22,6 +22,7 @@ import {
 
 export { MESSAGING_CHANNEL_FORM_FIELDS_SLOT, MESSAGING_CHANNEL_TOOLBAR_SLOT } from "./slots";
 export { CHANNEL_MODEL } from "./documents";
+export { PublicWebform, type PublicWebformProps } from "./PublicWebform";
 export {
   ActivityAgendaList,
   type ActivityAgendaListProps,

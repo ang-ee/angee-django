@@ -578,8 +578,8 @@ def test_explicit_ingest_rejects_same_channel_message_reassignment(channel: Any,
         assert original.thread_id == thread.pk
         assert list(original.parts.values_list("pk", flat=True)) == part_ids
         assert original.edit_history == []
-        assert thread.message_count == 1
-        assert other.message_count == 0
+        assert thread.message_count == 2
+        assert other.message_count == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -629,7 +629,7 @@ def test_threaded_model_posts_internal_message(composed_tables: None) -> None:
     assert message.subtype.key == "comment"
     assert message.subtype.model_label == "messaging.ThreadedTicket"
     assert message.preview == "Please follow up with the customer."
-    assert thread.message_count == 1
+    assert thread.message_count == 2
     assert thread.last_message_at == message.sent_at
     part = Part._base_manager.select_related("fragment").get(message=message)
     assert part.role == "body"
@@ -652,7 +652,7 @@ def test_threaded_model_logs_internal_note(composed_tables: None) -> None:
     assert message.subtype is not None
     assert message.subtype.key == "note"
     assert message.preview == "Keep this internal."
-    assert not ThreadFollower._base_manager.filter(user=user).exists()
+    assert not ThreadFollower._base_manager.filter(party__person__user=user).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -775,12 +775,16 @@ def test_threaded_model_unlinks_chatter_message(composed_tables: None) -> None:
         thread = ticket.message_unlink(first)
 
     thread.refresh_from_db()
-    assert thread.message_count == 1
+    assert thread.message_count == 2
     assert thread.last_message_at == second.sent_at
     assert not Message._base_manager.filter(pk=first.pk).exists()
     assert not Part._base_manager.filter(message_id=first.pk).exists()
     assert not Reaction._base_manager.filter(message_id=first.pk).exists()
-    assert list(Message._base_manager.values_list("pk", flat=True).order_by("pk")) == [
+    assert list(
+        Message._base_manager.filter(message_type=Message.MessageKind.COMMENT)
+        .values_list("pk", flat=True)
+        .order_by("pk")
+    ) == [
         second.pk,
         other_message.pk,
     ]
@@ -1129,7 +1133,7 @@ def test_threaded_model_create_autofollows_and_logs_author(composed_tables: None
     follower = ThreadFollower._base_manager.get()
     messages = list(Message._base_manager.select_related("subtype").order_by("id"))
     creation_message, tracking_message = messages
-    assert follower.user_id == user.pk
+    assert follower.party_id == ThreadFollower.objects.get_party_id(user=user)
     assert creation_message.message_type == "notification"
     assert creation_message.subtype is not None
     assert creation_message.subtype.key == "record_created"
@@ -1144,9 +1148,8 @@ def test_threaded_model_create_autofollows_and_logs_author(composed_tables: None
     assert tracking.field_name == "title"
     assert tracking.old_display == ""
     assert tracking.new_display == "Created case"
-    # The creator is a plain inbox follower: read state is the positional receipt,
-    # not per-message flag rows, so the system writes fan out no delivery ledger
-    # rows and the author's receipt already sits at the latest message.
+    # Authors receive no notification of their own messages; their follower
+    # cursor already sits at the latest message.
     assert ThreadNotification._base_manager.count() == 0
     follower.refresh_from_db()
     assert follower.last_read_message_id == tracking_message.pk
@@ -1213,7 +1216,7 @@ def test_threaded_model_subscribe_and_unsubscribe(composed_tables: None) -> None
     follower.refresh_from_db()
     again.refresh_from_db()
     assert follower.pk == again.pk
-    assert follower.user_id == user.pk
+    assert follower.party_id == ThreadFollower.objects.get_party_id(user=user)
     assert follower.thread_id == ThreadAttachment._base_manager.get().thread_id
     assert follower.notification_policy == "email"
     assert follower.subtype_keys == ["comment", "activity"]
@@ -1241,7 +1244,7 @@ def test_threaded_model_post_autofollows_author(composed_tables: None) -> None:
 
     follower = ThreadFollower._base_manager.get()
     follower.refresh_from_db()
-    assert follower.user_id == user.pk
+    assert follower.party_id == ThreadFollower.objects.get_party_id(user=user)
     assert follower.thread_id == Thread._base_manager.get().pk
     with actor_context(user):
         assert ticket.message_is_follower() is True
@@ -1283,11 +1286,11 @@ def test_threaded_model_updates_comment_content(composed_tables: None) -> None:
     assert "edited_at" not in edited.metadata
     assert "edited_by_id" not in edited.metadata
     assert Part._base_manager.select_related("fragment").get(message=edited).fragment.text == "Updated body"
-    assert Message._base_manager.count() == 1
+    assert Message._base_manager.count() == 2
     assert ThreadNotification._base_manager.count() == notification_count
     assert thread is not None
     thread.refresh_from_db()
-    assert thread.message_count == 1
+    assert thread.message_count == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1320,12 +1323,11 @@ def test_threaded_model_rejects_system_message_updates(composed_tables: None) ->
 
 @pytest.mark.django_db(transaction=True)
 def test_threaded_model_post_notifies_matching_followers(composed_tables: None) -> None:
-    """Posting fans out delivery rows to email-policy followers matching the subtype.
+    """Posting fans out delivery rows to inbox and email followers matching the subtype.
 
-    The notification table is a delivery ledger: only followers whose policy needs a
-    tracked delivery (``email``) get a row, filtered by their subtype keys. A plain
-    inbox follower gets no row at all — their read state is the positional receipt
-    and the feed itself is the notification — and a muted follower gets nothing.
+    Each told account gets a row, filtered by subtype preferences. The follower's
+    record cursor is independent of that item's acknowledgement; a muted follower
+    gets nothing unless directly addressed.
     """
 
     del composed_tables
@@ -1345,18 +1347,18 @@ def test_threaded_model_post_notifies_matching_followers(composed_tables: None) 
     with actor_context(author):
         message = ticket.message_post("Followers should see this.")
 
-    notification = ThreadNotification._base_manager.select_related("message", "user").get()
+    notification = ThreadNotification._base_manager.select_related("message", "user").get(user=watcher)
     assert notification.message_id == message.pk
     assert notification.thread_id == message.thread_id
     assert notification.attachment_id == ThreadAttachment._base_manager.get().pk
     assert notification.user_id == watcher.pk
     assert notification.notification_type == "email"
     assert notification.notification_status == "ready"
-    assert notification.follower_id == ThreadFollower._base_manager.get(user=watcher).pk
+    assert notification.follower_id == ThreadFollower._base_manager.get(party__person__user=watcher).pk
     assert ThreadNotification._base_manager.filter(user=muted).count() == 0
     assert ThreadNotification._base_manager.filter(user=activity_only).count() == 0
-    # An inbox follower's read state is their receipt — never a ledger row.
-    assert ThreadNotification._base_manager.filter(user=inbox_watcher).count() == 0
+    # Inbox delivery creates a row while unread progress remains a follower cursor.
+    assert ThreadNotification._base_manager.filter(user=inbox_watcher).count() == 1
     assert ThreadFollower.objects.unread_count_for_record(ticket, user=inbox_watcher) == 1
 
 
@@ -1365,7 +1367,7 @@ def test_threaded_model_mark_read_advances_receipt(composed_tables: None) -> Non
     """A follower owns read state through their positional receipt, not flag rows.
 
     Marking a record thread read advances the follower's ``last_read_message`` to the
-    latest message; nothing lands in the delivery ledger for an inbox follower, and a
+    latest message; the inbox row retains its independent acknowledgement, and a
     second mark-read has nothing left to advance.
     """
 
@@ -1383,11 +1385,11 @@ def test_threaded_model_mark_read_advances_receipt(composed_tables: None) -> Non
     assert ThreadFollower.objects.unread_count_for_record(ticket, user=watcher) == 1
     with actor_context(watcher):
         assert ThreadFollower.objects.mark_read_for_record(ticket, user=watcher) == 1
-    follower = ThreadFollower._base_manager.get(user=watcher)
+    follower = ThreadFollower._base_manager.get(party__person__user=watcher)
     assert follower.last_read_message_id == message.pk
     assert ThreadFollower.objects.unread_count_for_record(ticket, user=watcher) == 0
-    # No per-message flag rows exist for an inbox follower; re-marking is a no-op.
-    assert ThreadNotification._base_manager.filter(user=watcher).count() == 0
+    # The inbox item remains unacknowledged; re-marking the cursor is a no-op.
+    assert ThreadNotification._base_manager.filter(user=watcher, read_at__isnull=True).count() == 1
     with actor_context(watcher):
         assert ThreadFollower.objects.mark_read_for_record(ticket, user=watcher) == 0
 
@@ -1425,7 +1427,7 @@ def test_threaded_model_marks_one_message_done(composed_tables: None) -> None:
     assert ThreadFollower.objects.unread_count_for_record(ticket, user=watcher) == 1
 
     thread = ticket.message_thread(create=False)
-    follower = ThreadFollower._base_manager.get(thread=thread, user=watcher)
+    follower = ThreadFollower._base_manager.get(thread=thread, party__person__user=watcher)
     assert follower.last_read_message_id == first.pk
     # The other record's receipt is untouched by this thread's done marker.
     assert ThreadFollower.objects.unread_count_for_record(other_ticket, user=watcher) == 1
@@ -1504,7 +1506,7 @@ def test_threaded_model_post_notifies_direct_recipient_without_following(compose
     assert notification.follower_id is None
     assert notification.notification_type == "inbox"
     assert notification.notification_status == "ready"
-    assert ThreadFollower._base_manager.filter(user=recipient).count() == 0
+    assert ThreadFollower._base_manager.filter(party__person__user=recipient).count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1558,7 +1560,7 @@ def test_threaded_model_post_can_autofollow_direct_recipient(composed_tables: No
             autofollow_recipients=True,
         )
 
-    follower = ThreadFollower._base_manager.get(user=recipient)
+    follower = ThreadFollower._base_manager.get(party__person__user=recipient)
     notification = ThreadNotification._base_manager.get(user=recipient)
     assert follower.attachment_id == notification.attachment_id
     assert notification.follower_id is None
@@ -1650,7 +1652,7 @@ def test_agent_activity_completion_posts_system_message_with_service_user(
     with actor_context(agent.principal_subject()):
         ticket.activity_feedback(activity, feedback="Handled by agent.")
 
-    message = Message._base_manager.get()
+    message = Message._base_manager.get(message_type=Message.MessageKind.AUTO_COMMENT)
     assert post_context == {"is_sudo": True, "reason": "messaging.activity.complete"}
     assert message.created_by_id == service_user_id
     assert message.message_type == Message.MessageKind.AUTO_COMMENT
@@ -1882,14 +1884,15 @@ def test_threaded_model_autotracks_configured_field_saves(composed_tables: None)
         user = user_model.objects.create_user(username="autotracker", email="autotracker@example.com")
         ticket = ThreadedTicket.objects.create(title="Initial")
 
-    assert Message._base_manager.count() == 0
+    assert Message._base_manager.count() == 1
+    assert not TrackingValue._base_manager.exists()
 
     with actor_context(user):
         ticket.title = "Escalated"
         ticket.status = "closed"
         ticket.save(update_fields=("title", "status"))
 
-    message = Message._base_manager.get()
+    message = Message._base_manager.get(message_type=Message.MessageKind.AUTO_COMMENT)
     assert message.message_type == "auto_comment"
     assert message.subtype is not None
     assert message.subtype.key == "record_updated"
@@ -1911,14 +1914,14 @@ def test_threaded_model_autotracking_respects_update_fields(composed_tables: Non
         ticket.status = "closed"
         ticket.save(update_fields=("status",))
 
-    assert Message._base_manager.count() == 1
+    assert Message._base_manager.count() == 2
     assert TrackingValue._base_manager.get().field_name == "status"
 
     with system_context(reason="test threaded model autotrack no tracked fields"):
         ticket.title = "Ignored in update_fields"
         ticket.save(update_fields=("updated_at",))
 
-    assert Message._base_manager.count() == 1
+    assert Message._base_manager.count() == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1958,7 +1961,7 @@ def test_threaded_model_schedules_and_completes_activity(composed_tables: None) 
     assert completed.activity_state == "done"
     assert completed.feedback == "Customer confirmed."
     assert completed.completed_at is not None
-    message = Message._base_manager.get()
+    message = Message._base_manager.get(message_type=Message.MessageKind.AUTO_COMMENT)
     assert message.thread_id == completed.thread_id
     assert message.direction == "internal"
     assert message.message_type == "auto_comment"
@@ -2797,13 +2800,13 @@ def test_read_receipts_anchor_unread_and_never_regress(composed_tables: None) ->
     # A stale ack of an older message returns 0 and never regresses the receipt.
     with actor_context(watcher):
         assert ThreadFollower.objects.mark_read_up_to(thread, user=watcher, message=first) == 0
-    follower = ThreadFollower._base_manager.get(thread=thread, user=watcher)
+    follower = ThreadFollower._base_manager.get(thread=thread, party__person__user=watcher)
     assert follower.last_read_message_id == second.pk
     assert unread_pks(watcher) == {third.pk}
 
     # The author autofollowed and their receipt rode each post: nothing is unread.
     assert unread_pks(author) == set()
-    author_follower = ThreadFollower._base_manager.get(thread=thread, user=author)
+    author_follower = ThreadFollower._base_manager.get(thread=thread, party__person__user=author)
     assert author_follower.last_read_message_id == third.pk
 
 
@@ -2848,8 +2851,8 @@ def test_tracked_field_log_lands_without_post_access(composed_tables: None) -> N
         assert doc.status == "closed"
         thread = doc.message_thread(create=False)
         assert thread is not None
-        assert thread.message_count == 1
-        logs = list(Message._base_manager.filter(thread=thread))
+        assert thread.message_count == 2
+        logs = list(Message._base_manager.filter(thread=thread, message_type=Message.MessageKind.AUTO_COMMENT))
         assert len(logs) == 1
         assert logs[0].message_type == Message.MessageKind.AUTO_COMMENT
         assert [value.field_name for value in logs[0].tracking_values.all()] == ["status"]
@@ -2940,13 +2943,13 @@ def test_post_bumps_thread_through_an_instance_save(composed_tables: None) -> No
     finally:
         post_save.disconnect(sender=Thread, dispatch_uid="test-thread-bump-probe")
 
-    # One thread INSERT (the lazy get_or_create) and exactly one bump UPDATE for the post.
+    # One thread INSERT and one bump each for the creation note and the explicit post.
     bumps = [row for row in saves if not row["created"]]
-    assert len(bumps) == 1
-    assert {"message_count", "last_message_at"} <= bumps[0]["update_fields"]
+    assert len(bumps) == 2
+    assert all({"message_count", "last_message_at"} <= bump["update_fields"] for bump in bumps)
 
     thread = Thread._base_manager.get()
-    assert thread.message_count == 1
+    assert thread.message_count == 2
     assert thread.last_message_at == message.sent_at
 
 
@@ -3119,12 +3122,14 @@ def test_broadcasting_room_creator_socket_gated_by_membership(composed_tables: N
         # Not a member: the socket is dark despite having created the room.
         assert ChangeReadGate(Thread, creator_subject).filter(change) is None
 
-        # Granted membership through the atomic subscribe verb: the socket is live.
-        room.message_subscribe(user=creator, grant_read=True)
+        # Following grants no access; an explicit share makes the socket live.
+        room.message_subscribe(user=creator)
+        thread.grant_reader(user=creator)
         assert ChangeReadGate(Thread, creator_subject).filter(change) is not None
 
-        # Expelled through the mirror revoke verb: the socket goes dark again.
-        room.message_unsubscribe(user=creator, revoke_read=True)
+        # Removing the explicit share makes the socket go dark again.
+        room.message_unsubscribe(user=creator)
+        thread.revoke_reader(user=creator)
         assert ChangeReadGate(Thread, creator_subject).filter(change) is None
 
 
@@ -3144,7 +3149,7 @@ def test_first_post_autofollow_seeds_the_author_receipt(composed_tables: None) -
     with actor_context(author):
         ticket = ThreadedTicket.objects.create(title="First post receipt")
         message = ticket.message_post("Hello from an unfollowed record")
-        follower = ThreadFollower._base_manager.get(thread_id=message.thread_id, user=author)
+        follower = ThreadFollower._base_manager.get(thread_id=message.thread_id, party__person__user=author)
         assert follower.last_read_message_id == message.pk
         assert ThreadFollower.objects.unread_messages(message.thread, user=author).count() == 0
 

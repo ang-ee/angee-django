@@ -10,3 +10,13 @@ depends_on = ["angee.iam", "angee.parties", "angee.integrate", "angee.storage", 
 dependencies = [
   "django-anymail>=15.1",
 ]
+
+[[migrations]]
+name = "follower_party"
+app_label = "messaging"
+module = "runtime_migrations.follower_party"
+
+[[migrations]]
+name = "notification_read_at"
+app_label = "messaging"
+module = "runtime_migrations.notification_read_at"
