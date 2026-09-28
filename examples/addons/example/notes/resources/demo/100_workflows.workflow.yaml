@@ -1,10 +1,20 @@
 _meta:
   model: workflows.Workflow
 rows:
-  - xref: note_publish_approval
+  - xref: note_publish
     fields:
-      name: Note publish approval
-      description: Demo workflow for reviewing a note before publish.
-      subject_declaration: notes.note
-      max_steps: 20
-      budget: {}
+      key: note-publish
+      name: Note publication
+      description: Validate and publish a ready note.
+      subject_model: notes.note
+      publish: true
+      draft:
+        nodes:
+          validate:
+            step: note_validate_publication
+            # Human review belongs between these nodes once the decisions layer lands.
+            next: {needs_review: publish}
+          publish:
+            step: note_publish
+        results:
+          - {from: publish}

@@ -2,13 +2,14 @@
 
 import pytest
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.db import connection
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.integrate.testing import models as integrate_models
 from angee.workflows import models as workflow_sources
 from angee.workflows.testing import models as workflow_models
-from angee.workflows.testing.models import Decision, Workflow, WorkflowRun
+from angee.workflows.testing.models import Workflow, WorkflowRun, WorkflowVersion
 
 
 @pytest.mark.parametrize("shared_models", (integrate_models, workflow_models))
@@ -35,9 +36,22 @@ def test_native_database_cleanup_isolates_shared_models(transactional_db: None, 
         assert Workflow.objects.get(pk=workflow.pk).name == f"Native isolation {case}"
 
 
-@pytest.mark.parametrize("model", (Workflow, WorkflowRun, Decision))
+@pytest.mark.parametrize("model", (Workflow, WorkflowRun))
 def test_shared_models_preserve_source_grant_contract(model) -> None:
     """Reusable compositions preserve all source model share declarations."""
 
     source = getattr(workflow_sources, model.__name__)
     assert model.get_rebac_grantable() == source.get_rebac_grantable()
+
+
+def test_workflow_run_reads_through_the_version_workflow_relation(composed_tables: None) -> None:
+    """Forward FK paths inherit workflow access without copying its foreign key."""
+
+    with system_context(reason="workflow forward relation fixture"):
+        owner = get_user_model().objects.create_user(username="workflow-owner")
+        runner = get_user_model().objects.create_user(username="workflow-runner")
+        workflow = Workflow.objects.create(key="forward-relation", name="Forward relation", created_by=owner)
+        version = WorkflowVersion.objects.create(workflow=workflow, number=1, document={}, content_hash="0" * 64)
+        run = WorkflowRun.objects.create(version=version, run_as=runner)
+    with actor_context(owner):
+        assert WorkflowRun.objects.filter(pk=run.pk).exists()

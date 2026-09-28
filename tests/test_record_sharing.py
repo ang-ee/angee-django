@@ -38,14 +38,13 @@ def test_group_access_projects_canonical_subject_identity() -> None:
     assert projected.label == "Reviewers"
 
 
-def test_share_declarations_and_lineage_head_guard() -> None:
+def test_share_declarations() -> None:
+    """Each model advertises only its declared, permission-gated sharing relations."""
+
     assert AbstractAgent.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Task.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Drive.get_rebac_grantable() == {"editor": "write", "viewer": "write"}
-    assert Workflow.get_rebac_grantable() == {"editor": "write", "viewer": "write"}
-    Workflow.validate_record_access_target(SimpleNamespace(published_from_id=None))
-    with pytest.raises(ValidationError, match="lineage head"):
-        Workflow.validate_record_access_target(SimpleNamespace(published_from_id=7))
+    assert Workflow.get_rebac_grantable() == {"editor": "write", "viewer": "write", "starter": "write"}
 
 
 @pytest.mark.parametrize("relation,selectable", [("member", True), ("owner", False)])

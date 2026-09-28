@@ -11,17 +11,17 @@ def test_split_xref_prefers_the_longest_installed_addon_alias() -> None:
     """Dotted addon names and dotted local keys remain unambiguous."""
 
     aliases = {
-        "angee": "angee",
-        "angee.workflows_extraction": "angee.workflows_extraction",
-        "workflows_extraction": "angee.workflows_extraction",
+        "example": "example",
+        "example.documents": "example.documents",
+        "documents": "example.documents",
     }
 
-    assert split_xref("angee.workflows_extraction.document.pipeline", aliases) == (
-        "angee.workflows_extraction",
+    assert split_xref("example.documents.document.pipeline", aliases) == (
+        "example.documents",
         "document.pipeline",
     )
-    assert split_xref("workflows_extraction.document.pipeline", aliases) == (
-        "angee.workflows_extraction",
+    assert split_xref("documents.document.pipeline", aliases) == (
+        "example.documents",
         "document.pipeline",
     )
     with pytest.raises(ValueError, match="unresolved xref"):

@@ -1,9 +1,11 @@
-"""Executable Note workflow operations against composed models and permissions."""
+"""The shipped note graph executes against composed models and permissions.
+
+Human review joins this graph when the decisions layer is available. These
+contracts exercise the two currently supported publication steps end to end.
+"""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import Any
 from unittest.mock import patch
 
 from django.apps import apps
@@ -14,247 +16,157 @@ from django.test import TransactionTestCase
 from rebac import system_context
 from rebac.roles import grant as grant_role
 
-from angee.workflows import engine
-from angee.workflows.attempts import RecoveryMode
-from angee.workflows.steps import StepEffect
-from example.notes.steps import (
-    NotePublicationOutput,
-    NotePublishStep,
-    NoteValidateForPublicationStep,
-)
+from angee.jobs.enqueue import celery_app
+from angee.workflows.states import RunStatus, StepRunStatus
+from angee.workflows.testing.drivers import load_workflow, run_until, start_run
+from example.notes.steps import NotePublicationOutput, PublishNote, ValidateNotePublication
 
 Note = apps.get_model("notes", "Note")
-Workflow = apps.get_model("workflows", "Workflow")
-Step = apps.get_model("workflows", "Step")
-WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 StepRun = apps.get_model("workflows", "StepRun")
-WorkflowDispatch = apps.get_model("workflows", "WorkflowDispatch")
 Resource = apps.get_model("resources", "Resource")
 User = get_user_model()
 
 
-def execute_retained(step_run: Any) -> None:
-    """Consume the exact execution intent allocated for one started row."""
-
-    with system_context(reason="note workflow retained execution"):
-        step_run.refresh_from_db()
-        attempt = step_run.current_attempt
-        dispatch = WorkflowDispatch.objects.get(step_attempt=attempt)
-    engine.execute_dispatch(dispatch.pk, attempt.pk, attempt.lease_token)
-
-
 class NoteWorkflowStepTests(TransactionTestCase):
-    """Exercise the Note-owned readiness and publication effect."""
+    """Prove resource installation, actor scope, domain validation and audit."""
 
     def setUp(self) -> None:
-        for enqueue_name in (
-            "enqueue_advance",
-            "enqueue_advance_at",
-            "enqueue_dispatch_publisher",
-        ):
-            patcher = patch.object(engine, enqueue_name)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        """Install the shipped document with captured commit-time transport."""
+
+        patcher = patch.object(celery_app, "send_task")
+        self.sent = patcher.start()
+        self.addCleanup(patcher.stop)
         call_command("rebac", "sync", verbosity=0)
-        with system_context(reason="note workflow test setup"):
-            self.owner = User.objects.create_user(username="note-workflow-owner")
-            self.other = User.objects.create_user(username="note-workflow-other")
-            self.workflow = Workflow.objects.create(name="Note publication")
-            self.step = Step.objects.create(
-                workflow=self.workflow,
-                key="validate",
-                name="Validate note",
-                step_class="note_validate_publication",
-                is_entry=True,
+        with system_context(reason="note workflow fixtures"):
+            self.owner = User.objects.create_user(username="note-owner")
+            self.other = User.objects.create_user(username="note-other")
+            self.admin = User.objects.create_user(username="note-admin")
+            grant_role(actor=self.admin, role="angee/role:admin")
+        self.workflow = load_workflow("example.notes:note_publish", actor=self.admin)
+        self.workflow.with_actor(self.admin).grant_record_access("starter", self.owner)
+
+    def note(self, **kwargs):
+        """Create a subject owned by the non-administrator execution actor."""
+
+        values = {"title": "Release notes", "body": "Ready for readers.", "status": Note.Status.IN_REVIEW}
+        values.update(kwargs)
+        with system_context(reason="note workflow subject fixture"):
+            return Note.objects.create(created_by=self.owner, **values)
+
+    def test_shipped_graph_validates_and_publishes_with_actor_audit(self) -> None:
+        """The resource document completes both steps and records the acting user."""
+
+        note = self.note()
+        run = start_run(self.workflow, actor=self.owner, subject=note)
+        run_until(run)
+        with system_context(reason="note workflow result assertions"):
+            note.refresh_from_db()
+            step_runs = list(StepRun.objects.filter(run=run).order_by("created_at", "pk"))
+            self.assertEqual([step_run.node_key for step_run in step_runs], ["validate", "publish"])
+            self.assertEqual([step_run.outcome for step_run in step_runs], ["needs_review", "published"])
+            self.assertEqual(
+                step_runs[0].output,
+                {"id": note.sqid, "title": note.title, "status": Note.Status.IN_REVIEW},
             )
+            self.assertEqual(run.status, RunStatus.SUCCEEDED)
+            self.assertEqual(run.outcome, "published")
+            self.assertEqual(run.output, {"id": note.sqid, "title": note.title, "status": Note.Status.ACTIVE})
+            self.assertEqual(note.status, Note.Status.ACTIVE)
+            self.assertEqual(note.updated_by_id, self.owner.pk)
+            self.assertEqual(note.history.count(), 2)
+            self.assertEqual(note.history.first().status, Note.Status.ACTIVE)
+        self.assertGreaterEqual(self.sent.call_count, 2)
 
-    def step_run(self, subject: object, *, creator: object | None = None):
-        with system_context(reason="note workflow test run"):
-            run = WorkflowRun.objects.create(
-                workflow=self.workflow,
-                subject=subject,
-                created_by=creator if creator is not None else self.owner,
+    def test_duplicate_delivery_keeps_publication_history_unchanged(self) -> None:
+        """A stale delivery after publication does not write the subject again."""
+
+        note = self.note()
+        run = start_run(self.workflow, actor=self.owner, subject=note)
+        run_until(run)
+        with system_context(reason="note publication stale delivery fixture"):
+            step_run = StepRun.objects.get(run=run, node_key="publish")
+            history_count = note.history.count()
+        self.assertFalse(StepRun.objects.execute(step_run.pk))
+        with system_context(reason="note publication stale delivery assertion"):
+            self.assertEqual(note.history.count(), history_count)
+
+    def test_wrong_subject_model_is_rejected_at_admission(self) -> None:
+        """The declared subject contract rejects a different model before execution."""
+
+        with self.assertRaises(ValidationError):
+            start_run(self.workflow, actor=self.owner, subject=self.owner)
+
+    def test_step_subject_model_label_is_canonicalized_for_publication(self) -> None:
+        """A step's Django class label agrees with the canonical workflow subject."""
+
+        with patch.object(ValidateNotePublication, "subject", "notes.Note"):
+            workflow = type(self.workflow).objects.install_definition(
+                key="canonical-note-subject",
+                name="Canonical note subject",
+                subject_model="notes.note",
+                draft={"nodes": {"validate": {"step": ValidateNotePublication.key}}},
+                actor=self.admin,
             )
-            return StepRun.objects.create(run=run, step=self.step)
+            self.assertIsNotNone(workflow.published_id)
+            self.assertEqual(workflow.subject_model, "notes.note")
+            self.assertEqual(workflow.published.definition.step("validate").subject, "notes.note")
 
-    def test_valid_note_is_summarized_and_published_with_actor_audit(self) -> None:
-        with system_context(reason="note workflow test note"):
-            note = Note.objects.create(
-                title="Release notes",
-                body="Ready for readers.",
-                status=Note.Status.IN_REVIEW,
-                created_by=self.owner,
-            )
-        step_run = self.step_run(note)
+    def test_permission_removed_after_launch_prevents_publication(self) -> None:
+        """An actor who loses access cannot read or modify the note in a later step."""
 
-        validated = NoteValidateForPublicationStep().run(step_run, now=datetime.now(UTC))
-        self.assertEqual(validated.outcome, "needs_review")
-        self.assertEqual(
-            validated.output,
-            {"id": str(note.sqid), "title": "Release notes", "status": Note.Status.IN_REVIEW},
-        )
-
-        published = NotePublishStep().run(step_run, now=datetime.now(UTC))
-        note.refresh_from_db()
-        self.assertEqual(published.outcome, "published")
-        self.assertEqual(published.output["status"], Note.Status.ACTIVE)
-        self.assertEqual(note.status, Note.Status.ACTIVE)
-        self.assertEqual(note.updated_by_id, self.owner.pk)
-        self.assertEqual(note.history.count(), 2)
-        self.assertEqual(note.history.first().status, Note.Status.ACTIVE)
-
-    def test_wrong_model_subject_is_rejected(self) -> None:
-        step_run = self.step_run(self.other)
-        with self.assertRaisesMessage(ValidationError, "notes.Note subject"):
-            NoteValidateForPublicationStep().run(step_run, now=datetime.now(UTC))
-
-    def test_publish_recovery_reconciles_an_already_active_note_without_another_write(self) -> None:
-        with system_context(reason="note workflow recovery fixture"):
-            note = Note.objects.create(
-                title="Already published",
-                body="Retained body.",
-                status=Note.Status.ACTIVE,
-                created_by=self.owner,
-            )
-        step_run = self.step_run(note)
-        history_count = note.history.count()
-
-        recovered = NotePublishStep().run_recovery(
-            step_run,
-            now=datetime.now(UTC),
-            source_attempt=object(),
-            mode=RecoveryMode.RECONCILE,
-        )
-
-        note.refresh_from_db()
-        self.assertEqual(recovered.outcome, "published")
-        self.assertEqual(recovered.output["status"], Note.Status.ACTIVE)
-        self.assertEqual(recovered.artifacts[0].target, note)
-        self.assertEqual(note.history.count(), history_count)
-
-    def test_missing_run_creator_is_rejected(self) -> None:
-        with system_context(reason="note workflow test note"):
-            note = Note.objects.create(
-                title="No actor",
-                body="Ready.",
-                status=Note.Status.IN_REVIEW,
-                created_by=self.owner,
-            )
-        step_run = self.step_run(note)
-        with system_context(reason="remove note workflow run creator"):
-            WorkflowRun.objects.filter(pk=step_run.run_id).update(created_by=None)
-        step_run.run.refresh_from_db()
-
-        with self.assertRaisesMessage(ValidationError, "require a run creator"):
-            NoteValidateForPublicationStep().run(step_run, now=datetime.now(UTC))
-
-    def test_permission_removed_after_launch_is_rejected(self) -> None:
-        with system_context(reason="note workflow test note"):
-            note = Note.objects.create(
-                title="Revoked",
-                body="Was ready.",
-                status=Note.Status.IN_REVIEW,
-                created_by=self.owner,
-            )
-        step_run = self.step_run(note)
-        with system_context(reason="revoke note workflow owner"):
+        note = self.note()
+        run = start_run(self.workflow, actor=self.owner, subject=note)
+        run_until(run, node="publish")
+        with system_context(reason="revoke note workflow subject owner"):
             note.created_by = self.other
             note.save(update_fields={"created_by"})
-
-        with self.assertRaisesMessage(ValidationError, "no longer has permission"):
-            NotePublishStep().run(step_run, now=datetime.now(UTC))
-        note.refresh_from_db()
-        self.assertEqual(note.status, Note.Status.IN_REVIEW)
+        run_until(run)
+        self.assertEqual(run.status, RunStatus.FAILED)
+        with system_context(reason="note workflow permission assertions"):
+            note.refresh_from_db()
+            step_run = StepRun.objects.get(run=run, node_key="publish")
+            self.assertEqual(step_run.status, StepRunStatus.FAILED)
+            self.assertTrue(step_run.attempts.get().error)
+            self.assertEqual(note.status, Note.Status.IN_REVIEW)
 
     def test_invalid_content_and_state_leave_note_unchanged(self) -> None:
+        """Domain readiness failures are durable failures without publication writes."""
+
         for fields, message in (
             ({"title": "", "body": "Ready", "status": Note.Status.IN_REVIEW}, "title"),
             ({"title": "Draft", "body": "", "status": Note.Status.IN_REVIEW}, "content"),
             ({"title": "Draft", "body": "Ready", "status": Note.Status.DRAFT}, "in review"),
         ):
-            with self.subTest(message=message), system_context(reason="note workflow invalid note"):
-                note = Note.objects.create(created_by=self.owner, **fields)
-            step_run = self.step_run(note)
-            with self.assertRaisesMessage(ValidationError, message):
-                NotePublishStep().run(step_run, now=datetime.now(UTC))
-            note.refresh_from_db()
-            self.assertEqual(note.status, fields["status"])
+            with self.subTest(message=message):
+                note = self.note(**fields)
+                run = start_run(self.workflow, actor=self.owner, subject=note)
+                run_until(run)
+                self.assertEqual(run.status, RunStatus.FAILED)
+                with system_context(reason="note workflow invalid subject assertions"):
+                    note.refresh_from_db()
+                    step_run = StepRun.objects.get(run=run, node_key="validate")
+                    self.assertIn(message, step_run.attempts.get().error)
+                    self.assertEqual(note.status, fields["status"])
+                    self.assertEqual(note.history.count(), 1)
 
-    def test_demo_resource_identity_uses_concrete_note_operations(self) -> None:
+    def test_resource_loader_installs_the_same_document(self) -> None:
+        """Native resource loading keeps one graph row and immutable publication."""
+
         call_command("resources", "load", include_demo=True, allow_non_dev=True, verbosity=0)
         with system_context(reason="note workflow resource assertion"):
-            workflow = Resource.objects.get(
-                source_addon="example.notes",
-                xref="note_publish_approval",
-            ).target_instance()
-            self.assertIsInstance(workflow, Workflow)
-            steps = {step.key: step for step in workflow.steps.all()}
-        self.assertEqual(workflow.subject_declaration, "notes.note")
-        self.assertEqual(steps["entry"].step_class, "note_validate_publication")
-        self.assertEqual(steps["finalize"].step_class, "note_publish")
+            installed = Resource.objects.get(source_addon="example.notes", xref="note_publish").target_instance()
+            self.assertEqual(installed.pk, self.workflow.pk)
+            self.assertEqual(installed.published_id, self.workflow.published_id)
+            self.assertEqual(installed.subject_model, "notes.note")
+            self.assertEqual(set(installed.published.definition.nodes), {"validate", "publish"})
 
-    def test_operations_declare_their_authoring_contract(self) -> None:
-        validate = NoteValidateForPublicationStep.operation(key="note_validate_publication")
-        publish = NotePublishStep.operation(key="note_publish")
+    def test_steps_declare_their_typed_contract(self) -> None:
+        """The registry classes own schemas, subjects and named outcomes."""
 
-        self.assertEqual(validate.output_schema, NotePublicationOutput.model_json_schema())
-        self.assertEqual(validate.subject_declaration, "notes.note")
-        self.assertEqual(validate.effect, StepEffect.READ)
-        self.assertTrue(validate.idempotent)
-        self.assertEqual([outcome.key for outcome in validate.outcomes], ["needs_review"])
-        self.assertEqual(publish.effect, StepEffect.WRITE)
-        self.assertFalse(publish.idempotent)
-        self.assertEqual([outcome.key for outcome in publish.outcomes], ["published"])
-
-    def test_demo_graph_executes_validation_approval_and_publication(self) -> None:
-        call_command("resources", "load", include_demo=True, allow_non_dev=True, verbosity=0)
-        with system_context(reason="note workflow engine setup"):
-            grant_role(actor=self.owner, role="angee/role:admin")
-            note = Note.objects.create(
-                title="Engine release",
-                body="Approved through the executable graph.",
-                status=Note.Status.IN_REVIEW,
-                created_by=self.owner,
-            )
-            draft = Resource.objects.get(
-                source_addon="example.notes",
-                xref="note_publish_approval",
-            ).target_instance()
-            workflow = Workflow.objects.current_published_for(draft)
-
-        self.assertIsNotNone(workflow)
-        run = engine.start(workflow, subject=note, actor=self.owner)
-        engine.advance(run.pk)
-        with system_context(reason="note workflow execute validation"):
-            validation = StepRun.objects.get(run=run, step__key="entry")
-        execute_retained(validation)
-        validation.refresh_from_db()
-        self.assertEqual(validation.outcome, "needs_review")
-
-        engine.advance(run.pk)
-        with system_context(reason="note workflow execute approval"):
-            approval = StepRun.objects.get(run=run, step__key="approval")
-        execute_retained(approval)
-        with system_context(reason="note workflow read approval"):
-            decision = approval.decisions.get()
-        attempted = engine.decide(
-            decision,
-            "complete",
-            payload={"action": "approve"},
-            actor=self.owner,
-        )
-        self.assertIsNone(attempted.validation_error)
-
-        engine.advance(run.pk)
-        with system_context(reason="note workflow execute publication"):
-            publication = StepRun.objects.get(run=run, step__key="finalize")
-        execute_retained(publication)
-        engine.advance(run.pk)
-
-        run.refresh_from_db()
-        publication.refresh_from_db()
-        note.refresh_from_db()
-        self.assertEqual(run.status, "succeeded")
-        self.assertEqual(publication.outcome, "published")
-        self.assertEqual(note.status, Note.Status.ACTIVE)
-        self.assertEqual(note.updated_by_id, self.owner.pk)
+        for step in (ValidateNotePublication, PublishNote):
+            self.assertEqual(step.output_schema(), NotePublicationOutput.model_json_schema())
+            self.assertEqual(step.subject, "notes.note")
+        self.assertEqual(ValidateNotePublication.available_outcomes(None), {
+            "needs_review": "Needs review", "error": "Error",
+        })
+        self.assertEqual(PublishNote.available_outcomes(None), {"published": "Published", "error": "Error"})

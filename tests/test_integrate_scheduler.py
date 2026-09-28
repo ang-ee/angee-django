@@ -746,14 +746,13 @@ def test_queue_bridge_sync_inside_outer_transaction_preserves_caller(
     transactional_db: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Queueing a bridge sync does not poison the caller's outer transaction."""
+    """Queueing preserves its outer transaction and sends only after commit."""
 
     del transactional_db
     now = timezone.now()
     enqueued: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        integrate_queue,
-        "enqueue_task",
+        "angee.jobs.enqueue.celery_app.send_task",
         lambda _task_name, *, kwargs, **_options: enqueued.append(kwargs),
     )
     with system_context(reason="test integrate scheduler setup"):
@@ -762,6 +761,7 @@ def test_queue_bridge_sync_inside_outer_transaction_preserves_caller(
     with transaction.atomic():
         integrate_queue.queue_bridge_sync(bridge, now=now)
         assert SchedulerBridge._base_manager.filter(pk=bridge.pk).exists()
+        assert enqueued == []
 
     assert len(enqueued) == 1
     bridge.refresh_from_db()
@@ -847,10 +847,10 @@ def test_enqueue_due_bridges_resets_claim_when_dispatch_fails(
     del transactional_db
     now = timezone.now()
 
-    def fail_queue_bridge_sync(*_args: Any, **_kwargs: Any) -> None:
+    def fail_send_task(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("broker down")
 
-    monkeypatch.setattr(integrate_scheduler, "queue_bridge_sync", fail_queue_bridge_sync)
+    monkeypatch.setattr("angee.jobs.enqueue.celery_app.send_task", fail_send_task)
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
             "queued-failure",
@@ -866,6 +866,18 @@ def test_enqueue_due_bridges_resets_claim_when_dispatch_fails(
     assert bridge.next_sync_at == now
     assert bridge.sync_stage == Bridge.SyncStage.IDLE
     assert bridge.sync_progress == {}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_enqueue_due_bridges_rejects_outer_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reject an outer transaction before scanning or claiming any bridges."""
+
+    def unexpected_scan(**_kwargs: Any) -> None:
+        raise AssertionError("Scheduler scanned before enforcing autocommit.")
+
+    monkeypatch.setattr(integrate_scheduler, "models_with", unexpected_scan)
+    with transaction.atomic(), pytest.raises(RuntimeError, match="requires autocommit"):
+        enqueue_due_bridges()
 
 
 @pytest.mark.django_db(transaction=True)

@@ -72,10 +72,15 @@ class _AngeeQuerySetMixin(Generic[_ModelT]):
         except TypeError, ValueError:
             return None
 
-    def lock_if_supported(self, *, of: tuple[str, ...] = ("self",)) -> Self:
+    def lock_if_supported(
+        self, *, of: tuple[str, ...] = ("self",), skip_locked: bool = False, no_key: bool = False
+    ) -> Self:
         """Expose shared lock intent on Angee querysets and managers."""
 
-        return cast(Self, lock_if_supported(cast(models.QuerySet[_ModelT], self), of=of))
+        return cast(
+            Self,
+            lock_if_supported(cast(models.QuerySet[_ModelT], self), of=of, skip_locked=skip_locked, no_key=no_key),
+        )
 
     def locked_get(self, *args: Any, **kwargs: Any) -> _ModelT:
         """Return one row under a database row lock when the backend supports it."""

@@ -23,7 +23,6 @@ from angee.base.impl import (
     resolve_all_impl_classes,
 )
 from angee.storage.backends import LocalBackend, StorageBackend
-from angee.workflows.configs import EmitConfig, JoinContinuationConfig
 from tests.conftest import Integration, OAuthClient, VcsBridge
 from tests.tables import model_tables
 
@@ -673,22 +672,6 @@ def test_typed_config_projects_nested_arrays_nullable_and_enum_contracts() -> No
         "defaultValue": "only",
         "omittable": True,
     }
-
-
-def test_workflow_id_paths_project_as_lists_of_strings() -> None:
-    """Emit artifacts and continuation joins use the native string-list form shape."""
-
-    emit_spec = model_config_form_spec(EmitConfig, owner="EmitStep")
-    join_spec = model_config_form_spec(JoinContinuationConfig, owner="JoinContinuation")
-
-    artifact_id_path = emit_spec["properties"]["artifacts"]["items"]["properties"]["id_path"]
-    child_id_path = join_spec["properties"]["child_id_path"]
-    for path_spec in (artifact_id_path, child_id_path):
-        assert path_spec["type"] == "array"
-        assert path_spec["widget"] == "list"
-        assert path_spec["minItems"] == 1
-        assert path_spec["items"] == {"type": "string", "minLength": 1}
-        assert path_spec["presenceRequired"] is True
 
 
 def test_typed_config_omits_default_factory_without_invoking_it() -> None:

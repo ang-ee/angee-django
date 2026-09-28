@@ -191,6 +191,25 @@ boundaries instead of importing it, to avoid import cycles.
 `schemas` mapping in an addon's conventional `schema.py`. Each named schema
 contributes to fixed buckets, and Angee builds one Strawberry `Schema` per name.
 
+## Workflows
+
+**Node** — a keyed graph declaration naming a step, its bindings and outgoing
+edges in a `Definition` document.
+
+**Step** — the Python class a node runs, with typed input, output and config.
+
+**Step run** — one execution of a node within a workflow run. The persisted
+`StepRun` is named `step_run` in code; the reverse relation is `run.step_runs`.
+
+**Attempt** — one try of a step run, recorded by `StepAttempt` from claim to
+settlement. A retry creates another attempt for the same step run.
+
+**Settlement** — what a step returns: `Done`, `Wait` or `Fail`. It describes the
+attempt's completion or continuation, and the transition owner persists it.
+
+**Result** — what a workflow run reports, selected and projected from its
+declared producer bindings by `Definition`.
+
 ## Relationship Management
 
 **Party** — the universal supertype for a person, organization, or other actor

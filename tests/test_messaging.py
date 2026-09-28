@@ -70,7 +70,6 @@ from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Person as AbstractPerson
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from angee.workflows_parties.models import PartyHandle as WorkflowPartyHandleContribution
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (
@@ -146,7 +145,7 @@ class Address(AbstractAddress):
         rebac_resource_type = "parties/address"
 
 
-class PartyHandle(WorkflowPartyHandleContribution, AbstractPartyHandle):
+class PartyHandle(AbstractPartyHandle):
     """Concrete identity link used when messaging attributes a user-owned handle."""
 
     class Meta(_PartyHandleMeta):

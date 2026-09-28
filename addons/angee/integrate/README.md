@@ -5,11 +5,6 @@ bridge adds scheduling, a dedicated `sync_run_id` dispatch pointer, and telemetr
 stream partitions. `Bridge.sync()` drives those declarations by default, while
 existing capability overrides remain valid.
 
-An installed execution composition may select durable dispatch through
-`Bridge.dispatch_sync()`. A declared `sync_workflow_key` uses
-[`workflows_integrate`](../workflows_integrate/README.md); `SyncDispatch.DISPATCHED`
-defers terminal telemetry to that owner. Direct bridges still return an integer.
-
 | Concern | Owner |
 |---|---|
 | Connection, cadence, queue admission and run telemetry | [Integration and Bridge](models.py) |
@@ -80,10 +75,7 @@ Bounded callers resolve declarations through `open_stream`, use `begin_stream_cy
 once, then `advance_stream` until its
 result is exhausted, passing the returned stream after an epoch reset. The
 caller closes its adapter. `push_stream` and `reconcile_stream` complete the
-cycle when applicable. These functions contain no workflow runtime dependency;
-execution composition belongs to `workflows_integrate`. That addon contributes
-the run link through the Integration record-action slot using a public workflow
-identity; progress details remain replaceable telemetry.
+cycle when applicable. These functions contain no workflow runtime dependency.
 
 The Streams tab keeps its drill-down in route search state. Its open discrepancy
 view uses the backend `is_open` filter and offers explicit remote/local choices

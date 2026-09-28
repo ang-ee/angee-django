@@ -44,9 +44,11 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 boundaries and optional state-field declarations. See the
 [Database routing rule](backend/guidelines.md#rules) for persistence checks.
 
-PostgreSQL concurrency behavior also needs the database-backed lane in
-[reusable checks](../.github/workflows/reusable-checks.yml). SQLite results do not
-substitute for that coverage; report database-dependent skips explicitly.
+The PostgreSQL lane in [reusable checks](../.github/workflows/reusable-checks.yml)
+covers workflow definition, publication, execution, authorization, concurrency,
+test-harness and composed-consumer contracts. Its explicit file list must finish
+with zero skips. SQLite results do not substitute for that coverage; report
+database-dependent skips in other lanes explicitly.
 
 ### Source-addon Test Models
 
@@ -59,6 +61,12 @@ isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.
 Verify adopting modules individually as well as in the full suite so collection
 order cannot hide missing models.
+
+Workflow tests reach execution states through the shared `load_workflow`,
+`start_run`, `run_until` and `run_factory(...).at(...)` drivers. These compose
+production admission and transition verbs; do not fabricate step runs or attempts
+to stand in for execution. Name Python test modules `test_<concern>.py` and tests
+`test_<behavior>` so native discovery and focused file selection agree.
 
 ## Agent Methodology And Documentation
 

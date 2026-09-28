@@ -130,8 +130,7 @@ Use these owners instead of maintaining another contract in an addon:
   through `Manager.from_queryset(...)`. Factories and mutations stay on the
   manager that owns the write.
 - **Do not add a write API without a consumer.** Delete uncalled write commands;
-  keep required writes on their owning manager/queryset, as
-  [`DecisionManager.decide`](../../addons/angee/workflows/managers.py) does.
+  keep required writes on their owning manager/queryset.
 - Model methods own instance invariants, state transitions, validation, and
   side-effect boundaries tied to one row. Managers own factories, upserts,
   reconcile/load flows, and writes that begin from a model class. QuerySets own
@@ -499,7 +498,7 @@ data through REBAC, never a queryset bypass.
   `User.is_superuser` never creates or replaces role membership. Hosts may
   separately opt into the library's native superuser bypass.
   Bulk inserts and updates therefore take effect without a reconciliation
-  command. Human-only workflow completion and proposal evaluation intersect
+  command. Human-only proposal evaluation intersects
   authority with `iam/kind:person#active_member`, including admin authority;
   ordinary read/share grants and service requesters remain valid.
 - **Rebuild derived grants after the reset.** After the primary-key reset and
@@ -510,22 +509,6 @@ data through REBAC, never a queryset bypass.
   described in [Checks](../checks.md#composition-and-schema); each command
   delegates to its addon owner and is idempotent. No legacy tuple evidence is
   preserved or interpreted during this upgrade.
-- **Reviewers read evidence through standing grants.** A Decision never opens
-  records to its assignees; admission in
-  [`DecisionManager.create_for_suspension`](../../addons/angee/workflows/managers.py)
-  rejects any assignee or escalation subject that cannot already read every
-  record `decision_evidence_refs` returns. Grant reviewers read on the evidence
-  owner or its container (a folder `viewer`, an integration `reader`, or a
-  scope role arm). Stacks upgrading from per-Decision `pending_decision` grants
-  follow this order: list pending reviews with
-  `manage.py purge_decision_record_access --check-pending` and finish or cancel
-  them; deploy; `angee build`; `manage.py migrate` (drops
-  `Decision.record_access`); `manage.py purge_decision_record_access --apply`
-  (removes the retired tuples from both local stores; retained suspension
-  declarations stay untouched and decode without the retired key);
-  `manage.py rebac sync --force-overwrite` (only this flag prunes the retired
-  relation definitions; add `--yes` when non-interactive); `manage.py resync_extraction_targets`; then grant
-  reviewers their standing read. Rehearse against a restored database copy.
 - **Visibility and access are REBAC-native, always.** Put relations and
   permission arms on the model's zed and let the store scope reads; never stand
   authorization up with a Python provider, `visible_to` projection, or queryset
@@ -722,44 +705,18 @@ and current contracts before applying a historical example to a new deployment.
   a planned transition to `posts/*`; verify their actual data and migration state
   before selecting the migration and `reconcile_permissions` steps. A fresh
   installation does not inherit an old deployment's repair procedure.
-- **Drain retained extraction inputs before the profile cutover.** Before
-  upgrading a stack from extraction engines to profiles, inventory active durable
-  extraction runs, including suspended runs and retained recognition-page items,
-  for frozen inputs containing `engine`, `engine_config`, `recognition_engine`,
-  or `mapping_engine`. Stop admission and drain or cancel affected runs through
-  the workflow owner before deploying the new input contracts; no permanent
-  compatibility shim accepts the superseded engine inputs. Retained
-  `prepare_pages` outputs without `profile` restore under `none` and must still
-  match their source carriers. Runs that need a domain carrier profile must
-  prepare again: processing rejects a profile that differs from preparation.
-  Rehearse this inventory and drain/cancel
-  check against a restored database copy before the real upgrade, then verify
-  that no affected active runs remain in the deployment. Retain the stack's
-  runtime migration history throughout the rehearsal and upgrade.
 - **Convert optional-state sentinels when upgrading existing databases.**
-  The declared [workflow transition](../../addons/angee/workflows/runtime_migrations/optional_states_nullable.py)
-  and [storage transition](../../addons/angee/storage/runtime_migrations/smart_kind_nullable.py)
-  remove affected checks, make the columns nullable, convert empty strings to
-  NULL, and restore the frozen target constraints. Build materializes these guarded,
-  reversible migrations before downstream schema autodetection. A partial
-  nullable transition retaining legacy checks is rejected: complete or reverse
-  that transition through the consumer's migration history before upgrading.
-  Preserve retained rows and historical migration bodies; a generated schema
-  alteration alone does not perform the data conversion. Regenerate SDL and client types after
-  migration: workflow wait reasons use the `WaitingKind` enum's uppercase member
-  names on the wire. The released workflow body failed on populated PostgreSQL
-  (`pending trigger events`); its declaration keeps that body valid through
-  `compatible_source_sha256`. A stack holding it **unapplied** (absent from
-  `showmigrations workflows`) recovers by deleting that materialized copy and
-  the unapplied `workflows` migrations generated after it, then running
-  `angee build` and `makemigrations` to materialize the fixed body under the
-  same name. Never delete an applied node.
+  The declared [storage transition](../../addons/angee/storage/runtime_migrations/smart_kind_nullable.py)
+  removes affected checks, makes the column nullable, converts empty strings to
+  NULL, and restores the frozen target constraints. Build materializes this guarded,
+  reversible migration before downstream schema autodetection. Preserve retained
+  rows and historical migration bodies; a generated schema alteration alone does
+  not perform the data conversion. Regenerate SDL and client types after migration.
 - **Row updates followed by DDL on the same tables need immediate constraints.**
   PostgreSQL queues deferred foreign-key checks for rows a migration updates and
   refuses a later `ALTER TABLE` or index build in the same atomic migration.
-  Run `SET CONSTRAINTS ALL IMMEDIATE` (PostgreSQL only) before the data step, as
-  the optional-state transition does. SQLite never shows this; rehearse such a
-  migration against populated PostgreSQL.
+  Run `SET CONSTRAINTS ALL IMMEDIATE` (PostgreSQL only) before the data step.
+  SQLite never shows this; rehearse such a migration against populated PostgreSQL.
 - **A structural marker consumed after runtime emission must be emitted too.**
   A non-inherited `__dict__` source-model marker stops at the abstract source unless
   the composer carries it into the concrete runtime class body.
@@ -931,8 +888,7 @@ and current contracts before applying a historical example to a new deployment.
   the complete ordered domain lock set; it must not consume groups or write rows.
   `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
   through the same native instance loader; preflights compose this public owner.
-  [`WorkflowDefinitionResource`](../../addons/angee/workflows/resources.py) is the
-  facet-reconciliation example. Source omission and explicit null must remain
+  Source omission and explicit null must remain
   distinguishable through dataset normalization.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
   `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
@@ -949,8 +905,9 @@ and current contracts before applying a historical example to a new deployment.
   NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
 - **Row locks must keep the SQLite floor.** `angee.base.scoping.lock_if_supported()`
   names lock intent for both native querysets and the Angee queryset/manager
-  method, delegating to `select_for_update(of=...)`. Django owns write routing
-  and backend feature checks: SQLite emits no lock SQL, including when `of` is requested. Backends
+  method, delegating `of`, `skip_locked` and `no_key` to `select_for_update`.
+  Django owns write routing and backend feature checks: SQLite emits no lock SQL,
+  including when `of` is requested. Backends
   supporting row locks still enforce their supported lock options. Do not set
   private queryset write state or duplicate Django's feature checks.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
@@ -1041,7 +998,7 @@ and current contracts before applying a historical example to a new deployment.
   deny branch by design, so add a deny-path regression whenever you use this shape.
   Do not hide independently-authorized `on_delete=CASCADE` children under an elevated
   parent cascade; dependent rows must derive delete through the parent in their own
-  zed relation, like the workflows Step/Edge pattern.
+  zed relation.
 - **zed exclusion binds loosest.** Parenthesize `(a - b) + c` when combining
   exclusion with union.
 - **A status field is read/write-asymmetric** — GraphQL serializes it on read as
@@ -1088,8 +1045,7 @@ and current contracts before applying a historical example to a new deployment.
   `GraphQLSchemas` connects publishers from declared `changes` metadata after
   model population without constructing schemas. Readable-field projection is
   resolved only when an observable partial update needs changed values, through
-  the same schema owner used by workflow condition catalogues. Building a schema
-  never mutates process-global signal state.
+  that schema owner. Building a schema never mutates process-global signal state.
 - **Validate every named schema before deploying writer processes.** The GraphQL
   addon's [Django system check](../../addons/angee/graphql/checks.py) builds every
   named schema through `GraphQLSchemas` and reports construction failures. It runs
@@ -1222,47 +1178,8 @@ validated at the driver boundary.
   between attempts; conflicts await explicit resolution and never auto-retry.
   The shared driver owns budgets, repeated-page detection and partition
   concurrency.
-  Workflow execution, decisions and durable scheduling stay with their existing
+  Workflow execution and durable scheduling stay with their existing
   owners; integrate must not import workflows.
-
-### Bridge cycles as workflow runs
-
-[`angee.workflows_integrate`](../../addons/angee/workflows_integrate/README.md)
-composes workflow execution over integrate's data protocol. The dependency points
-from the composition addon to both owners; integrate never imports workflows.
-
-- **Admission retains one cycle.** Use `admit_bridge_cycle` with the concrete
-  Bridge subject, its queued cadence token and active Integration owner. The
-  native start manager owns publication/input validation and exact deduplication;
-  Deferred input invokes an optional database-only `prepare()` after the
-  workflow and retained Run locks, then locks Bridge before constructing its
-  input. Input construction can lock downstream scope rows. `validate_new`
-  rejects another active cycle under that Bridge lock. The
-  run's dedup key is the only cycle identity. Declare `sync_workflow_key` on the
-  Bridge and immutable facts through `sync_workflow_input`; no secondary schedule.
-- **Stream stages are STANDARD.** Delegate one page to `advance_stream` outside
-  the workflow finalization transaction. The driver atomically commits records,
-  discrepancies and cursor. Retrying a crash between the
-  page commit and workflow finalization reads that cursor. Renew the retained
-  lease during long pages. Resume state retains stream correlation and the sum
-  of reported page counts; the terminal output carries that stage total. It must
-  never duplicate the cursor or reconstruct counts from it. Use stage branches,
-  never a per-record Map.
-- **Coverage keeps data truth authoritative.** OPEN/RETRY discrepancies prevent
-  acceptance. Only the composition addon's coverage gate turns CONFLICT rows
-  into native workflow Decisions; a review does not itself resolve a discrepancy.
-  Coverage is STANDARD: waiting pulses re-drive one bounded stream's due
-  identities outside the workflow transaction, rotating through partitions.
-  Baseline fallback must exhaust before acceptance. Admission continues to bar
-  a competing cycle. Consumer stages use the public `bridge_for_step` resolver
-  to enforce the admitted subject identity.
-- **Terminal delivery uses expected-run CAS.** A terminal run transition retains
-  `RUN_SETTLE` only for a subject with an explicitly registered settler. The Bridge
-  handler delegates to `Bridge.settle_dispatch`, which locks the row and compares
-  `sync_run_id` plus its busy stage before composing `record_sync` or
-  `record_sync_error`. Direct cancel and retry exhaustion therefore clear syncing,
-  and old delivery cannot overwrite
-  a newer cycle. Keep the run pointer for the shared inspection link.
 
 ### Integrations and workers
 
@@ -1362,11 +1279,6 @@ from the composition addon to both owners; integrate never imports workflows.
   baked into the opencode image (the `OPENCODE_ANTHROPIC_AUTH_PLUGIN` build arg) and using a
   Pro/Max token there violates Anthropic's ToS — enabling it without the plugin silently drops
   Anthropic from OpenCode's model list.
-- **One-shot inference steps compose the shared workflow inference owner.**
-  [`call_inference`](../../addons/angee/workflows_agents/inference.py) combines
-  model-owned access, approval and capability checks with backend request/error
-  policy and workflow budget accounting. Prompt construction belongs to the
-  invoking domain; agents owns native requests, structured decoding and usage.
 - **Task locks are advisory, row locks are authoritative.** Celery task bodies may
   use `angee.jobs.locks.task_lock()` to prevent duplicate workers from doing the
   same external work, but persisted state transitions still use model/queryset row
@@ -1404,110 +1316,30 @@ from the composition addon to both owners; integrate never imports workflows.
 
 ### Workflow execution
 
-- **Every human review uses the built-in `GateStep`.** Static declarations and
-  dynamic input-bound slots, payloads, action schemas, targets, record access,
-  `clean` predicates, `all_done`, and same-step
-  resumption are variants of one gate contract, not reasons to create an addon
-  gate or call `StepResult.suspend()` directly. Bind upstream values into the
-  step's admitted input before the gate evaluates them.
-- **Decision action branches have one authoring owner.** Call
-  `build_decision_action()` with `ReviewAction` plus the typed review context
-  models. Do not write a consumer-local `oneOf`, serialize fact dictionaries by
-  hand, or call the compiler. `DecisionManager.create_for_suspension()` is the
-  only compiler and admission boundary.
-- **Static gates declare actions, not schemas.** Put fixed action metadata in
-  `GateConfig.actions` and optional editable field schemas in `properties`.
-  Decision admission delegates to `build_decision_action()` and freezes its
-  tagged schema. A hand-written static or slot-local `oneOf` is invalid; dynamic
-  gates may bind a complete schema built by that same owner upstream.
-- **A reviewed mutation subclasses `DecisionApplyStep`.** The dispatcher loads
-  the predecessor Decision identity and resolver. `DecisionManager.locked_resolution`
-  owns retained binding, actor, verdict and current-consumer validation while
-  locking workflow ancestry and the Decision. The bridge then calls a public
-  domain verb with plain values and the actor; that verb owns record locks,
-  permission, expected state and idempotence. Base domain addons never import
-  workflows. An addon that already depends on workflows may expose a domain
-  command accepting the Decision identity, as extraction does. Keep this whole
-  database command in one transaction, with workflow ancestry before Decision
-  before domain rows. Return the domain outcome through the declared `StepResult`.
-- **Decisions bind record references and the resolver, never domain snapshots.**
-  Use [`DecisionApplyStep`](../../addons/angee/workflows/steps.py) and
-  [`DecisionManager.locked_resolution`](../../addons/angee/workflows/managers.py);
-  readers may decode `Decision.payload` into read-only projections but must not
-  persist those projections.
-- **Workflow persistence uses Django owners.** Manager verbs complete aggregate
-  operations; model methods own narrow transitions and keep generic protected
-  writes closed. Conditional updates on retained leases, generations, deadlines
-  and empty settlement facts check their affected row count. Constraints own
-  uniqueness and consistency; append-only querysets and `PROTECT` own retention.
-  Explicit definition sessions carry locked lineage rows through nested edits
-  and bump the draft revision once. No ambient capability authorizes a save,
-  and a transaction is never evidence of caller provenance.
-- **Action admission and engine persistence have distinct principals.** Start,
-  cancel and decide check the pinned initiating actor inside their owning verb.
-  Engine-owned rows persist under a named `system_context(reason=...)`; their
-  generic saves stay closed even to reentrant signals. `DecisionManager.decide`
-  commits resolution, gate settlement, pending-grant removal and durable dispatch
-  together. Callers never complete a separate resolution handshake.
-- **A gate whose assignee is the run owner must not also set that owner as
-  requester.** The decision `act` permission is `(assignee − requester) +
-  admin` (separation of duties), so `requester == assignee` locks the owner
-  out of their own decision. Leave `requester` unset when the assignee
-  defaults to the run creator.
-- **Workflow step implementations persist continuation state in `resume_state`.**
-  Pre-suspend side effects must be idempotent because resume replays from the
-  journal row, not process memory.
-- **Every workflow Step declares its operation key.** `step_class` has no
-  framework fallback. Register a concrete operation at composition time and
-  name it on every model, resource, and test fixture; never register an abstract
-  catch-all operation to make incomplete declarations executable.
-- **Database-only steps declare `StepImpl.execution_mode = StepExecutionMode.DATABASE_COMMAND`.**
-  This runtime contract is separate from the step's `StepEffect` authoring label.
-  The retained-attempt engine fences the run, step, and attempt before mutation,
-  then commits the domain write, result, artifacts, and continuation dispatch
-  together. Keep provider and blob I/O outside this mode.
-- **Replay eligibility is explicit per operation.** The execution mode does not
-  imply recovery safety. Declare `replay_mode = RecoveryMode.FRESH` only when
-  the operation owns that proof, or override `recovery_capability()` from the
-  provider's native idempotency or reconciliation contract. An undeclared
-  operation is not replayable, and the engine rechecks the declaration when it
-  invokes an admitted recovery.
-- **A fenced database command retires another Workflow run through `RUN_CANCEL`.**
-  Retain the cancellation intent and target `WorkflowRun` artifact with an
-  external wait in the command transaction. The dispatcher cancels the target
-  outside the originating command, retains artifact delivery, and consumes the
-  intent together. Continue only after the target is terminal; keep a bounded
-  timer on the wait to reconcile a missed or racing delivery.
-- **External domain waits subscribe before reading their predicate.** A retained
-  standard invocation calls `engine.subscribe_external(step_run, records)` for its
-  complete target set, lets that attempt-row write commit, then re-reads the domain
-  record before deciding whether to wait. A database command held in its atomic
-  transaction cannot subscribe this way.
-  The native domain transition saves an artifact delivery intent
-  in its own transaction; its signal must not lock a Workflow run. After commit,
-  dispatch delivery locks the intent, then affected runs, steps, and attempts.
-  A delivery while the step runs increments the run generation, so finalization
-  makes a subsequent wait due; a delivery after finalization wakes its exact
-  external wait. Keep a bounded reconciliation timer for missed integrations.
-- **Continuation joins compose retained admission and delivery; they do not
-  re-prove child identity.** See the
-  [workflow operation contract](../../addons/angee/workflows/README.md).
-- **`emit` owns declared projection and artifact binding.** See the
-  [workflow operation contract](../../addons/angee/workflows/README.md).
-- **Workflow joins count rows, not broker messages.** `join_rule` is evaluated
-  over sibling `StepRun` rows.
-- **Steps with multiple mutually exclusive predecessors declare `join_rule: one_success`.**
-  The default `ALL_SUCCESS` can stall waiting for a missing predecessor in
-  [`_join_decision`](../../addons/angee/workflows/engine.py);
-  [`Workflow.graph_diagnostics`](../../addons/angee/workflows/models.py) does not
-  detect this stall.
-- **Never trust a workflow step to self-limit.** The engine owns `max_steps` and
-  budget enforcement.
-- **Invalid decision resolution re-opens the decision.** It increments the
-  attempt audit and leaves journal history immutable.
-- **Workflow event triggers consume the declared change feed.** A trigger's
-  target model must declare `changes()`; otherwise validation tells the addon to
-  declare `changes()` for the model to join the change feed.
+- **`Definition` owns graph policy.** The immutable document owns validation,
+  class resolution, input bindings, readiness, failure routing and result
+  projection. Callers use its methods rather than inspecting node declarations
+  to make their own execution decisions. `WorkflowManager` owns identity,
+  conditional draft saves and numbered publication.
+- **A `Step` declares typed input, output and config.** Register its key through
+  `ANGEE_WORKFLOW_STEP_CLASSES`. Its `run` method receives a `StepContext` and
+  returns a settlement: `Done`, `Wait` or `Fail`. The context supplies the admitted
+  actor, input, checkpoint and attempt identity. Database steps execute inside
+  the run's transaction; keep external I/O out of their bodies.
+- **`WorkflowRunQuerySet.hold` owns the run lock and transaction.** It registers
+  ready-row dispatch on successful commit. `advance` requires that lock and
+  composes `Definition` with the persistence owners. It isolates settlement,
+  planning and failure recording with savepoints so a later planning failure
+  does not discard a successful body write.
+- **Queryset verbs own transitions and companion fields.** `StepRunQuerySet`
+  owns `claim`, `settle`, `to_waiting`, `to_ready`, `cancel_open`, `dispatch` and
+  `count_redispatch`; `StepAttemptQuerySet.close` owns attempt closure.
+  Conditional updates check the attempt fence. The periodic tick rechecks due
+  waits and stale deliveries under `hold`, then delegates to those verbs.
+- **Conditional queryset updates send no model signals.** Workflow owners
+  explicitly call `publish_change` after their writes. Dispatch locks ready
+  rows with `skip_locked` and uses `enqueue_task` to send after commit; callers
+  do not infer publication or task delivery from `post_save`.
 
 ## Framework Contracts
 

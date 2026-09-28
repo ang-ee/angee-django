@@ -23,7 +23,6 @@ from angee.parties.models import Party as AbstractParty
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.projects.models import ThreadProjects
 from angee.spaces.models import ThreadSpace
-from angee.workflows_parties.models import Handle as WorkflowHandleContribution
 from tests import spaces_models  # noqa: F401 -- register Thread's group relation target
 from tests.integrate_models import Integration
 
@@ -66,7 +65,7 @@ class Party(AbstractParty):
         rebac_resource_type = "parties/party"
 
 
-class Handle(WorkflowHandleContribution, AbstractHandle):
+class Handle(AbstractHandle):
     """Concrete handle (a message sender/recipient) used by messaging tests."""
 
     rebac_grantable = AbstractHandle.rebac_grantable

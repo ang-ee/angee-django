@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from angee.messaging import _wire, identity
-from angee.workflows_integrate import archive_steps, steps
 from tests.test_base_layering import _module_imports
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -144,13 +143,6 @@ def test_integrate_does_not_import_workflows() -> None:
         for path in sorted(root.rglob("*.py"))
     }
     assert not {path: names for path, names in violations.items() if names}
-
-
-def test_workflows_integrate_public_archive_extension_imports() -> None:
-    """Released bridge extractors share the framework's canonical archive contracts."""
-
-    assert steps.ArchiveExtractor is archive_steps.ArchiveExtractor
-    assert steps.ArchiveExecutionReporter is archive_steps.ArchiveExecutionReporter
 
 
 def test_messaging_identity_public_owner() -> None:

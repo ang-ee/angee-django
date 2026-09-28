@@ -39,4 +39,4 @@ def test_composed_addon_query_budgets(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, f"composed query budgets failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0}
+    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}

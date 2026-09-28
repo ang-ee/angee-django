@@ -1,63 +1,42 @@
 // Authorization schema for the workflows addon.
 // @rebac_package: workflows
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 8
+// @rebac_schema_revision: 10
 
 definition workflows/workflow {
     relation owner: auth/user // rebac:field=created_by
     relation editor: auth/user | auth/group#member
     relation viewer: auth/user | auth/group#member
-    relation lineage_head: workflows/workflow // rebac:field=published_from
+    relation starter: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = owner + editor + viewer + lineage_head->read + admin->member
-    permission write = owner + editor + lineage_head->write + admin->member
+    permission read = owner + editor + viewer + admin->member
+    permission write = owner + editor + admin->member
+    permission start = owner + editor + starter + admin->member
     permission delete = owner + admin->member
 }
 
-definition workflows/step {
+definition workflows/version {
     relation workflow: workflows/workflow // rebac:field=workflow
     relation admin: angee/role // rebac:const=admin
 
     permission create = workflow->write + admin->member
     permission read = workflow->read + admin->member
-    permission write = workflow->write + admin->member
-    permission delete = workflow->write + admin->member
-}
-
-definition workflows/edge {
-    relation workflow: workflows/workflow // rebac:field=workflow
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = workflow->write + admin->member
-    permission read = workflow->read + admin->member
-    permission write = workflow->write + admin->member
-    permission delete = workflow->write + admin->member
-}
-
-definition workflows/trigger {
-    relation workflow: workflows/workflow // rebac:field=workflow
-    relation admin: angee/role // rebac:const=admin
-
-    permission create = workflow->write + admin->member
-    permission read = workflow->read + admin->member
-    permission write = workflow->write + admin->member
-    permission delete = workflow->write + admin->member
+    permission write = admin->member
+    permission delete = admin->member
 }
 
 definition workflows/run {
-    relation owner: auth/user // rebac:field=created_by
-    relation workflow: workflows/workflow // rebac:field=workflow
-    // Run readers are delegated by workflow editors (grant requires write).
-    // Unlike shareable file/evidence viewers, readers cannot propagate access.
+    relation run_as: auth/user // rebac:field=run_as
+    relation workflow: workflows/workflow // rebac:field=version__workflow
     relation reader: auth/user | auth/group#member
     relation operator: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
-    permission create = workflow->write + admin->member
-    permission read = owner + workflow->read + reader + operator + admin->member
-    permission write = owner + workflow->write + operator + admin->member
+    permission create = workflow->start + admin->member
+    permission read = run_as + workflow->read + reader + operator + admin->member
+    permission write = run_as + workflow->write + operator + admin->member
     permission delete = admin->member
 }
 
@@ -75,38 +54,8 @@ definition workflows/step_attempt {
     relation step_run: workflows/step_run // rebac:field=step_run
     relation admin: angee/role // rebac:const=admin
 
-    permission read = step_run->read + admin->member
-}
-
-definition workflows/step_artifact {
-    relation attempt: workflows/step_attempt // rebac:field=attempt
-    relation admin: angee/role // rebac:const=admin
-
-    permission read = attempt->read + admin->member
-}
-
-definition workflows/recovery_evidence {
-    relation run: workflows/run // rebac:field=run
-    relation admin: angee/role // rebac:const=admin
-
-    permission read = run->read + admin->member
-}
-
-definition workflows/decision {
-    // Retained by the suspension owner from the immutable admitted run actor.
-    // Separate from requester so ordinary self-review remains actionable.
-    relation issuer: auth/user
-    relation assignee: auth/user | angee/role#member
-    relation requester: auth/user
-    relation escalation: auth/user | angee/role#member
-    relation reader: auth/user | auth/group#member
-    relation admin: angee/role // rebac:const=admin
-    relation person: iam/kind // rebac:const=person
-
     permission create = admin->member
-    permission act = ((assignee - requester) + admin->member) & person->active_member
-    permission read = issuer + assignee + requester + escalation + reader + admin->member
-    permission share = issuer + requester + admin->member
+    permission read = step_run->read + admin->member
     permission write = admin->member
     permission delete = admin->member
 }

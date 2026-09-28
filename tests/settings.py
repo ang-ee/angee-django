@@ -11,7 +11,7 @@ from django.apps import AppConfig
 from angee.base.autoconfig import SETTINGS as BASE_SETTINGS
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
 from angee.jobs.autoconfig import SETTINGS as JOB_SETTINGS
-from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
+from angee.workflows.autoconfig import SETTINGS as WORKFLOW_SETTINGS
 
 
 class BareComposeConfig(AppConfig):
@@ -48,9 +48,6 @@ INSTALLED_APPS = [
     "angee.iam_integrate_oidc",
     "angee.agents",
     "angee.workflows",
-    "angee.workflows_agents",
-    "angee.workflows_parties",
-    "angee.workflows_extraction",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
@@ -171,40 +168,10 @@ ANGEE_AGENT_RUNTIME_CLASSES = {
     "opencode": "angee.agents.runtimes.OpenCodeRuntime",
     "pydantic": "angee.agents_runtime_pydantic.runtime.PydanticAIRuntime",
 }
-ANGEE_WORKFLOW_STEP_CLASSES = {
-    "wait": "angee.workflows.steps.WaitStep",
-    "gate": "angee.workflows.steps.GateStep",
-    "map": "angee.workflows.steps.MapStep",
-    "call_workflow": "angee.workflows.steps.CallWorkflow",
-    "join_continuation": "angee.workflows.steps.JoinContinuation",
-    "emit": "angee.workflows.steps.EmitStep",
-    "fixture": "tests.workflows.FixtureStep",
-    "archive_probe": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.archive_probe"],
-    "archive_gate": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.archive_gate"],
-    "archive_execute": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.archive_execute"],
-    "integrate_stream": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.integrate_stream"],
-    "integrate_coverage": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.integrate_coverage"],
-    "infer": "angee.workflows_agents.steps.InferStepImpl",
-    "agent_session": "angee.workflows_agents.steps.AgentSessionStepImpl",
-    "parties_dedupe_scan": "angee.workflows_parties.steps.DedupeScanStepImpl",
-    "parties_identity_review": "angee.workflows_parties.steps.IdentityReviewStepImpl",
-    "parties_identity_apply": "angee.workflows_parties.steps.IdentityApplyStepImpl",
-    "parties_dedupe_gate": "angee.workflows_parties.steps.DedupeGateStepImpl",
-    "parties_dedupe_execute": "angee.workflows_parties.steps.DedupeExecuteStepImpl",
-    "prepare_pages": "angee.workflows_extraction.steps.PreparePagesStepImpl",
-    "recognize_page": "angee.workflows_extraction.steps.RecognizePageStepImpl",
-    "collect_carriers": "angee.workflows_extraction.steps.CollectCarriersStepImpl",
-    "process_evidence": "angee.workflows_extraction.steps.ProcessEvidenceStepImpl",
-    "infer_evidence": "angee.workflows_extraction.steps.InferEvidenceStepImpl",
-}
-ANGEE_AGENT_TEARDOWN_HOOKS = ("angee.workflows_agents.sessions.close_agent_sessions",)
-ANGEE_EXTRACTION_PROFILE_CLASSES = {
-    "none": "angee.workflows_extraction.profiles.UnconfiguredExtractionProfile",
-    "fake_document": "tests.extraction_profiles.FakeDocumentProfile",
-    "record_carrier": "tests.extraction_profiles.RecordCarrierProfile",
-}
-ANGEE_EXTRACTION_MAX_BYTES = 25 * 1024 * 1024
-ANGEE_EXTRACTION_TIMEOUT_SECONDS = 120
+# Steps are registered explicitly by each workflow test.
+ANGEE_WORKFLOW_STEP_CLASSES: dict[str, str] = {}
+ANGEE_WORKFLOW_MAX_DISPATCHES = WORKFLOW_SETTINGS["ANGEE_WORKFLOW_MAX_DISPATCHES"]
+ANGEE_AGENT_TEARDOWN_HOOKS = ()
 ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
     "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",
 }

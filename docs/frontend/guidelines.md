@@ -231,10 +231,7 @@ history uses native Query pages with domain-owned
   do not mount their own chatter or filter its contributed tabs to change
   placement.
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
-  paging, record selection, and URL state. The workflows Decision inbox keeps
-  `ApprovalTask` as the sole form and mutation owner and specializes only its
-  content slot by Decision action; resolving closes the stale row so the native
-  filtered collection refreshes before selecting the next current record.
+  paging, record selection, and URL state.
 - **Routed page components are code-split.** In an addon manifest give each
   routed page `component: lazyRouteComponent(() => import("./views/Page"),
   "Page")` (the stack-native helper from `@tanstack/react-router`, already a
@@ -550,9 +547,9 @@ Hard-won traps — the wise learn from others' mistakes
   repository-local `.angee/runtime` fallback may be stale in a workspace slot.
 - **Optional operations travel with their owning addon.** Keep documents and their
   transport UI in the addon contributing the schema fields; a base fragment must
-  codegen without optional dependents. Runtime-specific agent chat composes the
-  [agents chat slot](../../addons/angee/agents/web/src/chat-slot.ts) from the
-  [workflow session fragment](../../addons/angee/workflows_agents/web/src/index.tsx).
+  codegen without optional dependents. Runtime-specific chat surfaces fill the
+  [agents chat slot](../../addons/angee/agents/web/src/chat-slot.ts) from their own
+  addon fragment.
 - **Relation widgets follow the SDL field kind** — a nested object FK
   (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:

@@ -2580,7 +2580,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             return None
         handler = getattr(settings, "ANGEE_BRIDGE_SYNC_DISPATCH", "")
         if not handler:
-            raise ImproperlyConfigured("A sync_workflow_key requires the workflows_integrate addon.")
+            raise ImproperlyConfigured("A sync_workflow_key requires an ANGEE_BRIDGE_SYNC_DISPATCH handler.")
         return import_string(handler)(self)
 
     def sync_workflow_input(self) -> dict[str, Any]:

@@ -21,8 +21,5 @@ demo = [
   { path = "resources/demo/085_integrate_vcs.source.yaml", depends_on = "resources/demo/084_integrate_vcs.repository.yaml" },
   { path = "resources/demo/094_integrate_vcs.template.yaml", depends_on = "resources/demo/085_integrate_vcs.source.yaml", adopt = ["source", "path"] },
   { path = "resources/demo/095_agents.agent.yaml", depends_on = ["resources/demo/094_integrate_vcs.template.yaml", "agents:resources/demo/020_agents.mcpserver.yaml", "agents_integrate_anthropic:resources/demo/040_agents.inferencemodel.yaml"] },
-  { path = "resources/demo/100_workflows.workflow.yaml", publish = true },
-  { path = "resources/demo/101_workflows.step.yaml", depends_on = "resources/demo/100_workflows.workflow.yaml" },
-  { path = "resources/demo/102_workflows.edge.yaml", depends_on = "resources/demo/101_workflows.step.yaml" },
-  { path = "resources/demo/103_workflows.trigger.yaml", depends_on = "resources/demo/100_workflows.workflow.yaml" },
+  { path = "resources/demo/100_workflows.workflow.yaml", adopt = "key" },
 ]

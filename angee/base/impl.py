@@ -430,16 +430,21 @@ class ImplBase:
 
         if cls.config_model is None:
             return cast(dict[str, Any], value)
+        validated = cls.parse_value(value, parser=cls.config_model.model_validate, path="config")
+        return validated.model_dump(mode="json", by_alias=True)
+
+    @staticmethod
+    def parse_value[T](value: Any, *, parser: Callable[[Any], T], path: str) -> T:
+        """Parse one typed value with the same field errors as config normalization."""
         try:
-            validated = cls.config_model.model_validate(value)
+            return parser(value)
         except PydanticValidationError as error:
             messages: dict[str, list[str]] = {}
             for issue in error.errors(include_url=False, include_context=False, include_input=False):
                 location = ".".join(str(part) for part in issue["loc"])
-                path = f"config.{location}" if location else "config"
-                messages.setdefault(path, []).append(str(issue["msg"]))
+                field_path = f"{path}.{location}" if location else path
+                messages.setdefault(field_path, []).append(str(issue["msg"]))
             raise ValidationError(messages) from None
-        return validated.model_dump(mode="json", by_alias=True)
 
     @classmethod
     def declared_config_keys(cls) -> frozenset[str] | None:
