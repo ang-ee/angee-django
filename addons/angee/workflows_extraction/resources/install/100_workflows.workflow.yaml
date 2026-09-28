@@ -1,0 +1,55 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: document_extraction
+    fields:
+      key: document_extraction
+      name: Document extraction
+      subject_model: ""
+      publish: true
+      draft:
+        nodes:
+          prepare_pages:
+            step: prepare_pages
+            input:
+              files: {from: input, path: [files]}
+              message_parts: {from: input, path: [message_parts]}
+              target_model: {from: input, path: [target_model]}
+              target_id: {from: input, path: [target_id]}
+              profile: {from: input, path: [profile]}
+              profile_config: {from: input, path: [profile_config]}
+              model: {from: input, path: [model]}
+              recognition_model: {from: input, path: [recognition_model]}
+            next: {prepared: map_pages}
+          map_pages:
+            step: map
+            input: {items: {from: prepare_pages, path: [pages]}}
+            body:
+              step: recognize_page
+              input:
+                page: {from: item}
+                model_id: {from: input, path: [recognition_model]}
+                profile_config: {from: input, path: [profile_config, recognition_config]}
+            next: {done: collect_carriers, failed: collect_carriers}
+          collect_carriers:
+            step: collect_carriers
+            input:
+              prepared: {from: prepare_pages, path: [prepared]}
+              recognition: {from: map_pages}
+            next: {collected: process_evidence, source_hold: process_evidence}
+          process_evidence:
+            step: process_evidence
+            input:
+              prepared: {from: collect_carriers, path: [prepared]}
+              recognition: {from: collect_carriers, path: [recognition]}
+              hold_reasons: {from: collect_carriers, path: [hold_reasons]}
+              schema: {from: input, path: [schema]}
+              profile: {from: input, path: [profile]}
+              profile_config: {from: input, path: [profile_config]}
+              target_model: {from: input, path: [target_model]}
+              target_id: {from: input, path: [target_id]}
+              model_id: {from: input, path: [model]}
+              recognition_model_id: {from: input, path: [recognition_model]}
+        results:
+          - {from: process_evidence, when: [processed]}
+          - {from: process_evidence, when: [source_hold]}

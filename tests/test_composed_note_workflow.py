@@ -24,6 +24,7 @@ def test_composed_note_workflow(tmp_path: Path) -> None:
             sys.executable,
             str(root / "tests" / "composed_host.py"),
             "--runtime-dir", str(tmp_path / "runtime"),
+            "--app", "example.notes",
             "--action", "tests",
             "--test-label", "example.notes.tests.test_workflow_steps",
             "--output", str(report),

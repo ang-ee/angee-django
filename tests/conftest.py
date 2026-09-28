@@ -61,7 +61,11 @@ from angee.storage.models import MimeType as AbstractMimeType
 from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
-from tests import messaging_models  # noqa: F401 -- register the managed posts FK targets before database setup
+from tests import (  # noqa: F401 -- register shared FK targets before native database setup
+    agents_models,
+    extraction_models,
+    messaging_models,
+)
 from tests.integrate_models import Integration
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
