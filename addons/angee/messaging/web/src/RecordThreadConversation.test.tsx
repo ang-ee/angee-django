@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { RecordMessageRow } from "./documents";
+import type { RecordActivityRow, RecordMessageRow } from "./documents";
 import type { RecordThreadConversationChrome } from "./RecordThreadConversation";
 
 const mocks = vi.hoisted(() => ({
@@ -83,7 +83,7 @@ function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
   } as unknown as RecordMessageRow;
 }
 
-function threadPayload(messages: RecordMessageRow[]): unknown {
+function threadPayload(messages: RecordMessageRow[], activities: RecordActivityRow[] = []): unknown {
   return {
     record_thread: {
       error: null,
@@ -103,8 +103,9 @@ function threadPayload(messages: RecordMessageRow[]): unknown {
       attachment_count: 0,
       notifications: [],
       followers: [],
-      activity_count: 0,
-      activities: [],
+      activity_count: activities.length,
+      activities,
+      activity_types: [{ id: "act_call", key: "call", name: "Call", glyph: "phone" }],
     },
   };
 }
@@ -132,11 +133,24 @@ afterEach(cleanup);
 
 describe("RecordThreadConversation", () => {
   test("renders the record-thread transcript for the given record", () => {
-    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    mocks.threadData = threadPayload([message()], [{
+      id: "activity_1", activity_type: "call", summary: "Earlier exchange",
+      note: "Agreed on the next step.", due_date: "2026-07-05",
+      completed_at: "2026-07-07T12:00:00Z", feedback: "", status: "DONE", state: "done",
+      user: null, created_by: null,
+    }]);
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1"
+      activityCopy={{ recordedOn: (day) => `Logged ${day}` }} />);
 
     // The record-attached chatter — not the .inbox()-scoped generic messages.
     expect(screen.getByText("Ping the room")).toBeTruthy();
     expect(screen.getByText("Grace Hopper")).toBeTruthy();
+    expect(screen.getByText("Call")).toBeTruthy();
+    expect(screen.getByText(/Logged /)).toBeTruthy();
+    const feed = screen.getByRole("list", { name: "Comments" });
+    expect(feed.textContent?.indexOf("Agreed on the next step.")).toBeLessThan(
+      feed.textContent?.indexOf("Ping the room") ?? -1,
+    );
   });
 
   test("posts a message through the composer keyed by the record", () => {

@@ -11,6 +11,9 @@ dependencies = [
   "django-anymail>=15.1",
 ]
 
+[resources]
+master = [{ path = "resources/master/010_messaging.activitytype.yaml", adopt = "key" }]
+
 [[migrations]]
 name = "follower_party"
 app_label = "messaging"

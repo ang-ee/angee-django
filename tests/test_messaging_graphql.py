@@ -29,6 +29,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.parties.mixins import LinkSource
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
+from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import (
     Backend,
     Drive,
@@ -2768,6 +2769,7 @@ def test_record_chatter_follow_toggle(composed_tables: None) -> None:
     }
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_chatter_activity_lifecycle(composed_tables: None) -> None:
     """The custom record activity mutations schedule and complete chatter activities."""
 
@@ -2874,8 +2876,63 @@ def test_record_chatter_activity_lifecycle(composed_tables: None) -> None:
         ],
     }
 
+    with system_context(reason="tests.messaging.logged_exchange"):
+        record = ChatterDoc.objects.create(title="Exchange record")
+        reader = get_user_model().objects.create_user(username="exchange-reader")
+        write_relationships([RelationshipTuple(to_object_ref(record), "reader", to_subject_ref(reader))])
+    logged = _data(execute_schema(
+        schema,
+        """
+        mutation Log($model: String!, $id: ID!) {
+          log_record_activity(input: {
+            model_label: $model, record_id: $id, activity_type: "call",
+            occurred_on: "2025-12-31", note: "Agreed next steps."
+          }) {
+            error_code
+            activity { status due_date note created_by { username } }
+            thread { message_count }
+          }
+        }
+        """,
+        {"model": "chatterdemo.ChatterDoc", "id": record.sqid},
+        request=_request(admin),
+    ))["log_record_activity"]
+    assert logged == {
+        "error_code": None,
+        "activity": {
+            "status": "DONE", "due_date": "2025-12-31", "note": "Agreed next steps.",
+            "created_by": {"username": "msg-activity-admin"},
+        },
+        "thread": {"message_count": 1},
+    }
+    readable = _data(execute_schema(
+        schema,
+        """query Activities($id: ID!) {
+          record_thread(input: {model_label: "chatterdemo.ChatterDoc", record_id: $id}) {
+            error_code activities { note status } activity_types { key name }
+          }
+        }""",
+        {"id": record.sqid}, request=_request(reader),
+    ))["record_thread"]
+    assert readable["error_code"] is None
+    assert readable["activities"] == [{"note": "Agreed next steps.", "status": "DONE"}]
+    assert {item["key"] for item in readable["activity_types"]} == {"call", "todo"}
+    denied = _data(execute_schema(
+        schema,
+        """mutation Log($id: ID!) {
+          log_record_activity(input: {
+            model_label: "chatterdemo.ChatterDoc", record_id: $id,
+            activity_type: "call", occurred_on: "2025-12-31", note: "No write access."
+          }) { error_code activity { id } }
+        }""",
+        {"id": record.sqid}, request=_request(reader),
+    ))["log_record_activity"]
+    assert denied["error_code"] is not None
+    assert denied["activity"] is None
+
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])
+@pytest.mark.usefixtures("activity_catalog")
 def test_activity_agenda_bare_assignee_gets_pointer_not_parent(
     composed_tables: None,
     storage: str,
@@ -3223,6 +3280,7 @@ def test_generic_thread_and_message_lists_exclude_record_chatter(composed_tables
     assert by_pk["messages_by_pk"] is None
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_complete_and_cancel_activity_authorize_through_record_read(composed_tables: None) -> None:
     """Complete/cancel reach the activity through the parent record's read.
 
@@ -3364,6 +3422,7 @@ def test_generic_delete_excludes_record_thread_from_its_creator(composed_tables:
         assert not messaging_models.Thread._base_manager.filter(sqid=inbox_thread.sqid).exists()
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_writer_completes_activity_they_neither_own_nor_are_assigned(
     composed_tables: None,
 ) -> None:

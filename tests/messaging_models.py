@@ -5,6 +5,7 @@ collected. Register this connected model graph from conftest, before Django
 creates the test database, without depending on a test module's import order.
 """
 
+from angee.messaging.models import ActivityType as AbstractActivityType
 from angee.messaging.models import Channel as AbstractChannel
 from angee.messaging.models import Fragment as AbstractFragment
 from angee.messaging.models import Message as AbstractMessage
@@ -118,6 +119,15 @@ class Thread(ThreadProjects, ThreadSpace, ThreadPublic, AbstractThread):
         app_label = "messaging"
         db_table = "test_messaging_thread"
         rebac_resource_type = "messaging/thread"
+
+
+class ActivityType(AbstractActivityType):
+    """Concrete activity catalog for source-addon compositions."""
+
+    class Meta(AbstractActivityType.Meta):
+        abstract = False
+        app_label = "messaging"
+        db_table = "test_messaging_activity_type"
 
 
 class MessageSubtype(AbstractMessageSubtype):

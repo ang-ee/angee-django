@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import override_settings
 from rebac import system_context
@@ -70,6 +71,8 @@ def test_channel_owner_reaches_threads_and_messages(messaging_access_schema: str
             assert type(row).objects.with_actor(actor).with_action("delete").scoped().filter(pk=row.pk).exists()
     assert person_thread.owner_id is None and person_thread.created_by_id == person.pk
     assert service_thread.owner_id is None and service_thread.created_by_id == author.pk
+    with system_context(reason="tests.messaging.channel_owner_refused"), pytest.raises(ValidationError):
+        Thread.objects.create(channel=service_channel, owner=author)
     assert not service_thread.with_actor(author).has_access("read")
 
     candidates = (thread_message.pk, channel_message.pk, service_message.pk)

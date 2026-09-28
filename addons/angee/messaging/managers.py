@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.postgres.search import SearchQuery, SearchVector
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, connections, models, transaction
 from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.query import ModelIterable
@@ -823,7 +823,7 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         :func:`_external_id_q`; the create side relies on the expression unique
         constraint to serialise a concurrent first insert, re-reading on conflict —
         the same converge-on-unique contract the old column constraint provided.
-        Channel-bound inserts release personal ownership within that transaction;
+        Channel-bound inserts skip personal ownership through the model's save;
         their access follows the channel while creation attribution remains intact.
         """
 
@@ -839,9 +839,6 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         try:
             with transaction.atomic():
                 thread = self.model._base_manager.create(platform=platform, external_id=external_id, **defaults)
-                if thread.channel_id is not None and thread.owner_id is not None:
-                    self.filter(pk=thread.pk).release(get_user_model()(pk=thread.owner_id))
-                    thread.owner = None
                 return thread, True
         except IntegrityError:
             existing = queryset.first()
@@ -1673,7 +1670,7 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
             team = record.thread_team()
             sources = (*team.thread_audience(),) if team is not None else ()
             for member in (*sources, *record.thread_audience_members()):
-                party_id = member.party.pk
+                party_id = member.party_id
                 follower = followers.get(party_id)
                 if follower is not None and follower.notification_policy == policy_type.MUTED:
                     continue
@@ -1706,12 +1703,15 @@ class ThreadNotificationManager(AngeeManager.from_queryset(ThreadNotificationQue
             accounts[account.pk] = account
             deliveries.setdefault(account.pk, (policy_type.INBOX, None))
 
+        eligible = {
+            key: account for key, account in accounts.items()
+            if created_by_id is None or str(key) != str(created_by_id)
+        }
+        reader_ids = record.thread_reader_ids(eligible.values()) if record is not None else set(eligible)
         existing = {row.user_id: row for row in self.model._base_manager.filter(message=message)}
         new_rows: list[Any] = []
         for user_id, (policy, follower) in deliveries.items():
-            if created_by_id is not None and str(user_id) == str(created_by_id):
-                continue
-            if record is not None and not record.thread_reader_allowed(accounts[user_id]):
+            if user_id not in reader_ids:
                 continue
             values = {
                 "thread_id": message.thread_id,
@@ -1800,12 +1800,14 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
     """Owns scheduled activities attached to model chatter threads."""
 
     def for_record(self, record: Any, *, role: str = "chatter", include_done: bool = True) -> Any:
-        """Return activities for ``record`` and ``role``."""
+        """Read activities through the record's gate; agenda keeps its own scope."""
 
+        if not record._message_read_allowed():
+            raise PermissionDenied("Reading activities requires record read access.")
         attachment = _record_attachment(record, role=role)
         if attachment is None:
             return self.none()
-        queryset = self.filter(attachment=attachment)
+        queryset = self.sudo(reason="messaging.activity.for_record").filter(attachment=attachment)
         if not include_done:
             queryset = queryset.open()
         return queryset
@@ -1837,7 +1839,7 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             role=role,
             title=_record_thread_title(record),
         )
-        return self.create(
+        activity = self.model(
             thread_id=attachment.thread.pk,
             attachment_id=attachment.pk if attachment is not None else None,
             user_id=resolved_user_id,
@@ -1848,6 +1850,35 @@ class ThreadActivityManager(AngeeManager.from_queryset(ThreadActivityQuerySet)):
             metadata=metadata or {},
             created_by_id=created_by_id,
         )
+        activity.clean()
+        activity.save()
+        return activity
+
+    def log(self, record: Any, *, activity_type: str, occurred_on: date, note: str, role: str = "chatter") -> Any:
+        """Insert one completed exchange under the record's activity authority."""
+
+        user_id = actor_user_id(current_actor())
+        if user_id is None:
+            raise PermissionDenied("Logging an activity requires an account.")
+        summary = note.splitlines()[0][:256] if note else ""
+        if not summary.strip():
+            raise ValidationError({"note": "An activity note needs a nonempty first line."})
+        if occurred_on is None:
+            raise ValidationError({"due_date": "The occurrence date is required."})
+        activity = self.model(
+            activity_type=activity_type, due_date=occurred_on, summary=summary,
+            note=note, user_id=user_id, status=self.model.ActivityStatus.DONE,
+            completed_at=timezone.now(), created_by_id=user_id,
+        )
+        activity.clean()
+        with transaction.atomic(), system_context(reason="messaging.activity.log"):
+            attachment = apps.get_model("messaging", "ThreadAttachment").objects.ensure_for_record(
+                record, role=role, title=_record_thread_title(record),
+            )
+            activity.thread_id = attachment.thread_id
+            activity.attachment_id = attachment.pk
+            activity.save()
+        return activity
 
     def complete(self, activity: Any, *, feedback: str = "", post_message: bool = True) -> Any:
         """Mark an activity done and optionally log that completion to the thread."""

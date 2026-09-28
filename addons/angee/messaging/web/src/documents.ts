@@ -13,6 +13,7 @@ export const READ_MODELS = [
   "messaging.Message",
   "messaging.ThreadFollower",
   "messaging.ThreadActivity",
+  "messaging.ActivityType",
   "messaging.ThreadNotification",
   "messaging.Reaction",
   "messaging.MessageStar",
@@ -191,6 +192,7 @@ export const RecordActivityFields = graphql(`
     status
     state
     user { ...RecordUserFields }
+    created_by { ...RecordUserFields }
   }
 `);
 
@@ -408,6 +410,7 @@ export const RecordThreadDocument = graphql(`
       activities {
         ...RecordActivityFields
       }
+      activity_types { id key name glyph }
     }
   }
 `);
@@ -675,6 +678,29 @@ export const SetRecordFollowingDocument = graphql(`
       follower {
         ...RecordFollowerFields
       }
+    }
+  }
+`);
+
+export const LogRecordActivityDocument = graphql(`
+  mutation MessagingLogRecordActivity(
+    $modelLabel: String!
+    $recordId: ID!
+    $activityType: String!
+    $occurredOn: Date!
+    $note: String!
+  ) {
+    log_record_activity(input: {
+      model_label: $modelLabel
+      record_id: $recordId
+      activity_type: $activityType
+      occurred_on: $occurredOn
+      note: $note
+    }) {
+      error
+      error_code
+      activity_count
+      activity { ...RecordActivityFields }
     }
   }
 `);

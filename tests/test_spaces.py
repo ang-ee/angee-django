@@ -268,7 +268,7 @@ def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(spaces_tables: None) 
         Membership.objects.create(group=queue, party=person, is_confirmed=True)
         assert Queue._meta.get_field("owner").model is Group
         assert queue.owner_id == owner.pk
-        assert [entry.party.pk for entry in queue.thread_audience()] == [person.pk]
+        assert [entry.party_id for entry in queue.thread_audience()] == [person.pk]
         queue.delete()
 
         root = Group.objects.create(name="Community")
