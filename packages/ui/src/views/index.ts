@@ -303,7 +303,6 @@ export {
   type UseDeleteWithPreviewResult,
 } from "./resource/resource-operations";
 export {
-  recordActionId,
   useActionOutcomeMutation,
   useActionResultMutation,
   useRecordAction,

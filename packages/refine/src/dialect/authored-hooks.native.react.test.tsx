@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { LiveProvider } from "@refinedev/core";
-import { focusManager, keepPreviousData, onlineManager } from "@tanstack/react-query";
+import { focusManager, keepPreviousData, onlineManager, type MutationFilters } from "@tanstack/react-query";
 import { parse } from "graphql";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -43,6 +43,16 @@ function fixture(custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } 
     >{children}</Provider>;
   }
   return { client, custom, onError, notify, wrapper: Providers };
+}
+
+function mutationWithValues(values: Variables) {
+  return {
+    predicate: ({ state }) => {
+      const variables = state.variables;
+      return typeof variables === "object" && variables !== null
+        && "values" in variables && variables.values === values;
+    },
+  } satisfies MutationFilters;
 }
 
 const feedWindow = {
@@ -189,6 +199,54 @@ test("authored mutation reset clears native error state without another request"
   await waitFor(() => expect(result.current[1].error).toBeNull());
   expect(result.current[1].fetching).toBe(false);
   expect(f.custom).toHaveBeenCalledTimes(1);
+});
+
+test.each([true, false])("authored mutation transient=%s controls result retention", async (transient) => {
+  const f = fixture();
+  const cache = f.client.getMutationCache();
+  const variables = { id: "a" };
+  const authored = mutationWithValues(variables);
+  let detached = false;
+  const unsubscribe = cache.subscribe((event) => {
+    if (event.type === "observerRemoved" && authored.predicate(event.mutation)) detached = true;
+  });
+  const { result } = renderHook(() => useAuthoredMutation(MUTATION, { transient }), { wrapper: f.wrapper });
+  await act(async () => {
+    await expect(result.current[0](variables)).resolves.toEqual({ notes: [{ id: "one" }] });
+    expect(detached).toBe(transient);
+  });
+  if (transient) {
+    await waitFor(() => expect(cache.findAll(authored)).toHaveLength(0));
+  } else {
+    expect(cache.findAll(authored)).toHaveLength(1);
+    expect(cache.findAll(authored)[0]?.state.data).toEqual({ data: { notes: [{ id: "one" }] } });
+  }
+  expect(f.client.getQueryCache().findAll({ queryKey: ["angee", "authored"] })).toHaveLength(0);
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  unsubscribe();
+});
+
+test("transient authored failures reset before rejection reaches the caller", async () => {
+  const error = new Error("Issue declined.");
+  const f = fixture(vi.fn().mockRejectedValue(error));
+  const cache = f.client.getMutationCache();
+  const variables = { id: "a" };
+  const authored = mutationWithValues(variables);
+  let detached = false;
+  const unsubscribe = cache.subscribe((event) => {
+    if (event.type === "observerRemoved" && authored.predicate(event.mutation)) detached = true;
+  });
+  const { result } = renderHook(() => useAuthoredMutation(MUTATION, { transient: true }), { wrapper: f.wrapper });
+  await act(async () => {
+    await expect(result.current[0](variables)).rejects.toBe(error);
+    expect(detached).toBe(true);
+  });
+  await waitFor(() => expect(cache.findAll(authored)).toHaveLength(0));
+  expect(result.current[1].error).toBeNull();
+  expect(result.current[1].fetching).toBe(false);
+  expect(f.onError).toHaveBeenCalledTimes(1);
+  expect(f.notify).toHaveBeenCalledTimes(1);
+  unsubscribe();
 });
 
 test("authored mutations stay pending until active query invalidation settles", async () => {
