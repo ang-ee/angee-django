@@ -1412,6 +1412,7 @@ class ThreadFollower(SqidMixin, AuditMixin, AngeeModel):
         "parties.Party",
         on_delete=models.CASCADE,
         related_name="+",
+        related_query_name="thread_followers",
     )
     notification_policy = StateField(choices_enum=NotificationPolicy, default=NotificationPolicy.INBOX)
     subtype_keys = models.JSONField(blank=True, default=list)
