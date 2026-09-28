@@ -49,6 +49,8 @@ boundaries and optional state-field declarations. See the
 PostgreSQL concurrency behavior also needs the database-backed lane in
 [reusable checks](../.github/workflows/reusable-checks.yml). SQLite results do not
 substitute for that coverage; report database-dependent skips explicitly.
+The PostgreSQL lane also runs `tests/test_decisions_lifecycle.py` and
+`tests/test_decisions_concurrency.py`.
 
 Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables

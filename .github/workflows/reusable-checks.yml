@@ -86,7 +86,8 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
       - run: uv run pytest -q -n auto --dist loadfile --durations=25 ${{ inputs.pytest-extra-args }}
-      - name: Verify workflow concurrency contracts execute on PostgreSQL
+      - name: Verify workflow and decision concurrency contracts execute on PostgreSQL
+        if: ${{ !cancelled() }}
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
         env:
@@ -101,7 +102,8 @@ jobs:
             tests/test_workflow_definition_concurrency.py \
             tests/test_workflow_test_snapshots.py::test_concurrent_test_request_reuses_one_snapshot_run_and_dispatch \
             tests/test_workflows_engine.py::test_postgres_lock_sql_scopes_joined_engine_queries_to_self \
-            tests/test_workflows_triggers.py::test_trigger_edit_and_activation_serialize_on_lineage_then_trigger
+            tests/test_workflows_triggers.py::test_trigger_edit_and_activation_serialize_on_lineage_then_trigger \
+            tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py
           uv run python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL concurrency tests, got tests={len(cases)}, skipped={skipped}"'
 
   pnpm:

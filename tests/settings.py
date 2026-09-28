@@ -9,6 +9,7 @@ import environ
 from django.apps import AppConfig
 
 from angee.base.autoconfig import SETTINGS as BASE_SETTINGS
+from angee.decisions.autoconfig import SETTINGS as DECISION_SETTINGS
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
 from angee.jobs.autoconfig import SETTINGS as JOB_SETTINGS
 from angee.workflows_integrate.autoconfig import SETTINGS as WORKFLOWS_INTEGRATE_SETTINGS
@@ -48,6 +49,7 @@ INSTALLED_APPS = [
     "angee.iam_integrate_oidc",
     "angee.agents",
     "angee.workflows",
+    "angee.decisions",
     "angee.workflows_agents",
     "angee.workflows_parties",
     "angee.workflows_extraction",
@@ -89,6 +91,7 @@ INSTALLED_APPS = [
     "angee.platform_integrate_operator",
     "angee.integrate.testing",
     "angee.workflows.testing",
+    "angee.decisions.testing",
     "tests.linesdemo",
     "tests.chatterdemo",
     "tests.scopedemo",
@@ -205,6 +208,8 @@ ANGEE_EXTRACTION_PROFILE_CLASSES = {
 }
 ANGEE_EXTRACTION_MAX_BYTES = 25 * 1024 * 1024
 ANGEE_EXTRACTION_TIMEOUT_SECONDS = 120
+ANGEE_DECISION_POLICY_CLASSES = DECISION_SETTINGS["ANGEE_DECISION_POLICY_CLASSES"]
+ANGEE_DECISION_MAX_ATTEMPTS = DECISION_SETTINGS["ANGEE_DECISION_MAX_ATTEMPTS"]
 ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
     "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",
 }

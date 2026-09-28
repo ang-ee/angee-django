@@ -11,7 +11,9 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 _QuerySetT = TypeVar("_QuerySetT", bound=models.QuerySet[Any])
 
 
-def lock_if_supported(queryset: _QuerySetT, *, of: tuple[str, ...] = ("self",)) -> _QuerySetT:
+def lock_if_supported(
+    queryset: _QuerySetT, *, of: tuple[str, ...] = ("self",), no_key: bool = False, skip_locked: bool = False,
+) -> _QuerySetT:
     """Declare row-lock intent; Django owns write routing and backend support.
 
     ``"self"`` means the whole row: for a multi-table child it also names every
@@ -20,7 +22,7 @@ def lock_if_supported(queryset: _QuerySetT, *, of: tuple[str, ...] = ("self",)) 
 
     if "self" in of:
         of = (*of, *(path for path in _parent_link_paths(queryset.model._meta.concrete_model) if path not in of))
-    return queryset.select_for_update(of=of)
+    return queryset.select_for_update(of=of, no_key=no_key, skip_locked=skip_locked)
 
 
 def _parent_link_paths(model: type[models.Model], prefix: str = "") -> tuple[str, ...]:

@@ -720,6 +720,17 @@ def declared_hasura_resource_fields(
     return tuple(fields)
 
 
+def declared_hasura_write_relation_fields(model: type[models.Model]) -> tuple[str, ...]:
+    """Project contributed writable relations from the canonical field declarations."""
+
+    fields = dict.fromkeys(
+        field
+        for attribute in ("hasura_insertable_fields", "hasura_updatable_fields")
+        for field in declared_hasura_resource_fields(model, attribute)
+    )
+    return tuple(name for name in fields if _is_writable_relation(model._meta.get_field(name)))
+
+
 def _declared_sortable_aliases(model: type[models.Model]) -> dict[str, SortAlias]:
     """Collect model-owned ``hasura_sortable_aliases`` into native lazy aliases.
 

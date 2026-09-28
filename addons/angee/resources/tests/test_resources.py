@@ -371,7 +371,7 @@ def test_resource_unique_constraint_is_addon_xref_pair() -> None:
         if isinstance(constraint, models.UniqueConstraint)
     }
 
-    assert constraints["%(app_label)s_resource_addon_xref"].fields == (
+    assert constraints["%(app_label)s_%(class)s_addon_xref"].fields == (
         "source_addon",
         "xref",
     )

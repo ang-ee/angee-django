@@ -64,6 +64,6 @@ class Resource(AngeeModel):
         constraints = (
             models.UniqueConstraint(
                 fields=("source_addon", "xref"),
-                name="%(app_label)s_resource_addon_xref",
+                name="%(app_label)s_%(class)s_addon_xref",
             ),
         )
