@@ -1,11 +1,14 @@
-"""Measure physical lines for the workflow L0/L1 file-and-symbol budget map.
+"""Measure workflow delivery budgets, including the independent decisions addon.
 
 Execution owns managers.py except DraftSave and WorkflowManager, tasks.py, and
 Definition.ready_nodes plus Definition._edge_live. Definition/validation/bindings
 owns the rest of definition.py, bindings.py, DraftSave, and WorkflowManager. Step contracts
 own steps.py and context.py. Models own models.py, states.py, and permissions.zed.
 Blank lines, comments, docstrings, and decorators count; every mapped file line
-belongs to exactly one row. Limits are fixed; exceeding one fails this command.
+belongs to exactly one row. Workflow limits are fixed; exceeding one fails this command.
+Decisions reports Python, permission, and manifest sources, excluding its testing app.
+Its budget comparison is informational pending B10 shared-schema owner consolidation;
+required public contract docstrings remain included in the reported physical count.
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ def symbol_lines(source: str, symbol: str) -> set[int]:
 
 
 def main() -> int:
-    """Print the four disjoint rows and fail if any exceeds its design budget."""
+    """Print workflow budgets and the decisions count; fail exceeded workflow limits."""
 
     root = Path(__file__).resolve().parents[2] / "addons" / "angee" / "workflows"
     names = (
@@ -86,6 +89,13 @@ def main() -> int:
         count = sum(len(lines) for lines in files.values())
         print(f"| {name} | {count} | {budget} | {budget - count} |")
         exceeded |= count > budget
+    decision_root = root.parent / "decisions"
+    decision_count = sum(
+        len(path.read_text(encoding="utf-8").splitlines())
+        for path in sorted(decision_root.rglob("*"))
+        if path.suffix in {".py", ".zed", ".toml"} and "testing" not in path.relative_to(decision_root).parts
+    )
+    print(f"| Decisions backend | {decision_count} | 1300 | {1300 - decision_count} |")
     return int(exceeded)
 
 

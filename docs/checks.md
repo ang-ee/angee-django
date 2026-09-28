@@ -35,8 +35,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
-| Python/addon/template handoff; required for core changes | `uv run --locked python -m pytest -q` |
-| Parallel SQLite suite (CI scheduling) | `uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
+| Python/addon/template handoff: full SQLite suite; required for core changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python types | `uv run --locked python -m mypy angee addons` |
@@ -48,9 +47,14 @@ boundaries and optional state-field declarations. See the
 
 The PostgreSQL lane in [reusable checks](../.github/workflows/reusable-checks.yml)
 covers workflow definition, publication, execution, authorization, concurrency,
-test-harness and composed-consumer contracts. Its explicit file list must finish
-with zero skips. SQLite results do not substitute for that coverage; report
-database-dependent skips in other lanes explicitly.
+test-harness and composed-consumer contracts, plus decision
+[lifecycle](../tests/test_decisions_lifecycle.py) and
+[concurrency](../tests/test_decisions_concurrency.py). This named file selection
+runs serially with `--nomigrations` and must finish with zero skips. The full
+suite runs on SQLite with migrations enabled and `DATABASE_URL` unset; do not
+apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
+skip explicitly on SQLite. Report those skips separately from the PostgreSQL
+lane's executed coverage.
 
 Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
@@ -63,7 +67,8 @@ host fixtures must use process-local connections or pytest's worker-local
 ### Source-addon Test Models
 
 Share source-addon compositions through their owning test apps:
-[`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py) and
+[`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py),
+[`angee.decisions.testing`](../addons/angee/decisions/testing/__init__.py), and
 [`angee.integrate.testing`](../addons/angee/integrate/testing/__init__.py). Their
 package docstrings own the adoption contract. The framework-generic
 [`composed_tables`](../angee/testing/fixtures.py) fixture uses native transactional
@@ -186,9 +191,10 @@ database, and these commands do not create one.
 pushes to `main`. The current tiers are:
 
 - **SQLite:** the full framework Python suite once, with `-n auto --dist loadfile`
-  and the 25 slowest test durations. Structural tests remain part of this suite.
-- **PostgreSQL:** the existing workflow-concurrency selection runs serially,
-  followed by a check that it did not skip tests.
+  and the 25 slowest test durations, with migrations enabled and `DATABASE_URL`
+  unset. Structural tests remain part of this suite.
+- **PostgreSQL:** the named workflow and decision selection runs serially with
+  `--nomigrations`, followed by a check that it did not skip tests.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents
