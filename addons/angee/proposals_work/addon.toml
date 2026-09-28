@@ -1,0 +1,5 @@
+[addon]
+name = "angee.proposals_work"
+description = "Route proposal questions through work queues"
+category = "Productivity"
+depends_on = ["angee.proposals", "angee.work"]

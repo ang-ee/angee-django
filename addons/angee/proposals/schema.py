@@ -23,7 +23,13 @@ from angee.graphql.actions import (
     authorized_permission_target,
 )
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
-from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
@@ -732,6 +738,7 @@ _ROUND_RESOURCE = hasura_model_resource(
         "closed_by",
         "created_at",
         "updated_at",
+        *declared_hasura_resource_fields(Round, "hasura_filterable_fields"),
     ],
     sortable=[
         "name",
@@ -761,6 +768,7 @@ _ROUND_RESOURCE = hasura_model_resource(
         "clarifications_shared_until",
         "last_call_at",
         "submission_deadline",
+        *declared_hasura_resource_fields(Round, "hasura_insertable_fields"),
     ],
     updatable=[
         "name",
@@ -773,6 +781,7 @@ _ROUND_RESOURCE = hasura_model_resource(
         "clarification_askers",
         "opens_after",
         "clarifications_shared_until",
+        *declared_hasura_resource_fields(Round, "hasura_updatable_fields"),
     ],
     field_id_decode={
         "team": public_pk_decoder(Team),
@@ -795,6 +804,7 @@ _ROUND_RESOURCE = hasura_model_resource(
             "team",
             "opens_after",
             "clarifications_shared_until",
+            *declared_hasura_write_relation_fields(Round),
         ),
         delete_guard=lambda instance: instance.deletion_error(),
     ),
