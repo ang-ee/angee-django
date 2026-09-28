@@ -1,6 +1,7 @@
 """Ownership and dependent permissions, checked both as objects and SQL scopes."""
 
 import pytest
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import transaction
@@ -74,7 +75,7 @@ def test_owner_column_uses_transfer_gate_when_declared_on_the_base(composed_tabl
     "thread", "message", "thread_attachment", "thread_follower", "thread_activity", "thread_notification",
     "part", "tracking_value", "message_edge", "participant", "reaction", "message_star",
 ])
-def test_dependents_inherit_parent_permissions_without_creator_access(composed_tables, messaging_access_schema, label):
+def test_dependents_inherit_parent_permissions_without_creator_access(activity_catalog, messaging_access_schema, label):
     owner, poster, reader, author, recipient = (
         make_user(name) for name in ("root-owner", "poster", "reader", "attributed-author", "recipient")
     )
@@ -224,6 +225,9 @@ def test_every_messaging_permission_compiles_without_enumeration(spaces_tables, 
     reader = make_user("sql-reader")
     models = (Thread, Message, ThreadAttachment, ThreadFollower, ThreadActivity, ThreadNotification,
               Part, TrackingValue, MessageEdge, Participant, Reaction, MessageStar)
+    # Generic record arms resolve Django content types during SQL rendering.
+    # Warm that native metadata cache as well as REBAC's schema before measuring.
+    ContentType.objects.get_for_models(*apps.get_models())
     with actor_context(reader), evaluator_scope():
         schema = backend().schema()
         for model in models:

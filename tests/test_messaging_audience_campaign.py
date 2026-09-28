@@ -235,11 +235,11 @@ def test_fanout_checks_each_distinct_account_once_even_when_all_sources_match(au
         case.record.lead = case.recipient
         case.record.save(update_fields=("lead",))
         ThreadFollower.objects.subscribe(case.record, party=case.party)
-    with patch.object(Project, "thread_reader_allowed", autospec=True,
-                      side_effect=Project.thread_reader_allowed) as check:
+    with patch.object(Project, "thread_reader_ids", autospec=True,
+                      side_effect=Project.thread_reader_ids) as check:
         message = fanout(case, direct=True)
     assert check.call_count == 1
-    assert check.call_args.args[1].pk == case.recipient.pk
+    assert [account.pk for account in check.call_args.args[1]] == [case.recipient.pk]
     assert ThreadNotification._base_manager.filter(message=message).count() == 1
 
 

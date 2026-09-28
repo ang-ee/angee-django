@@ -963,7 +963,7 @@ class TaskWork(StagedModelMixin):
             previous, following = self._reject_reserved_stage_transition(lock=True, stage_written=stage_written)
             self.validate_stage_scope()
             self.validate_cycle_scope()
-            projected = self._project_stage_lifecycle(previous, following)
+            projected = self._project_stage_lifecycle(previous, following) if stage_written else set()
             allocated = False
             if self._state.adding and self.queue_id is not None and self.number is None:
                 queue = self.queue
