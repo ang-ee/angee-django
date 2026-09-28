@@ -6,6 +6,7 @@ import {
 import {
   formViewRecordActionsSlot,
   formViewSectionsSlot,
+  Field,
   type BaseMenuItem,
 } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
@@ -17,9 +18,10 @@ import {
   GitBranch,
   Inbox,
   Kanban,
+  Play,
   XCircle,
 } from "lucide-react";
-import { TASK_MODEL } from "@angee/projects";
+import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
 
 import { enWorkMessages } from "./i18n";
 import { QUEUE_MODEL } from "./resources";
@@ -145,6 +147,12 @@ const work = defineBaseAddon({
   i18n: { work: enWorkMessages },
   slots: [
     {
+      ...formViewSectionsSlot(PROJECT_MODEL),
+      id: "work.project-team",
+      sequence: 40,
+      content: <Field name="team" />,
+    },
+    {
       ...formViewSectionsSlot(TASK_MODEL),
       id: "work.task-fields",
       sequence: 40,
@@ -162,6 +170,7 @@ const work = defineBaseAddon({
     "work-board": Kanban,
     "work-cycle": CalendarClock,
     "work-triage": Inbox,
+    "work-start": Play,
     "work-accept": CheckCircle2,
     "work-decline": XCircle,
     "work-snooze": CalendarClock,

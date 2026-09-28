@@ -2,14 +2,14 @@ import type { ActionFieldName } from "@angee/gql/console/actions";
 import { extractActionOutcome, type DocumentVariables } from "@angee/refine";
 import {
   ActionFormDialog,
-  Button,
-  Glyph,
+  RecordActionTrigger,
   canonicalOptionValue,
   defineRowAction,
   relationValueId,
   useActionOutcomeMutation,
   useAuthoredResourceMutation,
   useRecordChromeContext,
+  useRecordChromeActionMutation,
   type ActionDescriptor,
   type RowActionDeclaration,
   type WidgetOption,
@@ -18,9 +18,10 @@ import * as React from "react";
 import { TASK_MODEL } from "@angee/projects";
 
 import { AcceptTaskDocument } from "./documents";
+import { useQueueContext, useTaskContext } from "./context";
 import { useWorkT } from "./i18n";
 import { STAGE_MODEL } from "./resources";
-import { queueStageFilters } from "./stage-filters";
+import { acceptStageFilters } from "./stage-filters";
 import { isTaskInTriage, type WorkTaskRow } from "./task-work";
 
 type AcceptTaskVariables = DocumentVariables<typeof AcceptTaskDocument>;
@@ -64,7 +65,7 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
             label: t("triage.action.stage"),
             argKind: "relation" as const,
             resource: STAGE_MODEL,
-            filters: queueStageFilters(queueId),
+            filters: acceptStageFilters(queueId),
           },
         ],
         submit: async (values, context) => {
@@ -187,28 +188,57 @@ export function useTriageRowActions<TRow extends WorkTaskRow>(queueId: string): 
 
 /** Projects' routed task FormView record-toolbar contribution. */
 export function TriageRecordActions(): React.ReactElement | null {
+  const t = useWorkT();
   const context = useRecordChromeContext();
   const record = context.record as WorkTaskRow | null;
   const queueId = relationValueId(record?.queue);
   const actions = useTriageActions(queueId);
+  const { data } = useQueueContext(queueId);
+  const taskContext = useTaskContext(context.recordId);
+  const stage = taskContext.data?.project_tasks_by_pk?.stage ?? record?.stage;
+  const [start, startState] = useRecordChromeActionMutation<ActionFieldName>("start_task");
+  const [returnToTriage, returnState] = useRecordChromeActionMutation<ActionFieldName>("return_task_to_triage");
   const [active, setActive] = React.useState<ActionDescriptor | null>(null);
-  if (!record || !queueId || !isTaskInTriage(record)) return null;
+  if (!record || !queueId || context.formReadOnly) return null;
+  if (!isTaskInTriage(record)) {
+    if (stage?.rule_owned) return null;
+    return (
+      <>
+        {["BACKLOG", "UNSTARTED"].includes(String(stage?.category).toUpperCase()) ? (
+          <RecordActionTrigger
+            glyph="work-start"
+            loading={startState.fetching}
+            disabled={returnState.fetching}
+            onClick={() => void start(context.recordId)}
+          >
+            {t("task.action.start")}
+          </RecordActionTrigger>
+        ) : null}
+        {data?.work_queues_by_pk?.triage_enabled ? (
+          <RecordActionTrigger
+            glyph="work-triage"
+            loading={returnState.fetching}
+            disabled={startState.fetching}
+            onClick={() => void returnToTriage(context.recordId)}
+          >
+            {t("triage.action.return")}
+          </RecordActionTrigger>
+        ) : null}
+      </>
+    );
+  }
   return (
     <>
-      <div className="flex flex-wrap items-center justify-end gap-1">
-        {actions.map((action) => (
-          <Button
-            key={action.id}
-            type="button"
-            size="sm"
-            variant={action.danger ? "danger" : "ghost"}
-            onClick={() => setActive(action)}
-          >
-            {action.icon ? <Glyph decorative name={action.icon} /> : null}
-            {action.label}
-          </Button>
-        ))}
-      </div>
+      {actions.map((action) => (
+        <RecordActionTrigger
+          key={action.id}
+          glyph={action.icon}
+          variant={action.danger ? "danger" : "ghost"}
+          onClick={() => setActive(action)}
+        >
+          {action.label}
+        </RecordActionTrigger>
+      ))}
       {active ? (
         <ActionFormDialog
           key={active.id}

@@ -145,6 +145,7 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
           <Column field="category" header={t("common.category")} />
           <Column field="tone" header={t("common.tone")} />
           <Column field="position" header={t("common.order")} />
+          <Column field="rule_owned" header={t("common.ruleOwned")} />
         </List>
       </SettingsSection>
       <SettingsSection
@@ -167,6 +168,7 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
             <Column field="category" header={t("common.category")} />
             <Column field="tone" header={t("common.tone")} />
             <Column field="position" header={t("common.order")} />
+            <Column field="rule_owned" header={t("common.ruleOwned")} />
           </List>
           <Form resource={STAGE_MODEL}>
             <Field name="name" title />
@@ -174,6 +176,7 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
             <Field name="category" options={categoryOptions} />
             <Field name="tone" />
             <Field name="position" />
+            <Field name="rule_owned" />
           </Form>
         </DrawerResourceList>
       </SettingsSection>
