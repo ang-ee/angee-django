@@ -2,8 +2,8 @@
 
 A page's outgoing wikilinks are rebuilt from its markdown body on every
 body save, so the backlinks panel is a SQL query over rows, not a body scan.
-Record bindings point to arbitrary models through a ``GenericForeignKey``, so
-the target side cannot declare a reverse relation; the global ``pre_delete``
+Record bindings point to arbitrary models through a ``GenericForeignKey``. For
+targets that do not declare a reverse generic relation, the global ``pre_delete``
 receiver removes any canonical-target bindings before primary-key reuse can
 resolve them onto another row.
 """

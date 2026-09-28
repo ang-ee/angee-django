@@ -15,10 +15,11 @@ from rebac import system_context
 from rebac.resources import model_resource_type
 from strawberry import auto
 
+from angee.base.fields import SqidField
 from angee.base.identity import instance_from_public_id
 from angee.base.scoping import write_scoped_queryset
 from angee.data.metadata import DataResourceSubtitleMetadata
-from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     hasura_model_resource,
@@ -38,7 +39,7 @@ from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
-from angee.iam.permissions import request_from_info
+from angee.iam.permissions import request_from_info, session_user
 from angee.knowledge.models import (
     AmbiguousMatchError,
     RecordBindingManager,
@@ -223,11 +224,7 @@ class PageType(AuthoredRefMixin, AngeeNode):
 
 @strawberry_django.type(RecordBinding)
 class RecordBindingType(AngeeNode):
-    """Existence reverse-index visible to target readers.
-
-    Bound page/vault public ids, role, and timestamps are visible by design;
-    knowledge content remains gated by the page/vault's own REBAC policy.
-    """
+    """Binding metadata visible only to readers of both knowledge and target."""
 
     role: auto
     created_at: auto
@@ -489,11 +486,23 @@ class KnowledgeMutation:
 
     @strawberry.mutation(name="create_vault_from")
     @action_guard("Could not create the vault from this template.", errors=(UnsupportedPageKindError,))
-    def create_vault_from(self, info: strawberry.Info, template: PublicID, name: str) -> ActionResult:
-        """Create an actor-owned copy of a readable template vault."""
+    def create_vault_from(
+        self,
+        info: strawberry.Info,
+        template: PublicID,
+        name: str,
+        owned: bool = True,
+        client_creation_key: str | None = None,
+    ) -> ActionResult:
+        """Clone a readable template, optionally ownerless and replay-safe."""
 
-        source = authorized_permission_target(info, Vault, template, "read")
-        vault = Vault._default_manager.create_from(source, name=name)
+        session_user(info)
+        # Decode only identity: the manager resolves replay before reading the template.
+        field = cast(SqidField, Vault._meta.get_field("sqid"))
+        source = Vault(pk=field.public_id_to_value(template))
+        vault = Vault._default_manager.create_from(
+            source, name=name, owned=owned, client_creation_key=client_creation_key,
+        )
         return ActionResult(ok=True, message="Vault created.", id=require_public_id(Vault, vault.pk))
 
     @strawberry.mutation(name="bind_knowledge_record")
