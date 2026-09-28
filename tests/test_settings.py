@@ -582,6 +582,7 @@ def test_compose_settings_module_reads_settings_yaml(
 ) -> None:
     """settings.yaml can declare only composition facts and project overrides."""
 
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     manage_py = tmp_path / "manage.py"
     manage_py.write_text("# test entrypoint\n", encoding="utf-8")
     (tmp_path / "addons").mkdir()

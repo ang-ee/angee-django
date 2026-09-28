@@ -9,6 +9,7 @@ import environ
 from django.apps import AppConfig
 
 from angee.base.autoconfig import SETTINGS as BASE_SETTINGS
+from angee.decisions.autoconfig import SETTINGS as DECISION_SETTINGS
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
 from angee.jobs.autoconfig import SETTINGS as JOB_SETTINGS
 from angee.workflows.autoconfig import SETTINGS as WORKFLOW_SETTINGS
@@ -48,6 +49,7 @@ INSTALLED_APPS = [
     "angee.iam_integrate_oidc",
     "angee.agents",
     "angee.workflows",
+    "angee.decisions",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",
@@ -86,6 +88,7 @@ INSTALLED_APPS = [
     "angee.platform_integrate_operator",
     "angee.integrate.testing",
     "angee.workflows.testing",
+    "angee.decisions.testing",
     "tests.linesdemo",
     "tests.chatterdemo",
     "tests.scopedemo",
@@ -171,6 +174,8 @@ ANGEE_AGENT_RUNTIME_CLASSES = {
 # Steps are registered explicitly by each workflow test.
 ANGEE_WORKFLOW_STEP_CLASSES: dict[str, str] = {}
 ANGEE_WORKFLOW_MAX_DISPATCHES = WORKFLOW_SETTINGS["ANGEE_WORKFLOW_MAX_DISPATCHES"]
+ANGEE_DECISION_POLICY_CLASSES = DECISION_SETTINGS["ANGEE_DECISION_POLICY_CLASSES"]
+ANGEE_DECISION_MAX_ATTEMPTS = DECISION_SETTINGS["ANGEE_DECISION_MAX_ATTEMPTS"]
 ANGEE_AGENT_TEARDOWN_HOOKS = ()
 ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
     "lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend",

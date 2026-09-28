@@ -86,7 +86,7 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
       - run: uv run pytest -q -n auto --dist loadfile --durations=25 ${{ inputs.pytest-extra-args }}
-      - name: Verify workflow contracts execute on PostgreSQL
+      - name: Verify workflow and decision contracts execute on PostgreSQL
         # Run this independent database proof even if the preceding suite fails.
         if: ${{ !cancelled() }}
         # These source tests register bare concrete Django models, so PostgreSQL
@@ -99,8 +99,9 @@ jobs:
             tests/test_workflows_runtime.py tests/test_workflows_install.py \
             tests/test_workflows_subject.py tests/test_workflows_publication.py \
             tests/test_workflows_testing.py tests/test_testing.py \
-            tests/test_composed_note_workflow.py
-          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL workflow tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL workflow tests={len(cases)}, skipped={skipped}")'
+            tests/test_composed_note_workflow.py \
+            tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py
+          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
 
   pnpm:
     if: ${{ inputs.pnpm-enabled }}
