@@ -14,10 +14,12 @@ export {
   Breadcrumb,
   BreadcrumbLabelProvider,
   useBreadcrumbLeafLabel,
+  useBreadcrumbItems,
   useBreadcrumbCollectionLink,
   type BreadcrumbItem,
   type BreadcrumbProps,
 } from "./Breadcrumb";
+export { DocumentTitle } from "./DocumentTitle";
 export { CommandPalette, type CommandPaletteProps } from "./CommandPalette";
 export {
   AppRailTree,

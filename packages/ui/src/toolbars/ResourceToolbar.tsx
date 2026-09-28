@@ -193,6 +193,7 @@ const RESOURCE_VIEW_KIND_SWITCHER: Record<
   list: { labelKey: "resourceToolbar.listView", icon: "list" },
   board: { labelKey: "resourceToolbar.boardView", icon: "grid-2x2" },
   calendar: { labelKey: "resourceToolbar.calendarView", icon: "calendar" },
+  gantt: { labelKey: "resourceToolbar.ganttView", icon: "chart-gantt" },
   dashboard: { labelKey: "resourceToolbar.dashboardView", icon: "chart-no-axes-combined" },
 };
 

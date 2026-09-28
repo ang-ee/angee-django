@@ -203,6 +203,7 @@ resource transport/auth/live integration. The active frontend owners are
 | @xyflow/react | node/edge graph canvas | `@angee/ui` `GraphView` canvas |
 | @dagrejs/dagre | directed-graph layout | `@angee/ui` `GraphView` node placement |
 | FullCalendar (Standard: `@fullcalendar/react` + `@fullcalendar/daygrid` + `@fullcalendar/timegrid` + `@fullcalendar/interaction`) | Month/week/day event calendar, drag/resize/select | `@angee/ui` `CalendarView` renders server-expanded occurrences and wires interactions to auto-CRUD; code-split behind a lazy import and themed through the token set |
+| ReUI Base UI Gantt (vendored MIT) + @date-fns/tz | Date-scaled rows, bar layout, zoom, timeline navigation and timezone arithmetic | `@angee/ui` GanttView lazy-loads the drawing layer; the `gantt` collection kind composes native list queries and shared resource filter/search/group/saved-view state, pages related rows with all their bars, preserves empty rows, and disables drag/resize writes. Source, local adaptations and license: `packages/ui/src/views/gantt/UPSTREAM.md` and `LICENSE`. |
 | @dnd-kit | Drag and drop | Board and rail interactions |
 | Native browser drag/drop | File drag enter/leave/drop events and `DataTransfer.files` | `@angee/ui` upload drop target primitive |
 

@@ -27,11 +27,13 @@ import type {
   ModelSlotTarget,
   PreviewContribution,
   RuntimeFormRegistration,
+  RuntimeBrand,
   SlotContribution,
   WidgetMap,
 } from "@angee/ui/runtime";
 import { RECORD_SEARCH_KEYS, isModelScopedSlot } from "@angee/ui/runtime";
 import { STATUS_TONES, type StatusToneMap } from "@angee/ui/widgets/status-tones";
+import { getIcon } from "@angee/ui/chrome/icon-registry";
 import { optionToken } from "@angee/ui/widgets/types";
 import {
   DASHBOARD_STORE_SLOT,
@@ -57,6 +59,7 @@ export type {
   ModelSlotTarget,
   PreviewContribution,
   RuntimeFormRegistration,
+  RuntimeBrand,
   SlotContribution,
   WidgetMap,
 };
@@ -93,6 +96,8 @@ export interface LayoutProviderContribution {
 /** One addon's self-describing manifest. */
 export interface AddonManifest {
   id: string;
+  /** Product identity; at most one addon claims the application brand. */
+  brand?: RuntimeBrand;
   routes?: readonly AddonRoute[];
   menus?: readonly MenuItem[];
   widgets?: WidgetMap;
@@ -136,6 +141,7 @@ export type ThemeManifestContribution =
 
 /** The merged runtime an app composes from its addon manifests. */
 export interface ComposedAddons {
+  brand: RuntimeBrand | null;
   routes: readonly AddonRoute[];
   menus: readonly ComposedMenuItem[];
   widgets: WidgetMap;
@@ -257,6 +263,7 @@ export function composeAddons(
   options: ComposeAddonsOptions,
 ): ComposedAddons {
   const canonicalizeModel = options.canonicalModelLabel;
+  const identity: { brand?: RuntimeBrand } = {};
   const routes: AddonRoute[] = [];
   const menus: ComposedMenuItem[] = [];
   const widgets: WidgetMap = {};
@@ -274,6 +281,13 @@ export function composeAddons(
   const themeIds: Record<string, true> = {};
 
   for (const addon of addons) {
+    if (addon.brand) {
+      assertUnclaimed(identity, "brand", addon.id, "brand");
+      if (!addon.brand.name.trim() || !addon.brand.mark.trim()) {
+        throw new Error(`Addon "${addon.id}" declares an empty brand name or mark.`);
+      }
+      identity.brand = addon.brand;
+    }
     for (const contribution of addon.themes ?? []) {
       const definition = "definition" in contribution
         ? contribution.definition
@@ -350,6 +364,9 @@ export function composeAddons(
     }
     if (addon.i18n) {
       for (const [namespace, messages] of Object.entries(addon.i18n)) {
+        if (namespace === "ui") {
+          throw new Error(`Addon "${addon.id}" declares the reserved "ui" i18n namespace.`);
+        }
         const target = (i18n[namespace] ??= {});
         for (const [key, value] of Object.entries(messages)) {
           assertUnclaimed(target, key, addon.id, `i18n key "${namespace}.${key}"`);
@@ -365,6 +382,10 @@ export function composeAddons(
     }
   }
 
+  if (identity.brand && !getIcon(icons, identity.brand.mark)) {
+    throw new Error(`Brand mark "${identity.brand.mark}" is not registered by any addon.`);
+  }
+
   const slots = mergeSlotContributions(
     ...addons.map((addon) =>
       normalizeSlotContributions(
@@ -375,6 +396,7 @@ export function composeAddons(
     ),
   );
   return {
+    brand: identity.brand ?? null,
     routes,
     menus,
     widgets,

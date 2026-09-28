@@ -240,6 +240,7 @@ describe("resource-view model", () => {
       "list",
       "board",
       "calendar",
+      "gantt",
       "dashboard",
     ]);
     // The calendar takes only window args in v1: no group-by/pager/columns/filter.

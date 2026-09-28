@@ -256,6 +256,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   // The static composition; the session fields (auth, logoutAction,
   // userPreferences) are layered in by RuntimeSessionProvider inside the frame.
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
+    brand: composed.brand,
     widgets: { ...defaultWidgets, ...composed.widgets },
     statusTones: composed.statusTones,
     i18n: i18n.instance,
@@ -313,7 +314,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     refineResourceRegistry,
   );
   const home =
-    (input.home ? routeHref.maybe(input.home) ?? input.home : undefined) ??
+    (input.home ? input.home.startsWith("/") ? input.home : routeHref(input.home) : undefined) ??
     routes.find((route) => route.layout !== "public")?.path ??
     "/";
 
@@ -640,13 +641,12 @@ function Redirect({ to }: { to: string }): ReactNode {
   return null;
 }
 
-function mergeI18n(base: I18nResources, over: I18nResources): I18nResources {
-  const merged: Record<string, Record<string, string>> = {};
-  for (const [namespace, messages] of Object.entries(base)) {
-    merged[namespace] = { ...messages };
+/** Base and addon namespaces have disjoint ownership. */
+function mergeI18n(base: I18nResources, addons: I18nResources): I18nResources {
+  for (const namespace of Object.keys(addons)) {
+    if (Object.prototype.hasOwnProperty.call(base, namespace)) {
+      throw new Error(`Addon i18n namespace "${namespace}" is owned by the base bundle.`);
+    }
   }
-  for (const [namespace, messages] of Object.entries(over)) {
-    merged[namespace] = { ...(merged[namespace] ?? {}), ...messages };
-  }
-  return merged;
+  return { ...base, ...addons };
 }

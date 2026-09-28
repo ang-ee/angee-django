@@ -212,14 +212,19 @@ export class MenuTree {
       : buildMenuTree(itemsOrTree);
   }
 
+  /** Explicit app roots win; without an opt-in every root remains an app. */
+  appRoots(): readonly ChromeMenuNode[] {
+    return this.roots.some((item) => item.appRoot === true)
+      ? this.roots.filter((item) => item.appRoot === true)
+      : this.roots;
+  }
+
   railMenuItems(): readonly ChromeMenuNode[] {
-    const targetedRoots = this.roots.filter((item) => {
+    return this.appRoots().filter((item) => {
       if (CHROME_MENU_PARENT_IDS.has(item.id)) return false;
       if (item.group === "platform") return false;
       return Boolean(item.target);
     });
-    const appRoots = targetedRoots.filter((item) => item.appRoot);
-    return appRoots.length ? appRoots : targetedRoots;
   }
 
   /** Navigable root categories that live in the Settings place. */
@@ -425,6 +430,12 @@ export function buildMenuTree(
 
 function validateMenuTree(tree: MenuTree): void {
   for (const item of tree.byId.values()) {
+    if (item.appRoot !== undefined && (item.parentNode || item.parentKey)) {
+      throw new Error(`Menu item "${item.id}" declares appRoot on a non-root item.`);
+    }
+    if (item.appRoot === true && !item.target) {
+      throw new Error(`Menu item "${item.id}" declares appRoot without a target.`);
+    }
     void tree.trailFor(item.id);
     void item.target;
   }

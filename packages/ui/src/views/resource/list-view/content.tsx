@@ -6,21 +6,21 @@ import { useUiT } from "../../../i18n";
 import { BoardView } from "../BoardView";
 import { GroupedBoardBody } from "../board/grouped";
 import { type ResourceViewContextValue } from "../resource-view-context";
-import { DEFAULT_TEXT_FILTER_FIELD, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
+import { type ResourceViewFilter, type ResourceViewGroup, type ResourceViewKind } from "../resource-view-model";
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../resource-view-surface";
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
 import { ResourceListFrame } from "../ResourceListFrame";
 import type { CardActionContext, ListEmptyContent, ListViewProps } from "../resource-view-types";
-import { createLabelForResource, mergeFilterFields, mergeFilterOptions } from "../resource-view-utils";
+import { createLabelForResource } from "../resource-view-utils";
 import type { ColumnDescriptor } from "../../page";
 import { useRelationFacets } from "../../relation/relation-facet";
 import { useScalarFacets } from "../../relation/scalar-facet";
 import { useBulkDelete } from "../useBulkDelete";
 import { requireDataResource, useAggregateOperation } from "../resource-operations";
 import { useResourceToolbarProps } from "../resource-toolbar-props";
-import { useResourceViewToolbarInputs } from "../resource-view-toolbar-inputs";
+import { useListViewToolbarInputs } from "../resource-view-toolbar-inputs";
 import { PAGE_SIZE_OPTIONS } from "../page-size";
 import { ResourceViewUtilities } from "../resource-view-utilities";
 interface ListViewContentProps<TRow extends Row> {
@@ -115,24 +115,7 @@ export function ListViewContent<TRow extends Row = Row>({
     () => groupMeasuresFromColumns(resolvedColumns),
     [resolvedColumns],
   );
-  const facetFilters = React.useMemo(
-    () => mergeFilterOptions(declaredFacets.filters, scalarFacets.filters),
-    [declaredFacets.filters, scalarFacets.filters],
-  );
-  const facetCustomFilterFields = React.useMemo(
-    () =>
-      mergeFilterFields(declaredFacets.filterFields, scalarFacets.filterFields),
-    [declaredFacets.filterFields, scalarFacets.filterFields],
-  );
-  // Use the query owner's authored search field or record-representation fallback,
-  // not the hardcoded "title" that non-title models lack.
-  const textFilterField =
-    declaredTextField === undefined
-      ? modelMetadata
-        ? ResourceQuery.from(modelMetadata).textSearchFields()[0] ?? null
-        : DEFAULT_TEXT_FILTER_FIELD
-      : declaredTextField;
-  const toolbarInputs = useResourceViewToolbarInputs({
+  const toolbarInputs = useListViewToolbarInputs({
     query: source?.query,
     inferOptions: !source,
     serverGrouping: !clientRowModel,
@@ -144,14 +127,14 @@ export function ListViewContent<TRow extends Row = Row>({
     defaultGroup,
     defaultGroups,
     groupOptions: explicitGroupOptions,
-    contributedGroupOptions: declaredFacets.groupOptions,
+    declaredFacets,
+    scalarFacets,
     filterOptions: explicitFilterOptions,
-    contributedFilterOptions: facetFilters,
     customFilterFields: explicitCustomFilterFields,
-    contributedCustomFilterFields: facetCustomFilterFields,
-    textFilterField,
+    textFilterField: declaredTextField,
     groupStack: effectiveGroupStack,
   });
+  const { textFilterField } = toolbarInputs;
   const interactive = Boolean(onRowClick || rowHref);
   const bulkDelete = useBulkDelete(
     source ? "" : resource,
