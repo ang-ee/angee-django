@@ -4,13 +4,14 @@ import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRootRoute, createRouter, createMemoryHistory, RouterContextProvider } from "@tanstack/react-router";
 import { Controller, useForm } from "react-hook-form";
-import { schemaFieldMetadataFromDataResources, type ModelMetadata, type Row } from "@angee/metadata";
+import { schemaFieldMetadataFromDataResources, type DataResourceMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
+import type { MetaQuery } from "@refinedev/core";
 import { defaultWidgets } from "../../widgets";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
@@ -113,6 +114,8 @@ test("a bound parent value follows native dotted child updates", async () => {
 });
 
 async function fixture(options: {
+  rootArguments?: boolean;
+  resourceMetadata?: DataResourceMetadata;
   readOnlyWhen?: (record: Row) => boolean;
   id?: string | null;
   submit?: FormSubmit;
@@ -136,14 +139,15 @@ async function fixture(options: {
     title: "First",
     body: "Original body",
     deadline: "",
+    ...(options.rootArguments ? { revision: 1 } : {}),
     ...(options.presenceValues ? { note: null, settings: null } : {}),
     ...(options.relationValues
       ? { parent: { id: "note-a", title: "Parent A" } }
       : {}),
   };
   const onSaved = vi.fn();
-  const getOne = vi.fn(async () => ({ data: record }));
-  const update = vi.fn(async ({ variables }: { variables?: unknown }) => {
+  const getOne = vi.fn(async (_params?: { meta?: MetaQuery }) => ({ data: record }));
+  const update = vi.fn(async ({ variables }: { variables?: unknown; meta?: MetaQuery }) => {
     record = { ...record, ...(variables as Row) };
     return { data: record };
   });
@@ -153,10 +157,20 @@ async function fixture(options: {
   let surface!: FormViewSaveSurface;
   let acknowledgedSource = options.acknowledgedSource;
   const id = options.id === undefined ? "note-1" : options.id;
+  const formResource = options.resourceMetadata ?? (options.rootArguments
+    ? {
+        ...resource,
+        createArguments: [{ name: "client_creation_key", type: "String" }],
+        updateArguments: [{ name: "expected_revision", type: "Int" }],
+        fields: [...(resource.fields ?? []), {
+          name: "revision", kind: "scalar" as const, scalar: "Int", readable: true,
+          creatable: false, updatable: false, aggregatable: false, requiredOnCreate: false,
+        }],
+      } : resource);
   function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
-      dataResource: resource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
+      dataResource: formResource, modelMetadata: model, formFields: viewFields, fieldByName, refineFields,
       submit: options.submit, readOnlyWhen: options.readOnlyWhen, onSaved, t: (key) => key,
       acknowledgedSource,
       onFieldInteractionStart: options.onFieldInteractionStart,
@@ -638,6 +652,91 @@ test("full native Refine saves submit only dirty fields and establish a clean ba
   await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
   expect(f.surface().displayRecord?.title).toBe("Saved title");
   expect(f.surface().form.formState.dirtyFields).toEqual({});
+});
+
+test("updates send the edit baseline revision and retain a stale draft", async () => {
+  const f = await fixture({ rootArguments: true });
+  expect(f.getOne.mock.calls[0]?.[0]?.meta?.fields).toContain("revision");
+  edit("title", "Local edit");
+  f.setRecord({ id: "note-1", title: "Remote edit", body: "Fresh body", revision: 2 });
+  await act(async () => f.surface().reload());
+  await waitFor(() => expect(f.surface().displayRecord?.revision).toBe(2));
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Changed", extensions: { code: "STALE_REVISION" } }] });
+  await act(async () => f.surface().submitForm());
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({
+    variables: { title: "Local edit" }, meta: expect.objectContaining({ gqlVariables: { expected_revision: 1 } }),
+  }));
+  expect(f.surface().staleRevision).toBe(true);
+  expect(f.surface().form.getValues("title")).toBe("Local edit");
+});
+
+test("create retries reuse the form session's creation key", async () => {
+  const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "New record");
+  edit("deadline", "2026-09-28");
+  f.update.mockRejectedValueOnce(new Error("Unavailable"));
+  await act(async () => f.surface().submitForm());
+  await act(async () => f.surface().submitForm());
+  expect(f.update).toHaveBeenCalledTimes(2);
+  const key = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.client_creation_key;
+  expect(key).toEqual(expect.any(String));
+  expect(f.update.mock.calls[1]?.[0].meta?.gqlVariables?.client_creation_key).toBe(key);
+});
+
+test("an accepted create renews the key for the next record without remounting", async () => {
+  const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "One");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.client_creation_key;
+  edit("title", "Two");
+  await act(async () => f.surface().submitForm());
+  const second = f.update.mock.calls[1]?.[0].meta?.gqlVariables?.client_creation_key;
+  expect(first).toEqual(expect.any(String));
+  expect(second).toEqual(expect.any(String));
+  expect(second).not.toBe(first);
+});
+
+test("a creation-key conflict keeps the draft and renews the next attempt's key", async () => {
+  const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "My record");
+  edit("deadline", "2026-09-28");
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Conflict", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
+  await act(async () => f.surface().submitForm());
+  expect(f.surface().saveError).toBe("form.creationKeyConflict");
+  expect(f.surface().form.getValues("title")).toBe("My record");
+  const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.client_creation_key;
+  await act(async () => f.surface().submitForm());
+  const next = f.update.mock.calls[1]?.[0].meta?.gqlVariables?.client_creation_key;
+  expect(next).toEqual(expect.any(String));
+  expect(next).not.toBe(first);
+});
+
+test("custom create owners receive a retry-stable key that clears on acceptance", async () => {
+  const submit = vi.fn<FormSubmit>().mockRejectedValueOnce(new Error("Unavailable"))
+    .mockImplementation(async (data) => ({ id: "note-1", ...data }));
+  const f = await fixture({ id: null, submit, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "One");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  await act(async () => f.surface().submitForm());
+  const first = submit.mock.calls[0]?.[1].clientCreationKey;
+  expect(first).toEqual(expect.any(String));
+  expect(submit.mock.calls[1]?.[1].clientCreationKey).toBe(first);
+  edit("title", "Two");
+  await act(async () => f.surface().submitForm());
+  expect(submit.mock.calls[2]?.[1].clientCreationKey).not.toBe(first);
+});
+
+test("plain updates ignore save-only revision arguments and unexposed revision fields", async () => {
+  const f = await fixture({
+    resourceMetadata: { ...resource, saveArguments: [{ name: "expected_revision", type: "Int" }] },
+  });
+  expect(f.getOne.mock.calls[0]?.[0]?.meta?.fields).not.toContain("revision");
+  edit("title", "Changed");
+  await act(async () => f.surface().submitForm());
+  expect(f.update).toHaveBeenCalledOnce();
+  expect(f.update.mock.calls[0]?.[0].meta?.gqlVariables).toBeUndefined();
 });
 
 test("persisted null and omitted fields stay pristine during an unrelated save", async () => {

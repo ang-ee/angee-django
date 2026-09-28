@@ -91,6 +91,8 @@ export type ResourceRecordHrefLookup = (
  */
 export interface AppRuntime {
   brand: RuntimeBrand | null;
+  /** Host-selected menu root; this constrains navigation, never server access. */
+  confineTo: string | null;
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: RuntimeI18n | null;
@@ -143,7 +145,30 @@ export interface RuntimeAuthState {
   user: RuntimeAuthUser | null;
   status: "resolving" | "anonymous" | "authenticated";
   hasRole: (role: string) => boolean;
+  /** Optional preview controller supplied by the app's identity owner. */
+  viewAs?: RuntimeViewAs;
 }
+
+/** Server-authorized preview identities; the app owns transitions and transport. */
+export interface RuntimeViewAs {
+  viewAs: { userId: string } | null;
+  currentUser: RuntimeAuthUser | null;
+  realUser: RuntimeAuthUser | null;
+  viewablePeople: readonly RuntimeAuthUser[];
+  enter: (userId: string) => void;
+  exit: () => void;
+  pending?: boolean;
+  error?: string | null;
+}
+
+const NO_VIEW_AS: RuntimeViewAs = {
+  viewAs: null,
+  currentUser: null,
+  realUser: null,
+  viewablePeople: [],
+  enter: () => undefined,
+  exit: () => undefined,
+};
 
 export interface RuntimeLogoutAction {
   logout: () => Promise<boolean>;
@@ -171,6 +196,7 @@ const EMPTY_USER_PREFERENCES: RuntimeUserPreferences = {};
 
 const EMPTY_RUNTIME: AppRuntime = {
   brand: null,
+  confineTo: null,
   widgets: {},
   statusTones: {},
   i18n: null,
@@ -229,6 +255,11 @@ export function useAppRuntime(): AppRuntime {
 /** The product identity contributed by the composed app, if any. */
 export function useRuntimeBrand(): RuntimeBrand | null {
   return useAppRuntime().brand ?? null;
+}
+
+/** Preview state injected by the app; absent injection leaves preview inactive. */
+export function useRuntimeViewAs(): RuntimeViewAs {
+  return useRuntimeAuth().viewAs ?? NO_VIEW_AS;
 }
 
 /** The dashboard registry composed once by the app owner. */

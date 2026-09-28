@@ -724,6 +724,28 @@ def test_project_template_defaults_to_local_addon_installer() -> None:
     assert "ANGEE_ADDON_INSTALLER_BACKEND" not in settings
 
 
+def test_project_web_confinement_answer_renders_only_when_set() -> None:
+    project = ROOT / "templates" / "projects" / "web"
+    answers = yaml.safe_load((project / "copier.yml").read_text())
+    template = (project / "template" / "{{ web_path }}" / "src" / "main.tsx.jinja").read_text()
+    inputs = {name: answers[name]["default"] for name in ("home", "confine_to")}
+    inputs["console_chatter"] = "true" if answers["console_chatter"]["default"] else ""
+    for confine_to in (inputs["confine_to"], "requests", 'requests"\\draft'):
+        values = {**inputs, "confine_to": confine_to}
+        rendered = _render_conditionals(template, values)
+        rendered = re.sub(
+            r"\{\{\s*(\w+)\s*\|\s*tojson\s*\}\}",
+            lambda match: json.dumps(values[match.group(1)]),
+            rendered,
+        )
+        assert "{{" not in rendered
+        assert "{%" not in rendered
+        if confine_to:
+            assert f"confineTo: {json.dumps(confine_to)}," in rendered
+        else:
+            assert "confineTo:" not in rendered
+
+
 def test_project_python_dependencies_bootstrap_the_generated_addon_group() -> None:
     """Fresh hosts document the pre-Django dependency bootstrap sequence."""
 

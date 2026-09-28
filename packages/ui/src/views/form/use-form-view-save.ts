@@ -7,7 +7,7 @@ import {
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
-import { useAngeeResourceSave } from "@angee/refine";
+import { publicGraphQLErrorsFromUnknown, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
 import {
   useInvalidate,
   useOne,
@@ -26,6 +26,7 @@ import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-q
 
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
+import { createClientKey } from "../../lib/client-key";
 import { slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import {
@@ -60,6 +61,8 @@ export interface FormSubmitContext {
   record: Row | null;
   /** Saved record at the start of this local edit, held while the form is dirty. */
   baselineRecord: Row | null;
+  /** One create attempt, retained across failures and renewed after acceptance/conflict. */
+  clientCreationKey: string | null;
   lines: LineDiff | null;
   /** Exact RHF snapshot submitted by the user, including externally supplied fields. */
   values: FormValues;
@@ -136,6 +139,7 @@ export interface FormViewSaveSurface {
   formIsDirty: boolean;
   pending: boolean;
   saveError: string | null;
+  staleRevision: boolean;
   serverFieldErrors: Record<string, readonly string[]>;
   clearServerFieldError: (name: string) => void;
   requiredFieldNames: ReadonlySet<string>;
@@ -185,6 +189,14 @@ export function useFormViewSave({
 }: UseFormViewSaveProps): FormViewSaveSurface {
   const toast = useToast();
   const refineResource = refineResourceName(dataResource);
+  const updateRevision = Boolean(dataResource?.updateArguments?.some(({ name }) => name === "expected_revision"));
+  const saveRevision = Boolean(dataResource?.saveArguments?.some(({ name }) => name === "expected_revision"));
+  const selectRevision = (updateRevision || saveRevision)
+    && Boolean(dataResource?.fields?.some(({ name }) => name === "revision"));
+  const mutationFields = React.useMemo(() => selectRevision && !refineFields.includes("revision")
+    ? [...refineFields, "revision"] : refineFields, [refineFields, selectRevision]);
+  const creationKey = React.useRef<string | null>(null);
+  React.useEffect(() => { creationKey.current = null; }, [resource, id, isCreate]);
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],
@@ -227,12 +239,12 @@ export function useFormViewSave({
   const { identifier } = useResourceParams({ resource: refineResource });
   const detailKey = React.useMemo(() => keys().data(dataResource?.schemaName ?? "default")
     .resource(identifier ?? "").action("one").id(id ?? "")
-    .params({ fields: refineFields }).get(), [dataResource?.schemaName, id, identifier, keys, refineFields]);
+    .params({ fields: mutationFields }).get(), [dataResource?.schemaName, id, identifier, keys, mutationFields]);
   const read = useOne<RowRecord, HttpError>({
     resource: refineResource,
     id: id ?? undefined,
     dataProviderName: dataResource?.schemaName,
-    meta: { fields: refineFields },
+    meta: { fields: mutationFields },
     queryOptions: {
       queryKey: detailKey,
       enabled: acknowledgedSource === undefined && !isCreate && Boolean(id && dataResource?.roots.detail),
@@ -254,7 +266,7 @@ export function useFormViewSave({
   const create = useCreate<RowRecord, HttpError, FormValues>({
     resource: refineResource,
     dataProviderName: dataResource?.schemaName,
-    meta: { fields: refineFields },
+    meta: { fields: mutationFields },
     invalidates: ["list", "many"],
     successNotification: false,
     errorNotification: false,
@@ -262,7 +274,7 @@ export function useFormViewSave({
   const update = useUpdate<RowRecord, HttpError, FormValues>({
     resource: refineResource,
     dataProviderName: dataResource?.schemaName,
-    meta: { fields: refineFields },
+    meta: { fields: mutationFields },
     invalidates: ["list", "many", "detail"],
     successNotification: false,
     errorNotification: false,
@@ -382,6 +394,7 @@ export function useFormViewSave({
       (await submitOwner?.(data, {
         resource, id: id ?? null, isCreate, record: displayRecord,
         baselineRecord: editBasisRecordRef.current, lines,
+        clientCreationKey: creationKey.current,
         values: submitted, baselineValues: baseline,
       })) ?? null,
   });
@@ -413,32 +426,65 @@ export function useFormViewSave({
 
   const runSubmit = React.useCallback(
     async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<Row | FormSubmitAcknowledgement | null> => {
-      if (submitOwner) return customSubmit.mutateAsync({
-        data,
-        lines,
-        submitted,
-        baseline: (form.formState.defaultValues ?? {}) as FormValues,
-      });
-      if (!isCreate && lines && lines.hasChanges && id != null && saveOperation.target !== null) {
-        const saved = await resourceSave.save({
-          pk: id,
-          patch: data,
-          lines: lines.payload,
-        });
-        if (saved) await invalidateResource();
+      try {
+        if (isCreate && (submitOwner || dataResource?.createArguments?.some(({ name }) => name === "client_creation_key"))) {
+          creationKey.current ??= createClientKey("create");
+        }
+        let saved: Row | FormSubmitAcknowledgement | null;
+        if (submitOwner) {
+          saved = await customSubmit.mutateAsync({
+            data,
+            lines,
+            submitted,
+            baseline: (form.formState.defaultValues ?? {}) as FormValues,
+          });
+        } else {
+          const useSave = !isCreate && lines?.hasChanges && id != null && saveOperation.target !== null;
+          const rootArguments: MutationRootArguments = {};
+          if (!isCreate && (useSave ? saveRevision : updateRevision)) {
+            const revision = editBasisRecordRef.current?.revision;
+            if (typeof revision !== "number" || !Number.isInteger(revision)) {
+              throw new Error(t("form.revisionUnavailable"));
+            }
+            rootArguments.expected_revision = revision;
+          }
+          if (isCreate && creationKey.current) {
+            rootArguments.client_creation_key = creationKey.current;
+          }
+          if (useSave) {
+            saved = await resourceSave.save({ pk: id, patch: data, lines: lines.payload, ...rootArguments });
+            if (saved) await invalidateResource();
+          } else {
+            const mutationMeta = Object.keys(rootArguments).length
+              ? { meta: { fields: mutationFields, gqlVariables: rootArguments } } : {};
+            const response = isCreate
+              ? await create.mutateAsync({
+                  ...mutationMeta,
+                  values: lines?.hasChanges && linesField
+                    ? { ...data, [linesField]: { data: lines.payload } }
+                    : data,
+                })
+              : await update.mutateAsync({ id: id as BaseKey, values: data, ...mutationMeta });
+            saved = response?.data ?? null;
+          }
+        }
+        if (isCreate && saved) creationKey.current = null;
         return saved;
+      } catch (error) {
+        if (isCreate && publicGraphQLErrorsFromUnknown(error).some((item) => item.extensions.code === "CREATION_KEY_CONFLICT")) {
+          creationKey.current = null;
+        }
+        throw error;
       }
-      const response = isCreate
-        ? await create.mutateAsync({
-            values: lines?.hasChanges && linesField
-              ? { ...data, [linesField]: { data: lines.payload } }
-              : data,
-          })
-        : await update.mutateAsync({ id: id as BaseKey, values: data });
-      return response?.data ?? null;
     },
     [
       customSubmit.mutateAsync,
+      dataResource,
+      mutationFields,
+      updateRevision,
+      saveRevision,
+      form.formState.defaultValues,
+      t,
       create.mutateAsync,
       update.mutateAsync,
       id,
@@ -600,6 +646,14 @@ export function useFormViewSave({
       } catch (error) {
         const { fieldErrors, formErrors } = validationErrorsFromError(error);
         if (!mounted.current) return;
+        if (publicGraphQLErrorsFromUnknown(error).some((item) => item.extensions.code === "STALE_REVISION")) {
+          setError("root.server", { type: "STALE_REVISION", message: t("form.staleRevision") });
+          return;
+        }
+        if (publicGraphQLErrorsFromUnknown(error).some((item) => item.extensions.code === "CREATION_KEY_CONFLICT")) {
+          setError("root.server", { type: "CREATION_KEY_CONFLICT", message: t("form.creationKeyConflict") });
+          return;
+        }
         for (const [name, messages] of Object.entries(fieldErrors)) {
           setError(name, { type: "server", message: messages.join(" ") });
         }
@@ -755,6 +809,7 @@ export function useFormViewSave({
     formIsDirty,
     pending,
     saveError,
+    staleRevision: form.formState.errors.root?.server?.type === "STALE_REVISION",
     serverFieldErrors,
     clearServerFieldError,
     requiredFieldNames,

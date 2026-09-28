@@ -89,10 +89,12 @@ export function createAddonRouteNodes({
   routes,
   routesByName,
   layoutRoutes,
+  consoleConfinement,
 }: {
   routes: readonly BaseAddonRoute[];
   routesByName: ReadonlyMap<string, BaseAddonRoute>;
   layoutRoutes: ReadonlyMap<string, AnyRoute>;
+  consoleConfinement?: { allows: (route: BaseAddonRoute) => boolean; home: string };
 }): void {
   const routeNodes = new Map<string, AnyRoute>();
   const childrenByParent = new Map<AnyRoute, Array<NamedRouteNode>>();
@@ -111,10 +113,19 @@ export function createAddonRouteNodes({
     const parentNode = parentManifestRoute
       ? buildRoute(parentManifestRoute)
       : layoutRouteFor(route, layoutRoutes);
+    let ancestor = route;
+    while (ancestor.parent) {
+      const parent = routesByName.get(ancestor.parent);
+      if (!parent) break;
+      ancestor = parent;
+    }
+    const confined = consoleConfinement && (ancestor.layout ?? "console") === "console"
+      && !consoleConfinement.allows(route);
     const node = createAddonRouteNode(
       route,
       parentNode,
       parentManifestRoute,
+      confined ? consoleConfinement.home : undefined,
     );
     routeNodes.set(route.name, node);
     if (route.indexComponent) {
@@ -282,10 +293,12 @@ function createAddonRouteNode(
   route: BaseAddonRoute,
   parentNode: AnyRoute,
   parentManifestRoute: BaseAddonRoute | undefined,
+  redirectTo?: string,
 ): AnyRoute {
   return createRoute({
     getParentRoute: () => parentNode,
     path: routePathUnderParent(route, parentManifestRoute),
+    ...(redirectTo ? { beforeLoad: () => { throw redirect({ to: redirectTo, replace: true }); } } : {}),
     ...(route.component ? { component: route.component } : {}),
   });
 }
