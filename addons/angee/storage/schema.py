@@ -20,10 +20,9 @@ from angee.graphql.ids import (
     PublicID,
     instance_for_id,
     require_instance_for_id,
-    require_public_id,
-    to_public_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.relations import actor_scoped_public_id
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
@@ -76,11 +75,7 @@ class DriveType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["backend_id"])
-    def backend(self) -> strawberry.ID:
-        """Return the parent backend's public id without exposing the row."""
-
-        return require_public_id(Backend, cast(Any, self).backend_id)
+    backend: strawberry.ID | None = actor_scoped_public_id("backend")
 
 
 @strawberry_django.type(Folder)
@@ -94,17 +89,8 @@ class FolderType(AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["drive_id"])
-    def drive(self) -> strawberry.ID | None:
-        """Return the drive's public id; smart folders have none."""
-
-        return to_public_id(Drive, cast(Any, self).drive_id)
-
-    @strawberry_django.field(only=["parent_id"])
-    def parent(self) -> strawberry.ID | None:
-        """Return the parent folder's public id, if any."""
-
-        return to_public_id(Folder, cast(Any, self).parent_id)
+    drive: strawberry.ID | None = actor_scoped_public_id("drive")
+    parent: strawberry.ID | None = actor_scoped_public_id("parent")
 
 
 @strawberry_django.type(File)
@@ -128,25 +114,16 @@ class FileType(AuthoredRefMixin, AngeeNode):
     updated_at: auto
     mime_type: MimeTypeType | None
 
-    @strawberry_django.field(only=["drive_id"])
-    def drive(self) -> strawberry.ID:
-        """Return the drive's public id without exposing the drive object."""
-
-        return require_public_id(Drive, cast(Any, self).drive_id)
-
-    @strawberry_django.field(only=["folder_id"])
-    def folder(self) -> strawberry.ID | None:
-        """Return the folder's public id, if the file is in one."""
-
-        return to_public_id(Folder, cast(Any, self).folder_id)
+    drive: strawberry.ID | None = actor_scoped_public_id("drive")
+    folder: strawberry.ID | None = actor_scoped_public_id("folder")
 
     @strawberry_django.field
     def url(self) -> str:
         """Return the token proxy download URL for READY rows, empty otherwise.
 
-        Minted here in actor scope — only a reader of the row resolves this
-        field — so the URL is a short-lived capability the download view honours
-        without a second access check (see :meth:`File.download_url`).
+        The bearer token names the current actor. Download lookup re-checks
+        that actor's read permission, so revocation stops subsequent requests
+        even before the token expires (see :meth:`File.download_url`).
         """
 
         row = cast(Any, self)

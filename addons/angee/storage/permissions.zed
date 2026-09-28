@@ -91,8 +91,8 @@ definition storage/file {
 }
 
 // The attachment target is polymorphic (GenericForeignKey to any row), so no
-// single zed type can cover it; access rides entirely on the file parent.
-// Consumers needing target-side gating wrap their own attach call sites.
+// single zed type can cover it; existing-edge access rides on the file parent.
+// FileAttachmentManager.attach gates creation on target write and file read.
 definition storage/file_attachment {
     relation file:  storage/file // rebac:field=file
     relation admin: angee/role // rebac:const=admin
