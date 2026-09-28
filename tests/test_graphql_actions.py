@@ -42,6 +42,7 @@ def test_action_result_carries_created_record_id() -> None:
     """A create-and-return verb populates ``id``; a plain result leaves it ``None``."""
 
     assert ActionResult(ok=True, message="ok").id is None
+    assert ActionResult(ok=True, message="ok").code is None
     created = ActionResult(ok=True, message="Review registered.", id="review_abc123")
     assert created.id == "review_abc123"
 
@@ -133,15 +134,67 @@ def test_action_guard_preserves_typed_wire_errors(
     assert not caplog.records
 
 
-def test_action_guard_keeps_dual_typed_validation_refusals_in_band(caplog: pytest.LogCaptureFixture) -> None:
-    @action_guard("Access change refused.")
-    def update_access() -> ActionResult:
-        raise RecordAccessSubjectRefused()
+@pytest.mark.parametrize(
+    ("error", "code", "validation_errors"),
+    [
+        pytest.param(
+            ValidationError("The reviewer declined.", code="REVIEW_REFUSED"),
+            "REVIEW_REFUSED", None, id="coded-validation",
+        ),
+        pytest.param(ValidationError("The reviewer declined."), None, None, id="uncoded-validation"),
+        pytest.param(
+            ValidationError({"unit_price": ["Must be positive."]}),
+            None, {"unitPrice": ["Must be positive."]}, id="uncoded-field-validation",
+        ),
+        pytest.param(
+            RecordAccessSubjectRefused(), "RECORD_ACCESS_SUBJECT_REFUSED", None, id="dual-typed-validation",
+        ),
+    ],
+)
+def test_action_guard_keeps_validation_refusal_codes_in_band(
+    error: ValidationError,
+    code: str | None,
+    validation_errors: dict[str, list[str]] | None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Coded and uncoded validation refusals keep their native codes on the wire."""
 
-    result = update_access()
-    assert not result.ok
-    assert result.message == "Access change refused."
+    @strawberry.type
+    class Query:
+        ready: bool = True
+
+    @strawberry.type
+    class Mutation:
+        @strawberry.mutation
+        @action_guard("Access change refused.", errors=(Exception,))
+        def update_access(self) -> ActionResult:
+            raise error
+
+    result = AngeeSchema(query=Query, mutation=Mutation).execute_sync(
+        "mutation { updateAccess { ok message code validationErrors } }"
+    )
+
+    assert result.errors is None
+    assert result.data == {
+        "updateAccess": {
+            "ok": False,
+            "message": "Access change refused.",
+            "code": code,
+            "validationErrors": validation_errors,
+        },
+    }
     assert not caplog.records
+
+
+def test_action_result_from_error_preserves_domain_code() -> None:
+    """Direct projection uses the domain owner's code without its private detail."""
+
+    result = ActionResult.from_error(CreationKeyConflict("private-content"), "Creation refused.")
+
+    assert result.ok is False
+    assert result.message == "Creation refused."
+    assert result.code == "CREATION_KEY_CONFLICT"
+    assert result.validation_errors is None
 
 
 def test_action_result_carries_in_band_validation_errors() -> None:
@@ -202,16 +255,18 @@ def test_action_result_from_error_keeps_non_field_errors_at_form_level() -> None
 
 
 def test_action_result_from_error_falls_back_to_message_only() -> None:
-    """A non-field ``ValidationError`` and any other exception yield a message-only result."""
+    """Uncoded errors without a field map yield a message-only result."""
 
     non_field = ActionResult.from_error(ValidationError("Whole thing is wrong."), "Bad request.")
     assert non_field.ok is False
     assert non_field.message == "Bad request."
+    assert non_field.code is None
     assert non_field.validation_errors is None
 
     other = ActionResult.from_error(RuntimeError("boom"), "Sync failed.")
     assert other.ok is False
     assert other.message == "Sync failed."
+    assert other.code is None
     assert other.validation_errors is None
 
 

@@ -1,4 +1,8 @@
-"""Shared GraphQL result type, guard, and target preflights for console domain actions."""
+"""Shared GraphQL result type, guard, and target preflights for console domain actions.
+
+In-band refusals preserve the error's declared ``DomainError`` / ``ValidationError``
+code in nullable ``ActionResult.code``; errors without a code project ``None``.
+"""
 
 from __future__ import annotations
 
@@ -36,17 +40,18 @@ class ActionResult:
     Returned by non-CRUD action mutations (sync, test, discover, open-document,
     …) so the client can surface a toast and refresh the affected record.
 
-    On a *domain* failure the action returns ``ok=False`` and may populate
+    On a guarded failure the action returns ``ok=False`` and may populate
     ``validation_errors`` — a field → messages map keyed by the argument names the
     form binds to (its arg descriptor ``name``s) — which a typed-args action form
     binds to its inputs, keeping the dialog open until ``ok=True``. Keys that match
-    no argument surface at form level. This is the in-band path; a *non-domain*
-    failure still raises a GraphQL error carrying the ``validationErrors``
-    extension instead.
+    no argument surface at form level. Validation refusals remain in band even
+    when also typed as ``DomainError``; other typed domain refusals propagate to
+    the schema's stable-code GraphQL error projection.
     """
 
     ok: bool
     message: str
+    code: str | None = None
     validation_errors: JSON | None = None
     id: strawberry.ID | None = None
     """Public id of the record the verb created, when the action creates one.
@@ -82,19 +87,22 @@ class ActionResult:
         becomes the in-band ``validation_errors`` map a typed-args action form binds
         to its inputs: field names default to camel case to match the GraphQL argument
         names the form binds to, and ``NON_FIELD_ERRORS`` (or any key that matches
-        no argument) surfaces at form level. Any other exception — or a
-        ``ValidationError`` with only non-field messages — yields a message-only
-        failure. ``summary`` is the human banner shown either way; the raw exception
-        text is never leaked into it.
+        no argument) surfaces at form level. Other exceptions and validation errors
+        with only non-field messages leave the map empty. ``DomainError`` and
+        ``ValidationError`` codes are preserved when defined. ``summary`` is the
+        human banner either way; the raw exception text is never leaked into it.
         """
 
         validation_errors = (
             cls.validation_error_map(error, camel_case_keys=camel_case_keys)
             if isinstance(error, ValidationError) else None
         )
-        if validation_errors is not None:
-            return cls(ok=False, message=summary, validation_errors=validation_errors)
-        return cls(ok=False, message=summary)
+        return cls(
+            ok=False,
+            message=summary,
+            code=getattr(error, "code", None) if isinstance(error, (DomainError, ValidationError)) else None,
+            validation_errors=validation_errors,
+        )
 
 
 BASELINE_ACTION_ERRORS: tuple[type[Exception], ...] = (
