@@ -7,7 +7,7 @@ from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeDataModel
 from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
-from angee.work.models import TaskWork
+from angee.work.models import ProjectWork, TaskWork
 
 
 class Task(TaskWork, AuditMixin, AngeeDataModel):
@@ -48,8 +48,8 @@ class Link(SqidMixin, models.Model):
         db_table = "test_projects_link"
 
 
-class Project(AbstractProject):
-    """Concrete project carrying the production folder lifecycle owner."""
+class Project(ProjectWork, AbstractProject):
+    """Concrete project composing the folder lifecycle and work team donor."""
 
     rebac_grantable = {
         **AbstractProject.rebac_grantable,

@@ -10,7 +10,7 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
+from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
@@ -24,6 +24,7 @@ Queue = apps.get_model("work", "Queue")
 Stage = apps.get_model("work", "Stage")
 Cycle = apps.get_model("work", "Cycle")
 Task = apps.get_model("projects", "Task")
+Project = apps.get_model("projects", "Project")
 
 
 @strawberry_django.type(Queue)
@@ -36,6 +37,7 @@ class WorkQueueType(AngeeNode):
     visibility: auto
     key: auto
     triage_enabled: auto
+    provision_stages: auto
     cycles_enabled: auto
     cycle_weeks: auto
     cycle_cooldown_weeks: auto
@@ -61,6 +63,7 @@ class WorkStageType(AngeeNode):
     tone: auto
     position: auto
     category: auto
+    rule_owned: auto
     created_at: auto
     updated_at: auto
 
@@ -86,6 +89,20 @@ class WorkCycleType(AngeeNode):
         """Return a custom name or the model-owned ``Cycle N`` fallback."""
 
         return cast(Any, self).display_name
+
+
+@strawberry_django.type(Project, name="ProjectType", extend=True)
+class ProjectWorkExtension:
+    """Expose the optional team through the shared relation redaction owner."""
+
+    team: SpaceGroupType | None = actor_scoped_to_one("team")
+
+
+@strawberry_django.type(Project, name="ConsoleProjectType", extend=True)
+class ConsoleProjectWorkExtension:
+    """Contribute the optional team to the console project node."""
+
+    team: SpaceGroupType | None = actor_scoped_to_one("team")
 
 
 @strawberry_django.type(Task, name="TaskType", extend=True)
@@ -147,6 +164,24 @@ class WorkActionMutation:
     """Row-authorized task triage and cycle lifecycle actions."""
 
     @strawberry.mutation
+    @action_guard("Start task failed.")
+    def start_task(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Start one writable queued task."""
+
+        target = authorized_action_target(info, Task, id, "write")
+        target.start()
+        return ActionResult(ok=True, message="Task started.", id=target.sqid)
+
+    @strawberry.mutation
+    @action_guard("Return task to triage failed.")
+    def return_task_to_triage(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Return one writable task to its queue's triage stage."""
+
+        target = authorized_action_target(info, Task, id, "write")
+        target.return_to_triage()
+        return ActionResult(ok=True, message="Task returned to triage.", id=target.sqid)
+
+    @strawberry.mutation
     @action_guard("Accept task failed.")
     def accept_task(
         self,
@@ -157,7 +192,7 @@ class WorkActionMutation:
         """Accept one writable triage task into its selected/default stage."""
 
         target = authorized_action_target(info, Task, task, "write")
-        target_stage = None if stage is None else authorized_action_target(info, Stage, stage, "read")
+        target_stage = None if stage is None else authorized_permission_target(info, Stage, stage, "read")
         target.accept(target_stage)
         return ActionResult(ok=True, message="Task accepted.", id=target.sqid)
 
@@ -250,6 +285,7 @@ _QUEUE_RESOURCE = hasura_model_resource(
         "parent",
         "key",
         "triage_enabled",
+        "provision_stages",
         "cycles_enabled",
         "cycle_weeks",
         "cycle_cooldown_weeks",
@@ -306,14 +342,15 @@ _STAGE_RESOURCE = hasura_model_resource(
         "tone",
         "position",
         "category",
+        "rule_owned",
         "created_at",
         "updated_at",
     ],
     sortable=["queue", "position", "name", "created_at", "updated_at"],
     aggregatable=["id", "position"],
     groupable=["queue", "tone", "category"],
-    insertable=["queue", "name", "tone", "position", "category"],
-    updatable=["name", "tone", "position", "category"],
+    insertable=["queue", "name", "tone", "position", "category", "rule_owned"],
+    updatable=["name", "tone", "position", "category", "rule_owned"],
     field_id_decode={"queue": public_pk_decoder(Queue)},
     write_backend=AngeeHasuraWriteBackend(Stage, public_id_fields=("queue",)),
 )
@@ -362,7 +399,7 @@ _WORK_SCHEMA_BUCKET: dict[str, list[Any]] = {
         _CYCLE_RESOURCE.mutation,
     ],
     "types": [WorkQueueType, WorkStageType, WorkCycleType, TaskType, *_RESOURCE_TYPES],
-    "type_extensions": [TaskWorkExtension],
+    "type_extensions": [TaskWorkExtension, ProjectWorkExtension],
 }
 
 schemas = {
@@ -372,6 +409,7 @@ schemas = {
         "type_extensions": [
             *_WORK_SCHEMA_BUCKET["type_extensions"],
             ConsoleTaskWorkExtension,
+            ConsoleProjectWorkExtension,
         ],
         "subscription": [
             changes(Queue, field="workQueueChanged"),

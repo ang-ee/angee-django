@@ -5,7 +5,16 @@ export type EstimateScale =
   | "LINEAR"
   | "FIBONACCI"
   | "EXPONENTIAL"
-  | "TSHIRT";
+  | "TSHIRT"
+  | "HOURS"
+  | "DAYS"
+  | "WEEKS";
+
+const DURATION_LABEL_KEYS: Partial<Record<EstimateScale, string>> = {
+  HOURS: "estimate.hours",
+  DAYS: "estimate.days",
+  WEEKS: "estimate.weeks",
+};
 
 /** Render a stored estimate through the queue's declared estimation vocabulary. */
 export function estimateLabel(
@@ -16,6 +25,8 @@ export function estimateLabel(
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   const normalized = String(scale ?? "").trim().toUpperCase() as EstimateScale;
   if (normalized === "NONE") return null;
+  const durationKey = DURATION_LABEL_KEYS[normalized];
+  if (durationKey) return t(durationKey, { count: value });
   if (normalized !== "TSHIRT") return t("estimate.points", { count: value });
   switch (value) {
     case 1:
