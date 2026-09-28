@@ -22,6 +22,7 @@ export {
   useRouteHref,
   useLoginPath,
   useRuntimeAuth,
+  useRuntimeBrand,
   useRuntimeLogoutAction,
   useRuntimeUserPreferences,
   readRuntimeRouteShortcuts,
@@ -74,6 +75,7 @@ export type {
   MenuItem,
   ModelSlotTarget,
   PreviewContribution,
+  RuntimeBrand,
   SlotContribution,
   WidgetMap,
 } from "./contracts";

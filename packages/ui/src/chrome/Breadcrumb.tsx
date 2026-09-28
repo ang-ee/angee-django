@@ -79,14 +79,14 @@ export function useBreadcrumbCollectionLink(to: string, href: string | null): vo
 export function Breadcrumb({
   className,
 }: BreadcrumbProps): ReactElement {
+  return <BreadcrumbTrail className={className} items={useBreadcrumbItems()} />;
+}
+
+/** The displayed trail, including the record's published label and return link. */
+export function useBreadcrumbItems(): readonly BreadcrumbItem[] {
   const leafLabel = React.useContext(BreadcrumbLeafLabelContext);
   const collection = React.useContext(BreadcrumbCollectionContext)?.link;
-  const items = breadcrumbItemsFromRefine(
-    useRefineBreadcrumb().breadcrumbs,
-    leafLabel,
-    collection,
-  );
-  return <BreadcrumbTrail className={className} items={items} />;
+  return breadcrumbItemsFromRefine(useRefineBreadcrumb().breadcrumbs, leafLabel, collection);
 }
 
 function BreadcrumbTrail({

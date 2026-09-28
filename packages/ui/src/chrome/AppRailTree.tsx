@@ -41,6 +41,8 @@ export const appRailTreeVariants = tv({
 
 export interface AppRailTreeProps {
   className?: string;
+  /** Present one app's children without repeating its root heading. */
+  flat?: boolean;
   /** Which place the tree shows — the apps scope or the Settings swap. */
   scope: "apps" | "settings";
   /** The resolved roots of that place, in display order. */
@@ -55,6 +57,7 @@ export interface AppRailTreeProps {
 /** Accordion navigation rendered as the expanded state of the app rail. */
 export function AppRailTree({
   className,
+  flat = false,
   scope,
   roots,
   activeRootId,
@@ -71,6 +74,7 @@ export function AppRailTree({
   );
   const idPrefix = `app-rail-${useId().replaceAll(":", "")}`;
   const styles = appRailTreeVariants();
+  const [onlyRoot] = roots;
 
   return (
     <div className={styles.root({ className })}>
@@ -87,7 +91,12 @@ export function AppRailTree({
         </div>
       ) : null}
       <div className={styles.tree()}>
-        <Accordion.Root
+        {flat && roots.length === 1 && onlyRoot ? (
+          (onlyRoot.targetedChildren.length ? onlyRoot.targetedChildren : roots).map((item) => (
+            <NestedMenuItem key={item.id} idPrefix={idPrefix} item={item}
+              pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
+          ))
+        ) : <Accordion.Root
           variant="flush"
           value={openRootId ? [openRootId] : []}
           onValueChange={(value) => {
@@ -106,7 +115,7 @@ export function AppRailTree({
               onActiveToggle={onActiveToggle}
             />
           ))}
-        </Accordion.Root>
+        </Accordion.Root>}
       </div>
     </div>
   );
@@ -230,11 +239,13 @@ function NestedMenuItem({
   item,
   pathname,
   styles,
+  onActiveToggle,
 }: {
   idPrefix: string;
   item: ChromeMenuNode;
   pathname: string;
   styles: AppRailTreeStyles;
+  onActiveToggle?: (() => void) | undefined;
 }): ReactElement | null {
   const t = useUiT();
   const children = item.targetedChildren;
@@ -252,6 +263,7 @@ function NestedMenuItem({
         item={item}
         pathname={pathname}
         styles={styles}
+        onActiveToggle={onActiveToggle}
       />
     );
   }
@@ -269,6 +281,7 @@ function NestedMenuItem({
           item={item}
           pathname={pathname}
           styles={styles}
+          onActiveToggle={onActiveToggle}
         />
         <Collapsible.Trigger
           aria-controls={panelId}

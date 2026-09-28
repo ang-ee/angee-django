@@ -51,7 +51,7 @@ export function refineRouteResourceProjection(
 ): RefineRouteResourceProjection {
   const resourcesByIdentifier = new Map<string, ResourceProps>();
   const metadataByResource: Record<string, RefineResourceMetadata> = {};
-  const appRootIds = new Set(menuTree.roots.map((item) => item.id));
+  const appRootIds = new Set(menuTree.appRoots().map((item) => item.id));
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const childrenByParentName = childRoutesByParentName(routes);
 

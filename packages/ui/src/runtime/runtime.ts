@@ -16,6 +16,7 @@ import type {
   FormOverrideMap,
   ModelSlotTarget,
   PreviewContribution,
+  RuntimeBrand,
   SlotContribution,
   WidgetMap,
 } from "./contracts";
@@ -89,6 +90,7 @@ export type ResourceRecordHrefLookup = (
  * there is no separate provider per registry.
  */
 export interface AppRuntime {
+  brand: RuntimeBrand | null;
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: RuntimeI18n | null;
@@ -168,6 +170,7 @@ const ANONYMOUS_RUNTIME_AUTH: RuntimeAuthState = {
 const EMPTY_USER_PREFERENCES: RuntimeUserPreferences = {};
 
 const EMPTY_RUNTIME: AppRuntime = {
+  brand: null,
   widgets: {},
   statusTones: {},
   i18n: null,
@@ -221,6 +224,11 @@ export function AppRuntimeProvider(props: {
 /** The merged runtime, or the empty runtime when unprovided. */
 export function useAppRuntime(): AppRuntime {
   return RuntimeContext.useMaybe() ?? EMPTY_RUNTIME;
+}
+
+/** The product identity contributed by the composed app, if any. */
+export function useRuntimeBrand(): RuntimeBrand | null {
+  return useAppRuntime().brand ?? null;
 }
 
 /** The dashboard registry composed once by the app owner. */

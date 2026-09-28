@@ -70,6 +70,20 @@ export interface BoardLaneSource {
   foldField?: string;
 }
 
+/** Read-only schedules on rows supplied by the list's related lane source. */
+export interface GanttViewSpec {
+  start: string;
+  end: string;
+  /** Defaults to the resource's record representation. */
+  label?: string;
+  /** A status field resolved through the runtime's status-tone vocabulary. */
+  tone?: string;
+  /** Additional fields selected on the related row for renderRowContent. */
+  rowFields?: readonly string[];
+  /** Content beside the related row's name, including rows without schedules. */
+  renderRowContent?: (row: Row) => ReactNode;
+}
+
 /** One card's optimistic board placement while its server write settles. */
 export interface BoardCardPlacement {
   laneId: string;
@@ -150,6 +164,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Calendar data + interaction seams. When declared, the Calendar kind is offered
    * in the switcher and rendered as a windowed-collection surface (no `useList`). */
   calendar?: CalendarViewSpec;
+  /** Date-scaled bars on related rows; requires laneSource. Pages by row. */
+  gantt?: GanttViewSpec;
   /** Declared board lanes for a relation group field; empty lanes render too. */
   laneSource?: BoardLaneSource;
   /** Group seeded by the resource list. */

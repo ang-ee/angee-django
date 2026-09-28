@@ -397,3 +397,6 @@ export type {
 
 export { ManageAccessDialog, type ManageAccessDialogProps, type RecordAccessEntry } from "./access/ManageAccessDialog";
 export { SubjectPicker, type SubjectPickerProps } from "./access/SubjectPicker";
+
+export { GanttView, type GanttViewProps, type GanttEvent, type GanttResource, type GanttScale } from "./gantt/GanttView";
+export type { GanttViewSpec } from "./resource/resource-view-types";

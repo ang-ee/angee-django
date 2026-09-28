@@ -3,6 +3,7 @@ import { useRouter, useRouterState } from "@tanstack/react-router";
 
 import { AppRail } from "../chrome/AppRail";
 import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
+import { DocumentTitle } from "../chrome/DocumentTitle";
 import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar } from "../chrome/TopBar";
 import { Chatter } from "../communication/Chatter";
@@ -95,6 +96,7 @@ export function ConsoleLayout({
           <ControlBandProvider host={controlHost}>
             <StatuslineProvider host={statusHost}>
               <BreadcrumbLabelProvider>
+                <DocumentTitle />
                 <div
                   style={{
                     "--rail-current-w": mobileViewport

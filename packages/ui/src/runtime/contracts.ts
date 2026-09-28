@@ -21,6 +21,12 @@ export function isModelScopedSlot(slot: string): boolean {
   return MODEL_SCOPED_SLOTS.has(slot);
 }
 
+/** Product identity declared once by an addon; mark names a registered glyph. */
+export interface RuntimeBrand {
+  name: string;
+  mark: string;
+}
+
 /** A navigation entry; many menu items may target one route. */
 export interface MenuItem {
   /** Stable menu id. Defaults to `route` when omitted. */

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { isClientRowModel, useSchemaFieldMetadata, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { isClientRowModel, useSchemaFieldMetadata, ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { queryForColumns } from "./resource-query";
 
 import type {
@@ -12,6 +12,7 @@ import type { PagerState } from "../../ui/pager";
 import type { ResourceViewContextValue } from "./resource-view-context";
 import {
   RESOURCE_VIEW_KINDS,
+  DEFAULT_TEXT_FILTER_FIELD,
   type ResourceViewDefaultGroups,
   type ResourceViewGroup,
   type ResourceViewKind,
@@ -27,6 +28,8 @@ import {
   mergeFilterOptions,
   textFilterValue,
 } from "./resource-view-utils";
+import type { useRelationFacets } from "../relation/relation-facet";
+import type { useScalarFacets } from "../relation/scalar-facet";
 import { relationFilterFields } from "../relation/relation-filter";
 
 export interface UseResourceViewToolbarInputsProps<TRow extends Row> {
@@ -68,6 +71,40 @@ export interface ResourceViewToolbarInputState {
   customFilterChips: readonly ResourceToolbarCustomFilterChip[];
   activeFilterIds: readonly string[];
   filterText: string;
+}
+
+export interface ListViewToolbarInputsProps<TRow extends Row> extends Omit<
+  UseResourceViewToolbarInputsProps<TRow>,
+  "contributedGroupOptions" | "contributedFilterOptions" | "contributedCustomFilterFields"
+> {
+  declaredFacets: ReturnType<typeof useRelationFacets>;
+  scalarFacets: ReturnType<typeof useScalarFacets>;
+}
+
+/** Share facet contributions and the search-field default across collection kinds. */
+export function useListViewToolbarInputs<TRow extends Row>({
+  declaredFacets, scalarFacets, textFilterField: declaredTextField, ...props
+}: ListViewToolbarInputsProps<TRow>) {
+  const filters = React.useMemo(
+    () => mergeFilterOptions(declaredFacets.filters, scalarFacets.filters),
+    [declaredFacets.filters, scalarFacets.filters],
+  );
+  const fields = React.useMemo(
+    () => mergeFilterFields(declaredFacets.filterFields, scalarFacets.filterFields),
+    [declaredFacets.filterFields, scalarFacets.filterFields],
+  );
+  const textFilterField = declaredTextField === undefined
+    ? props.modelMetadata
+      ? ResourceQuery.from(props.modelMetadata).textSearchFields()[0] ?? null
+      : DEFAULT_TEXT_FILTER_FIELD
+    : declaredTextField;
+  const inputs = useResourceViewToolbarInputs({
+    ...props, textFilterField,
+    contributedGroupOptions: declaredFacets.groupOptions,
+    contributedFilterOptions: filters,
+    contributedCustomFilterFields: fields,
+  });
+  return { ...inputs, textFilterField };
 }
 
 /** Derive the toolbar's pager/group/filter inputs from one list surface. */

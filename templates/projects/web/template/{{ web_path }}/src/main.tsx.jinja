@@ -21,11 +21,17 @@ createApp({
     ...composedAddons,
   ],
   layouts: {
+{% if console_chatter %}
     console: { chrome: ConsoleLayout },
+{% else %}
+    console: { chrome: ({ children }) => <ConsoleLayout showChatter={false}>{children}</ConsoleLayout> },
+{% endif %}
     public: { schema: "public" },
   },
   schemas,
   defaultSchema: "console",
-  home: "platform.graph",
+{% if home %}
+  home: {{ home | tojson }},
+{% endif %}
   appearance,
 }).mount("#root");

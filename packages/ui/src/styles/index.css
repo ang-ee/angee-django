@@ -141,6 +141,7 @@
      / … (solid), text-on-success / … (on-fill), border-success-line / …
      (outline + surface border), bg-success-tint / … (surface bg). The
      brand/danger/accent solids and on-brand/on-danger already bridge above. */
+  --color-neutral:      var(--neutral);
   --color-info:         var(--info);
   --color-success:      var(--success);
   --color-warning:      var(--warning);
