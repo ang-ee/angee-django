@@ -30,6 +30,7 @@ def test_every_group_permission_matches_all_nine_seats(roster):
         "create": set(SEATS), "read": READERS, "post": READERS - {"viewer"},
         "write": MANAGERS | {"moderator"}, "delete": MANAGERS,
         "transfer": {"column_owner", "administrator"}, "manage_roster": MANAGERS,
+        "write__owner": {"column_owner", "administrator"},
     }
     assert set(SchemaPermission.objects.filter(definition__resource_type="spaces/group")
                .values_list("name", flat=True)) == set(expected)

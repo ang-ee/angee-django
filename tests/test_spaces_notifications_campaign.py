@@ -149,7 +149,7 @@ def test_audience_has_exactly_one_query_at_two_sizes_and_keeps_external_parties(
                 )
                 expected[party.pk] = (NotificationPolicy.EMAIL, ("comment",))
         with django_assert_num_queries(1):
-            actual = {member.party.pk: (member.notification_policy, member.subtype_keys)
+            actual = {member.party_id: (member.notification_policy, member.subtype_keys)
                       for member in roster.group.thread_audience()}
         assert actual == expected
     assert not ThreadFollower._base_manager.exists()
@@ -166,7 +166,7 @@ def test_queue_inherits_parent_audience_and_roster_changes_never_create_follower
     assert queue._meta.get_field("owner").model is type(roster.group)
     assert not [error for error in check_ownership([apps.get_app_config("work")]) if error.obj is Queue]
     with django_assert_num_queries(1):
-        audience = [(member.party.pk, member.notification_policy) for member in queue.thread_audience()]
+        audience = [(member.party_id, member.notification_policy) for member in queue.thread_audience()]
     assert audience == [(row.party_id, NotificationPolicy.MUTED)]
     with system_context(reason="remove audience member"):
         row.delete()

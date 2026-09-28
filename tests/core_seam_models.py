@@ -80,14 +80,17 @@ definition scopedemo/subject_guarded_row {
     permission delete = parent->delete
     permission share = parent->transfer
     permission child_transfer = nil
+    permission write__owner = parent->transfer
 }
 definition scopedemo/subject_guarded_leaf {
     relation parent: scopedemo/subject_guarded_row // rebac:field=subjectguardedrow_ptr
+    relation owner_row: scopedemo/owned_row // rebac:field=subjectguardedrow_ptr__ownedrow_ptr
     permission read = parent->read
     permission create = authenticated
     permission write = parent->write
     permission delete = parent->delete
     permission child_transfer = authenticated
+    permission write__owner = owner_row->transfer
 }
 """
 
@@ -110,6 +113,7 @@ def constrained_vault_tables(composed_tables):
             permission create = authenticated
             permission write = parent->write
             permission delete = parent->delete
+            permission write__owner = parent->transfer
         }
     """)
     active.set_schema(replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]))

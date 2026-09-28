@@ -27,6 +27,7 @@ from angee.compose.model_composition import ModelComposition
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
+from angee.intake.models import Need as AbstractNeed
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential
 from angee.integrate.models import ExternalAccount as AbstractExternalAccount
@@ -545,6 +546,16 @@ class ExtcontribRole(Role):
 # Register the projects concretes only after their storage FK targets above.
 # Proposal concretes depend on the project graph and register their role anchor.
 from tests import projects_models, proposals_models  # noqa: E402, F401
+
+
+class Need(AbstractNeed):
+    """Canonical intake edges required by the merged party/task permission graph."""
+
+    class Meta(AbstractNeed.Meta):
+        abstract = False
+        app_label = "intake"
+        db_table = "test_intake_need"
+        rebac_resource_type = "intake/need"
 
 
 def make_mount(

@@ -183,7 +183,7 @@ def test_notification_acknowledgement_returns_validation_for_foreign_or_missing_
     ("ReactionType", ("handle",)),
     ("RecordThreadNotificationType", ("message", "follower")),
 ])
-def test_unlisted_projection_types_regate_sudo_cached_relations(composed_tables, projection, fields):
+def test_unlisted_projection_types_regate_sudo_cached_relations(activity_catalog, projection, fields):
     """Invoke the installed fields, including types reached only inside chatter."""
     viewer, owner = make_user("projection-viewer"), make_user("projection-owner")
     with system_context(reason="test.messaging.graphql.cached-relations"):

@@ -57,20 +57,19 @@ def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
 
-    messaging = apps.get_app_config("messaging")
-    sentinel = object()
-    original_schema = getattr(messaging, "rebac_schema", sentinel)
+    originals = {config: getattr(config, "rebac_schema", None) for config in app_configs}
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)
 
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
-        if original_schema is sentinel:
-            if hasattr(messaging, "rebac_schema"):
-                delattr(messaging, "rebac_schema")
-        else:
-            messaging.rebac_schema = original_schema
+        for config, original in originals.items():
+            if original is None:
+                if hasattr(config, "rebac_schema"):
+                    delattr(config, "rebac_schema")
+            else:
+                config.rebac_schema = original
 
 
 def _role_relations(group: Group, user: Any) -> set[str]:

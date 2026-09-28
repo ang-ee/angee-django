@@ -76,6 +76,7 @@ from tests.conftest import (
     File as StorageFile,
 )
 from tests.messaging_models import (
+    Channel,
     Fragment,
     Handle,
     Message,
@@ -318,10 +319,10 @@ _AT = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 @pytest.fixture
 def channel(composed_tables: None) -> Any:
-    """Provide an Integration row to stand in as the ingest channel."""
+    """Provide the real channel composition consumed by message-ingested receivers."""
 
     del composed_tables
-    return make_integration("msgchan")
+    return make_integration("msgchan", model=Channel, backend_class="manual")
 
 
 def _parsed(
@@ -509,7 +510,7 @@ def test_historical_ingest_binds_explicit_thread_and_heals_reply_order(channel: 
             )[0]
             assert first.parent_id is None
             # An unrelated record with the same source ID cannot become its parent.
-            other_channel = make_integration("other-source")
+            other_channel = make_integration("other-source", model=Channel, backend_class="manual")
             Message.objects.ingest(
                 [parent], channel=other_channel, explicit_thread=other, historical=True, quote_edges=False
             )
@@ -1702,7 +1703,7 @@ def test_unnamed_media_ingest_names_the_file_from_its_mime(composed_tables: None
     with system_context(reason="test unnamed media ingest setup"):
         user = user_model.objects.create_user(username="wa-media", email="wa-media@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("wa-media-chan")
+    channel = make_integration("wa-media-chan", model=Channel, backend_class="manual")
 
     parsed = ParsedMessage(
         external_id="wa-media/1",
@@ -1732,7 +1733,7 @@ def test_nameless_chat_part_names_from_the_message_id(composed_tables: None, tmp
     with system_context(reason="test chat media ingest setup"):
         user = user_model.objects.create_user(username="chat-media", email="chat-media@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("chat-media-chan")
+    channel = make_integration("chat-media-chan", model=Channel, backend_class="manual")
 
     parsed = ParsedMessage(
         external_id="4917000001@s.whatsapp.net/3EB0STANZA",
@@ -1765,7 +1766,7 @@ def test_nameless_email_inline_part_names_from_the_content_id(composed_tables: N
     with system_context(reason="test inline media ingest setup"):
         user = user_model.objects.create_user(username="mail-inline", email="mail-inline@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("mail-inline-chan")
+    channel = make_integration("mail-inline-chan", model=Channel, backend_class="manual")
 
     parsed = ParsedMessage(
         external_id="cafe1234@mail.example.com",
@@ -1799,7 +1800,7 @@ def test_deduped_file_keeps_first_name_while_each_part_keeps_its_own(composed_ta
     with system_context(reason="test dedup media ingest setup"):
         user = user_model.objects.create_user(username="dedup-media", email="dedup-media@example.com")
         _storage_drive(tmp_path, owner=user)
-    channel = make_integration("dedup-media-chan")
+    channel = make_integration("dedup-media-chan", model=Channel, backend_class="manual")
 
     def _chat_message(external_id: str) -> ParsedMessage:
         return ParsedMessage(
@@ -2346,7 +2347,7 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     # Counters bump only for a newly created message, so a re-sync never inflates them.
     assert thread.message_count == 1
 
-    other_channel = make_integration("msgchan-b")
+    other_channel = make_integration("msgchan-b", model=Channel, backend_class="manual")
     assert _ingest([parsed], channel=other_channel) == 1
     rows = list(Message._base_manager.filter(external_id="m1").order_by("pk"))
     assert len(rows) == 2
@@ -3220,7 +3221,7 @@ def test_ingest_named_thread_fills_a_missing_title_but_never_renames(channel: An
 
 @pytest.mark.django_db(transaction=True)
 def test_fill_chat_titles_names_only_this_channels_untitled_chats(channel: Any) -> None:
-    other = make_integration("other-chats")
+    other = make_integration("other-chats", model=Channel, backend_class="manual")
     _ingest(
         [
             replace(_parsed("n-1", subject=""), thread=ParsedThread(external_id="g-1", modality="group")),

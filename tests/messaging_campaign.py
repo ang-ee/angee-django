@@ -1,6 +1,7 @@
 """Messaging campaign fixtures on the suite's canonical source compositions."""
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -26,7 +27,7 @@ def grant(row, relation, user):
 def make_user(name):
     """Create accounts without password hashing or transport work."""
     with system_context(reason="test.messaging.campaign.account"):
-        return get_user_model().objects.create_user(username=name)
+        return get_user_model().objects.create_user(username=f"{name}-{uuid4().hex}")
 
 
 @pytest.fixture
@@ -41,7 +42,7 @@ def audience_record(spaces_tables, monkeypatch):
         if record.lead_id is None:
             return ()
         person = Person._base_manager.get(user_id=record.lead_id)
-        return (AudienceMember(party=person, notification_policy=NotificationPolicy.INBOX),)
+        return (AudienceMember(party_id=person.pk, notification_policy=NotificationPolicy.INBOX),)
 
     monkeypatch.setattr(Project, "thread_team_field", "team")
     monkeypatch.setattr(Project, "thread_audience_members", named_members)
