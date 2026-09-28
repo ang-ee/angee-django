@@ -601,7 +601,7 @@ def test_record_followers_project_explicit_account_and_accountless_identities_on
         group = Group.objects.create(name="Record audience", owner=f.owner)
         thread.groups.add(group)
         Membership.objects.create(group=group, party=f.unfollowed, role="member", is_confirmed=True)
-        assert [member.party.pk for member in group.thread_audience()] == [f.unfollowed.pk]
+        assert [member.party_id for member in group.thread_audience()] == [f.unfollowed.pk]
         assert not ThreadFollower.objects.filter(thread=thread, party=f.unfollowed).exists()
     payload = result_data(
         execute_schema(

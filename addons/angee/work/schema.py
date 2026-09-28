@@ -25,6 +25,7 @@ Stage = apps.get_model("work", "Stage")
 Cycle = apps.get_model("work", "Cycle")
 Task = apps.get_model("projects", "Task")
 Project = apps.get_model("projects", "Project")
+Milestone = apps.get_model("projects", "Milestone")
 
 
 @strawberry_django.type(Queue)
@@ -64,6 +65,7 @@ class WorkStageType(AngeeNode):
     position: auto
     category: auto
     rule_owned: auto
+    conceals: auto
     created_at: auto
     updated_at: auto
 
@@ -103,6 +105,13 @@ class ConsoleProjectWorkExtension:
     """Contribute the optional team to the console project node."""
 
     team: SpaceGroupType | None = actor_scoped_to_one("team")
+
+
+@strawberry_django.type(Milestone, name="MilestoneType", extend=True)
+class MilestoneWorkExtension:
+    """Expose the phase's rule stage through the shared relation redaction owner."""
+
+    active_stage: WorkStageType | None = actor_scoped_to_one("active_stage")
 
 
 @strawberry_django.type(Task, name="TaskType", extend=True)
@@ -343,14 +352,15 @@ _STAGE_RESOURCE = hasura_model_resource(
         "position",
         "category",
         "rule_owned",
+        "conceals",
         "created_at",
         "updated_at",
     ],
     sortable=["queue", "position", "name", "created_at", "updated_at"],
     aggregatable=["id", "position"],
     groupable=["queue", "tone", "category"],
-    insertable=["queue", "name", "tone", "position", "category", "rule_owned"],
-    updatable=["name", "tone", "position", "category", "rule_owned"],
+    insertable=["queue", "name", "tone", "position", "category", "rule_owned", "conceals"],
+    updatable=["name", "tone", "position", "category", "rule_owned", "conceals"],
     field_id_decode={"queue": public_pk_decoder(Queue)},
     write_backend=AngeeHasuraWriteBackend(Stage, public_id_fields=("queue",)),
 )
@@ -399,7 +409,7 @@ _WORK_SCHEMA_BUCKET: dict[str, list[Any]] = {
         _CYCLE_RESOURCE.mutation,
     ],
     "types": [WorkQueueType, WorkStageType, WorkCycleType, TaskType, *_RESOURCE_TYPES],
-    "type_extensions": [TaskWorkExtension, ProjectWorkExtension],
+    "type_extensions": [TaskWorkExtension, ProjectWorkExtension, MilestoneWorkExtension],
 }
 
 schemas = {

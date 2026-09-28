@@ -1,4 +1,4 @@
-"""Work-owned reactions to upstream chatter events."""
+"""Work-owned reactions to upstream chatter and project lifecycle events."""
 
 from __future__ import annotations
 
@@ -7,15 +7,28 @@ from typing import Any
 from django.apps import apps
 
 from angee.messaging.events import message_ingested
+from angee.projects.events import project_phase_changed, project_status_changed, task_promoted
 
 
 def connect() -> None:
-    """Listen for new chatter activity through messaging's declared seam."""
+    """Listen through the declared messaging and composed-project event seams."""
 
     message_ingested.connect(
         wake_snoozed_task,
         dispatch_uid="work.wake_snoozed_task.message_ingested",
     )
+    for event in (task_promoted, project_phase_changed, project_status_changed):
+        event.connect(
+            follow_project,
+            dispatch_uid="work.follow_project",
+        )
+
+
+def follow_project(sender: Any, project: Any, **kwargs: Any) -> None:
+    """Follow current project state synchronously; a failed rule aborts the sender's transaction."""
+
+    del sender, kwargs
+    project.sync_source_task_stage()
 
 
 def wake_snoozed_task(sender: Any, instance: Any, **kwargs: Any) -> None:

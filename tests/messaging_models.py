@@ -5,6 +5,7 @@ collected. Register this connected model graph from conftest, before Django
 creates the test database, without depending on a test module's import order.
 """
 
+from angee.intake.models import ChannelIntake
 from angee.messaging.models import ActivityType as AbstractActivityType
 from angee.messaging.models import Channel as AbstractChannel
 from angee.messaging.models import Fragment as AbstractFragment
@@ -108,7 +109,7 @@ class Fragment(AbstractFragment):
         db_table = "test_messaging_fragment"
 
 
-class Channel(ChannelSpace, ImapChannelSampling, AbstractChannel, Integration):
+class Channel(ChannelIntake, ChannelSpace, ImapChannelSampling, AbstractChannel, Integration):
     """Concrete Integration child used to verify channel-owned message access."""
 
     class Meta(AbstractChannel.Meta):

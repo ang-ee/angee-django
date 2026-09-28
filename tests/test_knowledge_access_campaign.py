@@ -120,13 +120,13 @@ def test_deleting_target_removes_bindings_without_deleting_knowledge(composed_ta
 def test_page_can_write_tracks_vault_permission_for_non_author_viewer(clone_template):
     fixture = clone_template
     schema = addon_schema(schemas, "public")
-    query = "query ($id: String!) { pages_by_pk(id: $id) { id can_write } }"
+    query = "query ($id: String!) { pages_by_pk(id: $id) { id permissions } }"
     variables = {"id": str(fixture.note.sqid)}
     detail = result_data(execute_schema(schema, query, variables, user=fixture.actor))["pages_by_pk"]
-    assert detail == {"id": str(fixture.note.sqid), "can_write": False}
+    assert detail == {"id": str(fixture.note.sqid), "permissions": []}
     _grant(fixture.source, "editor", fixture.actor)
     detail = result_data(execute_schema(schema, query, variables, user=fixture.actor))["pages_by_pk"]
-    assert detail["can_write"] is True
+    assert detail["permissions"] == ["write"]
     stranger = create_user("page-stranger")
     assert result_data(execute_schema(schema, query, variables, user=stranger))["pages_by_pk"] is None
 

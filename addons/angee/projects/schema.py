@@ -14,10 +14,13 @@ from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
+    SortAlias,
     declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
     hasura_model_resource,
     public_pk_decoder,
 )
@@ -45,10 +48,9 @@ Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
 User = get_user_model()
 
-_PROJECT_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
-    Project,
-    "hasura_readable_fields",
-)
+_PROJECT_PERMISSIONS = ("write", "share", "delete")
+_TASK_PERMISSIONS = (*_PROJECT_PERMISSIONS, "narrow", "widen", "comment")
+
 _PROJECT_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
     Project,
     "hasura_filterable_fields",
@@ -73,18 +75,15 @@ _PROJECT_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
     Project,
     "hasura_updatable_fields",
 )
-_PROJECT_EXTENSION_WRITE_FIELDS = tuple(
-    dict.fromkeys((*_PROJECT_EXTENSION_INSERT_FIELDS, *_PROJECT_EXTENSION_UPDATE_FIELDS))
-)
-_PROJECT_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name for name in _PROJECT_EXTENSION_WRITE_FIELDS if Project._meta.get_field(name).is_relation
-)
+_PROJECT_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Project)
 
 
-_TASK_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
-    Task,
-    "hasura_readable_fields",
-)
+_MILESTONE_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_filterable_fields")
+_MILESTONE_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_insertable_fields")
+_MILESTONE_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Milestone, "hasura_updatable_fields")
+_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Milestone)
+
+
 _TASK_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
     Task,
     "hasura_filterable_fields",
@@ -112,10 +111,7 @@ _TASK_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(
 _TASK_EXTENSION_FORBIDDEN_INSERT_FIELDS = set(
     declared_hasura_resource_fields(Task, "hasura_forbidden_insertable_fields")
 )
-_TASK_EXTENSION_WRITE_FIELDS = tuple(dict.fromkeys((*_TASK_EXTENSION_INSERT_FIELDS, *_TASK_EXTENSION_UPDATE_FIELDS)))
-_TASK_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name for name in _TASK_EXTENSION_WRITE_FIELDS if Task._meta.get_field(name).is_relation
-)
+_TASK_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Task)
 
 DroppedReason = Task._meta.get_field("dropped_reason").choices_enum
 strawberry.enum(cast(Any, DroppedReason))
@@ -168,6 +164,7 @@ class ProjectType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(_PROJECT_PERMISSIONS)
 
     owner: UserType | None = actor_scoped_to_one("owner")
     owns_items: auto
@@ -199,6 +196,7 @@ class ConsoleProjectType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(_PROJECT_PERMISSIONS)
 
     owner: UserType | None = actor_scoped_to_one("owner")
     owns_items: auto
@@ -225,12 +223,30 @@ class MilestoneType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(("write", "reach"))
 
     project: ProjectType | None = actor_scoped_to_one("project")
 
 
+@strawberry.type
+class TaskProjectionMixin:
+    """Shared SQL scalar projections for public and console task types."""
+
+    @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
+    def priority_rank(self) -> int:
+        """Return the priority's position in its declared order."""
+
+        return cast(Any, self).priority_rank()
+
+    @strawberry_django.field(annotate={"_promoted_phase": lambda info: Task.objects.promoted_phase_expression()})
+    def promoted_phase(self) -> str | None:
+        """Return only the phase name authorized through read_promoted_phase."""
+
+        return cast(Any, self).promoted_phase()
+
+
 @strawberry_django.type(Task)
-class TaskType(AuthoredRefMixin, AngeeNode):
+class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
     """GraphQL projection of one human action."""
 
     display_name: str = strawberry_django.field(
@@ -254,6 +270,7 @@ class TaskType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(_TASK_PERMISSIONS)
 
     project: ProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
@@ -280,7 +297,7 @@ class TaskType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Task)
-class ConsoleTaskType(AuthoredRefMixin, AngeeNode):
+class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
     """Console task projection with label-bearing user relations."""
 
     display_name: str = strawberry_django.field(
@@ -304,6 +321,7 @@ class ConsoleTaskType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(_TASK_PERMISSIONS)
 
     project: ConsoleProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
@@ -730,6 +748,7 @@ _MILESTONE_RESOURCE = hasura_model_resource(
         "reached_by",
         "created_at",
         "updated_at",
+        *_MILESTONE_EXTENSION_FILTER_FIELDS,
     ],
     sortable=[
         "project",
@@ -744,10 +763,36 @@ _MILESTONE_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id", "sort_order"],
     groupable=["project", "start_date", "target_date"],
-    insertable=["project", "name", "description", "start_date", "target_date", "sort_order"],
-    updatable=["project", "name", "description", "start_date", "target_date", "sort_order"],
-    field_id_decode={"project": public_pk_decoder(Project), "reached_by": public_pk_decoder(User)},
-    write_backend=AngeeHasuraWriteBackend(Milestone, public_id_fields=("project",)),
+    insertable=[
+        "project",
+        "name",
+        "description",
+        "start_date",
+        "target_date",
+        "sort_order",
+        *_MILESTONE_EXTENSION_INSERT_FIELDS,
+    ],
+    updatable=[
+        "project",
+        "name",
+        "description",
+        "start_date",
+        "target_date",
+        "sort_order",
+        *_MILESTONE_EXTENSION_UPDATE_FIELDS,
+    ],
+    field_id_decode={
+        "project": public_pk_decoder(Project),
+        "reached_by": public_pk_decoder(User),
+        **{
+            name: public_pk_decoder(Milestone._meta.get_field(name).related_model)
+            for name in _MILESTONE_EXTENSION_PUBLIC_ID_FIELDS
+        },
+    },
+    write_backend=AngeeHasuraWriteBackend(
+        Milestone,
+        public_id_fields=("project", *_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS),
+    ),
 )
 
 
@@ -790,6 +835,7 @@ def _task_resource(node_type: type) -> Any:
             "status",
             "visibility",
             "priority",
+            "priority_rank",
             "due_date",
             "done_at",
             "dropped_at",
@@ -797,6 +843,9 @@ def _task_resource(node_type: type) -> Any:
             "updated_at",
             *_TASK_EXTENSION_ORDER_FIELDS,
         ],
+        sortable_aliases={
+            "priority_rank": SortAlias("_priority_rank", lambda _info, queryset: queryset.priority_rank_expression()),
+        },
         aggregatable=[
             "id",
             "sort_order",

@@ -75,6 +75,7 @@ class DataResourcePolicy:
     default_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] | None = None
     revision_fields: tuple[str, ...] | None = None
     lines_declaration: object | None = None
+    save_argument_names: tuple[str, ...] | None = None
     subtitle: data_contract.DataResourceSubtitleMetadata | None = None
     record_representation: str | None = None
     record_search_fields: tuple[str, ...] | None = None
@@ -244,6 +245,9 @@ def finalize_data_resources(
             filter_operators=_single_sequence(model_label, contributions, "filter_operators"),
             aggregate_measures=_single_sequence(model_label, contributions, "aggregate_measures"),
             default_measures=_single_sequence(model_label, contributions, "default_measures"),
+            create_argument_names=native_resource.insert_argument_names if native_resource is not None else (),
+            update_argument_names=native_resource.update_argument_names if native_resource is not None else (),
+            save_argument_names=_single_sequence(model_label, contributions, "save_argument_names"),
             create_fields=create_fields,
             update_fields=update_fields,
             revision_fields=_single_sequence(model_label, contributions, "revision_fields"),
@@ -404,6 +408,9 @@ def _finalize_data_resource(
     aggregate_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
     default_measures: tuple[data_contract.DataAggregateMeasureMetadata, ...] = (),
     default_sort: tuple[data_contract.DataDefaultSortMetadata, ...] = (),
+    create_argument_names: tuple[str, ...] = (),
+    update_argument_names: tuple[str, ...] = (),
+    save_argument_names: tuple[str, ...] = (),
     create_fields: tuple[str, ...] = (),
     update_fields: tuple[str, ...] = (),
     revision_fields: tuple[str, ...] = (),
@@ -599,9 +606,26 @@ def _finalize_data_resource(
         default_measures=default_measures,
         create_fields=active_create_fields,
         update_fields=active_update_fields,
+        create_arguments=_mutation_arguments(graphql_schema, roots.create_name, create_argument_names),
+        update_arguments=_mutation_arguments(graphql_schema, roots.update_name, update_argument_names),
+        save_arguments=_mutation_arguments(graphql_schema, roots.save_name, save_argument_names),
         required_create_fields=active_required_create_fields,
         revision_fields=revision_fields,
         lines=lines,
+    )
+
+
+def _mutation_arguments(
+    schema: GraphQLSchema, root: str | None, declared: tuple[str, ...],
+) -> tuple[data_contract.DataMutationArgument, ...]:
+    """Intersect the owner's declared names with the final root's wire arguments."""
+
+    mutation = schema.mutation_type
+    if mutation is None or root is None or root not in mutation.fields:
+        return ()
+    return tuple(
+        data_contract.DataMutationArgument(name=name, type=str(argument.type))
+        for name, argument in mutation.fields[root].args.items() if name in declared
     )
 
 

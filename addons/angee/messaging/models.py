@@ -916,9 +916,9 @@ class ThreadedModelMixin(models.Model):
     def thread_reader_allowed(self, user: Any) -> bool:
         """Check one recipient through the same explicit-account audience gate."""
 
-        return user.pk in self.thread_reader_ids((user,))
+        return actor_user_id(to_subject_ref(user)) in self.thread_reader_ids((user,))
 
-    def thread_reader_ids(self, accounts: Iterable[models.Model]) -> set[Any]:
+    def thread_reader_ids(self, accounts: Iterable[models.Model | SubjectRef]) -> set[Any]:
         """Evaluate the audience against this record's native read scopes once.
 
         Each EXISTS arm pins its account even under system-context fan-out. Only
@@ -928,19 +928,21 @@ class ThreadedModelMixin(models.Model):
         statement bound SQL expression depth and size independently of the audience.
         """
 
-        accounts = tuple(accounts)
-        if not accounts:
+        subjects = (to_subject_ref(account) for account in accounts)
+        account_subjects = {actor_user_id(subject): subject for subject in subjects}
+        account_subjects.pop(None, None)
+        if not account_subjects:
             return set()
         if not callable(getattr(self, "has_access", None)) or not model_resource_type(self):
-            return {account.pk for account in accounts}
+            return set(account_subjects)
         using = self._state.db or router.db_for_read(type(self), instance=self)
         allowed: set[Any] = set()
         with evaluator_scope():
-            for chunk in batched(accounts, 50):
+            for chunk in batched(account_subjects.items(), 50):
                 readers = models.Q(pk__in=[])
-                for account in chunk:
+                for account_id, account in chunk:
                     predicate = backend().queryset_filter(
-                        model=type(self), subject=to_subject_ref(account),
+                        model=type(self), subject=account,
                         action=self.thread_read_access, using=using,
                     )
                     # The native predicate avoids a grants-all probe per account;
@@ -951,7 +953,7 @@ class ThreadedModelMixin(models.Model):
                         type(self)._default_manager.using(using).with_actor(account)
                         .with_action(self.thread_read_access).filter(pk=self.pk).order_by().scoped()
                     )
-                    readers |= models.Q(pk=account.pk) & models.Q(models.Exists(scope))
+                    readers |= models.Q(pk=account_id) & models.Q(models.Exists(scope))
                 allowed.update(
                     get_user_model()._base_manager.using(using)
                     .filter(readers).values_list("pk", flat=True)
@@ -1819,7 +1821,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
         "messaging.Thread",
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
+        on_delete=models.CASCADE,
         related_name="messages",
         # Covered: every composite index below leads with thread (the Zulip
         # covered-FK rule — a redundant single-column index can misprice plans).
@@ -1934,7 +1936,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
             return "Only comment messages can be edited."
         if self.direction != self.Direction.INTERNAL:
             return "Only internally authored comments can be edited."
-        if self.tracking_values.exists():
+        if self.tracking_values.model.system_queryset().filter(message_id=self.pk).exists():
             return "Messages with tracking values cannot be edited."
         return None
 
@@ -1943,7 +1945,7 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
 
         if self.message_type != self.MessageKind.COMMENT:
             return "Only comment messages can be deleted."
-        if self.tracking_values.exists():
+        if self.tracking_values.model.system_queryset().filter(message_id=self.pk).exists():
             return "Messages with tracking values cannot be deleted."
         return None
 

@@ -10,6 +10,7 @@ from typing import Annotated, Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db.models import F
 from rebac import system_context
 from rebac.resources import model_resource_type
@@ -20,6 +21,7 @@ from angee.base.identity import instance_from_public_id
 from angee.base.scoping import write_scoped_queryset
 from angee.data.metadata import DataResourceSubtitleMetadata
 from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     hasura_model_resource,
@@ -154,11 +156,7 @@ class PageType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["id"])
-    def can_write(self) -> bool:
-        """Evaluate the ambient actor per row; system context is unscoped (always true)."""
-
-        return cast(Any, self).has_access("write")
+    permissions = permissions_field(("write",))
 
     @strawberry_django.field(only=["vault_id"])
     def vault(self) -> strawberry.ID:
@@ -317,20 +315,25 @@ def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
 class VaultWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create a vault owned by the requesting user."""
 
         user = getattr(info.context.request, "user", None)
-        return Vault._default_manager.create_for(user, **data)
+        fields = dict(data)
+        # The factory stamps attribution; the shared backend already validated scope.
+        fields.pop("created_by_id", None)
+        return Vault._default_manager.create_for(user, **fields)
 
 
 class PageWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for pages: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
         """Create a page in a vault the requesting user can write."""
 
         del info
+        if client_creation_key is not None:
+            raise ValidationError({"client_creation_key": "Page creation does not support creation keys."})
         vault = require_instance_for_id(Vault, data["vault"])
         parent = None
         if data.get("parent") is not None:

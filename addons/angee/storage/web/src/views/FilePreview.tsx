@@ -37,8 +37,10 @@ function validPreviewPage(value: number | null | undefined): number | null {
 /** Shared Storage adapter: download URL and access come from the File resource. */
 export function FilePreview({ file, page }: { file: StorageFile; page?: number | null }): ReactElement {
   const t = useStorageT();
+  const fallback = <EmptyState icon="file" title={file.title || file.filename} description={t("preview.unsupported")} />;
+  if (!file.url) return fallback;
   return <PreviewPane file={{ url: file.url, name: file.filename, mime: file.mime_type?.mime_type, size: file.size_bytes }} page={page}
-    fallback={<EmptyState icon="file" title={file.title || file.filename} description={t("preview.unsupported")} />} />;
+    fallback={fallback} />;
 }
 
 export function FileRecordPreview({ id, page }: { id: string; page?: number | null }): ReactElement {

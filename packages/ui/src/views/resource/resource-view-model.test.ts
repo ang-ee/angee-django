@@ -6,7 +6,7 @@ import { ResourceViewProvider, useResourceView } from "./resource-view-context";
 import { favoriteFromResourceView } from "./model/favorites";
 import { useResourceViewQueryFacts } from "./surface/table-state";
 import { initialResourceSorting } from "./resource-view-codecs";
-import type { ResourceViewInitialState } from "./resource-view-model";
+import type { ResourceViewFilter, ResourceViewInitialState } from "./resource-view-model";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
@@ -127,7 +127,7 @@ describe("resource-view model", () => {
     expect(resourceViewSearchToState({}, initial).pagination.pageIndex).toBe(2);
   });
 
-  test.each([
+  test.each<ResourceViewFilter>([
     { kind: { exact: "lead" } },
     { NOT: { status: { exact: "DROPPED" } } },
   ])("round-trips cleared seeded filter %j, group, and sort through search", (filter) => {

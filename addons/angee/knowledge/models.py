@@ -156,43 +156,36 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         # A successful ownerless clone is not necessarily readable by its caller.
         # Resolve only this actor's creation receipt, then rebind the returned row.
         replays = self.system_context(reason="knowledge.vault.clone.replay")
-        existing = replays.for_creation_key(user_id, client_creation_key, fingerprint)
-        if existing is not None:
-            return cast(Vault, existing.with_actor(actor))
-        source = self.with_actor(actor).get(pk=template.pk)
-        page_model = apps.get_model("knowledge", "Page")
-        markdown_model = apps.get_model("knowledge", "MarkdownPage")
-        try:
-            with transaction.atomic():
-                pages = {
-                    page.pk: page
-                    for page in page_model._default_manager.with_actor(actor).filter(vault=source).order_by("pk")
-                }
-                for page in pages.values():
-                    if page.kind not in (*markdown_model.page_kinds, Page.Kind.FOLDER):
-                        raise UnsupportedPageKindError(f"Cannot clone pages of kind {page.kind!r}.")
-                bodies = list(markdown_model._default_manager.with_actor(actor).filter(page__vault=source))
-                vault = self._create_for_actor(
-                    actor,
-                    owned=owned,
-                    name=name,
-                    description=source.description,
-                    icon=source.icon,
-                    accent=source.accent,
-                    retrieval_class=source.retrieval_class,
-                    client_creation_key=client_creation_key,
-                    creation_fingerprint=fingerprint,
-                )
-                copies = page_model._default_manager._copy_tree_in(vault, pages, actor=actor)
-                markdown_model._default_manager._copy_bodies(bodies, copies, actor=actor)
-                return cast(Vault, vault)
-        except (IntegrityError, ValidationError):
-            # The key constraint arbitrates concurrent clones. A winner may also
-            # become visible during the ordinary owner/name uniqueness validation.
-            existing = replays.for_creation_key(user_id, client_creation_key, fingerprint)
-            if existing is None:
-                raise
-            return cast(Vault, existing.with_actor(actor))
+
+        def insert() -> Vault:
+            source = self.with_actor(actor).get(pk=template.pk)
+            page_model = apps.get_model("knowledge", "Page")
+            markdown_model = apps.get_model("knowledge", "MarkdownPage")
+            pages = {
+                page.pk: page
+                for page in page_model._default_manager.with_actor(actor).filter(vault=source).order_by("pk")
+            }
+            for page in pages.values():
+                if page.kind not in (*markdown_model.page_kinds, Page.Kind.FOLDER):
+                    raise UnsupportedPageKindError(f"Cannot clone pages of kind {page.kind!r}.")
+            bodies = list(markdown_model._default_manager.with_actor(actor).filter(page__vault=source))
+            vault = self._create_for_actor(
+                actor,
+                owned=owned,
+                name=name,
+                description=source.description,
+                icon=source.icon,
+                accent=source.accent,
+                retrieval_class=source.retrieval_class,
+                client_creation_key=client_creation_key,
+                creation_fingerprint=fingerprint,
+            )
+            copies = page_model._default_manager._copy_tree_in(vault, pages, actor=actor)
+            markdown_model._default_manager._copy_bodies(bodies, copies, actor=actor)
+            return cast(Vault, vault)
+
+        vault, _created = replays.replay_or_insert(user_id, client_creation_key, fingerprint, insert)
+        return cast(Vault, vault.with_actor(actor))
 
     def _create_for_actor(self, actor: SubjectRef, *, owned: bool = True, **fields: Any) -> Any:
         """Persist a vault after its caller's create preflight."""

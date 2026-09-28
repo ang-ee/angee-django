@@ -851,13 +851,12 @@ class ThreadManager(AngeeManager.from_queryset(ThreadQuerySet)):  # type: ignore
         """Purge every thread and message that belongs to ``channel``.
 
         Deleting a channel is a purge, not an orphan: its threads and messages FK the
-        shared ``integrate.Integration`` parent with ``SET_NULL`` (so a message can
-        outlive a merged thread, and a bulk integration teardown never cascades into
-        unrelated messages), which means deleting the channel row alone would leave 13k+
-        rows behind pointing at nothing. This deletes them explicitly instead — messages
-        first (their ``SET_NULL`` thread FK would otherwise churn as each thread goes),
-        then threads — so their ``CASCADE`` subtrees (parts, reactions, participants,
-        followers, activities, notifications, attachments) go with them. Only *this*
+        shared ``integrate.Integration`` parent with ``SET_NULL`` (so a bulk integration
+        teardown never cascades into unrelated messages), which means deleting the
+        channel row alone would leave its conversation rows behind pointing at nothing.
+        This deletes messages first (including messages without a thread), then threads,
+        so their ``CASCADE`` subtrees (parts, reactions, participants, followers,
+        activities, notifications, attachments) go with them. Only *this*
         channel's ``(channel, external_id)`` message rows are touched, so the same
         logical message reached through another channel — a separate row in that
         channel — survives, and a body ``Fragment`` shared with it is spared (parts FK it
@@ -1057,7 +1056,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         Source edges are removed without deleting their shared conversation. A private
         chatter graph is deleted only when no other attachment retains its thread;
-        messages are removed explicitly because their thread FK uses ``SET_NULL``.
+        its messages and dependent rows follow the thread's native cascade.
         The parent record delete is the authorization boundary, so cleanup runs under
         the same system-context pattern as other messaging bookkeeping writes.
         """
@@ -1069,7 +1068,6 @@ class ThreadAttachmentManager(AngeeManager):
         if target_model is None:
             return
         thread_model = self.model._meta.get_field("thread").related_model
-        message_model = apps.get_model("messaging", "Message")
         with system_context(reason="messaging.record_thread.teardown"), transaction.atomic():
             target_model._base_manager.select_for_update().filter(pk=object_id).exists()
             attachments = list(
@@ -1091,7 +1089,6 @@ class ThreadAttachmentManager(AngeeManager):
                 if not self.model._base_manager.filter(thread_id=thread_id).exists()
             ]
             if orphaned_chatter_ids:
-                message_model._base_manager.filter(thread_id__in=orphaned_chatter_ids).delete()
                 thread_model._base_manager.filter(pk__in=orphaned_chatter_ids).delete()
 
 
@@ -2654,8 +2651,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         fingerprint = ""
         if client_creation_key is not None:
             self.model._meta.get_field("client_creation_key").clean(client_creation_key, None)
-            if not client_creation_key or "\x00" in client_creation_key:
-                raise ValueError("A client creation key must be nonempty and contain no null bytes.")
+            if not client_creation_key.strip() or "\x00" in client_creation_key:
+                raise ValidationError({"client_creation_key": "Creation keys must not be blank or contain null bytes."})
             actor = creation_actor or current_actor()
             if actor is None or is_anonymous_actor(actor):
                 raise ValueError("A keyed message requires an actor.")
@@ -2674,9 +2671,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 "autofollow_recipients": autofollow_recipients,
             }
             fingerprint = canonical_json_sha256(content)
-            existing = self.for_creation_key(creation_scope, client_creation_key, fingerprint)
-            if existing is not None:
-                return existing
         if not body and not attachments and not tracking_rows:
             raise ValueError("Message body, attachment, or tracking value is required.")
         if parent is not None and parent.thread_id != thread.pk:
@@ -2694,28 +2688,27 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 model_label=subtype_model_label,
                 created_by_id=created_by_id,
             )
-            try:
-                with transaction.atomic():
-                    message = self.create(
-                        thread_id=thread.pk,
-                        platform=thread.platform,
-                        direction=self.model.Direction.INTERNAL,
-                        status=self.model.MessageStatus.SENT,
-                        message_type=kind,
-                        subtype_id=subtype.pk if subtype is not None else None,
-                        parent_id=parent.pk if parent is not None else None,
-                        preview=body[:280] if body else _tracking_preview(tracking_values),
-                        sent_at=sent_at,
-                        created_by_id=created_by_id,
-                        creation_actor=creation_scope,
-                        client_creation_key=client_creation_key,
-                        creation_fingerprint=fingerprint,
-                    )
-            except IntegrityError:
-                existing = self.for_creation_key(creation_scope, client_creation_key, fingerprint)
-                if existing is None:
-                    raise
-                return existing
+
+            def insert() -> Any:
+                return self.create(
+                    thread_id=thread.pk,
+                    platform=thread.platform,
+                    direction=self.model.Direction.INTERNAL,
+                    status=self.model.MessageStatus.SENT,
+                    message_type=kind,
+                    subtype_id=subtype.pk if subtype is not None else None,
+                    parent_id=parent.pk if parent is not None else None,
+                    preview=body[:280] if body else _tracking_preview(tracking_values),
+                    sent_at=sent_at,
+                    created_by_id=created_by_id,
+                    creation_actor=creation_scope,
+                    client_creation_key=client_creation_key,
+                    creation_fingerprint=fingerprint,
+                )
+
+            message, created = self.replay_or_insert(creation_scope, client_creation_key, fingerprint, insert)
+            if not created:
+                return message
             position = 0
             if body:
                 fragment = fragment_model.objects.upsert(
@@ -3264,8 +3257,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         # message whenever it is a fresh row or a re-sync re-resolved an existing message
         # onto a *different* thread (e.g. a References parent that only just landed). The
         # losing thread is recounted from its survivors — but only when there was one:
-        # the prior thread may be NULL (its thread was deleted, ``SET_NULL``-ing the
-        # message), in which case the winner still gains the message and there is no
+        # the prior thread may be NULL (a standalone provider event), in which case
+        # the winner still gains the message and there is no
         # loser to recount. Gating the winner's bump on ``created`` alone dropped exactly
         # that NULL-prior re-home; an idempotent re-sync into the same thread is a no-op.
         thread_changed = prior is not None and prior["thread_id"] != thread.pk
@@ -3508,7 +3501,7 @@ class PartQuerySet(AngeeQuerySet[Any]):
 
         Record chatter surfaces only through the record-gated payloads; a part
         whose message's thread is record-attached stays off the generic surface
-        (a thread-less message is an inbox message whose thread merged away).
+        (a thread-less provider event has no chatter attachment).
         """
 
         return cast(

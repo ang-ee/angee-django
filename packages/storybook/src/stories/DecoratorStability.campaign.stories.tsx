@@ -56,7 +56,7 @@ export const PreservesState: StoryObj<typeof meta> = {
     await expect(canvas.getByLabelText("Router identity").textContent).toBe("Preserved");
 
     const values = preview.globalTypes?.themeId?.toolbar?.items?.map(
-      (item: string | { value: unknown }) => typeof item === "string" ? item : item.value,
+      (item) => typeof item === "string" ? item : item.value,
     ) ?? [];
     await expect(values).toContain("angee.stock");
     await expect(values).not.toContain("angee.brand");

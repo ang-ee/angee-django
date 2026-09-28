@@ -6,6 +6,7 @@ export const ProjectPhaseDocument = graphql(`
     projects_by_pk(id: $id) {
       id
       revision
+      permissions
       current_milestone { id name }
       selectable_milestones { id }
     }

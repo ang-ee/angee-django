@@ -18,6 +18,7 @@ from angee.base.checks import check_ownership
 from tests.conftest import Vault, create_user
 from tests.core_persistence import OWNERSHIP_SCHEMA, OwnedRow, OwnershipContainer, ownership_tables  # noqa: F401
 from tests.core_seam_models import (
+    SUBJECT_SCHEMA,
     ConstrainedVaultChild,
     SubjectGuardedLeaf,
     SubjectGuardedRow,
@@ -135,8 +136,9 @@ def test_ownership_check_skips_children_but_still_checks_the_owning_parent(tmp_p
     config = apps.get_app_config("scopedemo")
     path = tmp_path / "ownership.zed"
     schema = OWNERSHIP_SCHEMA if parent_valid else OWNERSHIP_SCHEMA.replace("permission transfer = owner", "")
-    path.write_text(schema)
+    path.write_text(schema + SUBJECT_SCHEMA)
     monkeypatch.setattr(config, "rebac_schema", str(path), raising=False)
+    monkeypatch.setattr(config, "get_models", lambda: iter((OwnedRow, SubjectGuardedRow, SubjectGuardedLeaf)))
     errors = check_ownership([config])
     assert [(error.id, error.obj) for error in errors] == ([] if parent_valid else [("angee.E022", OwnedRow)])
 

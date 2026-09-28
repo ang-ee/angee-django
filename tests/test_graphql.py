@@ -37,6 +37,7 @@ from angee.graphql.schema import (
     AngeeSchema,
     GraphQLSchemas,
 )
+from angee.graphql.view_as import ViewAsReadOnlyExtension
 from tests.conftest import make_addon
 
 
@@ -639,6 +640,7 @@ def test_build_schema_installs_universal_rebac_extensions() -> None:
     ).build("public")
 
     assert schema.extensions == (
+        ViewAsReadOnlyExtension,
         RebacExtension,
         CustomExtension,
         RebacDjangoOptimizerExtension,

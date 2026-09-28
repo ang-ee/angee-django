@@ -30,6 +30,7 @@ def test_every_group_permission_matches_all_nine_seats(roster):
         "create": set(SEATS), "read": READERS, "post": READERS - {"viewer"},
         "write": MANAGERS | {"moderator"}, "delete": MANAGERS,
         "transfer": {"column_owner", "administrator"}, "manage_roster": MANAGERS,
+        "write__owner": {"column_owner", "administrator"},
     }
     assert set(SchemaPermission.objects.filter(definition__resource_type="spaces/group")
                .values_list("name", flat=True)) == set(expected)
@@ -113,6 +114,14 @@ def test_moderator_reconfirms_same_row_without_role_write_and_cannot_promote(ros
 @pytest.mark.parametrize("operation", ("add", "insert", "confirm", "dismiss", "update", "delete"))
 def test_graphql_roster_mutations_enforce_the_seat_and_role_matrix(roster, spaces_console, operation):
     unexpected_errors = []
+    missing_id = None
+    if operation in {"update", "delete"}:
+        with system_context(reason="GraphQL missing target"):
+            missing = Membership.objects.create(
+                group=roster.group, party=target_party("graphql-missing-target"), role="member",
+            )
+            missing_id = str(missing.sqid)
+            missing.delete()
     for seat, actor in roster.actors.items():
         for role in ROLES:
             party = target_party(f"graphql-{seat}-{role}", (actor,))
@@ -150,8 +159,18 @@ def test_graphql_roster_mutations_enforce_the_seat_and_role_matrix(roster, space
                 if result.errors:
                     unexpected_errors.extend(
                         (seat, role, error.message, error.extensions)
-                        for error in result.errors if error.original_error is None
+                        for error in result.errors
+                        if error.extensions.get("code") not in {"VALIDATION", "PERMISSION_DENIED"}
                     )
+                if missing_id is not None and seat == "outsider" and role == "member":
+                    missing_result = execute_schema(
+                        spaces_console, query.replace(str(row.sqid), missing_id), user=actor,
+                    )
+                    assert result.errors and missing_result.errors
+                    assert [error.extensions["code"] for error in result.errors] == ["VALIDATION"]
+                    assert [(error.message, error.extensions) for error in result.errors] == [
+                        (error.message, error.extensions) for error in missing_result.errors
+                    ]
             stored = Membership._base_manager.filter(group=roster.group, party=party).first()
             if operation in {"add", "insert"}:
                 assert (stored is not None) == allowed

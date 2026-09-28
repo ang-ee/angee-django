@@ -15,5 +15,6 @@ export function acceptStageFilters(queueId: string) {
   return [
     ...queueStageFilters(queueId),
     { field: "rule_owned", operator: "eq" as const, value: false },
+    { field: "conceals", operator: "eq" as const, value: false },
   ];
 }
