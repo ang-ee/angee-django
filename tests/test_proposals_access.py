@@ -1,4 +1,4 @@
-"""Proposal visibility through invitations, scoped grants, and global roles."""
+"""Proposal visibility through admitted shells, scoped grants, and global roles."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 from django.apps import apps
-from django.db import connection, models
+from django.db import connection
 from django.test import override_settings
-from django.test.utils import CaptureQueriesContext, isolate_apps
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
     ObjectRef,
@@ -22,11 +22,10 @@ from rebac import (
     write_relationships,
 )
 
-from angee.proposals.models import TaskProposalAccess
 from tests.conftest import create_platform_admin
 from tests.projects_models import Project, Task
 from tests.proposals_models import Answer, Proposal, Round, Topic
-from tests.tables import model_tables
+from tests.test_messaging import Person  # noqa: F401 -- resolve requester and roster person backings
 from tests.test_project_access import project_access_schema as project_access_schema
 
 
@@ -48,9 +47,7 @@ def proposal_schema(rebac_storage: str, project_access_schema: Any) -> None:
 def _grant(resource: Any, relation: str, subject: Any) -> None:
     """Write one direct relationship using the models' canonical identities."""
 
-    write_relationships(
-        [RelationshipTuple(to_object_ref(resource), relation, to_subject_ref(subject))]
-    )
+    write_relationships([RelationshipTuple(to_object_ref(resource), relation, to_subject_ref(subject))])
 
 
 def _create_proposal(*, actor: Any, round: Round, responder: Any) -> Proposal:
@@ -70,7 +67,7 @@ def _create_proposal(*, actor: Any, round: Round, responder: Any) -> Proposal:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("target_kind", ("project", "task"))
-def test_proposals_follow_invitation_and_scope_hierarchy(
+def test_proposals_follow_admission_and_scope_hierarchy(
     proposal_schema: None,
     target_kind: str,
 ) -> None:
@@ -120,12 +117,9 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
             sort_order=1024.0,
         )
 
-    with system_context(reason="tests.proposals.invite"):
-        _grant(round, "responder", alice)
-        _grant(round, "responder", bob)
-
-    alice_proposal = _create_proposal(actor=alice, round=round, responder=alice)
-    bob_proposal = _create_proposal(actor=bob, round=round, responder=bob)
+    with actor_context(admin):
+        alice_proposal = round.with_actor(admin).admit(alice)
+        bob_proposal = round.with_actor(admin).admit(bob)
     with system_context(reason="tests.proposals.answers"):
         alice_answer = Answer.objects.create(
             proposal=alice_proposal,
@@ -143,24 +137,16 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
     with pytest.raises(PermissionDenied):
         _create_proposal(actor=bob, round=round, responder=alice)
 
-    assert set(Proposal.objects.as_user(alice).values_list("pk", flat=True)) == {
-        alice_proposal.pk
-    }
-    assert set(Proposal.objects.as_user(bob).values_list("pk", flat=True)) == {
-        bob_proposal.pk
-    }
+    assert set(Proposal.objects.as_user(alice).values_list("pk", flat=True)) == {alice_proposal.pk}
+    assert set(Proposal.objects.as_user(bob).values_list("pk", flat=True)) == {bob_proposal.pk}
     assert set(Proposal.objects.as_user(admin).values_list("pk", flat=True)) == {
         alice_proposal.pk,
         bob_proposal.pk,
     }
     assert not Proposal.objects.as_user(diego).exists()
     assert not Proposal.objects.as_user(service).exists()
-    assert set(Answer.objects.as_user(alice).values_list("pk", flat=True)) == {
-        alice_answer.pk
-    }
-    assert set(Answer.objects.as_user(bob).values_list("pk", flat=True)) == {
-        bob_answer.pk
-    }
+    assert set(Answer.objects.as_user(alice).values_list("pk", flat=True)) == {alice_answer.pk}
+    assert set(Answer.objects.as_user(bob).values_list("pk", flat=True)) == {bob_answer.pk}
     assert not Answer.objects.as_user(diego).exists()
 
     with system_context(reason="tests.proposals.project_viewer"):
@@ -186,12 +172,8 @@ def test_proposals_follow_invitation_and_scope_hierarchy(
         alice_proposal.pk,
         bob_proposal.pk,
     }
-    assert set(Proposal.objects.as_user(carla).values_list("pk", flat=True)) == {
-        alice_proposal.pk
-    }
-    assert set(Answer.objects.as_user(carla).values_list("pk", flat=True)) == {
-        alice_answer.pk
-    }
+    assert set(Proposal.objects.as_user(carla).values_list("pk", flat=True)) == {alice_proposal.pk}
+    assert set(Answer.objects.as_user(carla).values_list("pk", flat=True)) == {alice_answer.pk}
     assert not alice_proposal.with_actor(carla).has_access("read__cost")
     if target_kind == "task":
         assert set(Proposal.objects.as_user(task_viewer).values_list("pk", flat=True)) == {
@@ -234,6 +216,7 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
     del proposal_schema
     with system_context(reason="tests.proposals.deferred_save"):
         user = apps.get_model("iam", "User").objects.create_user(username="proposal-deferred-owner")
+        responder = apps.get_model("iam", "User").objects.create_user(username="proposal-deferred-responder")
         project = Project.objects.create(title="Deferred proposal target")
         now = timezone.now()
         round = Round.objects.create(
@@ -244,7 +227,7 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
             submission_deadline=now + timedelta(days=7),
         )
         topic = Topic.objects.create(round=round, key="scope", name="Original topic", sort_order=1024.0)
-        proposal = Proposal.objects.create(round=round, responder=user)
+        proposal = Proposal.objects.create(round=round, responder=responder)
         row, field = {
             "round": (round, "name"),
             "topic": (topic, "name"),
@@ -256,10 +239,7 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
         setattr(deferred, field, "Changed value")
         with CaptureQueriesContext(connection) as queries:
             deferred.save()
-        updates = [
-            query["sql"] for query in queries
-            if query["sql"].startswith(f'UPDATE "{row._meta.db_table}"')
-        ]
+        updates = [query["sql"] for query in queries if query["sql"].startswith(f'UPDATE "{row._meta.db_table}"')]
         assert len(updates) == 1
         assert '"created_at" =' not in updates[0]
         stored = type(row)._base_manager.get(pk=row.pk)
@@ -268,26 +248,18 @@ def test_proposal_save_leaves_unrelated_deferred_columns_unwritten(
 
 
 @pytest.mark.django_db(transaction=True)
-@isolate_apps()
 def test_task_proposal_donor_preserves_deferred_save() -> None:
-    """The optional queue guard must not load other columns on an unrelated save."""
+    """The question guard preserves a loaded-fields-only update of unrelated facts."""
 
-    class DeferredTask(TaskProposalAccess, models.Model):
-        title = models.CharField(max_length=80)
-        body = models.TextField()
-
-        class Meta:
-            app_label = "tests"
-
-    with model_tables((DeferredTask,)):
-        row = DeferredTask.objects.create(title="Original", body="Retained")
-        deferred = DeferredTask.objects.only("pk", "title").get(pk=row.pk)
-        deferred.title = "Changed"
+    with system_context(reason="tests.proposals.task_deferred_save"):
+        row = Task.objects.create(clarification_creation_key="retained")
+        deferred = Task.objects.only("pk", "shared_with_responders").get(pk=row.pk)
+        deferred.shared_with_responders = True
         with CaptureQueriesContext(connection) as queries:
             deferred.save()
         updates = [query["sql"] for query in queries if query["sql"].startswith("UPDATE ")]
         assert len(updates) == 1
-        assert '"body" =' not in updates[0]
-        stored = DeferredTask.objects.get(pk=row.pk)
-        assert stored.title == "Changed"
-        assert stored.body == "Retained"
+        assert '"clarification_creation_key" =' not in updates[0]
+        stored = Task.objects.get(pk=row.pk)
+        assert stored.shared_with_responders is True
+        assert stored.clarification_creation_key == "retained"

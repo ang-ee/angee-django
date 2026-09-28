@@ -1,11 +1,38 @@
-// Proposal visibility contributed to the installed planning hierarchy.
+// Proposal access through live planning and identity relations.
 // @rebac_package: proposals
-// @rebac_schema_revision: 1
+// @rebac_schema_revision: 2
 
 definition projects/project {
     relation proposal_viewer: auth/user | auth/group#member
+    relation source_proposal: proposals/proposal // rebac:field=source_proposal
+    relation round_responder: auth/user // rebac:field={"path":"proposal_rounds__proposals__responder","filters":{"proposal_rounds__proposals__retired_at__isnull":true}}
+    permission read = source_proposal->read_track + round_responder
+    permission write = source_proposal->write_track
+    permission share = source_proposal->manage
 }
 
 definition projects/task {
     relation proposal_viewer: auth/user | auth/group#member
+    relation track_proposal: proposals/proposal // rebac:field={"path":"project__source_proposal"}
+    relation round_responder: auth/user // rebac:field={"path":"proposal_rounds__proposals__responder","filters":{"proposal_rounds__proposals__retired_at__isnull":true}}
+    relation clarification_round: proposals/round // rebac:field=clarification_round
+    relation shared_clarification_round: proposals/round // rebac:field={"path":"clarification_round","filters":{"visibility":"inherited"}}
+    relation named_round: proposals/round // rebac:field={"path":"clarification_round","filters":{"clarification_round__clarification_askers":"named"}}
+    relation manager_asked_round: proposals/round // rebac:field={"path":"clarification_round","filters":{"clarification_by_manager":true}}
+    relation clarification_asker: auth/user // rebac:field={"path":"clarification_asker","filters":{"clarification_surrendered":false}}
+    relation responder_shared_round: proposals/round // rebac:field={"path":"project__source_proposal__round","filters":{"shared_with_responders":true}}
+    permission read_granted = round_responder + shared_clarification_round->respond + clarification_asker + responder_shared_round->respond
+    permission withheld = clarification_round->retired
+    permission read = track_proposal->manage + clarification_round->manage
+    permission write = track_proposal->manage + clarification_round->manage
+    permission share = track_proposal->manage + clarification_round->manage
+    permission narrow = clarification_asker - clarification_round->retired
+    permission widen = clarification_round->manage
+    permission comment = read & clarification_round->discuss_clarification
+    permission read__clarification_asker = clarification_round->manage + clarification_asker + named_round->read + manager_asked_round->read
+}
+
+definition auth/user {
+    relation responding_round: proposals/round // rebac:field={"path":"proposal_responses__round","filters":{"proposal_responses__retired_at__isnull":true}}
+    permission view_as = responding_round->manage
 }

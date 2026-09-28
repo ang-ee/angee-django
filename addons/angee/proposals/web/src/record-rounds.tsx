@@ -4,6 +4,7 @@ import {
   ListView,
   Tab,
   formViewSectionsSlot,
+  formViewRecordActionsSlot,
   useRecordChromeContext,
   useRouteHref,
   type ListColumn,
@@ -13,6 +14,7 @@ import * as React from "react";
 
 import { useProposalsT } from "./i18n";
 import { ROUND_MODEL } from "./resources";
+import { TaskResponderShareAction } from "./task-responder-share";
 
 interface RoundPaneRow extends StringIdRow {
   name?: unknown;
@@ -78,6 +80,12 @@ function RecordRoundsPane({
 }
 
 export const roundRecordSlots = [
+  {
+    ...formViewRecordActionsSlot(TASK_MODEL),
+    id: "proposals.task-responder-share",
+    sequence: 45,
+    content: <TaskResponderShareAction />,
+  },
   {
     ...formViewSectionsSlot(PROJECT_MODEL),
     id: "proposals.project-rounds",

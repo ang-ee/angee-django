@@ -7,7 +7,14 @@ depends_on = [
   "angee.money",
   "angee.parties",
   "angee.projects",
+  "angee.spaces",
+  "angee.storage",
 ]
+
+[[migrations]]
+name = "derived_disclosure"
+app_label = "proposals"
+module = "runtime_migrations.derived_disclosure"
 
 [resources]
 master = []

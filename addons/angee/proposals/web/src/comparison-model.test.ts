@@ -38,6 +38,7 @@ describe("proposal comparison model", () => {
       "topic:top_a",
       "topic:top_z",
       "topic:top_b",
+      "fact:statement",
       "fact:cost",
       "fact:staffing",
       "fact:timeframe_start",

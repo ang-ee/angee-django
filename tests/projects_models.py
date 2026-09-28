@@ -5,12 +5,14 @@ from django.db import models
 
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeDataModel
+from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
+from angee.proposals.models import TaskProposalAccess
 from angee.work.models import ProjectWork, TaskWork
 
 
-class Task(TaskWork, AuditMixin, AngeeDataModel):
+class Task(TaskProposalAccess, TaskWork, AuditMixin, AngeeDataModel):
     """Concrete task carrying the production chatter-wake owner."""
 
     sqid_prefix = "tpt_"
@@ -20,6 +22,8 @@ class Task(TaskWork, AuditMixin, AngeeDataModel):
     queue = None
     stage = None
     cycle = None
+    # Minimal backing required by the proposals task-project audience relation.
+    visibility = models.CharField(max_length=20, default="inherited")
     project = models.ForeignKey(
         "projects.Project",
         null=True,
@@ -46,6 +50,16 @@ class Link(SqidMixin, models.Model):
     class Meta:
         app_label = "projects"
         db_table = "test_projects_link"
+
+
+class Milestone(AbstractMilestone):
+    """Concrete phase target for proposal opening and clarification boundaries."""
+
+    class Meta(AbstractMilestone.Meta):
+        abstract = False
+        app_label = "projects"
+        db_table = "test_projects_milestone"
+        rebac_resource_type = "projects/milestone"
 
 
 class Project(ProjectWork, AbstractProject):

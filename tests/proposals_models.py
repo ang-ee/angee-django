@@ -6,7 +6,10 @@ from angee.proposals.models import ProposalsRole as AbstractProposalsRole
 from angee.proposals.models import Review as AbstractReview
 from angee.proposals.models import Round as AbstractRound
 from angee.proposals.models import Topic as AbstractTopic
-from tests import money_models  # noqa: F401 -- register Proposal.currency's concrete target
+from tests import (
+    money_models,  # noqa: F401 -- register Proposal.currency's concrete target
+    spaces_models,  # noqa: F401 -- register Round.team's concrete target
+)
 
 
 class Round(AbstractRound):

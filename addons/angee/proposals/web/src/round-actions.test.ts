@@ -7,6 +7,7 @@ describe("round ceremony presentation", () => {
     ["FACILITATOR_ONLY", "round.action.open.facilitatorOnly"],
     ["answers", "round.action.open.answers"],
     ["ANSWERS_AND_TRACKS", "round.action.open.answersAndTracks"],
+    ["DRAFTS_AND_TRACKS", "round.action.open.draftsAndTracks"],
     [null, "round.action.open.unknown"],
   ])("maps opening policy %s to its confirmation copy", (policy, key) => {
     expect(openingPolicyMessageKey(policy)).toBe(key);

@@ -6,17 +6,20 @@ from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from angee.graphql.capabilities import permissions_field
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import models
+from pydantic import ValidationError as TemplateValidationError
+from rebac import current_actor
 from strawberry import auto
+from strawberry.scalars import JSON
 
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
     authorized_action_target,
-    resolve_action_target,
+    authorized_permission_target,
 )
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
@@ -24,12 +27,13 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
-from angee.iam.identity import user_public_id
+from angee.iam.identity import user_label, user_public_id
 from angee.iam.schema import UserType
 from angee.messaging.schema import MessageType
 from angee.money.schema import CurrencyType
 from angee.parties.schema import PartyType
-from angee.projects.schema import ProjectType, TaskType
+from angee.projects.schema import MilestoneType, ProjectType, TaskType
+from angee.spaces.schema import SpaceGroupType
 
 Round = apps.get_model("proposals", "Round")
 Topic = apps.get_model("proposals", "Topic")
@@ -41,6 +45,8 @@ Task = apps.get_model("projects", "Task")
 Party = apps.get_model("parties", "Party")
 Message = apps.get_model("messaging", "Message")
 Currency = apps.get_model("money", "Currency")
+Team = apps.get_model("spaces", "Group")
+Milestone = apps.get_model("projects", "Milestone")
 User = get_user_model()
 
 RoundOutcome = Round._meta.get_field("outcome").choices_enum
@@ -53,23 +59,75 @@ def _user_id(value: Any | None) -> strawberry.ID | None:
     return cast("strawberry.ID | None", optional_public_id(user_public_id(value)))
 
 
-def _permission_target(
-    model: type[models.Model],
-    value: PublicID,
-    permission: str,
-    reason: str,
-) -> Any:
-    """Resolve a non-write lifecycle target and enforce its explicit permission."""
+@strawberry.type
+class RoundRosterEntry:
+    """The permitted roster facts without a proposal identifier."""
 
-    target: Any = resolve_action_target(model, value, reason=reason)
-    if not target.has_access(permission):
-        raise ValidationError(f"You are not allowed to {permission} this {model._meta.verbose_name}.")
-    return target
+    user: strawberry.ID | None
+    name: str
+    track_status: str | None = None
+
+
+@strawberry.type
+class ClarificationRecipient:
+    """An unanswered recipient reference, scoped by the question projection."""
+
+    user: strawberry.ID | None
+    name: str
+
+
+def _clarification_waiting(self: Any) -> list[ClarificationRecipient]:
+    return [
+        ClarificationRecipient(user=_user_id(value["id"]), name=user_label(User(**value)))
+        for value in self.clarification_waiting()
+    ]
+
+
+@strawberry.type
+class ResponderRemovalResult(ActionResult):
+    """Retirement outcome with deleted shares and wider shares retained for review."""
+
+    _share_report: strawberry.Private[dict[str, Any]] = strawberry.field(default_factory=dict)
+
+    @strawberry.field
+    def removed_shares(self) -> JSON:
+        """Return only the shares removed by this operation."""
+        return getattr(self, "_share_report", {}).get("removed", [])
+
+    @strawberry.field
+    def reported_shares(self) -> JSON:
+        """Return wider shares requiring a manager's explicit decision."""
+        return getattr(self, "_share_report", {}).get("reported", [])
 
 
 @strawberry_django.type(Round)
 class ProposalRoundType(AuthoredRefMixin, AngeeNode):
-    """GraphQL projection of one directly granted solicitation Round."""
+    """Round row with independently gated settings and roster projections."""
+
+    revision: auto
+    roster_visibility: str | None
+    clarification_askers: str | None
+    permissions = permissions_field(("manage", "write", "respond", "ask"))
+    team: SpaceGroupType | None = actor_scoped_to_one("team")
+    opens_after: MilestoneType | None = actor_scoped_to_one("opens_after")
+    clarifications_shared_until: MilestoneType | None = actor_scoped_to_one("clarifications_shared_until")
+
+    @strawberry_django.field(only=["status", "opens_after_id", "project_id", "task_id"])
+    def can_open(self) -> bool:
+        """Report the owning verb's permission and phase predicate."""
+        return cast(Any, self).can_open()
+
+    @strawberry_django.field
+    def roster(self) -> list[RoundRosterEntry]:
+        """Expose only the gated roster projection."""
+        return [
+            RoundRosterEntry(
+                user=optional_public_id(user_public_id(row.user.pk)),
+                name=user_label(row.user),
+                track_status=row.track_status,
+            )
+            for row in cast(Any, self).roster()
+        ]
 
     name: auto
     opening_policy: auto
@@ -105,6 +163,33 @@ class ProposalRoundType(AuthoredRefMixin, AngeeNode):
         return _user_id(cast(Any, self).closed_by_id)
 
 
+@strawberry.type
+class TaskProposalsFields:
+    """Shared declarations on both task schema nodes."""
+
+    clarification_round: ProposalRoundType | None = actor_scoped_to_one("clarification_round")
+    clarification_asker: UserType | None = actor_scoped_to_one("clarification_asker")
+    clarification_by_manager: auto
+    clarification_surrendered: auto
+    clarification_default_visibility: auto
+    clarification_passed_at: auto
+    shared_with_responders: auto
+    clarification_waiting = strawberry_django.field(
+        resolver=_clarification_waiting,
+        annotate={"_clarification_waiting": lambda info: Task.clarification_waiting_expression(current_actor())},
+    )
+
+
+@strawberry_django.type(Task, name="TaskType", extend=True)
+class TaskProposalsExtension(TaskProposalsFields):
+    """Public task contributions owned by proposals."""
+
+
+@strawberry_django.type(Task, name="ConsoleTaskType", extend=True)
+class ConsoleTaskProposalsExtension(TaskProposalsFields):
+    """Console task contributions owned by proposals."""
+
+
 @strawberry_django.type(Topic)
 class ProposalTopicType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of one stable comparison topic."""
@@ -122,6 +207,18 @@ class ProposalTopicType(AuthoredRefMixin, AngeeNode):
 @strawberry_django.type(Proposal)
 class ProposalType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a field-gated structured response."""
+
+    revision: auto
+    statement: str | None
+    disclosed_at: auto
+    track_published_at: auto
+    retired_at: auto
+    permissions = permissions_field(("write", "publish", "withdraw"))
+
+    @strawberry_django.field(only=["track_id"])
+    def track_status(self) -> str | None:
+        """Read the gated scalar without exposing the track."""
+        return cast(Any, self).track_status()
 
     state: auto
     cost: auto
@@ -151,6 +248,12 @@ class ProposalType(AuthoredRefMixin, AngeeNode):
 
         return _user_id(cast(Any, self).responder_id)
 
+    @strawberry_django.field(only=["retired_by_id"])
+    def retired_by(self) -> strawberry.ID | None:
+        """Return the retirement actor's public id."""
+
+        return _user_id(cast(Any, self).retired_by_id)
+
     @strawberry_django.field(only=["submitted_by_id"])
     def submitted_by(self) -> strawberry.ID | None:
         """Return the submission actor's public id."""
@@ -167,6 +270,18 @@ class ProposalType(AuthoredRefMixin, AngeeNode):
 @strawberry_django.type(Proposal)
 class ConsoleProposalType(AuthoredRefMixin, AngeeNode):
     """Console proposal projection with a label-bearing responder relation."""
+
+    revision: auto
+    statement: str | None
+    disclosed_at: auto
+    track_published_at: auto
+    retired_at: auto
+    permissions = permissions_field(("write", "publish", "withdraw"))
+
+    @strawberry_django.field(only=["track_id"])
+    def track_status(self) -> str | None:
+        """Read the gated scalar without exposing the track."""
+        return cast(Any, self).track_status()
 
     state: auto
     cost: auto
@@ -189,6 +304,12 @@ class ConsoleProposalType(AuthoredRefMixin, AngeeNode):
     currency: CurrencyType | None = actor_scoped_to_one("currency")
     responder: UserType | None = actor_scoped_to_one("responder")
 
+    @strawberry_django.field(only=["retired_by_id"])
+    def retired_by(self) -> strawberry.ID | None:
+        """Return the retirement actor's public id."""
+
+        return _user_id(cast(Any, self).retired_by_id)
+
     @strawberry_django.field(only=["submitted_by_id"])
     def submitted_by(self) -> strawberry.ID | None:
         """Return the submission actor's public id."""
@@ -202,9 +323,28 @@ class ConsoleProposalType(AuthoredRefMixin, AngeeNode):
         return _user_id(cast(Any, self).decided_by_id)
 
 
+@strawberry_django.type(Project, name="ProjectType", extend=True)
+class ProjectProposalsExtension:
+    """Expose the proposal-owned track relation through the common redaction seam."""
+
+    source_proposal: ProposalType | None = actor_scoped_to_one("source_proposal")
+
+
+@strawberry_django.type(Project, name="ConsoleProjectType", extend=True)
+class ConsoleProjectProposalsExtension:
+    """Contribute the track relation to the console project node."""
+
+    source_proposal: ConsoleProposalType | None = actor_scoped_to_one("source_proposal")
+
+
 @strawberry_django.type(Answer)
 class ProposalAnswerType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of one topic-aligned answer."""
+
+    revision: auto
+    visibility: auto
+    shared_with_responders: auto
+    permissions = permissions_field(("write", "narrow", "manage"))
 
     body: auto
     created_at: auto
@@ -236,12 +376,195 @@ class ProposalActionMutation:
     """Row-authorized lifecycle, identity, track, and capture verbs."""
 
     @strawberry.mutation
+    @action_guard("Round provisioning failed.", errors=(TemplateValidationError,))
+    def provision_proposal_round(
+        self,
+        info: strawberry.Info,
+        target: PublicID,
+        template: JSON,
+        facilitator: PublicID,
+        responders: list[PublicID],
+        target_model: str = "projects.Project",
+        team: PublicID | None = None,
+    ) -> ActionResult:
+        """Resolve authorized inputs and delegate replay-safe setup."""
+        model = {"projects.Project": Project, "projects.Task": Task}.get(target_model)
+        if model is None:
+            raise ValidationError({"target_model": "Choose projects.Project or projects.Task."})
+        target_row = authorized_permission_target(info, model, target, "write")
+        facilitator_row = authorized_permission_target(info, User, facilitator, "read")
+        responder_rows = [authorized_permission_target(info, User, user, "read") for user in responders]
+        team_row = authorized_permission_target(info, Team, team, "read") if team else None
+        round = Round.objects.provision(target_row, template, facilitator_row, responder_rows, team_row)
+        return ActionResult(ok=True, message="Proposal round provisioned.", id=round.sqid)
+
+    @strawberry.mutation
+    @action_guard("Responder admission failed.")
+    def admit_proposal_round_responder(
+        self,
+        info: strawberry.Info,
+        round: PublicID,
+        responder: PublicID,
+        party: PublicID | None = None,
+        track: bool = False,
+    ) -> ActionResult:
+        """Admit a responder through the shell owner."""
+        row = authorized_permission_target(info, Round, round, "write")
+        user = authorized_permission_target(info, User, responder, "read")
+        party_row = authorized_permission_target(info, Party, party, "read") if party else None
+        proposal = row.admit(user, party_row, track)
+        return ActionResult(ok=True, message="Responder admitted.", id=proposal.sqid)
+
+    @strawberry.mutation
+    @action_guard("Responder removal failed.")
+    def remove_proposal_round_responder(
+        self,
+        info: strawberry.Info,
+        round: PublicID,
+        responder: PublicID,
+        expected_revision: int | None = None,
+    ) -> ResponderRemovalResult:
+        """Return the retirement owner's share report."""
+        row = authorized_permission_target(info, Round, round, "manage")
+        user = User.system_queryset().from_public_id(str(responder))
+        if user is None:
+            raise ValidationError({"responder": "Responder was not found."})
+        report = row.remove_responder(user, expected_revision)
+        result = ResponderRemovalResult(
+            ok=True,
+            message=f"Responder removed. {len(report['removed'])} shares removed; "
+            f"{len(report['reported'])} wider shares remain for review.",
+            id=row.sqid,
+        )
+        result._share_report = report
+        return result
+
+    @strawberry.mutation
+    @action_guard("Opening policy change failed.")
+    def widen_proposal_round_opening_policy(
+        self,
+        info: strawberry.Info,
+        round: PublicID,
+        policy: str,
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Widen the round's disclosure policy."""
+        row = authorized_permission_target(info, Round, round, "write")
+        row.widen_opening_policy(policy, expected_revision)
+        return ActionResult(ok=True, message="Opening policy widened.", id=row.sqid)
+
+    @strawberry.mutation
+    @action_guard("Answer visibility change failed.")
+    def set_proposal_answer_visibility(
+        self,
+        info: strawberry.Info,
+        answer: PublicID,
+        visibility: str,
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Select an answer audience through its owner."""
+        row = authorized_permission_target(info, Answer, answer, "narrow")
+        row.set_visibility(visibility, expected_revision)
+        return ActionResult(ok=True, message="Answer audience changed.", id=row.sqid)
+
+    @strawberry.mutation
+    @action_guard("Answer responder sharing failed.")
+    def set_proposal_answer_responder_share(
+        self,
+        info: strawberry.Info,
+        answer: PublicID,
+        shared: bool,
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Set the live responder audience on an answer."""
+        row = authorized_permission_target(info, Answer, answer, "manage" if shared else "narrow")
+        row.set_responder_share(shared, expected_revision)
+        return ActionResult(ok=True, message="Answer responder audience changed.", id=row.sqid)
+
+    @strawberry.mutation
+    @action_guard("Task responder sharing failed.")
+    def set_task_responder_share(
+        self,
+        info: strawberry.Info,
+        task: PublicID,
+        shared: bool,
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Set the live responder audience on a track task."""
+        row = authorized_permission_target(info, Task, task, "widen" if shared else "narrow")
+        row.set_responder_share(shared, expected_revision)
+        return ActionResult(ok=True, message="Task responder audience changed.", id=row.sqid)
+
+    @strawberry.mutation
+    @action_guard("Question creation failed.")
+    def ask_proposal_round(
+        self,
+        info: strawberry.Info,
+        round: PublicID,
+        title: str,
+        body: str,
+        audience: str = "default",
+        recipient: str | None = None,
+        client_creation_key: str | None = None,
+    ) -> ActionResult:
+        """Return only the question id, including replays after surrender."""
+        row = authorized_permission_target(info, Round, round, "ask")
+        task = row.ask(title, body, audience, _clarification_recipient(info, recipient), client_creation_key)
+        return ActionResult(ok=True, message="Question asked.", id=task.sqid)
+
+    @strawberry.mutation
+    @action_guard("Question edit failed.")
+    def edit_proposal_round_clarification(
+        self,
+        info: strawberry.Info,
+        round: PublicID,
+        task: PublicID,
+        title: str,
+        body: str,
+        audience: str | None = None,
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Dispatch pre-pass editing to the round."""
+        row = authorized_permission_target(info, Round, round, "ask")
+        question = Task.system_queryset().from_public_id(str(task))
+        if question is None:
+            raise ValidationError({"task": "Question was not found."})
+        result = row.edit_clarification(question, title, body, audience, expected_revision)
+        return ActionResult(ok=True, message="Question updated.", id=result.sqid)
+
+    @strawberry.mutation
+    @action_guard("Passing question failed.")
+    def pass_proposal_round_clarification(
+        self,
+        info: strawberry.Info,
+        round: PublicID,
+        task: PublicID,
+        recipient: str,
+        audience: str = "default",
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Assign and pass the existing question without copying its content."""
+        row = authorized_permission_target(info, Round, round, "manage")
+        question = Task.system_queryset().from_public_id(str(task))
+        if question is None:
+            raise ValidationError({"task": "Question was not found."})
+        result = row.pass_clarification(
+            question,
+            _clarification_recipient(info, recipient),
+            audience,
+            expected_revision,
+        )
+        return ActionResult(ok=True, message="Question passed.", id=result.sqid)
+
+    @strawberry.mutation
     @action_guard("Open round failed.")
-    def open_proposal_round(self, info: strawberry.Info, round: PublicID) -> ActionResult:
+    def open_proposal_round(
+        self, info: strawberry.Info, round: PublicID, expected_revision: int | None = None
+    ) -> ActionResult:
         """Open one collecting Round under its declared disclosure policy."""
 
         target = authorized_action_target(info, Round, round, "write")
-        target.open()
+        target.open(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Proposal round opened.", id=target.sqid)
 
     @strawberry.mutation
@@ -253,22 +576,25 @@ class ProposalActionMutation:
         outcome: RoundOutcome,  # type: ignore[valid-type]
         accepted: list[PublicID],
         partial: list[PublicID],
+        expected_revision: int | None = None,
     ) -> ActionResult:
         """Close one Round with disjoint accepted and partial selections."""
 
         target = authorized_action_target(info, Round, round, "write")
         accepted_rows = [authorized_action_target(info, Proposal, value, "evaluate") for value in accepted]
         partial_rows = [authorized_action_target(info, Proposal, value, "evaluate") for value in partial]
-        target.close(outcome, accepted=accepted_rows, partial=partial_rows)
+        target.close(outcome, accepted=accepted_rows, partial=partial_rows, expected_revision=expected_revision)
         return ActionResult(ok=True, message="Proposal round closed.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Cancel round failed.")
-    def cancel_proposal_round(self, info: strawberry.Info, round: PublicID) -> ActionResult:
+    def cancel_proposal_round(
+        self, info: strawberry.Info, round: PublicID, expected_revision: int | None = None
+    ) -> ActionResult:
         """Cancel a collecting or opened Round."""
 
         target = authorized_action_target(info, Round, round, "write")
-        target.cancel()
+        target.cancel(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Proposal round cancelled.", id=target.sqid)
 
     @strawberry.mutation
@@ -278,38 +604,37 @@ class ProposalActionMutation:
         info: strawberry.Info,
         round: PublicID,
         facilitator: PublicID,
+        expected_revision: int | None = None,
     ) -> ActionResult:
-        """Transfer facilitation and reconcile private-track grants."""
+        """Transfer the round manager seat."""
 
         target = authorized_action_target(info, Round, round, "write")
         user = User.system_queryset().from_public_id(str(facilitator))
         if user is None:
             raise ValidationError({"facilitator": "User was not found."})
-        target.transfer_facilitation(user)
+        target.transfer_facilitation(user, expected_revision=expected_revision)
         return ActionResult(ok=True, message="Round facilitation transferred.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Submit proposal failed.")
-    def submit_proposal(self, info: strawberry.Info, proposal: PublicID) -> ActionResult:
-        """Submit one draft and revoke its responder editor tuple."""
+    def submit_proposal(
+        self, info: strawberry.Info, proposal: PublicID, expected_revision: int | None = None
+    ) -> ActionResult:
+        """Submit one draft and freeze its document."""
 
         target = authorized_action_target(info, Proposal, proposal, "write")
-        target.submit()
+        target.submit(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Proposal submitted.", id=target.sqid)
 
     @strawberry.mutation
     @action_guard("Withdraw proposal failed.")
-    def withdraw_proposal(self, info: strawberry.Info, proposal: PublicID) -> ActionResult:
+    def withdraw_proposal(
+        self, info: strawberry.Info, proposal: PublicID, expected_revision: int | None = None
+    ) -> ActionResult:
         """Withdraw one submitted Proposal as responder or facilitator."""
 
-        del info
-        target = _permission_target(
-            Proposal,
-            proposal,
-            "withdraw",
-            "proposals.graphql.withdraw",
-        )
-        target.withdraw()
+        target = authorized_permission_target(info, Proposal, proposal, "withdraw")
+        target.withdraw(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Proposal withdrawn.", id=target.sqid)
 
     @strawberry.mutation
@@ -323,7 +648,7 @@ class ProposalActionMutation:
         """Set one Proposal's party once through its row-locked verb."""
 
         target = authorized_action_target(info, Proposal, proposal, "write")
-        party_row = _permission_target(Party, party, "read", "proposals.graphql.identify_party")
+        party_row = authorized_permission_target(info, Party, party, "read")
         target.identify_party(party_row)
         return ActionResult(ok=True, message="Proposal party identified.", id=target.sqid)
 
@@ -338,17 +663,13 @@ class ProposalActionMutation:
 
     @strawberry.mutation
     @action_guard("Publish proposal track failed.")
-    def publish_proposal_track(self, info: strawberry.Info, proposal: PublicID) -> ActionResult:
+    def publish_proposal_track(
+        self, info: strawberry.Info, proposal: PublicID, expected_revision: int | None = None
+    ) -> ActionResult:
         """Publish a validated private track to the Round's responders."""
 
-        del info
-        target = _permission_target(
-            Proposal,
-            proposal,
-            "publish",
-            "proposals.graphql.publish_track",
-        )
-        track = target.publish_track()
+        target = authorized_permission_target(info, Proposal, proposal, "publish")
+        track = target.publish_track(expected_revision=expected_revision)
         return ActionResult(ok=True, message="Proposal track published.", id=track.sqid)
 
     @strawberry.mutation
@@ -363,12 +684,17 @@ class ProposalActionMutation:
         """Capture and submit one structured reply in a single transaction."""
 
         round_row = authorized_action_target(info, Round, round, "write")
-        message_row = _permission_target(Message, message, "read", "proposals.graphql.capture_message")
-        party_row = (
-            None if party is None else _permission_target(Party, party, "read", "proposals.graphql.capture_party")
-        )
+        message_row = authorized_permission_target(info, Message, message, "read")
+        party_row = None if party is None else authorized_permission_target(info, Party, party, "read")
         proposal = Proposal.objects.capture_from_message(message_row, round_row, party_row)
         return ActionResult(ok=True, message="Proposal captured.", id=proposal.sqid)
+
+
+def _clarification_recipient(info: strawberry.Info, value: str | None) -> Any:
+    """Decode a user reference or the explicit all-responders target."""
+    if value is None or value == "responders":
+        return value
+    return authorized_permission_target(info, User, cast(PublicID, value), "read")
 
 
 _ROUND_RESOURCE = hasura_model_resource(
@@ -380,6 +706,7 @@ _ROUND_RESOURCE = hasura_model_resource(
         "task",
         "project",
         "name",
+        "team",
         "facilitator",
         "requester_party",
         "opening_policy",
@@ -415,11 +742,30 @@ _ROUND_RESOURCE = hasura_model_resource(
         "requester_party",
         "opening_policy",
         "status",
+        "team",
+        "roster_visibility",
+        "clarification_askers",
+        "opens_after",
+        "clarifications_shared_until",
         "last_call_at",
         "submission_deadline",
     ],
-    updatable=["name", "requester_party", "opening_policy", "last_call_at", "submission_deadline"],
+    updatable=[
+        "name",
+        "requester_party",
+        "opening_policy",
+        "last_call_at",
+        "submission_deadline",
+        "team",
+        "roster_visibility",
+        "clarification_askers",
+        "opens_after",
+        "clarifications_shared_until",
+    ],
     field_id_decode={
+        "team": public_pk_decoder(Team),
+        "opens_after": public_pk_decoder(Milestone),
+        "clarifications_shared_until": public_pk_decoder(Milestone),
         "task": public_pk_decoder(Task),
         "project": public_pk_decoder(Project),
         "facilitator": public_pk_decoder(User),
@@ -429,7 +775,15 @@ _ROUND_RESOURCE = hasura_model_resource(
     },
     write_backend=AngeeHasuraWriteBackend(
         Round,
-        public_id_fields=("task", "project", "facilitator", "requester_party"),
+        public_id_fields=(
+            "task",
+            "project",
+            "facilitator",
+            "requester_party",
+            "team",
+            "opens_after",
+            "clarifications_shared_until",
+        ),
         delete_guard=lambda instance: instance.deletion_error(),
     ),
 )
@@ -486,6 +840,7 @@ def _proposal_resource(node_type: type) -> Any:
             "party",
             "source_message",
             "state",
+            "statement",
             "cost",
             "currency",
             "staffing",
@@ -495,6 +850,7 @@ def _proposal_resource(node_type: type) -> Any:
             "valid_until",
         ],
         updatable=[
+            "statement",
             "cost",
             "currency",
             "staffing",
@@ -528,11 +884,11 @@ _ANSWER_RESOURCE = hasura_model_resource(
     ProposalAnswerType,
     model=Answer,
     name="proposal_answers",
-    filterable=["id", "proposal", "topic", "created_at", "updated_at"],
+    filterable=["id", "proposal", "topic", "visibility", "shared_with_responders", "created_at", "updated_at"],
     sortable=["topic", "proposal", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["proposal", "topic"],
-    insertable=["proposal", "topic", "body"],
+    insertable=["proposal", "topic", "body", "visibility"],
     updatable=["body"],
     field_id_decode={
         "proposal": public_pk_decoder(Proposal),
@@ -599,6 +955,7 @@ def _proposals_schema_bucket(proposal_resource: Any, proposal_type: type) -> dic
             *proposal_resource.types,
             *_COMMON_RESOURCE_TYPES,
         ],
+        "type_extensions": [TaskProposalsExtension, ProjectProposalsExtension],
     }
 
 
@@ -611,6 +968,9 @@ _CONSOLE_PROPOSALS_SCHEMA_BUCKET = _proposals_schema_bucket(
     ConsoleProposalType,
 )
 _CONSOLE_PROPOSALS_SCHEMA_BUCKET["types"].append(UserType)
+_CONSOLE_PROPOSALS_SCHEMA_BUCKET["type_extensions"].extend(
+    [ConsoleTaskProposalsExtension, ConsoleProjectProposalsExtension],
+)
 
 schemas = {
     "public": {**_PUBLIC_PROPOSALS_SCHEMA_BUCKET},
