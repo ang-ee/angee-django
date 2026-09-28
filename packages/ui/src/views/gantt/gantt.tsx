@@ -325,7 +325,7 @@ function resolveSettings<TData>(
 
 const warned = new Set<string>()
 function warnOnce(key: string, message: string) {
-  if (process.env.NODE_ENV !== "production" && !warned.has(key)) {
+  if (!warned.has(key)) {
     warned.add(key)
     console.warn(`[gantt] ${message}`)
   }

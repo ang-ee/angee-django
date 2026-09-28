@@ -38,3 +38,5 @@ Local (non-upstream) files in this directory: `GanttView.tsx` (public lazy
 boundary), `gantt-surface.tsx` (read-only presentation wrapper) and
 `gantt-collection-surface.tsx` (resource-view collection adapter).
 `gantt-recurrence.tsx` replaces the unary `+y` coercion with `Number(y)`.
+`warnOnce` drops upstream's `process.env.NODE_ENV` guard: the composed host
+typechecks without Node types, and a once-per-key warning is harmless in production.
