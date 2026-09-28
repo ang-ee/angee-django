@@ -42,7 +42,10 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
     projects = Path(apps.get_app_config("projects").path, "permissions.extends.zed").read_text()
     messaging = Path(apps.get_app_config("messaging").path, "permissions.zed").read_text()
 
-    for definition in ("storage/drive", "storage/folder", "integrate/integration", "messaging/thread"):
+    for definition in (
+        "storage/drive", "storage/folder", "storage/file", "integrate/integration", "messaging/thread",
+        "knowledge/vault", "knowledge/record_binding",
+    ):
         assert f"definition {definition}" in projects
     assert "relation channel: integrate/integration // rebac:field=channel" in messaging
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
@@ -224,6 +227,7 @@ def test_project_drive_access_reaches_folders_and_files(project_access_schema: A
         )
     with actor_context(editor):
         assert drive.has_access("write")
+        assert drive.has_access("share")
         assert folder.has_access("write")
         assert file.has_access("write")
 

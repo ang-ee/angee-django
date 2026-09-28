@@ -21,6 +21,8 @@ class Task(TaskWork, OwnerMixin, AngeeDataModel):
     assignee = AbstractTask._meta.get_field("assignee").clone()
     visibility = AbstractTask._meta.get_field("visibility").clone()
     links = deepcopy(AbstractTask._meta.get_field("links"))
+    file_attachments = deepcopy(AbstractTask._meta.get_field("file_attachments"))
+    knowledge_bindings = deepcopy(AbstractTask._meta.get_field("knowledge_bindings"))
 
     # This source-model graph exercises chatter wake behavior without composing
     # work's queue lifecycle and its additional model graph.

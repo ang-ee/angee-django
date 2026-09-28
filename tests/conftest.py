@@ -52,7 +52,7 @@ from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
-from angee.projects.models import DriveProjects, FolderProjects
+from angee.projects.models import DriveProjects, FolderProjects, VaultProjects
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
@@ -140,7 +140,7 @@ class WebhookSubscription(AbstractWebhookSubscription):
         rebac_resource_type = "integrate/webhook_subscription"
 
 
-class Vault(AbstractVault):
+class Vault(VaultProjects, AbstractVault):
     """Concrete knowledge vault used by source-addon tests."""
 
     class Meta(AbstractVault.Meta):

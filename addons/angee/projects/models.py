@@ -124,6 +124,23 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
 class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any]):
     """Task rows with shared creation replay and ownership release contracts."""
 
+    def priority_rank_expression(self) -> models.Case:
+        """Order urgency by the priority field's declared enum order."""
+
+        priorities = self.model._meta.get_field("priority").choices_enum
+        return models.Case(
+            *(models.When(priority=priority, then=models.Value(rank)) for rank, priority in enumerate(priorities)),
+            output_field=models.IntegerField(),
+        )
+
+    def promoted_phase_expression(self) -> models.Expression:
+        """Project only the phase name admitted by the task's narrow permission."""
+
+        tasks = cast(TaskQuerySet, self.with_action("read_promoted_phase"))
+        return tasks.filter(pk=models.OuterRef("pk")).order_by().readable_scalar_subquery(
+            "promoted_projects__current_milestone__name",
+        )
+
 
 class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[misc]
     """Own idempotent task promotion from a ThreadActivity."""
@@ -353,6 +370,7 @@ class Project(
         object_id_field="object_id",
         related_query_name="project",
     )
+    knowledge_bindings = GenericRelation("knowledge.RecordBinding", related_query_name="project")
 
     objects = ProjectManager()
 
@@ -690,6 +708,8 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
         object_id_field="object_id",
         related_query_name="task",
     )
+    file_attachments = GenericRelation("storage.FileAttachment", related_query_name="task")
+    knowledge_bindings = GenericRelation("knowledge.RecordBinding", related_query_name="task")
 
     objects = TaskManager()
 
@@ -850,10 +870,14 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if locked.visibility != visibility:
+                locked.validate_visibility(visibility)
                 locked.visibility = visibility
                 locked.sudo(reason="projects.task.set_visibility").save(update_fields=("visibility", "updated_at"))
             self.refresh_from_db()
         return self
+
+    def validate_visibility(self, value: str) -> None:
+        """Validate a visibility change; task-kind contributors call super first."""
 
     def thread_audience_members(self) -> Iterable[AudienceMember]:
         """Notify the current assignee's existing party without creating a follower."""
@@ -1053,6 +1077,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     binding_fields = frozenset({"project", "project_id", "content_type", "content_type_id", "object_id"})
     allowed_target_models = frozenset(
         {
+            "knowledge.vault",
             "messaging.channel",
             "messaging.thread",
             "storage.drive",
@@ -1102,7 +1127,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
             ):
                 return
         raise ValidationError(
-            {"target": "Project bindings may target only drives, folders, messaging channels, or threads."}
+            {"target": "Project bindings may target only drives, folders, messaging channels, threads, or vaults."}
         )
 
     def clean(self) -> None:
@@ -1267,6 +1292,15 @@ class ThreadProjects(ProjectBindingsMixin):
     """Projects-owned reverse collection for messaging-thread bindings."""
 
     extends = "messaging.Thread"
+
+    class Meta:
+        abstract = True
+
+
+class VaultProjects(ProjectBindingsMixin):
+    """Projects-owned reverse collection for knowledge-vault bindings."""
+
+    extends = "knowledge.Vault"
 
     class Meta:
         abstract = True
