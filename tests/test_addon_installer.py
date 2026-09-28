@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
+from pydantic import BaseModel
 
 from angee.platform.installer import (
     AddonInstaller,
@@ -265,7 +266,32 @@ def test_installer_check_reports_every_backend_fault_with_distinct_ids(
     issues = _check_installer_backends(None)
 
     assert [issue.id for issue in issues] == [
-        "angee.platform.E002",
-        "angee.platform.E003",
+        "angee.E003",
+        "angee.E004",
         "angee.platform.E004",
     ]
+
+
+@pytest.mark.parametrize("registry, expected_id", [({}, "angee.platform.E001"), (["invalid"], "angee.E002")])
+def test_installer_check_requires_a_nonempty_registry(settings: Any, registry: Any, expected_id: str) -> None:
+    """The installer's required backend policy remains stricter than a rowless catalogue."""
+
+    settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = registry
+
+    assert [issue.id for issue in _check_installer_backends(None)] == [expected_id]
+
+
+def test_installer_check_inherits_config_form_validation(settings: Any, monkeypatch: Any) -> None:
+    """Installer declarations receive the same config checks as model-selected impls."""
+
+    class UnsupportedConfig(BaseModel):
+        headers: dict[str, str]
+
+    settings.ANGEE_ADDON_INSTALLER_BACKEND = "local"
+    settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {"local": "angee.platform.installer.LocalInstallerBackend"}
+    monkeypatch.setattr(LocalInstallerBackend, "config_model", UnsupportedConfig)
+
+    issues = _check_installer_backends(None)
+
+    assert [issue.id for issue in issues] == ["angee.E005"]
+    assert "config.headers" in issues[0].msg

@@ -679,6 +679,7 @@ name = "django-angee"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "billiard" },
     { name = "celery", extra = ["redis"] },
     { name = "channels" },
     { name = "cryptography" },
@@ -692,7 +693,7 @@ dependencies = [
     { name = "django-yamlconf" },
     { name = "django-zed-rebac" },
     { name = "hatch-angee" },
-    { name = "jsonschema" },
+    { name = "jsonschema", extra = ["format-nongpl"] },
     { name = "pydantic" },
     { name = "referencing" },
     { name = "uvicorn", extra = ["standard"] },
@@ -719,7 +720,6 @@ addons = [
     { name = "httpcore" },
     { name = "httpx" },
     { name = "imapclient" },
-    { name = "jsonschema", extra = ["format-nongpl"] },
     { name = "mail-parser-reply" },
     { name = "markdown-it-py" },
     { name = "mcp" },
@@ -732,7 +732,6 @@ addons = [
     { name = "python-magic" },
     { name = "pyyaml" },
     { name = "qrcode", extra = ["pil"] },
-    { name = "referencing" },
     { name = "ruamel-yaml" },
     { name = "slack-sdk" },
     { name = "strawberry-django-aggregates" },
@@ -757,6 +756,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "billiard", specifier = ">=4.2.1,<4.3" },
     { name = "celery", extras = ["redis"], specifier = ">=5.5" },
     { name = "channels", specifier = ">=4.0" },
     { name = "cryptography", specifier = ">=44" },
@@ -770,7 +770,7 @@ requires-dist = [
     { name = "django-yamlconf", specifier = ">=1.5.0" },
     { name = "django-zed-rebac", specifier = ">=0.18.2" },
     { name = "hatch-angee", specifier = ">=0.2.4" },
-    { name = "jsonschema", specifier = ">=4.26" },
+    { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "referencing", specifier = ">=0.37" },
@@ -794,7 +794,6 @@ addons = [
     { name = "httpcore", specifier = ">=1.0,<2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "imapclient", specifier = ">=3.1.0" },
-    { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "mail-parser-reply", specifier = ">=1.36" },
     { name = "markdown-it-py", specifier = ">=4.2" },
     { name = "mcp", specifier = ">=1.2" },
@@ -810,7 +809,6 @@ addons = [
     { name = "python-magic", specifier = ">=0.4.27" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
-    { name = "referencing", specifier = ">=0.37" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
     { name = "strawberry-django-aggregates", specifier = ">=0.12.0" },

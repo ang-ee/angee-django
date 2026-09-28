@@ -1,4 +1,4 @@
-"""GraphQL metadata for registry-backed implementation fields."""
+"""GraphQL metadata and enums for registry-backed implementations."""
 
 from __future__ import annotations
 

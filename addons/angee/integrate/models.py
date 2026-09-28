@@ -3333,14 +3333,6 @@ class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
     objects = RecordLinkManager()
     unscoped_objects = AngeeUnscopedManager()
 
-    @classmethod
-    def _record_ref_content_type_field_name(cls) -> str:
-        return "target_ct"
-
-    @classmethod
-    def _record_ref_object_id_field_name(cls) -> str:
-        return "target_id"
-
     class Meta:
         abstract = True
         base_manager_name = "unscoped_objects"

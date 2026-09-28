@@ -8,11 +8,13 @@ from django.db import IntegrityError, transaction
 from rebac import system_context
 
 from angee.base.scoping import system_queryset
-from angee.resources.models import Resource
+from angee.resources.testing.models import Resource
 from angee.workflows.definition import DefinitionInvalid
 from angee.workflows.steps import Step
 from angee.workflows.testing.models import Workflow, WorkflowVersion
 from tests.conftest import make_addon
+
+pytestmark = pytest.mark.usefixtures("workflow_step_classes")
 
 
 class InstallProbe(Step[None, None, None]):
@@ -21,24 +23,13 @@ class InstallProbe(Step[None, None, None]):
     key = "install_probe"
 
 
-class WorkflowResourceLedger(Resource):
-    """Concrete ledger for the production workflow resource adapter."""
-
-    class Meta(Resource.Meta):
-        """Django options for native resource test persistence."""
-
-        abstract = False
-        app_label = "resources"
-        db_table = "test_workflows_resource_ledger"
-
-
 @pytest.mark.parametrize("publish", [True, False, None])
 def test_resource_row_installs_one_document_and_reuses_its_hash(
-    composed_tables: None, tmp_path: Any, settings: Any, publish: bool | None,
+    composed_tables: None, tmp_path: Any, register_step, publish: bool | None,
 ) -> None:
     """Native imports retain ledger identity and support draft-only installation."""
 
-    settings.ANGEE_WORKFLOW_STEP_CLASSES = {"install_probe": f"{__name__}.InstallProbe"}
+    register_step(InstallProbe)
     fields: dict[str, Any] = {
         "key": "resource-graph",
         "name": "Resource graph",
@@ -49,19 +40,19 @@ def test_resource_row_installs_one_document_and_reuses_its_hash(
     source = "100_workflows.workflow.yaml"
     (tmp_path / source).write_text(yaml.safe_dump({"rows": [{"xref": "graph", "fields": fields}]}))
     owner = make_addon(path=tmp_path, resources={"demo": [{"path": source}]})
-    result = WorkflowResourceLedger.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
+    result = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert result.created == 1
     with system_context(reason="read installed workflow resource"):
         workflow = Workflow.objects.get(key="resource-graph")
         expected_versions = 0 if publish is False else 1
         assert WorkflowVersion.objects.filter(workflow=workflow).count() == expected_versions
         version_id = workflow.published_id
-    replay = WorkflowResourceLedger.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
+    replay = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert replay.skipped == 1
     with system_context(reason="read replayed workflow resource"):
         workflow.refresh_from_db()
         assert workflow.published_id == version_id
-        assert WorkflowResourceLedger.objects.count() == 1
+        assert Resource.objects.count() == 1
 
 
 @pytest.mark.parametrize("subject_model", ["knowledge.Vault", "knowledge.vault", "knowledge.VAULT"])

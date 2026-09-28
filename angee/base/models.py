@@ -24,7 +24,7 @@ from rebac import (
     to_object_ref,
     write_relationships,
 )
-from rebac.actors import to_subject_ref
+from rebac.actors import is_sudo, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError, PermissionDenied
 from rebac.managers import RebacManager, RebacQuerySet
 from rebac.models import active_relationship_model
@@ -414,7 +414,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Grant through one model class's own record-share declaration."""
 
         permission = declaration_owner.record_access_permission(relation)
-        self._require_record_access(permission)
+        self.require_access(permission)
         write_relationships(
             [
                 RelationshipTuple(
@@ -440,7 +440,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
         """Revoke through one model class's own record-share declaration."""
 
         permission = declaration_owner.record_access_permission(relation)
-        self._require_record_access(permission)
+        self.require_access(permission)
         delete_relationship(
             RelationshipTuple(
                 resource=to_object_ref(self),
@@ -469,7 +469,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
             )
         self.validate_record_access_target()
         for permission in sorted({declaration[relation] for relation in selected}):
-            self._require_record_access(permission)
+            self.require_access(permission)
 
         resource = to_object_ref(self)
         rows = (
@@ -498,11 +498,28 @@ class AngeeModel(TimestampMixin, RebacMixin):
 
         return None
 
-    def _require_record_access(self, permission: str) -> None:
-        """Raise when the ambient actor lacks a declared share permission."""
+    def require_access(self, permission: str, actor: Any = None) -> Any:
+        """Authorize and return the explicit, ambient, or pinned actor, in that order.
 
+        The resolved requester is retained as the instance binding. Missing actors
+        are denied in every strict mode unless an explicit sudo scope is active.
+        A concrete requester always clears instance sudo and scopes the check.
+        """
+
+        actor = actor if actor is not None else current_actor()
+        actor = actor if actor is not None else self.actor()
+        if actor is None:
+            if self.is_sudo() or is_sudo():
+                return None
+            raise PermissionDenied(f"Denied: {permission!r} requires an actor.")
+        self.with_actor(actor)
         if not self.has_access(permission):
-            raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {to_object_ref(self)}.")
+            target = self._meta.label if self._state.adding else to_object_ref(self)
+            raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {target}.")
+        return actor
+
+    # Remove after downstream callers have migrated to the public owner.
+    _require_record_access = require_access
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:

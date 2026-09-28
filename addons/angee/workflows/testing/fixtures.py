@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from typing import Any
 
 import pytest
@@ -13,7 +13,7 @@ from rebac.roles import grant as grant_role
 
 from angee.jobs.enqueue import celery_app
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import RunFactory
+from angee.workflows.testing.drivers import RunFactory, register_steps
 
 
 @pytest.fixture
@@ -29,17 +29,14 @@ def execution(composed_tables: None, monkeypatch: pytest.MonkeyPatch) -> tuple[A
 
 
 @pytest.fixture
-def register_step(settings: Any, monkeypatch: pytest.MonkeyPatch) -> Callable[[type[Step[Any, Any, Any]]], None]:
+def register_step() -> Iterator[Callable[[type[Step[Any, Any, Any]]], None]]:
     """Contribute a step through trusted settings, including function-local classes."""
 
-    def register(step: type[Step[Any, Any, Any]]) -> None:
-        monkeypatch.setattr(sys.modules[step.__module__], step.__name__, step, raising=False)
-        settings.ANGEE_WORKFLOW_STEP_CLASSES = {
-            **settings.ANGEE_WORKFLOW_STEP_CLASSES,
-            step.key: f"{step.__module__}.{step.__name__}",
-        }
+    with ExitStack() as stack:
+        def register(step: type[Step[Any, Any, Any]]) -> None:
+            stack.enter_context(register_steps(step))
 
-    return register
+        yield register
 
 
 @pytest.fixture

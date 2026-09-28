@@ -2,11 +2,7 @@
 # the package's [project] + entry points; see hatch-angee's native AddonManifest.
 [addon]
 name = "angee.workflows"
-description = "Immutable workflow graphs and actor-scoped database execution"
+description = "Immutable workflow graphs and actor-scoped execution"
 keywords = ["workflows", "automation", "orchestration"]
 category = "Workflows"
-depends_on = ["angee.iam", "angee.jobs", "angee.resources"]
-dependencies = [
-  "jsonschema[format-nongpl]>=4.26",
-  "referencing>=0.37",
-]
+depends_on = ["angee.iam", "angee.jobs", "angee.resources", "angee.graphql"]

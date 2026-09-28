@@ -87,14 +87,11 @@ class Visible(Step[Value, Value, None]):
         return ctx.done({"value": apps.get_model("knowledge", "Vault").objects.count()})
 
 
-STEP_CLASSES = {cls.key: f"tests.workflow_steps.{cls.__name__}" for cls in (Echo, Route, Pause, Retry, Reject, Visible)}
-"""Trusted settings contribution for the fixture implementations."""
-
-
-@pytest.fixture(autouse=True)
-def workflow_step_classes(settings):
+@pytest.fixture
+def workflow_step_classes(register_step):
     """Contribute neutral steps through the normal registry setting."""
-    settings.ANGEE_WORKFLOW_STEP_CLASSES = {**settings.ANGEE_WORKFLOW_STEP_CLASSES, **STEP_CLASSES}
+    for step in (Echo, Route, Pause, Retry, Reject, Visible):
+        register_step(step)
 
 
 def document(*keys, step="echo"):

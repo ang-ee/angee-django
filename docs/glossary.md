@@ -204,7 +204,7 @@ edges in a `Definition` document.
 **Attempt** — one try of a step run, recorded by `StepAttempt` from claim to
 settlement. A retry creates another attempt for the same step run.
 
-**Settlement** — what a step returns: `Done`, `Wait` or `Fail`. It describes the
+**Settlement** — what a step returns: `Done`, `Wait`, `NextPage` or `Fail`. It describes the
 attempt's completion or continuation, and the transition owner persists it.
 
 **Result** — what a workflow run reports, selected and projected from its

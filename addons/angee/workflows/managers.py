@@ -1,4 +1,4 @@
-"""Workflow admission, publication and transactional DATABASE execution."""
+"""Workflow admission, publication, fenced execution and operator recovery."""
 
 from __future__ import annotations
 
@@ -7,25 +7,28 @@ import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import cached_property
-from typing import Any, Literal
+from typing import Any, Literal, cast
+from uuid import uuid4
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import F, Max
-from django.db.models.functions import Now
-from rebac import actor_context, current_actor, system_context, to_subject_ref
+from django.db.models.functions import Least, Now
+from django.utils import timezone
+from rebac import actor_context, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
 from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
-from angee.base.serialization import canonical_json_sha256
+from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.graphql.publishing import publish_change
 from angee.jobs.enqueue import enqueue_task
 from angee.workflows.context import StepContext
@@ -39,22 +42,30 @@ from angee.workflows.states import (
     StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import Fail, Retryable, Settlement, Step, Superseded
+from angee.workflows.steps import Fail, Retryable, Settlement, Superseded, io_timeout_budget
 
 logger = logging.getLogger(__name__)
+RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
 
 
-def _error_text(value: str) -> str:
-    """Remove NUL bytes from unbounded diagnostic text before persistence."""
-    return value.replace("\x00", "")
+def _error_text(value: str, field: Any) -> str:
+    """Sanitize diagnostic text to the owning model field's declared bound."""
+    return cast(str, strip_null_bytes(value))[:field.max_length]
+
+
+def _sqlstate(error: Exception) -> str | None:
+    """Read the native database driver's SQLSTATE at one boundary."""
+    return getattr(error.__cause__, "sqlstate", None)
 
 
 @contextmanager
 def _record_failure(operation: str) -> Iterator[None]:
-    """Isolate a failure recorder so it cannot roll back successful body work."""
+    """Isolate diagnostic writes; a lost claim still aborts its execution transaction."""
     try:
         with transaction.atomic():
             yield
+    except Superseded:
+        raise
     except Exception:
         logger.exception("Workflow %s failed.", operation)
 
@@ -66,15 +77,6 @@ class DraftSave:
     status: Literal["saved", "conflict", "invalid"]
     revision: int
     issues: list[Issue]
-
-
-def _authorize(instance: Any, actor: Any, permission: str = "write") -> Any:
-    actor = actor if actor is not None else current_actor()
-    if actor is None and is_sudo():
-        return None
-    if actor is None or not instance.with_actor(actor).has_access(permission):
-        raise PermissionDenied(f"{permission} access is required.")
-    return actor
 
 
 class WorkflowManager(AngeeManager):
@@ -94,19 +96,23 @@ class WorkflowManager(AngeeManager):
                         message=f"Unknown subject model {subject_model!r}.",
                     ),
                 ]) from error
-        with transaction.atomic(), actor_context(actor) if actor is not None else nullcontext():
-            workflow, _ = self.get_or_create(
-                key=key, defaults={"name": name, "description": description, "subject_model": subject_model},
-            )
-            _authorize(workflow, actor)
-            workflow = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
-            if workflow.subject_model != subject_model and workflow.versions.exists():
-                raise ValidationError("The subject model cannot change after a workflow version exists.")
-            self.filter(pk=workflow.pk).update(
-                name=name, description=description, subject_model=subject_model, updated_at=Now(),
-            )
-            workflow.refresh_from_db()
-            return workflow
+        with transaction.atomic():
+            with system_context(reason="workflows.save_identity locate target"):
+                workflow = self.filter(key=key).first()
+            actor = (workflow or self.model()).require_access("write" if workflow else "create", actor)
+            with actor_context(actor) if actor is not None else nullcontext():
+                workflow, _ = self.get_or_create(
+                    key=key, defaults={"name": name, "description": description, "subject_model": subject_model},
+                )
+                workflow.require_access("write", actor)
+                workflow = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
+                if workflow.subject_model != subject_model and workflow.versions.exists():
+                    raise ValidationError("The subject model cannot change after a workflow version exists.")
+                self.filter(pk=workflow.pk).update(
+                    name=name, description=description, subject_model=subject_model, updated_at=Now(),
+                )
+                workflow.refresh_from_db()
+                return workflow
 
     def save_draft(
         self,
@@ -119,7 +125,7 @@ class WorkflowManager(AngeeManager):
     ) -> DraftSave:
         """Save one parsable registered document with optimistic concurrency."""
 
-        _authorize(workflow, actor)
+        workflow.require_access("write", actor)
         with system_context(reason="workflows.save_draft"):
             definition, issues = Definition.check(draft, subject_model=workflow.subject_model)
             if definition is None or any(issue.blocks_draft for issue in issues):
@@ -134,7 +140,7 @@ class WorkflowManager(AngeeManager):
     def publish(self, workflow: Any, *, actor: Any = None) -> Any:
         """Validate and publish the locked draft, reusing an unchanged hash."""
 
-        actor = _authorize(workflow, actor)
+        actor = workflow.require_access("write", actor)
         with transaction.atomic(), system_context(reason="workflows.publish"):
             current = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
             definition, issues = Definition.check(current.draft, subject_model=current.subject_model)
@@ -192,14 +198,16 @@ class WorkflowRunQuerySet(AngeeQuerySet):
     """Own run locks and the delivery obligation every lock holder acquires."""
 
     @contextmanager
-    def hold(self, run_id: int, *, skip_locked: bool = False) -> Iterator[Any]:
+    def hold(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
         """Lock one run and dispatch its ready rows after a successful commit.
 
         Register at context exit so any change publication registered while the
         lock is held runs before a broker send can fail.
         """
         with transaction.atomic():
-            with system_context(reason="workflows.hold"):
+            with system_context(reason="workflows.hold"), (
+                _database_timeout(timeout, setting="lock_timeout") if timeout is not None else nullcontext()
+            ), (transaction.atomic() if timeout is not None else nullcontext()):
                 run = self.filter(pk=run_id).lock_if_supported(no_key=True, skip_locked=skip_locked).first()
             try:
                 yield run
@@ -220,10 +228,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         input: Any = None,
         request_key: str | None = None,
         version: Any = None,
+        reprocess_of: Any = None,
     ) -> Any:
         """Start a pinned version, or replay against the existing run's version."""
 
-        actor = _authorize(workflow, actor, "start")
+        actor = workflow.require_access("start", actor)
         if actor is None:
             raise PermissionDenied("A run requires an actor.")
         payload = {} if input is None else input
@@ -258,7 +267,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             normalized = version.definition.validate_input(payload)
             try:
                 with transaction.atomic():
-                    run = self.create(version=version, input=normalized, request_key=request_key, **identity)
+                    run = self.create(
+                        version=version, input=normalized, request_key=request_key,
+                        reprocess_of=reprocess_of, **identity,
+                    )
             except IntegrityError:
                 existing = self.filter(request_key=request_key).first() if request_key is not None else None
                 if existing is None:
@@ -274,53 +286,67 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         step_run: Any = None,
         settlement: Settlement | None = None,
         *,
-        error: str = "",
+        artifacts: list[Any] | None = None,
     ) -> None:
         """Settle, plan and publish once, keeping successful body writes on data errors.
 
-        The caller holds the run lock. Only a lost fence escapes to roll back the
-        body. Planning has its own savepoint so a bad plan cannot poison the
-        outer transaction that records the durable run failure.
+        The caller holds the run lock. A lost fence or transient database error
+        escapes to roll back the transaction. Planning has its own savepoint so
+        a bad plan cannot poison the transaction recording the durable failure.
         """
         step_runs = run.step_runs
         with system_context(reason="workflows.advance"):
-            if run.is_terminal:
-                if settlement is not None:
-                    raise Superseded
+            if run.is_terminal and settlement is None:
                 return
             output: Any
             try:
                 if settlement is not None:
                     with transaction.atomic():
                         step_runs.settle(step_run, settlement)
-                with transaction.atomic():
-                    rows = list(step_runs.only("node_key", "map_index", "status", "outcome"))
-                    definition = run.version.definition
-                    if error or definition.unrouted_failure(rows):
-                        status, outcome, output = RunStatus.FAILED, ERROR_OUTCOME, {}
-                    else:
-                        step_runs.bulk_create([
-                            step_runs.model(run=run, node_key=node.node_key, status=node.status)
-                            for node in definition.ready_nodes(rows)
-                        ])
-                        statuses = set(step_runs.values_list("status", flat=True))
-                        if statuses & {StepRunStatus.READY, StepRunStatus.RUNNING}:
-                            status, outcome, output = RunStatus.RUNNING, "", {}
-                        elif StepRunStatus.WAITING in statuses:
-                            status, outcome, output = RunStatus.WAITING, "", {}
+                        if settlement.kind != "fail" and artifacts:
+                            step_run.artifacts.bulk_create(artifacts)
+                # A preserved IO sibling may settle after failure. Its evidence
+                # changes, but the terminal run and graph plan stay untouched.
+                if not run.is_terminal:
+                    with transaction.atomic():
+                        rows = list(step_runs.only("node_key", "map_index", "status", "outcome"))
+                        definition = run.version.definition
+                        if definition.unrouted_failure(rows):
+                            status, outcome, output = RunStatus.FAILED, ERROR_OUTCOME, {}
                         else:
-                            status = RunStatus.SUCCEEDED
-                            outcome, output = definition.result_for(step_runs.all(), run.input) or (
-                                DONE_OUTCOME, {},
-                            )
-                    self._write_state(run, status=status, outcome=outcome, output=output, error=error)
-                    if status == RunStatus.FAILED:
-                        step_runs.cancel_open()
+                            step_runs.bulk_create([
+                                step_runs.model(run=run, node_key=node.node_key, status=node.status)
+                                for node in definition.ready_nodes(rows)
+                            ])
+                            statuses = set(step_runs.values_list("status", flat=True))
+                            if statuses & {StepRunStatus.READY, StepRunStatus.RUNNING}:
+                                status, outcome, output = RunStatus.RUNNING, "", {}
+                            elif StepRunStatus.WAITING in statuses:
+                                status, outcome, output = RunStatus.WAITING, "", {}
+                            else:
+                                status = RunStatus.SUCCEEDED
+                                outcome, output = definition.result_for(step_runs.all(), run.input) or (
+                                    DONE_OUTCOME, {},
+                                )
+                        self._write_state(run, status=status, outcome=outcome, output=output)
             except Superseded:
                 raise
             except Exception as failure:
+                if isinstance(failure, OperationalError) and (
+                    _sqlstate(failure) in RETRYABLE_SQLSTATES
+                    or step_run is not None and step_run.step.mode == "IO"
+                ):
+                    raise
                 run_error = str(failure)
                 timed_out = isinstance(failure, SoftTimeLimitExceeded)
+                if step_run is not None:
+                    with _record_failure("settlement failure"):
+                        # A planning error follows a completed settlement and
+                        # cannot replace it. A failed settlement still owns its fence.
+                        if step_runs.filter(pk=step_run.pk, status=StepRunStatus.RUNNING).exists():
+                            step_runs.settle(step_run, Fail(
+                                error=run_error, stacktrace=traceback.format_exc(), timed_out=timed_out,
+                            ))
                 with _record_failure("attempt close"):
                     if step_run is not None:
                         closed = step_run.attempts.close(
@@ -330,47 +356,61 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                         )
                         if timed_out and closed:
                             run_error = ""
-                with _record_failure("run state"):
-                    self._write_state(
-                        run, status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error,
-                    )
-                with _record_failure("step cancellation"):
-                    step_runs.cancel_open()
+                if not run.is_terminal:
+                    with _record_failure("run state"):
+                        self._write_state(
+                            run, status=RunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, error=run_error,
+                        )
             with _record_failure("run change publication"):
                 run.refresh_from_db()
                 publish_change(run, action="update", update_fields=None)
 
     def _write_state(self, run: Any, *, status: str, outcome: str, output: Any, error: str = "") -> None:
         self.filter(pk=run.pk).update(
-            status=status, outcome=outcome, output=output, error=_error_text(error),
+            status=status, outcome=outcome, output=strip_null_bytes(output),
+            error=_error_text(error, self.model._meta.get_field("error")),
             finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
         )
 
-    def cancel(self, run: Any, *, actor: Any = None) -> None:
-        """Cancel an active run after any executing DATABASE step releases its lock."""
+    def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta = timedelta(seconds=5)) -> None:
+        """Cancel open rows after DATABASE work releases its lock, retaining terminal run facts."""
 
-        with self.hold(run.pk) as locked:
-            if locked is None:
-                return
-            _authorize(locked, actor)
-            with system_context(reason="workflows.cancel"):
-                if locked.is_terminal:
+        if not system_queryset(self.model).filter(pk=run.pk).exists():
+            return
+        run.require_access("write", actor)
+        try:
+            with self.hold(run.pk, timeout=timeout) as locked:
+                if locked is None:
                     return
-                locked.step_runs.cancel_open()
-                self._write_state(locked, status=RunStatus.CANCELED, outcome=CANCELED_OUTCOME, output={})
-                locked.refresh_from_db()
-                publish_change(locked, action="update", update_fields=None)
+                with system_context(reason="workflows.cancel"):
+                    changed = locked.step_runs.cancel_open()
+                    if not locked.is_terminal:
+                        self._write_state(locked, status=RunStatus.CANCELED, outcome=CANCELED_OUTCOME, output={})
+                    elif not changed:
+                        return
+                    locked.refresh_from_db()
+                    publish_change(locked, action="update", update_fields=None)
+        except OperationalError as error:
+            if _sqlstate(error) == "55P03":
+                raise ValidationError("The run is still running; retry cancellation.") from error
+            raise
 
     def reprocess(self, run: Any, *, actor: Any = None) -> Any:
         """Reprocess a terminal run on the current publication as its requesting operator."""
 
-        actor = _authorize(run, actor)
-        with system_context(reason="workflows.reprocess"):
-            run = self.get(pk=run.pk)
-            if not run.is_terminal:
-                raise ValidationError("Only terminal runs can be reprocessed.")
-            workflow, subject = run.version.workflow, run.subject
-        return self.start(workflow, actor=actor, subject=subject, input=run.input)
+        actor = run.require_access("write", actor)
+        with self.hold(run.pk) as retained:
+            with system_context(reason="workflows.reprocess"):
+                if not retained.is_terminal:
+                    raise ValidationError("Only terminal runs can be reprocessed.")
+                workflow, subject = retained.version.workflow, retained.subject
+            return self.start(workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained)
+
+    def reopen(self, run: Any) -> None:
+        """Clear a locked run's terminal facts and replan retained step rows."""
+        self._write_state(run, status=RunStatus.RUNNING, outcome="", output={})
+        run.refresh_from_db()
+        self.advance(run)
 
 
 class StepRunQuerySet(AngeeQuerySet):
@@ -379,12 +419,12 @@ class StepRunQuerySet(AngeeQuerySet):
     @staticmethod
     def _cleared_wait() -> dict[str, Any]:
         """Clear the companion columns shared by every non-waiting transition."""
-        return {"waiting_kind": None, "wake_at": None, "deadline_at": None, "updated_at": Now()}
+        return {"waiting_kind": None, "wait_reason": "", "wake_at": None, "deadline_at": None, "updated_at": Now()}
 
     def dispatch(self) -> None:
         """Send unlocked ready rows after refreshing their delivery timestamp."""
         with transaction.atomic(), system_context(reason="workflows.dispatch"):
-            ready = self.filter(status=StepRunStatus.READY)
+            ready = self.filter(status=StepRunStatus.READY).exclude(run__status__in=RunStatus.terminal_values())
             selected = ready.order_by("pk").lock_if_supported(no_key=True, skip_locked=True)
             for pk in list(selected.values_list("pk", flat=True)):
                 if ready.filter(pk=pk).update(dispatched_at=Now(), updated_at=Now()):
@@ -398,45 +438,91 @@ class StepRunQuerySet(AngeeQuerySet):
         """Claim a ready row, append its attempt and persist input before the body."""
         if not connection.in_atomic_block:
             raise RuntimeError("claim requires the caller's locked transaction.")
-        values = dict(
-            status=StepRunStatus.RUNNING, attempt=F("attempt") + 1, deadline_at=Now() + Step.timeout,
-            waiting_kind=None, wake_at=None, dispatches=0, updated_at=Now(),
-        )
+        values = dict(attempt=F("attempt") + 1, idempotency_token=step_run.idempotency_token or uuid4())
+        acknowledged_by_id = step_run.retry_acknowledged_by_id
         changed = self.filter(pk=step_run.pk, status=StepRunStatus.READY).update(**values)
         if not changed:
             return None
         step_run.refresh_from_db(fields=list(values))
-        attempt = step_run.attempts.create(number=step_run.attempt)
-        with transaction.atomic():
-            step_run.input = step_run.run.version.definition.input_for(
-                step_run.node_key, step_run.run.input, step_run.run.step_runs.all(),
-            )
-            self.filter(pk=step_run.pk).update(input=step_run.input, updated_at=Now())
+        attempt = step_run.attempts.create(
+            number=step_run.attempt, page_index=step_run.page_index, acknowledged_by_id=acknowledged_by_id,
+        )
+        deadline = timedelta(seconds=settings.CELERY_TASK_TIME_LIMIT)
+        until = attempt.started_at + deadline
+        try:
+            with transaction.atomic():
+                step = step_run.step
+                if step.mode == "IO":
+                    deadline = step.timeout
+                    until = attempt.started_at + io_timeout_budget()
+                step_run.input = step_run.run.version.definition.input_for(
+                    step_run.node_key, step_run.run.input, step_run.run.step_runs.all(),
+                )
+                self.filter(pk=step_run.pk).update(input=step_run.input)
+        finally:
+            self.filter(pk=step_run.pk).to_running(deadline, until=until)
+            step_run.refresh_from_db(fields=[
+                "status", "deadline_at", "waiting_kind", "wake_at", "wait_reason", "dispatches",
+                "retry_acknowledged_by_id",
+            ])
         return attempt
 
+    def to_running(self, timeout: timedelta, *, until: datetime) -> int:
+        """Finish a claim with one deadline write after class/input resolution."""
+        return self.filter(status=StepRunStatus.READY).update(
+            **(self._cleared_wait() | {"deadline_at": Least(Now() + timeout, until)}),
+            status=StepRunStatus.RUNNING, dispatches=0, retry_acknowledged_by_id=None,
+        )
+
+    def extend_deadline(self, timeout: timedelta, *, until: datetime) -> int:
+        """Extend a fenced claim from database time within the worker's IO budget."""
+        return self.update(deadline_at=Least(Now() + timeout, until), updated_at=Now())
+
+    def fenced(self, step_run: Any) -> Any:
+        """Select this still-live claim; every live attempt write uses this predicate."""
+        return self.filter(
+            pk=step_run.pk, status=StepRunStatus.RUNNING, attempt=step_run.attempt, deadline_at__gt=Now(),
+        )
+
     def settle(self, step_run: Any, settlement: Settlement) -> None:
-        """Write one fenced settlement and close its numbered attempt."""
-        fenced = self.filter(pk=step_run.pk, status=StepRunStatus.RUNNING, attempt=step_run.attempt)
+        """Record a settlement only while its numbered claim is live."""
+        self.fenced(step_run)._record_settlement(step_run, settlement)
+
+    def expire(self, step_run: Any) -> None:
+        """Recover an expired claim under the tick's run and step locks."""
+        self.expired().filter(pk=step_run.pk, attempt=step_run.attempt)._record_settlement(
+            step_run, Fail(error="The attempt deadline expired.", retryable=True, timed_out=True),
+        )
+
+    def _record_settlement(self, step_run: Any, settlement: Settlement) -> None:
+        """Persist one eligible claim and close its attempt through shared policy."""
         attempt_result = AttemptResult.SUCCEEDED
         if settlement.kind == "wait":
-            changed = fenced.to_waiting(until=settlement.until, state=settlement.state)
+            changed = self.to_waiting(until=settlement.until, state=settlement.state)
+        elif settlement.kind == "next_page":
+            changed = self.to_ready(state=settlement.state, reset_retries=True, next_page=True)
         else:
             values = self._cleared_wait()
             if settlement.kind == "done":
                 values.update(
-                    status=StepRunStatus.SUCCEEDED, output=settlement.output, outcome=settlement.outcome, retries=0,
+                    status=StepRunStatus.SUCCEEDED, output=strip_null_bytes(settlement.output),
+                    outcome=settlement.outcome, retries=0,
                 )
-                changed = fenced.update(**values)
+                changed = self.update(**values)
             else:
                 attempt_result = AttemptResult.TIMED_OUT if settlement.timed_out else AttemptResult.FAILED
                 retries = step_run.retries + 1
-                if settlement.retryable and retries < step_run.step.retry.max_attempts:
-                    changed = fenced.to_waiting(
+                if settlement.retryable and step_run.requires_duplicate_acknowledgement:
+                    changed = self.to_waiting(
+                        kind=cast(str, WaitingKind.OPERATOR), reason="possible duplicate effect", retries=retries,
+                    )
+                elif settlement.retryable and retries < step_run.step.retry.max_attempts:
+                    changed = self.to_waiting(
                         until=Now() + step_run.step.retry.delay_for(retries), state=step_run.state, retries=retries,
                     )
                 else:
                     values.update(status=StepRunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, retries=retries)
-                    changed = fenced.update(**values)
+                    changed = self.update(**values)
         if changed != 1:
             raise Superseded
         if step_run.attempts.filter(number=step_run.attempt).close(
@@ -444,23 +530,40 @@ class StepRunQuerySet(AngeeQuerySet):
         ) != 1:
             raise Superseded
 
-    def to_waiting(self, *, until: Any, state: Any = None, retries: int | None = None) -> int:
+    def to_waiting(
+        self, *, until: Any = None, state: Any = None, retries: int | None = None,
+        kind: str = cast(str, WaitingKind.TIME), reason: str = "",
+    ) -> int:
         """Park running rows, preserving retries unless a failure consumed one."""
-        return self.filter(status=StepRunStatus.RUNNING).update(
-            **(self._cleared_wait() | {"waiting_kind": WaitingKind.TIME, "wake_at": until}),
-            status=StepRunStatus.WAITING, state={} if state is None else state, outcome="",
+        if kind == WaitingKind.OPERATOR and not reason:
+            raise ValueError("An operator wait requires its reason.")
+        return self.filter(status__in=(StepRunStatus.RUNNING, StepRunStatus.READY)).update(
+            **(self._cleared_wait() | {
+                "waiting_kind": kind, "wake_at": until, "wait_reason": reason if kind == WaitingKind.OPERATOR else "",
+            }),
+            status=StepRunStatus.WAITING, state=F("state") if state is None else state, outcome="",
             retries=F("retries") if retries is None else retries,
         )
 
-    def to_ready(self) -> int:
+    def to_ready(
+        self, *, state: Any = None, reset_retries: bool = False,
+        acknowledged_by_id: Any = None, next_page: bool = False,
+    ) -> int:
         """Wake waiting rows and clear wait/deadline state; delivery is commit-owned."""
-        return self.filter(status=StepRunStatus.WAITING).update(
+        return self.filter(status__in=(StepRunStatus.WAITING, StepRunStatus.FAILED, StepRunStatus.RUNNING)).update(
             **self._cleared_wait(), status=StepRunStatus.READY, dispatched_at=Now(),
+            state=F("state") if state is None else state, retries=0 if reset_retries else F("retries"),
+            outcome="", output={}, retry_acknowledged_by_id=acknowledged_by_id,
+            page_index=F("page_index") + 1 if next_page else F("page_index"),
         )
 
     def cancel_open(self) -> int:
         """Cancel unsettled rows without disturbing completed branch evidence."""
-        return self.exclude(status__in=StepRunStatus.terminal_values()).update(
+        opened = self.exclude(status__in=StepRunStatus.terminal_values())
+        list(opened.order_by("pk").lock_if_supported(no_key=True).values_list("pk", flat=True))
+        attempts = self.model._meta.get_field("attempts").related_model
+        attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
+        return opened.update(
             **self._cleared_wait(), status=StepRunStatus.CANCELED,
         )
 
@@ -472,6 +575,10 @@ class StepRunQuerySet(AngeeQuerySet):
         """Return ready rows whose most recent delivery is old enough to retry."""
         return self.filter(status=StepRunStatus.READY, dispatched_at__lte=Now() - timedelta(seconds=60))
 
+    def expired(self) -> Any:
+        """Return committed claims whose database deadline has expired."""
+        return self.filter(status=StepRunStatus.RUNNING, deadline_at__lt=Now())
+
 
 class StepAttemptQuerySet(AngeeQuerySet):
     """Own the one-way closure of an execution attempt."""
@@ -480,28 +587,29 @@ class StepAttemptQuerySet(AngeeQuerySet):
         """Close unfinished attempts once, sanitizing their diagnostic columns."""
         return self.filter(finished_at__isnull=True).update(
             finished_at=Now(), result=result,
-            error=_error_text(error), stacktrace=_error_text(stacktrace), updated_at=Now(),
+            error=_error_text(error, self.model._meta.get_field("error")),
+            stacktrace=_error_text(stacktrace, self.model._meta.get_field("stacktrace")), updated_at=Now(),
         )
 
 
 @contextmanager
-def _statement_timeout(timeout: timedelta) -> Iterator[None]:
+def _database_timeout(timeout: timedelta, *, setting: str = "statement_timeout") -> Iterator[None]:
     """Bound each PostgreSQL statement, flooring sub-millisecond limits to 1 ms."""
     previous = None
     if connection.vendor == "postgresql":
         with connection.cursor() as cursor:
-            cursor.execute("SHOW statement_timeout")
+            cursor.execute("SELECT current_setting(%s)", [setting])
             previous = cursor.fetchone()[0]
             cursor.execute(
-                "SELECT set_config('statement_timeout', %s, true)",
-                [str(max(1, int(timeout.total_seconds() * 1000)))],
+                "SELECT set_config(%s, %s, true)",
+                [setting, str(max(1, int(timeout.total_seconds() * 1000)))],
             )
     try:
         yield
     finally:
         if previous is not None:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT set_config('statement_timeout', %s, true)", [previous])
+                cursor.execute("SELECT set_config(%s, %s, true)", [setting, previous])
 
 
 class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: ignore[misc]
@@ -513,7 +621,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
         return self.model._meta.get_field("run").related_model
 
     def execute(self, step_run_id: int) -> bool:
-        """Execute one DATABASE attempt with actor-scoped body writes in a savepoint."""
+        """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""
         run_id = system_queryset(self.model).filter(
             pk=step_run_id, status=StepRunStatus.READY,
         ).values_list("run_id", flat=True).first()
@@ -527,8 +635,8 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                     step_run = self.filter(pk=step_run_id).lock_if_supported(no_key=True).get()
                     step_run.run = run
                     if run.is_terminal:
-                        self.filter(pk=step_run.pk).cancel_open()
                         return False
+                ctx = None
                 try:
                     with system_context(reason="workflows.claim"):
                         attempt = self.claim(step_run)
@@ -539,37 +647,172 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                         node = run.version.definition.node(step_run.node_key)
                     ctx = StepContext(
                         run=run, step_run=step_run, step=step, attempt=attempt, actor=actor,
-                        input=step.parse_input(step_run.input), config=step.config(node.config), now=attempt.started_at,
+                        input=step.parse_input(step_run.input), config=step.parse_config(node.config),
+                        now=attempt.started_at,
                     )
-                    with _statement_timeout(step.timeout), transaction.atomic(), actor_context(actor):
-                        if is_sudo():
-                            raise RuntimeError("The step body must run under its actor, outside system_context.")
-                        settlement = step.check(step().run(ctx), config=ctx.config)
-                        if settlement.kind == "fail":
-                            transaction.set_rollback(True)
+                    if step.mode == "DATABASE":
+                        settlement = self._run_body(ctx)
+                    else:
+                        # The run lock owns this claim transaction. Leave it before
+                        # any IO body executes.
+                        settlement = None
                 except Superseded:
                     raise
                 except Exception as failure:
-                    retryable = isinstance(failure, Retryable) or (
-                        isinstance(failure, OperationalError)
-                        and getattr(failure.__cause__, "sqlstate", None) in {"57014", "40P01", "55P03"}
+                    settlement = self._failure(failure)
+                if settlement is not None:
+                    self.run_model.objects.advance(
+                        run, step_run, settlement, artifacts=ctx.pending_artifacts if ctx is not None else None,
                     )
-                    settlement = Fail(
-                        error=str(failure), retryable=retryable, timed_out=isinstance(failure, SoftTimeLimitExceeded),
-                        stacktrace=traceback.format_exc(),
-                    )
-                self.run_model.objects.advance(run, step_run, settlement)
+            if settlement is None:
+                assert ctx is not None
+                if connection.in_atomic_block:
+                    raise RuntimeError("An IO step cannot execute inside an enclosing transaction.")
+                return self._settle_io(ctx, self._run_body(ctx))
             return True
         except Superseded:
             return False
 
+    @staticmethod
+    def _failure(failure: Exception) -> Fail:
+        return Fail(
+            error=str(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
+            retryable=isinstance(failure, Retryable) or (
+                isinstance(failure, OperationalError)
+                and _sqlstate(failure) in RETRYABLE_SQLSTATES
+            ),
+            stacktrace=traceback.format_exc(),
+        )
+
+    def _run_body(self, ctx: StepContext) -> Settlement:
+        """Validate once with the body, rolling back DATABASE writes on failure."""
+        database = ctx.step.mode == "DATABASE"
+        try:
+            with (
+                _database_timeout(ctx.step.timeout) if database else nullcontext()
+            ), (transaction.atomic() if database else nullcontext()), actor_context(ctx.actor):
+                if is_sudo():
+                    raise RuntimeError("The step body must run under its actor, outside system_context.")
+                settlement = ctx.step.check(ctx.step().run(ctx), config=ctx.config)
+                if database and settlement.kind == "fail":
+                    transaction.set_rollback(True)
+                return settlement
+        except Superseded:
+            raise
+        except Exception as failure:
+            return self._failure(failure)
+
+    def _settle_io(self, ctx: StepContext, settlement: Settlement) -> bool:
+        """Retry a fenced result transaction until its claim's current deadline."""
+        while timezone.now() < ctx.step_run.deadline_at:
+            try:
+                with self._fenced(ctx.step_run) as current:
+                    self.run_model.objects.advance(
+                        current.run, current, settlement, artifacts=ctx.pending_artifacts,
+                    )
+                    return True
+            except Superseded:
+                break
+            except OperationalError:
+                pass
+            except SoftTimeLimitExceeded as failure:
+                settlement = self._failure(failure)
+        logger.warning("Workflow step %s attempt %s lost its IO settlement fence.", ctx.step_run.pk, ctx.attempt.number)
+        return False
+
+    @contextmanager
+    def _fenced(self, step_run: Any) -> Iterator[Any]:
+        """Wait for run then step locks within the live claim's remaining time."""
+        remaining = step_run.deadline_at - timezone.now()
+        if remaining <= timedelta():
+            raise Superseded
+        with self.run_model.objects.hold(step_run.run_id, timeout=remaining) as run:
+            with system_context(reason="workflows.attempt"), (
+                _database_timeout(step_run.deadline_at - timezone.now())
+            ), transaction.atomic():
+                current = self.fenced(step_run).lock_if_supported(no_key=True).first()
+                if run is None or current is None:
+                    raise Superseded
+                current.run = run
+                yield current
+
+    def begin_effect(self, step_run: Any) -> None:
+        """Mark the first possible effect under the same row lock used by the reaper."""
+        with self._fenced(step_run) as current:
+            current.attempts.filter(number=step_run.attempt, effect_started_at__isnull=True).update(
+                effect_started_at=Now(), updated_at=Now(),
+            )
+
+    def heartbeat(self, step_run: Any) -> None:
+        """Extend a live claim from database time, retaining the context's deadline."""
+        with self._fenced(step_run) as current:
+            attempt = current.attempts.get(number=step_run.attempt)
+            if self.fenced(step_run).extend_deadline(
+                step_run.step.timeout, until=attempt.started_at + io_timeout_budget(),
+            ) != 1:
+                raise Superseded
+            step_run.refresh_from_db(fields=["deadline_at"])
+
+    def raise_if_canceled(self, step_run: Any) -> None:
+        """Cooperatively stop an attempt after cancellation or supersession."""
+        with self._fenced(step_run):
+            pass
+
+    def artifact(self, step_run: Any, record: Any, *, label: str, actor: Any) -> Any:
+        """Stage an actor-readable canonical reference while the attempt is live."""
+        readable = read_scoped_queryset(type(record), actor)
+        if readable is None or not readable.filter(pk=record.pk).exists():
+            raise PermissionDenied("Read access to the artifact record is required.")
+        target = canonical_record_target(record)
+        with self._fenced(step_run) as current:
+            return current.artifacts.model(
+                step_run=current, content_type=target.content_type, object_id=target.object_id, label=label,
+            )
+
+    def retry_step(self, step_run: Any, *, actor: Any = None, accept_duplicate: bool = False) -> Any:
+        """Retry one failed or operator-waiting node, retaining all settled evidence."""
+        with self.run_model.objects.hold(step_run.run_id) as run:
+            if run is None:
+                raise ValidationError("The workflow run no longer exists.")
+            actor = run.require_access("write", actor)
+            if accept_duplicate and actor is None:
+                raise PermissionDenied("A duplicate-effect acknowledgement requires an actor.")
+            with system_context(reason="workflows.retry_step"):
+                current = run.step_runs.filter(pk=step_run.pk).lock_if_supported(no_key=True).get()
+                current.run = run
+                if (
+                    run.status not in {RunStatus.FAILED, RunStatus.WAITING, RunStatus.RUNNING}
+                    or not (
+                        current.status == StepRunStatus.FAILED
+                        or current.status == StepRunStatus.WAITING and current.waiting_kind == WaitingKind.OPERATOR
+                    )
+                    or current.status == StepRunStatus.FAILED
+                    and not run.version.definition.retry_allowed(current.node_key)
+                ):
+                    raise ValidationError("This step cannot be retried in place.")
+                others = [
+                    row.node_key for row in run.step_runs.exclude(pk=current.pk).order_by("node_key")
+                    if run.version.definition.unrouted_failure([row])
+                ]
+                if others:
+                    raise ValidationError(f"Other unrouted failures remain: {', '.join(others)}.")
+                if current.requires_duplicate_acknowledgement and not accept_duplicate:
+                    raise ValidationError("Retry requires accepting a possible duplicate effect.")
+                run.step_runs.filter(pk=current.pk).to_ready(
+                    acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,
+                )
+                self.run_model.objects.reopen(run)
+                current.refresh_from_db()
+                return current.with_actor(actor)
+
     def tick(self) -> dict[str, int]:
-        """Wake due waits and recover missing deliveries on a bounded batch."""
-        return {"woken": self.wake(), "redispatched": self.redispatch()}
+        """Wake waits, reap expired claims and recover missing deliveries in bounded batches."""
+        return {"woken": self.wake(), "reaped": self.reap(), "redispatched": self.redispatch()}
 
     def _each_candidate(self, candidates: Any, action: Callable[[Any, Any], None]) -> int:
         count = 0
         with system_context(reason="workflows.tick"):
+            candidates = candidates.exclude(run__status__in=RunStatus.terminal_values())
             for pk, run_id in list(candidates.order_by("pk").values_list("pk", "run_id")[:100]):
                 with _record_failure(f"tick candidate {pk}"):
                     with self.run_model.objects.hold(run_id, skip_locked=True) as run:
@@ -587,13 +830,33 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
 
     def _wake(self, run: Any, step_run: Any) -> None:
         run.step_runs.filter(pk=step_run.pk).to_ready()
-        type(run).objects.advance(run)
+        self.run_model.objects.advance(run)
 
     def redispatch(self) -> int:
-        """Bound tick redelivery; exhaustion fails L0 without domain routing."""
+        """Bound tick redelivery; exhaustion waits for an operator without routing."""
         return self._each_candidate(self.undispatched(), self._redispatch)
 
     def _redispatch(self, run: Any, step_run: Any) -> None:
         run.step_runs.filter(pk=step_run.pk).count_redispatch()
         if step_run.dispatches + 1 >= settings.ANGEE_WORKFLOW_MAX_DISPATCHES:
-            type(run).objects.advance(run, error="Task delivery exhausted its retry allowance.")
+            run.step_runs.filter(pk=step_run.pk).to_waiting(
+                kind=WaitingKind.OPERATOR, reason="Task delivery exhausted its retry allowance.",
+            )
+            self.run_model.objects.advance(run)
+
+    def reap(self) -> int:
+        """Recover expired committed claims while holding the effect marker's lock."""
+        return self._each_candidate(self.expired(), self._reap)
+
+    def _reap(self, run: Any, step_run: Any) -> None:
+        step_run.run = run
+        try:
+            with transaction.atomic():
+                run.step_runs.expire(step_run)
+        except ImproperlyConfigured as failure:
+            step_run.attempts.filter(number=step_run.attempt).close(AttemptResult.TIMED_OUT, str(failure))
+            run.step_runs.filter(pk=step_run.pk).to_waiting(
+                kind=WaitingKind.OPERATOR,
+                reason="The step implementation is unavailable; restore its registration before retrying.",
+            )
+        self.run_model.objects.advance(run)

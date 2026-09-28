@@ -9,9 +9,9 @@ from angee.workflows.definition import DefinitionInvalid
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import Workflow, WorkflowRun, WorkflowVersion
-from tests.workflow_steps import STEP_CLASSES, Echo, Value, document
+from tests.workflow_steps import Echo, Value, document
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
 
 
 class RevisedInput(BaseModel):
@@ -65,13 +65,10 @@ class WorkflowEcho(Echo):
     subject = "workflows.workflow"
 
 
-def test_request_key_replays_original_admission_after_publication(execution, settings):
+def test_request_key_replays_original_admission_after_publication(execution, register_step):
     """A stronger current input contract never invalidates a keyed earlier start."""
     actor, _ = execution
-    settings.ANGEE_WORKFLOW_STEP_CLASSES = {
-        **STEP_CLASSES,
-        "revised_echo": f"{__name__}.RevisedEcho",
-    }
+    register_step(RevisedEcho)
     workflow = load_workflow(document("entry"), key="request_publication", actor=actor)
     original = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 1}, request_key="test:original")
     saved = Workflow.objects.save_draft(
@@ -138,10 +135,10 @@ def test_result_projection_rejects_nonproducer_whole_object_at_publish(execution
      (None, ["optional", "value"], "required at every level"),
      (None, ["required", "optional"], "required at every level")],
 )
-def test_whole_result_rejections_block_publication(execution, settings, source, when, path, reason):
+def test_whole_result_rejections_block_publication(execution, register_step, source, when, path, reason):
     """Invalid whole bindings cannot produce a version through the production publisher."""
     actor, _ = execution
-    settings.ANGEE_WORKFLOW_STEP_CLASSES = {**STEP_CLASSES, "result_echo": f"{__name__}.ResultEcho"}
+    register_step(ResultEcho)
     draft = document("entry", step="result_echo")
     draft["results"] = [{
         "from": "entry", "output": {"from": source, "path": path},
@@ -154,14 +151,11 @@ def test_whole_result_rejections_block_publication(execution, settings, source, 
 
 
 @pytest.mark.parametrize("operation", ["install", "draft"])
-def test_subject_identity_is_immutable_once_a_version_exists(execution, settings, operation):
+def test_subject_identity_is_immutable_once_a_version_exists(execution, register_step, operation):
     """Only the identity verb can change subjects, and it rejects changes after publication."""
     actor, _ = execution
-    settings.ANGEE_WORKFLOW_STEP_CLASSES = {
-        **STEP_CLASSES,
-        "vault_echo": f"{__name__}.VaultEcho",
-        "workflow_echo": f"{__name__}.WorkflowEcho",
-    }
+    register_step(VaultEcho)
+    register_step(WorkflowEcho)
     workflow = Workflow.objects.install_definition(
         key="subject_contract", name="Subject contract", subject_model="knowledge.Vault",
         draft=document("entry", step="vault_echo"), actor=actor,

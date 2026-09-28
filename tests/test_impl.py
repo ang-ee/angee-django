@@ -12,19 +12,46 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Vali
 from django.db import models
 from django.test import override_settings
 from django.test.utils import isolate_apps
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
 from angee.base.impl import (
     ImplBase,
     ImplChoice,
     ImplClassField,
     ImplDefaultsMixin,
+    check_impl_registry,
+    freeze_form_schema,
+    impl_choices,
+    impl_choices_enum,
+    materialize_form_schema,
     model_config_form_spec,
     resolve_all_impl_classes,
 )
+from angee.base.jsonschema import validation_issues
+from angee.integrate_github.backend import GitHubBackend
+from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend
 from tests.conftest import Integration, OAuthClient, VcsBridge
 from tests.tables import model_tables
+
+
+def test_frozen_form_metadata_and_per_row_defaults_compose_shared_schema_validation():
+    """Frozen forms retain each row's readonly identity while applying stored defaults."""
+    schema = materialize_form_schema({
+        "type": "array", "$defs": {"Row": {
+            "type": "object", "properties": {
+                "key": {"type": "string", "readOnly": True}, "text": {"type": "string"},
+            },
+        }}, "items": {"$ref": "#/$defs/Row"},
+    })
+    initial = [{"key": "a", "text": "first"}, {"key": "b", "text": "second"}]
+    freeze_form_schema(schema, initial)
+    initial[0]["key"] = "changed outside snapshot"
+    values = [{}, {"text": "edited"}]
+    assert validation_issues(schema, values, defaults=True) == {}
+    assert values == [{"key": "a", "text": "first"}, {"key": "b", "text": "edited"}]
+    values[1]["key"] = "a"
+    assert set(validation_issues(schema, values)) == {"1.key"}
 
 
 class _BaseImpl(ImplBase):
@@ -69,6 +96,15 @@ class _ScalarConfig(BaseModel):
 class _TypedConfigImpl(ImplBase):
     key = "typed"
     config_model = _ScalarConfig
+
+
+class _UnsupportedConfigImpl(ImplBase):
+    key = "unsupported"
+
+    class Config(BaseModel):
+        headers: dict[str, str]
+
+    config_model = Config
 
 
 def test_impl_owner_public_import_contract() -> None:
@@ -147,6 +183,77 @@ def test_impl_registry_and_field_collect_every_registry_fault() -> None:
     assert "MissingImpl" in errors[0].msg
     assert "is not a _BaseImpl" in errors[1].msg
     assert "with key 'refined'" in errors[2].msg
+    assert check_impl_registry("ANGEE_TEST_IMPLS", _BaseImpl, obj=field) == errors
+
+
+@override_settings(ANGEE_TEST_IMPLS={"unsupported": "tests.test_impl._UnsupportedConfigImpl"})
+def test_rowless_registry_checks_config_form_declarations() -> None:
+    """A registry needs the same form declaration checks with or without a column."""
+
+    errors = check_impl_registry("ANGEE_TEST_IMPLS", ImplBase)
+
+    assert [error.id for error in errors] == ["angee.E005"]
+    assert "config.headers" in errors[0].msg
+    field = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS")
+    assert check_impl_registry("ANGEE_TEST_IMPLS", ImplBase, obj=field) == field.check()
+
+
+@override_settings(ANGEE_TEST_IMPLS=["not a registry"])
+def test_registry_checks_report_a_malformed_mapping() -> None:
+    """System checks report an invalid registry container without raising."""
+
+    errors = check_impl_registry("ANGEE_TEST_IMPLS", ImplBase)
+
+    assert [error.id for error in errors] == ["angee.E002"]
+    assert "must be a mapping" in errors[0].msg
+
+
+@override_settings(ANGEE_EMPTY_IMPLS={})
+def test_empty_rowless_registry_is_valid_but_cannot_project_an_enum() -> None:
+    """Empty catalogues need no artificial implementation to pass checks or list choices."""
+
+    assert check_impl_registry("ANGEE_EMPTY_IMPLS", ImplBase) == []
+    assert impl_choices("ANGEE_EMPTY_IMPLS", ImplBase) == []
+    with pytest.raises(ImproperlyConfigured, match="registry .* is empty"):
+        impl_choices_enum("ANGEE_EMPTY_IMPLS")
+
+
+@override_settings(
+    ANGEE_TEST_IMPLS={
+        "typed": "tests.test_impl._TypedConfigImpl",
+        "base": "tests.test_impl._BaseImpl",
+    }
+)
+def test_rowless_choices_share_field_metadata_and_order() -> None:
+    """Registry choices retain implementation labels, defaults and config forms."""
+
+    field = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_TEST_IMPLS")
+    choices = impl_choices("ANGEE_TEST_IMPLS", ImplBase)
+
+    assert choices == field.impl_choices() == [_BaseImpl.choice(), _TypedConfigImpl.choice()]
+
+
+@override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._BaseImpl"})
+def test_registry_enum_identity_tracks_keys_and_preserves_names() -> None:
+    """Native enum identity depends on the composed keys, not import paths or input order."""
+
+    enum = impl_choices_enum("ANGEE_ENUM_TEST_CLASSES")
+    field = ImplClassField(base_class=ImplBase, registry_setting="ANGEE_ENUM_TEST_CLASSES")
+    assert field.choices_enum is enum
+    assert enum.__name__ == "EnumTestImpl"
+    assert enum.choices == [("base", "base")]
+    with override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._RefinedImpl"}):
+        assert impl_choices_enum("ANGEE_ENUM_TEST_CLASSES") is enum
+    with override_settings(
+        ANGEE_ENUM_TEST_CLASSES={
+            "refined": "tests.test_impl._RefinedImpl",
+            "base": "tests.test_impl._BaseImpl",
+        }
+    ):
+        expanded = impl_choices_enum("ANGEE_ENUM_TEST_CLASSES")
+        assert expanded is not enum
+        assert expanded.choices == [("base", "base"), ("refined", "refined")]
+    assert impl_choices_enum("ANGEE_ENUM_TEST_CLASSES") is enum
 
 
 @override_settings(ANGEE_TEST_IMPLS={"local": "angee.storage.backends.LocalBackend"})
@@ -157,6 +264,9 @@ def test_native_impl_field_uses_its_registry_key() -> None:
 
     assert resolve_all_impl_classes("ANGEE_TEST_IMPLS", StorageBackend) == (LocalBackend,)
     assert field.check() == []
+    assert impl_choices("ANGEE_TEST_IMPLS", StorageBackend) == field.impl_choices() == [
+        ImplChoice(key="local", label="local", icon="", category="", defaults={}, config_schema=None)
+    ]
 
 
 @override_settings(ANGEE_EMPTY_IMPLS={})
@@ -329,6 +439,81 @@ def test_typed_config_projects_supported_scalars_and_validates_paths() -> None:
 
     with pytest.raises(ValidationError, match="config.retries"):
         _TypedConfigImpl.normalize_config({"endpoint": "https://example.test"})
+
+
+def test_config_parsing_returns_model_and_normalizes_once_with_wire_aliases() -> None:
+    """Parsing and JSON normalization share one validation pass and native aliases."""
+
+    seen = []
+
+    class Config(BaseModel):
+        amount: int = Field(alias="wireAmount")
+
+        @field_validator("amount")
+        @classmethod
+        def increment(cls, value: int) -> int:
+            seen.append(value)
+            return value + 1
+
+    class ConfiguredImpl(ImplBase):
+        config_model = Config
+
+    raw = {"wireAmount": "2"}
+    parsed = ConfiguredImpl.parse_config(raw)
+    assert isinstance(parsed, Config)
+    assert parsed.amount == 3
+    assert seen == [2]
+    seen.clear()
+    assert ConfiguredImpl.normalize_config(raw) == {"wireAmount": 3}
+    assert seen == [2]
+    assert raw == {"wireAmount": "2"}
+
+
+def test_config_parsing_translates_nested_alias_and_index_paths() -> None:
+    """Typed errors retain native wire aliases and collection indexes for Django callers."""
+
+    class Child(BaseModel):
+        value: int = Field(alias="wireValue")
+
+    class Config(BaseModel):
+        items: list[Child]
+
+    class ConfiguredImpl(ImplBase):
+        config_model = Config
+
+    with pytest.raises(ValidationError) as error:
+        ConfiguredImpl.parse_config({"items": [{"wireValue": "invalid"}, {}]})
+    assert set(error.value.message_dict) == {"config.items.0.wireValue", "config.items.1.wireValue"}
+
+
+@pytest.mark.parametrize("impl", [LocalVCSBackend, GitHubBackend])
+def test_production_backend_configs_share_typed_parsing(impl: type[ImplBase]) -> None:
+    """Every declared backend config keeps its model defaults and extra-key policy."""
+
+    parsed = impl.parse_config({})
+    assert isinstance(parsed, impl.config_model)
+    assert impl.normalize_config({}) == parsed.model_dump(mode="json", by_alias=True)
+    with pytest.raises(ValidationError) as error:
+        impl.parse_config({"unknown_option": True})
+    assert set(error.value.message_dict) == {"config.unknown_option"}
+
+
+def test_no_model_config_parser_rejects_values_without_changing_untyped_rows() -> None:
+    """Explicit typed parsing rejects config without a model; legacy row config stays open."""
+
+    for parse in (_BaseImpl.parse_config, _BaseImpl.normalize_config):
+        with pytest.raises(ValidationError, match="does not accept configuration"):
+            parse({"undeclared": True})
+    assert _BaseImpl.parse_config({}) is None
+    assert _BaseImpl.normalize_config({}) == {}
+
+    raw = {"arbitrary": ["retained"]}
+    bridge = VcsBridge(backend_class="stub", config=raw)
+    impl = VcsBridge.impl_field("backend_class").resolve_class("stub")
+    assert impl.config_model is None
+    assert impl.declared_config_keys() is None
+    bridge.validate_impl_configs()
+    assert bridge.config is raw
 
 
 def test_typed_config_defaults_do_not_depend_on_form_projection() -> None:

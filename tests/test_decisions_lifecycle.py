@@ -20,6 +20,7 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.errors import NoActorResolvedError
 
 from angee.base.scoping import system_queryset
 from angee.decisions import managers as decision_managers
@@ -102,6 +103,8 @@ def test_complete_lifecycle_without_any_run(people):
     assert decision.is_open and group.settled_at is None
     assert decision.requester_id == issuer.pk
     assert decision.subject_object_id == subject.pk
+    assert decision.record_model_label == subject._meta.label
+    assert decision.record_public_id == subject.sqid
     assert decision.basis == {"paragraph": 2}
     result = answer(decision, reviewer)
     assert result.verdict == "completed" and result.closed_reason == "resolved"
@@ -522,6 +525,36 @@ def test_settled_resolution_is_parsed_as_the_declared_action_model(people):
     resolved = Decision.objects.resolution(completed.pk, actor=issuer, actions=[Complete, Decline])
     assert isinstance(resolved.action, Complete)
     assert resolved.action.note == "Read" and resolved.resolver.pk == reviewer.pk
+
+
+@pytest.mark.parametrize("plural", [False, True])
+@pytest.mark.parametrize("requester", ["missing", "inactive"])
+def test_answer_consumption_rejects_missing_or_inactive_requester_before_elevation(people, plural, requester):
+    """The lock owner's system scope never supplies a missing requester's authority."""
+    issuer, reviewer, _outsider, _subject = people
+    group = Decision.objects.admit_group([request_for(people)], actor=issuer)
+    completed = answer(seat(group), reviewer)
+    if requester == "inactive":
+        with system_context(reason="test inactive answer reader"):
+            type(issuer).objects.filter(pk=issuer.pk).update(is_active=False)
+    operation = Decision.objects.resolutions if plural else Decision.objects.resolution
+    with pytest.raises(NoActorResolvedError if requester == "missing" else PermissionDenied):
+        operation(
+            group.pk if plural else completed.pk,
+            actor=None if requester == "missing" else issuer,
+            actions=[Complete, Decline],
+        )
+
+
+def test_answer_consumption_resolves_the_existing_ambient_requester(people):
+    """Consuming one answer or a group uses the same ambient identity owner as deciding."""
+    issuer, reviewer, _outsider, _subject = people
+    group = Decision.objects.admit_group([request_for(people)], actor=issuer)
+    completed = answer(seat(group), reviewer)
+    with actor_context(issuer):
+        singular = Decision.objects.resolution(completed.pk, actor=None, actions=[Complete, Decline])
+        plural = Decision.objects.resolutions(group.pk, actor=None, actions=[Complete, Decline])
+    assert singular.decision.pk == completed.pk == plural[0].decision.pk
 
 
 def test_singular_resolution_does_not_require_access_to_private_sibling(people):

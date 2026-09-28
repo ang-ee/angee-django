@@ -5,16 +5,17 @@ from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.test import override_settings
-from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from angee.base.impl import ImplBase
+from angee.base.jsonschema import validator
 from angee.workflows.bindings import SourceBinding
 from angee.workflows.definition import Definition
 from angee.workflows.states import ERROR_OUTCOME
 from angee.workflows.steps import Step, Wait, resolve_step
 from angee.workflows.testing.models import Workflow
+
+pytestmark = pytest.mark.usefixtures("steps")
 
 
 class Payload(BaseModel):
@@ -66,18 +67,11 @@ class Dynamic(Step[Payload, Payload, Configuration]):
         return {"added": "Added"} if config.amount else {"zero": "Zero"}
 
 
-@pytest.fixture(autouse=True)
-def steps():
+@pytest.fixture
+def steps(register_step):
     """Register classes through the production settings registry."""
-    with override_settings(
-        ANGEE_WORKFLOW_STEP_CLASSES={
-            "echo": "tests.test_workflows_definition.Echo",
-            "text_echo": "tests.test_workflows_definition.TextEcho",
-            "configured": "tests.test_workflows_definition.Configured",
-            "dynamic": "tests.test_workflows_definition.Dynamic",
-        }
-    ):
-        yield
+    for step in (Echo, TextEcho, Configured, Dynamic):
+        register_step(step)
 
 
 def row(key, status="succeeded", outcome="done", output=None):
@@ -254,9 +248,15 @@ def test_binding_source_names_are_reserved_at_publish(key):
     assert any(issue.code == "reserved_node" and not issue.blocks_draft for issue in issues)
 
 
-def test_publish_checks_step_subject_against_workflow_identity(monkeypatch):
+def test_publish_checks_step_subject_against_workflow_identity(register_step):
     """Publish checks step subject against workflow identity."""
-    monkeypatch.setattr(Echo, "subject", "knowledge.page")
+
+    class PageEcho(Echo):
+        """Require a page subject for this declaration."""
+
+        subject = "knowledge.page"
+
+    register_step(PageEcho)
     document = {"nodes": {"start": {"step": "echo"}}}
     assert Definition.check(document, subject_model="knowledge.page")[1] == []
     for subject_model in ("", "knowledge.vault", "knowledge.Page"):
@@ -354,17 +354,25 @@ def test_binding_schema_mismatch_is_publish_issue():
     assert any(issue.code == "binding" for issue in literal.issues())
 
 
-def test_incompatible_default_input_is_rejected_before_publication(monkeypatch):
+def test_incompatible_default_input_is_rejected_before_publication(register_step):
     """Incompatible default input is rejected before publication."""
-    definition = graph({"start": {"next": {"done": "finish"}}, "finish": {"step": "text_echo"}})
+    nodes = {"start": {"next": {"done": "finish"}}, "finish": {"step": "text_echo"}}
+    definition = graph(nodes)
     assert any(issue.node == "finish" and issue.code == "input" for issue in definition.issues())
-    monkeypatch.setattr(TextEcho, "input_model", None)
-    assert definition.issues() == []
+
+    class UntypedInput(TextEcho):
+        """Accept the upstream output without imposing a typed input."""
+
+        input_model = None
+
+    register_step(UntypedInput)
+    assert graph(nodes).issues() == []
 
 
-def test_error_default_input_requires_defaults_or_explicit_bindings(monkeypatch):
+def test_error_default_input_requires_defaults_or_explicit_bindings(register_step):
     """Error default input requires defaults or explicit bindings."""
-    definition = graph({"start": {"next": {"error": "finish"}}, "finish": {}})
+    nodes = {"start": {"next": {"error": "finish"}}, "finish": {}}
+    definition = graph(nodes)
     assert any(issue.code == "input" and "error edge" in issue.message for issue in definition.issues())
 
     class DefaultPayload(BaseModel):
@@ -372,11 +380,17 @@ def test_error_default_input_requires_defaults_or_explicit_bindings(monkeypatch)
 
         value: int = 0
 
-    monkeypatch.setattr(Echo, "input_model", DefaultPayload)
+    class DefaultInput(Echo):
+        """Fill the empty failure envelope from declared defaults."""
+
+        input_model = DefaultPayload
+
+    register_step(DefaultInput)
+    definition = graph(nodes)
     assert definition.issues() == []
     bound = definition.input_for("finish", {}, [row("start", "failed", "error")])
     assert bound == {}
-    assert Echo.parse_input(bound).value == 0
+    assert DefaultInput.parse_input(bound).value == 0
 
 
 def test_missing_required_binding_is_publish_issue():
@@ -491,7 +505,7 @@ def test_whole_result_binding_rejects_error_eligibility(source):
      (["optional", "value"], False), (["items", 0, "value"], True), (["items", 1, "value"], False)],
 )
 @pytest.mark.parametrize("source", ["start", "input"])
-def test_whole_result_path_must_be_required_at_every_level(monkeypatch, source, path, valid):
+def test_whole_result_path_must_be_required_at_every_level(register_step, source, path, valid):
     """Required parents, leaves and array bounds are proven through local model refs."""
     class Nested(BaseModel):
         """A payload with a required field and an omittable field."""
@@ -506,8 +520,13 @@ def test_whole_result_path_must_be_required_at_every_level(monkeypatch, source, 
         optional: Nested = Field(default_factory=lambda: Nested(value=0))
         items: list[Nested] = Field(min_length=1)
 
-    monkeypatch.setattr(Echo, "input_model", Structured)
-    monkeypatch.setattr(Echo, "output_model", Structured)
+    class StructuredEcho(Echo):
+        """Expose the same nested contract on input and output."""
+
+        input_model = Structured
+        output_model = Structured
+
+    register_step(StructuredEcho)
     definition = graph({"start": {}}, [{"from": "start", "output": {"from": source, "path": path}}])
     issues = definition.issues()
     if valid:
@@ -542,7 +561,9 @@ def test_generics_set_existing_config_owner_and_normalize_models():
     assert issubclass(Configured, ImplBase)
     assert Configured.config_model is Configuration
     assert Configured.config_defaults() == {"amount": 3}
-    assert Configured.config({}).amount == 3
+    assert Configured.parse_config({}).amount == 3
+    assert isinstance(Configured.parse_config({}), Configuration)
+    assert Configured.normalize_config({}) == {"amount": 3}
     assert Configured.normalize_input({"value": "2"}) == {"value": 2}
     output = Payload(value=8)
     completion = Configured.done(output)
@@ -554,10 +575,14 @@ def test_generics_set_existing_config_owner_and_normalize_models():
     with pytest.raises(ValidationError, match="outcome"):
         Configured.check(Configured.done(Payload(value=8), outcome="missing"))
     with pytest.raises(ValidationError, match="does not accept configuration"):
-        Echo.config({"unused": True})
+        Echo.parse_config({"unused": True})
+    with pytest.raises(ValidationError, match="does not accept configuration"):
+        Echo.normalize_config({"unused": True})
+    assert Echo.parse_config({}) is None
+    assert Echo.normalize_config({}) == {}
 
 
-def test_config_parser_applies_each_validator_once(monkeypatch):
+def test_config_parser_applies_each_validator_once(register_step):
     """Config parser applies each validator once."""
     seen = []
 
@@ -573,9 +598,17 @@ def test_config_parser_applies_each_validator_once(monkeypatch):
             seen.append(value)
             return value + 1
 
-    monkeypatch.setattr(Configured, "config_model", IncrementedConfiguration)
-    config = Configured.config({"amount": 2})
+    class IncrementedConfig(Configured):
+        """Use an observable validator through both config entry points."""
+
+        config_model = IncrementedConfiguration
+
+    register_step(IncrementedConfig)
+    config = IncrementedConfig.parse_config({"amount": 2})
     assert config.amount == 3
+    assert seen == [2]
+    seen.clear()
+    assert IncrementedConfig.normalize_config({"amount": 2}) == {"amount": 3}
     assert seen == [2]
     seen.clear()
     definition = graph({"start": {"step": "configured", "config": {"amount": 2}}}, [{"from": "start"}])
@@ -593,7 +626,7 @@ def test_dynamic_outcome_hook_retains_builtin_error_routing():
         }
     )
     assert definition.issues() == []
-    config = Dynamic.config({"amount": 1})
+    config = Dynamic.parse_config({"amount": 1})
     assert Dynamic.available_outcomes(config) == {"added": "Added", "error": "Error"}
     assert Dynamic.check(Dynamic.done(Payload(value=1), outcome="added"), config=config).outcome == "added"
     with pytest.raises(ValidationError, match="outcome"):
@@ -607,13 +640,25 @@ def test_wait_requires_aware_deadline():
     assert Wait(until=datetime(2026, 1, 1, tzinfo=timezone.utc)).kind == "wait"
 
 
-def test_resolve_step_rejects_timeouts_that_would_disable_postgresql_limit(monkeypatch):
+def test_resolve_step_rejects_timeouts_that_would_disable_postgresql_limit(register_step):
     """Resolve step rejects timeouts that would disable postgresql limit."""
-    monkeypatch.setattr(Echo, "timeout", timedelta(microseconds=1))
+
+    class SubMillisecond(Echo):
+        """Declare a timeout that PostgreSQL would truncate to zero."""
+
+        timeout = timedelta(microseconds=1)
+
+    register_step(SubMillisecond)
     with pytest.raises(ImproperlyConfigured, match="at least 1 millisecond"):
         resolve_step("echo")
-    monkeypatch.setattr(Echo, "timeout", timedelta(milliseconds=1))
-    assert resolve_step("echo") is Echo
+
+    class OneMillisecond(Echo):
+        """Declare the smallest supported statement timeout."""
+
+        timeout = timedelta(milliseconds=1)
+
+    register_step(OneMillisecond)
+    assert resolve_step("echo") is OneMillisecond
 
 
 def test_source_fallback_ignores_failed_sources():
@@ -668,7 +713,7 @@ def test_done_cannot_forge_the_builtin_error_outcome():
 def test_config_and_input_errors_keep_inherited_field_paths():
     """All typed boundaries expose Django validation errors, including nested fields."""
     for parse, value, path in (
-        (Configured.config, {"amount": "bad"}, "config.amount"),
+        (Configured.parse_config, {"amount": "bad"}, "config.amount"),
         (Configured.parse_input, {"value": "bad"}, "input.value"),
     ):
         with pytest.raises(ValidationError) as error:
@@ -681,13 +726,13 @@ def test_derived_input_schema_includes_later_binding_fields():
     definition = graph(
         {"start": {"next": {"done": "finish"}}, "finish": {"input": {"value": {"from": "input", "path": ["later"]}}}}
     )
-    validator = Draft202012Validator(definition.input_schema)
-    assert validator.is_valid({"value": 1, "later": 2})
-    assert not validator.is_valid({"value": 1})
-    assert not validator.is_valid({"value": 1, "later": "invalid"})
+    contract = validator(definition.input_schema)
+    assert contract.is_valid({"value": 1, "later": 2})
+    assert not contract.is_valid({"value": 1})
+    assert not contract.is_valid({"value": 1, "later": "invalid"})
 
 
-def test_whole_input_projection_extends_run_input_and_limits_entry_fields(monkeypatch):
+def test_whole_input_projection_extends_run_input_and_limits_entry_fields(register_step):
     """A later whole projection contributes its own fields to the run input."""
 
     class LaterPayload(BaseModel):
@@ -696,7 +741,12 @@ def test_whole_input_projection_extends_run_input_and_limits_entry_fields(monkey
         model_config = ConfigDict(extra="forbid")
         later: int
 
-    monkeypatch.setattr(TextEcho, "input_model", LaterPayload)
+    class LaterInput(TextEcho):
+        """Request the later projection through its own contract."""
+
+        input_model = LaterPayload
+
+    register_step(LaterInput)
     definition = graph(
         {
             "start": {"next": {"done": "finish"}},
@@ -723,11 +773,11 @@ def test_result_schema_describes_projection_instead_of_producer():
             }
         ],
     )
-    validator = Draft202012Validator(definition.result_schema(definition.results[0]))
-    assert validator.is_valid({"status": "finished", "copied": 4})
-    assert validator.is_valid({"status": "finished"})
-    assert not validator.is_valid({"value": 4})
-    assert not validator.is_valid({"status": "finished", "copied": "bad"})
+    contract = validator(definition.result_schema(definition.results[0]))
+    assert contract.is_valid({"status": "finished", "copied": 4})
+    assert contract.is_valid({"status": "finished"})
+    assert not contract.is_valid({"value": 4})
+    assert not contract.is_valid({"status": "finished", "copied": "bad"})
 
 
 def test_conflicting_input_consumers_are_a_publish_issue():
@@ -741,7 +791,7 @@ def test_conflicting_input_consumers_are_a_publish_issue():
     assert any(issue.code == "binding" and "incompatible" in issue.message for issue in definition.issues())
 
 
-def test_composed_schemas_keep_nested_model_references_local(monkeypatch):
+def test_composed_schemas_keep_nested_model_references_local(register_step):
     """Nested definitions stay scoped when projected into a result field."""
 
     class Nested(BaseModel):
@@ -754,7 +804,12 @@ def test_composed_schemas_keep_nested_model_references_local(monkeypatch):
 
         payload: Nested
 
-    monkeypatch.setattr(Echo, "output_model", Structured)
+    class StructuredOutput(Echo):
+        """Publish a nested result schema."""
+
+        output_model = Structured
+
+    register_step(StructuredOutput)
     definition = graph(
         {"start": {}},
         [
@@ -767,9 +822,9 @@ def test_composed_schemas_keep_nested_model_references_local(monkeypatch):
         ],
     )
     assert definition.issues() == []
-    validator = Draft202012Validator(definition.result_schema(definition.results[0]))
-    assert validator.is_valid({"copied": {"value": 3}})
-    assert not validator.is_valid({"copied": {"value": "bad"}})
+    contract = validator(definition.result_schema(definition.results[0]))
+    assert contract.is_valid({"copied": {"value": 3}})
+    assert not contract.is_valid({"copied": {"value": "bad"}})
 
 
 def test_nested_input_paths_are_derived_without_losing_target_constraints():
@@ -782,12 +837,12 @@ def test_nested_input_paths_are_derived_without_losing_target_constraints():
         "value": 1,
         "later": ["ignored", 3],
     }
-    validator = Draft202012Validator(definition.input_schema)
-    assert not validator.is_valid({"value": 1, "later": [0]})
-    assert not validator.is_valid({"value": 1, "later": [0, "invalid"]})
+    contract = validator(definition.input_schema)
+    assert not contract.is_valid({"value": 1, "later": [0]})
+    assert not contract.is_valid({"value": 1, "later": [0, "invalid"]})
 
 
-def test_closed_nested_entry_extension_is_rejected_before_publication(monkeypatch):
+def test_closed_nested_entry_extension_is_rejected_before_publication(register_step):
     """Publication must not advertise input that the entry's nested model rejects."""
 
     class Context(BaseModel):
@@ -801,7 +856,12 @@ def test_closed_nested_entry_extension_is_rejected_before_publication(monkeypatc
 
         context: Context
 
-    monkeypatch.setattr(Configured, "input_model", NestedInput)
+    class NestedEntry(Configured):
+        """Require the entry-owned nested input contract."""
+
+        input_model = NestedInput
+
+    register_step(NestedEntry)
     definition = graph(
         {
             "start": {"step": "configured", "next": {"done": "finish"}},
@@ -841,10 +901,31 @@ def test_invalid_static_outcomes_fail_at_class_declaration(outcome):
 
 
 @pytest.mark.parametrize("outcome", ["x" * 64, "Uppercase", "has space"])
-def test_invalid_dynamic_outcomes_are_publish_issues(monkeypatch, outcome):
+def test_invalid_dynamic_outcomes_are_publish_issues(register_step, outcome):
     """Config-derived names are checked even when no edge or result names them."""
-    monkeypatch.setattr(Dynamic, "outcomes_for", classmethod(lambda cls, config: {outcome: "Unusable"}))
+
+    class InvalidDynamic(Dynamic):
+        """Return an invalid name from the config hook."""
+
+        @classmethod
+        def outcomes_for(cls, config):
+            """Expose the publication-time invalid declaration."""
+            return {outcome: "Unusable"}
+
+    register_step(InvalidDynamic)
     definition = graph({"start": {"step": "dynamic"}})
+    assert any(issue.code == "outcome" and issue.node == "start" for issue in definition.issues())
+
+
+def test_inherited_outcome_hook_is_checked_at_publication(register_step):
+    """A changed declaration is checked even when the base hook returns it."""
+
+    class ChangedOutcomes(Echo):
+        """Keep the inherited hook while altering this class's declaration."""
+
+    ChangedOutcomes.outcomes["Uppercase"] = "Invalid"
+    register_step(ChangedOutcomes)
+    definition = graph({"start": {}})
     assert any(issue.code == "outcome" and issue.node == "start" for issue in definition.issues())
 
 
@@ -867,9 +948,15 @@ def test_outcomes_accept_the_shared_storage_boundary(register_step):
     assert BoundaryOutcome.done({"value": 1}, outcome=outcome).outcome == outcome
 
 
-def test_whole_null_binding_is_rejected_but_nested_null_is_preserved(monkeypatch):
+def test_whole_null_binding_is_rejected_but_nested_null_is_preserved(register_step):
     """Root input null cannot enter a nonnull JSON column; object fields may be null."""
-    monkeypatch.setattr(Echo, "input_model", None)
+
+    class UntypedInput(Echo):
+        """Permit nullable fields without a typed input model."""
+
+        input_model = None
+
+    register_step(UntypedInput)
     definition = graph({"start": {"input": {"from": "input", "path": ["optional"]}}})
     assert definition.issues() == []
     with pytest.raises(ValidationError, match="whole step input cannot be null"):
@@ -878,3 +965,180 @@ def test_whole_null_binding_is_rejected_but_nested_null_is_preserved(monkeypatch
         definition.input_for("start", {"optional": None}, [])
     assert definition.validate_input({"optional": {"value": None}}) == {"optional": {"value": None}}
     assert definition.input_for("start", {"optional": {"value": None}}, []) == {"value": None}
+
+
+@pytest.mark.parametrize("direction", ["input", "output"])
+@pytest.mark.parametrize("explicit_binding", [False, True])
+@pytest.mark.parametrize(
+    "schema_extra",
+    [
+        {"type": "unknown"},
+        {"allOf": [{"$ref": "#/$defs/missing"}]},
+        {"$defs": {"unused": {"$ref": "#/$defs/missing"}}},
+        {"allOf": [{"$ref": "https://example.invalid/schema"}]},
+    ],
+    ids=["malformed", "dangling-local-reference", "unused-local-reference", "remote-reference"],
+)
+def test_invalid_step_schema_is_a_typed_publication_issue(register_step, direction, explicit_binding, schema_extra):
+    """Bad declarations identify their node and cannot crash later binding checks."""
+
+    class InvalidPayload(BaseModel):
+        """A valid Python type whose declared JSON Schema is invalid or unsupported."""
+
+        model_config = ConfigDict(json_schema_extra=schema_extra)
+        value: int
+
+    input_type = InvalidPayload if direction == "input" else Payload
+    output_type = InvalidPayload if direction == "output" else Payload
+
+    class InvalidSchemaStep(Step[input_type, output_type, None]):
+        """Expose the invalid declaration through the normal cached schema owner."""
+
+        key = "invalid_schema"
+
+    register_step(InvalidSchemaStep)
+    finish = {"input": {"value": {"from": "start", "path": ["value"]}}} if explicit_binding else {}
+    definition = graph(
+        {"start": {"step": InvalidSchemaStep.key, "next": {"done": "finish"}}, "finish": finish},
+        [{"from": "finish", "output": {"copied": {"from": "start", "path": ["value"]}}}],
+    )
+
+    issues = definition.issues()
+
+    assert [(issue.node, issue.path, issue.code) for issue in issues] == [
+        ("start", ["nodes", "start", "step"], "schema")
+    ]
+    assert issues[0].message.startswith(f"{direction}:")
+    assert not issues[0].blocks_draft
+
+
+def test_publication_issue_concerns_keep_their_existing_order():
+    """Node diagnostics precede graph, input and result diagnostics."""
+    definition = graph(
+        {"input": {"next": {"unknown": "absent"}}, "other": {"step": "missing"}},
+        [{"from": "absent"}],
+    )
+
+    assert [issue.code for issue in definition.issues()] == [
+        "reserved_node", "outcome", "target", "unknown_step", "entry", "result",
+    ]
+
+
+def test_binding_literals_and_admission_assert_schema_formats(register_step):
+    """JSON Schema format assertions apply to literals and composed workflow inputs."""
+
+    class DatePayload(BaseModel):
+        """A string whose JSON Schema adds a date assertion."""
+
+        value: str = Field(json_schema_extra={"format": "date"})
+
+    class DateStep(Step[DatePayload, DatePayload, None]):
+        """Use the declared date contract without a Pydantic date coercion."""
+
+        key = "date_step"
+
+    register_step(DateStep)
+    literal = graph({"start": {"step": DateStep.key, "input": {"value": {"value": "not-a-date"}}}})
+    assert [(issue.code, issue.path) for issue in literal.issues()] == [
+        ("binding", ["nodes", "start", "input", "value"])
+    ]
+    bound = graph({"start": {"step": DateStep.key, "input": {"value": {"from": "input", "path": ["date"]}}}})
+    assert bound.issues() == []
+    assert bound.validate_input({"date": "2026-09-28"}) == {"date": "2026-09-28"}
+    with pytest.raises(ValidationError) as error:
+        bound.validate_input({"date": "not-a-date"})
+    assert error.value.messages == ["$.date: 'not-a-date' is not a 'date'"]
+
+
+def test_unknown_input_target_never_becomes_a_wildcard_schema():
+    """Missing structural paths remain invalid when consumers request admission schemas directly."""
+    definition = graph({"start": {"input": {"absent": {"from": "input", "path": ["value"]}}}})
+
+    assert any(issue.message == "Unknown target input field." for issue in definition.issues())
+    with pytest.raises(ValidationError, match="Unknown target input field"):
+        _ = definition.input_schema
+
+
+def test_recursive_input_requires_bindings_and_projects_its_root(register_step):
+    class RecursivePayload(BaseModel):
+        value: int
+        children: list['RecursivePayload'] = Field(default_factory=list)
+
+    class RecursiveStep(Step[RecursivePayload, RecursivePayload, None]):
+        key = 'recursive_payload'
+
+    register_step(RecursiveStep)
+    missing = graph({'start': {'step': RecursiveStep.key, 'input': {}}})
+    assert any(issue.path == ['nodes', 'start', 'input', 'value'] for issue in missing.issues())
+    projected = graph({'start': {'step': RecursiveStep.key, 'input': {'from': 'input', 'project': True}}})
+    assert projected.issues() == []
+    assert projected.input_for('start', {'value': 3, 'children': [{'value': 4}], 'extra': 1}, []) == {
+        'value': 3, 'children': [{'value': 4}],
+    }
+    assert projected.validate_input({'value': 3, 'children': [{'value': 4}]})['value'] == 3
+
+
+def test_untyped_consumer_does_not_hide_entry_schema_conflict(register_step):
+    class Untyped(Step[None, None, None]):
+        key = 'untyped_consumer'
+
+    class TextPayload(BaseModel):
+        value: str
+
+    class TextStep(Step[TextPayload, None, None]):
+        key = 'text_consumer'
+
+    register_step(Untyped)
+    register_step(TextStep)
+    definition = graph({
+        'start': {'next': {'done': 'untyped'}},
+        'untyped': {'step': Untyped.key, 'input': {'value': {'from': 'input', 'path': ['value']}},
+                    'next': {'done': 'text'}},
+        'text': {'step': TextStep.key, 'input': {'value': {'from': 'input', 'path': ['value']}}},
+    })
+    assert any('incompatible schemas' in issue.message for issue in definition.issues())
+
+
+def test_overlapping_input_paths_ignore_model_titles(register_step):
+    class FirstValue(BaseModel):
+        b: int
+
+    class SecondValue(BaseModel):
+        b: int
+
+    class EntryPayload(BaseModel):
+        a: FirstValue
+
+    class EntryStep(Step[EntryPayload, None, None]):
+        key = 'overlap_entry'
+
+    class ObjectStep(Step[SecondValue, None, None]):
+        key = 'overlap_object'
+
+    register_step(EntryStep)
+    register_step(ObjectStep)
+    definition = graph({
+        'start': {'step': EntryStep.key, 'next': {'done': 'object'}},
+        'object': {'step': ObjectStep.key, 'input': {'from': 'input', 'path': ['a']}, 'next': {'done': 'leaf'}},
+        'leaf': {'input': {'value': {'from': 'input', 'path': ['a', 'b']}}},
+    })
+    assert definition.issues() == []
+    assert definition.validate_input({'a': {'b': 3}}) == {'a': {'b': 3}}
+
+
+def test_definition_reuses_checked_validators(monkeypatch):
+    import angee.workflows.definition as owner
+
+    built = []
+    original = owner.validator
+
+    def counted(schema):
+        built.append(schema)
+        return original(schema)
+
+    monkeypatch.setattr(owner, 'validator', counted)
+    definition = graph({'start': {'input': {'value': {'value': 1}}}})
+    assert definition.issues() == definition.issues() == []
+    definition.validate_input({})
+    definition.validate_input({})
+    assert len(built) == 2

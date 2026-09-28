@@ -1,20 +1,32 @@
-"""Typed DATABASE steps composed through the framework implementation registry."""
+"""Typed workflow steps composed through the framework implementation registry."""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from functools import cache
-from types import MethodType, get_original_bases
-from typing import Annotated, Any, ClassVar, Literal, cast, get_args, get_origin
+from types import get_original_bases
+from typing import Annotated, Any, ClassVar, Literal, get_args, get_origin
 
 from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.utils import timezone
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, PydanticInvalidForJsonSchema
 
 from angee.base.impl import ImplBase, resolve_impl_class
+from angee.base.jsonschema import check_schema
+from angee.base.serialization import strip_null_bytes
 from angee.workflows.states import DONE_OUTCOME, ERROR_OUTCOME, Outcome
+
+IO_SETTLE_WINDOW = timedelta(seconds=30)
+"""Time reserved below worker limits for an IO attempt's fenced settlement."""
+
+
+def io_timeout_budget() -> timedelta:
+    """Bound IO leases by the worker lifetime, retaining the settlement reserve."""
+    worker_limit = timedelta(seconds=min(settings.CELERY_TASK_SOFT_TIME_LIMIT, settings.CELERY_TASK_TIME_LIMIT))
+    return worker_limit - IO_SETTLE_WINDOW
 
 
 class Retryable(Exception):
@@ -22,7 +34,7 @@ class Retryable(Exception):
 
 
 class Superseded(Exception):
-    """A DATABASE settlement lost its fence and must roll back its domain writes."""
+    """An attempt lost its fence; its settlement and further effects are forbidden."""
 
 
 @dataclass(frozen=True)
@@ -45,7 +57,7 @@ class RetryPolicy:
 class Settlement:
     """A body's completed, waiting or failed attempt, checked before persistence."""
 
-    kind: Literal["done", "wait", "fail"]
+    kind: Literal["done", "wait", "next_page", "fail"]
     output: Any = field(default_factory=dict)
     outcome: str = ""
     until: datetime | None = None
@@ -75,21 +87,28 @@ class Wait(Settlement):
 
 
 @dataclass(frozen=True)
+class NextPage(Settlement):
+    """A completed page whose checkpoint continues in a new attempt."""
+
+    kind: Literal["next_page"] = field(default="next_page", init=False)
+
+
+@dataclass(frozen=True)
 class Fail(Settlement):
     """An unsuccessful attempt whose body writes must roll back."""
 
     kind: Literal["fail"] = field(default="fail", init=False)
 
 
-type _WaitOrFail = Annotated[Wait | Fail, Field(discriminator="kind")]
+type _ContinuationOrFailure = Annotated[Wait | NextPage | Fail, Field(discriminator="kind")]
 
 
 class Step[I, O, C](ImplBase):
-    """A database-only step with input, output and config model parameters.
+    """A step with explicit execution mode and typed input, output and config.
 
     ``None`` input/output parameters accept arbitrary JSON. Typed values share
-    ``ImplBase``'s field-path validation errors; adapters and schemas are cached
-    by their declared type so consumers never reconstruct either contract.
+    ``ImplBase``'s cached adapters, config parsing and field-path validation
+    errors. Step schema projections are cached by their declared type.
     """
 
     input_model: ClassVar[Any] = None
@@ -98,15 +117,22 @@ class Step[I, O, C](ImplBase):
     subject: ClassVar[str | None] = None
     mode: ClassVar[str] = "DATABASE"
     timeout: ClassVar[timedelta] = timedelta(seconds=30)
-    """Per-statement limit; the 1 ms floor prevents PostgreSQL disabling its limit."""
+    """Per-statement DATABASE limit or whole-attempt IO deadline.
+
+    Changing mode without declaring timeout selects that mode's default: 30
+    seconds for DATABASE, five minutes for IO. Subclasses retain custom limits
+    while inheriting the same mode. IO deadlines must remain strictly below the
+    worker's soft and hard limits minus the 30-second settlement reserve.
+    """
     retry: ClassVar[RetryPolicy] = RetryPolicy()
+    effect_idempotent: ClassVar[bool] = False
     internal: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        cls.outcomes = cls.parse_value(
-            cls.outcomes, parser=cls._adapter(dict[Outcome, str]).validate_python, path="outcomes"
-        )
+        if "timeout" not in cls.__dict__ and cls.mode != getattr(super(cls, cls), "mode"):
+            cls.timeout = timedelta(minutes=5) if cls.mode == "IO" else Step.timeout
+        cls.outcomes = cls.parse_value(cls.outcomes, dict[Outcome, str], "outcomes")
         for base in get_original_bases(cls):
             if get_origin(base) is Step:
                 input_model, output_model, config_model = get_args(base)
@@ -116,15 +142,15 @@ class Step[I, O, C](ImplBase):
                 if cls.config_model is not None and not issubclass(cls.config_model, BaseModel):
                     raise TypeError("A step config must be a Pydantic model or None.")
 
-    @staticmethod
-    @cache
-    def _adapter(model: Any) -> TypeAdapter[Any]:
-        return TypeAdapter(model or Any)
-
     @classmethod
     @cache
     def _schema(cls, model: Any, mode: Literal["validation", "serialization"]) -> dict[str, Any]:
-        return cls._adapter(model).json_schema(mode=mode)
+        try:
+            schema = cls._adapter(model).json_schema(mode=mode)
+        except (KeyError, PydanticInvalidForJsonSchema) as error:
+            raise ValidationError(f"Cannot generate step schema: {error}") from error
+        check_schema(schema)
+        return schema
 
     @classmethod
     def input_schema(cls) -> dict[str, Any]:
@@ -142,31 +168,17 @@ class Step[I, O, C](ImplBase):
         return cls.outcomes
 
     @classmethod
-    def available_outcomes(cls, config: Any, *, validate_dynamic: bool = False) -> dict[Outcome, str]:
-        """Compose failure routing, validating overridden hooks at publication."""
+    def available_outcomes(cls, config: Any, *, validate: bool = False) -> dict[Outcome, str]:
+        """Compose failure routing, validating every hook result at publication."""
         outcomes = cls.outcomes_for(config)
-        if (
-            validate_dynamic
-            and cast(MethodType, cls.outcomes_for).__func__ is not cast(MethodType, Step.outcomes_for).__func__
-        ):
-            outcomes = cls.parse_value(
-                outcomes, parser=cls._adapter(dict[Outcome, str]).validate_python, path="outcomes"
-            )
+        if validate:
+            outcomes = cls.parse_value(outcomes, dict[Outcome, str], "outcomes")
         return {**outcomes, ERROR_OUTCOME: "Error"}
-
-    @classmethod
-    def config(cls, value: Any) -> Any:
-        """Parse config once using the inherited validation-error owner."""
-        if cls.config_model is None:
-            if value:
-                raise ValidationError({"config": f"Step {cls.key!r} does not accept configuration."})
-            return None
-        return cls.parse_value(value, parser=cls._adapter(cls.config_model).validate_python, path="config")
 
     @classmethod
     def parse_input(cls, value: Any) -> Any:
         """Parse admitted input using the inherited validation-error owner."""
-        return cls.parse_value(value, parser=cls._adapter(cls.input_model).validate_python, path="input")
+        return cls.parse_value(value, cls.input_model, "input")
 
     @classmethod
     def normalize_input(cls, value: Any) -> Any:
@@ -183,33 +195,32 @@ class Step[I, O, C](ImplBase):
         """Validate and serialize a body's settlement once, at the body boundary.
 
         Helpers construct plain values. The runner calls this inside the body's
-        savepoint and exception handler, so invalid returns fail the attempt and
-        roll back its writes. Pydantic receives the original values exactly once,
+        exception handler, and DATABASE mode's savepoint, so invalid returns fail
+        the attempt and roll back DATABASE writes. IO writes are already committed.
+        Pydantic receives the original values exactly once,
         preserving its validation aliases, validators and serialization behavior.
         """
         if isinstance(settlement, Done):
-            outcome = cls.parse_value(settlement.outcome, parser=cls._adapter(Outcome).validate_python, path="outcome")
+            outcome = cls.parse_value(settlement.outcome, Outcome, "outcome")
             if outcome == ERROR_OUTCOME or outcome not in cls.available_outcomes(config):
                 raise ValidationError(f"Step {cls.key!r} does not offer success outcome {outcome!r}.")
             adapter = cls._adapter(cls.output_model)
             parsed = cls.parse_value(
-                {} if settlement.output is None else settlement.output, parser=adapter.validate_python, path="output"
+                {} if settlement.output is None else settlement.output, cls.output_model, "output"
             )
-            return Done(output=adapter.dump_python(parsed, mode="json", by_alias=True), outcome=outcome)
-        if not isinstance(settlement, (Wait, Fail)):
-            raise ValidationError("A step must return Done, Wait or Fail.")
-        checked = cls.parse_value(
-            asdict(settlement),
-            parser=cls._adapter(_WaitOrFail).validate_python,
-            path="settlement",
-        )
-        if isinstance(checked, Wait):
+            return Done(
+                output=strip_null_bytes(adapter.dump_python(parsed, mode="json", by_alias=True)), outcome=outcome,
+            )
+        if not isinstance(settlement, (Wait, NextPage, Fail)):
+            raise ValidationError("A step must return Done, Wait, NextPage or Fail.")
+        checked = cls.parse_value(asdict(settlement), _ContinuationOrFailure, "settlement")
+        if isinstance(checked, (Wait, NextPage)):
             state = {} if checked.state is None else checked.state
-            checked = replace(checked, state=cls._adapter(Any).dump_python(state, mode="json"))
+            checked = replace(checked, state=strip_null_bytes(cls._adapter(Any).dump_python(state, mode="json")))
         return checked
 
     def run(self, ctx: Any) -> Settlement:
-        """Execute domain work under the context actor and the run transaction."""
+        """Execute under the context actor with the class's declared transaction boundary."""
         raise NotImplementedError
 
 
@@ -218,8 +229,8 @@ def resolve_step(key: str) -> type[Step[Any, Any, Any]]:
     step = resolve_impl_class("ANGEE_WORKFLOW_STEP_CLASSES", key, Step)
     if step.key != key:
         raise ImproperlyConfigured(f"Step registry key {key!r} disagrees with {step.key!r}.")
-    if step.mode != "DATABASE":
-        raise ImproperlyConfigured("Only DATABASE steps are supported.")
+    if step.mode not in {"DATABASE", "IO"}:
+        raise ImproperlyConfigured("A step mode must be DATABASE or IO.")
     if step.subject is not None:
         try:
             step.subject = apps.get_model(step.subject)._meta.label_lower
@@ -227,4 +238,8 @@ def resolve_step(key: str) -> type[Step[Any, Any, Any]]:
             raise ImproperlyConfigured(f"Unknown step subject model {step.subject!r}.") from error
     if not timedelta(milliseconds=1) <= step.timeout <= timedelta(seconds=900):
         raise ImproperlyConfigured("A step timeout must be at least 1 millisecond and at most 900 seconds.")
+    if step.mode == "IO" and step.timeout >= io_timeout_budget():
+        raise ImproperlyConfigured(
+            "An IO timeout must leave more than 30 seconds below the worker's soft and hard time limits."
+        )
     return step

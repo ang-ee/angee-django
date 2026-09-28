@@ -2,4 +2,3 @@
 name = "angee.decisions"
 description = "Human decisions with frozen forms and durable evidence"
 depends_on = ["angee.iam", "angee.graphql", "angee.jobs", "django.contrib.contenttypes"]
-dependencies = ["jsonschema[format-nongpl]>=4.26"]

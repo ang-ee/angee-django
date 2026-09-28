@@ -10,18 +10,17 @@ from graphlib import CycleError, TopologicalSorter
 from typing import Any, Literal, Protocol
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import ValidationError as PydanticValidationError
 
+from angee.base.jsonschema import embed_schema, schema_at, schemas_match, unmatched_properties, validate, validator
+from angee.base.serialization import canonical_json
 from angee.workflows.bindings import (
     ABSENT,
     InputBinding,
     SourceBinding,
     ValueBinding,
     resolve_bindings,
-    schema_at,
-    schemas_match,
 )
 from angee.workflows.states import ERROR_OUTCOME, INPUT_SOURCE, ITEM_SOURCE, NodeKey, Outcome, StepRunStatus
 from angee.workflows.steps import Step, resolve_step
@@ -165,6 +164,16 @@ class Definition(BaseModel):
 
     def issues(self, *, subject_model: str | None = None) -> list[Issue]:
         """Return publication issues; only parse/unknown-step issues block drafts."""
+        issues, offered = self._node_issues(subject_model)
+        issues.extend(self._graph_issues())
+        issues.extend(self._input_issues())
+        issues.extend(self._result_issues(offered))
+        if not issues:
+            issues.extend(self._derived_contract_issues())
+        return issues
+
+    def _node_issues(self, subject_model: str | None) -> tuple[list[Issue], dict[str, dict[str, str]]]:
+        """Check registered steps, their declarations, and authored outgoing edges."""
         issues: list[Issue] = []
         offered: dict[str, dict[str, str]] = {}
         for key, node in self.nodes.items():
@@ -196,13 +205,20 @@ class Definition(BaseModel):
                         message=f"Step requires subject model {required_subject!r}.",
                     )
                 )
+            for name, schema in (("input", step.input_schema), ("output", step.output_schema)):
+                try:
+                    schema()
+                except ValidationError as error:
+                    issues.append(
+                        Issue(node=key, path=["nodes", key, "step"], code="schema", message=f"{name}: {error}")
+                    )
             try:
-                config = step.config(node.config)
+                config = step.parse_config(node.config)
             except ValidationError as error:
                 issues.append(Issue(node=key, path=["nodes", key, "config"], code="config", message=str(error)))
                 continue
             try:
-                outcomes = step.available_outcomes(config, validate_dynamic=True)
+                outcomes = step.available_outcomes(config, validate=True)
             except ValidationError as error:
                 issues.append(Issue(node=key, path=["nodes", key, "step"], code="outcome", message=str(error)))
                 continue
@@ -236,7 +252,11 @@ class Definition(BaseModel):
                                 message=f"Unknown target {target!r}.",
                             )
                         )
-        incoming = self.predecessors
+        return issues, offered
+
+    def _graph_issues(self) -> list[Issue]:
+        """Check acyclicity, the single entry, and reachability in stable order."""
+        issues: list[Issue] = []
         try:
             tuple(TopologicalSorter(self.graph).static_order())
         except CycleError as error:
@@ -254,10 +274,16 @@ class Definition(BaseModel):
                 for key in self.nodes
                 if key not in reached
             )
+        return issues
+
+    def _input_issues(self) -> list[Issue]:
+        """Check explicit bindings and the default input supplied by incoming edges."""
+        issues: list[Issue] = []
+        incoming = self.predecessors
         for key, node in self.nodes.items():
             try:
                 target_schema = self.step(key).input_schema()
-            except ImproperlyConfigured:
+            except (ImproperlyConfigured, ValidationError):
                 continue
             if node.input is not None:
                 issues.extend(
@@ -282,7 +308,7 @@ class Definition(BaseModel):
                 for source_key, routed_outcomes in incoming[key].items():
                     try:
                         source_schema = self.step(source_key).output_schema()
-                    except ImproperlyConfigured:
+                    except (ImproperlyConfigured, ValidationError):
                         continue
                     if (
                         routed_outcomes - {ERROR_OUTCOME}
@@ -297,7 +323,7 @@ class Definition(BaseModel):
                                 message=f"Incompatible default input from {source_key!r}; bind explicitly.",
                             )
                         )
-                    if ERROR_OUTCOME in routed_outcomes and not Draft202012Validator(target_schema).is_valid({}):
+                    if ERROR_OUTCOME in routed_outcomes and not self._validator(target_schema).is_valid({}):
                         issues.append(
                             Issue(
                                 node=key,
@@ -306,6 +332,11 @@ class Definition(BaseModel):
                                 message="An error edge supplies {}; required input fields need explicit bindings.",
                             )
                         )
+        return issues
+
+    def _result_issues(self, offered: Mapping[str, dict[str, str]]) -> list[Issue]:
+        """Check producer outcomes and the permitted sources of terminal result bindings."""
+        issues: list[Issue] = []
         for index, result in enumerate(self.results):
             path: list[str | int] = ["results", index]
             if result.source not in self.nodes:
@@ -337,26 +368,28 @@ class Definition(BaseModel):
                             allowed=allowed,
                         )
                     )
-        if not issues:
-            try:
-                self.input_schema
-                for index, result in enumerate(self.results):
-                    self.result_schema(result)
-                    if isinstance(result.output, SourceBinding):
-                        for source in result.output.sources:
-                            source_schema = (
-                                self.input_schema if source == INPUT_SOURCE else self.step(source).output_schema()
-                            )
-                            if schema_at(source_schema, result.output.path, required=True) is None:
-                                issues.append(
-                                    Issue(
-                                        path=["results", index, "output"],
-                                        code="binding",
-                                        message="A whole result binding path must be required at every level.",
-                                    )
+        return issues
+
+    def _derived_contract_issues(self) -> list[Issue]:
+        """Check composed admission schemas and required whole-result paths last."""
+        issues: list[Issue] = []
+        try:
+            self.input_schema
+            for index, result in enumerate(self.results):
+                self.result_schema(result)
+                if isinstance(result.output, SourceBinding):
+                    for source in result.output.sources:
+                        source_schema = self._source_schema(source)
+                        if schema_at(source_schema, result.output.path, required=True) is None:
+                            issues.append(
+                                Issue(
+                                    path=["results", index, "output"],
+                                    code="binding",
+                                    message="A whole result binding path must be required at every level.",
                                 )
-            except ValidationError as error:
-                issues.append(Issue(code="binding", message=str(error)))
+                            )
+        except ValidationError as error:
+            issues.append(Issue(code="binding", message=str(error)))
         return issues
 
     def _binding_issues(
@@ -369,6 +402,7 @@ class Definition(BaseModel):
         allowed: set[str],
     ) -> list[Issue]:
         issues: list[Issue] = []
+        target = schema_at(target, []) or {}
         fields = self._bindings(binding)
         if not isinstance(binding, SourceBinding):
             for required in set(target.get("required", [])) - binding.keys():
@@ -382,14 +416,15 @@ class Definition(BaseModel):
                 )
         for field, value in fields.items():
             location = path if field is None else [*path, field]
-            expected = target if field is None else schema_at(target, [field])
-            if expected is None and target:
+            expected = self._field_schema(target, field)
+            if expected is None:
                 issues.append(Issue(node=node, path=location, code="binding", message="Unknown target input field."))
                 continue
             if isinstance(value, ValueBinding):
-                validator = Draft202012Validator(expected or {}, format_checker=FormatChecker())
-                for error in validator.iter_errors(value.value):
-                    issues.append(Issue(node=node, path=location, code="binding", message=error.message))
+                for error in self._validator(expected).iter_errors(value.value):
+                    issues.append(Issue(
+                        node=node, path=location, code="binding", message=f"{error.json_path}: {error.message}",
+                    ))
                 continue
             if not value.sources:
                 issues.append(Issue(node=node, path=location, code="binding", message="A source list cannot be empty."))
@@ -421,30 +456,24 @@ class Definition(BaseModel):
                         Issue(node=node, path=location, code="binding", message=f"Unknown source {source!r}.")
                     )
                     continue
+                except ValidationError:
+                    # The source node already reports its invalid schema declaration.
+                    continue
                 actual = schema_at(schema, value.path)
                 if actual is None:
                     issues.append(
                         Issue(node=node, path=location, code="binding", message="Unknown source output path.")
                     )
                 elif expected and value.project:
-                    for name in expected.get("properties", {}):
-                        source_field = schema_at(actual, [name])
-                        target_field = schema_at(expected, [name])
-                        if source_field is None and name not in expected.get("required", []):
-                            continue
-                        if (
-                            source_field is None
-                            or target_field is None
-                            or not schemas_match(source_field, target_field)
-                        ):
-                            issues.append(
-                                Issue(
-                                    node=node,
-                                    path=location,
-                                    code="binding",
-                                    message=f"Projection cannot supply field {name!r}.",
-                                )
+                    for name in unmatched_properties(actual, expected):
+                        issues.append(
+                            Issue(
+                                node=node,
+                                path=location,
+                                code="binding",
+                                message=f"Projection cannot supply field {name!r}.",
                             )
+                        )
                 elif expected and not schemas_match(actual, expected):
                     issues.append(
                         Issue(
@@ -455,6 +484,25 @@ class Definition(BaseModel):
                         )
                     )
         return issues
+
+    @cached_property
+    def _validators(self) -> dict[str, Any]:
+        return {}
+
+    def _validator(self, schema: dict[str, Any]) -> Any:
+        """Retain each checked schema validator for this immutable definition."""
+        key = canonical_json(schema)
+        if key not in self._validators:
+            self._validators[key] = validator(schema)
+        return self._validators[key]
+
+    def _source_schema(self, source: str) -> dict[str, Any]:
+        return self.input_schema if source == INPUT_SOURCE else self.step(source).output_schema()
+
+    @staticmethod
+    def _field_schema(target: dict[str, Any], field: str | None) -> dict[str, Any] | None:
+        """Whole and untyped bindings retain their contract; typed fields project it."""
+        return target if field is None or not target else schema_at(target, [field])
 
     @staticmethod
     def _bindings(binding: InputBinding | None) -> Mapping[str | None, SourceBinding | ValueBinding]:
@@ -480,9 +528,13 @@ class Definition(BaseModel):
     def unrouted_failure(self, rows: Iterable[StepRow]) -> bool:
         """Whether a failed node has no declared route for its built-in failure."""
         return any(
-            row.status == StepRunStatus.FAILED and ERROR_OUTCOME not in self.nodes[row.node_key].next
+            row.status == StepRunStatus.FAILED and self.retry_allowed(row.node_key)
             for row in rows
         )
+
+    def retry_allowed(self, key: str) -> bool:
+        """In-place recovery must not replay a failure already routed through error."""
+        return ERROR_OUTCOME not in self.nodes[key].next
 
     def ready_nodes(self, rows: Iterable[StepRow]) -> list[PlannedNode]:
         """Plan missing rows once all sources settle, propagating skips in one pass.
@@ -552,33 +604,11 @@ class Definition(BaseModel):
         for key, node in self.nodes.items():
             for field, binding in self._bindings(node.input).items():
                 if isinstance(binding, SourceBinding) and INPUT_SOURCE in binding.sources:
-                    target = self.step(key).input_schema()
-                    expected = target if field is None else schema_at(target, [field]) or {}
+                    target = schema_at(self.step(key).input_schema(), []) or {}
+                    expected = self._field_schema(target, field)
+                    if expected is None:
+                        raise ValidationError("Unknown target input field.")
                     yield binding, expected, field is None or field in target.get("required", [])
-
-    @staticmethod
-    def _embed_schema(schema: dict[str, Any], definitions: dict[str, Any]) -> dict[str, Any]:
-        """Keep each Pydantic schema's local pointers valid inside a composition."""
-        name = f"binding_{len(definitions)}"
-        while name in definitions:
-            name += "_"
-        prefix = f"#/$defs/{name}"
-
-        def relocate(value: Any) -> Any:
-            if isinstance(value, list):
-                return [relocate(item) for item in value]
-            if not isinstance(value, dict):
-                return value
-            result = {key: relocate(item) for key, item in value.items()}
-            if "$ref" in result:
-                reference = result["$ref"]
-                if reference != "#" and not reference.startswith("#/"):
-                    raise ValidationError("Composed schemas require root-local JSON Pointer references.")
-                result["$ref"] = prefix + reference[1:]
-            return result
-
-        definitions[name] = relocate(schema)
-        return {"$ref": prefix}
 
     @cached_property
     def input_schema(self) -> dict[str, Any]:
@@ -589,50 +619,19 @@ class Definition(BaseModel):
         schema implication is deliberately outside the binding contract.
         """
         entry = self.nodes[self.entry]
-        schema = copy.deepcopy(self.step(self.entry).input_schema()) if entry.input is None else {}
+        schema = schema_at(self.step(self.entry).input_schema(), []) or {} if entry.input is None else {}
         definitions = schema.setdefault("$defs", {})
         seen: dict[tuple[str | int, ...], dict[str, Any]] = {}
         for binding, expected, required in self._input_bindings():
             path = tuple(binding.path)
-            for index in range(1, len(path)):
-                parent = schema_at(schema, list(path[:index]))
-                if (
-                    parent
-                    and parent.get("additionalProperties") is False
-                    and isinstance(path[index], str)
-                    and path[index] not in parent.get("properties", {})
-                ):
-                    raise ValidationError("Workflow input cannot extend a closed nested entry field.")
-            known = seen.get(path) or schema_at(schema, list(path))
+            known = seen.get(path) or schema_at(schema, path)
             if known and expected and not schemas_match(known, expected) and not binding.project:
                 raise ValidationError("Workflow input consumers declare incompatible schemas for the same path.")
-            seen[path] = expected
+            seen[path] = expected or known or {}
             expected = copy.deepcopy(expected)
             if binding.project:
                 expected.pop("additionalProperties", None)
-            constraint = self._embed_schema(expected, definitions)
-            for part in reversed(binding.path):
-                if isinstance(part, str):
-                    constraint = {
-                        "type": "object",
-                        "properties": {part: constraint},
-                        **({"required": [part]} if required else {}),
-                    }
-                else:
-                    constraint = {
-                        "type": "array",
-                        "prefixItems": [{} for _ in range(part)] + [constraint],
-                        **({"minItems": part + 1} if required else {}),
-                    }
-            schema.setdefault("allOf", []).append(constraint)
-            if schema.get("type") == "object":
-                additions = [binding.path[0]] if binding.path else expected.get("properties", {})
-                for name in additions:
-                    if isinstance(name, str):
-                        contribution = constraint.get("properties", {}).get(name)
-                        if contribution is None:
-                            contribution = self._embed_schema(schema_at(expected, [name]) or {}, definitions)
-                        schema.setdefault("properties", {}).setdefault(name, contribution)
+            embed_schema(expected, definitions, path=binding.path, required=required, into=schema)
         if not definitions:
             schema.pop("$defs")
         return schema
@@ -643,9 +642,7 @@ class Definition(BaseModel):
         normalized = step.normalize_input(self.input_for(self.entry, value, []))
         if self.nodes[self.entry].input is None:
             value = {**value, **normalized} if isinstance(value, dict) and isinstance(normalized, dict) else normalized
-        errors = list(Draft202012Validator(self.input_schema, format_checker=FormatChecker()).iter_errors(value))
-        if errors:
-            raise ValidationError([error.message for error in errors])
+        validate(self._validator(self.input_schema), value)
         return value
 
     def _entry_input(self, value: Any, step: type[Step[Any, Any, Any]]) -> Any:
@@ -653,10 +650,10 @@ class Definition(BaseModel):
             return value
         if step.input_model is None:
             return value
-        properties = step.input_schema().get("properties", {})
+        properties = (schema_at(step.input_schema(), []) or {}).get("properties", {})
         additional: set[str | int] = set()
         for binding, expected, _required in self._input_bindings():
-            additional.update(binding.path[:1] or expected.get("properties", {}))
+            additional.update(binding.path[:1] or (schema_at(expected, []) or {}).get("properties", {}))
         return {key: item for key, item in value.items() if key not in additional or key in properties}
 
     def result_schema(self, result: ResultBinding) -> dict[str, Any]:
@@ -674,15 +671,11 @@ class Definition(BaseModel):
             else:
                 choices = []
                 for source in binding.sources:
-                    source_schema = (
-                        self.input_schema
-                        if source == INPUT_SOURCE
-                        else self.step(source).output_schema()
-                    )
+                    source_schema = self._source_schema(source)
                     source_value = schema_at(source_schema, binding.path)
                     if source_value is None:
                         raise ValidationError("Unknown result output path.")
-                    choices.append(self._embed_schema(source_value, definitions))
+                    choices.append(embed_schema(source_value, definitions))
                 actual = choices[0] if len(choices) == 1 else {"anyOf": choices}
             if field is None:
                 return {**actual, "$defs": definitions}

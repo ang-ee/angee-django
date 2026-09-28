@@ -74,6 +74,7 @@ class WaitingKind(models.TextChoices):
     """Implemented durable wait kinds."""
 
     TIME = "time", "Time"
+    OPERATOR = "operator", "Operator"
 
 
 class AttemptResult(models.TextChoices):

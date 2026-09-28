@@ -360,6 +360,14 @@ Use these owners instead of maintaining another contract in an addon:
   otherwise be empty registers a noop/null-object default (storage's `local`;
   integrate's `none` VCS client), so a composition always has one selectable
   impl and the enum is never empty.
+- **Rowless implementation catalogues compose the same registry owner.**
+  [`angee.base.impl`](../../angee/base/impl.py) owns registry checks, choice
+  metadata and native enum projection for fields and settings-selected uses.
+  Empty catalogues may pass checks and return no choices; projecting an enum
+  requires entries. Register an addon's checks through Django's native check
+  lifecycle and keep its selected-key policy with that addon. GraphQL adapters
+  live in [`angee.graphql.impl`](../../addons/angee/graphql/impl.py); callers
+  retain authorization policy.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.
 - GraphQL authoring is native Strawberry. Addons expose a `schemas` mapping in
@@ -373,6 +381,8 @@ Use these owners instead of maintaining another contract in an addon:
   source); the runtime class is the post-composition source of truth for fields,
   relations, and choices. A registry-backed enum (`ImplClassField`) is read off the
   runtime field, so the GraphQL enum already reflects every addon's contributions.
+  The native enum and choice projections belong to `angee.base.impl`; callers
+  without a model column use that owner after settings composition.
 - **Extension is symmetric across five axes — extend, never edit the owner — and
   the schema is built after the runtime is composed, so all five apply
   post-composition with the dependency staying one-way (downstream reaches up; the
@@ -435,6 +445,10 @@ data through REBAC, never a queryset bypass.
   define private share mutations. Metadata projects the grant surface and the
   subject resource's public identity field; the API converts selected public
   subjects to canonical PK references before validating and writing grants.
+- **Raise through the model's access owner.** `require_access(permission, actor=None)`
+  delegates to native REBAC checks. An explicit actor stays bound to the instance;
+  omitting it preserves native instance and ambient scope precedence. Verbs resolve
+  attribution separately when they need to record a requesting actor.
 - **Recipient discovery follows identity read policy.** IAM's user resource
   includes readable people and service users; human-only membership pickers
   use its people collection. IAM owns the group model and declares its native
@@ -582,17 +596,16 @@ data through REBAC, never a queryset bypass.
   it fails live ("loaded N rows outside actor scope") while passing unit tests.
   Resolve the field elevated by FK id under `system_context`, and verify by
   rendering the live page, not just the test.
-- The relationship store has two storage modes: composed projects run the
-  FK-backed `registry` mode (`angee.base` autoconfig) while bare
-  `tests/settings.py` runs the library's `denormalized` default — a
-  registry-only break therefore passes unit tests and fails live. Since
+- The relationship store has two storage modes: composed projects and bare
+  `tests/settings.py` both use the FK-backed `registry` mode contributed by
+  `angee.base` autoconfig. Since
   django-zed-rebac 0.14 the registry queryset storage-translates the whole read
   API — `filter`/`exclude`/`get` kwargs, `Q` objects, and
   `values`/`values_list`/`order_by`/`annotate` field names — so query with the
   natural denormalized names; instance attributes (`row.subject_id`) are
   portable too (the registry manager eager-joins them). Any read shape beyond
-  that API must be verified in both modes — regression-test permission-hub
-  surfaces under `override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")`.
+  that API must be verified in both modes by parametrizing
+  `REBAC_LOCAL_BACKEND_STORAGE` over `registry` and `denormalized`.
 - Derive operator/edge token scope from `<ns>/role:<id>#effective_member` (folds
   in role-hierarchy `includes`), never `roles_of`/`roleRefs` (a direct-grants UX
   hint that under-grants).
@@ -631,7 +644,8 @@ and current contracts before applying a historical example to a new deployment.
 - **Django owns static test-table lifecycle.** Register concrete models before
   database setup in installed, unmigrated apps, and use pytest-django's native
   setup and transactional flush. Share source compositions through the owning
-  [`workflows`](../../addons/angee/workflows/testing/__init__.py) and
+  [`resources`](../../addons/angee/resources/testing/__init__.py),
+  [`workflows`](../../addons/angee/workflows/testing/__init__.py), and
   [`integrate`](../../addons/angee/integrate/testing/__init__.py) test apps.
   Framework probes declared after setup, in isolated registries, unmanaged, or
   under uninstalled or migrated
@@ -888,6 +902,10 @@ and current contracts before applying a historical example to a new deployment.
   the complete ordered domain lock set; it must not consume groups or write rows.
   `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
   through the same native instance loader; preflights compose this public owner.
+  `Resource.objects.load_xref` imports one declared dotted xref through that
+  pipeline, preserving widgets, the demo-tier guard, and caller authorization
+  before updating existing targets and on unchanged replays. It does not import
+  other rows or prerequisite targets.
   Source omission and explicit null must remain
   distinguishable through dataset normalization.
 - **A resource yaml loads only when listed** in the addon's `addon.toml`
@@ -943,9 +961,9 @@ and current contracts before applying a historical example to a new deployment.
 - **An `ImplClassField` builds its enum at model-import time from its
   `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
   is supplied by the owning addon's `autoconfig`, so every settings module that
-  installs the addon must carry a **non-empty** mapping, including a bare module
-  that skips the composer (`tests/settings.py` declares storage, VCS, inference,
-  and OAuth provider registries explicitly). An empty
+  installs the addon must carry a **non-empty** mapping. Bare settings modules
+  call [`AutoConfig.apply_installed()`](../../angee/compose/autoconfig.py) before
+  Django loads models, then add only their fixture implementations. An empty
   registry raises `ImproperlyConfigured` at import — give the addon a
   noop/null-object default so the set is never empty. The column stores the key
   (`local`), never a dotted path. The one bounded exception is a deconstructed
@@ -960,8 +978,17 @@ and current contracts before applying a historical example to a new deployment.
   [`ImplBase.config_defaults()`](../../angee/base/impl.py) reads static input
   suggestions from Pydantic's validation JSON Schema independently of FormSpec
   support; forms project the same declaration downstream. Dynamic factories
-  resolve through `normalize_config()`
-  during runtime validation, keeping generated choice metadata deterministic.
+  resolve through `parse_config()` at runtime; `normalize_config()` serializes
+  that parsed model with its wire aliases. Typed implementation values share
+  `ImplBase`'s cached native adapter and Django field-path errors. Explicit
+  config parsing rejects non-empty values without a model; model-row validation
+  still leaves undeclared legacy config alone. Generated choice metadata stays
+  deterministic.
+- **JSON Schema policy belongs to the shared base owner.**
+  [`angee.base.jsonschema`](../../angee/base/jsonschema.py) checks declarations
+  and local references before value validation, asserts supported formats, and
+  translates errors for Django callers. Compose its bounded schema algebra;
+  keep graph and binding policy in the workflow definition.
 - **Actor-scoped scalar subqueries and keyset cursors belong to `angee/base`.**
   The `Coalesce(Subquery(related.with_actor().scoped().filter(pk=OuterRef).values(v)[:1]), "")`
   shape and the signed `(order_at, pk)` cursor pager are framework primitives;
@@ -1323,9 +1350,12 @@ validated at the driver boundary.
   conditional draft saves and numbered publication.
 - **A `Step` declares typed input, output and config.** Register its key through
   `ANGEE_WORKFLOW_STEP_CLASSES`. Its `run` method receives a `StepContext` and
-  returns a settlement: `Done`, `Wait` or `Fail`. The context supplies the admitted
+  returns a settlement. The context supplies the admitted
   actor, input, checkpoint and attempt identity. Database steps execute inside
-  the run's transaction; keep external I/O out of their bodies.
+  the run's transaction; keep external I/O out of their bodies. IO bodies run
+  after the claim commits, outside every transaction. Helpers construct plain
+  settlements; `Step.check` validates and serializes once at the body boundary.
+  A failed IO attempt cannot roll back writes already committed by its body.
 - **`WorkflowRunQuerySet.hold` owns the run lock and transaction.** It registers
   ready-row dispatch on successful commit. `advance` requires that lock and
   composes `Definition` with the persistence owners. It isolates settlement,
@@ -1335,7 +1365,19 @@ validated at the driver boundary.
   owns `claim`, `settle`, `to_waiting`, `to_ready`, `cancel_open`, `dispatch` and
   `count_redispatch`; `StepAttemptQuerySet.close` owns attempt closure.
   Conditional updates check the attempt fence. The periodic tick rechecks due
-  waits and stale deliveries under `hold`, then delegates to those verbs.
+  waits, expired claims and stale deliveries under `hold`, then delegates to
+  those verbs. The effect marker and heartbeat check the same attempt fence
+  under the step lock used by the reaper. Uncertain non-idempotent effects wait
+  for explicit operator acknowledgement; dispatch exhaustion also waits for an
+  operator and never enters domain error routing.
+- **Recovery and evidence stay with execution owners.** Operator actions call
+  the run and step managers; GraphQL exposes execution resources as read-only.
+  Failure preserves unfinished siblings; terminal runs suppress delivery and
+  tick recovery. An already-running IO sibling retains its result without
+  planning, and retry replans from all retained rows.
+  Reprocessing records its predecessor and uses the requesting actor on the
+  current publication. Artifacts reference actor-readable records without
+  granting access to them. Paging carries the checkpoint into a fresh claim.
 - **Conditional queryset updates send no model signals.** Workflow owners
   explicitly call `publish_change` after their writes. Dispatch locks ready
   rows with `skip_locked` and uses `enqueue_task` to send after commit; callers

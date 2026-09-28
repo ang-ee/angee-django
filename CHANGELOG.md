@@ -11,6 +11,37 @@ live in code docstrings.
 
 ## Unreleased — workflow and integration upgrades
 
+- Workflow IO steps commit claims before their bodies, fence results, reap
+  deadlines and retain effect markers. Operator actions recover failed or
+  stalled work with explicit duplicate acknowledgement when required. Add
+  checkpoint paging, artifact references and reprocess provenance, plus native
+  read-only GraphQL execution resources. Cancel bounds its lock wait.
+  Failed runs preserve unfinished siblings; retry replans their joins from
+  retained rows, including IO results received after the failure.
+  Delete the frozen workflow migration compatibility modules and default
+  callable under the authorized history reset.
+- Project settings composition publishes only after success. App-config
+  discovery no longer evaluates money settings prematurely, preserving the
+  original dependency error during Django startup.
+- `AngeeModel.require_access(permission, actor)` resolves the explicit requester,
+  then ambient requester, then the instance's pinned actor, and returns the
+  authorized actor. Missing actors fail closed outside system scope.
+  `_require_record_access` remains a temporary alias for downstream callers;
+  remove it after those callers migrate. Workflow starters can read identities
+  and versions and operate their own runs; monitoring other runs and reading
+  unpublished drafts requires workflow monitoring access. Engine rows remain
+  admin-write only; synchronize workflows REBAC schema revision 13.
+- `RecordRefMixin` uses the model's single native generic foreign key;
+  `record_ref_field_prefix` is removed and rejected by Django system checks.
+  `ImplBase.parse_value(value, type_, path)` owns typed error paths;
+  `parse_config` returns the model and `normalize_config` serializes it.
+  Step callers use `parse_config` directly.
+- `AutoConfig.apply_installed` composes installed app declarations for bare
+  hosts, with environment selection at the owner. Resource managers expose
+  `load_xref` for one declared row through the native import pipeline.
+  Workers default to `CELERY_WORKER_PREFETCH_MULTIPLIER=1`.
+  The operator GraphQL endpoint keeps its same-origin `/operator/graphql`
+  default; explicitly configuring `None` enables daemon URL derivation.
 - Rebuild the workflows engine around immutable published definitions,
   actor-scoped runs, database steps and durable attempts. Remove the workflows
   web fragment and the five satellite addons `workflows_agents`,
@@ -72,9 +103,9 @@ live in code docstrings.
   suite-local driver forwarding imports are removed.
 - Workflow definition validation asserts JSON Schema formats for inputs and
   binding literals.
-- Declare core `jsonschema` and `referencing` dependencies. The workflows
-  addon manifest retains `format-nongpl` extras to assert `date-time`,
-  `uri`, `hostname`, and `duration` as well.
+- Declare core `jsonschema[format-nongpl]` and `referencing` dependencies.
+  `angee.base.jsonschema` owns declaration checks, local-reference proof,
+  format validation and bounded schema algebra for core and addon callers.
 - Row-lock callers consistently use `lock_if_supported`, which delegates write
   routing and backend support to Django.
 - Slack rate-limit retries use the SDK's shared attempt budget, explicit polling

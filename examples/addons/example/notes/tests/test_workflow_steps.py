@@ -18,13 +18,20 @@ from rebac.roles import grant as grant_role
 
 from angee.jobs.enqueue import celery_app
 from angee.workflows.states import RunStatus, StepRunStatus
-from angee.workflows.testing.drivers import load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import load_workflow, register_steps, run_until, start_run
 from example.notes.steps import NotePublicationOutput, PublishNote, ValidateNotePublication
 
 Note = apps.get_model("notes", "Note")
 StepRun = apps.get_model("workflows", "StepRun")
 Resource = apps.get_model("resources", "Resource")
 User = get_user_model()
+
+
+class ClassLabelNotePublication(ValidateNotePublication):
+    """Contribute a class-form subject label through the normal step registry."""
+
+    key = "test_note_subject_label"
+    subject = "notes.Note"
 
 
 class NoteWorkflowStepTests(TransactionTestCase):
@@ -42,7 +49,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.other = User.objects.create_user(username="note-other")
             self.admin = User.objects.create_user(username="note-admin")
             grant_role(actor=self.admin, role="angee/role:admin")
-        self.workflow = load_workflow("example.notes:note_publish", actor=self.admin)
+        self.workflow = load_workflow("example.notes.note_publish", actor=self.admin, allow_non_dev=True)
         self.workflow.with_actor(self.admin).grant_record_access("starter", self.owner)
 
     def note(self, **kwargs):
@@ -99,12 +106,12 @@ class NoteWorkflowStepTests(TransactionTestCase):
     def test_step_subject_model_label_is_canonicalized_for_publication(self) -> None:
         """A step's Django class label agrees with the canonical workflow subject."""
 
-        with patch.object(ValidateNotePublication, "subject", "notes.Note"):
+        with register_steps(ClassLabelNotePublication):
             workflow = type(self.workflow).objects.install_definition(
                 key="canonical-note-subject",
                 name="Canonical note subject",
                 subject_model="notes.note",
-                draft={"nodes": {"validate": {"step": ValidateNotePublication.key}}},
+                draft={"nodes": {"validate": {"step": ClassLabelNotePublication.key}}},
                 actor=self.admin,
             )
             self.assertIsNotNone(workflow.published_id)

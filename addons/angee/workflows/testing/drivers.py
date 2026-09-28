@@ -2,54 +2,63 @@
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import patch
 
 from django.apps import apps
+from django.conf import settings
+from django.test import override_settings
 from rebac import system_context
 
-from angee.resources.entries import ROW_KIND, ResourceEntry, resource_manifest_for
 from angee.workflows.states import StepRunStatus
+from angee.workflows.steps import Step
+
+
+@contextmanager
+def register_steps(*steps: type[Step[Any, Any, Any]]) -> Iterator[None]:
+    """Register temporary classes, restoring settings and module names on exit.
+
+    Function-local classes use the same import-path registry as production
+    classes. Native Django settings overrides and mock patches isolate each
+    test, including nested registrations in pytest and TransactionTestCase.
+    """
+
+    with ExitStack() as stack:
+        registry = dict(settings.ANGEE_WORKFLOW_STEP_CLASSES)
+        for step in steps:
+            stack.enter_context(patch.object(sys.modules[step.__module__], step.__name__, step, create=True))
+            registry[step.key] = f"{step.__module__}.{step.__name__}"
+        stack.enter_context(override_settings(ANGEE_WORKFLOW_STEP_CLASSES=registry))
+        yield
 
 
 def load_workflow(
-    document_or_addon_key: dict[str, Any] | str,
+    document_or_xref: dict[str, Any] | str,
     *,
     key: str = "test-workflow",
     actor: Any = None,
     name: str = "",
     publish: bool = True,
     subject_model: str = "",
+    allow_non_dev: bool = False,
 ) -> Any:
-    """Install a document or ``addon.name:resource_xref`` with production validation.
+    """Install a document or canonical ``addon.name.xref`` resource declaration.
 
-    Resource keys read the declared workflow row with the resources addon's
-    parser. Installation still belongs to ``WorkflowManager.install_definition``;
-    tests of the import ledger should use ``Resource.objects.load_addons``.
+    Resource rows retain their authored fields, including publication intent,
+    through the native resource adapter and ledger. ``allow_non_dev`` passes
+    through the resource owner's explicit override of the demo-tier guard.
     """
 
     model = apps.get_model("workflows", "Workflow")
-    if isinstance(document_or_addon_key, str):
-        addon_name, separator, xref = document_or_addon_key.partition(":")
-        if not separator or not xref:
-            raise ValueError("A workflow resource key must be 'addon.name:resource_xref'.")
-        addon = next((config for config in apps.get_app_configs() if config.name == addon_name), None)
-        if addon is None:
-            raise LookupError(f"Addon {addon_name!r} is not installed.")
-        for tier, declarations in sorted(resource_manifest_for(addon).items()):
-            for declaration in declarations:
-                entry = ResourceEntry.from_declaration(addon, tier, declaration)
-                if entry.kind != ROW_KIND:
-                    continue
-                for group in entry.read_groups():
-                    if group.model != model:
-                        continue
-                    for row in group.dataset.dict:
-                        if row.pop("_xref") == xref:
-                            return model.objects.install_definition(**row, actor=actor)
-        raise LookupError(f"Workflow resource {document_or_addon_key!r} was not found.")
+    if isinstance(document_or_xref, str):
+        ledger = apps.get_model("resources", "Resource")
+        return ledger.objects.load_xref(document_or_xref, model=model, actor=actor, allow_non_dev=allow_non_dev)
     return model.objects.install_definition(
-        key=key, name=name or key, draft=document_or_addon_key,
+        key=key, name=name or key, draft=document_or_xref,
         publish=publish, subject_model=subject_model, actor=actor,
     )
 

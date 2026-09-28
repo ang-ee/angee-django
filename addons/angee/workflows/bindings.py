@@ -1,4 +1,4 @@
-"""Pure input/result bindings and conservative schema compatibility checks."""
+"""Pure input/result bindings for workflow data flow."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt, StrictStr
 
-from angee.base.jsonschema import LocalSchemaReferences
+from angee.base.jsonschema import schema_at
 from angee.workflows.states import INPUT_SOURCE
 
 ABSENT = object()
@@ -52,7 +52,8 @@ class SourceBinding(BaseModel):
             else:
                 return ABSENT
         if self.project and isinstance(value, dict) and target_schema is not None:
-            value = {name: item for name, item in value.items() if name in target_schema.get("properties", {})}
+            shape = schema_at(dict(target_schema), []) or {}
+            value = {name: item for name, item in value.items() if name in shape.get("properties", {})}
         return copy.deepcopy(value) if value is not ABSENT else ABSENT
 
 
@@ -83,78 +84,3 @@ def resolve_bindings(
         return binding.resolve(run_input, outputs, target_schema=target_schema)
     resolved = {key: value.resolve(run_input, outputs) for key, value in binding.items()}
     return {key: value for key, value in resolved.items() if value is not ABSENT}
-
-
-def schema_at(
-    schema: dict[str, Any], path: list[str | int], *, required: bool = False
-) -> dict[str, Any] | None:
-    """Follow a Pydantic object/list path, optionally proving each part exists.
-
-    A composed ``allOf`` constraint may prove a required path independently;
-    unproven paths are rejected without attempting general schema implication.
-    """
-    references = LocalSchemaReferences(schema)
-    current: Any = schema
-    for index in range(len(path) + 1):
-        visited: set[str] = set()
-        while "$ref" in current:
-            reference = current["$ref"]
-            if reference in visited:
-                return None
-            visited.add(reference)
-            current = references.resolve(reference)
-            if not isinstance(current, dict):
-                return None
-        if index == len(path):
-            return {**current, "$defs": schema.get("$defs", {})}
-        part = path[index]
-        if required and not (
-            part in current.get("required", [])
-            if isinstance(part, str)
-            else part < current.get("minItems", 0)
-        ):
-            for constraint in current.get("allOf", []):
-                actual = schema_at(
-                    {**constraint, "$defs": schema.get("$defs", {})}, path[index:], required=True
-                )
-                if actual is not None:
-                    return actual
-            return None
-        if isinstance(part, str):
-            current = current.get("properties", {}).get(part)
-        else:
-            positional = current.get("prefixItems", [])
-            current = positional[part] if part < len(positional) else current.get("items")
-        if not isinstance(current, dict):
-            return None
-    return None
-
-
-def schemas_match(source: dict[str, Any], target: dict[str, Any]) -> bool:
-    """Prove equality of contracts, ignoring presentation/default annotations.
-
-    This deliberately makes no claim to general JSON Schema entailment. More
-    permissive assignments need an explicit projection or matching declarations.
-    """
-    ignored = {"title", "description", "default", "examples", "$defs"}
-
-    def normalize(value: Any, references: LocalSchemaReferences, active: frozenset[str]) -> Any:
-        if isinstance(value, list):
-            return [normalize(item, references, active) for item in value]
-        if not isinstance(value, dict):
-            return value
-        if "$ref" in value:
-            reference = value["$ref"]
-            if reference in active:
-                return {"$ref": reference}
-            value = references.resolve(reference)
-            if value is None:
-                return {"$ref": reference}
-            return normalize(value, references, active | {reference})
-        return {key: normalize(item, references, active) for key, item in value.items() if key not in ignored}
-
-    return normalize(source, LocalSchemaReferences(source), frozenset()) == normalize(
-        target,
-        LocalSchemaReferences(target),
-        frozenset(),
-    )

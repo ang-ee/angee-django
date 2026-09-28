@@ -46,7 +46,8 @@ boundaries and optional state-field declarations. See the
 [Database routing rule](backend/guidelines.md#rules) for persistence checks.
 
 The PostgreSQL lane in [reusable checks](../.github/workflows/reusable-checks.yml)
-covers workflow definition, publication, execution, authorization, concurrency,
+covers workflow definition, publication, execution,
+[settlement recovery](../tests/test_workflows_fix_round.py), authorization, concurrency,
 test-harness and composed-consumer contracts, plus decision
 [lifecycle](../tests/test_decisions_lifecycle.py) and
 [concurrency](../tests/test_decisions_concurrency.py). This named file selection
@@ -67,6 +68,7 @@ host fixtures must use process-local connections or pytest's worker-local
 ### Source-addon Test Models
 
 Share source-addon compositions through their owning test apps:
+[`angee.resources.testing`](../addons/angee/resources/testing/__init__.py),
 [`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py),
 [`angee.decisions.testing`](../addons/angee/decisions/testing/__init__.py), and
 [`angee.integrate.testing`](../addons/angee/integrate/testing/__init__.py). Their

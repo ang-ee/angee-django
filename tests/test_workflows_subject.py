@@ -13,26 +13,30 @@ from tests.conftest import create_user
 from tests.mtidemo.models import MtiChild
 from tests.workflow_steps import Echo, document
 
+pytestmark = pytest.mark.usefixtures("workflow_step_classes")
+
 
 @pytest.mark.django_db(transaction=True)
-def test_context_preserves_concrete_mti_subject(execution, monkeypatch):
+def test_context_preserves_concrete_mti_subject(execution, register_step):
     """A child subject retains its fields through scoped reads and locked writes."""
 
     actor, _ = execution
     with system_context(reason="test.workflow_mti_subject"):
         subject = MtiChild.objects.create(title="Parent identity", detail="Child state")
-    monkeypatch.setattr(Echo, "subject", MtiChild._meta.label_lower)
 
-    def update_subject(self, ctx):
-        assert isinstance(ctx.subject, MtiChild)
-        assert ctx.subject.detail == "Child state"
-        locked = ctx.subject_for_update()
-        assert isinstance(locked, MtiChild)
-        locked.detail = "Updated child state"
-        locked.save(update_fields=("detail",))
-        return ctx.done(ctx.input)
+    class SubjectWriter(Echo):
+        subject = MtiChild._meta.label_lower
 
-    monkeypatch.setattr(Echo, "run", update_subject)
+        def run(self, ctx):
+            assert isinstance(ctx.subject, MtiChild)
+            assert ctx.subject.detail == "Child state"
+            locked = ctx.subject_for_update()
+            assert isinstance(locked, MtiChild)
+            locked.detail = "Updated child state"
+            locked.save(update_fields=("detail",))
+            return ctx.done(ctx.input)
+
+    register_step(SubjectWriter)
     workflow = Workflow.objects.install_definition(
         key="concrete_subject",
         name="Concrete subject",

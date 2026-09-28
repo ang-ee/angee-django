@@ -14,8 +14,14 @@ settings and serving code must not depend on this test support.
 Pytest suites opt into ``angee.workflows.testing.fixtures`` alongside
 ``angee.testing.fixtures``. ``execution`` captures task sends and supplies an
 acting administrator; ``register_step`` contributes a class through the existing
-registry. Bind ``run_factory(workflow, actor=...)`` and use ``.at(node, status=...)``
+registry through the ``register_steps`` context manager in ``testing.drivers``,
+also available to ``TransactionTestCase``. Bind ``run_factory(workflow, actor=...)``
+and use ``.at(node, status=...)``
 to reach a node with production execution. ``load_workflow`` accepts a document
-or ``addon.name:resource_xref``; ``start_run`` and ``run_until`` also work with
+or canonical ``addon.name.xref`` through the native resource adapter. Xref
+loading needs a concrete resource ledger; source suites install
+``angee.resources.testing``. The resource row owns publication intent, and the
+normal demo-tier guard applies unless ``allow_non_dev=True`` is explicit.
+``start_run`` and ``run_until`` also work with
 Django's native ``TransactionTestCase``.
 """

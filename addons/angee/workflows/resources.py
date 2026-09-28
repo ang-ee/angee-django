@@ -30,6 +30,7 @@ class WorkflowDefinitionResource(AngeeResource):
             publish=(
                 self.fields["publish"].clean(row) if "publish" in row else self.fields["publish"].default
             ),
+            actor=kwargs.get("actor"),
         )
         for field in instance._meta.concrete_fields:
             setattr(instance, field.attname, getattr(installed, field.attname))

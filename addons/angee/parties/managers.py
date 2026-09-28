@@ -553,7 +553,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         durable anti-link unchanged; confirmation remains the explicit human action.
         """
 
-        party.with_actor(actor)._require_record_access("write")
+        party.require_access("write", actor)
         handle_model = apps.get_model("parties", "Handle")
         allowed_platforms = {
             str(handle_model.Platform.EMAIL),
@@ -611,8 +611,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
                 handle_ids=(handle.pk,),
             )
             handle = handles[handle.pk]
-            locked_party = parties[party.pk].with_actor(actor)
-            locked_party._require_record_access("write")
+            locked_party = parties[party.pk]
+            locked_party.require_access("write", actor)
             if not handle.with_actor(actor).has_access("read"):
                 raise PermissionDenied("Denied: cannot add this contact point.")
             if normalized_label and not handle.label and handle.has_access("write"):
@@ -649,7 +649,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
 
         if actor is None:
             raise PermissionDenied("an actor is required to assess a party-handle association")
-        handle.with_actor(actor)._require_record_access("read")
+        handle.require_access("read", actor)
         with system_context(reason="parties.party_handle.has_confirmed_association"):
             return self.filter(
                 handle_id=handle.pk,
@@ -662,8 +662,8 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
 
         if actor is None:
             raise PermissionDenied("an actor is required to assess a party-handle association")
-        party.with_actor(actor)._require_record_access("read")
-        handle.with_actor(actor)._require_record_access("read")
+        party.require_access("read", actor)
+        handle.require_access("read", actor)
         visible = read_scoped_queryset(self.model, actor)
         readable = (
             tuple(visible.filter(handle_id=handle.pk).select_related("party").order_by("pk"))
@@ -730,9 +730,9 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
         later human confirmation of Party ownership.
         """
 
-        party.with_actor(actor)._require_record_access("write")
-        handle.with_actor(actor)._require_record_access("read")
-        evidence.with_actor(actor)._require_record_access("read")
+        party.require_access("write", actor)
+        handle.require_access("read", actor)
+        evidence.require_access("read", actor)
         return self._propose_claimed_handle_authorized(
             party, handle, evidence=evidence, actor=actor, confidence=confidence
         )
@@ -748,7 +748,7 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
     ) -> Any:
         """Retain a claim after the caller authorized exact Handle and evidence reads."""
 
-        party.with_actor(actor)._require_record_access("write")
+        party.require_access("write", actor)
         if not 0 < confidence < 0.5:
             raise ValidationError({"confidence": "Claimed-handle proposals require confidence below 0.5."})
         evidence_model = canonical_record_model(type(evidence))
@@ -1466,7 +1466,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         party = self.with_actor(actor).from_public_id(party_id)
         if party is None:
             raise ValidationError({"party_id": "Party was not found."})
-        party.with_actor(actor)._require_record_access("read")
+        party.require_access("read", actor)
         reason = "parties.party.identity_basis"
         address_owner = apps.get_model("parties", "Address").objects
         link_owner = apps.get_model("parties", "PartyHandle").objects
@@ -1532,7 +1532,7 @@ class PartyManager(AngeeManager.from_queryset(PartyQuerySet)):  # type: ignore[m
         with transaction.atomic(), actor_context(actor):
             basis = self.identity_basis(party_id, actor=actor, lock=True)
             party, current = basis.party, basis.complete
-            party._require_record_access("write")
+            party.require_access("write")
             if basis.facts_hash != expected_facts_hash:
                 return "conflict", {}
             results = {"name_result": "kept", "address_result": "kept", "handle_result": "kept"}

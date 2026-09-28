@@ -94,6 +94,22 @@ def test_action_guard_admits_addon_local_errors_and_reraises_others() -> None:
         submit("other")
 
 
+@pytest.mark.parametrize("camel_case_keys", [True, False])
+def test_action_guard_preserves_authored_field_paths_when_requested(camel_case_keys: bool) -> None:
+    """Frozen JSON schemas can retain their field names through the shared guard."""
+
+    @action_guard("Invalid answer.", camel_case_keys=camel_case_keys)
+    def submit() -> ActionResult:
+        raise ValidationError({"review_note": ["Required."], "rows.0.target_id": ["Not accessible."]})
+
+    result = submit()
+    assert result.ok is False
+    assert result.validation_errors == {
+        "reviewNote" if camel_case_keys else "review_note": ["Required."],
+        "rows.0.targetId" if camel_case_keys else "rows.0.target_id": ["Not accessible."],
+    }
+
+
 def test_action_result_carries_in_band_validation_errors() -> None:
     """``ActionResult`` exposes the additive in-band ``validation_errors`` map.
 

@@ -8,7 +8,7 @@ from angee.jobs.locks import LockKey, task_lock
 
 @shared_task(name="workflows.execute")
 def execute(step_run_id: int) -> bool:
-    """Execute one ready DATABASE step."""
+    """Execute one ready step through its declared transaction mode."""
     return apps.get_model("workflows", "StepRun").objects.execute(step_run_id)
 
 

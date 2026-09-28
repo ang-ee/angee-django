@@ -1,5 +1,6 @@
 """Database behavior of the rebuilt workflow managers."""
 
+from contextlib import contextmanager
 from datetime import timedelta
 
 import psycopg.errors
@@ -7,24 +8,35 @@ import pytest
 from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import IntegrityError, OperationalError, transaction
+from django.core.management import call_command
+from django.db import DataError, IntegrityError, OperationalError, transaction
 from django.db.models.functions import Now
 from pydantic import BaseModel, Field, field_serializer, field_validator
 from rebac import actor_context, system_context
+from rebac.roles import grant as grant_role
 
 from angee.base.scoping import system_queryset
 from angee.graphql.publishing import change_published
 from angee.jobs.enqueue import celery_app
+from angee.workflows import managers
 from angee.workflows.definition import Definition, DefinitionInvalid
 from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunManager
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Done, Fail, RetryPolicy, Step, Wait
-from angee.workflows.testing.drivers import load_workflow, run_until
+from angee.workflows.testing.drivers import load_workflow, register_steps, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun, WorkflowVersion
 from tests.conftest import create_user
 from tests.workflow_steps import Echo, document
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+
+
+class RetainedBody(Echo):
+    """Make a domain write that later engine failures must preserve."""
+
+    def run(self, ctx):
+        Workflow.objects.filter(pk=ctx.run.version.workflow_id).update(name="Successful body retained")
+        return ctx.done(ctx.input)
 
 
 def test_start_linear_run_and_immutable_version(execution):
@@ -384,8 +396,8 @@ def test_error_edge_recovers(execution):
     assert attempt.result == "failed" and attempt.error
 
 
-def test_unrouted_failure_cancels_pending_branches(execution):
-    """An unhandled failure closes the run and cancels unsettled siblings."""
+def test_unrouted_failure_preserves_pending_branches(execution):
+    """An unhandled failure closes the run while preserving resumable siblings."""
     actor, _ = execution
     workflow = load_workflow(
         {
@@ -402,13 +414,13 @@ def test_unrouted_failure_cancels_pending_branches(execution):
     StepRun.objects.execute(system_queryset(StepRun).get(run=run).pk)
     StepRun.objects.execute(system_queryset(StepRun).get(run=run, node_key="bad").pk)
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.FAILED
-    assert system_queryset(StepRun).get(run=run, node_key="other").status == StepRunStatus.CANCELED
+    assert system_queryset(StepRun).get(run=run, node_key="other").status == StepRunStatus.READY
     assert system_queryset(WorkflowRun).get(pk=run.pk).error == ""
     assert system_queryset(StepAttempt).get(step_run__run=run, step_run__node_key="bad").error
 
 
 def test_dispatch_counter_and_exhaustion(execution, settings):
-    """Only tick redeliveries consume the allowance before failing the L0 run."""
+    """Only tick redeliveries consume the allowance before parking for an operator."""
     actor, sent = execution
     settings.ANGEE_WORKFLOW_MAX_DISPATCHES = 2
     workflow = load_workflow(document("entry"), key="delivery", actor=actor)
@@ -419,31 +431,110 @@ def test_dispatch_counter_and_exhaustion(execution, settings):
             StepRun.objects.filter(pk=row.pk).update(dispatched_at=Now() - timedelta(seconds=61))
         assert StepRun.objects.redispatch() == 1
         assert system_queryset(StepRun).get(pk=row.pk).dispatches == expected
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.FAILED
+    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    assert retained.status == RunStatus.WAITING and retained.error == ""
+    waiting = system_queryset(StepRun).get(pk=row.pk)
+    assert waiting.waiting_kind == "operator" and waiting.wait_reason
     assert len(sent) == 2
 
 
-def test_body_rollback_for_returned_failure(execution, monkeypatch):
+def test_body_rollback_for_returned_failure(execution, register_step):
     """Returning a failed settlement rolls back the body savepoint."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="rollback", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
 
-    def fail(self, ctx):
-        Workflow.objects.filter(pk=workflow.pk).update(name="Uncommitted")
-        return ctx.fail("Roll it back.")
+    class RolledBackBody(Echo):
+        def run(self, ctx):
+            Workflow.objects.filter(pk=workflow.pk).update(name="Uncommitted")
+            return ctx.fail("Roll it back.")
 
-    monkeypatch.setattr(Echo, "run", fail)
+    register_step(RolledBackBody)
     StepRun.objects.execute(system_queryset(StepRun).get(run=run).pk)
     assert system_queryset(Workflow).get(pk=workflow.pk).name != "Uncommitted"
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.FAILED
+
+
+@pytest.mark.parametrize("explicit_actor", [False, True])
+def test_publication_and_start_keep_requesting_actor_attribution(execution, explicit_actor):
+    """Authorization and publication/run attribution preserve explicit and ambient actors."""
+    admin, _ = execution
+    operator = create_user("publication_operator")
+    workflow = load_workflow(document("entry"), key="attribution", actor=admin, publish=False)
+    workflow.grant_record_access("editor", operator)
+    workflow.grant_record_access("starter", operator)
+
+    with actor_context(operator):
+        actor = operator if explicit_actor else None
+        version = Workflow.objects.publish(workflow, actor=actor)
+        run = WorkflowRun.objects.start(workflow, actor=actor)
+
+    assert version.published_by_id == operator.pk
+    assert run.run_as_id == operator.pk
+
+
+def test_start_requires_an_actor_even_with_system_access(execution):
+    """System authorization alone cannot supply the principal of a new run."""
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="missing_actor", actor=actor)
+    workflow = Workflow._base_manager.get(pk=workflow.pk)
+
+    with system_context(reason="test.start.without_actor"), pytest.raises(PermissionDenied, match="requires an actor"):
+        WorkflowRun.objects.start(workflow, actor=None)
+
+
+def test_workflow_verbs_authorize_the_ambient_requester_over_a_pinned_actor(execution):
+    """A previously bound administrator cannot authorize an ambient outsider's operation."""
+    admin, _ = execution
+    workflow = load_workflow(document("entry"), key="ambient_requester", actor=admin)
+    run = WorkflowRun.objects.start(workflow, actor=admin)
+    run_until(run)
+    outsider = create_user("ambient_outsider")
+
+    with actor_context(outsider):
+        with pytest.raises(PermissionDenied, match="'write'"):
+            Workflow.objects.save_draft(
+                workflow.with_actor(admin), draft=document("entry"), expected_revision=workflow.draft_revision,
+            )
+        with pytest.raises(PermissionDenied, match="'write'"):
+            Workflow.objects.publish(workflow.with_actor(admin))
+        with pytest.raises(PermissionDenied, match="'start'"):
+            WorkflowRun.objects.start(workflow.with_actor(admin), actor=None)
+        with pytest.raises(PermissionDenied, match="'write'"):
+            WorkflowRun.objects.reprocess(run.with_actor(admin))
+        with pytest.raises(PermissionDenied, match="'write'"):
+            WorkflowRun.objects.cancel(run.with_actor(admin))
+
+
+@pytest.mark.parametrize("strict_mode", [False, True])
+def test_workflow_verbs_deny_missing_requesters_in_every_strict_mode(execution, settings, strict_mode):
+    """Every public workflow mutation fails closed before a scoped ORM query."""
+    admin, _ = execution
+    workflow = load_workflow(document("entry"), key="actorless_verbs", actor=admin)
+    run = WorkflowRun.objects.start(workflow, actor=admin)
+    run_until(run)
+    workflow = Workflow._base_manager.get(pk=workflow.pk)
+    run = WorkflowRun._base_manager.get(pk=run.pk)
+    settings.REBAC_STRICT_MODE = strict_mode
+    operations = (
+        lambda: Workflow.objects.save_draft(workflow, draft=document("entry"), expected_revision=0),
+        lambda: Workflow.objects.publish(workflow),
+        lambda: WorkflowRun.objects.start(workflow, actor=None),
+        lambda: WorkflowRun.objects.cancel(run),
+        lambda: WorkflowRun.objects.reprocess(run),
+        lambda: Workflow.objects.install_definition(key=workflow.key, name=workflow.name, draft=document("entry")),
+        lambda: Workflow.objects.install_definition(key="actorless_new", name="New", draft=document("entry")),
+    )
+    for operation in operations:
+        with pytest.raises(PermissionDenied, match="requires an actor"):
+            operation()
 
 
 def test_constraints_and_actor_admission(execution):
     """State constraints and workflow start permissions remain enforced."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="constraints", actor=actor)
-    with pytest.raises(Exception, match="access"):
+    with pytest.raises(PermissionDenied, match="'start'"):
         WorkflowRun.objects.start(workflow, actor=create_user("outsider"))
     run = WorkflowRun.objects.start(workflow, actor=actor)
     row = system_queryset(StepRun).get(run=run)
@@ -480,21 +571,17 @@ def test_holder_resend_refreshes_backlogged_ready_row_before_tick(execution, set
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
-def test_t19_result_binding_error_preserves_successful_body(execution, monkeypatch):
+def test_t19_result_binding_error_preserves_successful_body(execution, register_step, monkeypatch):
     """A result projection defect fails the run durably after the final body commits."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="result_failure", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 19})
     step_run = system_queryset(StepRun).get(run=run)
 
-    def complete_with_write(self, ctx):
-        Workflow.objects.filter(pk=workflow.pk).update(name="Successful body retained")
-        return ctx.done(ctx.input)
-
     def projection_error(self, rows, run_input):
         raise DjangoValidationError("Injected result binding failure.")
 
-    monkeypatch.setattr(Echo, "run", complete_with_write)
+    register_step(RetainedBody)
     monkeypatch.setattr(Definition, "result_for", projection_error)
     assert StepRun.objects.execute(step_run.pk)
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
@@ -563,7 +650,7 @@ def test_reprocess_requires_operator_access_and_acts_as_requester(execution, run
         assert replay.version_id == run.version_id and replay.request_key is None
 
 
-def test_failed_attempt_retains_bound_input_and_database_start_time(execution, monkeypatch):
+def test_failed_attempt_retains_bound_input_and_database_start_time(execution, register_step):
     """The body savepoint never rolls back the attempt's bound input or clock."""
     actor, _ = execution
     workflow = load_workflow(document("entry", "last"), key="retained_input", actor=actor)
@@ -571,12 +658,13 @@ def test_failed_attempt_retains_bound_input_and_database_start_time(execution, m
     assert StepRun.objects.execute(system_queryset(StepRun).get(run=run).pk)
     last = system_queryset(StepRun).get(run=run, node_key="last")
 
-    def fail(self, ctx):
-        assert ctx.now == ctx.attempt.started_at
-        assert ctx.step_run.input == {"value": 23}
-        return ctx.fail("Keep my input.")
+    class FailedLastStep(Echo):
+        def run(self, ctx):
+            assert ctx.now == ctx.attempt.started_at
+            assert ctx.step_run.input == {"value": 23}
+            return ctx.fail("Keep my input.")
 
-    monkeypatch.setattr(Echo, "run", fail)
+    register_step(FailedLastStep)
     assert StepRun.objects.execute(last.pk)
     retained = system_queryset(StepRun).get(pk=last.pk)
     assert retained.input == {"value": 23} and retained.status == StepRunStatus.FAILED
@@ -610,18 +698,22 @@ def test_publish_precedes_failing_commit_send(execution, monkeypatch):
 
 
 @pytest.mark.parametrize("sqlstate", ["57014", "40P01", "55P03"])
-def test_retryable_database_failure_records_attempt_and_schedules_retry(execution, monkeypatch, sqlstate):
+def test_retryable_database_failure_records_attempt_and_schedules_retry(execution, register_step, sqlstate):
     """Timeout, deadlock and unavailable-lock SQLSTATEs use the step's retry owner."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key=f"sqlstate_{sqlstate}", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 5})
-    monkeypatch.setattr(Echo, "retry", RetryPolicy(max_attempts=2, backoff=timedelta()))
 
-    def database_failure(self, ctx):
-        Workflow.objects.filter(pk=workflow.pk).update(name="Rolled back")
-        raise OperationalError("Transient database failure.") from psycopg.errors.lookup(sqlstate)("Injected failure.")
+    class RetryingDatabaseFailure(Echo):
+        retry = RetryPolicy(max_attempts=2, backoff=timedelta())
 
-    monkeypatch.setattr(Echo, "run", database_failure)
+        def run(self, ctx):
+            Workflow.objects.filter(pk=workflow.pk).update(name="Rolled back")
+            raise OperationalError("Transient database failure.") from psycopg.errors.lookup(sqlstate)(
+                "Injected failure."
+            )
+
+    register_step(RetryingDatabaseFailure)
     step_run = system_queryset(StepRun).get(run=run)
     assert StepRun.objects.execute(step_run.pk)
     retained = system_queryset(StepRun).get(pk=step_run.pk)
@@ -632,17 +724,18 @@ def test_retryable_database_failure_records_attempt_and_schedules_retry(executio
     assert system_queryset(Workflow).get(pk=workflow.pk).name != "Rolled back"
 
 
-def test_soft_time_limit_records_timed_out_and_keeps_input(execution, monkeypatch):
+def test_soft_time_limit_records_timed_out_and_keeps_input(execution, register_step):
     """A Celery soft timeout rolls back body writes and records its distinct result."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="soft_limit", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 14})
 
-    def timeout(self, ctx):
-        Workflow.objects.filter(pk=workflow.pk).update(name="Rolled back")
-        raise SoftTimeLimitExceeded()
+    class TimedOutBody(Echo):
+        def run(self, ctx):
+            Workflow.objects.filter(pk=workflow.pk).update(name="Rolled back")
+            raise SoftTimeLimitExceeded()
 
-    monkeypatch.setattr(Echo, "run", timeout)
+    register_step(TimedOutBody)
     step_run = system_queryset(StepRun).get(run=run)
     assert StepRun.objects.execute(step_run.pk)
     retained = system_queryset(StepRun).get(pk=step_run.pk)
@@ -652,11 +745,14 @@ def test_soft_time_limit_records_timed_out_and_keeps_input(execution, monkeypatc
 
 
 def test_start_permission_does_not_grant_workflow_editing(execution):
-    """An explicitly shared starter can run a graph while editing remains forbidden."""
+    """A starter can list and read published graphs without gaining editing rights."""
     admin, _ = execution
     actor = create_user("starter")
     workflow = load_workflow(document("entry"), key="start_permission", actor=admin)
     workflow.with_actor(admin).grant_record_access("starter", actor)
+    assert list(Workflow.objects.with_actor(actor).values_list("pk", flat=True)) == [workflow.pk]
+    assert Workflow.objects.with_actor(actor).get(pk=workflow.pk).name == workflow.name
+    assert WorkflowVersion.objects.with_actor(actor).get(pk=workflow.published_id).workflow_id == workflow.pk
     run = WorkflowRun.objects.start(workflow, actor=actor)
     assert run.run_as_id == actor.pk
     with pytest.raises(PermissionDenied):
@@ -669,6 +765,83 @@ def test_start_permission_does_not_grant_workflow_editing(execution):
         Workflow.objects.install_definition(key=workflow.key, name=workflow.name, draft=document("entry"), actor=actor)
     WorkflowRun.objects.cancel(run, actor=actor)
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.CANCELED
+    replay = WorkflowRun.objects.reprocess(run, actor=actor)
+    assert replay.pk != run.pk and replay.run_as_id == actor.pk
+
+    other = create_user("another_starter")
+    workflow.with_actor(admin).grant_record_access("starter", other)
+    other_run = WorkflowRun.objects.start(workflow, actor=other)
+    with pytest.raises(PermissionDenied, match="write"):
+        WorkflowRun.objects.cancel(other_run, actor=actor)
+    WorkflowRun.objects.cancel(other_run, actor=other)
+    with pytest.raises(PermissionDenied, match="write"):
+        WorkflowRun.objects.reprocess(other_run, actor=actor)
+
+
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_starter_cannot_read_another_starters_engine_rows(execution, settings, storage):
+    """Identity and publication visibility do not expose another user's execution."""
+    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
+    call_command("rebac", "sync", verbosity=0)
+    admin, _ = execution
+    with system_context(reason="test workflow storage administrator"):
+        grant_role(actor=admin, role="angee/role:admin")
+    first, second = create_user("first_starter"), create_user("second_starter")
+    workflow = load_workflow(document("entry"), key="private_runs", actor=admin)
+    for actor in (first, second):
+        workflow.require_access("write", admin)
+        workflow.grant_record_access("starter", actor)
+    first_run = WorkflowRun.objects.start(workflow, actor=first)
+    second_run = WorkflowRun.objects.start(workflow, actor=second)
+    run_until(first_run)
+    run_until(second_run)
+    for model in (WorkflowRun, StepRun, StepAttempt):
+        other = system_queryset(model).get(**(
+            {"pk": second_run.pk} if model is WorkflowRun else
+            {"run": second_run} if model is StepRun else {"step_run__run": second_run}
+        ))
+        assert not model.objects.with_actor(first).filter(pk=other.pk).exists()
+        with pytest.raises(model.DoesNotExist):
+            model.objects.with_actor(first).get(pk=other.pk)
+        with pytest.raises(PermissionDenied):
+            other.require_access("read", first)
+    visible = Workflow.objects.with_actor(first).get(pk=workflow.pk)
+    assert visible.name == workflow.name
+    assert visible.denied_read_fields() == frozenset({"draft", "layout"})
+    assert visible.draft is None and visible.layout is None
+    assert WorkflowVersion.objects.with_actor(first).get(pk=workflow.published_id).document
+
+
+@pytest.mark.parametrize("model", [StepRun, StepAttempt])
+def test_run_actor_cannot_create_engine_records(execution, model):
+    """Engine record creation belongs to the engine even for the run's actor."""
+    admin, _ = execution
+    actor = create_user("engine_row_creator")
+    workflow = load_workflow(document("entry"), key="engine_create", actor=admin)
+    workflow.grant_record_access("starter", actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    row = system_queryset(StepRun).get(run=run)
+    fields = {"run": run, "node_key": "forged"} if model is StepRun else {"step_run": row, "number": 1}
+    with pytest.raises(PermissionDenied), transaction.atomic():
+        model.objects.with_actor(actor).create(**fields)
+
+
+@pytest.mark.parametrize("model,field,value", [(StepRun, "state", {"edited": True}), (StepAttempt, "error", "Edited")])
+def test_run_actor_cannot_write_engine_records(execution, model, field, value):
+    """Generic ORM writes cannot grant a run actor control of engine-owned rows."""
+    admin, _ = execution
+    actor = create_user("run_actor")
+    workflow = load_workflow(document("entry"), key="engine_records", actor=admin)
+    workflow.with_actor(admin).grant_record_access("starter", actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    run_until(run)
+    row = model.objects.with_actor(actor).get()
+    assert not row.with_actor(actor).has_access("write")
+    with pytest.raises(PermissionDenied), transaction.atomic():
+        model.objects.with_actor(actor).filter(pk=row.pk).update(**{field: value})
+    setattr(row, field, value)
+    with pytest.raises(PermissionDenied), transaction.atomic():
+        row.with_actor(actor).save(update_fields=(field,))
 
 
 def test_tick_bad_candidate_does_not_abort_later_candidates(execution, monkeypatch, caplog):
@@ -711,7 +884,7 @@ def test_t18_five_minute_backlog_does_not_exhaust_dispatches(execution):
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
-def test_default_redelivery_exhaustion_fails_run_without_domain_error_routing(execution):
+def test_default_redelivery_exhaustion_waits_without_domain_error_routing(execution):
     """Twenty redeliveries exhaust the default allowance without inventing an attempt."""
     actor, sent = execution
     workflow = load_workflow(
@@ -734,10 +907,10 @@ def test_default_redelivery_exhaustion_fails_run_without_domain_error_routing(ex
         if count < 20:
             assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.RUNNING
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
-    assert (retained.status, retained.outcome, retained.output) == (RunStatus.FAILED, "error", {})
-    assert "delivery exhausted" in retained.error.lower()
+    assert (retained.status, retained.outcome, retained.output, retained.error) == (RunStatus.WAITING, "", {}, "")
     retained_step_run = system_queryset(StepRun).get(pk=step_run.pk)
-    assert retained_step_run.status == StepRunStatus.CANCELED
+    assert retained_step_run.status == StepRunStatus.WAITING and retained_step_run.waiting_kind == "operator"
+    assert "delivery exhausted" in retained_step_run.wait_reason.lower()
     assert retained_step_run.state == {}
     assert retained_step_run.outcome == ""
     assert not system_queryset(StepRun).filter(run=run, node_key="recover").exists()
@@ -801,7 +974,7 @@ def test_nullable_whole_successor_input_fails_its_attempt_durably(execution, reg
     assert attempt.result == "failed" and "null" in attempt.error.lower()
 
 
-def test_t22_removed_step_class_fails_first_attempt(execution, register_step, settings):
+def test_t22_removed_step_class_fails_first_attempt(execution):
     """A class removed after publication records its real resolution failure on first delivery."""
     actor, _ = execution
 
@@ -810,13 +983,10 @@ def test_t22_removed_step_class_fails_first_attempt(execution, register_step, se
 
         key = "removed_step"
 
-    register_step(RemovedStep)
-    workflow = load_workflow(document("entry", step=RemovedStep.key), key="removed_class", actor=actor)
-    run = WorkflowRun.objects.start(workflow, actor=actor)
-    step_run = system_queryset(StepRun).get(run=run)
-    settings.ANGEE_WORKFLOW_STEP_CLASSES = {
-        key: value for key, value in settings.ANGEE_WORKFLOW_STEP_CLASSES.items() if key != RemovedStep.key
-    }
+    with register_steps(RemovedStep):
+        workflow = load_workflow(document("entry", step=RemovedStep.key), key="removed_class", actor=actor)
+        run = WorkflowRun.objects.start(workflow, actor=actor)
+        step_run = system_queryset(StepRun).get(run=run)
 
     assert StepRun.objects.execute(step_run.pk)
     retained = system_queryset(StepRun).get(pk=step_run.pk)
@@ -858,42 +1028,49 @@ def test_soft_time_limit_outside_body_records_its_owner(execution, monkeypatch, 
 
 
 @pytest.mark.parametrize("phase", ["body", "result"])
-def test_failure_text_strips_nul_without_truncating(execution, monkeypatch, phase):
-    """Diagnostic text is sanitized without truncating its unbounded columns."""
+def test_failure_text_strips_nul_and_respects_field_bounds(execution, register_step, monkeypatch, phase):
+    """Diagnostic text is sanitized and truncated to each declared column bound."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key=f"nul_{phase}", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = system_queryset(StepRun).get(run=run)
 
     def fail(*args, **kwargs):
-        raise ValueError("Invalid\x00failure text")
+        raise ValueError("Invalid\x00failure text" + "x" * 70000)
 
-    monkeypatch.setattr(Echo if phase == "body" else Definition, "run" if phase == "body" else "result_for", fail)
+    if phase == "body":
+        class InvalidTextBody(Echo):
+            def run(self, ctx):
+                fail()
+
+        register_step(InvalidTextBody)
+    else:
+        monkeypatch.setattr(Definition, "result_for", fail)
     assert StepRun.objects.execute(step_run.pk)
     retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
     attempt = system_queryset(StepAttempt).get(step_run=step_run)
     assert retained_run.status == RunStatus.FAILED
     assert "\x00" not in retained_run.error + attempt.error + attempt.stacktrace
-    expected = "Invalidfailure text"
+    expected = "Invalidfailure text" + "x" * 70000
     if phase == "body":
-        assert attempt.result == "failed" and attempt.error == expected
+        assert attempt.result == "failed"
+        assert attempt.error == expected[:StepAttempt._meta.get_field("error").max_length]
+        assert len(attempt.stacktrace) == StepAttempt._meta.get_field("stacktrace").max_length
         assert retained_run.error == ""
     else:
         assert attempt.result == "succeeded" and attempt.error == ""
-        assert retained_run.error == expected
+        assert retained_run.error == expected[:WorkflowRun._meta.get_field("error").max_length]
 
 
 @pytest.mark.parametrize("failure_write", ["state", "publication"])
-def test_failure_recording_database_errors_preserve_successful_body(execution, monkeypatch, caplog, failure_write):
+def test_failure_recording_database_errors_preserve_successful_body(
+    execution, register_step, monkeypatch, caplog, failure_write,
+):
     """Real statement errors in recovery writes roll back only their individual savepoints."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key=f"failure_{failure_write}", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = system_queryset(StepRun).get(run=run)
-
-    def complete(self, ctx):
-        Workflow.objects.filter(pk=workflow.pk).update(name="Successful body retained")
-        return ctx.done(ctx.input)
 
     def result_error(*args, **kwargs):
         raise ValueError("Injected result failure.")
@@ -901,7 +1078,7 @@ def test_failure_recording_database_errors_preserve_successful_body(execution, m
     def invalid_write(*args, **kwargs):
         Workflow.objects.filter(pk=workflow.pk).update(key=None)
 
-    monkeypatch.setattr(Echo, "run", complete)
+    register_step(RetainedBody)
     monkeypatch.setattr(Definition, "result_for", result_error)
     if failure_write == "state":
         monkeypatch.setattr(WorkflowRunManager, "_write_state", invalid_write)
@@ -918,16 +1095,12 @@ def test_failure_recording_database_errors_preserve_successful_body(execution, m
         assert retained_run.status == RunStatus.FAILED and retained_run.error == "Injected result failure."
 
 
-def test_failure_attempt_close_database_error_preserves_successful_body(execution, monkeypatch, caplog):
+def test_failure_attempt_close_database_error_preserves_successful_body(execution, register_step, monkeypatch, caplog):
     """A broken attempt close after settlement failure cannot poison committed domain work."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="failure_attempt_close", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = system_queryset(StepRun).get(run=run)
-
-    def complete(self, ctx):
-        Workflow.objects.filter(pk=workflow.pk).update(name="Successful body retained")
-        return ctx.done(ctx.input)
 
     def settlement_error(*args, **kwargs):
         raise ValueError("Injected settlement failure.")
@@ -935,7 +1108,7 @@ def test_failure_attempt_close_database_error_preserves_successful_body(executio
     def attempt_close(self, result, error="", stacktrace=""):
         Workflow.objects.filter(pk=workflow.pk).update(key=None)
 
-    monkeypatch.setattr(Echo, "run", complete)
+    register_step(RetainedBody)
     monkeypatch.setattr(StepRunQuerySet, "settle", settlement_error)
     monkeypatch.setattr(StepAttemptQuerySet, "close", attempt_close)
     assert StepRun.objects.execute(step_run.pk)
@@ -946,21 +1119,17 @@ def test_failure_attempt_close_database_error_preserves_successful_body(executio
     assert any(record.exc_info and isinstance(record.exc_info[1], IntegrityError) for record in caplog.records)
 
 
-def test_soft_time_limit_during_settlement_belongs_to_open_attempt(execution, monkeypatch):
+def test_soft_time_limit_during_settlement_belongs_to_open_attempt(execution, register_step, monkeypatch):
     """A timeout before closing the invocation stays on that invocation's attempt."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="settlement_timeout", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = system_queryset(StepRun).get(run=run)
 
-    def complete(self, ctx):
-        Workflow.objects.filter(pk=workflow.pk).update(name="Successful body retained")
-        return ctx.done(ctx.input)
-
     def timeout(*args, **kwargs):
         raise SoftTimeLimitExceeded()
 
-    monkeypatch.setattr(Echo, "run", complete)
+    register_step(RetainedBody)
     monkeypatch.setattr(StepRunQuerySet, "settle", timeout)
     assert StepRun.objects.execute(step_run.pk)
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Successful body retained"
@@ -971,21 +1140,17 @@ def test_soft_time_limit_during_settlement_belongs_to_open_attempt(execution, mo
     assert retained_run.status == RunStatus.FAILED and retained_run.error == ""
 
 
-def test_publication_database_error_keeps_successful_outcome(execution, monkeypatch, caplog):
+def test_publication_database_error_keeps_successful_outcome(execution, register_step, monkeypatch, caplog):
     """Notification failure is logged without undoing a completed run or its body."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="successful_publication_failure", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = system_queryset(StepRun).get(run=run)
 
-    def complete(self, ctx):
-        Workflow.objects.filter(pk=workflow.pk).update(name="Successful body retained")
-        return ctx.done(ctx.input)
-
     def invalid_write(*args, **kwargs):
         Workflow.objects.filter(pk=workflow.pk).update(key=None)
 
-    monkeypatch.setattr(Echo, "run", complete)
+    register_step(RetainedBody)
     monkeypatch.setattr("angee.workflows.managers.publish_change", invalid_write)
     assert StepRun.objects.execute(step_run.pk)
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Successful body retained"
@@ -993,3 +1158,88 @@ def test_publication_database_error_keeps_successful_outcome(execution, monkeypa
     assert retained_run.status == RunStatus.SUCCEEDED and retained_run.error == ""
     assert system_queryset(StepAttempt).get(step_run=step_run).result == "succeeded"
     assert any(record.exc_info and isinstance(record.exc_info[1], IntegrityError) for record in caplog.records)
+
+
+def test_terminal_siblings_do_not_starve_later_tick_candidates(execution):
+    """The tick excludes preserved terminal-run rows before its bounded batch."""
+
+    actor, sent = execution
+    siblings = [f"preserved_{index}" for index in range(101)]
+    workflow = load_workflow({"nodes": {
+        "entry": {"step": "echo", "next": {"done": ["failure", *siblings]}},
+        "failure": {"step": "reject"},
+        **{key: {"step": "echo"} for key in siblings},
+    }}, key="terminal_batch", actor=actor)
+    failed = WorkflowRun.objects.start(workflow, actor=actor)
+    assert StepRun.objects.execute(system_queryset(StepRun).get(run=failed, node_key="entry").pk)
+    assert StepRun.objects.execute(system_queryset(StepRun).get(run=failed, node_key="failure").pk)
+    assert system_queryset(WorkflowRun).get(pk=failed.pk).status == RunStatus.FAILED
+    retained = system_queryset(StepRun).filter(run=failed, status=StepRunStatus.READY)
+    assert retained.count() == 101
+
+    live_workflow = load_workflow(document("entry"), key="live_after_terminal_batch", actor=actor)
+    live = WorkflowRun.objects.start(live_workflow, actor=actor)
+    live_step = system_queryset(StepRun).get(run=live)
+    with system_context(reason="age retained and active delivery timestamps"):
+        StepRun.objects.filter(status=StepRunStatus.READY).update(dispatched_at=Now() - timedelta(seconds=61))
+    sent.clear()
+
+    assert StepRun.objects.redispatch() == 1
+
+    assert system_queryset(StepRun).get(pk=live_step.pk).dispatches == 1
+    assert list(retained.values_list("dispatches", flat=True)) == [0] * 101
+    assert [payload["kwargs"]["step_run_id"] for _name, payload in sent] == [live_step.pk]
+
+
+@pytest.mark.parametrize("mode", ["DATABASE", "IO"])
+def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(execution, register_step, monkeypatch, mode):
+    """Failure recovery cannot turn an expired claim into a terminal run with a running row."""
+    actor, _ = execution
+
+    class ExpiredRecovery(RetainedBody):
+        pass
+
+    ExpiredRecovery.mode = mode
+    register_step(ExpiredRecovery)
+    workflow = load_workflow(document("entry"), key="expired_failure_recovery", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    step_run = system_queryset(StepRun).get(run=run)
+    original_settle, original_record_failure = StepRunQuerySet.settle, managers._record_failure
+    settlements = []
+
+    def reject_result(self, row, settlement):
+        settlements.append(settlement.kind)
+        if settlement.kind == "done":
+            raise DataError("Result persistence failed before its deadline elapsed")
+        return original_settle(self, row, settlement)
+
+    @contextmanager
+    def expire_before_failure_recovery(operation):
+        if operation == "settlement failure":
+            StepRun.objects.filter(pk=step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
+        with original_record_failure(operation):
+            yield
+
+    monkeypatch.setattr(StepRunQuerySet, "settle", reject_result)
+    monkeypatch.setattr(managers, "_record_failure", expire_before_failure_recovery)
+
+    assert StepRun.objects.execute(step_run.pk) is False
+    assert settlements == ["done", "fail"]
+    retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
+    retained_step = system_queryset(StepRun).get(pk=step_run.pk)
+    assert retained_run.status == RunStatus.RUNNING
+    assert retained_run.finished_at is None and retained_run.error == ""
+    attempts = system_queryset(StepAttempt).filter(step_run=step_run)
+    if mode == "DATABASE":
+        assert retained_step.status == StepRunStatus.READY and retained_step.attempt == 0
+        assert not attempts.exists()
+        assert system_queryset(Workflow).get(pk=workflow.pk).name != "Successful body retained"
+    else:
+        assert retained_step.status == StepRunStatus.RUNNING
+        attempt = attempts.get()
+        assert attempt.finished_at is None and attempt.result is None
+        with system_context(reason="test elapsed deadline after IO failure recovery rollback"):
+            StepRun.objects.filter(pk=step_run.pk).update(deadline_at=Now() - timedelta(seconds=1))
+        assert StepRun.objects.reap() == 1
+        assert system_queryset(StepRun).get(pk=step_run.pk).status == StepRunStatus.FAILED
+        assert attempts.get().result == "timed_out"

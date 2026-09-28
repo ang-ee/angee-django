@@ -9,6 +9,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, Field, WithJsonSchema
 
+from angee.base.jsonschema import validation_issues
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.forms import Action, Relation, RelationCandidate, compile_form, relation_candidates, validate_form
 from angee.decisions.states import Verdict
@@ -109,10 +110,12 @@ def test_relation_candidates_are_frozen_and_constrain_submissions():
     field = schema["oneOf"][0]["properties"]["document"]
     assert field["relation"] == {"resource": "notes.Document", "permission": "read"}
     assert field["enum"] == ["document-a", "document-b"]
-    validate_form(schema, "select", {"document": "document-a"})
+    branch = schema["oneOf"][0]
+    assert not validation_issues(branch, {"action": "select", "document": "document-a"})
+    assert "document" in validation_issues(branch, {"action": "select", "document": "document-c"})
     with pytest.raises(ValidationError) as error:
-        validate_form(schema, "select", {"document": "document-c"})
-    assert "document" in error.value.message_dict
+        validate_form(schema, "select", {"document": "document-a"})
+    assert error.value.message_dict == {"document": ["A relation value requires an actor."]}
 
 
 def test_date_formats_are_asserted_by_the_frozen_schema():

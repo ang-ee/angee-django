@@ -47,7 +47,7 @@ below.
 | Project-root discovery and project settings/bootstrap environment | [`ProjectContract`](../angee/compose/project.py), called by [`angee.compose.settings`](../angee/compose/settings.py) |
 | Bounded django-yamlconf loading and provenance | [`angee.compose.yamlconf`](../angee/compose/yamlconf.py) |
 | Overridable framework defaults and ordered always-on core apps | [`angee.compose.defaults`](../angee/compose/defaults.py) |
-| Reserved composed settings and final settings mutation | [`Composer`](../angee/compose/composer.py) |
+| Reserved composed settings and final settings mutation | [`AutoConfig`](../angee/compose/autoconfig.py) owns reserved names; [`Composer`](../angee/compose/composer.py) assigns their values |
 | Django app discovery, identity aliases and root annotations | [`AppGraph`](../angee/compose/appgraph.py) |
 | Dependency ordering and cycle rejection for both discovery paths | [`order_app_dependencies`](../angee/addons.py) |
 | Addon settings fragments and declared `ANGEE_*` env overlays | [`AutoConfig`](../angee/compose/autoconfig.py) |
@@ -132,11 +132,24 @@ After `INSTALLED_APPS` is resolved, `Composer` applies optional app settings
 through `AutoConfig` in dependency order. Core and third-party apps are plain
 `AppConfig` instances; folder addons additionally carry manifests.
 
+Bare settings modules such as the source-addon test harness call
+`AutoConfig.apply_installed(globals(), environment=False)` before Django loads models. They declare
+the complete app list in contribution order and receive the same addon defaults
+without generating a runtime. Django's app factory resolves their string entries;
+the method also accepts the config instances already resolved by `Composer`.
+Disabling environment input keeps shell service credentials and endpoints out of
+isolated tests. Production composition keeps environment input enabled.
+
 Any app may provide `<app>.autoconfig` with a `SETTINGS` mapping. The keys use
 `django-yamlconf` syntax; `AutoConfig` owns the Angee rules around reserved
 settings, app defaults, list/dict merging, and declared `ANGEE_*` environment
 overlays. Apps still read `django.conf.settings`; process environment is
 normalized during composition.
+
+Derived `settings(namespace)` hooks read only their supplied namespace.
+`AutoConfig` gives enabled environment values precedence over project values,
+so hooks inherit the same environment policy as declared settings without
+reading `os.environ` themselves. Hook parsing still owns typed derived values.
 
 `django_yamlconf` is in the framework-owned app prefix, so `ycexplain` and
 `yclist` remain the provenance tools for composed settings.

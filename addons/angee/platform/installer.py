@@ -42,7 +42,7 @@ from django.core.files import locks
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
+from angee.base.impl import ImplBase, check_impl_registry, impl_registry, resolve_impl_class
 from angee.fs import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
@@ -396,35 +396,20 @@ def register_checks() -> None:
 
 
 def _check_installer_backends(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """Validate the installer backend registry and selected key, like ``ImplClassField.check``."""
+    """Compose shared registry checks with the installer's required backend selection."""
 
     del app_configs, kwargs
-    errors: list[CheckMessage] = []
-    registry = getattr(settings, _REGISTRY_SETTING, {})
-    if not isinstance(registry, Mapping) or not registry:
+    errors = check_impl_registry(_REGISTRY_SETTING, AddonInstallerBackend)
+    if any(error.id == "angee.E002" for error in errors):
+        return errors
+    registry = impl_registry(_REGISTRY_SETTING)
+    if not registry:
         return [
             Error(
                 f"settings.{_REGISTRY_SETTING} must be a non-empty mapping of key to dotted path.",
                 id="angee.platform.E001",
             )
         ]
-    resolution_errors: list[Exception] = []
-    resolve_all_impl_classes(
-        _REGISTRY_SETTING,
-        AddonInstallerBackend,
-        on_error=resolution_errors.append,
-    )
-    for error in resolution_errors:
-        errors.append(
-            Error(
-                str(error),
-                id=(
-                    "angee.platform.E002"
-                    if isinstance(error, ImportError)
-                    else "angee.platform.E003"
-                ),
-            )
-        )
     selected = getattr(settings, _BACKEND_SETTING, "local")
     if selected not in registry:
         errors.append(

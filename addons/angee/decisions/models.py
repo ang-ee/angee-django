@@ -97,7 +97,6 @@ class Decision(RecordRefMixin, AngeeDataModel):
 
     runtime = True
     sqid_prefix = "dcn_"
-    record_ref_field_prefix = "subject"
     group = models.ForeignKey("decisions.DecisionGroup", on_delete=models.CASCADE, related_name="decisions")
     index = models.PositiveIntegerField()
     kind = models.CharField(max_length=200)

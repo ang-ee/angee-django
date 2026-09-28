@@ -490,7 +490,7 @@ def test_resolve_xref_reports_ambiguous_source_rows() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(monkeypatch) -> None:
+def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(composed_tables) -> None:
     """The loader owns persona lookup: ledger + app-registry aliases in one call.
 
     A demo-seed hook resolves ``<addon>.<xref>`` by the same alias convention the
@@ -509,35 +509,10 @@ def test_resolve_ledger_xref_binds_ledger_and_app_registry_aliases(monkeypatch) 
 
             app_label = "base"
 
-    class LedgerXrefLedger(Resource):
-        """Ledger model without the production uniqueness constraint."""
-
-        source_addon = models.CharField(max_length=200)
-        xref = models.CharField(max_length=160)
-        target_model = models.CharField(max_length=120)
-        target_id = models.CharField(max_length=120, blank=True, default="")
-
-        class Meta:
-            """Django model options for the test ledger."""
-
-            app_label = "base"
-
-    with model_tables((LedgerXrefTarget, LedgerXrefLedger)):
-        # No concrete ``resources.Resource`` exists under bare test settings (the composer
-        # is not run), so stand the ledger model in for the helper's own ledger lookup only;
-        # every other ``get_model`` (the target-model resolution inside ``resolve_xref``)
-        # delegates to the real registry, and the addon-alias map is built from the real
-        # installed apps.
-        real_get_model = apps.get_model
-
-        def fake_get_model(app_label: str, model_name: str, *args: Any, **kwargs: Any) -> Any:
-            if (app_label, model_name) == ("resources", "Resource"):
-                return LedgerXrefLedger
-            return real_get_model(app_label, model_name, *args, **kwargs)
-
-        monkeypatch.setattr(apps, "get_model", fake_get_model)
+    ledger = apps.get_model("resources", "Resource")
+    with model_tables((LedgerXrefTarget,)), system_context(reason="test ledger xref registry aliases"):
         target = LedgerXrefTarget.objects.create(name="alice")
-        LedgerXrefLedger.objects.create(
+        ledger.objects.create(
             tier=Resource.Tier.MASTER,
             source_addon="angee.resources",
             xref="user_alice",

@@ -1,4 +1,4 @@
-"""Concrete L0/L1 workflow sources for native Django test database setup."""
+"""Concrete workflow sources for native Django test database setup."""
 
 from angee.workflows import models as sources
 
@@ -65,3 +65,15 @@ class StepAttempt(sources.StepAttempt):
         app_label = "workflows"
         db_table = "test_workflows_attempt"
         rebac_resource_type = "workflows/step_attempt"
+
+
+class StepArtifact(sources.StepArtifact):
+    """Concrete artifact used by source-addon tests."""
+
+    class Meta(sources.StepArtifact.Meta):
+        """Django options for the shared artifact test table."""
+
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_artifact"
+        rebac_resource_type = "workflows/step_artifact"

@@ -53,6 +53,7 @@ from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
+from angee.base.serialization import strip_null_bytes
 from angee.integrate.models import Bridge
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
@@ -68,7 +69,6 @@ from angee.messaging.managers import (
     ThreadFollowerManager,
     ThreadManager,
     ThreadNotificationManager,
-    strip_null_bytes,
 )
 from angee.messaging.tracking import FieldTracker, TrackingChange
 from angee.messaging.webforms import WebformSpec, default_webform_schema

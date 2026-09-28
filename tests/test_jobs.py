@@ -111,6 +111,7 @@ def test_job_autoconfig_declares_celery_defaults_only() -> None:
     assert "CELERY_BEAT_SCHEDULE" not in SETTINGS
     assert "CELERY_BEAT_SCHEDULE:append" not in SETTINGS
     assert SETTINGS["CELERY_TASK_IGNORE_RESULT"] is True
+    assert SETTINGS["CELERY_WORKER_PREFETCH_MULTIPLIER"] == 1
     # Beat keeps its schedule in the database through the jobs-owned scheduler.
     assert SETTINGS["CELERY_BEAT_SCHEDULER"] == "angee.jobs.scheduler:DatabaseScheduler"
     assert "CELERY_BEAT_SCHEDULE_FILENAME" not in SETTINGS

@@ -11,7 +11,8 @@ import copy
 import math
 import re
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import cache
 from typing import Any, ClassVar, NoReturn, cast, get_args
 
 from django.conf import settings
@@ -20,19 +21,33 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Vali
 from django.db import models
 from django.utils.module_loading import import_string
 from django_choices_field import TextChoicesField
-from jsonschema import Draft202012Validator
-from pydantic import BaseModel
+from jsonschema import Draft202012Validator, FormatChecker
+from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.fields import enum_member_for
-from angee.base.jsonschema import LocalSchemaReferences
+from angee.base.jsonschema import (
+    LocalSchemaReferences,
+    materialize_schema,
+    schema_nodes,
+    validation_issues,
+    validator,
+)
 
 __all__ = [
+    "FORM_SCHEMA_ANNOTATIONS",
+    "FORM_SPEC_RELATION_VALIDATOR",
+    "check_form_annotations",
+    "freeze_form_schema",
+    "materialize_form_schema",
     "ImplBase",
     "ImplChoice",
     "ImplClassField",
     "ImplDefaultsMixin",
+    "check_impl_registry",
+    "impl_choices",
+    "impl_choices_enum",
     "impl_registry",
     "resolve_all_impl_classes",
     "resolve_impl_class",
@@ -101,7 +116,85 @@ _FORM_SPEC_RELATION_SCHEMA: dict[str, Any] = {
         },
     },
 }
-_FORM_SPEC_RELATION_VALIDATOR = Draft202012Validator(_FORM_SPEC_RELATION_SCHEMA)
+FORM_SPEC_RELATION_VALIDATOR = validator(_FORM_SPEC_RELATION_SCHEMA)
+"""Native validator for the shared FormSpec relation metadata contract."""
+
+FORM_SCHEMA_ANNOTATIONS = frozenset({"title", "description", "widget", "relation", "options", "readOnly"})
+"""Presentation annotations shared by config forms and frozen form snapshots."""
+
+_FORM_SCHEMA_KEYS = frozenset(Draft202012Validator.VALIDATORS) | FORM_SCHEMA_ANNOTATIONS | {
+    "$schema", "$defs", "$anchor", "default",
+}
+_SCHEMA_LISTS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
+_FORM_MISSING = object()
+
+
+def materialize_form_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Compile a finite form schema using the shared annotation vocabulary."""
+    for node in schema_nodes(schema):
+        if node.keys() - _FORM_SCHEMA_KEYS:
+            raise ValidationError("Forms contain unsupported schema keywords or nested discriminators.")
+        if "$ref" in node and node.keys() - FORM_SCHEMA_ANNOTATIONS - {"$ref", "default"}:
+            raise ValidationError("Reference siblings must be form annotations.")
+        if "format" in node and node["format"] not in FormatChecker.checkers:
+            raise ValidationError(f"Unsupported form format: {node['format']}.")
+    result = materialize_schema(schema, annotations=FORM_SCHEMA_ANNOTATIONS | {"default"})
+    for node in schema_nodes(result):
+        check_form_annotations(node)
+    return result
+
+
+def check_form_annotations(schema: dict[str, Any]) -> None:
+    """Validate shared form annotations and their declared field values."""
+    for name in ("title", "description", "widget"):
+        if name in schema and not isinstance(schema[name], str):
+            raise ValidationError(f"Form annotation {name} must be a string.")
+    if "readOnly" in schema and not isinstance(schema["readOnly"], bool):
+        raise ValidationError("Form annotation readOnly must be a boolean.")
+    if "relation" in schema and (
+        not FORM_SPEC_RELATION_VALIDATOR.is_valid(schema["relation"])
+        or schema.get("type") != "string"
+    ):
+        raise ValidationError("Relation fields require a string value and a valid FormSpec relation.")
+    if "options" in schema:
+        options = schema["options"]
+        if not isinstance(options, list) or not options or any(
+            not isinstance(option, dict) or set(option) != {"value", "label"}
+            or not isinstance(option["label"], str) or validation_issues(schema, option["value"])
+            for option in options
+        ):
+            raise ValidationError("Field options require valid values and labels.")
+
+
+def freeze_form_schema(schema: Any, initial: Any = _FORM_MISSING) -> None:
+    """Freeze copied defaults, option enums and read-only values into a form schema."""
+    if not isinstance(schema, dict):
+        return
+    if "options" in schema:
+        schema["enum"] = [copy.deepcopy(option["value"]) for option in schema["options"]]
+    if initial is not _FORM_MISSING:
+        if "const" in schema and schema["const"] != initial:
+            raise ValidationError("An initial value cannot change a declared constant.")
+        schema["default"] = copy.deepcopy(initial)
+    value = schema.get("default", _FORM_MISSING)
+    if schema.get("readOnly"):
+        if value is _FORM_MISSING:
+            raise ValidationError("A readOnly field requires an initial value or declared default.")
+        schema["const"] = copy.deepcopy(value)
+    for name, child in schema.get("properties", {}).items():
+        freeze_form_schema(child, value.get(name, _FORM_MISSING) if isinstance(value, dict) else _FORM_MISSING)
+        if isinstance(child, dict) and child.get("readOnly") and name not in schema.get("required", []):
+            schema.setdefault("required", []).append(name)
+    for key in _SCHEMA_LISTS:
+        for child in schema.get(key, []):
+            freeze_form_schema(child, value)
+    if isinstance(value, list) and "items" in schema:
+        # Per-row immutable values require per-row schemas, not one mutable shared item schema.
+        schema["prefixItems"] = [copy.deepcopy(schema["items"]) for _ in value]
+        for child, item in zip(schema["prefixItems"], value, strict=True):
+            freeze_form_schema(child, item)
+    elif "items" in schema:
+        freeze_form_schema(schema["items"])
 
 
 class _ConfigFormSpecProjector:
@@ -278,7 +371,7 @@ class _ConfigFormSpecProjector:
         return result
 
     def _relation(self, value: Any) -> dict[str, Any]:
-        error = next(_FORM_SPEC_RELATION_VALIDATOR.iter_errors(value), None)
+        error = next(FORM_SPEC_RELATION_VALIDATOR.iter_errors(value), None)
         if error is not None:
             location = ".".join(str(part) for part in error.absolute_path)
             self._unsupported(
@@ -388,7 +481,7 @@ class ImplBase:
         """Return non-empty static input suggestions from Pydantic's JSON Schema.
 
         Pydantic's validation schema owns default encoding and omits factories;
-        ``normalize_config`` resolves those when validating runtime input.
+        ``parse_config`` resolves those when validating runtime input.
         FormSpec support does not determine which backend defaults are available.
         """
 
@@ -425,19 +518,35 @@ class ImplBase:
         )
 
     @classmethod
-    def normalize_config(cls, value: Any) -> dict[str, Any]:
-        """Validate and normalize adapter-owned JSON through its optional model."""
+    def parse_config(cls, value: Any) -> BaseModel | None:
+        """Return the declared config model, rejecting non-empty config without one."""
 
         if cls.config_model is None:
-            return cast(dict[str, Any], value)
-        validated = cls.parse_value(value, parser=cls.config_model.model_validate, path="config")
-        return validated.model_dump(mode="json", by_alias=True)
+            if value:
+                raise ValidationError({"config": f"{cls.__name__} does not accept configuration."})
+            return None
+        return cast(BaseModel, cls.parse_value(value, cls.config_model, "config"))
+
+    @classmethod
+    def normalize_config(cls, value: Any) -> dict[str, Any]:
+        """Parse config once and serialize the model with its declared wire aliases."""
+
+        validated = cls.parse_config(value)
+        return validated.model_dump(mode="json", by_alias=True) if validated is not None else {}
 
     @staticmethod
-    def parse_value[T](value: Any, *, parser: Callable[[Any], T], path: str) -> T:
-        """Parse one typed value with the same field errors as config normalization."""
+    @cache
+    def _adapter(type_: Any) -> TypeAdapter[Any]:
+        """Reuse native parsing, schema and serialization for each declared type."""
+
+        return TypeAdapter(Any if type_ is None else type_)
+
+    @classmethod
+    def parse_value(cls, value: Any, type_: Any, path: str) -> Any:
+        """Validate through the cached native adapter, translating Django field paths."""
+
         try:
-            return parser(value)
+            return cls._adapter(type_).validate_python(value)
         except PydanticValidationError as error:
             messages: dict[str, list[str]] = {}
             for issue in error.errors(include_url=False, include_context=False, include_input=False):
@@ -448,10 +557,10 @@ class ImplBase:
 
     @classmethod
     def declared_config_keys(cls) -> frozenset[str] | None:
-        """Return the top-level config wire names this impl accepts.
+        """Return the top-level config wire names accepted by model-row validation.
 
-        ``None`` means the config is untyped or open (``extra="allow"``), so every
-        key is accepted.
+        ``None`` means row config is untyped or open (``extra="allow"``), so
+        every key is accepted. Explicit typed parsing uses ``parse_config``.
         """
 
         if cls.config_model is None or cls.config_model.model_config.get("extra") == "allow":
@@ -583,6 +692,76 @@ def resolve_all_impl_classes[T](
     return tuple(classes)
 
 
+def check_impl_registry(
+    registry_setting: str,
+    base_class: type[object],
+    *,
+    obj: object | None = None,
+) -> list[checks.CheckMessage]:
+    """Check every registry declaration and config form, including rowless registries.
+
+    Empty registries are valid catalogues. Model fields and enum projections
+    require entries, and consumers own any required selected-key policy.
+    """
+
+    errors: list[checks.CheckMessage] = []
+    try:
+        classes = resolve_all_impl_classes(
+            registry_setting,
+            base_class,
+            on_error=lambda error: errors.append(
+                checks.Error(
+                    str(error), obj=obj,
+                    id="angee.E003" if isinstance(error, ImportError) else "angee.E004",
+                )
+            ),
+        )
+    except ImproperlyConfigured as error:
+        return [checks.Error(str(error), obj=obj, id="angee.E002")]
+    for impl in classes:
+        if issubclass(impl, ImplBase):
+            try:
+                impl.config_form_spec()
+            except ImproperlyConfigured as error:
+                errors.append(checks.Error(str(error), obj=obj, id="angee.E005"))
+    return errors
+
+
+def impl_choices(registry_setting: str, base_class: type[object]) -> list[ImplChoice]:
+    """Project pickable metadata in registry-key order, without requiring a column."""
+
+    choices: list[ImplChoice] = []
+    for key in sorted(impl_registry(registry_setting)):
+        impl = resolve_impl_class(registry_setting, key, base_class)
+        if issubclass(impl, ImplBase):
+            choices.append(replace(impl.choice(), key=key))
+        else:
+            choices.append(ImplChoice(key=key, label=key, icon="", category="", defaults={}, config_schema=None))
+    return choices
+
+
+def impl_choices_enum(registry_setting: str) -> type[models.TextChoices]:
+    """Return the shared native enum for the current non-empty registry key set."""
+
+    keys = tuple(sorted(impl_registry(registry_setting)))
+    if not keys:
+        raise ImproperlyConfigured(
+            f"Implementation registry settings.{registry_setting} is empty; "
+            "at least one implementation is required to build its enum."
+        )
+    return _impl_choices_enum(registry_setting, keys)
+
+
+@cache
+def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[models.TextChoices]:
+    """Share enum identity across projections while settings changes select new keys."""
+
+    core = registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
+    camel = "".join(part.capitalize() for part in core.split("_") if part)
+    members = [(key.upper(), (key, key)) for key in keys]
+    return cast("type[models.TextChoices]", models.TextChoices(f"{camel or 'Impl'}Impl", members))
+
+
 class ImplClassField(TextChoicesField):
     """A column naming a non-model implementation class by a short key.
 
@@ -643,22 +822,7 @@ class ImplClassField(TextChoicesField):
                 )
             )
         elif isinstance(self.base_class, type):
-            for impl in resolve_all_impl_classes(
-                self.registry_setting,
-                self.base_class,
-                on_error=lambda error: errors.append(
-                    checks.Error(
-                        str(error),
-                        obj=self,
-                        id="angee.E003" if isinstance(error, ImportError) else "angee.E004",
-                    )
-                ),
-            ):
-                if issubclass(impl, ImplBase):
-                    try:
-                        impl.config_form_spec()
-                    except ImproperlyConfigured as error:
-                        errors.append(checks.Error(str(error), obj=self, id="angee.E005"))
+            errors.extend(check_impl_registry(self.registry_setting, self.base_class, obj=self))
         return errors
 
     def resolve_class(self, key: Any) -> type:
@@ -669,7 +833,7 @@ class ImplClassField(TextChoicesField):
     def registered_keys(self) -> tuple[str, ...]:
         """Return this field's configured implementation keys in deterministic order."""
 
-        return tuple(sorted(self._registry()))
+        return tuple(sorted(impl_registry(self.registry_setting)))
 
     def resolve_for(self, instance: models.Model) -> type:
         """Return the impl class selected by this field on ``instance``."""
@@ -687,57 +851,18 @@ class ImplClassField(TextChoicesField):
     def _build_enum(self) -> type[models.TextChoices]:
         """Return a ``TextChoices`` enum over the registered keys, in deterministic order."""
 
-        keys = sorted(self._registry())
-        if not keys:
-            if self.base_class is None:
-                # A migration-state field (``deconstruct`` drops ``base_class`` and
-                # ``choices``) only describes its varchar column, so it must load
-                # even when its registry was renamed or retired after the migration
-                # was written.
-                default = self._historical_default
-                key = default if isinstance(default, str) and default else "historical"
-                members = [(key.upper(), (key, key))]
-                return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
-            raise ImproperlyConfigured(
-                f"ImplClassField registry settings.{self.registry_setting} is empty; an addon must "
-                "contribute at least one impl (e.g. a noop/null-object default) before the field is built."
-            )
-        members = [(key.upper(), (key, key)) for key in keys]
-        return cast("type[models.TextChoices]", models.TextChoices(self._enum_name(), members))
-
-    def _enum_name(self) -> str:
-        """Return a stable PascalCase GraphQL enum name derived from ``registry_setting``."""
-
-        core = self.registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
-        camel = "".join(part.capitalize() for part in core.split("_") if part)
-        return f"{camel or 'Impl'}Impl"
+        if self.base_class is None and not impl_registry(self.registry_setting):
+            # Migration-state fields omit base_class and only describe the old
+            # varchar column, even after its registry was renamed or retired.
+            default = self._historical_default
+            key = default if isinstance(default, str) and default else "historical"
+            return _impl_choices_enum(self.registry_setting, (key,))
+        return impl_choices_enum(self.registry_setting)
 
     def impl_choices(self) -> list[ImplChoice]:
         """Return pickable choices for the registry in deterministic key order."""
 
-        choices: list[ImplChoice] = []
-        for key in sorted(self._registry()):
-            impl = self.resolve_class(key)
-            if isinstance(impl, type) and issubclass(impl, ImplBase):
-                choice = impl.choice()
-                choices.append(
-                    ImplChoice(
-                        key=key,
-                        label=choice.label,
-                        icon=choice.icon,
-                        category=choice.category,
-                        defaults=choice.defaults,
-                        config_schema=choice.config_schema,
-                    )
-                )
-            else:
-                choices.append(ImplChoice(key=key, label=key, icon="", category="", defaults={}, config_schema=None))
-        return choices
-
-    def _registry(self) -> dict[str, str]:
-        """Return the configured ``key -> dotted path`` mapping for this field."""
-
-        return impl_registry(self.registry_setting)
+        return impl_choices(self.registry_setting, cast(type, self.base_class))
 
 
 class ImplDefaultsMixin(models.Model):
@@ -876,7 +1001,7 @@ class ImplDefaultsMixin(models.Model):
         return {"config"}
 
     def validate_impl_configs(self, *, update_fields: Any = None) -> None:
-        """Validate every declared adapter config before any model save ingress."""
+        """Validate declared config models on save, leaving untyped row config alone."""
 
         if not self._state.adding and update_fields is not None and "config" not in update_fields:
             return

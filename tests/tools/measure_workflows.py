@@ -4,10 +4,12 @@ Execution owns managers.py except DraftSave and WorkflowManager, tasks.py, and
 Definition.ready_nodes plus Definition._edge_live. Definition/validation/bindings
 owns the rest of definition.py, bindings.py, DraftSave, and WorkflowManager. Step contracts
 own steps.py and context.py. Models own models.py, states.py, and permissions.zed.
-Blank lines, comments, docstrings, and decorators count; every mapped file line
-belongs to exactly one row. Workflow limits are fixed; exceeding one fails this command.
+Blank lines, comments, docstrings, and decorators count; every source file line
+belongs to exactly one row. The README and addon declaration are named non-code
+exceptions. Bytecode caches are generated artifacts. An unknown file or an
+exceeded fixed budget fails this command.
 Decisions reports Python, permission, and manifest sources, excluding its testing app.
-Its budget comparison is informational pending B10 shared-schema owner consolidation;
+Its budget comparison is informational;
 required public contract docstrings remain included in the reported physical count.
 """
 
@@ -15,6 +17,24 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2] / "addons" / "angee" / "workflows"
+"""Source addon whose complete inventory must agree with the budget map."""
+
+NON_CODE_FILES = frozenset({"README.md", "addon.toml"})
+"""Named declarations and prose outside the physical code budgets."""
+
+WHOLE_FILE_ROWS = (
+    ("Step contract, context, built-in steps", 900, ("steps.py", "context.py")),
+    ("Models, constraints, permissions", 900, ("models.py", "states.py", "permissions.zed")),
+    ("Triggers and sources", 500, ("triggers.py", "sources.py")),
+    ("GraphQL schema", 700, ("schema.py",)),
+    ("Resources, autoconfig, settings", 300, ("__init__.py", "apps.py", "resources.py", "autoconfig.py")),
+    ("Testing harness", 500, (
+        "testing/__init__.py", "testing/apps.py", "testing/models.py", "testing/fixtures.py", "testing/drivers.py",
+    )),
+)
+"""Named whole-file owners, including the design's optional later-phase sources."""
 
 
 def symbol_lines(source: str, symbol: str) -> set[int]:
@@ -36,14 +56,18 @@ def symbol_lines(source: str, symbol: str) -> set[int]:
 
 
 def main() -> int:
-    """Print workflow budgets and the decisions count; fail exceeded workflow limits."""
+    """Print all rows, rejecting unmapped workflow files and exceeded workflow limits."""
 
-    root = Path(__file__).resolve().parents[2] / "addons" / "angee" / "workflows"
-    names = (
-        "managers.py", "tasks.py", "definition.py", "bindings.py", "steps.py",
-        "context.py", "models.py", "states.py", "permissions.zed",
-    )
-    sources = {name: (root / name).read_text(encoding="utf-8") for name in names}
+    names = {"managers.py", "tasks.py", "definition.py", "bindings.py"}
+    names.update(name for _, _, files in WHOLE_FILE_ROWS for name in files)
+    inventory = {
+        path.relative_to(ROOT).as_posix()
+        for path in ROOT.rglob("*")
+        if path.is_file() and "__pycache__" not in path.relative_to(ROOT).parts
+    }
+    if unmapped := inventory - names - NON_CODE_FILES:
+        raise ValueError(f"Unmapped workflow files: {', '.join(sorted(unmapped))}.")
+    sources = {name: (ROOT / name).read_text(encoding="utf-8") for name in sorted(names & inventory)}
     whole = {name: set(range(1, len(source.splitlines()) + 1)) for name, source in sources.items()}
     authoring = (
         symbol_lines(sources["managers.py"], "DraftSave")
@@ -64,13 +88,8 @@ def main() -> int:
             "bindings.py": whole["bindings.py"],
             "managers.py": authoring,
         }),
-        ("Step contract, context, built-in steps", 900, {
-            "steps.py": whole["steps.py"], "context.py": whole["context.py"],
-        }),
-        ("Models, constraints, permissions", 900, {
-            "models.py": whole["models.py"], "states.py": whole["states.py"],
-            "permissions.zed": whole["permissions.zed"],
-        }),
+        *((name, budget, {file: whole[file] for file in files if file in whole})
+          for name, budget, files in WHOLE_FILE_ROWS),
     )
     for name, expected in whole.items():
         covered: set[int] = set()
@@ -89,7 +108,7 @@ def main() -> int:
         count = sum(len(lines) for lines in files.values())
         print(f"| {name} | {count} | {budget} | {budget - count} |")
         exceeded |= count > budget
-    decision_root = root.parent / "decisions"
+    decision_root = ROOT.parent / "decisions"
     decision_count = sum(
         len(path.read_text(encoding="utf-8").splitlines())
         for path in sorted(decision_root.rglob("*"))

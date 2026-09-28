@@ -1,4 +1,4 @@
-"""Abstract definitions and retained execution rows for database workflows."""
+"""Abstract definitions and retained workflow execution rows."""
 
 from __future__ import annotations
 
@@ -22,12 +22,6 @@ from angee.workflows.managers import StepAttemptQuerySet, StepRunManager, Workfl
 from angee.workflows.resources import WorkflowDefinitionResource
 from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
-
-
-def _empty_workflow_output_schema() -> dict[str, Any]:
-    """Preserve the default callable used by materialized historical migrations."""
-
-    return {"type": "object", "properties": {}, "additionalProperties": False}
 
 
 class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
@@ -123,7 +117,6 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     """One actor's execution of one immutable graph against an optional record."""
 
     runtime = True
-    record_ref_field_prefix = "subject"
     rebac_grantable = {"reader": "write", "operator": "write"}
     sqid_prefix = "wfr_"
 
@@ -136,11 +129,19 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     input = models.JSONField(default=dict)
     output = models.JSONField(default=dict)
     outcome = models.CharField(max_length=NAME_MAX_LENGTH, blank=True, default="")
-    error = models.TextField(blank=True, default="")
+    error = models.TextField(max_length=8192, blank=True, default="")
     request_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
+    reprocess_of = models.ForeignKey(
+        "workflows.WorkflowRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="reprocesses",
+    )
     finished_at = models.DateTimeField(null=True, blank=True)
 
     objects = WorkflowRunManager()
+
+    @property
+    def origin(self) -> str:
+        """Derive the run's admission origin from its retained execution links."""
+        return "reprocess" if self.reprocess_of_id is not None else "manual"
 
     @property
     def is_terminal(self) -> bool:
@@ -185,8 +186,15 @@ class StepRun(AngeeDataModel):
     map_index = models.PositiveIntegerField(default=0)
     status = StateField(choices_enum=StepRunStatus, default=StepRunStatus.READY, db_index=False)
     waiting_kind = StateField(choices_enum=WaitingKind, null=True, blank=True, db_index=False)
+    wait_reason = models.TextField(blank=True, default="")
     attempt = models.PositiveIntegerField(default=0)
+    idempotency_token = models.UUIDField(null=True, blank=True, editable=False)
+    page_index = models.PositiveIntegerField(default=0, editable=False)
     retries = models.PositiveIntegerField(default=0)
+    retry_acknowledged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+        help_text="Pending duplicate-effect acknowledgement, transferred to the next committed attempt.",
+    )
     dispatches = models.PositiveIntegerField(default=0)
     deadline_at = models.DateTimeField(null=True, blank=True)
     wake_at = models.DateTimeField(null=True, blank=True)
@@ -202,6 +210,13 @@ class StepRun(AngeeDataModel):
     def step(self) -> type[Step]:
         """Resolve the class once from this run's immutable node declaration."""
         return self.run.version.definition.step(self.node_key)
+
+    @property
+    def requires_duplicate_acknowledgement(self) -> bool:
+        """Whether any attempt on this page may have made a non-idempotent effect."""
+        return not self.step.effect_idempotent and self.attempts.filter(
+            page_index=self.page_index, effect_started_at__isnull=False,
+        ).exists()
 
     class Meta:
         """Django options for node identity, fences and tick predicates."""
@@ -250,11 +265,16 @@ class StepAttempt(AngeeDataModel):
 
     step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="attempts")
     number = models.PositiveIntegerField()
+    page_index = models.PositiveIntegerField(default=0, editable=False)
     started_at = models.DateTimeField(db_default=Now())
     finished_at = models.DateTimeField(null=True, blank=True)
     result = StateField(choices_enum=AttemptResult, null=True, blank=True, db_index=False)
-    error = models.TextField(blank=True, default="")
-    stacktrace = models.TextField(blank=True, default="")
+    error = models.TextField(max_length=8192, blank=True, default="")
+    stacktrace = models.TextField(max_length=65536, blank=True, default="")
+    effect_started_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+    )
 
     objects = AngeeManager.from_queryset(StepAttemptQuerySet)()
 
@@ -266,3 +286,22 @@ class StepAttempt(AngeeDataModel):
         constraints = [
             models.UniqueConstraint(fields=("step_run", "number"), name="workflows_attempt_number_unique"),
         ]
+
+
+class StepArtifact(RecordRefMixin, AngeeDataModel):
+    """One record retained as a step's result evidence without copying its data."""
+
+    runtime = True
+    sqid_prefix = "wfa_"
+
+    step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="artifacts")
+    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
+    object_id = models.PositiveBigIntegerField()
+    record = GenericForeignKey("content_type", "object_id")
+    label = models.CharField(max_length=200, blank=True, default="")
+
+    class Meta:
+        """Django options for actor-readable execution artifacts."""
+
+        abstract = True
+        rebac_resource_type = "workflows/step_artifact"

@@ -37,6 +37,7 @@ requires-python = ">=3.14"
 # build backend (build-backend above) — see [tool.hatch-angee] below.
 dependencies = [
   "celery[redis]>=5.5",
+  "billiard>=4.2.1,<4.3",
   "django-celery-beat>=2.9",
   "channels>=4.0",
   "cryptography>=44",
@@ -51,7 +52,7 @@ dependencies = [
   "django-choices-field>=4.0.0",
   "django-yamlconf>=1.5.0",
   "django-environ>=0.12",
-  "jsonschema>=4.26",
+  "jsonschema[format-nongpl]>=4.26",
   "pydantic>=2.13",
   "referencing>=0.37",
   # ASGI server: serves the composed app and addon-contributed channels WebSocket
@@ -112,7 +113,6 @@ addons = [
     "httpcore>=1.0,<2",
     "httpx>=0.28.1,<0.29",
     "imapclient>=3.1.0",
-    "jsonschema[format-nongpl]>=4.26",
     "mail-parser-reply>=1.36",
     "markdown-it-py>=4.2",
     "mcp>=1.2",
@@ -128,7 +128,6 @@ addons = [
     "python-magic>=0.4.27",
     "pyyaml>=6",
     "qrcode[pil]>=8.2",
-    "referencing>=0.37",
     "ruamel.yaml>=0.18",
     "slack-sdk>=3.43.0",
     "strawberry-django-aggregates>=0.12.0",

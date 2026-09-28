@@ -1,7 +1,7 @@
 // Authorization schema for the workflows addon.
 // @rebac_package: workflows
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 10
+// @rebac_schema_revision: 14
 
 definition workflows/workflow {
     relation owner: auth/user // rebac:field=created_by
@@ -11,7 +11,10 @@ definition workflows/workflow {
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = owner + editor + viewer + admin->member
+    permission read = owner + editor + viewer + starter + admin->member
+    permission monitor = owner + editor + viewer + admin->member
+    permission read__draft = monitor
+    permission read__layout = monitor
     permission write = owner + editor + admin->member
     permission start = owner + editor + starter + admin->member
     permission delete = owner + admin->member
@@ -35,7 +38,7 @@ definition workflows/run {
     relation admin: angee/role // rebac:const=admin
 
     permission create = workflow->start + admin->member
-    permission read = run_as + workflow->read + reader + operator + admin->member
+    permission read = run_as + workflow->monitor + reader + operator + admin->member
     permission write = run_as + workflow->write + operator + admin->member
     permission delete = admin->member
 }
@@ -44,13 +47,26 @@ definition workflows/step_run {
     relation run: workflows/run // rebac:field=run
     relation admin: angee/role // rebac:const=admin
 
-    permission create = run->write + admin->member
+    permission create = admin->member
     permission read = run->read + admin->member
-    permission write = run->write + admin->member
+    permission write = admin->member
     permission delete = admin->member
 }
 
 definition workflows/step_attempt {
+    relation step_run: workflows/step_run // rebac:field=step_run
+    relation admin: angee/role // rebac:const=admin
+
+    permission create = admin->member
+    permission read = step_run->read + admin->member
+    // Diagnostic text and its trace share the attempt's error visibility.
+    permission read__error = read
+    permission read__stacktrace = read__error
+    permission write = admin->member
+    permission delete = admin->member
+}
+
+definition workflows/step_artifact {
     relation step_run: workflows/step_run // rebac:field=step_run
     relation admin: angee/role // rebac:const=admin
 

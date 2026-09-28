@@ -5,7 +5,6 @@ from __future__ import annotations
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -89,21 +88,13 @@ class DecisionMutation:
     """Dispatch deciding through the exact action permission and manager."""
 
     @strawberry.mutation
-    @action_guard("Could not decide.")
+    @action_guard("Could not decide.", camel_case_keys=False)
     def decide(self, info: strawberry.Info, id: PublicID, revision: int, action: str, values: JSON) -> ActionResult:
         """Record one action against the frozen form at the expected revision."""
         decision = authorized_permission_target(info, Decision, id, "act")
-        try:
-            Decision.objects.decide(
-                decision.pk, actor=info.context.request.user, revision=revision, action=action, values=values,
-            )
-        except ValidationError as error:
-            # Integration stand-in: action_guard needs a field-key casing option.
-            # Frozen schema fields retain their authored names on the wire.
-            return ActionResult(
-                ok=False, message="Could not decide.",
-                validation_errors=ActionResult.validation_error_map(error, camel_case_keys=False),
-            )
+        Decision.objects.decide(
+            decision.pk, actor=info.context.request.user, revision=revision, action=action, values=values,
+        )
         return ActionResult(ok=True, message="Decision recorded.", id=decision.sqid)
 
 

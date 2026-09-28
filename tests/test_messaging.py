@@ -41,6 +41,7 @@ import tests.spaces_models  # noqa: F401 -- register related models before nativ
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
+from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -52,7 +53,7 @@ from angee.messaging.backends import (
     ParsedRecipient,
     ParsedThread,
 )
-from angee.messaging.managers import derived_part_name, normalize_subject, strip_null_bytes
+from angee.messaging.managers import derived_part_name, normalize_subject
 from angee.messaging.models import MessageEdge as AbstractMessageEdge
 from angee.messaging.models import MessageStar as AbstractMessageStar
 from angee.messaging.models import Participant as AbstractParticipant

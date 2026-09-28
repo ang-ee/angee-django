@@ -45,6 +45,7 @@ from angee.base.actors import actor_user_id
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_target
+from angee.base.serialization import strip_null_bytes
 from angee.graphql.publishing import mute_changes
 from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.events import message_ingested
@@ -64,24 +65,6 @@ logger = logging.getLogger(__name__)
 
 _SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:re|fwd|fw|aw|sv|vs|ref|tr|rif)\s*(?:\[\d+\])?\s*:\s*", re.IGNORECASE)
 _WS_RE = re.compile(r"\s+")
-
-
-def strip_null_bytes(value: Any) -> Any:
-    """Recursively remove ``\\x00`` from strings inside str/dict/list values.
-
-    Email bodies routinely contain null bytes, which Postgres rejects in text/JSON
-    columns; stripping them on the write path keeps a large sync from hard-failing.
-    """
-
-    if isinstance(value, str):
-        return value.replace("\x00", "")
-    if isinstance(value, dict):
-        return {key: strip_null_bytes(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [strip_null_bytes(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(strip_null_bytes(item) for item in value)
-    return value
 
 
 def normalize_subject(subject: str) -> str:
@@ -897,7 +880,7 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None:
             return self.model._base_manager.none()
-        record._require_record_access("read")
+        record.require_access("read")
         content_type, object_id = canonical_record_target(record)
         visible_threads = apps.get_model("messaging", "Thread").objects.all().scoped().values("pk")
         return (
@@ -929,8 +912,8 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None or thread.pk is None:
             raise ValueError("Source thread attachment requires saved records.")
-        record._require_record_access("write")
-        thread._require_record_access("read")
+        record.require_access("write")
+        thread.require_access("read")
         content_type, object_id = canonical_record_target(record)
         values = {
             "label": strip_null_bytes(label or str(record)),
@@ -956,8 +939,8 @@ class ThreadAttachmentManager(AngeeManager):
 
         if record.pk is None or thread.pk is None:
             return 0
-        record._require_record_access("write")
-        thread._require_record_access("read")
+        record.require_access("write")
+        thread.require_access("read")
         content_type, object_id = canonical_record_target(record)
         target_model = content_type.model_class()
         if target_model is None:

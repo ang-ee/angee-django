@@ -74,20 +74,24 @@ class ActionResult:
         return cast(JSON, field_errors) if field_errors else None
 
     @classmethod
-    def from_error(cls, error: Exception, summary: str) -> ActionResult:
+    def from_error(cls, error: Exception, summary: str, *, camel_case_keys: bool = True) -> ActionResult:
         """Return a failed result from a caught exception.
 
         A Django ``ValidationError`` carrying per-field messages (``error_dict``)
         becomes the in-band ``validation_errors`` map a typed-args action form binds
-        to its inputs: field names are camel-cased to match the GraphQL argument
-        names the form binds to, and ``NON_FIELD_ERRORS`` (or any key that matches
+        to its inputs: field names are camel-cased to match GraphQL arguments by
+        default; ``camel_case_keys=False`` preserves authored schema paths.
+        ``NON_FIELD_ERRORS`` (or any key that matches
         no argument) surfaces at form level. Any other exception — or a
         ``ValidationError`` with only non-field messages — yields a message-only
         failure. ``summary`` is the human banner shown either way; the raw exception
         text is never leaked into it.
         """
 
-        validation_errors = cls.validation_error_map(error) if isinstance(error, ValidationError) else None
+        validation_errors = (
+            cls.validation_error_map(error, camel_case_keys=camel_case_keys)
+            if isinstance(error, ValidationError) else None
+        )
         if validation_errors is not None:
             return cls(ok=False, message=summary, validation_errors=validation_errors)
         return cls(ok=False, message=summary)
@@ -108,6 +112,7 @@ def action_guard(
     summary: str,
     *,
     errors: tuple[type[Exception], ...] = (),
+    camel_case_keys: bool = True,
 ) -> Callable[[Callable[_P, ActionResult]], Callable[_P, ActionResult]]:
     """Decorate an action resolver so domain errors return an in-band ``ActionResult``.
 
@@ -117,7 +122,9 @@ def action_guard(
     the body raises naturally and one owner projects the failure (a Django
     ``ValidationError`` carrying ``error_dict`` becomes the field-keyed in-band
     ``validation_errors`` map a typed-args form binds). Any other exception
-    propagates as a GraphQL error. ``@wraps`` preserves the resolver signature so a
+    propagates as a GraphQL error. Set ``camel_case_keys=False`` when errors name
+    authored JSON Schema fields rather than GraphQL arguments.
+    ``@wraps`` preserves the resolver signature so a
     Strawberry field decorated with it keeps its introspected arguments. Every
     caught failure is logged with the action name and traceback before projection.
     """
@@ -131,7 +138,7 @@ def action_guard(
                 return resolver(*args, **kwargs)
             except caught as error:
                 logger.exception("GraphQL action %s failed", resolver.__name__)
-                return ActionResult.from_error(error, summary)
+                return ActionResult.from_error(error, summary, camel_case_keys=camel_case_keys)
 
         return guarded
 

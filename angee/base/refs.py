@@ -20,9 +20,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, ClassVar, NamedTuple
+from typing import Any, NamedTuple
 
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.core import checks
 from django.db import models
 from rebac import ObjectRef, to_object_ref
 from rebac.resources import model_resource_type
@@ -135,22 +137,46 @@ def _pk_ancestor_chain(model: type[models.Model]) -> Iterator[type[models.Model]
 
 
 class RecordRefMixin(models.Model):
-    """Project a contenttypes-backed row reference from model-owned fields."""
-
-    record_ref_field_prefix: ClassVar[str] = "target"
-    """Reference field prefix; ``target`` maps to ``content_type``/``object_id``."""
+    """Project a row reference from the model's single declared generic foreign key."""
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
 
         abstract = True
 
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Reject ambiguous generic pointers and the obsolete prefix declaration."""
+
+        errors = super().check(**kwargs)
+        references = [field for field in cls._meta.private_fields if isinstance(field, GenericForeignKey)]
+        if len(references) != 1:
+            errors.append(
+                checks.Error(
+                    f"{cls._meta.label} must declare exactly one GenericForeignKey for RecordRefMixin; "
+                    f"found {len(references)}.",
+                    obj=cls,
+                    id="angee.E022",
+                )
+            )
+        if hasattr(cls, "record_ref_field_prefix"):
+            errors.append(
+                checks.Error(
+                    f"{cls._meta.label}.record_ref_field_prefix is obsolete; "
+                    "the GenericForeignKey owns its field names.",
+                    obj=cls,
+                    id="angee.E023",
+                )
+            )
+        return errors
+
     @property
     def record_ref(self) -> RecordRef:
         """Return this row's referenced record identity without loading the target."""
 
-        content_type_id = getattr(self, self._record_ref_content_type_id_attr(), None)
-        object_id = getattr(self, self._record_ref_object_id_field_name(), None)
+        reference = next(field for field in self._meta.private_fields if isinstance(field, GenericForeignKey))
+        content_type_id = getattr(self, reference.ct_field_attname)
+        object_id = getattr(self, reference.fk_field)
         if content_type_id in (None, "") or object_id in (None, ""):
             return _empty_record_ref(object_id)
         model = ContentType.objects.get_for_id(content_type_id).model_class()
@@ -169,30 +195,6 @@ class RecordRefMixin(models.Model):
         """Return the referenced record's stable public id."""
 
         return self.record_ref.public_id
-
-    @classmethod
-    def _record_ref_content_type_field_name(cls) -> str:
-        """Return the content-type FK field that backs this reference."""
-
-        prefix = cls.record_ref_field_prefix
-        if prefix == "target":
-            return "content_type"
-        return f"{prefix}_content_type"
-
-    @classmethod
-    def _record_ref_content_type_id_attr(cls) -> str:
-        """Return the stored content-type id attribute name."""
-
-        return f"{cls._record_ref_content_type_field_name()}_id"
-
-    @classmethod
-    def _record_ref_object_id_field_name(cls) -> str:
-        """Return the object-id field that backs this reference."""
-
-        prefix = cls.record_ref_field_prefix
-        if prefix == "target":
-            return "object_id"
-        return f"{prefix}_object_id"
 
 
 def _record_ref_from_model(model: type[models.Model], object_id: Any) -> RecordRef:

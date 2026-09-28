@@ -1,6 +1,5 @@
 """Admission and final transitions, serialized group first, then decision."""
 
-import json
 import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -272,8 +271,7 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         resolver = _user(actor)
         error = None
         with self.hold(decision_id) as (group, decision):
-            if not decision.with_actor(resolver).has_access("act"):
-                raise PermissionDenied("Act access is required.")
+            decision.require_access("act", resolver)
             if not decision.is_open or decision.revision != revision or group.settled_at is not None:
                 raise ValidationError({"revision": "The decision has changed; reload it."})
             target = self.filter(pk=decision.pk)
@@ -328,24 +326,22 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
 
     def resolutions(self, group_id: Any, *, actor: Any, actions: Sequence[type[Action]]) -> list[ResolvedDecision]:
         """Lock settled seats, recheck resolver authority and parse through supplied action models."""
+        actor = _user(actor)
         group_model = self.model._meta.get_field("group").related_model
         with group_model.objects.hold(group_id) as group:
-            if not group.with_actor(actor).has_access("read"):
-                raise PermissionDenied("Group read access is required.")
+            actor = group.require_access("read", actor)
             if group.settled_at is None:
                 raise ValidationError("The decision group is still open.")
             return [self._read_resolution(decision, actor, actions)
                     for decision in lock_if_supported(group.decisions.order_by("index"), no_key=True)]
 
     def _read_resolution(self, decision: Any, actor: Any, actions: Sequence[type[Action]]) -> ResolvedDecision:
-        if not decision.with_actor(actor).has_access("read"):
-            raise PermissionDenied("Read access to the decision is required.")
+        decision.require_access("read", actor)
         answer = None
         resolver = None
         if decision.closed_reason == ClosedReason.RESOLVED:
             resolver = _user(decision.resolved_by)
-            if not decision.with_actor(resolver).has_access("act"):
-                raise PermissionDenied("The resolver no longer has act access.")
+            decision.require_access("act", resolver)
             value = decision.resolution["action"]
             action_model = next((cls for cls in actions if cls.value == value), None)
             if action_model is None:
@@ -353,12 +349,14 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
             _, payload = validate_form(decision.form_schema, value, {
                 k: v for k, v in decision.resolution.items() if k != "action"
             }, actor=resolver)
-            answer = ImplBase.parse_value(json.dumps({k: v for k, v in payload.items() if k != "action"}),
-                                          parser=action_model.model_validate_json, path="resolution")
+            answer = ImplBase.parse_value(
+                {k: v for k, v in payload.items() if k != "action"}, action_model, "resolution",
+            )
         return ResolvedDecision(decision, answer, resolver)
 
     def resolution(self, decision_id: Any, *, actor: Any, actions: Sequence[type[Action]]) -> ResolvedDecision:
         """Revalidate one retained answer without requiring access to sibling seats."""
+        actor = _user(actor)
         with self.hold(decision_id) as (group, decision):
             if group.settled_at is None:
                 raise ValidationError("The decision group is still open.")
