@@ -566,8 +566,17 @@ data through REBAC, never a queryset bypass.
   uses a const-backed singleton relation on each row (for example,
   `auth/user#directory` → `iam/directory:main`) plus a seed on that singleton
   (`iam/directory:main#reader`), never base schema arms or per-row fan-out a
-  deployment cannot omit. Row-dependent public visibility composes
-  [`ConditionalSharedReaderMixin`](../../angee/base/mixins.py).
+  deployment cannot omit.
+- **Row-dependent shared visibility uses a filtered constant.** Filter the
+  resource's own columns and target its own resource type at sentinel ID
+  `shared`, then arrow to `shared_reader = authenticated`; see
+  [dashboards](../../addons/angee/dashboards/permissions.zed). The sentinel needs
+  no target row because the arrowed permission is the authenticated builtin.
+  `shared_reader` is arrow-only: never check it directly or use it as an action
+  or field gate, which would bypass the row filter. Check the resource's `read`
+  permission instead. The legacy
+  [shared-reader mixin](../../angee/base/mixins.py) remains only for spaces until
+  its filtered-constant migration.
 - **Always-shared reference data reads through `authenticated`.** A resource
   every signed-in subject reads unions the library's `authenticated` builtin into
   `read` and stores no wildcard tuple; [`tags/tag`](../../addons/angee/tags/permissions.zed)

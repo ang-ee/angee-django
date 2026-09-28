@@ -18,8 +18,8 @@ def historical_rebac(db):
     return loader.project_state(loader.graph.leaf_nodes("rebac"))
 
 
-@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio"])
-def test_tuple_cleanup_removes_only_retired_user_wildcards_in_both_stores(historical_rebac, addon):
+@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money"])
+def test_tuple_cleanup_removes_only_retired_relations_in_both_stores(historical_rebac, addon):
     module = importlib.import_module(f"angee.{addon}.runtime_migrations.shared_reader_cleanup")
     assert module.applies(historical_rebac)
     registry = historical_rebac.apps
@@ -35,7 +35,17 @@ def test_tuple_cleanup_removes_only_retired_user_wildcards_in_both_stores(histor
         (kind, retired, "auth/user", "*", "member"),
         (kind, "editor", "auth/user", "*", ""),
         ("other/row", retired, "auth/user", "*", ""),
+        ("money/role", "member", "auth/user", "42", ""),
+        ("money/role", "shared", "auth/user", "*", ""),
+        ("money/rate", "includes", "money/role", "money_admin", ""),
+        ("other/role", "includes", "money/role", "money_admin", ""),
     ]
+    role_inclusions = [
+        ("money/role", "includes", "money/role", "money_admin", ""),
+        ("money/role", "includes", "auth/user", "*", ""),
+        ("money/role", "includes", "auth/group", "42", "member"),
+    ]
+    (targets if addon == "money" else retained).extend(role_inclusions)
     keep_ids = {relationship: set(), normalized: set()}
     for index, (target, relation, subject_type, subject_id, subject_relation) in enumerate(targets + retained):
         values = {"relation": relation, "optional_subject_relation": subject_relation}
@@ -62,7 +72,7 @@ def test_tuple_cleanup_removes_only_retired_user_wildcards_in_both_stores(histor
     assert list(resource.objects.order_by("pk").values()) == resources_before
 
 
-@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio"])
+@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money"])
 def test_tuple_cleanup_honors_router_denial_without_queries(
     historical_rebac, addon, settings, django_assert_num_queries,
 ):
@@ -76,7 +86,7 @@ def test_tuple_cleanup_honors_router_denial_without_queries(
         module.forwards(historical_rebac.apps, connection.schema_editor())
 
 
-@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio"])
+@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money"])
 def test_tuple_cleanup_waits_for_both_historical_stores(addon):
     module = importlib.import_module(f"angee.{addon}.runtime_migrations.shared_reader_cleanup")
     state = ProjectState()
