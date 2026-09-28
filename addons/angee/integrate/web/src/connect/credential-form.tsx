@@ -5,12 +5,12 @@ import {
   Field,
   Form,
   Group,
-  recordActionId,
   registerForm,
   useAuthoredResourceMutation,
+  useRecordAction,
   useRecordActionMutation,
-  type ActionContext,
   type FormSubmit,
+  type RecordActionRunner,
   type RegisteredFormProps,
 } from "@angee/ui";
 import * as React from "react";
@@ -35,7 +35,7 @@ export function CredentialForm({
 }: RegisteredFormProps): React.ReactElement {
   const t = useIntegrateT();
   const isCreate = props.id == null;
-  const [revealCredential] = useAuthoredMutation(IntegrateRevealCredential);
+  const [revealCredential] = useAuthoredMutation(IntegrateRevealCredential, { transient: true });
   const [refresh] = useRecordActionMutation<ActionFieldName>("refresh_credential", {
     defaultMessage: t("credentials.refresh.done"),
   });
@@ -43,10 +43,8 @@ export function CredentialForm({
     invalidateModels: INTEGRATE_CREATE_CREDENTIAL_INVALIDATES,
   });
 
-  const reveal = React.useCallback(
-    async (context: ActionContext) => {
-      const id = recordActionId(context);
-      if (!id) return;
+  const revealById = React.useCallback<RecordActionRunner>(
+    async (id, context) => {
       const result = await revealCredential({ id });
       const secret = result?.reveal_credential.secret ?? "";
       if (!secret) throw new Error(t("credentials.reveal.noSecret"));
@@ -59,12 +57,14 @@ export function CredentialForm({
             label: t("credentials.reveal.secretLabel"),
             defaultValue: secret,
             readOnly: true,
+            copyable: true,
           },
         ],
       });
     },
     [revealCredential, t],
   );
+  const reveal = useRecordAction(revealById, { refresh: false });
 
   const submitCredential = React.useCallback<FormSubmit>(
     async (data) => {
