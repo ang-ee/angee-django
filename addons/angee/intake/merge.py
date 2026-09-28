@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from django.apps import apps
-from django.utils import timezone
+from django.core.exceptions import ValidationError
+
+from angee.base.errors import RecordAccessSubjectRefused
 
 
 def move_task_needs(source: Any, canonical: Any) -> int:
@@ -17,12 +19,18 @@ def move_task_needs(source: Any, canonical: Any) -> int:
     """
 
     need_model = apps.get_model("intake", "Need")
-    return int(
-        need_model._base_manager.filter(task_id=source.pk).update(
-            task_id=canonical.pk,
-            project_id=canonical.project_id,
-            targets_project=False,
-            original_task_id=source.pk,
-            updated_at=timezone.now(),
-        )
+    rows = (
+        need_model.objects.sudo(reason="intake.need.merge").lock_if_supported().filter(task_id=source.pk).order_by("pk")
     )
+    moved = 0
+    for need in rows.iterator():
+        need.task = canonical
+        need.original_task_id = source.pk
+        try:
+            need.save(update_fields=("task", "original_task"))
+        except RecordAccessSubjectRefused as error:
+            # Work's action guard preserves field errors, and its transaction
+            # rolls back every contributor and the task's own moved relations.
+            raise ValidationError({"canonical": error.code}) from error
+        moved += 1
+    return moved
