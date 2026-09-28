@@ -21,6 +21,7 @@ from strawberry.scalars import JSON
 from angee.base.identity import instance_from_public_id
 from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot
+from angee.graphql.capabilities import held_permissions, permission_annotations
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
@@ -133,6 +134,7 @@ class DashboardSummaryPageType:
 
 
 def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
+    permissions = held_permissions(row, ("write", "archive"))
     sources = {
         str(widget.data.get("source", {}).get("resource"))
         for widget in row.widgets.all()
@@ -151,8 +153,8 @@ def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
         revision=row.revision,
         is_archived=row.is_archived,
         resources=sorted(sources),
-        can_edit=row.has_access("write"),
-        can_archive=row.scope == "personal" and row.has_access("archive"),
+        can_edit="write" in permissions,
+        can_archive=row.scope == "personal" and "archive" in permissions,
     )
 
 
@@ -188,6 +190,7 @@ def _summary_offset(user: Any, version: str, cursor: str | None) -> int:
 
 
 def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
+    permissions = held_permissions(dashboard, ("write", "reset", "archive"))
     return DashboardPayload(
         status=status,
         id=cast(PublicID, require_public_id(Dashboard, dashboard.pk)),
@@ -195,9 +198,9 @@ def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
         name=dashboard.name,
         description=dashboard.description,
         snapshot=cast(JSON, dashboard.snapshot()),
-        can_edit=dashboard.has_access("write"),
-        can_reset=dashboard.scope != "personal" and dashboard.has_access("reset"),
-        can_archive=dashboard.scope == "personal" and dashboard.has_access("archive"),
+        can_edit="write" in permissions,
+        can_reset=dashboard.scope != "personal" and "reset" in permissions,
+        can_archive=dashboard.scope == "personal" and "archive" in permissions,
     )
 
 
@@ -245,6 +248,7 @@ class DashboardQuery:
             raise ValidationError({"limit": "Dashboard summary pages contain from 1 to 100 items."})
         rows = list(
             Dashboard.objects.filter(Q(scope="personal") | Q(owner=user) | Q(owner__isnull=True))
+            .annotate(**permission_annotations(Dashboard, ("write", "archive")))
             .select_related("owner")
             .prefetch_related("widgets")
             .order_by("sqid")[:5_001]

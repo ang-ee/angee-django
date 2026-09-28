@@ -93,6 +93,7 @@ const GrantableRelationSchema = v.looseObject({
   permission: v.string(),
   subjects: v.pipe(v.array(SubjectTypeSchema), v.readonly()),
 });
+const MutationArguments = v.pipe(v.array(v.object({ name: v.string(), type: v.string() })), v.readonly());
 const ResourceSchema = v.looseObject({
   schemaName: v.string(),
   modelLabel: v.string(),
@@ -117,6 +118,9 @@ const ResourceSchema = v.looseObject({
   defaultMeasures: v.optional(Measures),
   createFields: v.optional(Strings),
   updateFields: v.optional(Strings),
+  createArguments: v.optional(MutationArguments),
+  updateArguments: v.optional(MutationArguments),
+  saveArguments: v.optional(MutationArguments),
   requiredCreateFields: v.optional(Strings),
   createArguments: v.optional(MutationArguments),
   updateArguments: v.optional(MutationArguments),

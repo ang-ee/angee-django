@@ -2654,8 +2654,8 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         fingerprint = ""
         if client_creation_key is not None:
             self.model._meta.get_field("client_creation_key").clean(client_creation_key, None)
-            if not client_creation_key or "\x00" in client_creation_key:
-                raise ValueError("A client creation key must be nonempty and contain no null bytes.")
+            if not client_creation_key.strip() or "\x00" in client_creation_key:
+                raise ValidationError({"client_creation_key": "Creation keys must not be blank or contain null bytes."})
             actor = creation_actor or current_actor()
             if actor is None or is_anonymous_actor(actor):
                 raise ValueError("A keyed message requires an actor.")
@@ -2674,9 +2674,6 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 "autofollow_recipients": autofollow_recipients,
             }
             fingerprint = canonical_json_sha256(content)
-            existing = self.for_creation_key(creation_scope, client_creation_key, fingerprint)
-            if existing is not None:
-                return existing
         if not body and not attachments and not tracking_rows:
             raise ValueError("Message body, attachment, or tracking value is required.")
         if parent is not None and parent.thread_id != thread.pk:
@@ -2694,28 +2691,27 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
                 model_label=subtype_model_label,
                 created_by_id=created_by_id,
             )
-            try:
-                with transaction.atomic():
-                    message = self.create(
-                        thread_id=thread.pk,
-                        platform=thread.platform,
-                        direction=self.model.Direction.INTERNAL,
-                        status=self.model.MessageStatus.SENT,
-                        message_type=kind,
-                        subtype_id=subtype.pk if subtype is not None else None,
-                        parent_id=parent.pk if parent is not None else None,
-                        preview=body[:280] if body else _tracking_preview(tracking_values),
-                        sent_at=sent_at,
-                        created_by_id=created_by_id,
-                        creation_actor=creation_scope,
-                        client_creation_key=client_creation_key,
-                        creation_fingerprint=fingerprint,
-                    )
-            except IntegrityError:
-                existing = self.for_creation_key(creation_scope, client_creation_key, fingerprint)
-                if existing is None:
-                    raise
-                return existing
+
+            def insert() -> Any:
+                return self.create(
+                    thread_id=thread.pk,
+                    platform=thread.platform,
+                    direction=self.model.Direction.INTERNAL,
+                    status=self.model.MessageStatus.SENT,
+                    message_type=kind,
+                    subtype_id=subtype.pk if subtype is not None else None,
+                    parent_id=parent.pk if parent is not None else None,
+                    preview=body[:280] if body else _tracking_preview(tracking_values),
+                    sent_at=sent_at,
+                    created_by_id=created_by_id,
+                    creation_actor=creation_scope,
+                    client_creation_key=client_creation_key,
+                    creation_fingerprint=fingerprint,
+                )
+
+            message, created = self.replay_or_insert(creation_scope, client_creation_key, fingerprint, insert)
+            if not created:
+                return message
             position = 0
             if body:
                 fragment = fragment_model.objects.upsert(

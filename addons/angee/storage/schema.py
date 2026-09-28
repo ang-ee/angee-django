@@ -30,7 +30,7 @@ from angee.graphql.relations import actor_scoped_public_id
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import write_queryset
 from angee.iam.audit import AuthoredRefMixin
-from angee.iam.permissions import RolePermission
+from angee.iam.permissions import RolePermission, request_from_info
 from angee.storage import exceptions
 from angee.storage.models import FileVisibility, UploadState
 
@@ -126,14 +126,16 @@ class FileType(AuthoredRefMixin, AngeeNode):
     folder: strawberry.ID | None = actor_scoped_public_id("folder")
 
     @strawberry_django.field
-    def url(self) -> str:
-        """Return the token proxy download URL for READY rows, empty otherwise.
+    def url(self, info: strawberry.Info) -> str | None:
+        """Return a READY row's download URL, empty when unready, null in previews.
 
         The bearer token names the current actor. Download lookup re-checks
         that actor's read permission, so revocation stops subsequent requests
         even before the token expires (see :meth:`File.download_url`).
         """
 
+        if getattr(request_from_info(info), "view_as", None) is not None:
+            return None
         row = cast(Any, self)
         if row.upload_state != UploadState.READY:
             return ""
@@ -216,10 +218,12 @@ _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 class FolderWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for folders: create belongs to the manager factory."""
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
         """Create a real folder through ``Folder.objects.create_in_drive``."""
 
         del info
+        if client_creation_key is not None:
+            raise ValidationError({"client_creation_key": "Folder creation does not support creation keys."})
         try:
             return Folder.objects.create_in_drive(
                 drive_id=str(data["drive"]),

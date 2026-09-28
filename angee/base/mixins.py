@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import DatabaseError, models, router, transaction
+from django.db import DatabaseError, IntegrityError, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 from rebac import (
@@ -25,6 +25,7 @@ from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id, instance_actor
+from angee.base.errors import DomainError
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.scoping import system_queryset
@@ -688,8 +689,13 @@ class ImmutableFieldsMixin(models.Model):
             self._allowed_immutable_fields = set()
 
 
-class CreationKeyConflict(Exception):
+class CreationKeyConflict(DomainError):
     """A client creation key was already used for different content."""
+
+    code = "CREATION_KEY_CONFLICT"
+
+    def __init__(self, *args: object) -> None:
+        Exception.__init__(self, *args)
 
 
 class CreationKeyQuerySet(models.QuerySet[_ModelT]):
@@ -699,10 +705,12 @@ class CreationKeyQuerySet(models.QuerySet[_ModelT]):
         """Return a readable replay, refusing content changes for the same key.
 
         A missing scope or key has no replay identity. Callers own fingerprint
-        construction and the insert/savepoint retry on a uniqueness race.
+        construction; :meth:`replay_or_insert` owns uniqueness races.
         An empty stored fingerprint is unknown legacy content and permits replay.
         """
 
+        if key is not None and not key.strip():
+            raise ValidationError({"client_creation_key": "A client creation key must not be blank."})
         if scope is None or key is None:
             return None
         model = cast(type[CreationKeyMixin], self.model)
@@ -711,6 +719,29 @@ class CreationKeyQuerySet(models.QuerySet[_ModelT]):
         if stored and stored != fingerprint:
             raise CreationKeyConflict("This client creation key was already used for different content.")
         return row
+
+    def replay_or_insert(
+        self, scope: Any, key: str | None, fingerprint: str, insert: Callable[[], _ModelT],
+    ) -> tuple[_ModelT, bool]:
+        """Return a readable replay or insert once, retrying a uniqueness race.
+
+        The callback owns domain persistence and runs inside a savepoint. Only
+        an existing matching receipt turns an insert/constraint failure into a
+        replay. The boolean tells callers whether to run creation side effects.
+        """
+
+        self._for_write = True
+        existing = self.for_creation_key(scope, key, fingerprint)
+        if existing is not None:
+            return existing, False
+        try:
+            with transaction.atomic(using=self.db):
+                return insert(), True
+        except (IntegrityError, ValidationError):
+            existing = self.for_creation_key(scope, key, fingerprint)
+            if existing is None:
+                raise
+            return existing, False
 
 
 class CreationKeyMixin(models.Model):
@@ -730,6 +761,20 @@ class CreationKeyMixin(models.Model):
         abstract = True
 
     @classmethod
+    def creation_key_actor_scope(cls, actor: Any, values: Mapping[str, Any]) -> Any:
+        """Require a user-scoped creation receipt to belong to the acting user."""
+
+        scope = actor_user_id(actor)
+        if scope is None:
+            raise ValidationError({"client_creation_key": "A creation key requires a user actor."})
+        scope_field = cls._meta.get_field(cls.creation_key_scope)
+        supplied = values.get(scope_field.attname, values.get(scope_field.name, scope))
+        supplied = supplied.pk if isinstance(supplied, models.Model) else supplied
+        if supplied != scope:
+            raise ValidationError({"client_creation_key": "The creation scope must be the current actor."})
+        return scope
+
+    @classmethod
     def creation_key_constraint(cls, *, scope: str | None = None, name: str | None = None) -> models.UniqueConstraint:
         """Declare key uniqueness, optionally preserving an adopter's existing constraint name."""
 
@@ -740,16 +785,18 @@ class CreationKeyMixin(models.Model):
         )
 
 
-class StaleRevisionError(Exception):
+class StaleRevisionError(DomainError):
     """An update expected a revision that is no longer committed.
 
     ``current`` is ``None`` when the row no longer exists.
     """
 
+    code = "STALE_REVISION"
+
     def __init__(self, expected: int | None, current: int | None) -> None:
         self.expected = expected
         self.current = current
-        super().__init__(f"Expected revision {expected}; current revision is {current}.")
+        Exception.__init__(self, f"Expected revision {expected}; current revision is {current}.")
 
 
 def validate_revision(value: Any) -> None:
