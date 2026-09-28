@@ -46,7 +46,7 @@ from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
 from angee.base.refs import canonical_record_target
 from angee.graphql.publishing import mute_changes
-from angee.integrate.models import IntegrationLifecycle, IntegrationManager
+from angee.integrate.models import IntegrationLifecycle, IntegrationManager, IntegrationQuerySet
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
@@ -175,7 +175,42 @@ _SEARCH_MAX_BYTES = 512 * 1024
 _MESSAGE_METADATA_MAX_BYTES = 512 * 1024
 
 
-class ChannelManager(IntegrationManager):
+class ChannelQuerySet(IntegrationQuerySet):
+    """Chainable scopes over messaging channels and their pairing attempts."""
+
+    def unfinished_pairing(self, user: Any, backend_class: str) -> ChannelQuerySet:
+        """Return the user's empty, never-claimed, non-paused channels, newest first.
+
+        "Claimed" is the durable identity under the live implementation's
+        ``state_identity_key``. A pairing report's ``own_id`` is diagnostic — a
+        duplicate rejection or logout keeps it after releasing the claim — so
+        it does not disqualify reuse. Message membership is the message owner's
+        ``for_channel`` predicate; callers run elevated so it sees every message.
+        """
+
+        impl_class = self.model.resolve_impl_class(self.model.live_impl_field, backend_class)
+        identity_key = impl_class.state_identity_key
+        identity = f"subscription_state__{identity_key}"
+        claimed = (
+            models.Q(subscription_state__has_key=identity_key)
+            & ~models.Q(**{identity: ""})
+            & ~models.Q(**{identity: None})
+        )
+        message_model = apps.get_model("messaging", "Message")
+        return cast(
+            ChannelQuerySet,
+            self.filter(
+                ~models.Exists(message_model.objects.for_channel(models.OuterRef("pk"))),
+                owner_id=user.pk,
+                backend_class=backend_class,
+            )
+            .exclude(lifecycle=IntegrationLifecycle.PAUSED)
+            .exclude(claimed)
+            .order_by("-created_at", "-pk"),
+        )
+
+
+class ChannelManager(IntegrationManager.from_queryset(ChannelQuerySet)):  # type: ignore[misc]
     """Channel factory + delete owner, bound as ``Channel.objects``.
 
     A Channel is a multi-table-inheritance child of the concrete ``Integration``, so
