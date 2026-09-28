@@ -90,6 +90,8 @@ dev = [
   "mypy>=1.10",
   "pytest>=8.0",
   "pytest-django>=4.8",
+  "pytest-randomly>=3.16",
+  "pytest-xdist>=3.6",
   "ruff>=0.15.12",
   "vulture>=2.16",
 ]
@@ -195,7 +197,7 @@ DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
 testpaths = ["tests", "addons/angee/resources/tests"]
 pythonpath = [".", "addons", "examples/addons"]
-addopts = "-ra --strict-markers --import-mode=importlib"
+addopts = "-ra --strict-markers --import-mode=importlib -p no:randomly"
 
 [tool.ruff]
 line-length = 120

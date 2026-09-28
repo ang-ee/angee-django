@@ -5,6 +5,8 @@ from __future__ import annotations
 import itertools
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import ExitStack
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -654,6 +656,16 @@ def vault_for(owner: Any, *, name: str = "Research") -> Any:
 
 
 _TEST_ADDON_SEQ = itertools.count()
+_TEST_ADDON_CONTEXTS = ExitStack()
+
+
+@pytest.fixture(autouse=True)
+def addon_fixture_resources(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Release fake addons before restoring their callers' module monkeypatches."""
+
+    del monkeypatch
+    with _TEST_ADDON_CONTEXTS:
+        yield
 
 
 def make_addon(
@@ -667,20 +679,25 @@ def make_addon(
     resources: dict[str, Any] | None = None,
     migrations: tuple[dict[str, str], ...] = (),
 ) -> AppConfig:
-    """Return a native AppConfig backed by a real manifest and optional schema module."""
+    """Return a native AppConfig backed by a real manifest and optional schema module.
+
+    Tests outside this conftest's directory import ``addon_fixture_resources``
+    alongside the factory so pytest scopes its modules and temporary directories.
+    """
 
     name = name or f"tests._addon_{next(_TEST_ADDON_SEQ)}"
-    path = path or Path(tempfile.mkdtemp())
+    path = path or Path(_TEST_ADDON_CONTEXTS.enter_context(tempfile.TemporaryDirectory()))
     path.mkdir(parents=True, exist_ok=True)
+    monkeypatch = _TEST_ADDON_CONTEXTS.enter_context(pytest.MonkeyPatch.context())
     module = ModuleType(name)
     module.__file__ = str(path / "apps.py")
     module.__path__ = [str(path)]
-    sys.modules[name] = module
+    monkeypatch.setitem(sys.modules, name, module)
     declaration: dict[str, Any] = {"name": name, "depends_on": depends_on}
     if schemas is not None:
         schema_module = ModuleType(f"{name}.schema")
         schema_module.schemas = schemas
-        sys.modules[f"{name}.schema"] = schema_module
+        monkeypatch.setitem(sys.modules, f"{name}.schema", schema_module)
         declaration["schemas"] = "schema.schemas"
     document: dict[str, Any] = {"addon": declaration}
     for section, value in (("web", web), ("resources", resources), ("migrations", migrations)):

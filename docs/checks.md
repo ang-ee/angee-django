@@ -36,6 +36,8 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
 | Python/addon/template handoff; required for core changes | `uv run --locked python -m pytest -q` |
+| Parallel SQLite suite (CI scheduling) | `uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
+| Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python types | `uv run --locked python -m mypy angee addons` |
 | Dead-code review | `uv run --locked python -m vulture` |
@@ -49,6 +51,14 @@ covers workflow definition, publication, execution, authorization, concurrency,
 test-harness and composed-consumer contracts. Its explicit file list must finish
 with zero skips. SQLite results do not substitute for that coverage; report
 database-dependent skips in other lanes explicitly.
+
+Local pytest remains serial and keeps its normal ordering: `addopts` disables
+pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
+the plugin; change `--randomly-seed` to reproduce or vary test order. Use `-n 0`
+or `-p no:xdist` for serial debugging. `--dist loadfile` keeps each test module on
+one worker. Pytest-django isolates worker databases; custom database and composed
+host fixtures must use process-local connections or pytest's worker-local
+`tmp_path`/`tmp_path_factory`, and restore registry changes after each test.
 
 ### Source-addon Test Models
 
@@ -172,11 +182,24 @@ database, and these commands do not create one.
 ## What CI Actually Runs
 
 [CI](../.github/workflows/ci.yml) calls
-[reusable checks](../.github/workflows/reusable-checks.yml): the Python suite,
-PostgreSQL concurrency tests, framework package typecheck/test/build and
-export/distribution checks, then a composed-stack lane for generated-document
-and addon-fragment checks. Separate workflows enforce private-path exclusion and
-other repository policies.
+[reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
+pushes to `main`. The current tiers are:
+
+- **SQLite:** the full framework Python suite once, with `-n auto --dist loadfile`
+  and the 25 slowest test durations. Structural tests remain part of this suite.
+- **PostgreSQL:** the existing workflow-concurrency selection runs serially,
+  followed by a check that it did not skip tests.
+- **Packages:** framework package typecheck/test/build and export/distribution
+  checks.
+- **Composed stack:** compose the host, check generated documents
+  and addon fragments, and run the bridges repository's pytest suite. Framework
+  composed-host tests create their own temporary hosts in the SQLite suite; the
+  stack job does not repeat that framework suite.
+
+Separate structural and downstream tiers are not implemented. Separate workflows
+enforce private-path exclusion and other repository policies. Executable jobs in
+the reusable workflow own timeouts; GitHub's reusable-workflow caller syntax does
+not accept `timeout-minutes`.
 
 Browser e2e is manual; neither `pnpm -r test` nor the current GitHub workflows run
 it. Python lint, mypy, and vulture are prescribed local checks but are not jobs in
