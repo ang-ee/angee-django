@@ -1790,7 +1790,7 @@ class _InboxWriteBackend(AngeeHasuraWriteBackend):
     The read side scopes ``threads``/``messages`` to ``.inbox()`` through
     ``get_queryset``; the write side must match, or a creator who lost record access
     could still reach a record-attached row through ``update_<res>_by_pk`` /
-    ``delete_<res>_by_pk`` (its own ``owner``/``admin`` permission would allow it).
+    ``delete_<res>_by_pk`` through the thread's ownership or channel access.
     Narrowing the write-target queryset to ``.inbox()`` makes the by-pk lookup miss
     a record-attached row, so the generic mutation reports it as not found while the
     inbox rows keep their update/delete surfaces. The ``.inbox()`` verb resolves

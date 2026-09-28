@@ -3023,27 +3023,27 @@ def _replace_with_nested_part_tree(message: Any, owner: Any) -> None:
     fragment_kind = fragment_model.FragmentKind
     owner_id = owner.pk
     fragments = {
-        "title": fragment_model.objects.upsert(text="Depth subject", owner_id=owner_id),
+        "title": fragment_model.objects.upsert(text="Depth subject", created_by_id=owner_id),
         "list_id": fragment_model.objects.upsert(
             text="List-ID: updates.example",
             kind=fragment_kind.HEADER,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
         "unsubscribe": fragment_model.objects.upsert(
             text="<mailto:unsubscribe@example.com>",
             kind=fragment_kind.HEADER,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
-        "body": fragment_model.objects.upsert(text="Body paragraph.", owner_id=owner_id),
+        "body": fragment_model.objects.upsert(text="Body paragraph.", created_by_id=owner_id),
         "quote": fragment_model.objects.upsert(
             text="Quoted reply.",
             kind=fragment_kind.QUOTE,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
         "signature": fragment_model.objects.upsert(
             text="Regards, Ada",
             kind=fragment_kind.SIGNATURE,
-            owner_id=owner_id,
+            created_by_id=owner_id,
         ),
     }
     part_model._base_manager.filter(message=message).delete()
