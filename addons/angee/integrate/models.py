@@ -3334,12 +3334,10 @@ class RecordLink(RecordRefMixin, SqidMixin, AuditMixin, AngeeModel):
     unscoped_objects = AngeeUnscopedManager()
 
     @classmethod
-    def _record_ref_content_type_field_name(cls) -> str:
-        return "target_ct"
+    def record_ref_fields(cls) -> tuple[str, str]:
+        """Return the custom backing columns for this record reference."""
 
-    @classmethod
-    def _record_ref_object_id_field_name(cls) -> str:
-        return "target_id"
+        return "target_ct", "target_id"
 
     class Meta:
         abstract = True

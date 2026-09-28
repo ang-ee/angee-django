@@ -7,6 +7,8 @@ import { BookOpen, FileStack, FileText, Library } from "lucide-react";
 import { enKnowledgeMessages } from "./i18n";
 import { vaultCreateForm } from "./views/vault-form";
 
+export { KnowledgePageView, type KnowledgePageViewProps } from "./KnowledgePageView";
+
 const KNOWLEDGE_ID = "knowledge";
 
 const knowledgeRoutes: readonly BaseAddonRoute[] = [

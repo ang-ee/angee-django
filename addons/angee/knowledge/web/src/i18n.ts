@@ -14,10 +14,10 @@ export const enKnowledgeMessages: Record<string, string> = {
   "vault.placeholder": "Select a vault",
   "vault.searchPlaceholder": "Search vaults…",
   "page.loading": "Loading page",
-  "page.notFoundTitle": "Page not found",
-  "page.notFoundDescription": "This page is no longer available.",
   "page.selectTitle": "Select a page",
   "page.selectDescription": "Choose a page from the tree to read it.",
+  "page.notFoundTitle": "Page not found",
+  "page.notFoundDescription": "This page is unavailable or you do not have access to it.",
   "page.edit": "Edit",
   "page.lastUpdated": "Updated {value}",
   "page.emptyTitle": "This page is empty",
@@ -48,6 +48,9 @@ export const enKnowledgeMessages: Record<string, string> = {
   "editor.folderTitle": "Folder",
   "editor.folderDescription":
     "A folder groups pages — open a note in the tree to edit it.",
+  "vault.clone": "Create from template",
+  "vault.cloneName": "New vault name",
+  "vault.cloneFailed": "Could not create the vault from this template.",
   "settings.title": "Settings",
   "settings.description": "The access boundary a tree of pages lives in.",
 };

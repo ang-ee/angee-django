@@ -6,9 +6,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import models
-from import_export import widgets
+from import_export import fields, widgets
 
+from angee.base.refs import CanonicalRecordTarget, RecordRefMixin, canonical_record_target
 from angee.base.serialization import canonical_json
 
 
@@ -42,6 +44,61 @@ class XrefWidgetMixin:
         return target
 
 
+class RecordRefWidget(XrefWidgetMixin, widgets.Widget):
+    """Resolve an xref to the canonical columns of a generic record reference."""
+
+    def clean(
+        self,
+        value: Any,
+        row: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> CanonicalRecordTarget | None:
+        """Return a canonical target, or ``None`` for an empty reference."""
+
+        del row, kwargs
+        if value in (None, ""):
+            return None
+        return canonical_record_target(resolve_xref(value, self.ledger_model, self.addon_aliases))
+
+
+class RecordRefField(fields.Field):
+    """Assign a cleaned record reference to its model-owned backing columns."""
+
+    def __init__(self, model: type[RecordRefMixin]) -> None:
+        """Declare the model's import column and its xref widget."""
+
+        super().__init__(
+            attribute=model.record_ref_field_prefix,
+            column_name=model.record_ref_field_prefix,
+            widget=RecordRefWidget(),
+        )
+
+    def save(
+        self,
+        instance: RecordRefMixin,
+        row: Mapping[str, Any],
+        is_m2m: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Reject conflicting columns before resolution, then assign both fields."""
+
+        del is_m2m
+        field_names = instance.record_ref_fields()
+        if any(name in row for name in field_names):
+            raise ValueError(f"{self.column_name} cannot be combined with its backing columns")
+        target = self.clean(row, **kwargs)
+        values = (target.content_type.pk, target.object_id) if target is not None else None
+        for index, name in enumerate(field_names):
+            field = instance._meta.get_field(name)
+            value = values[index] if values is not None else (None if field.null else field.get_default())
+            try:
+                # Field.clean owns to_python and null/default validation before assignment.
+                value = field.clean(value, instance)
+            except ValidationError as error:
+                raise ValidationError({name: error}) from error
+            setattr(instance, field.attname, value)
+
+
 class XrefForeignKeyWidget(XrefWidgetMixin, widgets.ForeignKeyWidget):
     """Resolve ``<addon>.<xref>`` foreign keys through the ledger."""
 
@@ -56,8 +113,6 @@ class XrefForeignKeyWidget(XrefWidgetMixin, widgets.ForeignKeyWidget):
         del row, kwargs
         if value in (None, ""):
             return None
-        if not isinstance(value, str):
-            raise ValueError("xref foreign keys must be strings")
         target = self.resolve_field_target(value)
         return target.pk if self.key_is_id else target
 
@@ -114,6 +169,8 @@ def resolve_xref(
 ) -> models.Model:
     """Resolve ``<addon>.<xref>`` through the resource ledger."""
 
+    if not isinstance(value, str):
+        raise ValueError("xrefs must be strings")
     if ledger_model is None:
         raise ValueError("xref resolution requires a bound ledger model")
     if addon_aliases is None:

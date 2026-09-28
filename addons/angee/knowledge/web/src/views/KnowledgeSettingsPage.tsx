@@ -1,7 +1,10 @@
-import { type ReactElement } from "react";
+import type { ActionFieldName } from "@angee/gql/console/actions";
+import { useCallback, type ReactElement } from "react";
 
 import {
-  Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell } from "@angee/ui";
+  Action, Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
+  useActionOutcomeMutation, type ActionDescriptor } from "@angee/ui";
+import { PAGE_READ_MODELS } from "../data/documents";
 import { useKnowledgeT } from "../i18n";
 
 const VAULT_MODEL = "knowledge.Vault";
@@ -13,6 +16,20 @@ const VAULT_MODEL = "knowledge.Vault";
  */
 export function KnowledgeSettingsPage(): ReactElement {
   const t = useKnowledgeT();
+  const [createFrom] = useActionOutcomeMutation<ActionFieldName>("create_vault_from", {
+    idArgument: "template",
+    invalidateModels: [VAULT_MODEL, ...PAGE_READ_MODELS],
+  });
+  const cloneSubmit = useCallback<NonNullable<ActionDescriptor["submit"]>>(
+    async (values, context) => {
+      const template = context.record?.id;
+      if (typeof template !== "string" || !template || typeof values.name !== "string") {
+        return { ok: false, message: t("vault.cloneFailed") };
+      }
+      return createFrom(template, { name: values.name.trim() });
+    },
+    [createFrom, t],
+  );
   return (
     <SettingsShell maxWidth="1100" gap="6">
       <SettingsSection
@@ -30,6 +47,15 @@ export function KnowledgeSettingsPage(): ReactElement {
           <Field name="description" widget="textarea" />
           <Field name="icon" />
           <Field name="accent" />
+          <Action
+            id="create-from-template"
+            label={t("vault.clone")}
+            icon="copy"
+            args={[{ name: "name", label: t("vault.cloneName"), widget: "text" }]}
+            submit={cloneSubmit}
+            // Keep the action off the create drawer until a record is loaded.
+            visibleWhen={() => true}
+          />
         </Form>
       </DrawerResourceList>
     </SettingsShell>

@@ -31,11 +31,12 @@ def rebuild_backlinks(
     instance: Any,
     raw: bool = False,
     update_fields: Iterable[str] | None = None,
+    knowledge_backlinks_rebuilt: bool = False,
     **_: Any,
 ) -> None:
     """Rebuild a page's outgoing wikilinks when its markdown body changes."""
 
-    if raw or instance._meta.label_lower != _MARKDOWN_LABEL:
+    if raw or knowledge_backlinks_rebuilt or instance._meta.label_lower != _MARKDOWN_LABEL:
         return
     if update_fields is not None and "body" not in update_fields:
         return
