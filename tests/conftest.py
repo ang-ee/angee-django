@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -21,6 +22,7 @@ from rebac.roles import grant as grant_role
 
 from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
+from angee.compose.model_composition import ModelComposition
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
@@ -63,6 +65,12 @@ from tests import messaging_models  # noqa: F401 -- register the managed posts F
 from tests.integrate_models import Integration
 
 pytest_plugins = ("angee.testing.fixtures", "tests.workflows")
+
+
+def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[str, str]]:
+    """Use the source composition's field ownership in installed-schema callers."""
+
+    return ModelComposition.discover(app_configs).field_gate_owners()
 
 
 class OAuthClient(AbstractOAuthClientOidc, AbstractOAuthClient):

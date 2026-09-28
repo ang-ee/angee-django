@@ -19,6 +19,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id
+from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
@@ -280,12 +281,17 @@ class DashboardMutation:
         description: str = "",
     ) -> DashboardPayload:
         user = session_user(info)
-        row = Dashboard.objects.create_personal(
-            user,
-            name=name,
-            description=description,
-            client_creation_key=client_creation_key,
-        )
+        try:
+            row = Dashboard.objects.create_personal(
+                user,
+                name=name,
+                description=description,
+                client_creation_key=client_creation_key,
+            )
+        except CreationKeyConflict as error:
+            return DashboardPayload(status="conflict", message=str(error))
+        except (ValidationError, PermissionDenied) as error:
+            return DashboardPayload(status="error", message=str(error))
         return _payload(row)
 
     @strawberry.mutation
@@ -329,6 +335,8 @@ class DashboardMutation:
                 name=name,
                 description=description,
             )
+        except StaleRevisionError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
             return DashboardPayload(status="conflict", current_revision=error.current_revision, message=str(error))
         except (ValidationError, PermissionDenied) as error:
@@ -349,9 +357,11 @@ class DashboardMutation:
             return DashboardPayload(status="conflict", message="The persisted dashboard identity is no longer current.")
         try:
             Dashboard.objects.reset_snapshot(row, expected_revision=expected_revision)
+        except StaleRevisionError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
             return DashboardPayload(status="conflict", current_revision=error.current_revision, message=str(error))
-        except PermissionDenied as error:
+        except (ValidationError, PermissionDenied) as error:
             return DashboardPayload(status="error", message=str(error))
         return DashboardPayload(status="absent")
 
@@ -369,9 +379,11 @@ class DashboardMutation:
             return DashboardPayload(status="unavailable")
         try:
             locked = row.set_personal_archived(archived=archived, expected_revision=expected_revision)
+        except StaleRevisionError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
             return DashboardPayload(status="conflict", current_revision=error.current_revision)
-        except PermissionDenied as error:
+        except (ValidationError, PermissionDenied) as error:
             return DashboardPayload(status="error", message=str(error))
         return _payload(locked)
 
@@ -387,22 +399,22 @@ class DashboardMutation:
         source = _resolve_target(info, target)
         if source is None:
             return DashboardPayload(status="unavailable")
-        created = Dashboard.objects.create_personal(
-            user,
-            name=name,
-            client_creation_key=client_creation_key,
-        )
-        snapshot = source.snapshot()
-        duplicated_widgets = []
-        for index, widget in enumerate(snapshot["widgets"]):
-            if widget["isArchived"]:
-                continue
-            duplicate = {**widget, "id": f"copy-{index + 1}"}
-            duplicate.pop("definitionRef", None)
-            duplicated_widgets.append(duplicate)
-        snapshot["widgets"] = duplicated_widgets
-        canonical = canonical_dashboard_snapshot(snapshot)
         try:
+            created = Dashboard.objects.create_personal(
+                user,
+                name=name,
+                client_creation_key=client_creation_key,
+            )
+            snapshot = source.snapshot()
+            duplicated_widgets = []
+            for index, widget in enumerate(snapshot["widgets"]):
+                if widget["isArchived"]:
+                    continue
+                duplicate = {**widget, "id": f"copy-{index + 1}"}
+                duplicate.pop("definitionRef", None)
+                duplicated_widgets.append(duplicate)
+            snapshot["widgets"] = duplicated_widgets
+            canonical = canonical_dashboard_snapshot(snapshot)
             saved = Dashboard.objects.save_snapshot(
                 user,
                 scope="personal",
@@ -412,8 +424,14 @@ class DashboardMutation:
                 snapshot=canonical,
                 name=created.name,
             )
+        except StaleRevisionError as error:
+            return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:
             return DashboardPayload(status="conflict", current_revision=error.current_revision)
+        except CreationKeyConflict as error:
+            return DashboardPayload(status="conflict", message=str(error))
+        except (ValidationError, PermissionDenied) as error:
+            return DashboardPayload(status="error", message=str(error))
         return _payload(saved)
 
 

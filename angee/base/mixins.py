@@ -8,14 +8,16 @@ from typing import Any, ClassVar, Self, TypeVar, cast
 import reversion
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import DatabaseError, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
 from rebac import (
+    PermissionDenied,
     RelationshipTuple,
     SubjectRef,
     current_actor,
     delete_relationships,
+    system_context,
     to_object_ref,
     write_relationships,
 )
@@ -58,6 +60,14 @@ def audit_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model],
 
     del using
     collector.add_field_update(field, None, list(sub_objs))
+
+
+def _instance_actor(instance: models.Model) -> SubjectRef | None:
+    """Use an instance's pinned actor before the ambient actor for defaults and audit."""
+
+    actor_getter = getattr(instance, "actor", None)
+    actor = actor_getter() if callable(actor_getter) else None
+    return actor if actor is not None else current_actor()
 
 
 def _shared_reader_policy_field_spellings(model: type[models.Model]) -> frozenset[str]:
@@ -277,11 +287,7 @@ class AuditMixin(models.Model):
                 super().save(*args, **kwargs)
                 return
 
-        actor_getter = getattr(self, "actor", None)
-        actor = actor_getter() if callable(actor_getter) else None
-        if actor is None:
-            actor = current_actor()
-        user_id = actor_user_id(actor)
+        user_id = actor_user_id(_instance_actor(self))
         touched: set[str] = set()
         if user_id is not None:
             if self._state.adding:
@@ -298,6 +304,109 @@ class AuditMixin(models.Model):
         if update_fields is not None:
             kwargs["update_fields"] = update_fields_with_auto_now(self, update_fields | touched)
         super().save(*args, **kwargs)
+
+
+class OwnerQuerySet(RebacQuerySet[_ModelT]):
+    """Ownership writes for verbs that have already authorized their selected rows."""
+
+    def release(self, user: models.Model) -> int:
+        """Clear only this user's ownership within this queryset, without another gate.
+
+        Protected API: the caller must authorize the encompassing operation (for
+        example, removal from a managed round). This is an elevated bulk write;
+        it preserves attribution and emits no instance-save history.
+        """
+
+        if user.pk is None:
+            raise ValidationError("Releasing ownership requires a saved user.")
+        return self.filter(owner=user).system_context(reason="ownership.release").update(owner=None)
+
+
+class ItemOwnershipMixin(models.Model):
+    """Let a container retain ownership of newly created items through their parent access.
+
+    Adopters gate updates with ``write__owns_items = share`` in their Zed schema.
+    Changing the flag affects later inserts only.
+    """
+
+    owns_items = models.BooleanField(default=False)
+
+    class Meta:
+        abstract = True
+
+
+class OwnerMixin(AuditMixin):
+    """Give a grant root transferable ownership independent of its audit attribution.
+
+    A non-null owner wins. Otherwise an owning container leaves the owner empty;
+    other inserts default to ``created_by`` and then the pinned acting user.
+    A cached, saved container supplies its flag; an uncached container costs one
+    query per insert. ``bulk_create`` bypasses this instance-save default.
+    Compose :class:`OwnerQuerySet` when an owning verb needs bulk release.
+    """
+
+    owner_transfer_permission: ClassVar[str] = "transfer"
+    owner_container: ClassVar[str | None] = None
+    """Foreign key to an ItemOwnershipMixin container, when this root is also an item."""
+    owner_id: Any
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=audit_set_null,
+        related_name="+",
+    )
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Apply the insert-only owner default before the audit and permission hooks."""
+
+        if self._state.adding and self.owner_id is None:
+            container_owns_items = False
+            if self.owner_container is not None:
+                field = self._meta.get_field(self.owner_container)
+                container_id = getattr(self, field.attname)
+                container = field.get_cached_value(self, default=None)
+                if container is not None and not container._state.adding:
+                    container_owns_items = container.owns_items
+                elif container_id is not None:
+                    container_owns_items = system_queryset(field.related_model).filter(
+                        pk=container_id, owns_items=True,
+                    ).exists()
+            if not container_owns_items:
+                self.owner_id = (
+                    self.created_by_id if self.created_by_id is not None else actor_user_id(_instance_actor(self))
+                )
+        super().save(*args, **kwargs)
+
+    def transfer_ownership(self, user: models.Model | None) -> Self:
+        """Authorize against the locked row, transfer or clear its owner, and retain attribution.
+
+        Even ambient ``system_context`` must supply a resolvable actor: this verb
+        owns an actor-authorized transfer, not an unattended ownership backfill.
+        A full save and refresh let composed mixins own their updated fields.
+        """
+
+        if self.pk is None or self._state.adding:
+            raise ValidationError("Ownership transfer requires a saved row.")
+        if user is not None and user.pk is None:
+            raise ValidationError({"owner": "The new owner must be a saved user."})
+        actor = _instance_actor(self)
+        if actor is None:
+            raise PermissionDenied("Ownership transfer requires an acting user.")
+        with transaction.atomic():
+            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            if not locked.with_actor(actor).has_access(self.owner_transfer_permission):
+                raise PermissionDenied("You cannot transfer ownership of this row.")
+            owner_id = user.pk if user is not None else None
+            if locked.owner_id != owner_id:
+                locked.owner = user
+                locked.sudo(reason="ownership.transfer").save()
+            self.refresh_from_db()
+        return self
 
 
 class AppendOnlyQuerySet(RebacQuerySet[_ModelT]):
@@ -519,6 +628,201 @@ class RevisionMixin(models.Model):
         with transaction.atomic(), reversion.create_revision():
             self.save(update_fields=update_fields_with_auto_now(self, reverted))
             reversion.set_comment(f"Reverted to revision {version.revision_id}.")
+
+
+class ImmutableFieldsMixin(models.Model):
+    """Reject identity/receipt changes except through an owning model verb."""
+
+    immutable_fields: ClassVar[tuple[str, ...]] = ()
+
+    class Meta:
+        """Django options for the shared write-once field guard."""
+
+        abstract = True
+
+    def allow_immutable_save(self, *field_names: str) -> None:
+        """Allow the next save to change named immutable attnames."""
+
+        allowed = set(getattr(self, "_allowed_immutable_fields", set()))
+        allowed.update(field_names)
+        self._allowed_immutable_fields = allowed
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist after comparing immutable facts with the committed row."""
+
+        allowed = set(getattr(self, "_allowed_immutable_fields", set()))
+        try:
+            if self.pk is not None and not self._state.adding:
+                checked = tuple(name for name in self.immutable_fields if name not in allowed)
+                if checked:
+                    # Compare committed identities without loading unrelated deferred columns.
+                    with system_context(reason=f"{self._meta.label_lower}.immutable_fields"):
+                        persisted = type(self)._base_manager.filter(pk=self.pk).values(*checked).first()
+                    if persisted is not None:
+                        changed = [name for name in checked if persisted[name] != getattr(self, name)]
+                        if changed:
+                            raise ValidationError(
+                                {name.removesuffix("_id"): "This identity or receipt is immutable." for name in changed}
+                            )
+            super().save(*args, **kwargs)
+        finally:
+            self._allowed_immutable_fields = set()
+
+
+class CreationKeyConflict(Exception):
+    """A client creation key was already used for different content."""
+
+
+class CreationKeyQuerySet(models.QuerySet[_ModelT]):
+    """Look up idempotent creations within the queryset's existing read policy."""
+
+    def for_creation_key(self, scope: Any, key: str | None, fingerprint: str) -> _ModelT | None:
+        """Return a readable replay, refusing content changes for the same key.
+
+        A missing scope or key has no replay identity. Callers own fingerprint
+        construction and the insert/savepoint retry on a uniqueness race.
+        An empty stored fingerprint is unknown legacy content and permits replay.
+        """
+
+        if scope is None or key is None:
+            return None
+        model = cast(type[CreationKeyMixin], self.model)
+        row = self.filter(**{model.creation_key_scope: scope, "client_creation_key": key}).first()
+        stored = cast(CreationKeyMixin, row).creation_fingerprint if row is not None else ""
+        if stored and stored != fingerprint:
+            raise CreationKeyConflict("This client creation key was already used for different content.")
+        return row
+
+
+class CreationKeyMixin(models.Model):
+    """Store a caller-scoped creation key and its original content fingerprint.
+
+    Compose :class:`CreationKeyQuerySet` into the model's queryset and include
+    :meth:`creation_key_constraint` in its ``Meta.constraints``. A custom scope
+    is passed to the factory in that class body and declared on the model;
+    the system check verifies they agree.
+    """
+
+    creation_key_scope: ClassVar[str] = "created_by"
+    client_creation_key = models.CharField(max_length=128, null=True, blank=True, editable=False)
+    creation_fingerprint = models.CharField(max_length=64, blank=True, editable=False)
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def creation_key_constraint(cls, *, scope: str | None = None, name: str | None = None) -> models.UniqueConstraint:
+        """Declare key uniqueness, optionally preserving an adopter's existing constraint name."""
+
+        return models.UniqueConstraint(
+            fields=(scope or cls.creation_key_scope, "client_creation_key"),
+            condition=models.Q(client_creation_key__isnull=False),
+            name=name or "%(app_label)s_%(class)s_creation_key",
+        )
+
+
+class StaleRevisionError(Exception):
+    """An update expected a revision that is no longer committed.
+
+    ``current`` is ``None`` when the row no longer exists.
+    """
+
+    def __init__(self, expected: int | None, current: int | None) -> None:
+        self.expected = expected
+        self.current = current
+        super().__init__(f"Expected revision {expected}; current revision is {current}.")
+
+
+def validate_revision(value: Any) -> None:
+    """Require a portable positive integer revision."""
+
+    if type(value) is not int or not 1 <= value <= 2**31 - 1:
+        raise ValidationError({"expected_revision": "Expected revision must be an integer from 1 to 2147483647."})
+
+
+def require_revision(*, expected: Any, current: int | None) -> None:
+    """Validate a portable positive revision and reject a stale expectation."""
+
+    validate_revision(expected)
+    if expected != current:
+        raise StaleRevisionError(expected, current)
+
+
+class OptimisticLockMixin(models.Model):
+    """Count instance saves and optionally compare the revision in the UPDATE.
+
+    Compose before the model base. Inserts start at one; nonempty updates bump
+    through a database expression, including partial and deferred saves. Bulk
+    queryset updates deliberately do not bump. A guarded compare-and-swap updates
+    only the revision-owning table before Django saves the instance in the same
+    transaction, even for multi-table children. New instances require an INSERT;
+    loaded rows are never resurrected by ``save()``. On unguarded updates,
+    ``pre_save`` receivers see an ``F()`` expression in ``instance.revision``;
+    ``post_save`` receivers and callers see the resulting integer.
+    """
+
+    revision = models.PositiveIntegerField(default=1, editable=False)
+
+    class Meta:
+        abstract = True
+
+    def require_revision(self, expected: Any) -> None:
+        """Check a row already locked by an owning verb."""
+
+        require_revision(expected=expected, current=self.revision)
+
+    def save(self, *, expected_revision: int | None = None, **kwargs: Any) -> None:
+        """Save atomically, rejecting a competing update when an expectation is supplied."""
+
+        if expected_revision is not None:
+            validate_revision(expected_revision)
+            if self._state.adding:
+                raise ValidationError({"expected_revision": "An expected revision requires an existing row."})
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        owner = self._meta.get_field("revision").model
+        rows = system_queryset(owner).using(using).filter(pk=self._get_pk_val(owner._meta))
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = set(update_fields)
+            kwargs["update_fields"] = update_fields
+            if not update_fields:
+                if expected_revision is not None:
+                    current = rows.values_list("revision", flat=True).first()
+                    require_revision(expected=expected_revision, current=current)
+                return
+        previous = self.__dict__.get("revision", models.DEFERRED)
+        existing = not self._state.adding
+        kwargs["using"] = using
+        if existing:
+            if update_fields is not None:
+                kwargs["update_fields"] = update_fields | {"revision"}
+            kwargs["force_update"] = True
+        else:
+            kwargs["force_insert"] = True
+        try:
+            with transaction.atomic(using=using):
+                if expected_revision is not None:
+                    updated = rows.filter(revision=expected_revision).update(revision=F("revision") + 1)
+                    if not updated:
+                        current = rows.values_list("revision", flat=True).first()
+                        raise StaleRevisionError(expected_revision, current)
+                    self.revision = expected_revision + 1
+                elif existing:
+                    self.revision = F("revision") + 1
+                super().save(**kwargs)
+        except Exception as error:
+            if previous is models.DEFERRED:
+                self.__dict__.pop("revision", None)
+            else:
+                self.revision = previous
+            # Django doesn't pass force_update to MTI parents; a missing parent's
+            # F-expression INSERT raises ValueError before that INSERT can execute.
+            if (
+                isinstance(error, (DatabaseError, ValueError))
+                and existing and expected_revision is None and not rows.exists()
+            ):
+                raise StaleRevisionError(expected=None, current=None) from error
+            raise
 
 
 class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
