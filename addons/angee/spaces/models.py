@@ -4,7 +4,7 @@
 ``Membership`` owns each party's role, confirmation and notification preference;
 only confirmed, non-dismissed rows grant roster access. ``ThreadSpace`` binds
 threads to groups and ``ChannelSpace`` binds channels to a team on their own rows.
-REBAC reads these facts live. Public group visibility retains its wildcard tuple.
+REBAC reads these facts live, including public visibility from the group column.
 """
 
 from __future__ import annotations
@@ -19,20 +19,18 @@ from django.utils.text import slugify
 from rebac import PermissionDenied, current_actor
 
 from angee.base.fields import StateField
-from angee.base.mixins import AuditMixin, ConditionalSharedReaderMixin, HierarchyMixin, OwnerMixin, SqidMixin
+from angee.base.mixins import AuditMixin, HierarchyMixin, OwnerMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.parties.mixins import ScoredLinkMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
 
-class Group(ConditionalSharedReaderMixin, ThreadAudienceMixin, HierarchyMixin, SqidMixin, OwnerMixin, AngeeModel):
+class Group(ThreadAudienceMixin, HierarchyMixin, SqidMixin, OwnerMixin, AngeeModel):
     """A shared group with one canonical roster and an unscoped parent tree."""
 
     runtime = True
     sqid_prefix = "grp_"
-    shared_reader_relation = "reader"
-    shared_reader_policy_fields = ("visibility",)
 
     class GroupVisibility(models.TextChoices):
         """Whether membership is required to read the group and its threads."""
@@ -62,12 +60,6 @@ class Group(ConditionalSharedReaderMixin, ThreadAudienceMixin, HierarchyMixin, S
 
         return self.name
 
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Make public groups readable by every authenticated actor."""
-
-        return self.visibility == self.GroupVisibility.PUBLIC
-
     def thread_audience(self) -> Iterable[AudienceMember]:
         """Read participating roster parties; messaging owns delivery and read checks."""
 
@@ -94,7 +86,7 @@ class Group(ConditionalSharedReaderMixin, ThreadAudienceMixin, HierarchyMixin, S
             )
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the group with a unique slug and reconcile its reader tuple."""
+        """Persist the group with a unique slug."""
 
         with transaction.atomic():
             if not self.slug:

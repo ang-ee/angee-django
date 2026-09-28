@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
@@ -11,17 +11,8 @@ from django.core.exceptions import ValidationError
 from django.db import DatabaseError, models, router, transaction
 from django.db.models import F, Value
 from django.db.models.functions import Replace
-from rebac import (
-    PermissionDenied,
-    RelationshipTuple,
-    SubjectRef,
-    delete_relationships,
-    system_context,
-    to_object_ref,
-    write_relationships,
-)
+from rebac import PermissionDenied, system_context
 from rebac.managers import RebacQuerySet
-from rebac.types import RelationshipFilter
 from simple_history.models import HistoricalRecords
 
 from angee.base.actors import actor_user_id, instance_actor
@@ -43,8 +34,6 @@ identical everywhere is the contract that lets pickers default-filter archived
 rows and lists expose an archived facet without per-model wiring.
 """
 
-_EVERY_AUTHENTICATED_USER = SubjectRef.of("auth/user", "*")
-
 
 def audit_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
     """Null audit attribution even when the referencing rows are append-only.
@@ -59,123 +48,6 @@ def audit_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model],
 
     del using
     collector.add_field_update(field, None, list(sub_objs))
-
-
-def _shared_reader_policy_field_spellings(model: type[models.Model]) -> frozenset[str]:
-    """Return every model field spelling that participates in reader policy."""
-
-    names = {
-        name
-        for owner in model.__mro__
-        for declaration in (owner.__dict__.get("shared_reader_policy_fields", ()),)
-        for name in declaration
-    }
-    return frozenset(
-        spelling
-        for name in names
-        for field in (model._meta.get_field(name),)
-        for spelling in (field.name, field.attname)
-    )
-
-
-class ConditionalSharedReaderQuerySet(models.QuerySet[_ArchiveModelT]):
-    """Protect fields that decide whether one row receives a wildcard reader."""
-
-    def update(self, **kwargs: Any) -> int:
-        """Keep eligibility changes on the owner that reconciles wildcard readers."""
-
-        if kwargs.keys() & _shared_reader_policy_field_spellings(self.model):
-            raise ValidationError("Change shared-reader eligibility through its native owner.")
-        return super().update(**kwargs)
-
-    def bulk_create(self, *args: Any, **kwargs: Any) -> list[_ArchiveModelT]:
-        """Require instance creation so wildcard readers are reconciled."""
-
-        raise ValidationError("Create conditional shared-reader rows through their native owner.")
-
-
-class ConditionalSharedReaderMixin(models.Model):
-    """Keep one per-record wildcard reader aligned with canonical persisted facts.
-
-    Consumers declare the stored fields that decide eligibility and override
-    :attr:`shared_reader_eligible`; the generic default is private. The
-    reconciler reads a fresh canonical row after persistence,
-    so deferred or dirty values excluded by ``update_fields`` never drive access.
-    It changes only its configured wildcard tuple; manual and source-scope grants
-    remain owned by their distinct relations. Shared-reader persistence and tuple
-    reconciliation remain in the same transaction.
-    """
-
-    shared_reader_relation: ClassVar[str | None] = "shared"
-    shared_reader_policy_fields: ClassVar[tuple[str, ...]] = ()
-
-    class Meta:
-        abstract = True
-
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Deny wildcard visibility unless the native model opts in explicitly."""
-
-        return False
-
-    def proposed_relationships(self, *, using: str | None = None) -> Mapping[str, Iterable[SubjectRef | models.Model]]:
-        """Propose only the shared-reader tuple that save will reconcile atomically."""
-
-        # ``using`` is django-zed-rebac's own override signature; pass it through.
-        relationships = dict(super().proposed_relationships(using=using))
-        if self.shared_reader_relation is not None:
-            relationships[self.shared_reader_relation] = (
-                (_EVERY_AUTHENTICATED_USER,) if self.shared_reader_eligible else ()
-            )
-        return relationships
-
-    def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist and reconcile when this write can change reader eligibility."""
-
-        update_fields = kwargs.get("update_fields")
-        if update_fields is not None:
-            update_fields = {str(field) for field in update_fields}
-            kwargs["update_fields"] = update_fields
-            if not update_fields:
-                super().save(*args, **kwargs)
-                return
-        reconcile = (
-            self._state.adding
-            or update_fields is None
-            or bool(update_fields & _shared_reader_policy_field_spellings(type(self)))
-        )
-        if not reconcile:
-            super().save(*args, **kwargs)
-            return
-        with transaction.atomic():
-            super().save(*args, **kwargs)
-            self.reconcile_shared_reader()
-
-    def reconcile_shared_reader(self) -> None:
-        """Reconcile only this owner's wildcard tuple from persisted row facts."""
-
-        if self.pk is None:
-            raise ValidationError("A shared reader requires a saved row.")
-        with transaction.atomic():
-            canonical = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
-            relation = canonical.shared_reader_relation
-            if relation is None:
-                return
-            resource = to_object_ref(canonical)
-            if canonical.shared_reader_eligible:
-                write_relationships(
-                    [RelationshipTuple(resource=resource, relation=relation, subject=_EVERY_AUTHENTICATED_USER)]
-                )
-            else:
-                delete_relationships(
-                    RelationshipFilter(
-                        resource_type=resource.resource_type,
-                        resource_id=resource.resource_id,
-                        relation=relation,
-                        subject_type=_EVERY_AUTHENTICATED_USER.subject_type,
-                        subject_id=_EVERY_AUTHENTICATED_USER.subject_id,
-                    )
-                )
 
 
 class TimestampMixin(models.Model):
@@ -881,6 +753,11 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
         if {"path", "parent", "parent_id"} & kwargs.keys():
             raise ValidationError("The hierarchy parent and path belong to the saved-row owner.")
         return super().update(**kwargs)
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> list[_HierarchyModelT]:
+        """Require saves to derive paths from persisted row and parent identities."""
+
+        raise ValidationError("Create hierarchy rows through save(); paths belong to the saved-row owner.")
 
     def owner_update(self, **kwargs: Any) -> int:
         """Protected API: apply an owner-validated write through downstream guards.

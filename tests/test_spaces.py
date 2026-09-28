@@ -87,18 +87,6 @@ def _role_relations(group: Group, user: Any) -> set[str]:
     }
 
 
-def _wildcard_reader_exists(group: Group) -> bool:
-    """Return whether ``group`` carries its public-reader wildcard tuple."""
-
-    return active_relationship_model().objects.filter(
-        resource_type="spaces/group",
-        resource_id=str(group.pk),
-        relation="reader",
-        subject_type="auth/user",
-        subject_id="*",
-    ).exists()
-
-
 def _group_relationship_count(group: Group) -> int:
     """Return every relationship whose resource is ``group``."""
 
@@ -480,66 +468,81 @@ def test_membership_without_a_platform_user_grants_nothing(spaces_tables: None) 
     assert _role_relations(group, user) == set()
 
 
-def test_public_visibility_reconciles_the_wildcard_reader(spaces_tables: None) -> None:
-    """Public/private flips add and remove ``reader@auth/user:*``."""
+def test_public_visibility_follows_the_group_column(spaces_tables: None) -> None:
+    """Public/private flips change read access without relationship writes."""
 
     del spaces_tables
+    reader = to_subject_ref(create_user("spaces-public-reader"))
     with system_context(reason="spaces visibility"):
         group = Group.objects.create(name="Community", slug="community")
-        assert not _wildcard_reader_exists(group)
+        for visibility, allowed in (
+            (Group.GroupVisibility.PRIVATE, False),
+            (Group.GroupVisibility.PUBLIC, True),
+            (Group.GroupVisibility.PRIVATE, False),
+        ):
+            group.visibility = visibility
+            group.save(update_fields=["visibility", "updated_at"])
+            assert backend().check_access(
+                subject=reader, action="read", resource=to_object_ref(group),
+            ).allowed == allowed
+            assert _group_relationship_count(group) == 0
 
-        group.visibility = Group.GroupVisibility.PUBLIC
-        group.save(update_fields=["visibility", "updated_at"])
-        assert _wildcard_reader_exists(group)
 
-        group.visibility = Group.GroupVisibility.PRIVATE
-        group.save(update_fields=["visibility", "updated_at"])
-        assert not _wildcard_reader_exists(group)
+def test_visibility_reads_persisted_facts_including_bulk_writes(spaces_tables: None) -> None:
+    """Dirty and deferred values do not replace the persisted visibility column."""
 
-
-def test_visibility_reads_persisted_facts_and_rejects_bulk_bypasses(spaces_tables: None) -> None:
-    """Dirty or deferred visibility cannot leak access outside its native save."""
-
+    reader = to_subject_ref(create_user("spaces-persisted-reader"))
     with system_context(reason="spaces visibility persisted policy"):
         group = Group.objects.create(name="Community", visibility=Group.GroupVisibility.PUBLIC)
         group.visibility = Group.GroupVisibility.PRIVATE
         group.description = "Only content changed"
         group.save(update_fields=["description"])
-        assert _wildcard_reader_exists(group)
+        assert backend().check_access(subject=reader, action="read", resource=to_object_ref(group)).allowed
 
         group = Group.objects.defer("visibility").get(pk=group.pk)
         group.description = "Deferred policy"
         group.save(update_fields=["description"])
-        assert _wildcard_reader_exists(group)
+        assert backend().check_access(subject=reader, action="read", resource=to_object_ref(group)).allowed
         group.visibility = Group.GroupVisibility.PRIVATE
         group.save(update_fields=["visibility"])
-        assert not _wildcard_reader_exists(group)
+        assert not backend().check_access(subject=reader, action="read", resource=to_object_ref(group)).allowed
 
-        with pytest.raises(ValidationError, match="eligibility"):
-            Group.objects.filter(pk=group.pk).update(visibility=Group.GroupVisibility.PUBLIC)
-        with pytest.raises(ValidationError, match="native owner"):
-            Group.objects.bulk_create([Group(name="Bypass", slug="bypass")])
+        Group.objects.filter(pk=group.pk).update(visibility=Group.GroupVisibility.PUBLIC)
+        assert backend().check_access(subject=reader, action="read", resource=to_object_ref(group)).allowed
+        for path in ("", group.path):
+            with pytest.raises(ValidationError, match="saved-row owner"):
+                Group.objects.bulk_create([
+                    Group(name="Public", slug="public", visibility=Group.GroupVisibility.PUBLIC, path=path),
+                ])
+            assert not Group.objects.filter(slug="public").exists()
+        inserted = Group.objects.create(name="Public", slug="public", visibility=Group.GroupVisibility.PUBLIC)
+        assert inserted.path == f"/{inserted.pk:0{Group.path_segment_width}d}/"
+        assert backend().check_access(subject=reader, action="read", resource=to_object_ref(inserted)).allowed
+        assert _group_relationship_count(group) == _group_relationship_count(inserted) == 0
 
 
 def test_visibility_double_flip_is_idempotent(spaces_tables: None) -> None:
-    """Repeated public/private reconciliation creates no duplicate or stale tuple."""
+    """Repeated public/private saves change reads without storing tuples."""
 
     del spaces_tables
+    reader = to_subject_ref(create_user("spaces-repeat-reader"))
     with system_context(reason="spaces visibility idempotence"):
         group = Group.objects.create(name="Community", slug="community")
-        group.visibility = Group.GroupVisibility.PUBLIC
-        group.save(update_fields=["visibility", "updated_at"])
-        group.save(update_fields=["visibility", "updated_at"])
-        assert _group_relationship_count(group) == 1
+        for visibility, allowed in (
+            (Group.GroupVisibility.PUBLIC, True),
+            (Group.GroupVisibility.PRIVATE, False),
+        ):
+            group.visibility = visibility
+            for _ in range(2):
+                group.save(update_fields=["visibility", "updated_at"])
+                assert backend().check_access(
+                    subject=reader, action="read", resource=to_object_ref(group),
+                ).allowed == allowed
+                assert _group_relationship_count(group) == 0
 
-        group.visibility = Group.GroupVisibility.PRIVATE
-        group.save(update_fields=["visibility", "updated_at"])
-        group.save(update_fields=["visibility", "updated_at"])
-        assert _group_relationship_count(group) == 0
 
-
-def test_group_delete_removes_roster_rows_and_public_reader(spaces_tables: None) -> None:
-    """Deleting a public group removes its wildcard tuple and canonical roster rows."""
+def test_group_delete_removes_roster_rows(spaces_tables: None) -> None:
+    """Deleting a public group removes its canonical roster rows."""
 
     del spaces_tables
     user, person = _person_for("spaces-delete-member")
@@ -555,12 +558,13 @@ def test_group_delete_removes_roster_rows_and_public_reader(spaces_tables: None)
             role=Membership.MembershipRole.OWNER,
         )
         membership.confirm()
-        assert _wildcard_reader_exists(group)
         assert _role_relations(group, user) == {"owner"}
-        assert _group_relationship_count(group) == 1
+        assert _group_relationship_count(group) == 0
 
         resource_id = str(group.pk)
+        membership_id = membership.pk
         group.delete()
+        assert not Membership.objects.filter(pk=membership_id).exists()
 
     assert not active_relationship_model().objects.filter(
         resource_type="spaces/group",

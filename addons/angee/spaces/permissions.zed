@@ -1,7 +1,7 @@
 // Authorization schema for the spaces addon.
 // @rebac_package: spaces
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 8
 
 definition spaces/group {
     relation owner: auth/user // rebac:field=owner
@@ -9,11 +9,15 @@ definition spaces/group {
     relation roster_moderator: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"moderator"}}
     relation roster_member: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"member"}}
     relation roster_viewer: auth/user // rebac:field={"path":"memberships__party__person__user","filters":{"memberships__is_confirmed":true,"memberships__is_dismissed":false,"memberships__role":"viewer"}}
-    relation reader: auth/user | auth/user:*
+    relation reader: spaces/group // rebac:const={"target_id":"shared","filters":{"visibility":"public"}}
     relation admin: angee/role // rebac:const=admin
 
+    // The shared sentinel needs no target row because this permission is authenticated.
+    // Arrow-only through reader: never check directly or use as an action/field gate;
+    // doing so bypasses visibility. Check read on the group or its child instead.
+    permission shared_reader = authenticated
     permission create = authenticated
-    permission read   = owner + roster_viewer + roster_member + roster_moderator + roster_owner + reader + admin->member
+    permission read   = owner + roster_viewer + roster_member + roster_moderator + roster_owner + reader->shared_reader + admin->member
     permission post   = owner + roster_member + roster_moderator + roster_owner + admin->member
     permission write  = owner + roster_moderator + roster_owner + admin->member
     permission delete = owner + roster_owner + admin->member

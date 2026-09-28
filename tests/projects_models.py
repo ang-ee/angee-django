@@ -6,6 +6,7 @@ from django.db import models
 
 from angee.base.mixins import OwnerMixin
 from angee.base.models import AngeeDataModel
+from angee.intake.models import Need as AbstractNeed
 from angee.messaging.models import ThreadedModelMixin
 from angee.projects.models import Link as AbstractLink
 from angee.projects.models import Milestone as AbstractMilestone
@@ -109,3 +110,13 @@ class Milestone(AbstractMilestone):
         app_label = "projects"
         db_table = "test_projects_milestone"
         rebac_resource_type = "projects/milestone"
+
+
+class Need(AbstractNeed):
+    """Concrete request backing the task and party access paths in this graph."""
+
+    class Meta(AbstractNeed.Meta):
+        abstract = False
+        app_label = "intake"
+        db_table = "test_intake_need"
+        rebac_resource_type = "intake/need"
