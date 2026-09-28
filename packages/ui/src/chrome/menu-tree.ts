@@ -212,6 +212,13 @@ export class MenuTree {
       : buildMenuTree(itemsOrTree);
   }
 
+  /** Project one host-selected root, retaining contributed descendants. */
+  confineTo(rootId: string): MenuTree {
+    const root = this.roots.find((item) => item.id === rootId);
+    if (!root) throw new Error(`Unknown menu root "${rootId}" in confineTo.`);
+    return MenuTree.from([{ ...root, appRoot: true, group: "domain" }]);
+  }
+
   /** Explicit app roots win; without an opt-in every root remains an app. */
   appRoots(): readonly ChromeMenuNode[] {
     return this.roots.some((item) => item.appRoot === true)

@@ -16,6 +16,7 @@ import {
   tanStackRouterProvider,
   type AngeeHasuraSchemaConfig,
   type SchemaOperationDocuments,
+  type ResourceMutationOperations,
 } from "@angee/refine";
 import {
   Refine,
@@ -109,6 +110,8 @@ import {
   refineResourcesForSchemas,
   refineRouteResourceProjection,
   resourceRouteIndex,
+  resourceMutationsForSchema,
+  menuNodeForRoute,
 } from "./resource-projection";
 import { chatterRouteIndex } from "./chatter-routes";
 import {
@@ -147,6 +150,8 @@ export interface CreateAppInput {
   subscriptionSchema?: string;
   /** Where `/` redirects. Defaults to the first non-public route's path. */
   home?: string;
+  /** Confine console navigation to this menu root; public routes stay available. */
+  confineTo?: string;
   /** Auth-owned sign-in destination. Defaults to `/login`. */
   loginPath?: string;
   /** Host-level UI slot contributions, merged with the addons'. */
@@ -156,7 +161,7 @@ export interface CreateAppInput {
 }
 
 export type AngeeAppSchemaConfig =
-  Omit<AngeeHasuraSchemaConfig, "metadata"> & {
+  Omit<AngeeHasuraSchemaConfig, "metadata" | "mutations"> & {
     /** Generated schema metadata imported from emitted JSON. */
     metadata?: unknown;
     /** Generated operation documents imported from emitted project codegen. */
@@ -166,6 +171,7 @@ export type AngeeAppSchemaConfig =
 type NormalizedAngeeAppSchemaConfig =
   Omit<AngeeAppSchemaConfig, "metadata"> & {
     metadata?: AngeeSchemaMetadata;
+    mutations: Readonly<Record<string, ResourceMutationOperations>>;
     fieldMetadata: SchemaFieldMetadata;
   };
 
@@ -243,10 +249,28 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routeHref,
   );
   const menuTree = MenuTree.from(menus);
+  const navigationTree = input.confineTo === undefined ? menuTree : menuTree.confineTo(input.confineTo);
+  const allowsConsolePath = (pathname: string) => menuTree.activeAppRoot(pathname)?.id === input.confineTo;
+  const consoleRouteRoot = (route: BaseAddonRoute): string | undefined => {
+    const menu = menuNodeForRoute(route, menuTree);
+    const references = menu ? [menu] : menuTree.itemsForRoute(route.name);
+    const roots = new Set(references.map((item) => menuTree.trailFor(item.id)[0]?.id));
+    if (roots.size > 1) {
+      throw new Error(`Route "${route.name}" is referenced by different menu roots; declare route.menu.`);
+    }
+    if (roots.size > 0) return roots.values().next().value;
+    const parent = route.parent ? routesByName.get(route.parent) : undefined;
+    return parent ? consoleRouteRoot(parent) : undefined;
+  };
+  const allowsConsoleRoute = (route: BaseAddonRoute): boolean => {
+    const root = consoleRouteRoot(route);
+    return root === undefined || root === input.confineTo;
+  };
 
   const routeResourceProjection = refineRouteResourceProjection(
     routes,
     menuTree,
+    navigationTree,
   );
 
   const defaultSchema = input.defaultSchema ?? "public";
@@ -256,6 +280,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   // The static composition; the session fields (auth, logoutAction,
   // userPreferences) are layered in by RuntimeSessionProvider inside the frame.
   const runtime: Omit<AppRuntime, "auth" | "logoutAction" | "userPreferences"> = {
+    confineTo: input.confineTo ?? null,
     brand: composed.brand,
     widgets: { ...defaultWidgets, ...composed.widgets },
     statusTones: composed.statusTones,
@@ -315,8 +340,16 @@ export function createApp(input: CreateAppInput): AngeeApp {
   );
   const home =
     (input.home ? input.home.startsWith("/") ? input.home : routeHref(input.home) : undefined) ??
+    (input.confineTo !== undefined ? navigationTree.roots[0]?.target : undefined) ??
     routes.find((route) => route.layout !== "public")?.path ??
     "/";
+  const homePath = new URL(home, "https://angee.invalid").pathname;
+  const homeRoute = input.home && !input.home.startsWith("/")
+    ? routesByName.get(input.home) : routes.find((route) => route.path === homePath);
+  if (input.confineTo !== undefined && (homePath === "/"
+    || !(homeRoute ? consoleRouteRoot(homeRoute) === input.confineTo : allowsConsolePath(homePath)))) {
+    throw new Error(`Home "${home}" must belong to confined menu root "${input.confineTo}".`);
+  }
 
   function RootOutlet(): ReactNode {
     return (
@@ -368,7 +401,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    component: () => <HomeRedirect fallback={home} />,
+    component: () => <HomeRedirect fallback={home} confined={input.confineTo !== undefined} />,
   });
 
   const layoutRoutes = createLayoutRoutes({
@@ -386,6 +419,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     routes,
     routesByName,
     layoutRoutes,
+    ...(input.confineTo !== undefined ? { consoleConfinement: { allows: allowsConsoleRoute, home } } : {}),
   });
 
   const router = createRouter({
@@ -443,6 +477,7 @@ function normalizeSchemaConfig(
     metadata == null ? undefined : defineAngeeSchemaMetadata(metadata);
   return {
     ...config,
+    mutations: resourceMutationsForSchema(normalizedMetadata),
     fieldMetadata: schemaFieldMetadataFromAngeeSchemaMetadata(normalizedMetadata),
     ...(normalizedMetadata == null ? {} : { metadata: normalizedMetadata }),
   };
@@ -615,10 +650,11 @@ function RuntimeSessionProvider({
   );
 }
 
-function HomeRedirect({ fallback }: { fallback: string }): ReactNode {
+function HomeRedirect({ fallback, confined }: { fallback: string; confined: boolean }): ReactNode {
   const menuTree = useChromeMenuTree();
   const { preferences } = useUserPreferences();
   const target = useMemo(() => {
+    if (confined) return fallback;
     const preferredPath = preferences[HOME_PATH_PREFERENCE_KEY];
     if (typeof preferredPath === "string" && preferredPath.startsWith("/")) {
       return preferredPath;
@@ -629,7 +665,7 @@ function HomeRedirect({ fallback }: { fallback: string }): ReactNode {
       .railMenuItems()
       .find((node) => node.id === defaultItemId);
     return (item && railDefaultTarget(item)) ?? fallback;
-  }, [fallback, menuTree, preferences]);
+  }, [confined, fallback, menuTree, preferences]);
   return <Redirect to={target} />;
 }
 

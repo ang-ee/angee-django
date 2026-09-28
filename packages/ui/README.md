@@ -4,6 +4,24 @@
 
 Install: `pnpm add @angee/ui`
 
+`useRuntimeBrand` supplies addon identity to chrome. `DocumentTitle` composes
+the active breadcrumb with that brand. `GanttView` is the presentational date
+axis; the `gantt` collection kind composes the list owner's filter, grouping and
+row paging alongside list, board and calendar views.
+
+`useRuntimeViewAs`, `ViewAsBanner` and `ViewAsPicker` consume an injected
+`RuntimeAuthState.viewAs` controller. Its identity and selectable people come from the
+app's authorized identity read; the components issue no identity requests. The
+banner fits `CONSOLE_NOTICE_SLOT`. The controller's owner must implement the
+actor transition, HTTP header, query reset, subscription shutdown and write
+disabling before enabling preview in a host.
+
+`FormView` consumes advertised root mutation arguments: updates use the loaded
+edit baseline's revision and create retries reuse one key until acceptance or a
+creation-key conflict. A stale revision keeps local edits until an explicit reload
+and discard. Custom submit owners receive `baselineRecord` and `clientCreationKey`
+and retain responsibility for their own operation arguments.
+
 ## Resource query migration
 
 Resource views now use the resource's single `query` contract through

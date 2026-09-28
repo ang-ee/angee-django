@@ -6,6 +6,7 @@ import {
   type RefineResourceMetadata,
 } from "@angee/metadata";
 import type { ResourceProps } from "@refinedev/core";
+import type { ResourceMutationOperations } from "@angee/refine";
 import {
   MenuTree,
   type ChromeMenuNode,
@@ -22,6 +23,23 @@ import {
 
 interface SchemaWithMetadata {
   metadata?: AngeeSchemaMetadata;
+}
+
+/** Translate metadata once; the provider receives only executable wire facts. */
+export function resourceMutationsForSchema(
+  metadata: AngeeSchemaMetadata | undefined,
+): Readonly<Record<string, ResourceMutationOperations>> {
+  return Object.fromEntries(dataResourcesFromAngeeSchemaMetadata(metadata).flatMap((resource) => {
+    if (!resource.roots.list) return [];
+    const mutations: ResourceMutationOperations = {};
+    if (resource.roots.create && resource.typeNames.createInput && resource.createArguments?.length) {
+      mutations.create = { root: resource.roots.create, inputType: resource.typeNames.createInput, arguments: resource.createArguments };
+    }
+    if (resource.roots.update && resource.typeNames.updateInput && resource.updateArguments?.length) {
+      mutations.update = { root: resource.roots.update, inputType: resource.typeNames.updateInput, arguments: resource.updateArguments };
+    }
+    return [[resource.roots.list, mutations] as const];
+  }));
 }
 
 export interface RefineRouteResourceProjection {
@@ -48,15 +66,16 @@ export function refineResourcesForSchemas(
 export function refineRouteResourceProjection(
   routes: readonly BaseAddonRoute[],
   menuTree: MenuTree,
+  navigationTree: MenuTree = menuTree,
 ): RefineRouteResourceProjection {
   const resourcesByIdentifier = new Map<string, ResourceProps>();
   const metadataByResource: Record<string, RefineResourceMetadata> = {};
-  const appRootIds = new Set(menuTree.appRoots().map((item) => item.id));
+  const appRootIds = new Set(navigationTree.appRoots().map((item) => item.id));
   const routesByName = new Map(routes.map((route) => [route.name, route]));
   const childrenByParentName = childRoutesByParentName(routes);
 
-  for (const node of menuTree.byId.values()) {
-    const menuTrail = menuTree.trailFor(node.id);
+  for (const node of navigationTree.byId.values()) {
+    const menuTrail = navigationTree.trailFor(node.id);
     menuTrail.forEach((item, index) => {
       addMenuRouteResource(
         resourcesByIdentifier,
@@ -70,7 +89,7 @@ export function refineRouteResourceProjection(
 
   for (const route of routes) {
     if (!route.resource) continue;
-    const selected = menuNodeForRouteResource(route, menuTree);
+    const selected = menuNodeForRoute(route, menuTree);
     const trail = selected
       ? breadcrumbTrailFromMenuTrail(menuTree.trailFor(selected.id))
       : [];
@@ -172,7 +191,7 @@ function addMenuRouteResource(
   });
 }
 
-function menuNodeForRouteResource(
+export function menuNodeForRoute(
   route: BaseAddonRoute,
   menuTree: MenuTree,
 ): ChromeMenuNode | undefined {
