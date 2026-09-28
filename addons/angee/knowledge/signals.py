@@ -10,13 +10,16 @@ resolve them onto another row.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import Any
 
-from django.apps import apps
-from django.db.models.signals import post_save, pre_delete
+from django.apps import AppConfig, apps
+from django.db import router
+from django.db.models.signals import post_migrate, post_save, pre_delete
 
 _MARKDOWN_LABEL = "knowledge.markdownpage"
+logger = logging.getLogger(__name__)
 
 
 def connect() -> None:
@@ -24,6 +27,28 @@ def connect() -> None:
 
     post_save.connect(rebuild_backlinks, dispatch_uid="angee.knowledge.backlinks")
     pre_delete.connect(teardown_record_bindings, dispatch_uid="angee.knowledge.record_binding.teardown")
+    post_migrate.connect(
+        migrate_page_attribution,
+        sender=apps.get_app_config("knowledge"),
+        dispatch_uid="angee.knowledge.migrate_page_attribution",
+    )
+
+
+def migrate_page_attribution(sender: AppConfig, using: str, **_: Any) -> None:
+    """Apply the page owner's pending access transition before permission sync."""
+
+    page_model = sender.get_model("Page")
+    if using != router.db_for_write(page_model) or not router.allow_migrate_model(using, page_model):
+        return
+    changes = page_model._default_manager.db_manager(using).migrate_attribution(apply=True)
+    grants = sum(change.grants_viewer for change in changes)
+    if grants:
+        logger.info(
+            "Page attribution migration: %d viewer share(s), %d lost write(s), %d ownerless-vault page(s) excluded.",
+            grants,
+            sum(change.loses_write for change in changes),
+            sum(change.ownerless_vault for change in changes),
+        )
 
 
 def rebuild_backlinks(

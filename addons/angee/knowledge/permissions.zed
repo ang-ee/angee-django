@@ -49,17 +49,16 @@ definition knowledge/vault {
 definition knowledge/page {
     relation vault: knowledge/vault // rebac:field=vault
     relation parent: knowledge/page // rebac:field=parent
-    relation owner: auth/user // rebac:field=created_by
     relation viewer: auth/user | auth/group#member
 
     // Preflighted by PageManager.create_in with the vault the row will carry.
     permission create = vault->write
-    permission read   = owner + viewer + parent->read + vault->read
-    permission write  = owner + parent->write + vault->write
+    permission read   = viewer + parent->read + vault->read
+    permission write  = parent->write + vault->write
     // `parent->delete` matches the FK CASCADE: deleting a folder must pass
     // the gate on every cascaded child, so the right to delete the parent
     // carries down the subtree.
-    permission delete = owner + parent->delete + vault->delete
+    permission delete = parent->delete + vault->delete
 }
 
 // The body sidecar has no access surface of its own: everything delegates
