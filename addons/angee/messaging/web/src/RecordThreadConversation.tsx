@@ -1,6 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, createClientKey, errorMessage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants } from "@angee/ui";
+import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants } from "@angee/ui";
 import {
   useStorageUpload,
   type UploadedFile,
@@ -23,6 +23,7 @@ import {
   SetRecordMessageStarredDocument,
   UpdateRecordMessageDocument,
   type RecordMessageRow,
+  type RecordActivityRow,
   type RecordThreadPayload,
   type RecipientUserRow,
   type SuggestedRecipientRow,
@@ -72,6 +73,8 @@ export interface RecordThreadConversationProps {
    *  followers/subtypes/mark-read strip here; a room supplies its own or omits it.
    *  The transcript + composer + mark-read + live-refetch are the same either way. */
   header?: (chrome: RecordThreadConversationChrome) => React.ReactNode;
+  /** Override the label used when an exchange was recorded on a later day. */
+  activityCopy?: { recordedOn: (day: string) => string };
 }
 
 /** The reusable record-thread conversation: the message transcript + composer over
@@ -87,6 +90,7 @@ export function RecordThreadConversation({
   modelLabel,
   recordId,
   header,
+  activityCopy,
 }: RecordThreadConversationProps): React.ReactElement {
   const t = useMessagingT();
   const enabled = Boolean(modelLabel && recordId);
@@ -165,6 +169,8 @@ export function RecordThreadConversation({
   const messageResultCount = threadPayload?.message_result_count ?? 0;
   // Messages arrive server-ordered (chronological ascending); render them verbatim.
   const messages = threadPayload?.messages ?? [];
+  const transcript = transcriptEntries(messages, threadPayload?.activities ?? []);
+  const activityTypes = new Map((threadPayload?.activity_types ?? []).map((type) => [type.key, type]));
 
   // Drop local reply / editing state the moment its message leaves the feed (a
   // delete elsewhere, a filtered search) so we never edit or reply to a ghost row.
@@ -339,7 +345,7 @@ export function RecordThreadConversation({
         placeholder={t("chatter.search")}
         aria-label={t("chatter.search")}
       />
-      {messages.length > 0 ? (
+      {transcript.length > 0 ? (
         <div className="space-y-3">
           {debouncedSearch ? (
             <div className={cn(textRoleVariants({ role: "caption" }), "px-1")}>
@@ -347,11 +353,18 @@ export function RecordThreadConversation({
             </div>
           ) : null}
           <MessageFeed label={t("chatter.feedLabel")}>
-            {messages.map((message) => (
+            {transcript.map((entry) => entry.kind === "activity" ? (
+              <CompletedActivityRow
+                key={`activity:${entry.activity.id}`}
+                activity={entry.activity}
+                type={activityTypes.get(entry.activity.activity_type)}
+                recordedOn={activityCopy?.recordedOn ?? ((day) => t("activity.recordedOn", { day }))}
+              />
+            ) : (
               <MessageFeedRow
-                key={message.id}
-                message={message}
-                editing={editingMessageId === message.id}
+                key={`message:${entry.message.id}`}
+                message={entry.message}
+                editing={editingMessageId === entry.message.id}
                 t={t}
                 onStartEdit={handleStartEdit}
                 onCancelEdit={handleCancelEdit}
@@ -395,6 +408,63 @@ export function RecordThreadConversation({
         onDismiss={() => setError(null)}
       />
     </div>
+  );
+}
+
+type TranscriptEntry =
+  | { kind: "message"; message: RecordMessageRow; day: string; at: string }
+  | { kind: "activity"; activity: RecordActivityRow; day: string; at: string };
+
+function transcriptEntries(
+  messages: readonly RecordMessageRow[],
+  activities: readonly RecordActivityRow[],
+): TranscriptEntry[] {
+  const messageEntries: TranscriptEntry[] = messages.map((message) => {
+    const at = message.sent_at ?? message.created_at;
+    return { kind: "message", message, at, day: formatDateStorage(dateFromValue(at)) ?? "" };
+  });
+  const activityEntries: TranscriptEntry[] = activities
+    .filter((activity) => activity.status === "DONE")
+    .map((activity) => ({
+      kind: "activity", activity, at: activity.completed_at ?? "",
+      day: activity.due_date ?? formatDateStorage(dateFromValue(activity.completed_at)) ?? "",
+    }));
+  const entries: TranscriptEntry[] = [];
+  let nextActivity = 0;
+  for (const messageEntry of messageEntries) {
+    while (nextActivity < activityEntries.length) {
+      const activityEntry = activityEntries[nextActivity]!;
+      const dayOrder = activityEntry.day.localeCompare(messageEntry.day);
+      if (dayOrder > 0 || (dayOrder === 0 &&
+        Date.parse(activityEntry.at) > Date.parse(messageEntry.at))) break;
+      entries.push(activityEntry);
+      nextActivity += 1;
+    }
+    entries.push(messageEntry);
+  }
+  entries.push(...activityEntries.slice(nextActivity));
+  return entries;
+}
+
+function CompletedActivityRow({ activity, type, recordedOn }: {
+  activity: RecordActivityRow;
+  type: { name: string; glyph: string } | undefined;
+  recordedOn: (day: string) => string;
+}): React.ReactElement {
+  const recordedDay = formatDateStorage(dateFromValue(activity.completed_at));
+  const occurredDay = activity.due_date ?? recordedDay;
+  return (
+    <MessageRow
+      avatar={<Glyph decorative name={type?.glyph || "activity"} fallbackName="activity" />}
+      author={activity.created_by ? userDisplayName(activity.created_by, "") : undefined}
+      channel={<span className="text-13 font-medium">{type?.name ?? activity.activity_type}</span>}
+      meta={<>
+        {occurredDay ? <time dateTime={occurredDay}>{formatDate(occurredDay)}</time> : null}
+        {recordedDay && recordedDay !== occurredDay ? <> · {recordedOn(formatDate(recordedDay))}</> : null}
+      </>}
+    >
+      {activity.note || activity.summary}
+    </MessageRow>
   );
 }
 

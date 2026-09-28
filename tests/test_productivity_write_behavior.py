@@ -30,8 +30,6 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.intake.models import Need as AbstractNeed
 from angee.projects.models import Task as AbstractTask
-from angee.work.models import Queue as AbstractQueue
-from angee.work.models import Stage as AbstractWorkStage
 from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
 from tests.composed_host import run_composed_tests
@@ -41,8 +39,7 @@ from tests.conftest import (
     execute_schema,
     result_data,
 )
-from tests.projects_models import Task
-from tests.spaces_models import Group
+from tests.projects_models import Queue, Stage, Task
 from tests.tables import model_tables
 
 
@@ -95,26 +92,6 @@ class RoutingSnoozeRecord(models.Model):
 
     class Meta:
         app_label = "tests"
-
-
-class Queue(AbstractQueue, Group):
-    """Native materialized work queue, retaining Group and sequence ownership."""
-
-    class Meta(AbstractQueue.Meta):
-        abstract = False
-        app_label = "work"
-        db_table = "test_create_work_queue"
-        rebac_resource_type = "work/queue"
-
-
-class Stage(AbstractWorkStage):
-    """Production stage behavior used by the prepared-instance regressions."""
-
-    class Meta(AbstractWorkStage.Meta):
-        abstract = False
-        app_label = "work"
-        db_table = "test_create_work_stage"
-        rebac_resource_type = "work/stage"
 
 
 class CreateProject(AngeeDataModel):

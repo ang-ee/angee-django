@@ -35,9 +35,9 @@ from tests.conftest import (
     installed_field_owners,
     result_data,
 )
+from tests.projects_models import Queue
 from tests.spaces_models import Group, Membership
 from tests.test_messaging import Party, Person, Thread
-from tests.test_productivity_write_behavior import Queue
 
 # These concrete test models register after Django's app population. The lazy
 # string relation resolves when ``Party`` registers, but Django may already have
@@ -57,20 +57,19 @@ def spaces_tables(transactional_db: Any, tmp_path: Path) -> Iterator[None]:
     for relpath, text in source_map.items():
         write_atomic(runtime_dir / relpath, text)
 
-    messaging = apps.get_app_config("messaging")
-    sentinel = object()
-    original_schema = getattr(messaging, "rebac_schema", sentinel)
+    originals = {config: getattr(config, "rebac_schema", None) for config in app_configs}
     apply_schema_paths(app_configs, runtime_dir, sources=source_map)
 
     call_command("rebac", "sync", verbosity=0)
     try:
         yield
     finally:
-        if original_schema is sentinel:
-            if hasattr(messaging, "rebac_schema"):
-                delattr(messaging, "rebac_schema")
-        else:
-            messaging.rebac_schema = original_schema
+        for config, original in originals.items():
+            if original is None:
+                if hasattr(config, "rebac_schema"):
+                    delattr(config, "rebac_schema")
+            else:
+                config.rebac_schema = original
 
 
 def _role_relations(group: Group, user: Any) -> set[str]:
@@ -268,7 +267,7 @@ def test_group_crud_slug_uniqueness_and_unscoped_hierarchy(spaces_tables: None) 
         Membership.objects.create(group=queue, party=person, is_confirmed=True)
         assert Queue._meta.get_field("owner").model is Group
         assert queue.owner_id == owner.pk
-        assert [entry.party.pk for entry in queue.thread_audience()] == [person.pk]
+        assert [entry.party_id for entry in queue.thread_audience()] == [person.pk]
         queue.delete()
 
         root = Group.objects.create(name="Community")

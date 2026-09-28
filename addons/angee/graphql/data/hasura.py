@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import types as _types
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from functools import partial
 from typing import Any
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.expressions import Combinable
-from rebac import PermissionDenied, system_context
+from rebac import PermissionDenied, current_actor, system_context
+from rebac.resources import model_resource_type
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django_aggregates import (
     default_operators_for,
@@ -38,8 +43,11 @@ from angee.base.identity import (
     public_data_id_field,
     public_id_for,
 )
+from angee.base.mixins import CreationKeyMixin, OptimisticLockMixin
 from angee.base.scoping import (
     aggregate_scoped_queryset,
+    lock_if_supported,
+    read_scoped_queryset,
     system_queryset,
 )
 from angee.data.field_classification import (
@@ -79,6 +87,7 @@ from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.introspection import (
     FieldPathError,
+    django_model,
     require_field_for_path,
 )
 from angee.graphql.relations import actor_scoped_relation_group_expression
@@ -182,17 +191,46 @@ class AngeeHasuraWriteBackend:
 
         return write_queryset(self.model)
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, client_creation_key: str | None = None) -> Any:
         """Create one row (and any declared nested child lines) atomically."""
 
-        if self.lines is None:
+        if client_creation_key is None and self.lines is None:
             return self._create_row(info, data)
         with transaction.atomic():
-            line_rows = self._pop_line_rows(data)
-            instance = self._create_row(info, data)
-            if line_rows is not None:
-                self._apply_line_diff(info, instance, line_rows)
+            data = dict(data)
+            line_rows = self._pop_line_rows(data) if self.lines is not None else None
+
+            def insert() -> Any:
+                instance = self._create_row(info, data)
+                if line_rows is not None:
+                    self._apply_line_diff(info, instance, line_rows)
+                return instance
+
+            if client_creation_key is None:
+                return insert()
+            if not issubclass(self.model, CreationKeyMixin):
+                raise ValidationError({"client_creation_key": "This resource does not support creation keys."})
+            decoded = self._decode_public_id_fields(data)
+            scope = self.model.creation_key_actor_scope(current_actor(), decoded)
+            fingerprint = self._creation_fingerprint(decoded, line_rows)
+            scope_field = self.model._meta.get_field(self.model.creation_key_scope)
+            data.update({
+                scope_field.attname: scope,
+                "client_creation_key": client_creation_key,
+                "creation_fingerprint": fingerprint,
+            })
+            replays = read_scoped_queryset(self.model, current_actor())
+            if replays is None:
+                raise ImproperlyConfigured("Creation-key resources require an actor-scoped queryset.")
+            instance, _created = replays.replay_or_insert(scope, client_creation_key, fingerprint, insert)
             return instance
+
+    def _creation_fingerprint(self, data: dict[str, Any], line_rows: list[dict[str, Any]] | None) -> str:
+        """Fingerprint decoded write inputs, including the declared line envelope."""
+
+        content = {"object": data, "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None}
+        encoded = json.dumps(content, cls=_CreationFingerprintEncoder, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode()).hexdigest()
 
     def save(
         self,
@@ -200,6 +238,8 @@ class AngeeHasuraWriteBackend:
         pk: str,
         patch: dict[str, Any],
         line_rows: list[dict[str, Any]] | None,
+        *,
+        expected_revision: int | None = None,
     ) -> Any:
         """Patch one parent and diff-apply its child lines in one transaction.
 
@@ -219,16 +259,16 @@ class AngeeHasuraWriteBackend:
 
         if self.lines is None:
             raise ImproperlyConfigured(f"{self.model._meta.label} resource declares no editable lines.")
-        targets = self.write_target_queryset()
-
         with transaction.atomic():
             instance = require_instance_for_id(
                 self.model,
                 pk,
-                queryset=targets,
+                queryset=lock_if_supported(self.write_target_queryset()),
             )
             if not instance.has_access("write"):
                 raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
+            if expected_revision is not None:
+                instance.require_revision(expected_revision)
             if patch:
                 instance = mutation_resolvers.update(
                     info,
@@ -237,12 +277,15 @@ class AngeeHasuraWriteBackend:
                     key_attr=PUBLIC_ID_FIELD_NAME,
                     full_clean=True,
                 )
+            elif line_rows is not None and isinstance(instance, OptimisticLockMixin):
+                # A document's revision covers its child set as well as its columns.
+                instance.save(update_fields={"revision"})
             if line_rows is not None:
                 self._apply_line_diff(info, instance, line_rows)
             return instance
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create one row through strawberry-django's prepared-instance resolver."""
+        """Create one row through strawberry-django's resolver and native manager."""
 
         decoded_data = self._decode_public_id_fields(data)
         return mutation_resolvers.create(
@@ -289,12 +332,7 @@ class AngeeHasuraWriteBackend:
         back_fk_id = f"{self._line_back_fk}_id"
         # Phase 1 — decode line relation ids under the caller's actor, before any
         # elevation. Each entry is ``(public id | None, decoded child payload)``.
-        prepared: list[tuple[str | None, dict[str, Any]]] = []
-        for row in rows:
-            payload = dict(row)
-            public_id = payload.pop("id", None)
-            decoded = self._decode_public_id_fields(payload, self._line_public_id_fields)
-            prepared.append((str(public_id) if public_id else None, decoded))
+        prepared = self._prepare_line_rows(rows)
         # Phase 2 — child writes elevated, under a parent-row lock.
         with system_context(reason="graphql.hasura.save.lines"):
             self.model._default_manager.lock_if_supported().filter(pk=parent.pk).first()
@@ -331,17 +369,34 @@ class AngeeHasuraWriteBackend:
             if removed:
                 child_model._base_manager.filter(pk__in=removed).delete()
 
-    def update(self, info: strawberry.Info, pk: str, data: dict[str, Any]) -> Any:
+    def _prepare_line_rows(self, rows: list[dict[str, Any]]) -> list[tuple[str | None, dict[str, Any]]]:
+        """Decode line payloads under the caller for both fingerprinting and writes."""
+
+        prepared = []
+        for row in rows:
+            payload = dict(row)
+            public_id = payload.pop("id", None)
+            prepared.append(
+                (
+                    str(public_id) if public_id else None,
+                    self._decode_public_id_fields(payload, self._line_public_id_fields),
+                )
+            )
+        return prepared
+
+    def update(
+        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None
+    ) -> Any:
         """Patch one public-id-addressed row through the write queryset."""
 
-        targets = self.write_target_queryset()
-
-        instance = require_instance_for_id(
-            self.model,
-            pk,
-            queryset=targets,
-        )
         with transaction.atomic():
+            instance = require_instance_for_id(
+                self.model,
+                pk,
+                queryset=lock_if_supported(self.write_target_queryset()),
+            )
+            if expected_revision is not None:
+                instance.require_revision(expected_revision)
             return mutation_resolvers.update(
                 info,
                 instance,
@@ -405,15 +460,24 @@ class AngeeHasuraWriteBackend:
                 field = None
             if getattr(field, "many_to_many", False):
                 instances = (
-                    tuple(_write_public_instance(related_model, item) for item in value)
-                    if value is not None
-                    else ()
+                    tuple(_write_public_instance(related_model, item) for item in value) if value is not None else ()
                 )
                 out[key] = list(instances) if value is not None else None
                 continue
             instance = _write_public_instance(related_model, value)
             out[f"{key}_id"] = None if instance is None else instance.pk
         return out
+
+
+class _CreationFingerprintEncoder(DjangoJSONEncoder):
+    """Canonical JSON leaves for decoded mutation input, including M2M rows."""
+
+    def default(self, value: Any) -> Any:
+        if isinstance(value, models.Model):
+            return {"model": value._meta.label_lower, "pk": value.pk}
+        if isinstance(value, Enum):
+            return value.value
+        return super().default(value)
 
 
 def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:
@@ -478,27 +542,24 @@ def _relation_filter_decoders(
     public identity is filtered by that related row's public id — the node
     projects the relation as one — so its ``bool_exp`` operand is a public id,
     never the raw primary key. Each such operand resolves through the related
-    model's identity owner (:func:`public_pk_decoder` →
-    :func:`instance_from_public_id`, which also keeps a raw primary key working)
-    instead of being handed to the ORM raw, which rejects a sqid on a numeric
-    key. A caller-declared ``field_id_decode`` always wins, so an explicit
-    write-scoped decoder is never overridden.
+    model's identity owner through its actor read scope. Caller-declared
+    decoders retain their conversion after the same read preflight.
     """
 
     decoders = dict(declared or {})
     for name, field in _relation_axis_fields(model, filterable).items():
-        if name in decoders:
-            continue
         related = field.related_model
+        if name in decoders and not model_resource_type(related):
+            continue
         if public_data_id_field(related) is None:
             continue
         target = getattr(field, "target_field", None)
-        if target is not None and not target.primary_key:
+        if target is not None and not target.primary_key and name not in decoders:
             raise ImproperlyConfigured(
                 f"{model._meta.label} filter axis {name!r} targets a non-primary "
                 "identity; provide an explicit field_id_decode for that target."
             )
-        decoders[name] = public_pk_decoder(related)
+        decoders[name] = partial(_relation_filter_pk, related, decoder=decoders.get(name))
     return decoders or None
 
 
@@ -556,6 +617,38 @@ def _aggregate_queryset(
     return get_aggregate_queryset
 
 
+def _relation_scalar_queryset(
+    model: type[models.Model],
+    source: Callable[[strawberry.Info], models.QuerySet[Any]],
+    paths: Iterable[str],
+) -> Callable[[strawberry.Info], models.QuerySet[Any]]:
+    """Make relation-path filters and ordering see the same redacted SQL values."""
+
+    scalar_paths = []
+    for path in sorted(set(paths)):
+        if "__" not in path or "." in path:
+            continue
+        try:
+            field = require_field_for_path(model, path)
+        except FieldPathError:
+            continue
+        if not field.is_relation:
+            scalar_paths.append(path)
+    if not scalar_paths:
+        return source
+
+    def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+        queryset = source(info)
+        expressions = {
+            path: expression
+            for path in scalar_paths
+            if (expression := actor_scoped_relation_group_expression(queryset, path)) is not None
+        }
+        return queryset.alias(**expressions) if expressions else queryset
+
+    return get_queryset
+
+
 def _group_by_expression_provider(
     info: strawberry.Info,
     queryset: models.QuerySet[Any],
@@ -566,7 +659,7 @@ def _group_by_expression_provider(
     del info
     expressions: dict[str, Combinable] = {}
     for path, _granularity in spec:
-        if "__" not in path or "." in path:
+        if "." in path:
             continue
         expression = actor_scoped_relation_group_expression(queryset, path)
         if expression is not None:
@@ -618,6 +711,26 @@ def _public_pk(model: type[models.Model], value: Any) -> Any:
     return None if instance is None else instance.pk
 
 
+def _relation_filter_pk(model: type[models.Model], value: Any, *, decoder: Callable[[Any], Any] | None = None) -> Any:
+    """Resolve readable operands, with identical NULL semantics for hidden/unknown ids."""
+
+    queryset = None
+    if model_resource_type(model):
+        queryset = read_scoped_queryset(model, current_actor())
+        if queryset is None:
+            queryset = model._default_manager.none()
+    if value in (None, ""):
+        return None
+    instance = instance_from_public_id(
+        model, str(value), queryset=queryset if queryset is not None else system_queryset(model),
+    )
+    if instance is None:
+        # Django omits NULL operands from IN lists. Scalar comparisons retain
+        # the same NULL semantics for unknown and unreadable identities.
+        return None
+    return decoder(value) if decoder is not None else instance.pk
+
+
 def _write_public_instance(model: type[models.Model], value: Any) -> Any:
     """Decode one write relation public id through the actor-scoped write owner."""
 
@@ -641,7 +754,7 @@ def _public_instance(
         queryset=active_queryset,
     )
     if instance is None:
-        raise ValueError(f"{model._meta.object_name} {value!r} was not found")
+        raise ValidationError("The requested record was not found.", code="not_found")
     return instance
 
 
@@ -740,7 +853,17 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         )
 
     resource_name = name or model.__name__.lower()
-    read_queryset = get_queryset or _model_queryset(model)
+    relation_paths = (
+        *filterable,
+        *sortable,
+        *(alias.path if isinstance(alias, SortAlias) else alias for alias in (sortable_aliases or {}).values()),
+    )
+    read_queryset = _relation_scalar_queryset(model, get_queryset or _model_queryset(model), relation_paths)
+    aggregate_source = (
+        _relation_scalar_queryset(model, get_aggregate_queryset, relation_paths)
+        if get_aggregate_queryset is not None
+        else _aggregate_queryset(read_queryset)
+    )
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
     active_write_backend = write_backend or AngeeHasuraWriteBackend(model, lines=lines)
@@ -793,9 +916,15 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         insert=insert,
         update=update,
         delete=delete,
+        insert_arguments={"client_creation_key": str | None}
+        if insert and issubclass(model, CreationKeyMixin)
+        else None,
+        update_arguments={"expected_revision": int | None}
+        if update and issubclass(model, OptimisticLockMixin)
+        else None,
         field_id_decode=field_id_decode,
         get_queryset=read_queryset,
-        get_aggregate_queryset=get_aggregate_queryset or _aggregate_queryset(read_queryset),
+        get_aggregate_queryset=aggregate_source,
         write_backend=active_write_backend,
         id_decode=id_decode,
         id_column=id_column,
@@ -819,9 +948,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         row_model=row_model,
         subtitle=subtitle,
         record_representation=record_representation,
-        record_search_fields=(
-            tuple(record_search_fields) if record_search_fields is not None else None
-        ),
+        record_search_fields=(tuple(record_search_fields) if record_search_fields is not None else None),
     )
 
 
@@ -936,28 +1063,35 @@ def _attach_lines_save(
         )
     save_root = f"{res}_save"
 
-    def resolve_save(
-        self: Any,
-        info: strawberry.Info,
-        pk: PublicID,
-        patch: Any = None,
-        lines: Any = None,
-    ) -> Any:
+    revisioned = issubclass(django_model(node), OptimisticLockMixin)
+
+    def save(info: strawberry.Info, pk: PublicID, patch: Any, lines: Any, **kwargs: Any) -> Any:
         patch_data = input_to_dict(patch) if patch is not None else {}
         rows = None if lines is None else [input_to_dict(row) for row in lines]
-        return write_backend.save(info, str(pk), patch_data, rows)
+        return write_backend.save(info, str(pk), patch_data, rows, **kwargs)
 
-    annotations: dict[str, Any] = {"self": Any, "info": strawberry.Info, "pk": PublicID}
-    annotations["patch"] = patch_type | None
-    annotations["lines"] = _types.GenericAlias(list, (line_input,)) | None
-    annotations["return"] = node
-    resolve_save.__annotations__ = annotations
+    def resolve_save(self: Any, info: strawberry.Info, pk: PublicID, patch: Any = None, lines: Any = None) -> Any:
+        return save(info, pk, patch, lines)
+
+    def resolve_revisioned_save(
+        self: Any, info: strawberry.Info, pk: PublicID, patch: Any = None, lines: Any = None,
+        expected_revision: int | None = None,
+    ) -> Any:
+        return save(info, pk, patch, lines, expected_revision=expected_revision)
+
+    resolver = resolve_revisioned_save if revisioned else resolve_save
+    resolver.__annotations__.update({
+        "self": Any, "info": strawberry.Info, "pk": PublicID,
+        "patch": patch_type | None, "lines": _types.GenericAlias(list, (line_input,)) | None, "return": node,
+    })
+    if revisioned:
+        resolver.__annotations__["expected_revision"] = int | None
 
     save_holder = strawberry.type(
         type(
             f"{res}__save_mutation",
             (),
-            {save_root: strawberry.mutation(resolver=resolve_save, name=save_root)},
+            {save_root: strawberry.mutation(resolver=resolver, name=save_root)},
         )
     )
     combined_mutation = strawberry.type(type(f"{res}__mutation", (resource.mutation, save_holder), {}))
@@ -1014,6 +1148,7 @@ def attach_hasura_resource_metadata(
             record_representation=record_representation,
             record_search_fields=record_search_fields,
             lines_declaration=lines,
+            save_argument_names=("expected_revision",) if lines is not None else (),
         ),
     )
     attach_data_resource_contribution(resource.query, contribution)
@@ -1045,8 +1180,7 @@ def _line_metadata(
     if unknown_defaults:
         names = ", ".join(sorted(unknown_defaults))
         raise ImproperlyConfigured(
-            f"editable lines {lines.model._meta.label}.{lines.field} declare defaults for "
-            f"non-writable fields: {names}."
+            f"editable lines {lines.model._meta.label}.{lines.field} declare defaults for non-writable fields: {names}."
         )
     return DataLinesMetadata(
         field=lines.field,

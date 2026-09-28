@@ -7,13 +7,15 @@ import importlib
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import SuspiciousFileOperation
+from django.core.exceptions import SuspiciousFileOperation, ValidationError
 from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
@@ -1440,3 +1442,15 @@ def test_attachment_locks_canonical_target_and_file_before_creation(
     assert stored.file_id == row.pk
     assert stored.object_id == target.pk
     assert stored.content_type_id == canonical.content_type.pk
+
+
+def test_storage_preview_does_not_mint_download_urls() -> None:
+    row = SimpleNamespace(upload_state=UploadState.READY, download_url=Mock(side_effect=AssertionError("minted")))
+    info = SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace(view_as=object())))
+    assert storage_schema.FileType.url.get_result(row, info=info, args=[], kwargs={}) is None
+    row.download_url.assert_not_called()
+
+
+def test_folder_create_refuses_unsupported_creation_keys() -> None:
+    with pytest.raises(ValidationError, match="does not support creation keys"):
+        storage_schema.FolderWriteBackend(Folder).create(None, {}, client_creation_key="request")

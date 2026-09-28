@@ -17,7 +17,9 @@ from rebac import (
     PermissionDenied,
     current_actor,
     system_context,
+    to_object_ref,
 )
+from rebac.backends import backend
 
 from angee.base.actors import actor_user_id
 from angee.base.fields import FractionalRankField, StateField
@@ -123,6 +125,41 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
 
 class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any]):
     """Task rows with shared creation replay and ownership release contracts."""
+
+    def update(self, **kwargs: Any) -> int:
+        """Keep visibility transitions on the authorized instance verb."""
+
+        if "visibility" in kwargs:
+            raise ValueError("Task.visibility requires set_visibility().")
+        return super().update(**kwargs)
+
+    def bulk_update(self, objs: Any, fields: Any, *args: Any, **kwargs: Any) -> int:
+        """Refuse visibility changes that bypass transition validation."""
+
+        if "visibility" in fields:
+            raise ValueError("Task.visibility requires set_visibility().")
+        return super().bulk_update(objs, fields, *args, **kwargs)
+
+    def priority_rank_expression(self) -> models.Case:
+        """Order urgency by the priority field's declared enum order."""
+
+        priorities = self.model._meta.get_field("priority").choices_enum
+        return models.Case(
+            *(models.When(priority=priority, then=models.Value(rank)) for rank, priority in enumerate(priorities)),
+            output_field=models.IntegerField(),
+        )
+
+    def promoted_phase_expression(self) -> models.Expression:
+        """Project only the phase name admitted by the task's narrow permission."""
+
+        tasks = cast(TaskQuerySet, self.with_action("read_promoted_phase"))
+        return (
+            tasks.filter(pk=models.OuterRef("pk"))
+            .order_by()
+            .readable_scalar_subquery(
+                "promoted_projects__current_milestone__name",
+            )
+        )
 
 
 class TaskManager(AngeeManager.from_queryset(TaskQuerySet)):  # type: ignore[misc]
@@ -353,6 +390,7 @@ class Project(
         object_id_field="object_id",
         related_query_name="project",
     )
+    knowledge_bindings = GenericRelation("knowledge.RecordBinding", related_query_name="project")
 
     objects = ProjectManager()
 
@@ -586,7 +624,15 @@ class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, Aud
             raise ValidationError("A reached milestone cannot be deleted.")
 
 
-class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
+class Task(
+    CreationKeyMixin,
+    ImmutableFieldsMixin,
+    OwnerMixin,
+    OptimisticLockMixin,
+    ThreadedModelMixin,
+    HistoryMixin,
+    AngeeDataModel,
+):
     """The platform's one table for a discrete human action."""
 
     runtime = True
@@ -594,6 +640,7 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
     thread_tracking_fields = ("status", "assignee", "due_date", "priority", "visibility")
     thread_post_access = "comment"
     owner_container = "project"
+    immutable_fields = ("visibility",)
     rebac_grantable = {"reader": "share", "editor": "share"}
 
     class TaskVisibility(models.TextChoices):
@@ -690,6 +737,8 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
         object_id_field="object_id",
         related_query_name="task",
     )
+    file_attachments = GenericRelation("storage.FileAttachment", related_query_name="task")
+    knowledge_bindings = GenericRelation("knowledge.RecordBinding", related_query_name="task")
 
     objects = TaskManager()
 
@@ -729,6 +778,29 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
             field = cast(FractionalRankField, self._meta.get_field(field_name))
             field.pre_save(self, True)
 
+    def priority_rank(self) -> int:
+        """Use the SQL annotation or the priority field's declared enum order."""
+
+        if hasattr(self, "_priority_rank"):
+            return self._priority_rank
+        return list(self._meta.get_field("priority").choices_enum).index(self.priority)
+
+    def promoted_phase(self) -> str | None:
+        """Use the annotation or fetch the phase through the same scoped expression."""
+
+        if hasattr(self, "_promoted_phase"):
+            return self._promoted_phase
+        actor = self.actor() or current_actor()
+        if self.pk is None or actor is None:
+            return None
+        return (
+            type(self)
+            ._base_manager.filter(pk=self.pk)
+            .annotate(_promoted_phase=type(self).objects.with_actor(actor).promoted_phase_expression())
+            .values_list("_promoted_phase", flat=True)
+            .first()
+        )
+
     def clean(self) -> None:
         """Normalize insert lifecycle state and reject invalid task structure."""
 
@@ -741,12 +813,12 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
 
         update_fields = kwargs.get("update_fields")
         deferred = self.get_deferred_fields()
-        project_is_written = (
-            update_fields is None and "project_id" not in deferred
-        ) or (update_fields is not None and bool({"project", "project_id"}.intersection(update_fields)))
-        assignee_is_written = (
-            update_fields is None and "assignee_id" not in deferred
-        ) or (update_fields is not None and bool({"assignee", "assignee_id"}.intersection(update_fields)))
+        project_is_written = (update_fields is None and "project_id" not in deferred) or (
+            update_fields is not None and bool({"project", "project_id"}.intersection(update_fields))
+        )
+        assignee_is_written = (update_fields is None and "assignee_id" not in deferred) or (
+            update_fields is not None and bool({"assignee", "assignee_id"}.intersection(update_fields))
+        )
         previous_project_id, previous_assignee_id = None, None
         if not self._state.adding and (project_is_written or assignee_is_written):
             previous_project_id, previous_assignee_id = (
@@ -775,10 +847,15 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
                 super().save(*args, **kwargs)
                 # The persisted candidate lets REBAC evaluate every composed share arm.
                 # A refusal rolls the insert and its transactional side effects back.
-                if assignment_actor is not None and (
-                    self.container_owns_items() or self.owner_id is None
-                    or self.assignee_id != actor_user_id(assignment_actor)
-                ) and not self.has_access("share"):
+                if (
+                    assignment_actor is not None
+                    and (
+                        self.container_owns_items()
+                        or self.owner_id is None
+                        or self.assignee_id != actor_user_id(assignment_actor)
+                    )
+                    and not self.has_access("share")
+                ):
                     raise PermissionDenied("Share access to the task is required to assign it.")
             return
         super().save(*args, **kwargs)
@@ -845,15 +922,30 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
         permission = "narrow" if visibility == self.TaskVisibility.RESTRICTED else "widen"
         with transaction.atomic():
             locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
-            if not bypass and not locked.with_actor(actor).has_access(permission):
+            if not bypass and (
+                actor is None
+                or not backend().check_access(subject=actor, action=permission, resource=to_object_ref(locked)).allowed
+            ):
                 raise PermissionDenied(f"{permission.title()} access to the task is required.")
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
             if locked.visibility != visibility:
+                with system_context(reason="projects.task.validate_visibility"):
+                    locked.validate_visibility(visibility)
                 locked.visibility = visibility
+                locked.allow_immutable_save("visibility")
+                bind_actor(locked, actor)
                 locked.sudo(reason="projects.task.set_visibility").save(update_fields=("visibility", "updated_at"))
             self.refresh_from_db()
         return self
+
+    def validate_visibility(self, value: str) -> None:
+        """Validate on the locked row under system context with no actor bound.
+
+        Task-kind contributors call super first. The row still holds the old
+        visibility. The lock covers only the task, so implementations must also
+        re-check their message invariants on post to cover concurrent messages.
+        """
 
     def thread_audience_members(self) -> Iterable[AudienceMember]:
         """Notify the current assignee's existing party without creating a follower."""
@@ -862,7 +954,7 @@ class Task(CreationKeyMixin, OwnerMixin, OptimisticLockMixin, ThreadedModelMixin
         if self.assignee_id is not None:
             person = system_queryset(apps.get_model("parties", "Person")).filter(user_id=self.assignee_id).first()
             if person is not None:
-                yield AudienceMember(party=person)
+                yield AudienceMember(party_id=person.pk)
 
     def _normalize_insert_lifecycle(self) -> None:
         """Stamp coherent close state while rejecting contradictory inserts."""
@@ -1053,6 +1145,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
     binding_fields = frozenset({"project", "project_id", "content_type", "content_type_id", "object_id"})
     allowed_target_models = frozenset(
         {
+            "knowledge.vault",
             "messaging.channel",
             "messaging.thread",
             "storage.drive",
@@ -1102,7 +1195,7 @@ class ProjectBinding(AuditMixin, RecordRefMixin, AngeeDataModel):
             ):
                 return
         raise ValidationError(
-            {"target": "Project bindings may target only drives, folders, messaging channels, or threads."}
+            {"target": "Project bindings may target only drives, folders, messaging channels, threads, or vaults."}
         )
 
     def clean(self) -> None:
@@ -1267,6 +1360,15 @@ class ThreadProjects(ProjectBindingsMixin):
     """Projects-owned reverse collection for messaging-thread bindings."""
 
     extends = "messaging.Thread"
+
+    class Meta:
+        abstract = True
+
+
+class VaultProjects(ProjectBindingsMixin):
+    """Projects-owned reverse collection for knowledge-vault bindings."""
+
+    extends = "knowledge.Vault"
 
     class Meta:
         abstract = True

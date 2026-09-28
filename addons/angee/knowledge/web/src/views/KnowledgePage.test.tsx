@@ -369,7 +369,7 @@ function page(id: string, title: string, kind: string, vault: string) {
 function detail(id: string, title: string, vault: string) {
   return {
     ...page(id, title, "note", vault),
-    can_write: true,
+    permissions: ["write"],
     markdown: {
       body: "Hello",
       body_hash: "hash",

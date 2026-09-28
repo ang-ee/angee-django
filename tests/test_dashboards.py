@@ -10,7 +10,6 @@ from unittest.mock import patch
 import pytest
 import tablib
 from django.apps import apps
-from django.core.exceptions import ValidationError
 from django.db import models
 from django.test import override_settings
 from rebac import actor_context, system_context
@@ -56,7 +55,7 @@ class DashboardResourceLedger(Resource):
 
 @pytest.fixture()
 def dashboard_tables(transactional_db: Any) -> Iterator[None]:
-    """Load the production dashboard policy before creating shared readers."""
+    """Load the production dashboard policy before creating dashboard rows."""
 
     del transactional_db
     reset_backend()
@@ -124,7 +123,7 @@ def test_for_target_preserves_authored_precedence_with_scoped_installed_reads(
             assert [widget["id"] for widget in selected.snapshot()["widgets"]] == ["welcome"]
 
 
-def test_dashboard_owner_changes_reconcile_only_persisted_eligibility(dashboard_tables: None) -> None:
+def test_dashboard_owner_changes_use_only_persisted_eligibility(dashboard_tables: None) -> None:
     """Dirty and deferred owners never change readers until ownership is saved."""
 
     owner = create_user("dashboard-owner")
@@ -150,21 +149,33 @@ def test_dashboard_owner_changes_reconcile_only_persisted_eligibility(dashboard_
         assert DashboardTarget.objects.filter(pk=dashboard.pk).exists()
 
 
-def test_dashboard_policy_bulk_writes_are_rejected(dashboard_tables: None) -> None:
-    """Bulk writes cannot bypass reader reconciliation."""
+def test_dashboard_policy_bulk_writes_change_readers_without_tuples(dashboard_tables: None) -> None:
+    """Bulk ownership changes and inserts use the same live column policy."""
 
+    owner = create_user("dashboard-bulk-owner")
+    outsider = create_user("dashboard-bulk-reader")
     with system_context(reason="test.dashboards.bulk"):
-        dashboard = DashboardTarget.objects.create(name="Baseline", scope="addon", scope_key="bulk")
-        with pytest.raises(ValidationError, match="eligibility"):
-            DashboardTarget.objects.filter(pk=dashboard.pk).update(owner_id=None)
-        with pytest.raises(ValidationError, match="native owner"):
-            DashboardTarget.objects.bulk_create([DashboardTarget(name="Bulk", scope="addon", scope_key="other")])
+        dashboard = DashboardTarget.objects.create(owner=owner, name="Baseline", scope="addon", scope_key="bulk")
+    with actor_context(outsider):
+        assert not DashboardTarget.objects.filter(pk=dashboard.pk).exists()
+    with system_context(reason="test.dashboards.bulk.share"):
+        assert DashboardTarget.objects.filter(pk=dashboard.pk).update(owner_id=None) == 1
+        (bulk,) = DashboardTarget.objects.bulk_create([
+            DashboardTarget(name="Bulk", scope="addon", scope_key="other"),
+        ])
+    with actor_context(outsider):
+        assert set(DashboardTarget.objects.values_list("pk", flat=True)) == {dashboard.pk, bulk.pk}
+    with system_context(reason="test.dashboards.bulk.own"):
+        assert DashboardTarget.objects.filter(pk=dashboard.pk).update(owner=owner) == 1
+    with actor_context(outsider):
+        assert list(DashboardTarget.objects.values_list("pk", flat=True)) == [bulk.pk]
+    assert not active_relationship_model().objects.filter(resource_type="dashboards/dashboard").exists()
 
 
-def test_resource_reload_reconciles_unchanged_installed_readers(
+def test_resource_reload_preserves_unchanged_installed_reads_without_tuples(
     dashboard_tables: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Post-load hooks restore readers even when the import skips an unchanged row."""
+    """Initial and unchanged resource imports need no stored shared readers."""
 
     # This empty dashboard names no composed console resources.
     monkeypatch.setattr(GraphQLSchemas, "resources", lambda self, name: ())
@@ -189,10 +200,6 @@ def test_resource_reload_reconciles_unchanged_installed_readers(
         assert result.skipped == 1 - expected_created
         with actor_context(outsider):
             dashboard = DashboardTarget.objects.get(scope_key="reload")
-        if expected_created:
-            with system_context(reason="test.dashboards.resource.previous-policy"):
-                active_relationship_model().objects.filter(
-                    resource_type="dashboards/dashboard", resource_id=str(dashboard.pk), relation="shared"
-                ).delete()
-            with actor_context(outsider):
-                assert not DashboardTarget.objects.filter(pk=dashboard.pk).exists()
+        assert not active_relationship_model().objects.filter(
+            resource_type="dashboards/dashboard", resource_id=str(dashboard.pk), relation="shared"
+        ).exists()

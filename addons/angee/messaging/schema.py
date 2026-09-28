@@ -22,10 +22,12 @@ from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
 from rebac import PermissionDenied, current_actor
+from rebac.resources import model_resource_type
 from strawberry import auto
 
 from angee.base.identity import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
+from angee.graphql.capabilities import held_permissions
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     SortAlias,
@@ -57,6 +59,7 @@ Thread = apps.get_model("messaging", "Thread")
 ThreadAttachment = apps.get_model("messaging", "ThreadAttachment")
 ThreadFollower = apps.get_model("messaging", "ThreadFollower")
 ThreadActivity = apps.get_model("messaging", "ThreadActivity")
+ActivityType = apps.get_model("messaging", "ActivityType")
 ThreadNotification = apps.get_model("messaging", "ThreadNotification")
 MessageSubtype = apps.get_model("messaging", "MessageSubtype")
 Message = apps.get_model("messaging", "Message")
@@ -302,6 +305,15 @@ class PartType(AngeeNode):
     fragment: FragmentType | None
     file: FileType | None = actor_scoped_to_one("file")
     created_at: auto
+
+
+@strawberry_django.type(ActivityType)
+class ActivityTypeType(AngeeNode):
+    """The installed resource-declared activity catalog."""
+
+    key: auto
+    name: auto
+    glyph: auto
 
 
 @strawberry_django.type(MessageSubtype)
@@ -695,7 +707,8 @@ class RecordThreadActivityType(AngeeNode):
     """Record-scoped activity projection without thread or attachment backedges."""
 
     user: "UserType | None" = actor_scoped_to_one("user")
-    activity_type: auto
+    created_by: "UserType | None" = actor_scoped_to_one("created_by")
+    activity_type: str = strawberry_django.field(field_name="activity_type_id")
     summary: auto
     note: auto
     due_date: auto
@@ -763,7 +776,7 @@ class ThreadActivityType(AngeeNode):
     thread: "ThreadType | None" = actor_scoped_to_one("thread")
     attachment: "ThreadAttachmentType | None" = actor_scoped_to_one("attachment")
     user: "UserType | None" = actor_scoped_to_one("user")
-    activity_type: auto
+    activity_type: str = strawberry_django.field(field_name="activity_type_id")
     summary: auto
     note: auto
     due_date: auto
@@ -825,7 +838,7 @@ class AgendaActivityType(AngeeNode):
     """
 
     user: "UserType | None" = actor_scoped_to_one("user")
-    activity_type: auto
+    activity_type: str = strawberry_django.field(field_name="activity_type_id")
     summary: auto
     note: auto
     due_date: auto
@@ -1048,6 +1061,15 @@ class RecordActivityScheduleInput(RecordReferenceInput):
 
 
 @strawberry.input
+class RecordActivityLogInput(RecordReferenceInput):
+    """One completed exchange on a record's chatter."""
+
+    activity_type: str = strawberry.field(name="activity_type")
+    occurred_on: date = strawberry.field(name="occurred_on")
+    note: str
+
+
+@strawberry.input
 class RecordActivityFeedbackInput:
     """Fields accepted when completing a record activity."""
 
@@ -1092,6 +1114,7 @@ class RecordThreadStatePayload:
     message_has_error: bool = strawberry.field(name="message_has_error", default=False)
     message_has_error_counter: int = strawberry.field(name="message_has_error_counter", default=0)
     activities: list[RecordThreadActivityType] = strawberry.field(default_factory=list)
+    activity_types: list[ActivityTypeType] = strawberry.field(default_factory=list)
     activity_count: int = strawberry.field(name="activity_count", default=0)
     attachment_count: int = strawberry.field(name="attachment_count", default=0)
 
@@ -1638,6 +1661,28 @@ class MessagingMutation:
             is_following=payload.is_following,
         )
 
+    @strawberry.mutation(name="log_record_activity")
+    def log_record_activity(self, info: strawberry.Info, input: RecordActivityLogInput) -> RecordActivityPayload:
+        """Record one completed exchange under the target record's authority."""
+
+        if _request_user(info) is None:
+            return RecordActivityPayload(error="authentication required", error_code="NOT_AUTHENTICATED")
+        try:
+            record = _threaded_record(input)
+        except ValueError as error:
+            return RecordActivityPayload(error=str(error), error_code="BAD_RECORD")
+        if record is None:
+            return RecordActivityPayload(error="record not found", error_code="NOT_FOUND")
+        try:
+            activity = record.activity_log(input.activity_type, input.occurred_on, input.note)
+        except (PermissionDenied, ValueError, ValidationError) as error:
+            return RecordActivityPayload.from_error(error, invalid_code="BAD_ACTIVITY")
+        payload = _record_thread_payload(record, info, role=input.role)
+        return RecordActivityPayload(
+            activity=activity, thread=payload.thread, activities=payload.activities,
+            activity_count=payload.activity_count,
+        )
+
     @strawberry.mutation(name="schedule_record_activity")
     def schedule_record_activity(
         self,
@@ -1664,7 +1709,7 @@ class MessagingMutation:
                 due_date=input.due_date,
                 activity_type=input.activity_type,
             )
-        except (PermissionDenied, ValueError) as error:
+        except (PermissionDenied, ValueError, ValidationError) as error:
             return RecordActivityPayload.from_error(error, invalid_code="BAD_ACTIVITY")
         payload = _record_thread_payload(record, info, role=input.role)
         return RecordActivityPayload(
@@ -2046,7 +2091,17 @@ _NOTIFICATION_INBOX_RESOURCE = hasura_model_resource(
 )
 
 
+_ACTIVITY_TYPE_RESOURCE = hasura_model_resource(
+    ActivityTypeType, model=ActivityType, name="activity_types",
+    filterable=["id", "key", "name"], sortable=["name", "key"],
+    aggregatable=["id"],
+    insertable=["key", "name", "glyph"], updatable=["name", "glyph"],
+    write_backend=AngeeHasuraWriteBackend(ActivityType),
+)
+
+
 _RESOURCE_TYPES = [
+    *_ACTIVITY_TYPE_RESOURCE.types,
     *_CHANNEL_RESOURCE.types,
     *_MESSAGE_RESOURCE.types,
     *_THREAD_RESOURCE.types,
@@ -2059,6 +2114,7 @@ _RESOURCE_TYPES = [
 
 _MESSAGING_SCHEMA_BUCKET = {
     "query": [
+        _ACTIVITY_TYPE_RESOURCE.query,
         MessagingPairingQuery,
         MessagingQuery,
         _CHANNEL_RESOURCE.query,
@@ -2070,6 +2126,7 @@ _MESSAGING_SCHEMA_BUCKET = {
         _NOTIFICATION_INBOX_RESOURCE.query,
     ],
     "mutation": [
+        _ACTIVITY_TYPE_RESOURCE.mutation,
         MessagingPairingMutation,
         MessagingChannelMutation,
         MessagingMutation,
@@ -2079,6 +2136,7 @@ _MESSAGING_SCHEMA_BUCKET = {
         _PART_RESOURCE.mutation,
     ],
     "types": [
+        ActivityTypeType,
         ChannelType,
         PairingProjection,
         ThreadType,
@@ -2227,6 +2285,18 @@ def _record_message_access_cache(info: strawberry.Info | None) -> dict[Any, tupl
     return cache
 
 
+def _record_message_access(record: ThreadedModelMixin, user: Any) -> tuple[bool, bool]:
+    """Compose record predicates with the shared permission evaluator."""
+
+    if user is not None and not user.is_authenticated:
+        return False, False
+    if not model_resource_type(record):
+        return record.can_post(user), record.can_moderate(user)
+    permissions = held_permissions(record, (record.thread_post_access, "write"))
+    return record.thread_post_access in permissions, "write" in permissions
+
+
+
 def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any]:
     """Pass the actor and the record's access facts to Message's predicates."""
 
@@ -2236,9 +2306,7 @@ def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any
         cache = _record_message_access_cache(info)
         if message.thread_id not in cache:
             record = message.threaded_record()
-            cache[message.thread_id] = (
-                (record.can_post(user), record.can_moderate(user)) if record is not None else (False, False)
-            )
+            cache[message.thread_id] = _record_message_access(record, user) if record is not None else (False, False)
         post_access, moderate_access = cache[message.thread_id]
     return {"post_access": post_access, "moderate_access": moderate_access, "actor_id": getattr(user, "pk", None)}
 
@@ -2266,6 +2334,20 @@ def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
         party._meta.get_field("person").set_cached_value(party, people.get(party.pk))
     for follower in followers:
         follower._meta.get_field("party").set_cached_value(follower, parties.get(follower.party_id))
+
+
+def _prime_activity_identities(activities: list[Any], actor: Any) -> None:
+    """Load readable activity accounts once for both guarded identity fields."""
+
+    if not activities:
+        return
+    ids = {value for row in activities for value in (row.user_id, row.created_by_id) if value is not None}
+    users = {
+        row.pk: row for row in get_user_model().objects.with_actor(actor).filter(pk__in=ids)
+    } if actor is not None else {}
+    for row in activities:
+        for name in ("user", "created_by"):
+            row._meta.get_field(name).set_cached_value(row, users.get(getattr(row, f"{name}_id")))
 
 
 def _record_thread_payload(
@@ -2299,7 +2381,14 @@ def _record_thread_payload(
     )
     followers = list(cast(Any, record).message_followers()) if thread is not None else []
     _prime_follower_identities(followers, current_actor())
-    activities = list(cast(Any, record).activity_ids().select_related("user")) if thread is not None else []
+    activities = (
+        ThreadActivity.objects.for_record_window(
+            record, role=role, search=search, limit=message_limit,
+            messages=messages, message_count=message_result_count,
+            bounded=any(value not in (None, "") for value in (before, after, around)),
+        ) if thread is not None else []
+    )
+    _prime_activity_identities(activities, current_actor())
     attachment_count = (
         apps.get_model("messaging", "Part").objects.filter(message__thread=thread).attachments().count()
         if thread is not None
@@ -2338,7 +2427,7 @@ def _record_thread_payload(
     if messages:
         # Posting and moderation are record-level facts shared by the whole page.
         # Prime both through their owner instead of re-walking each message's record.
-        _record_message_access_cache(info)[messages[0].thread_id] = (record.can_post(user), record.can_moderate(user))
+        _record_message_access_cache(info)[messages[0].thread_id] = _record_message_access(record, user)
     if messages and thread is not None and user is not None:
         # One receipt-anchored scan primes the page's needaction flags — the same
         # unread set the badge counts, restricted to the rows on this page.
@@ -2371,6 +2460,7 @@ def _record_thread_payload(
         message_has_error_counter=message_has_error_counter,
         activities=activities,
         activity_count=len(activities),
+        activity_types=list(ActivityType.objects.all()),
         attachment_count=attachment_count,
     )
 

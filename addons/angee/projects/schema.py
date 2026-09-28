@@ -14,9 +14,11 @@ from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
+    SortAlias,
     declared_hasura_resource_fields,
     declared_hasura_write_relation_fields,
     hasura_model_resource,
@@ -45,6 +47,9 @@ ThreadActivity = apps.get_model("messaging", "ThreadActivity")
 Folder = apps.get_model("storage", "Folder")
 Party = apps.get_model("parties", "Party")
 User = get_user_model()
+
+_PROJECT_PERMISSIONS = ("write", "share", "delete")
+_TASK_PERMISSIONS = (*_PROJECT_PERMISSIONS, "narrow", "widen", "comment")
 
 _PROJECT_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
     Project,
@@ -159,6 +164,7 @@ class ProjectType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(_PROJECT_PERMISSIONS)
 
     owner: UserType | None = actor_scoped_to_one("owner")
     owns_items: auto
@@ -190,6 +196,7 @@ class ConsoleProjectType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(_PROJECT_PERMISSIONS)
 
     owner: UserType | None = actor_scoped_to_one("owner")
     owns_items: auto
@@ -216,12 +223,30 @@ class MilestoneType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(("write", "reach"))
 
     project: ProjectType | None = actor_scoped_to_one("project")
 
 
+@strawberry.type
+class TaskProjectionMixin:
+    """Shared SQL scalar projections for public and console task types."""
+
+    @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
+    def priority_rank(self) -> int:
+        """Return the priority's position in its declared order."""
+
+        return cast(Any, self).priority_rank()
+
+    @strawberry_django.field(annotate={"_promoted_phase": lambda info: Task.objects.promoted_phase_expression()})
+    def promoted_phase(self) -> str | None:
+        """Return only the phase name authorized through read_promoted_phase."""
+
+        return cast(Any, self).promoted_phase()
+
+
 @strawberry_django.type(Task)
-class TaskType(AuthoredRefMixin, AngeeNode):
+class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
     """GraphQL projection of one human action."""
 
     display_name: str = strawberry_django.field(
@@ -245,6 +270,7 @@ class TaskType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(_TASK_PERMISSIONS)
 
     project: ProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
@@ -271,7 +297,7 @@ class TaskType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Task)
-class ConsoleTaskType(AuthoredRefMixin, AngeeNode):
+class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
     """Console task projection with label-bearing user relations."""
 
     display_name: str = strawberry_django.field(
@@ -295,6 +321,7 @@ class ConsoleTaskType(AuthoredRefMixin, AngeeNode):
     created_at: auto
     updated_at: auto
     revision: auto
+    permissions = capabilities.permissions_field(_TASK_PERMISSIONS)
 
     project: ConsoleProjectType | None = actor_scoped_to_one("project")
     milestone: MilestoneType | None = actor_scoped_to_one("milestone")
@@ -808,6 +835,7 @@ def _task_resource(node_type: type) -> Any:
             "status",
             "visibility",
             "priority",
+            "priority_rank",
             "due_date",
             "done_at",
             "dropped_at",
@@ -815,6 +843,9 @@ def _task_resource(node_type: type) -> Any:
             "updated_at",
             *_TASK_EXTENSION_ORDER_FIELDS,
         ],
+        sortable_aliases={
+            "priority_rank": SortAlias("_priority_rank", lambda _info, queryset: queryset.priority_rank_expression()),
+        },
         aggregatable=[
             "id",
             "sort_order",

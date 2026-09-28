@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import strawberry_django
-from django.db import models
+from django.db import connection, models
+from django.test.utils import CaptureQueriesContext
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -19,12 +21,15 @@ from rebac import (
     write_relationships,
 )
 from rebac.backends import LocalBackend, backend, reset_backend
+from rebac.resources import model_resource_type
 from rebac.schema import parse_zed
 from strawberry import auto
 
 from angee.base.models import AngeeDataModel
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import (
     SchemaAddon,
@@ -44,7 +49,7 @@ class GroupLabel(AngeeDataModel):
 
     class Meta(AngeeDataModel.Meta):
         abstract = False
-        app_label = "tests"
+        app_label = "scopedemo"
         rebac_resource_type = "tests/group_label"
 
 
@@ -60,7 +65,7 @@ class GroupMiddle(AngeeDataModel):
 
     class Meta(AngeeDataModel.Meta):
         abstract = False
-        app_label = "tests"
+        app_label = "scopedemo"
         rebac_resource_type = "tests/group_middle"
 
 
@@ -70,7 +75,7 @@ class PlainGroupLabel(models.Model):
     display_name = models.CharField(max_length=64)
 
     class Meta:
-        app_label = "tests"
+        app_label = "scopedemo"
 
 
 class GroupParent(AngeeDataModel):
@@ -95,7 +100,7 @@ class GroupParent(AngeeDataModel):
         GroupMiddle,
         null=True,
         on_delete=models.SET_NULL,
-        related_name="+",
+        related_name="parents",
     )
     plain = models.ForeignKey(
         PlainGroupLabel,
@@ -106,14 +111,30 @@ class GroupParent(AngeeDataModel):
 
     class Meta(AngeeDataModel.Meta):
         abstract = False
-        app_label = "tests"
+        app_label = "scopedemo"
         rebac_resource_type = "tests/group_parent"
+
+
+@strawberry_django.type(GroupLabel)
+class GroupLabelType(AngeeNode):
+    display_name: auto
+    permissions = permissions_field(("read",))
+
+
+@strawberry_django.type(GroupMiddle)
+class GroupMiddleType(AngeeNode):
+    target: GroupLabelType | None = actor_scoped_to_one("target")
+    parents: list["GroupParentType"] = actor_scoped_to_many("parents")
+    permissions = permissions_field(("read",))
 
 
 @strawberry_django.type(GroupParent)
 class GroupParentType(AngeeNode):
     kind: auto
     amount: auto
+    target: GroupLabelType | None = actor_scoped_to_one("target")
+    middle: GroupMiddleType | None = actor_scoped_to_one("middle")
+    permissions = permissions_field(("read",))
 
 
 @pytest.fixture
@@ -124,27 +145,32 @@ def relation_grouping_case(transactional_db: None):
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)
-    active.set_schema(
-        parse_zed(
-            """
-            definition auth/user {}
-            definition tests/group_label {
-                relation reader: auth/user
-                permission read = reader
-            }
-            definition tests/group_middle {
-                relation reader: auth/user
-                permission read = reader
-            }
-            definition tests/group_parent {
-                relation reader: auth/user
-                permission read = reader
-            }
-            """
-        )
+    definition = parse_zed(
+        """
+        definition auth/user {}
+        definition tests/group_label {
+            relation reader: auth/user
+            permission read = reader
+        }
+        definition tests/group_middle {
+            relation reader: auth/user
+            permission read = reader
+        }
+        definition tests/group_parent {
+            relation reader: auth/user
+            permission read = reader
+        }
+        """
     )
+    active.set_schema(definition)
     models_in_order = (GroupLabel, GroupMiddle, PlainGroupLabel, GroupParent)
-    with model_tables(models_in_order):
+    with (
+        model_tables(models_in_order),
+        patch(
+            "angee.graphql.capabilities.effective_rebac_definition",
+            side_effect=lambda model: definition.get_definition(model_resource_type(model)),
+        ),
+    ):
         try:
             alice = SubjectRef.of("auth/user", "alice")
             bob = SubjectRef.of("auth/user", "bob")
@@ -152,8 +178,10 @@ def relation_grouping_case(transactional_db: None):
                 GroupParentType,
                 model=GroupParent,
                 name="group_parents",
-                filterable=["kind"],
-                sortable=["kind"],
+                filterable=[
+                    "kind", "target", "metric_target__rank", "target__display_name", "middle__target__display_name",
+                ],
+                sortable=["kind", "id", "metric_target__rank"],
                 aggregatable=["amount"],
                 groupable=[
                     "target",
@@ -183,8 +211,8 @@ def relation_grouping_case(transactional_db: None):
                 GroupParentType,
                 model=GroupParent,
                 name="pinned_group_parents",
-                filterable=["kind"],
-                sortable=["kind"],
+                filterable=["kind", "target__display_name"],
+                sortable=["kind", "metric_target__rank"],
                 aggregatable=["amount"],
                 groupable=["target"],
                 get_queryset=lambda info: GroupParent.objects.with_actor(alice),
@@ -299,6 +327,7 @@ def relation_grouping_case(transactional_db: None):
                 beta_middle=beta_middle,
                 hidden_middle=hidden_middle,
                 plain=plain,
+                parents=parents,
             )
         finally:
             reset_backend()
@@ -308,10 +337,10 @@ def _query(case: Any, actor: SubjectRef, document: str) -> dict[str, Any]:
     return result_data(execute_schema(case.schema, document, user=actor))
 
 
-def test_related_axes_follow_actor_without_changing_group_identity(
+def test_related_axes_merge_unreadable_identities_into_null(
     relation_grouping_case: Any,
 ) -> None:
-    """Labels/scalars redact per actor while identity/count semantics stay stable."""
+    """Unreadable keys merge into null while readable identities stay distinct."""
 
     case = relation_grouping_case
     document = """
@@ -352,8 +381,9 @@ def test_related_axes_follow_actor_without_changing_group_identity(
     alice = _query(case, case.alice, document)
     bob = _query(case, case.bob, document)
 
-    assert alice["exact"] == bob["exact"] == 5
-    assert alice["having_exact"] == bob["having_exact"] == 1
+    assert alice["exact"] == bob["exact"] == 4
+    assert alice["having_exact"] == 2
+    assert bob["having_exact"] == 1
 
     alice_groups = {
         row["key"]["target_id"]: (
@@ -371,41 +401,43 @@ def test_related_axes_follow_actor_without_changing_group_identity(
     }
     assert alice_groups == {
         case.alpha.sqid: ("Alpha", 2),
-        case.beta.sqid: (None, 1),
         case.duplicate_one.sqid: ("Duplicate", 1),
         case.duplicate_two.sqid: ("Duplicate", 1),
-        None: (None, 1),
+        None: (None, 2),
     }
     assert bob_groups == {
-        case.alpha.sqid: (None, 2),
         case.beta.sqid: ("Beta", 1),
         case.duplicate_one.sqid: ("Duplicate", 1),
         case.duplicate_two.sqid: ("Duplicate", 1),
-        None: (None, 1),
+        None: (None, 3),
     }
-    assert alice["having"] == [
-        {
-            "key": {
-                "target_id": case.alpha.sqid,
-                "target__display_name": "Alpha",
+    assert sorted(alice["having"], key=lambda row: str(row["key"]["target_id"])) == sorted(
+        [
+            {"key": {"target_id": None, "target__display_name": None}, "aggregate": {"count": 2}},
+            {
+                "key": {
+                    "target_id": case.alpha.sqid,
+                    "target__display_name": "Alpha",
+                },
+                "aggregate": {"count": 2},
             },
-            "aggregate": {"count": 2},
-        }
-    ]
+        ],
+        key=lambda row: str(row["key"]["target_id"]),
+    )
     assert bob["having"] == [
         {
             "key": {
-                "target_id": case.alpha.sqid,
+                "target_id": None,
                 "target__display_name": None,
             },
-            "aggregate": {"count": 2},
+            "aggregate": {"count": 3},
         }
     ]
     alice_ranks = {row["key"]["metric_target_id"]: row["key"]["metric_target__rank"] for row in alice["ranks"]}
     bob_ranks = {row["key"]["metric_target_id"]: row["key"]["metric_target__rank"] for row in bob["ranks"]}
     assert alice_ranks[case.alpha.sqid] == 10
-    assert alice_ranks[case.beta.sqid] is None
-    assert bob_ranks[case.alpha.sqid] is None
+    assert case.beta.sqid not in alice_ranks and alice_ranks[None] is None
+    assert case.alpha.sqid not in bob_ranks and bob_ranks[None] is None
     assert bob_ranks[case.beta.sqid] == 20
 
 
@@ -441,7 +473,7 @@ def test_nested_protected_hop_and_plain_django_target(
         case.alpha_middle.sqid: "Alpha",
         case.beta_middle.sqid: None,
         # The terminal label is readable, but its intermediate hop is not.
-        case.hidden_middle.sqid: None,
+        None: None,
     }
     assert {row["key"]["middle_id"]: row["key"]["middle__target__display_name"] for row in bob["nested"]} == {
         case.alpha_middle.sqid: None,
@@ -487,4 +519,115 @@ def test_explicit_queryset_actor_owns_related_axis_scope(
     )["pinned_group_parents_groups"]
     labels = {row["key"]["target_id"]: row["key"]["target__display_name"] for row in result}
     assert labels[case.alpha.sqid] == "Alpha"
-    assert labels[case.beta.sqid] is None
+    assert case.beta.sqid not in labels and labels[None] is None
+
+
+@pytest.mark.parametrize(
+    ("path", "kind", "null_indexes"),
+    [("target__display_name", "target", (2, 5)), ("middle__target__display_name", "nested", (7, 8))],
+)
+def test_scalar_relation_filters_redact_every_protected_hop(
+    relation_grouping_case: Any, path: str, kind: str, null_indexes: tuple[int, int],
+) -> None:
+    case = relation_grouping_case
+    document = """
+        query {
+          hidden: group_parents(where: {PATH: {_eq: "Beta"}}) { id }
+          unknown: group_parents(where: {PATH: {_eq: "Absent"}}) { id }
+          range: group_parents(where: {metric_target__rank: {_gte: 20, _lt: 30}}) { id }
+          nulls: group_parents(where: {kind: {_eq: "KIND"}, PATH: {_is_null: true}}) { id }
+          groups: group_parents_groups_count(group_by: [{field: TARGET}], where: {PATH: {_eq: "Beta"}})
+        }
+    """.replace("PATH", path).replace('"KIND"', f'"{kind}"')
+    alice = _query(case, case.alice, document)
+    assert alice["hidden"] == alice["unknown"] == alice["range"] == []
+    assert alice["groups"] == 0
+    assert {row["id"] for row in alice["nulls"]} == {str(case.parents[index].sqid) for index in null_indexes}
+    bob = _query(case, case.bob, document)
+    assert len(bob["hidden"]) == bob["groups"] == len(bob["range"]) == 1
+
+
+def test_scalar_relation_sort_cannot_order_by_hidden_values(relation_grouping_case: Any) -> None:
+    case = relation_grouping_case
+    document = """
+        query {
+          group_parents(where: {kind: {_eq: "target"}}, order_by: [{metric_target__rank: desc}, {id: asc}]) { id }
+        }
+    """
+    before = _query(case, case.alice, document)
+    assert len(before["group_parents"]) == 6
+    with system_context(reason="test.related.hidden_sort_value"):
+        GroupLabel.objects.filter(pk=case.beta.pk).update(rank=-100)
+    assert _query(case, case.alice, document) == before
+    pinned = result_data(execute_schema(
+        case.pinned_schema,
+        '{ pinned_group_parents(where: {target__display_name: {_eq: "Beta"}}) { id } }',
+        user=case.bob,
+    ))
+    assert pinned["pinned_group_parents"] == []
+
+
+def test_permissions_remain_batched_through_guarded_relations(relation_grouping_case: Any) -> None:
+    """Selected to-one and reverse to-many permissions never fall back per row."""
+
+    case = relation_grouping_case
+    with system_context(reason="test.permissions.nested_rows"):
+        for _index in range(50):
+            middle = GroupMiddle.objects.create(target=case.alpha)
+            parent = GroupParent.objects.create(kind="batch", middle=middle)
+            write_relationships([
+                RelationshipTuple(to_object_ref(row), "reader", case.alice) for row in (middle, parent)
+            ])
+    document = """
+        query Permissions($limit: Int!) {
+          group_parents(where: {kind: {_eq: "batch"}}, order_by: [{id: asc}], limit: $limit) {
+            permissions
+            middle {
+              permissions
+              target { permissions }
+              parents { permissions }
+            }
+          }
+        }
+    """
+    result_data(execute_schema(case.schema, document, {"limit": 1}, user=case.alice))
+    counts = []
+    for limit in (1, 10, 50):
+        with (
+            patch(
+                "angee.graphql.capabilities.permission_annotations",
+                side_effect=AssertionError("Unbatched permission check"),
+            ),
+            CaptureQueriesContext(connection) as queries,
+        ):
+            result = execute_schema(case.schema, document, {"limit": limit}, user=case.alice)
+            rows = result_data(result)["group_parents"]
+        assert len(rows) == limit
+        assert all(row["permissions"] == ["read"] for row in rows)
+        for row in rows:
+            if middle := row["middle"]:
+                assert middle["permissions"] == ["read"]
+                assert middle["parents"] == [{"permissions": ["read"]}]
+                assert middle["target"] is None or middle["target"]["permissions"] == ["read"]
+        counts.append(len(queries))
+    assert counts[0] == counts[1] == counts[2], counts
+    print(f"Nested permission queries at 1/10/50 rows: {counts}")
+
+
+def test_relation_filter_lists_keep_readable_targets_and_hide_unknowns(relation_grouping_case: Any) -> None:
+    case = relation_grouping_case
+    document = """
+      query($readable: String!, $hidden: String!, $unknown: String!) {
+        mixed: group_parents(where: {target: {_in: [$readable, $hidden, $unknown]}}) { id }
+        hidden: group_parents(where: {target: {_eq: $hidden}}) { id }
+        unknown: group_parents(where: {target: {_eq: $unknown}}) { id }
+      }
+    """
+    data = result_data(execute_schema(case.schema, document, {
+        "readable": case.alpha.sqid, "hidden": case.beta.sqid, "unknown": "unknown",
+    }, user=case.alice))
+    assert {row["id"] for row in data["mixed"]} == {str(row.sqid) for row in case.parents[:2]}
+    assert data["hidden"] == data["unknown"]
+    assert {row["id"] for row in data["hidden"]} == {
+        str(row.sqid) for row in case.parents if row.target_id is None
+    }

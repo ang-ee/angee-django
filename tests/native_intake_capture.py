@@ -501,9 +501,8 @@ class NeedAccessTests(IntakeAccessCase):
         party = self.party(self.reader)
         need = self.need(party=party)
         with system_context(reason="test restricted request"):
-            need.task.visibility = "restricted"
+            need.task.set_visibility("restricted")
             need.task.revoke_record_access("reader", self.reader)
-            need.task.save(update_fields=("visibility",))
         self.assertTrue(need.task.with_actor(to_subject_ref(self.reader)).has_access("comment"))
         self.assertFalse(need.task.has_access("read"))
         for user in (self.owner, self.writer):

@@ -332,6 +332,14 @@ class GrantableRelationMetadata:
     subjects: tuple[RecordAccessSubjectMetadata, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class DataMutationArgument:
+    """One declared mutation argument with its final GraphQL wire type."""
+
+    name: str
+    type: str
+
+
 @with_config(alias_generator=to_camel)
 @dataclass(frozen=True, slots=True)
 class DataResourceMetadata:
@@ -365,6 +373,9 @@ class DataResourceMetadata:
     default_measures: tuple[DataAggregateMeasureMetadata, ...] = ()
     create_fields: tuple[str, ...] = ()
     update_fields: tuple[str, ...] = ()
+    create_arguments: tuple[DataMutationArgument, ...] = ()
+    update_arguments: tuple[DataMutationArgument, ...] = ()
+    save_arguments: tuple[DataMutationArgument, ...] = ()
     required_create_fields: tuple[str, ...] = ()
     revision_fields: tuple[str, ...] = ()
     lines: Annotated[DataLinesMetadata | None, Field(serialization_alias="linesResource")] = None
