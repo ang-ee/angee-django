@@ -532,8 +532,13 @@ data through REBAC, never a queryset bypass.
   filter. Scope roles live on the scope definition, and scoped models derive
   arms from them (`scope->viewer` for read, `scope->editor` for write).
 - A `read__<field>`-gated field is never filterable, sortable, groupable, or aggregatable.
-- Declared record-share delegates enforce their mapped permission: messaging's
-  `grant_reader` / `revoke_reader` now require `share`, unlike their former ungated tuple writes.
+- **Following is notification state, never access.** Messaging's
+  `ThreadFollower` is keyed by party; follow/unfollow write no relationship
+  tuples. Explicit `Thread.grant_reader` / `revoke_reader` remain shares governed
+  by `share`. Team and record audiences are read live through the messaging
+  contracts; they are not copied into followers. See
+  [`ThreadedModelMixin`](../../addons/angee/messaging/models.py) and
+  [`ThreadNotificationManager`](../../addons/angee/messaging/managers.py).
 - **Posture is data, not schema.** `permissions.extends.zed` fragments are
   additive-only, so narrowable defaults ship as seeded tuples (the shared
   wildcard pattern). Platform-wide tuple-driven visibility uses a const-backed
