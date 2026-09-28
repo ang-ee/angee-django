@@ -3,25 +3,21 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import close_old_connections, connection
 from django.utils import timezone
 from rebac import PermissionDenied, RelationshipTuple, system_context, to_subject_ref, write_relationships
+from rebac.models import SchemaRelation
 from rebac.resources import to_object_ref
 
 from angee.base.refs import canonical_record_target
 from angee.base.serialization import canonical_json
-from angee.compose.permissions import apply_schema_paths, extension_source_map
-from angee.fs import write_atomic
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.attempts import (
@@ -36,7 +32,6 @@ from angee.workflows.testing.drivers import advance_once, execute_started, run_t
 from angee.workflows.testing.models import Decision, StepAttempt, StepRun, WorkflowDispatch
 from angee.workflows_parties.autoconfig import SETTINGS as WORKFLOWS_PARTIES_SETTINGS
 from angee.workflows_parties.steps import DedupeExecuteStepImpl, IdentityApplyStepImpl, IdentityReviewStepImpl
-from tests.conftest import installed_field_owners
 from tests.test_messaging import (
     Address,
     Handle,
@@ -55,18 +50,16 @@ POSTGRES_IDENTITY = pytest.mark.skipif(
 User = get_user_model()
 
 
-@pytest.fixture
-def workflows_parties_tables(transactional_db: Any, tmp_path: Path) -> None:
-    """Sync workflow and parties permissions from the composed schema sources."""
+def test_party_reads_without_uncomposed_intake_relations(composed_tables: None) -> None:
+    """Source-only workflow models use base permissions, without optional donors."""
 
-    del transactional_db
-    app_configs = list(apps.get_app_configs())
-    runtime_dir = tmp_path / "permissions"
-    source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
-    for relpath, text in source_map.items():
-        write_atomic(runtime_dir / relpath, text)
-    apply_schema_paths(app_configs, runtime_dir, sources=source_map)
-    call_command("rebac", "sync", verbosity=0)
+    assert not SchemaRelation.objects.filter(definition__resource_type="parties/party", name="filed_task").exists()
+    owner = User.objects.create_user(username="party-read-owner")
+    outsider = User.objects.create_user(username="party-read-outsider")
+    with system_context(reason="test base party permission"):
+        party = Party.objects.create(display_name="Workflow contact", created_by=owner)
+    assert Party.objects.as_user(owner).filter(pk=party.pk).exists()
+    assert not Party.objects.as_user(outsider).filter(pk=party.pk).exists()
 
 
 def _dedupe_workflow() -> Any:
@@ -126,14 +119,14 @@ def _identity_workflow(*, config: dict[str, Any] | None = None) -> Any:
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("disposition", ("confirm", "dismiss"))
 def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
-    workflows_parties_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     disposition: str,
 ) -> None:
     """One identity disposition wakes exact-link and stable-handle subscribers."""
 
-    del workflows_parties_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     operator = User.objects.create_user(username="handle-reviewer")
     with system_context(reason="test handle review fixtures"):
         party = Party._base_manager.create(display_name="Claimed counterparty", created_by=operator)
@@ -223,13 +216,13 @@ def test_party_handle_review_delivers_exact_nonterminal_artifact_runs(
 
 @pytest.mark.django_db(transaction=True)
 def test_party_handle_delete_notifies_stable_handle_after_resolution(
-    workflows_parties_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The supported delete path publishes its surviving collection owner."""
 
-    del workflows_parties_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     operator = User.objects.create_user(username="handle-delete-reviewer")
     with system_context(reason="test handle delete fixture"):
         party = Party._base_manager.create(display_name="Deleted counterparty", created_by=operator)
@@ -268,13 +261,13 @@ def test_party_handle_delete_notifies_stable_handle_after_resolution(
     ),
 )
 def test_identity_review_freezes_context_and_applies_name_and_address(
-    workflows_parties_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     config: dict[str, Any],
     party_label: str,
     address_label: str,
 ) -> None:
-    del workflows_parties_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     operator = User.objects.create_user(username="identity-reviewer")
     with system_context(reason="test identity fixture"):
         party = Party._base_manager.create(display_name="Old Counterparty", created_by=operator)
@@ -438,12 +431,12 @@ def _duplicate_pair(owner: Any, *, named: str, digits: str, spaced: str) -> tupl
 
 @pytest.mark.django_db(transaction=True)
 def test_dedupe_scan_gate_map_apply_end_to_end(
-    workflows_parties_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """Scan proposes pairs, the decision batch edits them, and verbs apply."""
 
-    del workflows_parties_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     operator = User.objects.create_user(username="dedupe-operator")
     with system_context(reason="test dedupe fixture"):
         keep_a, drop_a = _duplicate_pair(
@@ -527,12 +520,12 @@ def test_dedupe_scan_gate_map_apply_end_to_end(
 
 @pytest.mark.django_db(transaction=True)
 def test_dedupe_scan_without_candidates_routes_empty(
-    workflows_parties_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """An empty directory ends the run after the scan with no decision."""
 
-    del workflows_parties_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     operator = User.objects.create_user(username="dedupe-empty")
     workflow = _dedupe_workflow()
 
@@ -547,12 +540,12 @@ def test_dedupe_scan_without_candidates_routes_empty(
 
 @pytest.mark.django_db(transaction=True)
 def test_prepare_rejects_a_tampered_pair_identity(
-    workflows_parties_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """A resolution that rewrites a read-only identity cell never applies."""
 
-    del workflows_parties_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     operator = User.objects.create_user(username="dedupe-tamper")
     with system_context(reason="test dedupe fixture"):
         _duplicate_pair(operator, named="Kent Rothwell", digits="+4915112345678", spaced="+49 151 1234 5678")
@@ -583,10 +576,10 @@ def test_prepare_rejects_a_tampered_pair_identity(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_apply_unit_is_idempotent_on_retry(workflows_parties_tables: None) -> None:
+def test_apply_unit_is_idempotent_on_retry(composed_tables: None) -> None:
     """A retried merge unit reports already_merged instead of failing."""
 
-    del workflows_parties_tables
+    del composed_tables
     operator = User.objects.create_user(username="dedupe-retry")
     with system_context(reason="test dedupe fixture"):
         keep, drop = _duplicate_pair(operator, named="Brian Bourgerie", digits="+16175550100", spaced="+1 617 555 0100")
@@ -616,11 +609,11 @@ def test_apply_unit_is_idempotent_on_retry(workflows_parties_tables: None) -> No
 
 @pytest.mark.django_db(transaction=True)
 def test_apply_unit_authorizes_and_attributes_merge_and_veto_to_decision_resolver(
-    workflows_parties_tables: None,
+    composed_tables: None,
 ) -> None:
     """The run owner cannot replace the distinct accountable Decision resolver."""
 
-    del workflows_parties_tables
+    del composed_tables
     run_owner = User.objects.create_user(username="dedupe-run-owner")
     resolver = User.objects.create_user(username="dedupe-decision-resolver")
     with system_context(reason="test resolver-owned dedupe fixtures"):
@@ -679,10 +672,10 @@ def test_autoconfig_registers_the_party_governance_step_keys() -> None:
 
 @pytest.mark.django_db(transaction=True)
 def test_identity_owner_checks_basis_and_rolls_back_all_changes(
-    workflows_parties_tables: None,
+    composed_tables: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del workflows_parties_tables
+    del composed_tables
     actor = User.objects.create_user(username="identity-atomic-owner")
     with system_context(reason="identity operation fixture"):
         party = Party.objects.create(display_name="Original", created_by=actor)
@@ -718,11 +711,11 @@ def test_identity_owner_checks_basis_and_rolls_back_all_changes(
 @POSTGRES_IDENTITY
 @pytest.mark.django_db(transaction=True)
 def test_identity_confirmation_and_competing_admission_share_total_lock_order(
-    workflows_parties_tables: None,
+    composed_tables: None,
 ) -> None:
     """Concurrent Handle claims serialize without the former Party/Handle deadlock cycle."""
 
-    del workflows_parties_tables
+    del composed_tables
     actor = User.objects.create_user(username="identity-lock-owner")
     with system_context(reason="identity lock-order fixture"):
         first = Party.objects.create(display_name="First", created_by=actor)
@@ -762,11 +755,11 @@ def test_identity_confirmation_and_competing_admission_share_total_lock_order(
 @POSTGRES_IDENTITY
 @pytest.mark.django_db(transaction=True)
 def test_identity_suggestion_and_transition_share_total_lock_order(
-    workflows_parties_tables: None,
+    composed_tables: None,
 ) -> None:
     """Rule insertion and review serialize through the same complete identity lock set."""
 
-    del workflows_parties_tables
+    del composed_tables
     actor = User.objects.create_user(username="identity-suggest-race")
     with system_context(reason="identity suggestion race fixture"):
         first = Party.objects.create(display_name="First", created_by=actor)
@@ -813,11 +806,11 @@ def test_identity_suggestion_and_transition_share_total_lock_order(
 @POSTGRES_IDENTITY
 @pytest.mark.django_db(transaction=True)
 def test_identity_delete_repair_and_transition_do_not_reverse_lock_order(
-    workflows_parties_tables: None,
+    composed_tables: None,
 ) -> None:
     """Delete repair waits for commit before competing with an identity transition."""
 
-    del workflows_parties_tables
+    del composed_tables
     actor = User.objects.create_user(username="identity-delete-race")
     with system_context(reason="identity delete race fixture"):
         first = Party.objects.create(display_name="First", created_by=actor)
@@ -857,10 +850,10 @@ def test_identity_delete_repair_and_transition_do_not_reverse_lock_order(
 
 @pytest.mark.django_db(transaction=True)
 def test_identity_snapshot_hides_private_handles_even_when_the_link_is_readable(
-    workflows_parties_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    del workflows_parties_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = User.objects.create_user(username="identity-visible-link-owner")
     other = User.objects.create_user(username="identity-private-handle-owner")
     with system_context(reason="identity snapshot relation-read fixture"):
@@ -900,12 +893,12 @@ def _private_handle_identity(owner: Any, reviewer: Any, *, value: str) -> tuple[
 
 @pytest.mark.django_db(transaction=True)
 def test_identity_review_applies_for_a_reviewer_who_cannot_read_a_private_handle(
-    workflows_parties_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
     """The basis hash is actor-independent while the reviewed facts stay actor-visible."""
 
-    del workflows_parties_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     owner = User.objects.create_user(username="identity-basis-owner")
     reviewer = User.objects.create_user(username="identity-basis-reviewer")
     party, _link = _private_handle_identity(owner, reviewer, value="private-basis@example.test")
@@ -948,9 +941,9 @@ def test_identity_review_applies_for_a_reviewer_who_cannot_read_a_private_handle
 
 @pytest.mark.django_db(transaction=True)
 def test_identity_apply_conflicts_when_an_unreadable_handle_changes_during_review(
-    workflows_parties_tables: None,
+    composed_tables: None,
 ) -> None:
-    del workflows_parties_tables
+    del composed_tables
     owner = User.objects.create_user(username="identity-hidden-change-owner")
     reviewer = User.objects.create_user(username="identity-hidden-change-reviewer")
     party, link = _private_handle_identity(owner, reviewer, value="hidden-change@example.test")
@@ -971,10 +964,10 @@ def test_identity_apply_conflicts_when_an_unreadable_handle_changes_during_revie
 
 @pytest.mark.django_db(transaction=True)
 def test_identity_review_payload_never_carries_an_unreadable_handle(
-    workflows_parties_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
 ) -> None:
-    del workflows_parties_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     owner = User.objects.create_user(username="identity-payload-handle-owner")
     reviewer = User.objects.create_user(username="identity-payload-reviewer")
     with system_context(reason="identity payload private-handle fixture"):
