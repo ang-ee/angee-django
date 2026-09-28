@@ -18,7 +18,6 @@ from rebac import app_settings, current_actor, is_anonymous_actor, to_subject_re
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
-from angee.base.mixins import ConditionalSharedReaderMixin, ConditionalSharedReaderQuerySet
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 
 SCOPE_MEMBER_RELATION = "direct_member"
@@ -184,26 +183,14 @@ class ProjectionDoc(AngeeDataModel):
         rebac_resource_type = "scopedemo/projection_doc"
 
 
-class SharedDocQuerySet(ConditionalSharedReaderQuerySet[Any], AngeeQuerySet[Any]):
-    """Keep shared eligibility changes on the tuple reconciliation owner."""
-
-
-class SharedDoc(ConditionalSharedReaderMixin, AngeeDataModel):
-    """A candidate whose create permission needs its promised wildcard tuple."""
+class SharedDoc(AngeeDataModel):
+    """A candidate whose create permission reads its own sharing column."""
 
     sqid_prefix = "shd_"
     title = models.CharField(max_length=200)
     is_shared = models.BooleanField(default=False)
-    shared_reader_policy_fields = ("is_shared",)
-    objects = AngeeManager.from_queryset(SharedDocQuerySet)()
 
     class Meta(AngeeDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/shared_doc"
-
-    @property
-    def shared_reader_eligible(self) -> bool:
-        """Share only rows whose persisted policy opts in."""
-
-        return self.is_shared

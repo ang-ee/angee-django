@@ -572,11 +572,14 @@ data through REBAC, never a queryset bypass.
   `shared`, then arrow to `shared_reader = authenticated`; see
   [dashboards](../../addons/angee/dashboards/permissions.zed). The sentinel needs
   no target row because the arrowed permission is the authenticated builtin.
+  `authenticated` admits every non-anonymous subject, so public rows also admit
+  non-user subjects such as agents and integration sources that the former
+  `auth/user:*` tuple excluded; this widening is intentional.
   `shared_reader` is arrow-only: never check it directly or use it as an action
   or field gate, which would bypass the row filter. Check the resource's `read`
-  permission instead. The legacy
-  [shared-reader mixin](../../angee/base/mixins.py) remains only for spaces until
-  its filtered-constant migration.
+  permission instead. Multi-table children read through their parent's permission,
+  as [work queues](../../addons/angee/work/permissions.zed) do for public
+  [groups](../../addons/angee/spaces/permissions.zed); no tuple mirrors the column.
 - **Always-shared reference data reads through `authenticated`.** A resource
   every signed-in subject reads unions the library's `authenticated` builtin into
   `read` and stores no wildcard tuple; [`tags/tag`](../../addons/angee/tags/permissions.zed)

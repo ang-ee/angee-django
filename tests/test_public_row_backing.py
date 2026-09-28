@@ -1,4 +1,4 @@
-"""The dashboard and rate shared readers follow columns in both local stores."""
+"""Shared reads follow row columns and multi-table parents in both local stores."""
 
 from dataclasses import replace
 from datetime import date
@@ -11,7 +11,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
-from rebac import PermissionDenied, system_context, to_object_ref, to_subject_ref
+from rebac import PermissionDenied, SubjectRef, system_context, to_object_ref, to_subject_ref
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.backends.local_query import LocalQueryScope
 from rebac.models import Relationship, RelationshipRegistry
@@ -20,6 +20,8 @@ from rebac.schema import parse_zed
 
 from tests.conftest import create_platform_admin, create_user
 from tests.money_models import Currency, CurrencyRate
+from tests.projects_models import Queue
+from tests.spaces_models import Group
 from tests.test_dashboards import DashboardTarget
 
 
@@ -36,7 +38,7 @@ def public_policy(request, db, settings):
     root = Path(__file__).parents[1] / "addons/angee"
     active.set_schema(parse_zed("\n".join(
         (root / addon / "permissions.zed").read_text()
-        for addon in ("iam", "dashboards", "money")
+        for addon in ("iam", "dashboards", "money", "spaces", "work")
     )))
     try:
         yield active
@@ -44,7 +46,7 @@ def public_policy(request, db, settings):
         reset_backend()
 
 
-@pytest.fixture(params=("dashboard", "rate"))
+@pytest.fixture(params=("dashboard", "rate", "group", "queue"))
 def candidates(request, public_policy):
     """Return valid unsaved matching and nonmatching adopter rows."""
 
@@ -53,6 +55,16 @@ def candidates(request, public_policy):
         return (
             DashboardTarget(name="Shared", scope="addon", scope_key="shared"),
             DashboardTarget(name="Owned", scope="addon", scope_key="owned", owner=owner),
+        )
+    if request.param in {"group", "queue"}:
+        model = Group if request.param == "group" else Queue
+        owner = create_user("public-row-owner") if model is Group else None
+        return tuple(
+            model(
+                name=name, slug=name.lower(), visibility=visibility, owner=owner,
+                **({"key": name.upper()} if model is Queue else {}),
+            )
+            for name, visibility in (("Public", "public"), ("Private", "private"))
         )
     with system_context(reason="test.public_row.currencies"):
         currency = Currency.objects.create(code="EUR", name="Euro")
@@ -69,6 +81,8 @@ def candidates(request, public_policy):
 
 @pytest.fixture(params=("reader", "anonymous", "administrator"))
 def actor(request, public_policy):
+    if request.param == "service":
+        return request.param, SubjectRef.of("service/principal", "public-row-reader")
     if request.param == "anonymous":
         user = AnonymousUser()
     elif request.param == "administrator":
@@ -82,6 +96,7 @@ def _relationship_counts():
     return Relationship.objects.count(), RelationshipRegistry.objects.count()
 
 
+@pytest.mark.parametrize("actor", ("reader", "service", "anonymous", "administrator"), indirect=True)
 def test_read_checks_and_sql_scope_agree(public_policy, candidates, actor):
     """Anonymous is denied; ordinary readers need a match; admins keep both rows."""
 
@@ -94,7 +109,7 @@ def test_read_checks_and_sql_scope_agree(public_policy, candidates, actor):
             candidate.save()
     expected = {
         row.pk for index, row in enumerate(candidates)
-        if kind == "administrator" or (kind == "reader" and index == 0)
+        if kind == "administrator" or (kind in {"reader", "service"} and index == 0)
     }
     with patch.object(public_policy, "accessible", side_effect=AssertionError("enumerated resource IDs")):
         with CaptureQueriesContext(connection) as compilation:
@@ -102,7 +117,7 @@ def test_read_checks_and_sql_scope_agree(public_policy, candidates, actor):
             query = model._base_manager.filter(predicate).order_by()
             sql, _params = query.query.sql_with_params()
         assert len(compilation) == 0
-        assert "IS NULL" in sql
+        assert ("visibility" if issubclass(model, Group) else "IS NULL") in sql
         assert set(query.values_list("pk", flat=True)) == expected
         assert set(model.objects.with_actor(subject).values_list("pk", flat=True)) == expected
         for row in candidates:
@@ -110,15 +125,26 @@ def test_read_checks_and_sql_scope_agree(public_policy, candidates, actor):
                 subject=subject, action="read", resource=to_object_ref(row),
             ).allowed == (row.pk in expected)
             assert row.with_actor(subject).has_access("read") == (row.pk in expected)
+            if model is Queue:
+                parent = Group._base_manager.get(pk=row.pk)
+                assert public_policy.check_access(
+                    subject=subject, action="read", resource=to_object_ref(parent),
+                ).allowed == (row.pk in expected)
     assert _relationship_counts() == before
 
 
-@pytest.mark.parametrize("read_gated_create", (False, True), ids=("production-create", "read-gated-create"))
+@pytest.mark.parametrize(
+    ("candidates", "read_gated_create"),
+    [(model, gate) for model in ("dashboard", "rate", "group", "queue")
+     for gate in ((False,) if model == "queue" else (False, True))],
+    indirect=("candidates",),
+)
 def test_create_preflight_matches_persisted_policy(public_policy, candidates, actor, read_gated_create):
     """Native insertion agrees with preflight, including the row-filtered read arm.
 
     Production create admission is independent of sharing: dashboards allow
-    signed-in users; money requires management. The second profile reuses the
+    signed-in users, as do groups and queues; money requires management.
+    The second profile applies only to the owners of filtered constants: it reuses the
     exact production read expression as create's test-only gate so the native
     candidate projection must evaluate the filtered constant before insertion.
     It never checks shared_reader directly or changes a production declaration.
@@ -127,6 +153,7 @@ def test_create_preflight_matches_persisted_policy(public_policy, candidates, ac
     kind, subject = actor
     model = type(candidates[0])
     resource_type = model._meta.rebac_resource_type
+    stranger = to_subject_ref(create_user("public-row-stranger"))
     if read_gated_create:
         schema = public_policy.schema()
         definition = schema.get_definition(resource_type)
@@ -143,9 +170,9 @@ def test_create_preflight_matches_persisted_policy(public_policy, candidates, ac
     inserted = []
     with patch.object(public_policy, "accessible", side_effect=AssertionError("enumerated resource IDs")):
         for index, candidate in enumerate(candidates):
-            readable = kind == "administrator" or (kind == "reader" and index == 0)
+            readable = kind == "administrator" or (kind == "reader" and (index == 0 or model is Queue))
             allowed = readable if read_gated_create else (
-                kind == "administrator" or (kind == "reader" and model is DashboardTarget)
+                kind == "administrator" or (kind == "reader" and model is not CurrencyRate)
             )
             assert _check_new_model(candidate, subject=subject, using="default").allowed == allowed
             if not allowed:
@@ -155,6 +182,8 @@ def test_create_preflight_matches_persisted_policy(public_policy, candidates, ac
                 continue
             row = model.objects.with_actor(subject).insert(candidate)
             inserted.append(row)
+            if model is Queue:
+                assert str(row.owner_id) == subject.subject_id
             assert public_policy.check_access(
                 subject=subject, action="create", resource=to_object_ref(row),
             ).allowed
@@ -162,24 +191,37 @@ def test_create_preflight_matches_persisted_policy(public_policy, candidates, ac
                 subject=subject, action="read", resource=to_object_ref(row),
             ).allowed == readable
             assert model.objects.with_actor(subject).filter(pk=row.pk).exists() == readable
+            assert public_policy.check_access(
+                subject=stranger, action="read", resource=to_object_ref(row),
+            ).allowed == (index == 0)
+            assert model.objects.with_actor(stranger).filter(pk=row.pk).exists() == (index == 0)
     assert model._base_manager.count() == len(inserted)
     assert _relationship_counts() == before
 
 
-def test_bulk_creation_and_column_updates_change_reads_without_tuples(public_policy, candidates):
-    """Bulk inserts and trusted column updates require no tuple reconciliation."""
+def test_creation_and_column_updates_change_reads_without_tuples(public_policy, candidates):
+    """Ordinary hierarchy inserts and bulk reference inserts need no reader tuples."""
 
     reader = to_subject_ref(create_user("public-row-bulk-reader"))
     administrator = create_platform_admin("public-row-bulk-administrator")
     anonymous = to_subject_ref(AnonymousUser())
     model = type(candidates[0])
-    columns = ("owner_id",) if model is DashboardTarget else (
-        "context_content_type_id", "context_object_id", "reference_currency_id",
-    )
+    if issubclass(model, Group):
+        columns = ("visibility",)
+    elif model is DashboardTarget:
+        columns = ("owner_id",)
+    else:
+        columns = ("context_content_type_id", "context_object_id", "reference_currency_id")
     matching, nonmatching = ({name: getattr(row, name) for name in columns} for row in candidates)
     before = _relationship_counts()
     with patch.object(public_policy, "accessible", side_effect=AssertionError("enumerated resource IDs")):
-        shared, private = model.objects.with_actor(administrator).bulk_create(candidates)
+        manager = model.objects.with_actor(administrator)
+        # Hierarchy saves derive paths, including the parent path of multi-table children.
+        shared, private = (
+            [manager.insert(row) for row in candidates] if issubclass(model, Group) else manager.bulk_create(candidates)
+        )
+        if issubclass(model, Group):
+            assert all(row.path for row in (shared, private))
         assert set(model.objects.with_actor(reader).values_list("pk", flat=True)) == {shared.pk}
         assert _relationship_counts() == before
         for row, values, expected in (
@@ -191,7 +233,11 @@ def test_bulk_creation_and_column_updates_change_reads_without_tuples(public_pol
             # Rate identity remains immutable through its public queryset. A
             # trusted data migration can update columns via Django's base manager;
             # the derived permission must immediately follow those persisted facts.
-            assert model._base_manager.filter(pk=row.pk).update(**values) == 1
+            queryset = (
+                Group.system_queryset().filter(pk=row.pk)
+                if issubclass(model, Group) else model._base_manager.filter(pk=row.pk)
+            )
+            assert queryset.update(**values) == 1
             assert set(model.objects.with_actor(reader).values_list("pk", flat=True)) == expected
             for persisted in (shared, private):
                 assert public_policy.check_access(

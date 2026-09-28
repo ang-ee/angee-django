@@ -177,8 +177,8 @@ def test_hasura_create_unknown_relation_denies_even_in_exclusion(rebac_storage: 
 @pytest.mark.django_db
 @pytest.mark.parametrize("rebac_storage", ("denormalized", "registry"))
 @pytest.mark.parametrize("eligible", (True, False), ids=("shared", "private"))
-def test_hasura_create_uses_promised_shared_reader(rebac_storage: str, eligible: bool) -> None:
-    """The create gate and persisted wildcard agree on the same eligibility rule."""
+def test_hasura_create_uses_filtered_constant(rebac_storage: str, eligible: bool) -> None:
+    """The create gate and persisted read agree without a wildcard tuple."""
 
     with override_settings(REBAC_LOCAL_BACKEND_STORAGE=rebac_storage):
         call_command("rebac", "sync", verbosity=0)
@@ -199,10 +199,7 @@ def test_hasura_create_uses_promised_shared_reader(rebac_storage: str, eligible:
             document = SharedDoc.objects.as_user(actor).get(sqid=public_id)
             assert document.is_shared is True
             assert SharedDoc._base_manager.count() == 1
-            assert relationships.count() == 1
-            assert relationships.filter(
-                resource_id=str(document.pk), relation="shared", subject_type="auth/user", subject_id="*",
-            ).exists()
+            assert not relationships.exists()
         else:
             assert result.errors
             assert isinstance(result.errors[0].original_error, PermissionDenied)

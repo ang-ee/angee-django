@@ -229,7 +229,9 @@ def test_current_default_cannot_become_entry_reserved(work_case, method, elevate
         stage.rule_owned = True
     else:
         stage.category = reservation
-    with hand_context(actor, elevated), pytest.raises(ValidationError, match="default stage cannot reserve"):
+    with hand_context(actor, elevated), pytest.raises(ValidationError) as error:
         getattr(stage, method)()
+    field = "rule_owned" if reservation == "rule_owned" else "category"
+    assert error.value.message_dict == {field: ["The queue's default stage must allow ordinary entry."]}
     stage.refresh_from_db()
     assert (stage.rule_owned, stage.category) == (False, "unstarted")

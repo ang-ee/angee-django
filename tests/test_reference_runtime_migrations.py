@@ -1,6 +1,7 @@
 """Replay frozen cleanup and ownership migrations against historical models."""
 
 import importlib
+import logging
 
 import pytest
 from django.conf import settings
@@ -18,8 +19,8 @@ def historical_rebac(db):
     return loader.project_state(loader.graph.leaf_nodes("rebac"))
 
 
-@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money"])
-def test_tuple_cleanup_removes_only_retired_relations_in_both_stores(historical_rebac, addon):
+@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money", "spaces"])
+def test_tuple_cleanup_removes_only_retired_relations_in_both_stores(historical_rebac, addon, caplog):
     module = importlib.import_module(f"angee.{addon}.runtime_migrations.shared_reader_cleanup")
     assert module.applies(historical_rebac)
     registry = historical_rebac.apps
@@ -30,9 +31,8 @@ def test_tuple_cleanup_removes_only_retired_relations_in_both_stores(historical_
     targets = [(kind, retired, "auth/user", "*", "") for kind in module.RESOURCE_TYPES]
     kind = module.RESOURCE_TYPES[0]
     retained = [
-        (kind, retired, "auth/user", "42", ""),
         (kind, retired, "auth/group", "*", ""),
-        (kind, retired, "auth/user", "*", "member"),
+        (kind, retired, "auth/group", "42", "member"),
         (kind, "editor", "auth/user", "*", ""),
         ("other/row", retired, "auth/user", "*", ""),
         ("money/role", "member", "auth/user", "42", ""),
@@ -40,6 +40,12 @@ def test_tuple_cleanup_removes_only_retired_relations_in_both_stores(historical_
         ("money/rate", "includes", "money/role", "money_admin", ""),
         ("other/role", "includes", "money/role", "money_admin", ""),
     ]
+    user_readers = [
+        (kind, retired, "auth/user", "42", ""),
+        (kind, retired, "auth/user", "*", "member"),
+        (kind, retired, "auth/user", "42", "member"),
+    ]
+    (targets if addon == "spaces" else retained).extend(user_readers)
     role_inclusions = [
         ("money/role", "includes", "money/role", "money_admin", ""),
         ("money/role", "includes", "auth/user", "*", ""),
@@ -61,6 +67,7 @@ def test_tuple_cleanup_removes_only_retired_relations_in_both_stores(historical_
     resources_before = list(resource.objects.order_by("pk").values())
     operation = module.Migration.operations[0]
     editor = connection.schema_editor()
+    caplog.set_level(logging.INFO, logger=module.__name__)
     for _ in range(2):
         operation.database_forwards(addon, editor, historical_rebac, historical_rebac)
         for store, ids in keep_ids.items():
@@ -70,9 +77,15 @@ def test_tuple_cleanup_removes_only_retired_relations_in_both_stores(historical_
     for store, ids in keep_ids.items():
         assert set(store.objects.values_list("pk", flat=True)) == ids
     assert list(resource.objects.order_by("pk").values()) == resources_before
+    if addon == "spaces":
+        assert [record.args for record in caplog.records if record.name == module.__name__] == [
+            (count, store._meta.label)
+            for count in (len(targets), 0)
+            for store in (relationship, normalized)
+        ]
 
 
-@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money"])
+@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money", "spaces"])
 def test_tuple_cleanup_honors_router_denial_without_queries(
     historical_rebac, addon, settings, django_assert_num_queries,
 ):
@@ -86,7 +99,7 @@ def test_tuple_cleanup_honors_router_denial_without_queries(
         module.forwards(historical_rebac.apps, connection.schema_editor())
 
 
-@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money"])
+@pytest.mark.parametrize("addon", ["tags", "uom", "portfolio", "dashboards", "money", "spaces"])
 def test_tuple_cleanup_waits_for_both_historical_stores(addon):
     module = importlib.import_module(f"angee.{addon}.runtime_migrations.shared_reader_cleanup")
     state = ProjectState()
