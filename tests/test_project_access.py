@@ -13,7 +13,7 @@ from django.core.management import call_command
 from django.db import connection, transaction
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from graphql import GraphQLEnumType, get_named_type
+from graphql import GraphQLEnumType, GraphQLObjectType, get_named_type
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -83,6 +83,7 @@ def test_task_permissions_are_typed_actor_scoped_and_batched(project_access_sche
             ]
         ).build("public")
         graphql_type = schema._schema.get_type("TaskPermissionsType")
+        assert isinstance(graphql_type, GraphQLObjectType)
         enum = get_named_type(graphql_type.fields["permissions"].type)
         assert isinstance(enum, GraphQLEnumType)
         assert set(enum.values) == {"write", "share", "delete"}
