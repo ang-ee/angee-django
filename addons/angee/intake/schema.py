@@ -8,13 +8,16 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from strawberry import auto
+from strawberry.scalars import JSON
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
+from angee.base.mixins import StaleRevisionError
+from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
+from angee.iam.schema import UserType
 from angee.messaging.schema import ChannelType, MessageType
 from angee.parties.schema import PartyType
 from angee.projects.schema import ProjectType, TaskType
@@ -30,6 +33,8 @@ Queue = apps.get_model("work", "Queue")
 
 NeedImportance = Need._meta.get_field("importance").choices_enum
 strawberry.enum(cast(Any, NeedImportance))
+NeedAccessVerdict = Need._meta.get_field("access_verdict").choices_enum
+strawberry.enum(cast(Any, NeedAccessVerdict))
 
 
 @strawberry.input
@@ -46,6 +51,12 @@ class NeedType(AngeeNode):
 
     importance: auto
     body: auto
+    revision: auto
+    claimed_name: auto
+    claimed_email: str | None
+    access_verdict: NeedAccessVerdict | None  # type: ignore[valid-type]
+    access_resolved_at: auto
+    access_resolution: JSON | None
     created_at: auto
     updated_at: auto
 
@@ -54,6 +65,7 @@ class NeedType(AngeeNode):
     project: ProjectType | None = actor_scoped_to_one("project")
     source_message: MessageType | None = actor_scoped_to_one("source_message")
     original_task: TaskType | None = actor_scoped_to_one("original_task")
+    access_resolved_by: UserType | None = actor_scoped_to_one("access_resolved_by")
 
 
 @strawberry_django.type(Channel, name="ChannelType", extend=True)
@@ -61,6 +73,8 @@ class ChannelIntakeExtension:
     """Contribute intake configuration onto messaging's channel node."""
 
     intake_trigger: auto
+    intake_field_map: auto
+    intake_requester_domains: auto
     intake_queue: WorkQueueType | None = actor_scoped_to_one("intake_queue")
 
 
@@ -81,8 +95,8 @@ class IntakeActionMutation:
         """Idempotently capture one exact manual request on a task or project."""
 
         target_model = Need.objects.target_model(target.model_label)
-        target_record = authorized_action_target(info, target_model, target.record_id, "write")
-        party_record = None if party is None else authorized_action_target(info, Party, party, "read")
+        target_record = authorized_permission_target(info, target_model, target.record_id, "write")
+        party_record = None if party is None else authorized_permission_target(info, Party, party, "read")
         need = Need.objects.capture(
             target=target_record,
             body=body,
@@ -101,10 +115,26 @@ class IntakeActionMutation:
     ) -> ActionResult:
         """Convert one writable need into a triage task, or return its existing task."""
 
-        target = authorized_action_target(info, Need, need, "write")
-        target_queue = authorized_action_target(info, Queue, queue, "write")
+        target = authorized_permission_target(info, Need, need, "write")
+        target_queue = authorized_permission_target(info, Queue, queue, "write")
         task = target.convert_to_task(target_queue)
         return ActionResult(ok=True, message="Need converted to task.", id=task.sqid)
+
+    @strawberry.mutation
+    @action_guard("Request access decision failed.", errors=(StaleRevisionError,))
+    def decide_need_access(
+        self,
+        info: strawberry.Info,
+        need: PublicID,
+        action: str,
+        reason: str = "",
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Apply the need owner's access decision and return the approved account."""
+
+        target = authorized_permission_target(info, Need, need, "write")
+        user = target.decide_access(action, reason=reason, expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Request access decided.", id=user.sqid if user is not None else None)
 
 
 _NEED_RESOURCE = hasura_model_resource(
@@ -115,6 +145,7 @@ _NEED_RESOURCE = hasura_model_resource(
         "id",
         "party",
         "task",
+        "task__project",
         "project",
         "importance",
         "source_message",
@@ -123,6 +154,7 @@ _NEED_RESOURCE = hasura_model_resource(
         "updated_at",
     ],
     sortable=[
+        "claimed_name",
         "party",
         "task",
         "project",
@@ -137,6 +169,7 @@ _NEED_RESOURCE = hasura_model_resource(
     field_id_decode={
         "party": public_pk_decoder(Party),
         "task": public_pk_decoder(Task),
+        "task__project": public_pk_decoder(Project),
         "project": public_pk_decoder(Project),
         "source_message": public_pk_decoder(Message),
         "original_task": public_pk_decoder(Task),
