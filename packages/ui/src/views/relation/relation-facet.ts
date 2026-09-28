@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useAngeeFacets } from "@angee/refine";
 import { ResourceQuery, useModelMetadata, type GroupAxis } from "@angee/metadata";
-import type { ResourceToolbarFilterField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../toolbars";
+import type { FilterClauseField, ResourceToolbarFilterOption, ResourceToolbarGroupOption } from "../../toolbars";
 import type { ResourceViewFilter } from "../resource/resource-view-model";
 import { resourceFieldGroupLabel } from "../resource/model-metadata-defaults";
 import type { FacetDescriptor } from "../page";
@@ -13,7 +13,7 @@ const EMPTY_OPTIONS: readonly FacetDescriptor[] = [];
 export type RelationFacetOptions = FacetDescriptor;
 export interface RelationFacets {
   filters: readonly ResourceToolbarFilterOption[];
-  filterFields: readonly ResourceToolbarFilterField[];
+  filterFields: readonly FilterClauseField[];
   groupOptions: readonly ResourceToolbarGroupOption[];
 }
 interface DeclaredRelationFacet {

@@ -2,6 +2,17 @@
 // list/form views, their collection⇄record page composition, and aggregate
 // panels. Hosts configure them with descriptors or with the page element DSL.
 
+export { SchemaPathPicker, type SchemaPathPickerProps, type SchemaPath, type SchemaPathSchema } from "./SchemaPathPicker";
+export { useFormHistory, type FormHistory } from "./form/use-form-history";
+export {
+  keyedCollectionFromRecord,
+  createKeyedEntry,
+  keyedCollectionToRecord,
+  type KeyedEntry,
+  type KeyedCollection,
+  type KeyedCollectionSnapshot,
+} from "./form/keyed-collection";
+
 export { List, type ListComponent, type ListProps } from "./resource/List";
 export {
   ListView,
@@ -74,6 +85,7 @@ export {
   deserializeFormSpec,
   formSpecInitialValues,
   normalizeFormSpecValues,
+  resolveSchemaReference,
   useFormSpecFields,
   type FormSpecFieldDescriptor,
   type FormSpecFieldType,
@@ -144,14 +156,25 @@ export {
   type GraphViewActivation,
   type GraphViewEdge,
   type GraphViewEdgeStyle,
-  type GraphViewGeometry,
   type GraphViewLayout,
   type GraphViewNode,
   type GraphViewNodeStyle,
   type GraphViewProps,
   type GraphViewConnection,
   type GraphViewPosition,
+  type GraphViewPort,
+  type GraphViewStatus,
 } from "./GraphView";
+export {
+  GraphEditor,
+  type GraphEditorNode,
+  type GraphEditorLink,
+  type GraphEditorLayout,
+  type GraphEditorSelection,
+  type GraphEditorNodeAction,
+  type GraphEditorProps,
+} from "./GraphEditor";
+export { layoutGraph, findFreeGraphPosition, placeGraphNodeBeside } from "./graph-layout";
 export {
   DashboardView,
   type DashboardViewProps,

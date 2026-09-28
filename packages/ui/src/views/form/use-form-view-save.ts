@@ -50,6 +50,7 @@ import {
 import { useSaveOperation } from "../resource/resource-operations";
 import { applyFormErrors, formSubmitError, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
+import { useFormHistory, type FormHistory } from "./use-form-history";
 
 type RowRecord = BaseRecord & Row;
 
@@ -130,6 +131,7 @@ export interface UseFormViewSaveProps {
 
 export interface FormViewSaveSurface {
   form: FormViewForm;
+  history: FormHistory;
   displayRecord: Row | null;
   loading: boolean;
   formReadOnly: boolean;
@@ -326,6 +328,18 @@ export function useFormViewSave({
     return isCreate ? emptyValues : record
       ? recordToValues(record, formFields, linesSeed(seedLineRows)) : emptyValues;
   }, [acknowledgedSource, emptyValues, formFields, isCreate, linesSeed, record, seedLineRows]);
+  const recordUnavailable = !isCreate && record == null;
+  const submitOwner = submit ?? (isCreate ? createSubmit : undefined);
+  const formReadOnly = React.useMemo(
+    () =>
+      readOnly ||
+      recordUnavailable ||
+      (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
+      (!submitOwner &&
+        !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
+      (formFields.length > 0 && formFields.every((field) => field.readOnly)),
+    [dataResource, formFields, isCreate, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
+  );
   const composedValidators = React.useRef(new Map<
     string,
     (value: unknown, values: FormValues) => string | undefined
@@ -346,6 +360,9 @@ export function useFormViewSave({
     },
   });
   const { reset, resetDefaultValues, resetField, clearErrors, getFieldState, setValue } = form;
+  const history = useFormHistory(form, { readOnly: formReadOnly });
+  const { reset: resetHistory, start: startHistory, commit: commitHistory } = history;
+  const activeFieldInteractions = React.useRef(new Set<string>());
   const { dirtyFields } = form.formState;
   const syncRecordValues = React.useCallback((next: FormValues, lineBaseline?: unknown) => {
     // RHF merges dirty paths by index. A full-list line mutation is atomic, so
@@ -369,7 +386,10 @@ export function useFormViewSave({
       for (const [path, value] of arrays) setValue(path, value, { shouldDirty: true });
     }
     resetDefaultValues(baseline, { keepIsValid: true });
-  }, [form, linesActive, linesField, reset, resetDefaultValues, setValue]);
+    // Whole-value undo frames cannot restore fields from an older accepted baseline.
+    resetHistory();
+    activeFieldInteractions.current.clear();
+  }, [form, linesActive, linesField, reset, resetDefaultValues, resetHistory, setValue]);
   const lineDraftDirty = Boolean(!isCreate && linesActive && linesField && dirtyFields[linesField]);
   // Replay a held remote array when the user undoes the last local line edit.
   React.useEffect(() => { syncRecordValues(values); }, [lineDraftDirty, syncRecordValues, values]);
@@ -377,8 +397,6 @@ export function useFormViewSave({
   const saveError = form.formState.errors.root?.server?.message ?? null;
   const saveConflict = form.formState.errors.root?.server?.type === "conflict";
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
-  const recordUnavailable = !isCreate && record == null;
-  const submitOwner = submit ?? (isCreate ? createSubmit : undefined);
   const customSubmit = useMutation({
     mutationFn: async ({ data, lines, submitted, baseline }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues }) => {
       if (!submitOwner) throw new Error("No custom form submission is configured.");
@@ -389,16 +407,6 @@ export function useFormViewSave({
       });
     },
   });
-  const formReadOnly = React.useMemo(
-    () =>
-      readOnly ||
-      recordUnavailable ||
-      (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
-      (!submitOwner &&
-        !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
-      (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [dataResource, formFields, isCreate, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
-  );
   const formIsDirty = form.formState.isDirty;
   const pending = create.mutation.isPending || update.mutation.isPending || customSubmit.isPending || resourceSave.fetching || form.formState.isSubmitting;
   const formIsDirtyRef = React.useRef(formIsDirty);
@@ -537,6 +545,8 @@ export function useFormViewSave({
       ]);
       formIsDirtyRef.current = [...observedNames].some((name) => form.getFieldState(name).isDirty)
         || Boolean(linesField && form.getFieldState(linesField).isDirty);
+      resetHistory();
+      activeFieldInteractions.current.clear();
       if (isCreate) manualSlugFieldsRef.current.clear();
       if (options.message || options.notify) {
         toast.success({ title: options.message || t(isCreate ? "form.createSuccess" : "form.updateSuccess") });
@@ -550,7 +560,7 @@ export function useFormViewSave({
         || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
       )) reload();
     },
-    [acknowledgedSource, detailKey, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, rowsFromRecord, setValue, syncRecordValues, t, toast],
+    [acknowledgedSource, detailKey, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues, t, toast],
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
@@ -724,25 +734,28 @@ export function useFormViewSave({
   );
   const discardChanges = React.useCallback(() => {
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
+    resetHistory();
+    activeFieldInteractions.current.clear();
     formIsDirtyRef.current = false;
     editBasisRecordRef.current = displayRecord;
     onDiscarded?.();
-  }, [displayRecord, emptyValues, isCreate, onDiscarded, reset, values]);
-  const activeFieldInteractions = React.useRef(new Set<string>());
+  }, [displayRecord, emptyValues, isCreate, onDiscarded, reset, resetHistory, values]);
   const startFieldInteraction = React.useCallback(
     (path: string) => {
+      startHistory(path);
       if (activeFieldInteractions.current.has(path)) return;
       activeFieldInteractions.current.add(path);
       onFieldInteractionStart?.(path);
     },
-    [onFieldInteractionStart],
+    [onFieldInteractionStart, startHistory],
   );
   const commitFieldInteraction = React.useCallback(
     (path: string) => {
       if (!activeFieldInteractions.current.delete(path)) return;
+      commitHistory(path);
       onFieldInteractionCommit?.(path);
     },
-    [onFieldInteractionCommit],
+    [onFieldInteractionCommit, commitHistory],
   );
   const registerFieldValidation = React.useCallback((
     name: string,
@@ -758,6 +771,7 @@ export function useFormViewSave({
 
   return {
     form,
+    history,
     displayRecord,
     loading,
     formReadOnly,

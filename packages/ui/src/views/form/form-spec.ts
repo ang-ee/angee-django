@@ -168,6 +168,22 @@ export function normalizeFormSpecValues(
   }));
 }
 
+/** Resolve a root-local definition; callers decide how to present missing or recursive references. */
+export function resolveSchemaReference<T>(
+  reference: string,
+  root: { $defs?: Readonly<Record<string, T>>; definitions?: Readonly<Record<string, T>> },
+  path = "schema",
+): T {
+  const match = /^#\/(\$defs|definitions)\/([^/]+)$/.exec(reference);
+  if (!match) throw new Error(`Invalid ${path}: unsupported reference "${reference}".`);
+  const definitions = match[1] === "$defs" ? root.$defs : root.definitions;
+  const name = decodeURIComponent(match[2]!).replace(/~1/g, "/").replace(/~0/g, "~");
+  if (!definitions || !Object.hasOwn(definitions, name)) {
+    throw new Error(`Invalid ${path}: missing reference "${reference}".`);
+  }
+  return definitions[name]!;
+}
+
 /** Resolve only projected nodes: opaque context schemas need no finite template. */
 function resolveFieldReferences(
   field: FormSpecWire,
@@ -178,12 +194,7 @@ function resolveFieldReferences(
   const chain: FormSpecWire[] = [];
   while (field.$ref !== undefined) {
     const { $ref, ...siblings } = field;
-    const match = /^#\/(\$defs|definitions)\/([^/]+)$/.exec($ref);
-    if (!match) throw new Error(`Invalid ${path}: unsupported reference "${$ref}".`);
-    const definitions = match[1] === "$defs" ? root.$defs : root.definitions;
-    const name = decodeURIComponent(match[2]!).replace(/~1/g, "/").replace(/~0/g, "~");
-    const target = definitions && Object.hasOwn(definitions, name) ? definitions[name] : undefined;
-    if (!target) throw new Error(`Invalid ${path}: missing reference "${$ref}".`);
+    const target = resolveSchemaReference($ref, root, path);
     if (chain.includes(target)) throw new Error(`Invalid ${path}: cyclic reference "${$ref}".`);
     chain.push(target);
     field = { ...target, ...siblings };

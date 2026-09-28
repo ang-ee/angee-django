@@ -987,12 +987,75 @@ test("the record chrome distinguishes conflicts and reloads the saved record", a
   expect(await screen.findByText("Record changed")).toBeTruthy();
   expect(surface.saveConflict).toBe(true);
   expect(surface.formIsDirty).toBe(true);
+  expect(surface.history.canUndo).toBe(true);
   f.setRecord({ id: "note-1", title: "Saved elsewhere", body: "Latest body", deadline: "" });
   fireEvent.click(screen.getByRole("button", { name: "Reload saved record" }));
   await waitFor(() => expect((title as HTMLInputElement).value).toBe("Saved elsewhere"));
   expect(surface.saveConflict).toBe(false);
   expect(surface.formIsDirty).toBe(false);
+  expect(surface.history.canUndo).toBe(false);
+  expect(surface.history.canRedo).toBe(false);
   expect(submit).toHaveBeenCalledTimes(1);
+});
+
+test("accepted saves clear history and later field interactions start a fresh group", async () => {
+  const f = await fixture();
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Accepted title");
+  expect(f.surface().history.canUndo).toBe(true);
+  await act(async () => f.surface().submitForm());
+  expect(f.surface().history.canUndo).toBe(false);
+  expect(f.surface().history.canRedo).toBe(false);
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Later edit");
+  act(() => {
+    f.surface().commitFieldInteraction("title");
+    f.surface().history.undo();
+  });
+  expect(f.surface().form.getValues("title")).toBe("Accepted title");
+  expect(f.surface().formIsDirty).toBe(false);
+});
+
+test("overlapping field interactions keep history groups independent of observer deduplication", async () => {
+  const started = vi.fn();
+  const f = await fixture({ onFieldInteractionStart: started });
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Local title");
+  act(() => f.surface().startFieldInteraction("body"));
+  edit("body", "Local body");
+  act(() => {
+    f.surface().commitFieldInteraction("body");
+    f.surface().startFieldInteraction("title");
+  });
+  edit("title", "Later title");
+  act(() => { f.surface().commitFieldInteraction("title"); f.surface().history.undo(); });
+  expect(f.surface().form.getValues("title")).toBe("Local title");
+  expect(f.surface().form.getValues("body")).toBe("Local body");
+  expect(started.mock.calls).toEqual([["title"], ["body"]]);
+});
+
+test("accepting a remote baseline clears old undo frames without losing local edits", async () => {
+  const f = await fixture({ acknowledgedSource: {
+    record: { id: "note-1", title: "First", body: "Original body" },
+    values: { title: "First", body: "Original body" },
+  } });
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Local title");
+  expect(f.surface().history.canUndo).toBe(true);
+  f.setAcknowledgedSource({
+    record: { id: "note-1", title: "First", body: "Remote body" },
+    values: { title: "First", body: "Remote body" },
+  });
+  f.rerender({});
+  await waitFor(() => expect(f.surface().form.getValues("body")).toBe("Remote body"));
+  expect(f.surface().history.canUndo).toBe(false);
+  act(() => f.surface().history.undo());
+  expect(f.surface().form.getValues()).toMatchObject({ title: "Local title", body: "Remote body" });
+  act(() => f.surface().startFieldInteraction("title"));
+  edit("title", "Later title");
+  act(() => { f.surface().commitFieldInteraction("title"); f.surface().history.undo(); });
+  expect(f.surface().form.getValues()).toMatchObject({ title: "Local title", body: "Remote body" });
+  expect(f.surface().form.getFieldState("body").isDirty).toBe(false);
 });
 
 test("the form save owner displays an explicit success message once", async () => {

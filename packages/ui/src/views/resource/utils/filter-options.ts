@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { filterFieldType as metadataFilterFieldType, isDateField, supportsChoiceFacet as metadataSupportsChoiceFacet, type ResourceQuery, type ModelFieldMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import { queryForColumns } from "../resource-query";
 import { statusLabel } from "../../../lib/labels";
-import type { ResourceToolbarFilterField, ResourceToolbarFilterOption } from "../../../toolbars";
+import type { FilterClauseField, ResourceToolbarFilterOption } from "../../../toolbars";
 import { DEFAULT_TEXT_FILTER_FIELD } from "../resource-view-model";
 import { readPath } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
@@ -10,7 +10,7 @@ import { fieldLabel } from "../model-metadata-defaults";
 export function buildFilterOptions<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   rows: readonly TRow[],
-  fields: readonly ResourceToolbarFilterField[],
+  fields: readonly FilterClauseField[],
 ): readonly ResourceToolbarFilterOption[] {
   const columnsByField = new Map(columns.map((column) => [column.field, column]));
   return fields.flatMap((filterField) => {
@@ -32,7 +32,7 @@ export function buildFilterOptions<TRow extends Row>(
 function selectionOptions<TRow extends Row>(
   column: ColumnDescriptor<TRow>,
   rows: readonly TRow[],
-  field: ResourceToolbarFilterField,
+  field: FilterClauseField,
 ): readonly { value: string; label: ReactNode }[] {
   if (field.options) return field.options;
   return statusValues(column, rows).map((value) => ({
@@ -46,9 +46,9 @@ export function buildFilterFields<TRow extends Row>(
   rows: readonly TRow[],
   metadata: ModelMetadata | null,
   suppliedQuery?: ResourceQuery,
-): readonly ResourceToolbarFilterField[] {
+): readonly FilterClauseField[] {
   const query = suppliedQuery ?? queryForColumns(columns, metadata);
-  const fields: ResourceToolbarFilterField[] = [];
+  const fields: FilterClauseField[] = [];
   const seen = new Set<string>();
   const addField = (
     fieldName: string,
@@ -103,7 +103,7 @@ function filterFieldType<TRow extends Row>(
   fieldName: string,
   column: ColumnDescriptor<TRow> | undefined,
   field: Parameters<typeof metadataFilterFieldType>[1],
-): ResourceToolbarFilterField["type"] | null {
+): FilterClauseField["type"] | null {
   if (fieldName === DEFAULT_TEXT_FILTER_FIELD) return "text";
   // Relation values travel over the filter wire as public-id strings. The
   // relation layer replaces this text editor with its lazy remote picker; keep

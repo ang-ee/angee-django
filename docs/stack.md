@@ -196,8 +196,8 @@ resource transport/auth/live integration. The active frontend owners are
 | react-day-picker | Calendar | Date widgets |
 | react-resizable-panels | Split panes | Layout and inspector panes |
 | CodeMirror 6 (+ @codemirror/lang-json) | Text / Markdown / JSON editor | Markdown and JSON widget editors (shared `useCodeMirrorEditor`) |
-| @xyflow/react | node/edge graph canvas | `@angee/ui` `GraphView` canvas |
-| @dagrejs/dagre | directed-graph layout | `@angee/ui` `GraphView` node placement |
+| @xyflow/react | node/edge graph canvas | `@angee/ui` [GraphView](../packages/ui/src/views/GraphView.tsx) canvas and [GraphEditor](../packages/ui/src/views/GraphEditor.tsx) editing controls |
+| @dagrejs/dagre | directed-graph layout | `@angee/ui` [layoutGraph and placeGraphNodeBeside](../packages/ui/src/views/graph-layout.ts) placement helpers |
 | FullCalendar (Standard: `@fullcalendar/react` + `@fullcalendar/daygrid` + `@fullcalendar/timegrid` + `@fullcalendar/interaction`) | Month/week/day event calendar, drag/resize/select | `@angee/ui` `CalendarView` renders server-expanded occurrences and wires interactions to auto-CRUD; code-split behind a lazy import and themed through the token set |
 | @dnd-kit | Drag and drop | Board and rail interactions |
 | Native browser drag/drop | File drag enter/leave/drop events and `DataTransfer.files` | `@angee/ui` upload drop target primitive |

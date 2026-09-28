@@ -12,7 +12,7 @@ import type {
 import type { ButtonVariant } from "../../ui/button";
 
 import type {
-  ResourceToolbarFilterField,
+  FilterClauseField,
   ResourceToolbarFilterOption,
   ResourceToolbarGroupOption,
 } from "../../toolbars";
@@ -138,7 +138,7 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Explicit relation facets exposed as quick filters and group-by axes. */
   facets?: readonly FacetDescriptor[];
   /** Presentation overrides for custom filters; the query supplies all supported fields. */
-  customFilterFields?: readonly ResourceToolbarFilterField[];
+  customFilterFields?: readonly FilterClauseField[];
   /** Curated group shortcuts; the custom editor always uses the query's supported axes. */
   groupOptions?: readonly ResourceToolbarGroupOption[];
   /** Default resource order when the URL-owned data view has no sort. */

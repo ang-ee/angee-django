@@ -94,6 +94,8 @@ interface DynamicI18nKeyFamily {
 }
 
 const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
+  frameworkCriticalExport("layoutGraph", "@angee/ui", "src/views/graph-layout.ts"),
+  frameworkCriticalExport("FilterClauseEditor", "@angee/ui", "src/toolbars/FilterClauseEditor.tsx"),
   frameworkCriticalExport("StatusToneMap", "@angee/ui", "src/widgets/status-tones.ts"),
   frameworkCriticalExport("statusTone", "@angee/ui", "src/widgets/status-tones.ts"),
   frameworkCriticalExport("useStatusTone", "@angee/ui", "src/widgets/use-status-tone.ts"),

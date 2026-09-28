@@ -475,6 +475,16 @@ history uses native Query pages with domain-owned
   from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
   discriminator selection; RHF owns original and transformed values. Keep this
   opt-in adapter out of the UI main entry so other forms do not load Ajv.
+- Graph editing composes [GraphEditor](../../packages/ui/src/views/GraphEditor.tsx);
+  consumers own connection policy, selection and persisted layout.
+- Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);
+  custom pickers retain their own keyboard interaction.
+- Form undo composes [useFormHistory](../../packages/ui/src/views/form/use-form-history.ts);
+  group field interactions and reset history when accepting a saved or reloaded baseline.
+- Editable named entries use the [keyed collection](../../packages/ui/src/views/form/keyed-collection.ts)
+  in authored order; client identities survive renaming and own duplicate-key issues.
+- Schema path selection composes [SchemaPathPicker](../../packages/ui/src/views/SchemaPathPicker.tsx)
+  with lazy branches, concrete indices and literal keys; schema owners resolve references.
 - A labeled control is a page element or a `FieldRoot`. Reach for `FieldRoot` /
   `FieldLabel` (the stacked label-over-control owner, e.g. for an ephemeral
   composer not bound to a model record) before hand-rolling a `<label>` wrapper.
