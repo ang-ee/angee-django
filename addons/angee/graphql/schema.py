@@ -27,6 +27,7 @@ from strawberry.types.field import StrawberryField
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
+from angee.base.errors import DomainError
 from angee.data.metadata import DataResourceMetadata, serialize_data_resources
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -107,6 +108,11 @@ class AngeeSchema(strawberry.Schema):
 
         original = error.original_error
         if original is None or isinstance(original, MissingActorError | PermissionDenied):
+            return
+        if isinstance(original, DomainError):
+            error.message = original.code
+            error.extensions = {"code": original.code}
+            error.original_error = None
             return
         if _unwrap_validation_error(original) is not None:
             return
