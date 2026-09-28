@@ -59,7 +59,7 @@ describe("ResourceList Gantt declaration", () => {
     const event = drawing.props?.events[0];
     if (!event) throw new Error("Missing fixture event");
     act(() => drawing.props?.onEventClick?.(event));
-    expect(onSelect).toHaveBeenCalledWith("schedule-a", undefined);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("schedule-a");
     act(() => view.applyFavorite({
       id: "favorite:list", label: "List query", view: "list", groupStack: [], filter: { name: { iContains: "First" } },
     }));
