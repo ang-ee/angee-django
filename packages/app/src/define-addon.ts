@@ -82,6 +82,8 @@ export interface AddonRoute {
    * destination. One route per resource — a second claim is a build-time error.
    */
   resource?: string;
+  /** Chatter contribution ids admitted on this route and inherited by children. */
+  chatterAdmitContributions?: readonly string[];
 }
 
 /** A provider mounted once around one layout's chrome and routed content. */

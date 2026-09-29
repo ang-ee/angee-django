@@ -79,6 +79,20 @@ export interface GanttViewSpec extends GanttRowLayout {
   label?: string;
   /** A status field resolved through the runtime's status-tone vocabulary. */
   tone?: string;
+  /** Field on the lane resource holding the current bar's identity (scalar id or to-one relation). */
+  current?: string;
+  /** Read-only point events from a second resource, scoped to the same lane page. */
+  markers?: {
+    resource: string;
+    /** Relation group axis on the marker resource, targeting the lane resource. */
+    lane: string;
+    date: string;
+    /** Defaults to the marker resource's record representation. */
+    label?: string;
+    tone?: string;
+    /** Marker-specific scope; the bars' filters and search never apply to this resource. */
+    filter?: ResourceFilter<ResourceTypeName>;
+  };
   /** Additional fields selected on the related row for renderRowContent. */
   rowFields?: readonly string[];
   /** Replaces the related row's name, including rows without schedules. */

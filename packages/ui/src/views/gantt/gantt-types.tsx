@@ -83,6 +83,8 @@ interface GanttRecurrenceRule {
 interface GanttEvent<TData = unknown> {
   id: GanttBarId
   title: string
+  /** Emphasize the lane's declared current event, independently of user selection. */
+  current?: boolean
   /** Plain instants, not ISO strings. `end` is exclusive and must be >= start. */
   start: Date
   end: Date

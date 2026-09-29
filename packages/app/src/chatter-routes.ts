@@ -43,8 +43,18 @@ export function chatterRouteIndex(
       ...(modelLabel ? { modelLabel } : {}),
       ...(canonicalLabel ? { canonicalLabel } : {}),
       ...(recordParam ? { recordParam } : {}),
+      admitContributions: inheritedChatterAdmission(route, routesByName),
     };
   });
+}
+
+function inheritedChatterAdmission(
+  route: BaseAddonRoute,
+  routesByName: ReadonlyMap<string, BaseAddonRoute>,
+): readonly string[] | undefined {
+  if (route.chatterAdmitContributions !== undefined) return route.chatterAdmitContributions;
+  const parent = route.parent ? routesByName.get(route.parent) : undefined;
+  return parent ? inheritedChatterAdmission(parent, routesByName) : undefined;
 }
 
 function routeChatterViewType(

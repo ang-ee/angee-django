@@ -86,6 +86,8 @@ export interface ChatterRoute {
   modelLabel?: string;
   canonicalLabel?: string;
   recordParam?: string;
+  /** Route-scoped chatter contribution ids; overrides the app's admit list. */
+  admitContributions?: readonly string[];
 }
 
 /** Runtime context for rendering a chatter tab on the active page. */

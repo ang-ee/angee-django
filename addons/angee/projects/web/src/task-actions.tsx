@@ -68,7 +68,7 @@ export function useTaskRowActions<
   );
 }
 
-/** One Form declaration reused by the routed task page and personal board create flow. */
+/** Shared task form for collection routes and board create flows. */
 export function useTaskFormDeclaration(): React.ReactElement {
   const t = useProjectsT();
   const visibilityOptions = useEnumOptions(TASK_MODEL, "visibility", { casing: "upper" });
@@ -145,13 +145,9 @@ export function useTaskFormDeclaration(): React.ReactElement {
         <Field name="due_date" />
         <Field name="recurrence" />
       </Group>
-      <Group label={t("task.group.ordering")} columns={2}>
+      <Group label={t("task.group.details")} columns={2} collapsible defaultOpen={false}>
         <Field name="sort_order" label={t("common.order")} createOnly />
-        <Field
-          name="sub_sort_order"
-          label={t("common.subtaskOrder")}
-          createOnly
-        />
+        <Field name="sub_sort_order" label={t("common.subtaskOrder")} createOnly />
         <Field name="dropped_reason" readOnly />
         <Field name="done_at" readOnly />
         <Field name="dropped_at" readOnly />
@@ -166,6 +162,7 @@ export function useTaskFormDeclaration(): React.ReactElement {
       />
       <Action
         id="complete"
+        placement="toolbar"
         label={t("task.action.complete")}
         icon="check"
         run={complete}

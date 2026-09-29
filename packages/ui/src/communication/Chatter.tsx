@@ -9,6 +9,7 @@ import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
 import { useUiT, type UiMessageVars } from "../i18n";
 import { cn } from "../lib/cn";
+import { admittedContributions, assertContributionIds } from "../runtime/contribution-selection";
 import {
   useAppRuntime,
   type ChatterContribution,
@@ -21,12 +22,15 @@ import { Tabs } from "../ui/tabs";
 import { CHATTER_TAB_SEARCH_KEY, useChatter, type ChatterTab } from "./chatter-context";
 
 export interface ChatterProps {
+  /** Override route/app admission for this shell surface. Omit for inherited admission. */
+  admitContributions?: readonly string[];
   tabs?: readonly ChatterTab[];
   composer?: React.ReactNode;
   className?: string;
 }
 
 export function Chatter({
+  admitContributions,
   tabs,
   composer,
   className,
@@ -66,22 +70,26 @@ export function Chatter({
   // replaces its predecessor in place; a new id appends. So a page contributing a
   // `details`/`backlinks` tab keeps the defaults it does not override.
   const viewContext = useActiveChatterView(runtime.chatterRoutes ?? []);
+  const admit = admitContributions ?? viewContext.route?.admitContributions ?? runtime.chatterAdmitContributions;
+  const baseTabs = defaultTabs(t);
+  const publishedTabs = tabs ?? content?.tabs ?? [];
+  assertContributionIds(admit, [...baseTabs, ...(runtime.chatter ?? []), ...publishedTabs], "Chatter");
   const activeContributions = React.useMemo(
     () =>
-      (runtime.chatter ?? []).filter((contribution) =>
+      admittedContributions(runtime.chatter ?? [], admit).filter((contribution) =>
         contributionMatches(contribution, viewContext),
       ),
-    [runtime.chatter, viewContext],
+    [runtime.chatter, viewContext, admit],
   );
   const contributedTabs = React.useMemo(
     () => tabsFromContributions(activeContributions, viewContext, counts),
     [activeContributions, viewContext, counts],
   );
-  const resolvedTabs = mergeChatterTabs(
-    defaultTabs(t),
+  const resolvedTabs = admittedContributions(mergeChatterTabs(
+    baseTabs,
     contributedTabs,
-    tabs ?? content?.tabs ?? [],
-  );
+    publishedTabs,
+  ), admit);
   const resolvedComposer = composer ?? content?.composer;
   const requestedTabAvailable = Boolean(
     requestedTab && resolvedTabs.some((tab) => tab.id === requestedTab),

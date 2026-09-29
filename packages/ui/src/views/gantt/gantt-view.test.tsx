@@ -16,6 +16,20 @@ const events = [
 ];
 
 describe("Gantt row and control geometry", () => {
+  test("renders due markers as native diamonds and marks the current bar independently of selection", () => {
+    const view = render(<GanttSurface resources={resources} events={[
+      { ...events[0]!, current: true }, events[1]!,
+      { id: "due", resourceId: "project", title: "Review due", start: new Date(2026, 9, 7), end: new Date(2026, 9, 7), allDay: true, readOnly: true },
+    ]} date={new Date(2026, 9, 1)} defaultScale="quarter" />);
+    const current = screen.getByRole("button", { name: /First phase,/ });
+    expect(current.getAttribute("aria-current")).toBe("step");
+    expect(current.hasAttribute("data-selected")).toBe(false);
+    expect(view.container.querySelectorAll("[data-current]")).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-slot="gantt-bar-milestone"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-slot="gantt-resize-handle"]')).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: /Second phase,/ }));
+    expect(current.getAttribute("aria-current")).toBe("step");
+  });
   test("packs overlapping bars inside matching, non-shrinking tree and timeline rows", () => {
     const view = render(<GanttSurface resources={resources} events={events} date={new Date(2026, 9, 1)} defaultScale="quarter" />);
     const row = view.container.querySelector<HTMLElement>('[data-gantt-resource="project"]')!;

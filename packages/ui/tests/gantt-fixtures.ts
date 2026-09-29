@@ -42,6 +42,19 @@ export const ganttRecord = testDataResource("example.Schedule", {
 });
 
 export const ganttResources = [ganttRecord, ganttLane];
+export const ganttMarker = testDataResource("example.Checkpoint", {
+  capabilities: ["list"], rowModel: "server", roots: { aggregate: "checkpoints_aggregate" },
+  typeNames: { filter: "CheckpointBoolExp", order: "CheckpointOrderBy" },
+  recordRepresentation: "name",
+  fields: [scalar("id", "ID"), scalar("name"), scalar("due", "Date"), scalar("status"), {
+    ...scalar("lane"), kind: "relation", relationModelLabel: ganttLane.modelLabel, relationObject: true,
+  }],
+  query: testResourceQuery({ fields: {
+    id: ganttRecord.query.fields.id!, name: ganttRecord.query.fields.name!,
+    due: testQueryField("due", { scalar: "Date" }), status: ganttRecord.query.fields.status!,
+    lane: ganttRecord.query.fields.lane!,
+  }, axes: { lane: ganttRecord.query.axes.lane! } }),
+});
 export const ganttLanes = [{ id: "lane-a", name: "Alpha", code: "A" }, { id: "lane-b", name: "Beta", code: "B" }];
 export const scheduledRecord = {
   id: "schedule-a", name: "First interval", start: "2026-09-01", end: "2026-09-03", status: "active",

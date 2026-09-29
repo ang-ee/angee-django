@@ -45,6 +45,8 @@ export interface BaseAddonRoute extends AddonRoute {
 }
 
 export interface ResourcePageRoutesOptions {
+  /** Chatter admission shared by the collection and its record route. */
+  chatterAdmitContributions?: AddonRoute["chatterAdmitContributions"];
   /** Layout for both routes. Defaults to the rendered addon's console layout. */
   layout?: string;
   /** Menu id that owns the list route chrome. */
@@ -79,6 +81,7 @@ export function resourcePageRoutes(
       ...(resource ? { resource } : {}),
       ...(options.recordModel ? { recordModel: options.recordModel } : {}),
       ...(options.menu ? { menu: options.menu } : {}),
+      ...(options.chatterAdmitContributions !== undefined ? { chatterAdmitContributions: options.chatterAdmitContributions } : {}),
     },
     {
       name: options.detailName ?? `${name}.record`,

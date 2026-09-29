@@ -102,6 +102,8 @@ export interface AppRuntime {
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
+  /** App-wide chatter admission. Omit for all; routes can override it. */
+  chatterAdmitContributions?: readonly string[];
   chatterRoutes: readonly ChatterRoute[];
   slots: readonly SlotContribution[];
   /** Addon-owned detail search keys cleared by routed record navigation. */
