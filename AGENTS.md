@@ -242,10 +242,12 @@ Durable project knowledge is checked in, not held only in private agent memory.
 - **Shared methodology:** reviewer prompts, skills, commands, and workflows live
   in public `.agents/`; private task history does not.
 - **Private work-state:** resolve the current workspace through the workspace
-  skill. Its optional work-state slot is `<workspace>/.work`, materialized as a
-  Git clone or local-source symlink. Use its `plans/specs/`, `plans/`, `notes/`,
-  and `handovers/` directories; do not create `angee/.work` inside this source
-  slot. Follow the workspace's synchronization rules and the user's instructions.
+  skill. Its optional work-state slot is `<workspace>/.work`: a Git clone, a
+  local-source symlink, or a Jujutsu workspace of a shared store. When
+  `.work/.jj` exists, write through `jj` only and follow `.work/AGENTS.md`.
+  Use its `plans/specs/`, `plans/`, `notes/`, and `handovers/` directories; do
+  not create `angee/.work` inside this source slot. Follow the workspace's
+  synchronization rules and the user's instructions.
 - **No work-state source:** keep task-specific plans and handoff notes in the
   conversation. Do not invent a private repository/path or put private history
   into public docs or `.agents/`. Global defaults such as `docs/superpowers/**`

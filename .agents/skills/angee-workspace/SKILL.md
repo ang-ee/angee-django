@@ -70,7 +70,7 @@ For each workspace worktree source, the parent ref is the source `ref` reported 
 branch (`main`), a shared feature branch (`feature/<topic>`), or another
 workspace branch (`<prefix>/<parent>`).
 
-The optional work-state clone is independent task history. Do not merge it
+The optional work-state checkout is independent task history. Do not merge it
 between workspace branches as if it were a framework worktree; synchronize its
 own reported upstream when that operation is authorized.
 
@@ -98,7 +98,10 @@ are committed first.
 Use the current workspace's reported `work-state` slot, when present. The src
 template materializes it at `$angee_root/workspaces/<name>/.work`, beside the
 framework checkout. It is a Git clone or a local-source symlink, according to
-the stack source kind; it is not necessarily `<repository>/.work`.
+the stack source kind, or a Jujutsu workspace of a shared work-state store that
+the stack attaches itself; it is not necessarily `<repository>/.work`. When
+`.work/.jj` exists, every write goes through `jj` (never `git commit`/`git push`
+there) and `.work/AGENTS.md` owns the commit, publish, and attach procedure.
 
 Write private specs, plans, notes, and handovers beneath that resolved location.
 If the optional slot is absent, keep task state in the conversation; do not
@@ -150,7 +153,9 @@ After creation, report:
 
 - Workspace path.
 - Per-slot branch names and parent refs from Angee state.
-- Whether `.work/` was materialized at the workspace root.
+- Whether `.work/` was materialized at the workspace root. A stack that keeps
+  work-state as Jujutsu workspaces leaves `work_state_source` empty and attaches
+  `.work` after creation, following the work-state repository's `AGENTS.md`.
 - `angee --root "$angee_root" ws git <name>` for the per-slot state.
 - `angee --root "$angee_root" ws status <name>` for follow-up inspection.
 
@@ -211,7 +216,7 @@ angee --root "$angee_root" ws source merge <current-workspace> <slot> <source-br
 For a workspace argument, `<source-branch-or-ref>` is the source slot's reported
 `branch`, usually `<prefix>/<source>`. Repeat the merge for matching framework
 and external-addon worktree slots in BOTH workspaces; a slot only one side has
-is skipped and reported. The work-state clone follows its own upstream.
+is skipped and reported. The work-state checkout follows its own upstream.
 
 If the merge conflicts, inspect the conflict files, resolve them according to
 the repo's owners and `AGENTS.md`, then commit the merge. If the user wants to
@@ -259,7 +264,8 @@ angee --root "$angee_root" ws source publish <workspace> <slot> --remote <remote
    untouched repository is noise.
 6. When present, the `work-state` slot is a slot like any other: inspect its
    reported branch and source kind. Commit and push its changes continuously
-   (`ws source push <workspace> work-state` for a Git source), within the user's
+   (`ws source push <workspace> work-state` for a Git source; the `jj` publish
+   recipe in `.work/AGENTS.md` when `.work/.jj` exists), within the user's
    authorization. A user instruction not to commit or push applies to this slot
    too. Do not assume it uses the workspace branch or a particular upstream.
 7. Re-run `angee --root "$angee_root" ws git <name> --json` and report whether
