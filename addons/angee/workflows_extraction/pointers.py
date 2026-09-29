@@ -13,6 +13,17 @@ JSON_POINTER_MISSING = object()
 """Sentinel distinguishing an absent path from a retained JSON null."""
 
 
+def fact_pointers(value: Any, path: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Enumerate scalar facts with RFC 6901 escaping and stable container ordering."""
+    if isinstance(value, dict):
+        return tuple(pointer for key in sorted(value) for pointer in fact_pointers(value[key], (*path, key)))
+    if isinstance(value, list):
+        return tuple(
+            pointer for index, item in enumerate(value) for pointer in fact_pointers(item, (*path, str(index)))
+        )
+    return (JsonPointer.from_parts(path).path,)
+
+
 def _resolve(value: Any, pointer: JsonPointer, baseline: Any = JSON_POINTER_MISSING) -> Any:
     """Constrain upstream traversal to JSON containers and stable array elements."""
     for token in pointer.parts:
@@ -33,8 +44,8 @@ def json_pointer_value(value: Any, pointer: str) -> Any:
     """Resolve one RFC 6901 pointer or raise ``KeyError`` when invalid or absent."""
     try:
         return _resolve(value, JsonPointer(pointer))
-    except JsonPointerException as error:
-        raise KeyError(pointer) from error
+    except JsonPointerException:
+        raise KeyError(pointer) from None
 
 
 def json_pointer_value_or_missing(
@@ -60,8 +71,8 @@ def set_json_pointer(value: Any, pointer: str, replacement: Any) -> None:
         if not isinstance(parent, (dict, list)) or (isinstance(parent, list) and parsed.parts[-1] == "-"):
             raise JsonPointerException("The parent is not a writable JSON container.")
         JsonPointer.from_parts(parsed.parts[-1:]).set(parent, replacement)
-    except (JsonPointerException, IndexError) as error:
-        raise KeyError(pointer) from error
+    except (JsonPointerException, IndexError):
+        raise KeyError(pointer) from None
 
 
 def materialize_missing_json_pointer_path(
@@ -91,8 +102,8 @@ def materialize_missing_json_pointer_path(
                 break
             _resolve(value, destination)
             return
-    except JsonPointerException as error:
-        raise KeyError(pointer) from error
+    except JsonPointerException:
+        raise KeyError(pointer) from None
     raise KeyError(pointer)
 
 
@@ -100,20 +111,9 @@ def result_selectors(result: Any, layout: Any) -> tuple[tuple[str, tuple[str, ..
     """Expand profile-declared document and line pointers without interpreting keys."""
     if not isinstance(result, dict) or not result:
         return ()
-    if not isinstance(layout, dict):
-        raise ValidationError({"extraction": "The evidence layout is invalid."})
     document_collection = layout.get("document_collection", "")
     line_collection = layout.get("line_collection", "")
     root_document_on_missing = layout.get("root_document_on_missing", False)
-    if type(root_document_on_missing) is not bool:
-        raise ValidationError({"extraction": "The root document fallback policy must be a boolean."})
-    try:
-        for pointer in (document_collection, line_collection):
-            if not isinstance(pointer, str):
-                raise JsonPointerException("A pointer must be a string.")
-            JsonPointer(pointer)
-    except JsonPointerException as error:
-        raise ValidationError({"extraction": "The evidence layout requires JSON pointers."}) from error
     try:
         documents = json_pointer_value(result, document_collection) if document_collection else None
     except KeyError:
@@ -139,42 +139,3 @@ def result_selectors(result: Any, layout: Any) -> tuple[tuple[str, tuple[str, ..
             raise ValidationError({"extraction": "The declared source-line collection must be a list."})
         selectors.append((selector, tuple(f"{selector}{line_collection}/{index}" for index in range(len(lines or ())))))
     return tuple(selectors)
-
-
-def implicit_identity_correspondence(result: Any, *, layout: Any, original: Any) -> dict[str, str] | None:
-    """Return a complete correspondence only when retained positions are unambiguous."""
-    requested = result_selectors(result, layout)
-    previous = tuple(original.document_refs)
-    if not previous:
-        return {}
-    if canonical_json(original.result) == canonical_json(result):
-        return {
-            selector: identity
-            for ref in previous
-            for selector, identity in (
-                (ref.selector, ref.identity),
-                *((line.selector, line.identity) for line in ref.lines),
-            )
-        }
-    if len(previous) != 1 or len(requested) != 1:
-        return None
-    document = previous[0]
-    selector, line_selectors = requested[0]
-    if document.selector != selector:
-        return None
-    mapping = {selector: document.identity}
-    if not document.lines:
-        return mapping | dict.fromkeys(line_selectors, "new")
-    if tuple(line.selector for line in document.lines) != line_selectors:
-        return None
-    if len(line_selectors) == 1:
-        return mapping | {line_selectors[0]: document.lines[0].identity}
-    try:
-        unchanged = all(
-            canonical_json(json_pointer_value(original.result, path))
-            == canonical_json(json_pointer_value(result, path))
-            for path in line_selectors
-        )
-    except KeyError:
-        return None
-    return mapping | {line.selector: line.identity for line in document.lines} if unchanged else None

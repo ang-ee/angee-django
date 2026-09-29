@@ -5,22 +5,25 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import closing
+from dataclasses import asdict
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 import pypdfium2 as pdfium
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_ai.messages import BinaryContent, ModelRequest, SystemPromptPart, UserPromptPart
+from pydantic_ai.settings import ThinkingLevel
 from rebac import to_subject_ref
 
+from angee.agents.backends import InferenceBackend
 from angee.base.actors import actor_user_id
 from angee.base.impl import ImplBase
 from angee.workflows.steps import Retryable
@@ -29,13 +32,71 @@ from angee.workflows_extraction.contracts import (
     ExtractionPartKind,
     MappingResult,
     PageImage,
-    PageResult,
     PipelineError,
     RecognitionResult,
     Source,
 )
 from angee.workflows_extraction.inference import derive_text_claims
 from angee.workflows_extraction.profiles import ExtractionProfile
+
+
+class RequestConfig(BaseModel):
+    """The bounded model settings an extraction definition may author."""
+
+    model_config = ConfigDict(extra="forbid")
+    timeout: float = Field(default=120, gt=0, le=240)
+    max_tokens: int = Field(default=8192, gt=0, le=32768)
+    temperature: float = Field(default=0, ge=0, le=2)
+    thinking: ThinkingLevel | None = None
+
+    @field_validator("timeout")
+    @classmethod
+    def valid_timeout(cls, value: float) -> float:
+        InferenceBackend.validate_timeout(value)
+        return value
+
+
+class NativeExtractionConfig(BaseModel):
+    """Acquisition bounds and inference settings owned by the native backend."""
+
+    model_config = ConfigDict(extra="forbid")
+    max_pages: int = Field(default=10, ge=1, le=100)
+    max_text_bytes: int = Field(default=2_000_000, ge=1, le=2_000_000)
+    dpi: int = Field(default=200, ge=36, le=600)
+    max_edge: int = Field(default=3500, ge=1, le=3500)
+    request: RequestConfig = Field(default_factory=RequestConfig)
+
+
+class PartCarrier(BaseModel):
+    """A protected acquisition envelope; workflow rows retain no document values."""
+
+    model_config = ConfigDict(extra="forbid")
+    source_position: int = Field(ge=0)
+    source_page: int | None = Field(default=None, ge=0)
+    kind: ExtractionPartKind
+    file_id: str
+    content_hash: str
+
+    @classmethod
+    def retain(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> PartCarrier:
+        """Retain text and structured values under the storage owner's permissions."""
+        file = apps.get_model("storage.File").objects.ingest_bytes(
+            json.dumps(asdict(part), ensure_ascii=False).encode(),
+            filename="extraction-part.json",
+            owner_id=actor_user_id(to_subject_ref(actor)),
+            drive_id=drive_id,
+        )
+        return cls(source_position=part.source_position, source_page=part.source_page, kind=part.kind,
+                   file_id=str(file.sqid), content_hash=str(file.content_hash))
+
+    def restore(self, ctx: Any) -> DocumentPart:
+        """Read the envelope only after rechecking its file authority and digest."""
+        file = ctx.load(apps.get_model("storage.File"), self.file_id)
+        content = file.read_verified(max_bytes=settings.ANGEE_EXTRACTION_MAX_BYTES, expected_digest=self.content_hash)
+        part = ImplBase.parse_value(json.loads(content), DocumentPart, "part")
+        if (part.source_position, part.source_page, part.kind) != (self.source_position, self.source_page, self.kind):
+            raise ValidationError("The retained part identity changed.")
+        return part
 
 
 class SourceSnapshot(BaseModel):
@@ -71,30 +132,9 @@ class PageCarrier(BaseModel):
     height: int = Field(default=0, ge=0)
     dpi: int = Field(default=200, gt=0)
 
-    def result(self, parts: Sequence[DocumentPart]) -> PageResult:
-        """Project this page's retained evidence and protected raster identity."""
-        page_parts = [
-            part
-            for part in parts
-            if part.source_position == self.source_position and (part.source_page or 0) == self.page_position
-        ]
-        return PageResult(
-            {"parts": [part.value for part in page_parts]},
-            duration_ms=sum(part.duration_ms for part in page_parts),
-            provider_metadata={"carrier_files": [self.image_file_id] if self.image_file_id else []},
-        )
-
     def image(self, file: Any) -> PageImage:
         """Read and verify the retained raster once before a provider call."""
-        if file.upload_state != "ready" or str(file.content_hash) != self.image_digest:
-            raise ValidationError("The page carrier changed.")
-        with file.open_stream() as stream:
-            content = stream.read(settings.ANGEE_EXTRACTION_MAX_BYTES + 1)
-        if (
-            len(content) > settings.ANGEE_EXTRACTION_MAX_BYTES
-            or hashlib.sha256(content).hexdigest() != self.image_digest
-        ):
-            raise ValidationError("The retained raster bytes changed.")
+        content = file.read_verified(max_bytes=settings.ANGEE_EXTRACTION_MAX_BYTES, expected_digest=self.image_digest)
         return PageImage(
             self.source_position, self.page_position, "image/jpeg", content, self.width, self.height, self.dpi
         )
@@ -106,7 +146,7 @@ class PreparedDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sources: list[SourceSnapshot]
     pages: list[PageCarrier]
-    parts: list[DocumentPart]
+    parts: list[PartCarrier]
     hold_reasons: list[str] = Field(default_factory=list)
 
     @property
@@ -114,7 +154,7 @@ class PreparedDocument(BaseModel):
         """Return the prepared pages whose retained rasters need recognition."""
         return [page for page in self.pages if page.image_file_id]
 
-    def collect(self, results: Sequence[dict[str, Any]]) -> tuple[tuple[DocumentPart, ...], list[str]]:
+    def collect(self, results: Sequence[dict[str, Any]]) -> tuple[tuple[PartCarrier, ...], list[str]]:  # L4
         """Accept exactly one ordered map response for every requested raster."""
         requested = self.recognition_pages
         if len(results) > len(requested):
@@ -135,8 +175,6 @@ class PreparedDocument(BaseModel):
                 or part.source_position != page.source_position
                 or part.source_page != page.page_position
                 or part.kind != ExtractionPartKind.RECOGNIZED_TEXT
-                or not isinstance(part.value, str)
-                or hashlib.sha256(part.value.encode()).hexdigest() != part.content_hash
             ):
                 raise ValidationError("Recognition returned a different page carrier.")
             parts.append(response.part)
@@ -148,13 +186,11 @@ class RecognitionOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     page: PageCarrier
-    part: DocumentPart
+    part: PartCarrier
 
 
 class ExtractionProvider(ImplBase):
-    """Acquisition/OCR/inference adapter; only test implementations disable I/O."""
-
-    external_io: ClassVar[bool] = True
+    """Registry-selected acquisition, recognition and inference implementation."""
 
     def prepare(
         self,
@@ -162,18 +198,19 @@ class ExtractionProvider(ImplBase):
         message_parts: Sequence[Any],
         *,
         profile: ExtractionProfile,
-        config: dict[str, Any],
+        config: Any,
         actor: Any,
+        heartbeat: Callable[[], None],
     ) -> PreparedDocument:
         """Acquire each source once and return its bounded page snapshot."""
         raise NotImplementedError
 
-    def recognize(self, page: PageCarrier, file: Any, model: Any, *, config: dict[str, Any]) -> RecognitionResult:
+    def recognize(self, page: PageCarrier, file: Any, model: Any, *, config: Any) -> RecognitionResult:
         """Recognize one retained image without changing its identity."""
         raise NotImplementedError
 
     def infer(
-        self, parts: Sequence[DocumentPart], schema: dict[str, Any], model: Any, *, config: dict[str, Any]
+        self, parts: Sequence[DocumentPart], schema: dict[str, Any], model: Any, *, config: Any
     ) -> MappingResult:
         """Map retained carriers into one declared schema candidate."""
         raise NotImplementedError
@@ -184,6 +221,7 @@ class NativeExtractionProvider(ExtractionProvider):
 
     key = "native"
     label = "Native document extraction"
+    config_model = NativeExtractionConfig
 
     def prepare(
         self,
@@ -191,35 +229,28 @@ class NativeExtractionProvider(ExtractionProvider):
         message_parts: Sequence[Any],
         *,
         profile: ExtractionProfile,
-        config: dict[str, Any],
+        config: NativeExtractionConfig,
         actor: Any,
+        heartbeat: Callable[[], None],
     ) -> PreparedDocument:
         """Read verified sources, prefer native text, and rasterize only missing text."""
         snapshots: list[SourceSnapshot] = []
         parts: list[DocumentPart] = []
         pages: list[PageCarrier] = []
         holds: list[str] = []
-        limit = int(config.get("max_pages", 10))
-        text_limit = int(config.get("max_text_bytes", 2_000_000))
-        dpi, max_edge = int(config.get("dpi", 200)), int(config.get("max_edge", 3500))
-        if min(limit, text_limit, dpi, max_edge) <= 0:
-            raise ValidationError("Document acquisition limits must be positive.")
+        limit, text_limit, dpi, max_edge = config.max_pages, config.max_text_bytes, config.dpi, config.max_edge
         for position, row in enumerate([*files, *message_parts]):
+            heartbeat()
             is_file = position < len(files)
             if is_file:
-                if row.upload_state != "ready":
-                    raise ValidationError("Document sources must be ready.")
-                with row.open_stream() as stream:
-                    content = stream.read(settings.ANGEE_EXTRACTION_MAX_BYTES + 1)
+                content = row.read_verified(max_bytes=settings.ANGEE_EXTRACTION_MAX_BYTES)
                 digest, mime = str(row.content_hash), str(row.mime_type.mime_type)
-                if len(content) > settings.ANGEE_EXTRACTION_MAX_BYTES or len(content) != row.size_bytes:
-                    raise ValidationError("Document source exceeds its byte limit or changed size.")
             else:
                 if row.fragment is None:
                     raise ValidationError("A message source requires a retained text fragment.")
                 content = str(row.fragment.text).encode()
                 digest, mime = str(row.fragment.hash), str(row.type)
-            if hashlib.sha256(content).hexdigest() != digest:
+            if not is_file and hashlib.sha256(content).hexdigest() != digest:
                 raise ValidationError("Document source bytes changed.")
             kind: Literal["file", "message_part"] = "file" if is_file else "message_part"
             snapshots.append(SourceSnapshot(kind=kind, public_id=str(row.sqid), content_hash=digest, mime_type=mime))
@@ -249,6 +280,7 @@ class NativeExtractionProvider(ExtractionProvider):
                     if len(document) + len(pages) > limit:
                         raise ValidationError("Document exceeds its page limit.")
                     for number in range(len(document)):
+                        heartbeat()
                         with closing(document[number]) as page, closing(page.get_textpage()) as textpage:
                             text = textpage.get_text_range().strip()
                             if text:
@@ -270,7 +302,12 @@ class NativeExtractionProvider(ExtractionProvider):
                 holds.append(f"unsupported_media_type:{position}")
             if len(pages) > limit or sum(len(json.dumps(p.value).encode()) for p in parts) > text_limit:
                 raise ValidationError("Document exceeds its page or text limit.")
-        return PreparedDocument(sources=snapshots, pages=pages, parts=parts, hold_reasons=holds)
+        carriers = []
+        for part in parts:
+            heartbeat()
+            drive_id = str(files[part.source_position].drive.sqid) if part.source_position < len(files) else ""
+            carriers.append(PartCarrier.retain(part, actor=actor, drive_id=drive_id))
+        return PreparedDocument(sources=snapshots, pages=pages, parts=carriers, hold_reasons=holds)
 
     @staticmethod
     def _raster(
@@ -295,7 +332,9 @@ class NativeExtractionProvider(ExtractionProvider):
             dpi=dpi,
         )
 
-    def recognize(self, page: PageCarrier, file: Any, model: Any, *, config: dict[str, Any]) -> RecognitionResult:
+    def recognize(
+        self, page: PageCarrier, file: Any, model: Any, *, config: NativeExtractionConfig,
+    ) -> RecognitionResult:
         """Submit exactly one verified raster through the selected agents model."""
         image = page.image(file)
         result = self._request(
@@ -306,15 +345,15 @@ class NativeExtractionProvider(ExtractionProvider):
                 )
             ],
             images=[BinaryContent(image.image_bytes, media_type=image.mime_type)],
-            settings=config,
+            settings=config.request.model_dump(exclude_none=True),
         )
         text = result.response.text
-        if text is None or "\x00" in text:
+        if text is None:
             raise PipelineError("Invalid recognition response.", stage="recognition_response", code="invalid_response")
         return RecognitionResult(text, provider_metadata={"usage": result.usage}, usage_delta=result.usage)
 
     def infer(
-        self, parts: Sequence[DocumentPart], schema: dict[str, Any], model: Any, *, config: dict[str, Any]
+        self, parts: Sequence[DocumentPart], schema: dict[str, Any], model: Any, *, config: NativeExtractionConfig
     ) -> MappingResult:
         """Submit retained evidence as untrusted data and derive claims locally."""
         evidence = json.dumps([{"part": i, "value": part.value} for i, part in enumerate(parts)], ensure_ascii=False)
@@ -332,7 +371,7 @@ class NativeExtractionProvider(ExtractionProvider):
                 )
             ],
             output_schema=schema,
-            settings=config,
+            settings=config.request.model_dump(exclude_none=True),
         )
         if result.output is None:
             raise PipelineError("Invalid mapping response.", stage="mapping_response", code="invalid_response")
@@ -348,22 +387,24 @@ class NativeExtractionProvider(ExtractionProvider):
         try:
             return model.infer(messages, **kwargs)
         except Exception as error:  # noqa: BLE001 - backend SDK exception hierarchies differ.
-            if model.provider.backend.is_transient_error(error):
+            if model.is_transient_error(error):
                 raise Retryable(f"Inference transport failed ({type(error).__name__}).") from None
             raise PipelineError("Inference request failed.", stage="inference", code=type(error).__name__) from None
 
 
-def _text_part(source: int, page: int, text: str, method: str) -> DocumentPart:
-    if "\x00" in text:
-        raise ValidationError("Document text contains null characters.")
+def _text_part(
+    source: int, page: int, text: str, method: str, *, kind: ExtractionPartKind = ExtractionPartKind.NATIVE_TEXT,
+    **metadata: Any,
+) -> DocumentPart:
     return DocumentPart(
         source,
         page,
         "text/plain",
-        ExtractionPartKind.NATIVE_TEXT,
+        kind,
         text,
         method,
         hashlib.sha256(text.encode()).hexdigest(),
+        **metadata,
     )
 
 

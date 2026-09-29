@@ -2,7 +2,7 @@
 
 SETTINGS = {
     "ANGEE_EXTRACTION_PROFILE_CLASSES": {"none": "angee.workflows_extraction.profiles.UnconfiguredExtractionProfile"},
-    "ANGEE_EXTRACTION_PROVIDER_CLASSES": {"native": "angee.workflows_extraction.providers.NativeExtractionProvider"},
+    "ANGEE_EXTRACTION_BACKEND_CLASSES": {"native": "angee.workflows_extraction.providers.NativeExtractionProvider"},
     "ANGEE_WORKFLOW_STEP_CLASSES.prepare_pages": "angee.workflows_extraction.steps.PreparePagesStep",
     "ANGEE_WORKFLOW_STEP_CLASSES.recognize_page": "angee.workflows_extraction.steps.RecognizePageStep",
     "ANGEE_WORKFLOW_STEP_CLASSES.collect_carriers": "angee.workflows_extraction.steps.CollectCarriersStep",

@@ -2,7 +2,6 @@
 
 from dataclasses import replace
 from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -11,11 +10,9 @@ from angee.base.impl import resolve_impl_class
 from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentPipelineError,
-    DocumentRef,
     DocumentResult,
     DocumentSource,
     ExtractionPartKind,
-    LineRef,
     PipelineError,
     Result,
     Source,
@@ -23,7 +20,6 @@ from angee.workflows_extraction.contracts import (
 from angee.workflows_extraction.inference import derive_text_claims
 from angee.workflows_extraction.pointers import (
     JSON_POINTER_MISSING,
-    implicit_identity_correspondence,
     json_pointer_value,
     json_pointer_value_or_missing,
     materialize_missing_json_pointer_path,
@@ -35,6 +31,9 @@ from angee.workflows_extraction.profiles import (
     UnconfiguredExtractionProfile,
     authored_profile_config,
 )
+from angee.workflows_extraction.providers import NativeExtractionProvider
+from angee.workflows_extraction.steps import PreparePagesStep, RecognizePageStep
+from tests.extraction_models import Extraction
 
 
 @pytest.fixture
@@ -51,17 +50,16 @@ def test_compatibility_aliases_and_failure_retain_evidence(text_part):
     assert error.usage_delta == {"input_tokens": 4}
 
 
-def test_profile_resolves_through_existing_registry_and_fails_closed(settings):
-    settings.ANGEE_EXTRACTION_PROFILE_CLASSES = {
-        "none": "angee.workflows_extraction.profiles.UnconfiguredExtractionProfile",
-    }
+def test_profile_resolves_through_existing_registry_and_fails_closed():
     profile_class = resolve_impl_class("ANGEE_EXTRACTION_PROFILE_CLASSES", "none", ExtractionProfile)
     assert profile_class is UnconfiguredExtractionProfile
     with pytest.raises(ValueError, match="Select a document extraction profile"):
         profile_class().process_parts([], [], {}, config={})
     assert profile_class().inference_required({}, ["unresolved"])
     assert not profile_class().inference_required({}, [])
-    assert authored_profile_config({"mode": "strict", "retry_of_revision": 3}) == {"mode": "strict"}
+    with pytest.raises(ValidationError, match="does not accept configuration"):
+        profile_class.parse_config({"retry_of_revision": 3})
+    assert authored_profile_config({"retry_of_revision": 3}) == {"retry_of_revision": 3}
 
 
 def test_claims_use_exact_text_spans_and_escaped_pointers(text_part):
@@ -145,24 +143,46 @@ def test_layout_validates_structure_and_requires_explicit_root_fallback():
     assert result_selectors({"label": "Alpha"}, layout | {"root_document_on_missing": True}) == (("", ()),)
     for invalid in ({"line_collection": "/~2"}, {"root_document_on_missing": 1}):
         with pytest.raises(ValidationError):
-            result_selectors({"label": "Alpha"}, invalid)
+            type("InvalidLayout", (ExtractionProfile,), {"evidence_layout": invalid})
 
 
 def test_identity_correspondence_does_not_guess_reordered_line_identity():
     layout = {"line_collection": "/rows"}
     previous = {"label": "Alpha", "rows": [{"value": "A"}, {"value": "B"}]}
-    original = SimpleNamespace(
+    original = Extraction(
         result=previous,
-        document_refs=(DocumentRef("document", "", (LineRef("first", "/rows/0"), LineRef("second", "/rows/1"))),),
+        document_map=[{"identity": "document", "selector": "", "lines": [
+            {"identity": "first", "selector": "/rows/0"}, {"identity": "second", "selector": "/rows/1"},
+        ]}],
     )
-    assert implicit_identity_correspondence(previous | {"label": "Beta"}, layout=layout, original=original) == {
+    assert original.implicit_identity_correspondence(previous | {"label": "Beta"}, layout=layout) == {
         "": "document",
         "/rows/0": "first",
         "/rows/1": "second",
     }
     assert (
-        implicit_identity_correspondence(
-            previous | {"rows": list(reversed(previous["rows"]))}, layout=layout, original=original
+        original.implicit_identity_correspondence(
+            previous | {"rows": list(reversed(previous["rows"]))}, layout=layout,
         )
         is None
     )
+
+
+@pytest.mark.parametrize("config", [
+    {"max_pages": 101}, {"max_text_bytes": 2_000_001}, {"dpi": 601}, {"max_edge": 3501},
+    {"request": {"extra_headers": {"Authorization": "untrusted"}}},
+    {"request": {"extra_body": {}}}, {"request": {"timeout": float("inf")}},
+    {"request": {"max_tokens": 32769}}, {"request": {"temperature": -1}},
+])
+def test_native_configuration_rejects_unbounded_or_transport_settings(config):
+    with pytest.raises(ValidationError):
+        NativeExtractionProvider.parse_config(config)
+
+
+def test_native_configuration_defaults_and_input_policy_boundary():
+    assert NativeExtractionProvider.parse_config({}).request.temperature == 0
+    for name in ("max_pages", "max_text_bytes", "dpi", "max_edge", "profile_config"):
+        with pytest.raises(ValidationError):
+            PreparePagesStep.parse_input({"target_model": "storage.File", "target_id": "file", name: 1})
+    with pytest.raises(ValidationError):
+        RecognizePageStep.parse_input({"page": {"source_position": 0, "page_position": 0}, "profile_config": {}})

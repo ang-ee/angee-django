@@ -38,9 +38,11 @@ from angee.workflows_extraction.inference import RETAINED_AUTHORITY_COMPLETION_R
 from angee.workflows_extraction.managers import EvidenceManager, EvidenceSystemManager, ExtractionManager
 from angee.workflows_extraction.pointers import (
     JSON_POINTER_MISSING,
+    fact_pointers,
     json_pointer_value,
     json_pointer_value_or_missing,
     materialize_missing_json_pointer_path,
+    result_selectors,
     set_json_pointer,
 )
 from angee.workflows_extraction.profiles import ExtractionProfile
@@ -113,6 +115,14 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
         related_name="recognition_extraction_evidence",
     )
     profile_config = models.JSONField(default=dict, editable=False)
+    correction_decision = models.ForeignKey(
+        "decisions.Decision",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="extraction_corrections",
+        editable=False,
+    )
     result = models.JSONField(editable=False)
     provenance = models.JSONField(default=dict, editable=False)
     document_map = models.JSONField(default=list, editable=False)
@@ -205,8 +215,8 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
                     )
                     completed_missing = True
                 set_json_pointer(value, destination, deepcopy(retained_value))
-            except KeyError as error:
-                raise ValidationError("The candidate omitted an authoritative fact path.") from error
+            except KeyError:
+                raise ValidationError("The candidate omitted an authoritative fact path.") from None
             claims = {
                 path: entries
                 for path, entries in claims.items()
@@ -223,8 +233,8 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
                         }
                         for claim in self.claims[pointer]
                     ]
-                except KeyError as error:
-                    raise ValidationError("An authoritative claim lacks a retained carrier.") from error
+                except KeyError:
+                    raise ValidationError("An authoritative claim lacks a retained carrier.") from None
         metadata = deepcopy(candidate.provider_metadata or {})
         if completed_missing:
             metadata["unresolved_reasons"] = list(
@@ -307,6 +317,32 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
             raise ValueError("The document selector does not point to an object.")
         return value, reference
 
+    def reviewed_facts(
+        self,
+        value: Mapping[str, Any],
+        *,
+        identity_mapping: Mapping[str, str],
+        retired_identities: Mapping[str, str],
+        confirmed_paths: tuple[str, ...],
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Carry unchanged source claims and attribute changed or confirmed scalar facts."""
+        unchanged = {}
+        for pointer in fact_pointers(self.result):
+            destination = self._authority_destination(pointer, identity_mapping, retired_identities)
+            if destination is not None:
+                after = json_pointer_value_or_missing(value, destination)
+                if after is not JSON_POINTER_MISSING and canonical_json(self.fact(pointer)) == canonical_json(after):
+                    unchanged[destination] = pointer
+        paths = set(fact_pointers(value))
+        if not set(confirmed_paths) <= paths:
+            raise ValidationError("Confirmed paths must name retained scalar facts.")
+        claims = {
+            destination: deepcopy(self.claims[pointer])
+            for destination, pointer in unchanged.items()
+            if pointer in self.claims and destination not in confirmed_paths
+        }
+        return claims, sorted(paths - unchanged.keys() | set(confirmed_paths))
+
     def selected_line(self, document_identity: str, line_identity: str) -> tuple[Mapping[str, Any], LineRef]:
         """Resolve a line within its owning document without positional fallback."""
         _document, document_ref = self.selected_document(document_identity)
@@ -317,6 +353,44 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
                     raise ValueError("The line selector does not point to an object.")
                 return value, reference
         raise KeyError(line_identity)
+
+    def implicit_identity_correspondence(self, result: Any, *, layout: Any) -> dict[str, str] | None:
+        """Return a complete correspondence only when retained positions are unambiguous."""
+        requested = result_selectors(result, layout)
+        previous = tuple(self.document_refs)
+        if not previous:
+            return {}
+        if canonical_json(self.result) == canonical_json(result):
+            return {
+                selector: identity
+                for ref in previous
+                for selector, identity in (
+                    (ref.selector, ref.identity),
+                    *((line.selector, line.identity) for line in ref.lines),
+                )
+            }
+        if len(previous) != 1 or len(requested) != 1:
+            return None
+        document = previous[0]
+        selector, line_selectors = requested[0]
+        if document.selector != selector:
+            return None
+        mapping = {selector: document.identity}
+        if not document.lines:
+            return mapping | dict.fromkeys(line_selectors, "new")
+        if tuple(line.selector for line in document.lines) != line_selectors:
+            return None
+        if len(line_selectors) == 1:
+            return mapping | {line_selectors[0]: document.lines[0].identity}
+        try:
+            unchanged = all(
+                canonical_json(json_pointer_value(self.result, path))
+                == canonical_json(json_pointer_value(result, path))
+                for path in line_selectors
+            )
+        except KeyError:
+            return None
+        return mapping | {line.selector: line.identity for line in document.lines} if unchanged else None
 
     def document_parts(self) -> tuple[DocumentPart, ...]:
         """Return retained raw carriers without rereading or preparing source bytes."""
@@ -335,7 +409,7 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
                 duration_ms=row.duration_ms,
                 metadata=row.metadata,
             )
-            for row in self.parts.select_related("source").order_by("position")
+            for row in self.parts.order_by("position")
         )
 
     def authority_carrier_positions(self, current: Extraction) -> dict[int, int]:
@@ -344,13 +418,12 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
         Required non-retired claims fail in ``preserve_authority`` when their
         position is absent. Source ordering and acquisition telemetry are not identity.
         """
-        related = ("source__file", "source__message_part")
         positions: dict[tuple[Any, ...], list[int]] = {}
-        for part in current.parts.select_related(*related).order_by("position"):
+        for part in current.parts.order_by("position"):
             positions.setdefault(part.carrier_identity, []).append(part.position)
         return {
             part.position: matches[0]
-            for part in self.parts.select_related(*related).order_by("position")
+            for part in self.parts.order_by("position")
             if len(matches := positions.get(part.carrier_identity, [])) == 1
         }
 
@@ -502,7 +575,6 @@ class ExtractionPage(RetainedEvidence, SqidMixin, AngeeModel):
     height = models.PositiveIntegerField(editable=False)
     dpi = models.PositiveIntegerField(editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
-    result = models.JSONField(editable=False)
     provider_metadata = models.JSONField(default=dict, editable=False)
     carrier_file = models.ForeignKey(
         "storage.File", null=True, blank=True, on_delete=models.PROTECT, related_name="extraction_pages"
@@ -523,7 +595,8 @@ class ExtractionPage(RetainedEvidence, SqidMixin, AngeeModel):
     @property
     def reference(self) -> PageRef:
         """Expose the source/page and its retained raster carrier identities."""
-        return PageRef(self.source.reference, self.source_page, tuple(self.provider_metadata.get("carrier_files", ())))
+        carriers = (str(self.carrier_file.sqid),) if self.carrier_file_id else ()
+        return PageRef(self.source.reference, self.source_page, carriers)
 
 
 class ExtractionPart(RetainedEvidence, SqidMixin, AngeeModel):
@@ -535,15 +608,14 @@ class ExtractionPart(RetainedEvidence, SqidMixin, AngeeModel):
     source = models.ForeignKey("workflows_extraction.ExtractionSource", on_delete=models.PROTECT, related_name="parts")
     position = models.PositiveIntegerField(editable=False)
     source_page = models.PositiveIntegerField(null=True, blank=True, editable=False)
-    mime_type = models.CharField(max_length=128, editable=False)
-    kind = StateField(choices_enum=ExtractionPartKind, editable=False)
+    mime_type = models.CharField(max_length=200, editable=False)
+    kind = models.CharField(max_length=32, choices=ExtractionPartKind, editable=False)
     method = models.CharField(max_length=128, editable=False)
     content_hash = models.CharField(max_length=64, editable=False)
     width = models.PositiveIntegerField(null=True, blank=True, editable=False)
     height = models.PositiveIntegerField(null=True, blank=True, editable=False)
     dpi = models.PositiveIntegerField(null=True, blank=True, editable=False)
     value = models.JSONField(editable=False)
-    claims = models.JSONField(default=dict, editable=False)
     metadata = models.JSONField(default=dict, editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
     objects = EvidenceManager()

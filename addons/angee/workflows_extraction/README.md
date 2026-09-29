@@ -16,15 +16,27 @@ Inference preserves source-grounded facts, correction authority and retained
 carriers. It rechecks source access before provider work; explicit correspondence
 finalizes the held candidate without another inference call.
 
-The current engine has no IO mode or map execution. `# L2` marks the temporary
-DATABASE declaration and pending context hooks; native providers fail closed
-under that declaration. Tests register deterministic providers through the same
-`ImplBase` registry. The shipped map definition awaits L4 installation support.
-Owned-child admission belongs to the engine's later start-run contract.
+Acquisition and inference run as IO steps with fenced heartbeats, declared retry
+policy and retained artifacts. Non-idempotent inference marks its effect before
+calling the provider. Preparation and recognition store carrier contents in
+protected files; step payloads carry references and digests. File access is
+checked again when a later step reads them.
+
+Profiles, schemas, acquisition bounds and model request settings belong to
+author-controlled node config. `ImplBase.parse_config` validates the selected
+profile and backend declarations. Run input supplies record references and
+revision correspondence. The shipped definition defaults to the unconfigured
+profile; an author must select a profile before executing it.
+
+The shipped map definition still awaits L4 installation support. Its temporary
+`collect_carriers` adapter is marked `# L4`; the engine's typed map output will
+replace it. Owned-child admission belongs to the engine's later start-run contract.
 
 Register profiles through `ANGEE_EXTRACTION_PROFILE_CLASSES` and providers through
-`ANGEE_EXTRACTION_PROVIDER_CLASSES`. The manifest owns installation and native
+`ANGEE_EXTRACTION_BACKEND_CLASSES`. The manifest owns installation and native
 parser dependencies. `profiles.authored_profile_config` replaces the deleted
 service helper; historical `Document*` contracts remain aliases to the pure
-contracts. Decision-backed correction writes will compose the new decisions
-owner when it is available; the removed workflow decision API is not retained.
+contracts. Decision-backed corrections compose the typed resolution contract in
+`angee.decisions`; [`ExtractionManager`](managers.py) owns revision and reviewed
+authority validation. [`schema.py`](schema.py) exposes read-only evidence through
+the framework resource owner and actor-scoped relations.

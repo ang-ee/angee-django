@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 from angee.base.impl import ImplBase
+from angee.base.jsonschema import validate
 from angee.workflows_extraction.contracts import DocumentPart, Result, Source
 
 
@@ -14,8 +15,19 @@ class ExtractionProfile(ImplBase):
 
     category = "Extraction"
     label = "Extraction profile"
-    pipeline_version: ClassVar[str] = "page-v1"
     evidence_layout: ClassVar[dict[str, Any]] = {}
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        validate({
+            "type": "object",
+            "properties": {
+                "document_collection": {"type": "string", "format": "json-pointer"},
+                "line_collection": {"type": "string", "format": "json-pointer"},
+                "root_document_on_missing": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        }, cls.evidence_layout)
 
     def detect_carriers(self, source: Source) -> tuple[DocumentPart, ...]:
         """Return format-specific evidence before generic acquisition, without I/O."""
@@ -66,6 +78,5 @@ class UnconfiguredExtractionProfile(ExtractionProfile):
         raise ValueError("Select a document extraction profile.")
 
 
-def authored_profile_config(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Return authored profile policy without retained retry lineage metadata."""
-    return {key: value for key, value in config.items() if key != "retry_of_revision"}
+# Historical import: the obsolete retry-lineage filtering rule has no successor.
+authored_profile_config = dict

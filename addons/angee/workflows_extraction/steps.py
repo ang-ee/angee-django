@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import replace
-from datetime import timedelta
 from typing import Any
 
 from django.apps import apps
@@ -12,24 +10,30 @@ from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field
 
 from angee.base.impl import resolve_impl_class
-from angee.workflows.steps import Done, Step
+from angee.workflows.steps import Done, RetryPolicy, Step
 from angee.workflows_extraction.contracts import (
-    DocumentPart,
     ExtractionPartKind,
-    PageImage,
     PipelineError,
     Result,
 )
-from angee.workflows_extraction.enums import ExtractionRole
+from angee.workflows_extraction.enums import ExtractionRole, ExtractionStatus
 from angee.workflows_extraction.inference import RETAINED_CARRIER_UNAVAILABLE
 from angee.workflows_extraction.managers import StaleExtraction
-from angee.workflows_extraction.providers import ExtractionProvider, PageCarrier, PreparedDocument, RecognitionOutput
+from angee.workflows_extraction.providers import (
+    ExtractionProvider,
+    PageCarrier,
+    PartCarrier,
+    PreparedDocument,
+    RecognitionOutput,
+    _text_part,
+)
 
 
-class ExtractionConfigInput(BaseModel):
-    """Authored deterministic profile and inference settings."""
+class ProfileConfig(BaseModel):
+    """Author-controlled deterministic profile settings."""
 
     model_config = ConfigDict(extra="forbid")
+    profile: str = Field(default="none", min_length=1)
     profile_config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -43,19 +47,10 @@ class ExtractionSourceInput(BaseModel):
     target_id: str
 
 
-class ExtractionPolicyInput(ExtractionConfigInput):
+class ProcessEvidenceConfig(ProfileConfig):
     """Published schema and profile used to interpret retained carriers."""
 
     schema_: dict[str, Any] = Field(alias="schema")
-    profile: str = Field(min_length=1)
-
-
-class PreparePagesInput(ExtractionConfigInput, ExtractionSourceInput):
-    """Source references and the profile selected for one preparation."""
-
-    profile: str = Field(default="none", min_length=1)
-    model: str | None = None
-    recognition_model: str | None = None
 
 
 class PreparePagesOutput(BaseModel):
@@ -70,28 +65,31 @@ class ProviderConfig(BaseModel):
     """Trusted provider implementation selected by the workflow definition."""
 
     model_config = ConfigDict(extra="forbid")
-    provider: str = "native"
+    backend: str = "native"
+    backend_config: dict[str, Any] = Field(default_factory=dict)
 
 
-class _ProviderStep:
-    """One temporary L2 boundary shared by all steps that can perform I/O."""
-
-    mode = "DATABASE"  # L2: set to "IO" when the engine admits IO mode.
-    timeout = timedelta(minutes=5)
-    effect_idempotent = False  # L2: these providers make no deduplication guarantee.
-
-    def provider(self, ctx: Any) -> ExtractionProvider:
-        """Resolve the trusted adapter and fence its external-effect boundary."""
-        provider = resolve_impl_class("ANGEE_EXTRACTION_PROVIDER_CLASSES", ctx.config.provider, ExtractionProvider)()
-        if provider.external_io:
-            if ctx.step.mode != "IO":
-                raise ValidationError("External extraction providers require L2 IO mode.")
-            ctx.begin_effect()  # L2: the engine must fence the effect before any provider call.
-            ctx.heartbeat()  # L2: the IO attempt owns its deadline.
-        return provider
+class PreparePagesConfig(ProviderConfig, ProfileConfig):
+    """Preparation's authored acquisition implementation and profile policy."""
 
 
-class PreparePagesStep(_ProviderStep, Step[PreparePagesInput, PreparePagesOutput, ProviderConfig]):
+class _IOStep(Step[None, None, None]):
+    """Shared execution bounds for storage and inference IO."""
+
+    mode = "IO"
+    retry = RetryPolicy(max_attempts=3)
+
+
+class _ProviderStep(_IOStep):
+    """Resolve the implementation and its authored typed configuration."""
+
+    def provider(self, ctx: Any) -> tuple[ExtractionProvider, Any]:
+        """Parse configuration through the selected implementation's owner."""
+        provider = resolve_impl_class("ANGEE_EXTRACTION_BACKEND_CLASSES", ctx.config.backend, ExtractionProvider)()
+        return provider, provider.parse_config(ctx.config.backend_config)
+
+
+class PreparePagesStep(_ProviderStep, Step[ExtractionSourceInput, PreparePagesOutput, PreparePagesConfig]):
     """Prepare each authorized source once before mapping its raster pages."""
 
     key = "prepare_pages"
@@ -108,16 +106,21 @@ class PreparePagesStep(_ProviderStep, Step[PreparePagesInput, PreparePagesOutput
         ctx.load(apps.get_model(value.target_model), value.target_id)
         files = [ctx.load(apps.get_model("storage.File"), public_id) for public_id in value.files]
         parts = [ctx.load(apps.get_model("messaging.Part"), public_id) for public_id in value.message_parts]
-        profile = apps.get_model("workflows_extraction.Extraction").impl_field("profile").resolve_class(value.profile)()
-        prepared = self.provider(ctx).prepare(
-            files, parts, profile=profile, config=value.profile_config, actor=ctx.actor
+        profile = (
+            apps.get_model("workflows_extraction.Extraction").impl_field("profile").resolve_class(ctx.config.profile)()
+        )
+        profile.parse_config(ctx.config.profile_config)
+        provider, config = self.provider(ctx)
+        prepared = provider.prepare(
+            files, parts, profile=profile, config=config, actor=ctx.actor, heartbeat=ctx.heartbeat,
         )
         return ctx.done(PreparePagesOutput(prepared=prepared, pages=prepared.recognition_pages), outcome="prepared")
 
 
-class RecognizePageInput(ExtractionConfigInput):
+class RecognizePageInput(BaseModel):
     """A prepared raster and the model selected to recognize it."""
 
+    model_config = ConfigDict(extra="forbid")
     page: PageCarrier
     model_id: str | None = None
 
@@ -134,27 +137,25 @@ class RecognizePageStep(_ProviderStep, Step[RecognizePageInput, RecognitionOutpu
         value = ctx.input
         file = ctx.load(apps.get_model("storage.File"), value.page.image_file_id)
         model = _model(ctx, value.model_id, ExtractionRole.RECOGNITION)
-        response = self.provider(ctx).recognize(value.page, file, model, config=value.profile_config)
-        if "\x00" in response.text:
-            raise ValidationError("Recognition text contains null characters.")
-        part = DocumentPart(
+        provider, config = self.provider(ctx)
+        ctx.heartbeat()
+        ctx.begin_effect()
+        response = provider.recognize(value.page, file, model, config=config)
+        part = _text_part(
             value.page.source_position,
             value.page.page_position,
-            "text/plain",
-            ExtractionPartKind.RECOGNIZED_TEXT,
             response.text,
             "text_recognition",
-            hashlib.sha256(response.text.encode()).hexdigest(),
-            value.page.width,
-            value.page.height,
-            value.page.dpi,
-            response.duration_ms,
-            response.provider_metadata,
+            kind=ExtractionPartKind.RECOGNIZED_TEXT,
+            width=value.page.width, height=value.page.height, dpi=value.page.dpi,
+            duration_ms=response.duration_ms, metadata=response.provider_metadata,
         )
-        return ctx.done(RecognitionOutput(page=value.page, part=part), outcome="recognized")
+        ctx.heartbeat()
+        carrier = PartCarrier.retain(part, actor=ctx.actor, drive_id=str(file.drive.sqid))
+        return ctx.done(RecognitionOutput(page=value.page, part=carrier), outcome="recognized")
 
 
-class CollectCarriersInput(BaseModel):
+class CollectCarriersInput(BaseModel):  # L4: replaced by the map's typed output.
     """Preparation plus the map's ordered success and failure records."""
 
     model_config = ConfigDict(extra="forbid")
@@ -162,7 +163,7 @@ class CollectCarriersInput(BaseModel):
     recognition: list[dict[str, Any]]
 
 
-class CollectCarriersOutput(BaseModel):
+class CollectCarriersOutput(BaseModel):  # L4: replaced by the map's typed output.
     """Validated carriers with explicit reasons a source requires review."""
 
     model_config = ConfigDict(extra="forbid")
@@ -171,7 +172,7 @@ class CollectCarriersOutput(BaseModel):
     hold_reasons: list[str]
 
 
-class CollectCarriersStep(Step[CollectCarriersInput, CollectCarriersOutput, None]):
+class CollectCarriersStep(Step[CollectCarriersInput, CollectCarriersOutput, None]):  # L4
     """Validate map completeness without repeating source acquisition."""
 
     key = "collect_carriers"
@@ -188,7 +189,7 @@ class CollectCarriersStep(Step[CollectCarriersInput, CollectCarriersOutput, None
         )
 
 
-class ProcessEvidenceInput(ExtractionPolicyInput, CollectCarriersOutput):
+class ProcessEvidenceInput(CollectCarriersOutput):
     """Validated carriers and policy for an immutable evidence revision."""
 
     target_model: str
@@ -226,7 +227,7 @@ class ProcessEvidenceOutput(ExtractionOutput):
         )
 
 
-class ProcessEvidenceStep(Step[ProcessEvidenceInput, ProcessEvidenceOutput, None]):
+class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOutput, ProcessEvidenceConfig]):
     """Interpret carriers through their profile and retain one immutable revision."""
 
     key = "process_evidence"
@@ -239,10 +240,16 @@ class ProcessEvidenceStep(Step[ProcessEvidenceInput, ProcessEvidenceOutput, None
         model = apps.get_model("workflows_extraction.Extraction")
         target = ctx.load(apps.get_model(value.target_model), value.target_id)
         sources = [source.restore(ctx, i) for i, source in enumerate(value.prepared.sources)]
-        parts, holds = value.prepared.collect(value.recognition)
+        carriers, holds = value.prepared.collect(value.recognition)
         if holds != value.hold_reasons:
             raise ValidationError("The collected source hold changed.")
-        profile = model.impl_field("profile").resolve_class(value.profile)()
+        restored_parts = []
+        for carrier in carriers:
+            ctx.heartbeat()
+            restored_parts.append(carrier.restore(ctx))
+        parts = tuple(restored_parts)
+        profile = model.impl_field("profile").resolve_class(ctx.config.profile)()
+        profile_config = profile.normalize_config(ctx.config.profile_config)
         failure = None
         try:
             result = (
@@ -251,8 +258,8 @@ class ProcessEvidenceStep(Step[ProcessEvidenceInput, ProcessEvidenceOutput, None
                 else profile.process_parts(
                     sources,
                     parts,
-                    value.schema_,
-                    config=value.profile_config,
+                    ctx.config.schema_,
+                    config=profile_config,
                     recognition_used=any(part.kind == ExtractionPartKind.RECOGNIZED_TEXT for part in parts),
                 )
             )
@@ -263,20 +270,15 @@ class ProcessEvidenceStep(Step[ProcessEvidenceInput, ProcessEvidenceOutput, None
             result = replace(
                 result, provider_metadata={**(result.provider_metadata or {}), "unresolved_reasons": holds}
             )
-        pages = [
-            PageImage(page.source_position, page.page_position, "image/jpeg", b"", page.width, page.height, page.dpi)
-            for page in value.prepared.pages
-        ]
         evidence = model.objects.retain_result(
             sources=sources,
-            pages=pages,
-            page_results=[page.result(parts) for page in value.prepared.pages],
+            pages=value.prepared.pages,
             result=result,
             target=target,
             actor=ctx.actor,
-            profile=value.profile,
-            profile_config=value.profile_config,
-            schema=value.schema_,
+            profile=ctx.config.profile,
+            profile_config=profile_config,
+            schema=ctx.config.schema_,
             model=_model(ctx, value.model_id, ExtractionRole.MAPPING),
             recognition_model=_model(ctx, value.recognition_model_id, ExtractionRole.RECOGNITION),
             request_key=ctx.idempotency_key,
@@ -285,10 +287,10 @@ class ProcessEvidenceStep(Step[ProcessEvidenceInput, ProcessEvidenceOutput, None
             identity_mapping=value.identity_mapping,
             retired_identities=value.retired_identities,
         )
-        # L2: ctx.artifact(evidence, "Document extraction evidence") when artifacts exist.
+        ctx.artifact(evidence, "Document extraction evidence")
         return ctx.done(
             ProcessEvidenceOutput.from_extraction(evidence),
-            outcome="processed" if evidence.status == "succeeded" else "source_hold",
+            outcome="processed" if evidence.status == ExtractionStatus.SUCCEEDED else "source_hold",
         )
 
 
@@ -380,9 +382,10 @@ class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOut
             )
         else:
             try:
-                mapped = self.provider(ctx).infer(
-                    parts, base.schema, inference_model, config=base.profile_config.get("mapping_config", {})
-                )
+                provider, config = self.provider(ctx)
+                ctx.heartbeat()
+                ctx.begin_effect()
+                mapped = provider.infer(parts, base.schema, inference_model, config=config)
                 result = profile.normalize_inference_candidate(
                     sources,
                     parts,
@@ -427,9 +430,9 @@ class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOut
                 ),
                 outcome="superseded",
             )
-        # L2: ctx.artifact(evidence, "Inferred extraction evidence") when artifacts exist.
+        ctx.artifact(evidence, "Inferred extraction evidence")
         outcome = "correspondence_required" if evidence.awaiting_correspondence else "inferred"
-        if evidence.status != "succeeded" and not evidence.awaiting_correspondence:
+        if evidence.status != ExtractionStatus.SUCCEEDED and not evidence.awaiting_correspondence:
             outcome = "inference_failed"
         return ctx.done(
             InferEvidenceOutput(

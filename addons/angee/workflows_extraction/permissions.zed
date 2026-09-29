@@ -1,6 +1,6 @@
 // @rebac_package: workflows_extraction
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 2
 
 definition workflows_extraction/extraction {
     relation owner: auth/user // rebac:field=created_by

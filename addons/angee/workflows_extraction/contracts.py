@@ -205,15 +205,6 @@ class PipelineError(RuntimeError):
         self.usage_delta = dict(usage_delta or {})
 
 
-@dataclass(frozen=True, slots=True)
-class PageResult:
-    """One page's validated provider response and non-sensitive metrics."""
-
-    value: dict[str, Any]
-    duration_ms: int = 0
-    provider_metadata: dict[str, Any] | None = None
-
-
 # Historical consumer imports name the same contracts, not parallel types.
 DocumentSource = Source
 DocumentResult = Result

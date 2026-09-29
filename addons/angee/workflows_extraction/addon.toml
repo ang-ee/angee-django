@@ -3,8 +3,8 @@ name = "angee.workflows_extraction"
 description = "Immutable document evidence and extraction workflow steps"
 keywords = ["workflows", "extraction", "documents", "evidence"]
 category = "Workflows"
-depends_on = ["angee.workflows", "angee.agents", "angee.storage", "angee.messaging", "django.contrib.contenttypes"]
-dependencies = ["jsonpointer>=3.1", "jsonschema[format-nongpl]>=4.26", "pypdfium2>=4.30", "pillow>=11.0"]
+depends_on = ["angee.workflows", "angee.decisions", "angee.agents", "angee.storage", "angee.messaging", "django.contrib.contenttypes"]
+dependencies = ["jsonpointer>=3.1", "pypdfium2>=4.30", "pillow>=11.0"]
 
 [resources]
-install = [{ path = "resources/install/100_workflows.workflow.yaml", publish = true }]
+install = ["resources/install/100_workflows.workflow.yaml"]

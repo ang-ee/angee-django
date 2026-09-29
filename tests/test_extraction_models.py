@@ -6,11 +6,13 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from threading import Barrier
+from traceback import format_exception
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import close_old_connections, connection, connections
+from django.test import override_settings
 from rebac import actor_context, system_context
 
 from angee.workflows_extraction.contracts import (
@@ -18,11 +20,10 @@ from angee.workflows_extraction.contracts import (
     DocumentResult,
     DocumentSource,
     ExtractionPartKind,
-    PageImage,
-    PageResult,
 )
 from angee.workflows_extraction.managers import StaleExtraction
 from angee.workflows_extraction.profiles import ExtractionProfile
+from angee.workflows_extraction.providers import PageCarrier
 from tests.conftest import Drive, File, create_platform_admin
 from tests.extraction_models import Extraction, ExtractionLineage, ExtractionPage, ExtractionPart, ExtractionSource
 from tests.test_storage import drive as drive
@@ -60,30 +61,44 @@ SCHEMA = {
 
 
 @pytest.fixture
-def evidence(drive, settings):
+def evidence(drive):
     """Retain real storage-backed evidence with a registry-selected profile."""
 
-    settings.ANGEE_EXTRACTION_PROFILE_CLASSES = {
-        **settings.ANGEE_EXTRACTION_PROFILE_CLASSES,
-        NotesProfile.key: "tests.test_extraction_models.NotesProfile",
-    }
     content = b"Note\nFirst line\nSecond line"
     with actor_context(drive.alice):
         source = File.objects.ingest_bytes(content, filename="note.txt", drive_id=str(drive.sqid))
     document_source = DocumentSource(0, source.content_hash, "text/plain", content, file=source)
     part = DocumentPart(
-        0, 0, "text/plain", ExtractionPartKind.NATIVE_TEXT, content.decode(), "native", source.content_hash,
+        0,
+        0,
+        "text/plain",
+        ExtractionPartKind.NATIVE_TEXT,
+        content.decode(),
+        "native",
+        source.content_hash,
     )
     result = DocumentResult(
-        value={"documents": [{
-            "title": "Note", "optional": None, "lines": [{"text": "First line"}, {"text": "Second line"}],
-        }]},
+        value={
+            "documents": [
+                {
+                    "title": "Note",
+                    "optional": None,
+                    "lines": [{"text": "First line"}, {"text": "Second line"}],
+                }
+            ]
+        },
         parts=(part,),
         claims={"/documents/0/title": [{"part_position": 0, "start": 0, "end": 4}]},
     )
     defaults = {
-        "sources": (document_source,), "result": result, "target": source, "actor": drive.alice,
-        "profile": NotesProfile.key, "profile_config": {}, "schema": SCHEMA, "request_key": "first",
+        "sources": (document_source,),
+        "result": result,
+        "target": source,
+        "actor": drive.alice,
+        "profile": NotesProfile.key,
+        "profile_config": {},
+        "schema": SCHEMA,
+        "request_key": "first",
     }
 
     def retain(**changes):
@@ -97,9 +112,8 @@ def evidence(drive, settings):
 
 def test_retention_preserves_sources_parts_pages_and_typed_missing_values(evidence):
     retain, values = evidence
-    image = PageImage(0, 0, "image/png", b"retained raster", 40, 60, 100)
-    page = PageResult({"text": "Note"}, duration_ms=12)
-    row = retain(pages=(image,), page_results=(page,))
+    image = PageCarrier(source_position=0, page_position=0, width=40, height=60, dpi=100)
+    row = retain(pages=(image,))
 
     assert row.revision == 1
     assert row.sources.count() == row.parts.count() == row.pages.count() == 1
@@ -159,15 +173,26 @@ def test_source_order_does_not_fork_the_target_lineage(evidence):
     assert list(second.sources.values_list("file_id", flat=True)) == [other.pk, original.file.pk]
 
 
-@pytest.mark.parametrize("invalid", [
-    "schema", "source_position", "claim_position", "claim_shape", "claim_span", "source_digest",
-    "unknown_role", "unconfigured_role", "nonfinite_metadata", "page_source",
-])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "schema",
+        "source_position",
+        "claim_position",
+        "claim_shape",
+        "claim_span",
+        "source_digest",
+        "unknown_role",
+        "unconfigured_role",
+        "nonfinite_metadata",
+        "page_source",
+    ],
+)
 def test_invalid_candidate_rolls_back_the_whole_evidence_family(evidence, invalid):
     retain, values = evidence
     result = values["result"]
     sources = values["sources"]
-    pages = page_results = ()
+    pages = ()
     if invalid == "schema":
         result = replace(result, value={"documents": [{"title": 3, "lines": []}]})
     elif invalid == "source_position":
@@ -187,10 +212,9 @@ def test_invalid_candidate_rolls_back_the_whole_evidence_family(evidence, invali
     elif invalid == "nonfinite_metadata":
         result = replace(result, provider_metadata={"duration": float("nan")})
     else:
-        pages = (PageImage(99, 0, "image/png", b"raster", 40, 60, 100),)
-        page_results = (PageResult({"text": "Note"}),)
+        pages = (PageCarrier(source_position=99, page_position=0, width=40, height=60, dpi=100),)
     with pytest.raises(ValidationError):
-        retain(result=result, sources=sources, pages=pages, page_results=page_results)
+        retain(result=result, sources=sources, pages=pages)
     for model in (Extraction, ExtractionLineage, ExtractionSource, ExtractionPage, ExtractionPart):
         assert model.objects.count() == 0
 
@@ -230,7 +254,9 @@ def test_explicit_correspondence_preserves_reordered_lines_and_records_retiremen
     changed = deepcopy(values["result"].value)
     changed["documents"][0]["lines"] = [{"text": "Second line"}, {"text": "New line"}]
     next_row = retain(
-        base=first, request_key="correspondence", result=replace(values["result"], value=changed),
+        base=first,
+        request_key="correspondence",
+        result=replace(values["result"], value=changed),
         identity_mapping={
             "/documents/0": reference.identity,
             "/documents/0/lines/0": reference.lines[1].identity,
@@ -242,9 +268,13 @@ def test_explicit_correspondence_preserves_reordered_lines_and_records_retiremen
     assert next_ref.identity == reference.identity
     assert next_ref.lines[0].identity == reference.lines[1].identity
     assert next_ref.lines[1].identity not in {item.identity for item in reference.lines}
-    assert next_row.retired_identities == [{
-        "identity": reference.lines[0].identity, "kind": "line", "reason": "Removed from the revised evidence",
-    }]
+    assert next_row.retired_identities == [
+        {
+            "identity": reference.lines[0].identity,
+            "kind": "line",
+            "reason": "Removed from the revised evidence",
+        }
+    ]
 
 
 def test_unknown_correspondence_cannot_create_arbitrary_identities(evidence):
@@ -253,7 +283,9 @@ def test_unknown_correspondence_cannot_create_arbitrary_identities(evidence):
     reference = first.document_refs[0]
     with pytest.raises(ValidationError):
         retain(
-            base=first, request_key="invalid-correspondence", result=values["result"],
+            base=first,
+            request_key="invalid-correspondence",
+            result=values["result"],
             identity_mapping={
                 "/documents/0": reference.identity,
                 "/documents/0/lines/0": "invented",
@@ -266,13 +298,15 @@ def test_unknown_correspondence_cannot_create_arbitrary_identities(evidence):
 def test_retained_rows_reject_instance_and_collection_mutation(evidence):
     retain, _values = evidence
     extraction = retain(
-        pages=(PageImage(0, 0, "image/png", b"raster", 40, 60, 100),),
-        page_results=(PageResult({"text": "Note"}),),
+        pages=(PageCarrier(source_position=0, page_position=0, width=40, height=60, dpi=100),),
     )
     with system_context(reason="tests.extraction immutable evidence"):
         rows = (
-            extraction, ExtractionLineage.objects.get(pk=extraction.lineage_key),
-            extraction.sources.get(), extraction.pages.get(), extraction.parts.get(),
+            extraction,
+            ExtractionLineage.objects.get(pk=extraction.lineage_key),
+            extraction.sources.get(),
+            extraction.pages.get(),
+            extraction.parts.get(),
         )
         for row in rows:
             with pytest.raises((ValidationError, ValueError)):
@@ -293,11 +327,18 @@ def test_retention_requires_independent_source_and_target_read_access(evidence, 
     outsider = get_user_model().objects.create_user(username="evidence-outsider")
     with actor_context(outsider), system_context(reason="tests.extraction separate source and target"):
         other_drive = Drive.objects.create(
-            backend=values["target"].drive.backend, slug="private", name="Private", prefix="private",
-            created_by=outsider, updated_by=outsider,
+            backend=values["target"].drive.backend,
+            slug="private",
+            name="Private",
+            prefix="private",
+            created_by=outsider,
+            updated_by=outsider,
         )
         other = File.objects.ingest_bytes(
-            b"Other evidence", filename="other.txt", drive_id=str(other_drive.sqid), owner_id=outsider.pk,
+            b"Other evidence",
+            filename="other.txt",
+            drive_id=str(other_drive.sqid),
+            owner_id=outsider.pk,
         )
     if protected == "source":
         changes = {"sources": (replace(values["sources"][0], file=other),)}
@@ -318,3 +359,40 @@ def test_target_reader_inherits_evidence_access_without_receiving_ownership(evid
     for evidence_row in (row, row.sources.get(), row.parts.get()):
         assert evidence_row.with_actor(owner).has_access("read")
         assert not evidence_row.with_actor(outsider).has_access("read")
+
+
+@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
+def test_actor_scoped_carrier_reads_and_base_copy_do_not_join_guarded_sources(evidence):
+    retain, values = evidence
+    first = retain(pages=(PageCarrier(source_position=0, page_position=0, width=40, height=60, dpi=100),))
+    scoped = Extraction.objects.with_actor(values["actor"]).get(pk=first.pk)
+    assert scoped.document_parts()[0].value == values["result"].parts[0].value
+    second = retain(base=scoped, request_key="scoped-copy")
+    assert scoped.authority_carrier_positions(second) == {0: 0}
+    assert second.pages.get().source_page == 0
+
+
+def test_schema_error_does_not_disclose_rejected_document_values(evidence):
+    retain, values = evidence
+    value = deepcopy(values["result"].value)
+    value["documents"][0]["title"] = {"private": "rejected document content"}
+    with pytest.raises(ValidationError) as raised:
+        retain(result=replace(values["result"], value=value))
+    assert "rejected document content" not in "".join(format_exception(raised.value))
+
+
+def test_missing_claim_path_does_not_disclose_document_values_in_tracebacks(evidence):
+    retain, values = evidence
+    result = replace(values["result"], value={"documents": [], "private": "protected source content"},
+                     claims={"/absent": [{"part_position": 0, "start": 0, "end": 4}]})
+    with pytest.raises(ValidationError) as raised:
+        retain(result=result)
+    assert "protected source content" not in "".join(format_exception(raised.value))
+
+
+def test_nul_in_retained_part_is_rejected_by_the_retention_owner(evidence):
+    retain, values = evidence
+    part = replace(values["result"].parts[0], value="Rejected\x00text")
+    with pytest.raises(ValidationError, match="null characters"):
+        retain(result=replace(values["result"], parts=(part,)))
+    assert Extraction.objects.count() == 0
