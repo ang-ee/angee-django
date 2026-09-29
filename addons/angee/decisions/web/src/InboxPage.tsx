@@ -1,13 +1,12 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import {
-  Column, List, LoadingPanel, ResourceList, Select,
+  Column, List, LoadingPanel, RecordReference, ResourceList, Select,
   routeSearchParam, updateRouteSearch,
   useRouteHref, useRouteSearch, useRuntimeAuth, type StringIdRow,
 } from "@angee/ui";
 
 import { useDecisionsT } from "./i18n";
-import { DecisionSubject } from "./DecisionSubject";
 
 const MODEL = "decisions.Decision";
 
@@ -64,7 +63,7 @@ export function InboxPage(): ReactElement {
         <Column field="record_public_id" header={t("inbox.subject")} render={(row) => {
           const id = row.record_public_id;
           if (typeof id !== "string") return null;
-          return typeof row.record_model_label === "string" ? <DecisionSubject model={row.record_model_label} id={id} /> : id;
+          return typeof row.record_model_label === "string" ? <RecordReference model={row.record_model_label} id={id} /> : id;
         }} />
         <Column field="requester.display_name" header={t("inbox.requester")} />
         <Column field="expires_at" header={t("inbox.expiresAt")} />

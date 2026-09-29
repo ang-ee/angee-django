@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import * as v from "valibot";
-import { Badge, Button, ErrorBanner, JsonValueSchema, JsonValueView, LazyBoundary, useRecordPeek, type RecordPeekOpen } from "@angee/ui";
+import { Badge, ErrorBanner, JsonValueSchema, JsonValueView, LazyBoundary, RecordReference, useRecordPeek, type RecordPeekOpen } from "@angee/ui";
 
 import { useDecisionsT } from "./i18n";
 
@@ -43,7 +43,7 @@ export function DecisionContext({ context }: { context: unknown }): ReactElement
         <dt className="flex items-center gap-2 font-medium">{fact.label}<Badge>{authorityLabels[fact.authority]}</Badge></dt>
         <dd className="space-y-2">
           <LazyBoundary pending={null}><JsonValueView value={fact.value} /></LazyBoundary>
-          {fact.subject ? <div><span>{t("context.subject")}: </span><ReferenceButton reference={fact.subject} openRecord={openRecord} /></div> : null}
+          {fact.subject ? <div><span>{t("context.subject")}: </span><RecordReference {...fact.subject} label={fact.subject.label || fact.subject.id} onOpen={() => fact.subject && openRecord(fact.subject)} /></div> : null}
           <References heading="h3" title={t("context.evidence")} references={fact.evidence} openRecord={openRecord} />
         </dd>
       </div>)}</dl>
@@ -59,11 +59,7 @@ function References({ title, references, openRecord, heading: Heading = "h2" }: 
   return <section aria-label={title} className="space-y-1">
     <Heading className="text-sm font-medium">{title}</Heading>
     <ul className="flex flex-wrap gap-2">{references.map((reference, index) =>
-      <li key={`${reference.model}:${reference.id}:${index}`}><ReferenceButton reference={reference} openRecord={openRecord} /></li>,
+      <li key={`${reference.model}:${reference.id}:${index}`}><RecordReference {...reference} label={reference.label || reference.id} onOpen={() => openRecord(reference)} /></li>,
     )}</ul>
   </section>;
-}
-
-function ReferenceButton({ reference, openRecord }: { reference: Reference; openRecord: RecordPeekOpen }): ReactElement {
-  return <Button type="button" size="sm" variant="ghost" onClick={() => openRecord(reference)}>{reference.label || reference.id}</Button>;
 }

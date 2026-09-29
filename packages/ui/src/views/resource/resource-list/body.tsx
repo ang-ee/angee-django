@@ -258,6 +258,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       resource={resource}
       columns={resolvedColumns}
       {...listRenderProps}
+      scope="inherit"
       calendar={listCalendar}
       onCreate={
         hasRecordSurface && !hideCreate && handleSelectRecord

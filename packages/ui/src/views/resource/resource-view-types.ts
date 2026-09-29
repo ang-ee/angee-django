@@ -129,6 +129,10 @@ export interface ListViewProps<TRow extends Row = Row> {
   renderGroupLabel?: (group: GroupLabelContext) => ReactNode;
   /** Columns rendered by the list. */
   columns: readonly ColumnDescriptor<TRow>[];
+  /** Render flat ordered-list items instead of table rows. The collection retains
+   * filtering and paging; the item owns its links/actions. Grouping, other view
+   * kinds and row selection are unavailable in this presentation. */
+  renderItem?: (row: TRow) => ReactNode;
   /** Extra resource fields selected in addition to the declared columns. */
   fields?: readonly string[];
   /** Base resource filter applied before user-owned view filters. */

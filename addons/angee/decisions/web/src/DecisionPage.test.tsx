@@ -2,9 +2,11 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { useFormContext } from "react-hook-form";
+import type { GetOneParams } from "@refinedev/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { defaultWidgets, Input, ToastProvider, type SlotContribution, type WidgetMap, type WidgetRenderProps } from "@angee/ui";
+import { createRouteHref } from "@angee/ui/runtime";
 import { createUiTestProviders } from "@angee/ui/testing";
 import type { ActionOutcome } from "@angee/refine";
 
@@ -17,7 +19,7 @@ const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://decision-review",
   resources: [decisionResourceFixture, decisionSubjectFixture],
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
-  dataProvider: { getOne: async ({ id }) => ({ data: { id, display_name: "Review note" } }) },
+  dataProvider: { getOne: async ({ id }: Partial<GetOneParams>) => ({ data: { id, display_name: "Review note" } }) },
 });
 
 const mocks = vi.hoisted(() => ({
@@ -48,7 +50,10 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearClients(); vi.clearAllMocks(); });
 
 function renderReview(decision = decisionFixture(), reload = vi.fn().mockResolvedValue(decision), widgets: WidgetMap = defaultWidgets, slots: readonly SlotContribution[] = []) {
-  return { reload, ...render(<Provider><ShellPageTestProviders runtime={{ widgets, slots }}><ToastProvider>
+  return { reload, ...render(<Provider><ShellPageTestProviders runtime={{ widgets, slots,
+    routeHref: createRouteHref([{ name: "notes.record", path: "/notes/$id" }]),
+    routesByResource: { "notes.Note": { collection: "notes", record: { name: "notes.record", param: "id" } } },
+  }}><ToastProvider>
     <DecisionReview decision={decision} reload={reload} />
   </ToastProvider></ShellPageTestProviders></Provider>) };
 }
@@ -82,7 +87,7 @@ describe("decision review", () => {
     expect(screen.getByText("R-7")).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Reference" })).toBeNull();
     expect(screen.queryByRole("textbox", { name: /Reason/ })).toBeNull();
-    expect(await screen.findByRole("link", { name: "Review note" })).toBeTruthy();
+    expect((await screen.findByRole("link", { name: "Review note" })).getAttribute("href")).toBe("/notes/nte_7");
     fireEvent.click(screen.getByRole("button", { name: "Decide" }));
     await waitFor(() => expect(mocks.decide).toHaveBeenCalledWith("dcn_review", {
       revision: 3, action: "accept", values: { note: "Read", reference: "R-7" },

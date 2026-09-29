@@ -145,6 +145,7 @@ export {
 } from "./form/field-descriptor-control";
 export {
   useEnumOptions,
+  useEnumValueLabel,
   useImplCategory,
   useImplConfigFields,
   useImplChoices,
@@ -185,6 +186,7 @@ export {
   RelationFieldWidget,
   type RelationFieldWidgetProps,
 } from "./relation/RelationFieldWidget";
+export { RecordReference, type RecordReferenceProps } from "./relation/RecordReference";
 export {
   CollectionTreeView,
   type CollectionTreeViewProps,

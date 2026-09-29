@@ -1,18 +1,15 @@
 import { useMemo, useRef, type ReactElement } from "react";
 import { useWatch } from "react-hook-form";
 import { useAuthoredQuery } from "@angee/refine";
-import { useModelMetadata } from "@angee/metadata";
-import { enumValueLabel } from "@angee/ui/views/resource-view-list-body";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   actionOutcomeSubmitResult, ActionFormProvider, Button, DescriptorFieldList, EmptyState, ErrorBanner,
   formatDateTime, LoadingPanel, MetaGrid, MetaSection,
-  Page, PageBody, parseFormSpecPayload, RecordChrome, RecordHeader, TextLink,
-  useActionForm, useActionOutcomeMutation, useAppRuntime, useRouteHref, useRouteParam, useUiT,
+  Page, PageBody, parseFormSpecPayload, RecordChrome, RecordHeader, RecordReference, TextLink,
+  useActionForm, useActionOutcomeMutation, useAppRuntime, useEnumValueLabel, useRouteHref, useRouteParam, useUiT,
 } from "@angee/ui";
 
 import { DecisionContext } from "./DecisionContext";
-import { DecisionSubject } from "./DecisionSubject";
 import { decisionForm, type DecisionValues } from "./decision-form";
 import { DECISION_MODEL, DECISION_MODELS, DecisionDocument, DecisionSeatsDocument, type Decision } from "./documents.console";
 import { useDecisionsT } from "./i18n";
@@ -50,7 +47,7 @@ function DecisionReviewForm({ decision, reload, definition }: {
   decision: Decision; reload: () => Promise<Decision | null>; definition: ReturnType<typeof decisionForm>;
 }): ReactElement {
   const t = useDecisionsT();
-  const label = useDecisionLabel();
+  const label = useEnumValueLabel(DECISION_MODEL);
   const revision = useRef(decision.revision);
   const [decide] = useActionOutcomeMutation<ActionFieldName>("decide", { dataProviderName: "console", invalidateModels: DECISION_MODELS });
   const actionForm = useActionForm<DecisionValues>({
@@ -90,7 +87,7 @@ function DecisionReviewForm({ decision, reload, definition }: {
         <PageBody className="space-y-6">
           <MetaGrid rows={[
             [t("decision.requester"), decision.requester?.display_name],
-            [t("decision.subject"), <DecisionSubject model={decision.record_model_label} id={decision.record_public_id} />],
+            [t("decision.subject"), <RecordReference model={decision.record_model_label} id={decision.record_public_id} />],
             [t("decision.expiry"), formatDateTime(decision.expires_at) || null],
           ]} />
           <DecisionOriginOutlet />
@@ -122,7 +119,7 @@ function DecisionReviewForm({ decision, reload, definition }: {
 function DecisionSeats({ decision }: { decision: Decision }): ReactElement {
   const t = useDecisionsT();
   const href = useRouteHref();
-  const label = useDecisionLabel();
+  const label = useEnumValueLabel(DECISION_MODEL);
   const query = useAuthoredQuery(DecisionSeatsDocument, { group: decision.group.id }, { models: DECISION_MODELS });
   const seats = query.data?.decisions.filter((seat) => seat.id !== decision.id) ?? [];
   return <MetaSection title={t("decision.seats")}>
@@ -134,10 +131,4 @@ function DecisionSeats({ decision }: { decision: Decision }): ReactElement {
         {seat.closed_reason ? <> · {label("closed_reason", seat.closed_reason)}</> : null}
       </li>)}</ul> : <p>{t("decision.noSeats")}</p>}
   </MetaSection>;
-}
-
-function useDecisionLabel() {
-  const metadata = useModelMetadata(DECISION_MODEL);
-  return (field: string, value: string | null) => value
-    ? enumValueLabel(metadata?.fields[field]?.values?.find((entry) => entry.value === value) ?? { value }) : "";
 }

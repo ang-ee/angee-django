@@ -1,0 +1,18 @@
+export const enCatalogueMessages = {
+  "catalogue.title": "Workflows",
+  "catalogue.empty": "No workflows in this view.",
+  "catalogue.key": "Key",
+  "catalogue.name": "Name",
+  "catalogue.subjectModel": "Subject model",
+  "catalogue.publishedVersion": "Published version",
+  "catalogue.error": "Could not load this workflow.",
+  "catalogue.notFound": "This workflow was not found or is not readable.",
+  "catalogue.reload": "Reload",
+  "catalogue.versions": "Versions",
+  "catalogue.version": "Version",
+  "catalogue.noVersions": "No visible versions.",
+  "catalogue.created": "Created",
+  "catalogue.publishedBy": "Published by",
+  "catalogue.contentHash": "Content hash",
+  "catalogue.recentRuns": "Recent runs",
+};
