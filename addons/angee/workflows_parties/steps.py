@@ -418,7 +418,6 @@ class IdentityReviewStepImpl(GateStep):
                         "tab": "identity",
                     }
                 ],
-                "record_access": [{"model": party._meta.label, "id": str(party.sqid)}],
             },
         )
 

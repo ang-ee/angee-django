@@ -80,12 +80,6 @@ class MessageAdmissionTests(TransactionTestCase):
         self.assertEqual(self.Run._base_manager.count(), 1)
         self.assertEqual(self.Run._base_manager.get().subject_object_id, messages[0].pk)
 
-    def test_source_thread_opts_into_exact_pending_decision_read(self):
-        self.assertEqual(
-            self.Thread.get_rebac_grantable().get("pending_decision"),
-            "write",
-        )
-
     def test_invalid_trigger_is_disabled_without_rolling_back_the_message(self):
         # Historical rows can predate validation or come from a stale operator write.
         models.QuerySet.update(

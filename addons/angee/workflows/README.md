@@ -182,7 +182,7 @@ native contract. `DATABASE_COMMAND` no longer implies replay eligibility.
 `GateStep` is the only workflow review gate. Its static and bound forms share
 the same `GateConfig`: `one_done`, `all_success`, `all_done`, `majority`, and
 `sequential` policies; static or input-bound slots; input-bound `payload`,
-`decision_schema`, `targets`, `record_access`, and `clean`; and optional
+`decision_schema`, `targets`, and `clean`; and optional
 same-step resumption. A true `clean` value returns the
 canonical empty `DecisionGateOutput` on `completed` without creating Decisions.
 `resume: true` retains caller state, wakes the same `StepRun` after settlement,
@@ -198,6 +198,15 @@ values. The builder owns the closed
 tagged `oneOf`, action metadata, and read-only context schema. The Decision
 manager remains the sole compiler when it admits the suspension; consumers do
 not compile or hand-author action branches.
+
+Reviewers read evidence through ordinary REBAC relations; a Decision never
+grants temporary access. `decision_evidence_refs(schema, payload)` returns the
+records a review context declares: `references` plus every fact `subject` and
+`evidence` (the navigation target is not evidence). Admission rejects a
+Decision with `decision_evidence_unreadable` unless the admitted run actor and
+every assignee and escalation subject can already read each of those records.
+Grant reviewers standing read on the evidence owner or its container, for
+example a folder `viewer` or an integration `reader`.
 
 Static YAML gates declare fixed `actions` and optional editable `properties`.
 The normalized definition retains only those authoring declarations;
@@ -280,7 +289,6 @@ The exact resource shape for a bound gate and apply pair is:
       payload: {kind: workflow_input, path: [payload]}
       decision_schema: {kind: workflow_input, path: [decision_schema]}
       targets: {kind: workflow_input, path: [targets]}
-      record_access: {kind: workflow_input, path: [record_access]}
       clean: {kind: workflow_input, path: [clean]}
     join_rule: all_success
     is_entry: false

@@ -5,15 +5,12 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable
 from datetime import timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.core.management import call_command
 from django.db import connection
 from django.db.models.deletion import ProtectedError
 from django.test import RequestFactory
@@ -29,9 +26,7 @@ from rebac import (
 from rebac.models import active_relationship_model
 
 from angee.base.identity import public_subject_ref
-from angee.compose.permissions import apply_schema_paths, extension_source_map
 from angee.dashboards.models import validate_dashboard_queries
-from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import decision_actions, engine
 from angee.workflows import models as workflow_models
@@ -53,7 +48,6 @@ from angee.workflows.decision_actions import (
     retained_decision_form_schema,
 )
 from angee.workflows.dispatch import WorkflowDispatchKind
-from angee.workflows.managers import _retained_record_access_refs
 from angee.workflows.steps import (
     DecisionApplyStep,
     DecisionSpec,
@@ -221,7 +215,6 @@ def test_gate_resolves_bound_dynamic_slots_context_and_clean_predicate() -> None
                 "id": "party-1",
             }
         ],
-        "record_access": [{"model": "parties.Party", "id": "party-1"}],
         "clean": False,
     }
 
@@ -241,7 +234,6 @@ def test_gate_resolves_bound_dynamic_slots_context_and_clean_predicate() -> None
                 "payload": binding("payload"),
                 "decision_schema": binding("decision_schema"),
                 "targets": binding("targets"),
-                "record_access": binding("record_access"),
                 "clean": binding("clean"),
             }
         ),
@@ -253,7 +245,6 @@ def test_gate_resolves_bound_dynamic_slots_context_and_clean_predicate() -> None
     assert result.resume_state == {"gate": {"policy": "all_done"}}
     assert [decision.priority for decision in result.decisions] == [0, 1]
     assert result.decisions[0].payload == {"batch": "batch-1"}
-    assert result.decisions[0].record_access[0].id == "party-1"
 
     admitted.clear()
     admitted["clean"] = True
@@ -264,14 +255,14 @@ def test_gate_resolves_bound_dynamic_slots_context_and_clean_predicate() -> None
 
 @pytest.mark.parametrize("clean", (False, True))
 def test_producer_gate_binding_round_trips_into_native_gate(
-    workflow_gate_record_access_tables: None,
+    composed_tables: None,
     no_workflow_queue: None,
     monkeypatch: pytest.MonkeyPatch,
     clean: bool,
 ) -> None:
-    """A declared producer output retains all six values through native gate admission."""
+    """A declared producer output retains all five values through native gate admission."""
 
-    del workflow_gate_record_access_tables, no_workflow_queue
+    del composed_tables, no_workflow_queue
     actor = _platform_admin("wdc-binding-admin")
     assignee = User.objects.create_user(username="wdc-binding-reviewer")
     with system_context(reason="test gate binding review record"):
@@ -291,7 +282,6 @@ def test_producer_gate_binding_round_trips_into_native_gate(
                 "payload": authored.payload,
                 "decision_schema": authored.decision_schema,
                 "targets": [{**record, "tab": "details"}],
-                "record_access": [record],
                 "clean": False,
             }
         )
@@ -316,7 +306,7 @@ def test_producer_gate_binding_round_trips_into_native_gate(
                     "action": "review-binding",
                     **{
                         name: {"kind": "workflow_input", "path": [name]}
-                        for name in ("slots", "payload", "decision_schema", "targets", "record_access", "clean")
+                        for name in ("slots", "payload", "decision_schema", "targets", "clean")
                     },
                 },
             },
@@ -353,7 +343,6 @@ def test_producer_gate_binding_round_trips_into_native_gate(
         record["id"],
         "details",
     )
-    assert retained["record_access"] == [record]
 
 
 @pytest.mark.parametrize("slot_schema", [False, True])
@@ -1071,23 +1060,6 @@ def test_predecessor_lookup_recovers_the_exact_transitive_gate_source(
     assert (recovered.step_id, recovered.map_index) == (source_step.step_id, source_step.map_index)
 
 
-@pytest.fixture()
-def workflow_gate_record_access_tables(
-    transactional_db: Any,
-    tmp_path: Path,
-) -> None:
-    """Compose the native pending-Decision Party owner before the fixture's sole sync."""
-
-    del transactional_db
-    app_configs = list(apps.get_app_configs())
-    runtime_dir = tmp_path / "permissions"
-    source_map = extension_source_map(app_configs)
-    for relpath, text in source_map.items():
-        write_atomic(runtime_dir / relpath, text)
-    apply_schema_paths(app_configs, runtime_dir, sources=source_map)
-    call_command("rebac", "sync", verbosity=0)
-
-
 def _action_schema(
     *,
     properties: dict[str, Any] | None = None,
@@ -1491,15 +1463,6 @@ def test_settled_retained_decision_output_feeds_downstream_binding(
     assert consumer.current_attempt.input_provenance["settled_decision_ids"] == [
         decision.pk,
     ]
-
-
-def test_retained_decision_record_access_rejects_duplicate_refs() -> None:
-    retained = {
-        "resource_type": "storage/file",
-        "resource_id": "1",
-    }
-    with pytest.raises(ValidationError, match="must be unique"):
-        _retained_record_access_refs(SimpleNamespace(record_access=[retained, dict(retained)]))
 
 
 def test_force_expiry_wakes_retained_decision_continuation(
