@@ -6,8 +6,8 @@ import { createRouteHref, defaultWidgets, JsonValueSchema } from "@angee/ui";
 import { TriggerCondition } from "./TriggerCondition";
 import { TriggersList } from "./TriggersPage";
 import { TRIGGER_MODEL } from "./triggers";
-import { triggerEventFixture, triggerEventResourceFixture, triggerFixture, triggerResourceFixture } from "./trigger-testing";
-import { runResourceFixture, runSubjectFixture, userResourceFixture, workflowResourceFixture } from "./testing";
+import { triggerEventFixture, triggerEventResourceFixture, triggerFixture, triggerMessageResourceFixture, triggerNoteResourceFixture, triggerResourceFixture } from "./trigger-testing";
+import { runResourceFixture, userResourceFixture, workflowResourceFixture } from "./testing";
 
 export default { title: "Workflows/Triggers", parameters: { layout: "fullscreen" }, excludeStories: ["TriggerStory"] };
 export const Trigger = { render: () => <TriggerStory /> };
@@ -45,7 +45,7 @@ export function TriggerStory({ embedded = false, canEdit = true, onRequest }: { 
       const request = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       onRequest?.(request);
       const { query } = request;
-      if (query.includes("impl_choices")) return jsonResponse({ data: { impl_choices: ["record_changed", "custom_changed"].map((key) => ({ key, label: key, defaults: { source_model: "" }, config_schema: null })) } });
+      if (query.includes("impl_choices")) return jsonResponse({ data: { impl_choices: ["record_changed", "custom_changed", "message_ingested"].map((key) => ({ key, label: key, defaults: { source_model: key === "message_ingested" ? "messaging.Message" : "" }, config_schema: null })) } });
       const action = ["enable_workflow_trigger", "disable_workflow_trigger"].find((name) => query.includes(name + "("));
       if (action) {
         current = { ...current, enabled: action === "enable_workflow_trigger" };
@@ -61,7 +61,7 @@ export function TriggerStory({ embedded = false, canEdit = true, onRequest }: { 
       return jsonResponse({ data: { trigger: [current], trigger_aggregate: { aggregate: { count: 1 } } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
-      triggerResourceFixture, triggerEventResourceFixture, workflowResourceFixture, runResourceFixture, userResourceFixture, runSubjectFixture,
+      triggerResourceFixture, triggerEventResourceFixture, workflowResourceFixture, runResourceFixture, userResourceFixture, triggerNoteResourceFixture, triggerMessageResourceFixture,
     ] } } } };
   }, [canEdit, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/triggers"

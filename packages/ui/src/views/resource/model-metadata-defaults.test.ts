@@ -86,6 +86,15 @@ const STATUS_OPTIONS = [
 ];
 
 describe("resource metadata defaults", () => {
+  test("an inherited select widget receives the same metadata choices as a declared select", () => {
+    const metadata = canonicalModel({ status: { ...NOTE_METADATA.fields.status!, widget: "select" } }, NOTE_METADATA.resource!);
+    const [inherited, declared] = columnsWithMetadataDefaults<Row>([
+      { field: "status" }, { field: "status", widget: "select" },
+    ], metadata);
+    expect(inherited).toEqual(declared);
+    expect(inherited?.options).toEqual(STATUS_OPTIONS);
+  });
+
   const columns: readonly ColumnDescriptor<Row>[] = [
     { field: "title" },
     { field: "status", widget: "statusBadge" },

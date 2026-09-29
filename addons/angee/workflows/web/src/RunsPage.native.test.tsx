@@ -35,6 +35,21 @@ test("routed record uses the framework action menu, facts and retained JSON", as
   await waitFor(() => expect(document.body.textContent).toContain("R-7"));
 });
 
+test("empty run facts are omitted while populated facts remain visible", async () => {
+  const { unmount } = render(<RunStory run={runFixture({ finished_at: null })} />);
+  await screen.findByRole("heading", { name: "Run wfr_review" });
+  for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
+    expect(screen.queryByText(label)).toBeNull();
+  }
+  unmount();
+  render(<RunStory run={runFixture({ outcome: "approved", reprocess_of: { id: "wfr_previous" },
+    parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } }, trigger_event: { id: "wte_review" } })} />);
+  await screen.findByText("approved");
+  for (const label of ["Finished", "Outcome", "Reprocess of", "Parent run", "Trigger event"]) {
+    expect(screen.getByText(label)).toBeTruthy();
+  }
+});
+
 test("parent references and the child tab compose the existing scoped runs list", async () => {
   const requests: RunRequest[] = [];
   render(<RunStory run={runFixture({ parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } } })}

@@ -40,17 +40,18 @@ class TriggerSource(ImplBase):
     def choice(cls) -> Any:
         """Expose the fixed model to editors without duplicating its declaration."""
         choice = super().choice()
-        return replace(choice, defaults={**choice.defaults, "source_model": cls.model_label})
+        model_label = cls.model()._meta.label if cls.model_label else ""
+        return replace(choice, defaults={**choice.defaults, "source_model": model_label})
 
     @classmethod
-    def model(cls, trigger: Any) -> Any:
+    def model(cls, trigger: Any = None) -> Any:
         """Resolve the fixed or opted-in model, refusing recursive engine sources."""
         label = cls.model_label or trigger.model_label
         try:
             model = apps.get_model(label)
         except (LookupError, ValueError) as error:
             raise ValidationError("The trigger source model is unknown.") from error
-        if cls.model_label and trigger.model_label:
+        if cls.model_label and trigger is not None and trigger.model_label:
             raise ValidationError("A fixed source owns its model; leave model_label empty.")
         cls.validate_model(model)
         return model

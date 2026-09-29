@@ -487,9 +487,9 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
 
     @property
     def source_model(self) -> str:
-        """Expose the declared model even when disabled configuration needs repair."""
+        """Expose the resolved model's canonical label, retaining unavailable-source configuration."""
         try:
-            return (self.source_class.model_label or self.model_label).lower()
+            return self.source_class.model(self)._meta.label
         except ImproperlyConfigured:
             return self.model_label
 
@@ -533,7 +533,12 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
 
     def __str__(self) -> str:
         """Identify configuration without loading permission-sensitive relations."""
-        return str(self.sqid)
+        try:
+            source = self.source_class.display_label()
+        except ImproperlyConfigured:
+            source = str(self.source)
+        model = self.source_model
+        return f"{source}: {model}" if model else source
 
     class Meta:
         """Compose admission configuration and its permission identity."""

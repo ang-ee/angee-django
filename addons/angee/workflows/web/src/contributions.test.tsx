@@ -8,7 +8,7 @@ import type { DocumentType } from "@angee/gql/console";
 import type { CustomParams } from "@refinedev/core";
 
 import { DecisionRunOrigin, workflowsChatter } from "./contributions";
-import { DecisionWaitingRunsDocument, RUN_MODEL } from "./documents.console";
+import { DecisionWaitingRunsDocument } from "./documents.console";
 
 vi.mock("@angee/decisions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/decisions")>()),
@@ -82,6 +82,13 @@ test("the record contribution only mounts for identified records", () => {
   expect(workflowsChatter.when?.(context)).toBe(true);
   expect(workflowsChatter.when?.({ ...context, view: { kind: "list", type: "notes/note" } })).toBe(false);
   expect(workflowsChatter.when?.({ ...context, route: undefined })).toBe(false);
-  expect(workflowsChatter.when?.({ ...context, route: { ...context.route!, canonicalLabel: RUN_MODEL } })).toBe(false);
+  for (const model of ["Workflow", "WorkflowVersion", "WorkflowRun", "StepRun", "StepAttempt", "StepArtifact", "Trigger", "TriggerEvent"]) {
+    expect(workflowsChatter.when?.({ ...context, route: { ...context.route!, canonicalLabel: `workflows.${model}` } })).toBe(false);
+  }
   expect(workflowsChatter.render?.({ ...context, route: undefined })).toBeNull();
+});
+
+test("the contextual contribution is labeled as runs", () => {
+  render(<>{workflowsChatter.label}</>);
+  expect(screen.getByText("Runs")).toBeTruthy();
 });

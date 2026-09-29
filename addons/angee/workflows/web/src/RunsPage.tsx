@@ -1,4 +1,5 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
+import { rowValueAtPath } from "@angee/metadata";
 import {
   Action, Column, Facet, Field, Form, Group, List, RecordReference, ResourceList,
   useRecordActionMutation, useRouteHref, type ResourceListProps, type StringIdRow,
@@ -54,11 +55,11 @@ export function RunsList({ baseFilter, embedded = false }: {
         <Field name="origin" label={t("run.origin")} widget="statusBadge" />
         <Field name="run_as" label={t("run.runAs")} />
         <Field name="created_at" label={t("run.started")} />
-        <Field name="finished_at" label={t("run.finished")} />
-        <Field name="outcome" label={t("run.outcome")} />
-        <Field name="reprocess_of" label={t("run.reprocessOf")} />
-        <Field name="parent_step.run" label={t("run.parent")} />
-        <Field name="trigger_event" label={t("trigger.event")} />
+        <Field name="finished_at" label={t("run.finished")} showWhen={(row) => Boolean(row.finished_at)} />
+        <Field name="outcome" label={t("run.outcome")} showWhen={(row) => Boolean(row.outcome)} />
+        <Field name="reprocess_of" label={t("run.reprocessOf")} showWhen={(row) => Boolean(row.reprocess_of)} />
+        <Field name="parent_step.run" label={t("run.parent")} showWhen={(row) => Boolean(rowValueAtPath(row, "parent_step.run"))} />
+        <Field name="trigger_event" label={t("trigger.event")} showWhen={(row) => Boolean(row.trigger_event)} />
       </Group>
       <Field name="error" label={t("run.retainedError")} widget="textarea" showWhen={(row) => Boolean(row.error)} />
       <Field name="input" label={t("run.input")} widget="json" />

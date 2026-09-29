@@ -207,9 +207,10 @@ def test_unimportable_source_disables_and_keeps_the_row_readable(trigger_setup, 
     assert not trigger.enabled and trigger.run_as_id is None and "cannot be loaded" in trigger.disabled_reason
     assert event.rejection == trigger.disabled_reason and event.evaluated_at and not event.admitted_at
     data = result_data(execute_schema(schema, """query($id: String!) {
-      trigger(where: {id: {_eq: $id}}) { id source source_model enabled disabled_reason run_as { id } }
+      trigger(where: {id: {_eq: $id}}) { id source source_model display_name enabled disabled_reason run_as { id } }
     }""", {"id": trigger.sqid}, user=actor))["trigger"]
     assert len(data) == 1 and data[0]["source_model"] == "knowledge.vault"
+    assert data[0]["display_name"] == "record_changed: knowledge.vault"
     assert data[0]["enabled"] is False and data[0]["run_as"] is None
     assert data[0]["disabled_reason"] == trigger.disabled_reason
 

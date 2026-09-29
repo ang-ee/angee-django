@@ -270,7 +270,7 @@ export function columnsWithMetadataDefaults<TRow extends object>(
         ? { currencyField: field.currencyField }
         : {}),
       ...(column.options === undefined &&
-      isEnumOptionWidget(column.widget) &&
+      isEnumOptionWidget(column.widget ?? (!relationLabelField ? field?.widget ?? undefined : undefined)) &&
       options.length > 0
         ? { options }
         : {}),

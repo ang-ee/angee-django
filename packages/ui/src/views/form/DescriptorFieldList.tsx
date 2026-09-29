@@ -255,6 +255,7 @@ export function LabeledDescriptorField({
         <FieldDescriptorControl
           field={field}
           value={value}
+          row={dialogValues}
           messages={messages}
           readOnly={readOnly}
           disabled={disabled}

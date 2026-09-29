@@ -28,7 +28,7 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
     <List emptyContent={t("trigger.empty")}>
       <Column field="display_name" header={t("trigger.title")} />
       <Column field="source" header={t("trigger.source")} />
-      <Column field="enabled" header={t("trigger.enabled")} widget="booleanBadge" />
+      <Column field="enabled" header={t("trigger.enabled")} widget="boolean" />
       <Column field="run_as" header={t("run.runAs")} />
       <Column field="disabled_reason" header={t("trigger.disabledReason")} />
     </List>
@@ -40,7 +40,7 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
         <Field name="source" label={t("trigger.source")} createOnly widget="select" options={sourceOptions} defaultValue="record_changed" />
         <Field name="model_label" label={t("catalogue.subjectModel")} createOnly defaultValue="" description={t("trigger.modelHint")} />
         <Field name="source_model" label={t("trigger.resolvedModel")} readOnly showWhen={(row) => Boolean(row.source_model) && !row.model_label} />
-        <Field name="enabled" label={t("trigger.enabled")} readOnly widget="booleanBadge" />
+        <Field name="enabled" label={t("trigger.enabled")} readOnly widget="boolean" />
         <Field name="run_as" label={t("run.runAs")} readOnly />
       </Group>
       <Field name="condition" label={t("trigger.condition")} widget="angee.workflows.condition" defaultValue={{}} />

@@ -21,6 +21,7 @@ export default defineBaseAddon({
     { id: "workflows", label: "Workflows", icon: "versions" },
     { id: "workflows.runs", parentId: "workflows", label: "Runs", icon: "activity", route: "workflows.runs" },
     { id: "workflows.catalogue", parentId: "workflows", label: "Workflows", icon: "versions", route: "workflows.catalogue" },
+    { id: "workflows.triggers", parentId: "workflows", label: "Triggers", icon: "activity", route: "workflows.triggers" },
   ],
   chatter: [workflowsChatter],
   slots: [decisionRunOrigin],

@@ -3,7 +3,7 @@ import { useAuthoredQuery } from "@angee/refine";
 import { lazy } from "react";
 import { ErrorBanner, LazyBoundary, LoadingPanel, MetaSection, TextLink, useRouteHref, type ChatterContribution, type SlotContribution } from "@angee/ui";
 
-import { DecisionWaitingRunsDocument, RUN_MODEL } from "./documents.console";
+import { DecisionWaitingRunsDocument } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
 
 const RunsList = lazy(() => import("./RunsPage").then(({ RunsList }) => ({ default: RunsList })));
@@ -25,12 +25,12 @@ export function DecisionRunOrigin() {
       {step.run.version?.workflow?.name ?? step.run.id}</TextLink>{" · "}{step.node_key}{step.is_mapped ? ` [${step.map_index}]` : ""}</li>)}</ul></MetaSection>;
 }
 
-function WorkflowsTabLabel() { return useWorkflowsT()("catalogue.title"); }
+function RunsTabLabel() { return useWorkflowsT()("runs.title"); }
 
 /** The shell owns record selection and tab lifetime; the runs owner owns the collection. */
 export const workflowsChatter: ChatterContribution = {
-  id: "workflows", sequence: 40, icon: "versions", label: <WorkflowsTabLabel />,
-  when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && route?.canonicalLabel !== RUN_MODEL,
+  id: "workflows", sequence: 40, icon: "versions", label: <RunsTabLabel />,
+  when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && !route?.canonicalLabel?.startsWith("workflows."),
   render: ({ view, route }) => view.sqid && route?.canonicalLabel ? <LazyBoundary pending={<LoadingPanel />}><RunsList embedded baseFilter={{
     subject_model: { exact: route.canonicalLabel }, subject_id: { exact: view.sqid },
   }} /></LazyBoundary> : null,

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Controller, get, useWatch } from "react-hook-form";
+import { Controller, useWatch } from "react-hook-form";
 import { useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
 
 import type { DescriptorField } from "./DescriptorFieldList";
@@ -80,16 +80,7 @@ export function BoundDescriptorField({
     () => fieldsWithMetadataDefaults([field], modelMetadata, schemaMetadata)[0] ?? field,
     [field, modelMetadata, schemaMetadata],
   ) as DescriptorField;
-  const needsSiblingValues = declared.resolve !== undefined
-    || declared.showWhen !== undefined
-    || declared.control !== undefined;
-  const watchedName = needsSiblingValues
-    ? scope || undefined
-    : scope ? `${scope}.${declared.name}` : declared.name;
-  const watched = useWatch({ control: surface.form.control, name: watchedName as string });
-  const scopedValues = needsSiblingValues
-    ? watched
-    : (scope ? get(surface.form.getValues(), scope) : surface.form.getValues());
+  const scopedValues = useWatch({ control: surface.form.control, name: (scope || undefined) as string });
   const siblingValues = isFormValues(scopedValues) ? scopedValues : {};
   const resolved = resolveField(declared, siblingValues) as DescriptorField;
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;

@@ -12,7 +12,7 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import { defaultWidgets } from "../../widgets";
+import { defaultWidgets, type WidgetDefinition } from "../../widgets";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
 import {
@@ -114,6 +114,7 @@ test("a bound parent value follows native dotted child updates", async () => {
 });
 
 async function fixture(options: {
+  widgets?: Record<string, WidgetDefinition>;
   readOnlyWhen?: (record: Row) => boolean;
   id?: string | null;
   submit?: FormSubmit;
@@ -171,7 +172,7 @@ async function fixture(options: {
   }
   function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
     return <Provider dataProvider={provider} queryClient={client}>
-      <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...options.widgets } }}>
         {options.publicView ? (
           <FormView
             resource="notes.Note"
@@ -237,6 +238,15 @@ test("form extras receive the native create and edit form contexts", async () =>
   f.rerender({ recordId: "note-1" });
   expect((await screen.findAllByText("note-1")).length).toBeGreaterThan(0);
   expect(extras).toHaveBeenCalled();
+});
+
+test("registry widgets receive live sibling values in record forms", async () => {
+  const read: WidgetDefinition["read"] = ({ row }) => <output aria-label="Sibling title">{row && typeof row === "object" && "title" in row ? String(row.title) : ""}</output>;
+  const f = await fixture({ publicView: true, widgets: { sibling: { read, edit: read } } });
+  f.rerender({ viewFields: [{ name: "title", label: "Title" }, { name: "body", widget: "sibling" }] });
+  await waitFor(() => expect(screen.getByLabelText("Sibling title").textContent).toBe("First"));
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Changed" } });
+  expect(screen.getByLabelText("Sibling title").textContent).toBe("Changed");
 });
 
 test("header extras render from the same live record context as the title", async () => {

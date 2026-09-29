@@ -125,6 +125,7 @@ export interface WidgetFocusTarget {
 
 export interface WidgetRenderProps<TValue = unknown, TRow = unknown> {
   value?: TValue | null;
+  /** Current sibling values in forms, or the source record in read/list views. */
   row?: TRow;
   /** Owning document for a widget rendered inside editable child lines. */
   parentRow?: unknown;

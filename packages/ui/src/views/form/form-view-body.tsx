@@ -286,7 +286,7 @@ export function FormViewOverview({
   } = surface;
   const bodyValues = useWatch({
     control: form.control,
-    disabled: !bodyField?.resolve,
+    disabled: !bodyField,
   }) as FormValues;
   const currentBodyField = bodyField
     ? resolveField(bodyField, bodyValues)
@@ -407,6 +407,7 @@ export function FormViewOverview({
                 controlRef={controller.ref}
                 field={currentBodyField}
                 value={controller.value}
+                row={bodyValues}
                 readOnly={fieldReadOnly(currentBodyField)}
                 errors={fieldState.error ? [fieldState.error] : []}
                 onCommit={() => commitFieldInteraction(currentBodyField.name)}
@@ -434,7 +435,8 @@ function BoundFormField({
   field: FieldDescriptor;
   relation: RelationFieldInfo | undefined;
 }): React.ReactElement {
-  const value = useWatch({ control: surface.form.control, name: field.name });
+  const values = useWatch({ control: surface.form.control });
+  const value = get(values, field.name);
   const readOnly = surface.fieldReadOnly(field);
   const currentRelationId = relationValueId(value);
   const savedOption = relation
@@ -457,6 +459,7 @@ function BoundFormField({
           relation={relation}
           selectedOption={selectedOption}
           value={value}
+          row={values}
           readOnly={readOnly}
           errors={fieldState.error ? [fieldState.error] : []}
           onCommit={() => surface.commitFieldInteraction(field.name)}
@@ -660,6 +663,7 @@ function BoundFieldRow({
   relation,
   selectedOption,
   value,
+  row,
   readOnly,
   errors,
   serverMessages,
@@ -671,6 +675,7 @@ function BoundFieldRow({
   relation?: RelationFieldInfo;
   selectedOption?: RelationOption;
   value: unknown;
+  row: FormValues;
   readOnly?: boolean;
   errors: readonly unknown[];
   serverMessages?: readonly string[];
@@ -718,6 +723,7 @@ function BoundFieldRow({
             controlRef={controlRef}
             field={field}
             value={value}
+            row={row}
             messages={messages}
             readOnly={effectiveReadOnly}
             onChange={onChange}
@@ -735,6 +741,7 @@ function BoundFieldRow({
 function BodyFieldControl({
   field,
   value,
+  row,
   readOnly,
   errors,
   serverMessages,
@@ -744,6 +751,7 @@ function BodyFieldControl({
 }: {
   field: FieldDescriptor;
   value: unknown;
+  row: FormValues;
   readOnly?: boolean;
   errors: readonly unknown[];
   serverMessages?: readonly string[];
@@ -760,6 +768,7 @@ function BodyFieldControl({
         controlRef={controlRef}
         field={field}
         value={value}
+        row={row}
         messages={messages}
         readOnly={readOnly}
         onChange={onChange}

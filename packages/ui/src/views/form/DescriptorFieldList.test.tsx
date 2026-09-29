@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AppRuntimeProvider } from "../../runtime";
 import { ToastProvider } from "../../feedback";
-import { defaultWidgets } from "../../widgets";
+import { defaultWidgets, type WidgetDefinition } from "../../widgets";
 import { RelationPicker } from "../relation/RelationPicker";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import { deserializeFormSpec } from "./form-spec";
@@ -45,6 +45,22 @@ function FormHarness<TValues extends Values = Values>({
 afterEach(cleanup);
 
 describe("DescriptorFieldList", () => {
+  test("registry widgets receive live sibling values in descriptor forms", () => {
+    const read: WidgetDefinition["read"] = ({ row }) => <output aria-label="Sibling model">{row && typeof row === "object" && "model" in row ? String(row.model) : ""}</output>;
+    function Harness() {
+      const form = useForm({ defaultValues: { model: "notes.Note", condition: {} } });
+      return <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, sibling: { read, edit: read } } }}>
+        <FormProvider {...form}><DescriptorFieldList fields={[
+          { name: "model", label: "Model" }, { name: "condition", widget: "sibling" },
+        ]} /></FormProvider>
+      </AppRuntimeProvider>;
+    }
+    render(<Harness />);
+    expect(screen.getByLabelText("Sibling model").textContent).toBe("notes.Note");
+    fireEvent.change(screen.getByRole("textbox", { name: "Model" }), { target: { value: "messaging.Message" } });
+    expect(screen.getByLabelText("Sibling model").textContent).toBe("messaging.Message");
+  });
+
   test.each([false, true])("keeps malformed JSON drafts through asynchronous validation (nested: %s)", async (nested) => {
     const submit = vi.fn(async () => ({ status: "ok" as const, data: null }));
     let finishValidation: (() => void) | undefined;

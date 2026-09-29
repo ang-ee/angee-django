@@ -2,7 +2,7 @@ import { testDataResource, testQueryField, testResourceQuery } from "@angee/meta
 import { retainedField } from "./testing";
 import { TRIGGER_EVENT_MODEL, TRIGGER_MODEL } from "./triggers";
 
-const sources = [{ value: "RECORD_CHANGED", description: "Record changed" }, { value: "CUSTOM_CHANGED", description: "Custom changed" }];
+const sources = [{ value: "RECORD_CHANGED", description: "Record changed" }, { value: "CUSTOM_CHANGED", description: "Custom changed" }, { value: "MESSAGE_INGESTED", description: "Message ingested" }];
 const relation = (name: string, model: string, writable = false) => ({
   ...retainedField(name), kind: "relation" as const, relationObject: true, relationModelLabel: model,
   creatable: writable, updatable: writable,
@@ -15,7 +15,7 @@ export const triggerResourceFixture = testDataResource(TRIGGER_MODEL, {
   typeNames: { node: "TriggerType", filter: "trigger_bool_exp", order: "trigger_order_by", insert: "trigger_insert_input", update: "trigger_set_input", pkColumns: "trigger_pk_columns_input" },
   fields: [retainedField("id"), retainedField("display_name"), retainedField("enabled", "Boolean"), retainedField("can_edit", "Boolean"), retainedField("source_model"), retainedField("disabled_reason"),
     relation("run_as", "iam.User"), relation("workflow", "workflows.Workflow", true),
-    { ...writable("source"), kind: "enum", values: sources }, writable("model_label"), writable("condition", "JSON")],
+    { ...writable("source"), kind: "enum", widget: "select", values: sources }, writable("model_label"), writable("condition", "JSON")],
   query: testResourceQuery({ fields: {
     ...Object.fromEntries(["id", "display_name", "model_label", "source_model", "condition", "enabled", "can_edit", "disabled_reason", "run_as.id", "run_as.display_name", "workflow.id", "workflow.name"].map((name) => [name, testQueryField(name)])),
     source: testQueryField("source", { kind: "enum", values: sources }),
@@ -41,7 +41,24 @@ export const triggerEventResourceFixture = testDataResource(TRIGGER_EVENT_MODEL,
 });
 
 export const triggerFixture = { id: "wft_review", display_name: "Review admission", workflow: { id: "wfl_review", name: "Record review" },
-  source: "RECORD_CHANGED", model_label: "notes.Note", source_model: "notes.Note", condition: {}, enabled: false, can_edit: true, run_as: null, disabled_reason: "" };
+  source: "RECORD_CHANGED", model_label: "notes.note", source_model: "notes.Note", condition: { status: { _eq: "in_review" } }, enabled: false, can_edit: true, run_as: null, disabled_reason: "" };
 export const triggerEventFixture = { id: "wte_review", display_name: "Review event", trigger: { id: "wft_review" },
   record_model: "notes.Note", record_id: "nte_7", changed_at: "2026-09-29T09:00:00Z", evaluated_at: "2026-09-29T09:00:01Z",
   admitted_at: "2026-09-29T09:00:01Z", rejection: "", run: { id: "wfr_review" } };
+
+const noteStatuses = [{ value: "IN_REVIEW", description: "In review" }];
+export const triggerNoteResourceFixture = testDataResource("notes.Note", {
+  fields: [retainedField("id"), retainedField("display_name"), { ...retainedField("status"), kind: "enum", values: noteStatuses }],
+  capabilities: ["list", "detail"], recordRepresentation: "display_name",
+  roots: { list: "notes", detail: "notes_by_pk" },
+  query: testResourceQuery({ fields: {
+    id: testQueryField("id"), display_name: testQueryField("display_name"),
+    status: testQueryField("status", { kind: "enum", values: noteStatuses, filter: {
+      field: "status", scalar: "String", values: [], operators: ["exact"], valueMap: [{ from: "IN_REVIEW", to: "in_review" }],
+    } }),
+  } }),
+});
+export const triggerMessageResourceFixture = testDataResource("messaging.Message", {
+  fields: [retainedField("subject")],
+  query: testResourceQuery({ fields: { subject: testQueryField("subject") } }),
+});

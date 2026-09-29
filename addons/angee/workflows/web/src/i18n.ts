@@ -3,6 +3,7 @@ import { enCatalogueMessages } from "./i18n-catalogue";
 
 export const enWorkflowsMessages = {
   ...enCatalogueMessages,
+  "runs.title": "Runs",
   "runs.empty": "No runs in this view.",
   "run.title": "Run {id}",
   "run.status": "Status",

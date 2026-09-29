@@ -2,6 +2,8 @@
 
 import pytest
 import yaml
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 
 from angee.base.scoping import system_queryset
 from angee.integrate.schema import ConsoleImplChoicesQuery
@@ -9,11 +11,21 @@ from angee.resources.testing.models import Resource
 from angee.workflows import schema as workflow_schema
 from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import Trigger, TriggerEvent, WorkflowRun
+from angee.workflows.triggers import TriggerSource
+from angee.workflows_messaging.sources import MessageIngested
 from tests.conftest import Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.workflow_steps import document
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
+
+
+class FixedVaultSource(TriggerSource):
+    """Exercise a fixed model authored with Django's lowercase label spelling."""
+
+    key = "record_changed"
+    label = "Vault event"
+    model_label = "knowledge.vault"
 
 
 @pytest.fixture
@@ -40,7 +52,7 @@ def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_su
         assert execute_schema(schema, create, variables, user=reader).errors
     inserted = result_data(execute_schema(schema, create, variables, user=editor))["insert_trigger_one"]
     assert inserted["enabled"] is False and inserted["run_as"] is None
-    assert inserted["disabled_reason"] == "" and inserted["source_model"].lower() == "knowledge.vault"
+    assert inserted["disabled_reason"] == "" and inserted["source_model"] == "knowledge.Vault"
     assert inserted["can_edit"] is True
     trigger = system_queryset(Trigger).get(sqid=inserted["id"])
     read = "query { trigger { id can_edit } }"
@@ -75,6 +87,48 @@ def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_su
       delete_trigger_by_pk(id: $id) { id }
     }""", {"id": trigger.sqid}, user=editor))
     assert not system_queryset(Trigger).filter(pk=trigger.pk).exists()
+
+
+@pytest.mark.parametrize("source_path,model_label,label", [
+    ("angee.workflows.triggers.RecordChanged", "knowledge.vault", "Record changed"),
+    ("tests.test_workflows_triggers_surface.FixedVaultSource", "", "Vault event"),
+])
+def test_resolved_model_and_title_share_source_owner_without_row_queries(
+    trigger_surface, settings, source_path, model_label, label,
+):
+    """Stored lowercase and fixed source models use the metadata's canonical identity."""
+    schema, workflow, editor, viewer, _starter = trigger_surface
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCES,
+        "record_changed": source_path,
+    }
+    assert FixedVaultSource.choice().defaults["source_model"] == "knowledge.Vault"
+    query = "{ trigger { display_name source_model condition } }"
+    expected = {
+        "display_name": f"{label}: knowledge.Vault", "source_model": "knowledge.Vault",
+        "condition": {"name": {"_eq": "Ready"}},
+    }
+    counts = []
+    for count in (1, 5):
+        for _ in range(count - system_queryset(Trigger).count()):
+            Trigger.objects.with_actor(editor).create(
+                workflow=workflow, source="record_changed", model_label=model_label, condition=expected["condition"],
+            )
+        with CaptureQueriesContext(connection) as captured:
+            assert result_data(execute_schema(schema, query, user=viewer)) == {"trigger": [expected] * count}
+        counts.append(len(captured))
+    assert counts[0] == counts[1]
+
+
+def test_message_source_defaults_and_record_model_use_the_same_canonical_identity(settings):
+    """New message-source forms receive the same model as a retained trigger."""
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCES,
+        "message_ingested": "angee.workflows_messaging.sources.MessageIngested",
+    }
+    trigger = Trigger(source="message_ingested")
+    assert trigger.source_model == MessageIngested.choice().defaults["source_model"] == "messaging.Message"
+    assert str(trigger) == "Message ingested: messaging.Message"
 
 
 def test_source_choices_follow_workflow_authority_without_widening_other_registries(trigger_surface):

@@ -209,6 +209,7 @@ class StepArtifactType(AngeeNode):
 class TriggerType(AngeeNode):
     """A workflow's editable event admission policy and server-owned activation."""
 
+    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["source", "model_label"])
     workflow: WorkflowType | None = actor_scoped_to_one("workflow")
     source: auto
     model_label: auto
