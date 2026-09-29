@@ -444,6 +444,13 @@ class InferenceModel(SqidMixin, AuditMixin, AngeeModel):
         backend = provider.backend
         return backend.model(self.provider_model_name, credential=credential)
 
+    def is_transient_error(self, error: Exception) -> bool:
+        """Classify a failure through this model's native provider backend."""
+
+        with system_context(reason="agents.inference_model.error"):
+            provider: Any = self.provider
+            return bool(provider.backend.is_transient_error(error))
+
     def deployment_identity(self) -> InferenceDeploymentIdentity:
         """Return the non-secret endpoint binding used by role approval policy."""
 
@@ -1014,8 +1021,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
             model: Any = self.model
             if model is None:
                 return False
-            provider: Any = model.provider
-            return bool(provider.backend.is_transient_error(error))
+            return bool(model.is_transient_error(error))
 
     @property
     def runtime_backend(self) -> AgentRuntime:

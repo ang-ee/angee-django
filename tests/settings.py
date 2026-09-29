@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "angee.agents_runtime_pydantic",
     "angee.workflows",
     "angee.decisions",
+    "angee.workflows_extraction",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",

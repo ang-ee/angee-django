@@ -1307,6 +1307,33 @@ class File(SqidMixin, AuditMixin, AngeeModel):
 
         return self.storage.open(self.storage_path, "rb")
 
+    def read_verified(self, *, max_bytes: int, expected_digest: str = "") -> bytes:
+        """Read bounded bytes and verify their stored size and SHA-256 identity.
+
+        Callers own actor-scoped access before reading. ``expected_digest`` also
+        checks a retained reference against this row's current content identity.
+        Backend IO errors propagate; invalid state or bytes raise ValidationError.
+        """
+
+        if max_bytes < 0:
+            raise ValueError("A file read requires a nonnegative byte limit.")
+        if self.upload_state != UploadState.READY:
+            raise ValidationError("The file is not ready.")
+        if expected_digest and self.content_hash != expected_digest:
+            raise ValidationError("The file content identity changed.")
+        if self.size_bytes > max_bytes:
+            raise ValidationError("The file exceeds the byte limit.")
+        try:
+            with self.open_stream() as stream:
+                digest, size, content = sha256_stream(
+                    cast(BinaryIO, CappedReader(stream, max_bytes=max_bytes)), capture_head=max_bytes,
+                )
+        except BodyTooLarge as error:
+            raise ValidationError("The file exceeds the byte limit.") from error
+        if size != self.size_bytes or digest != self.content_hash:
+            raise ValidationError("The stored bytes do not match the file identity.")
+        return content
+
     def issue_upload_token(self) -> str:
         """Return a one-shot signed token authorizing a proxy byte push.
 

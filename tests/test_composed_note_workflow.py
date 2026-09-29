@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from django.db import connection
+from hatch_angee import discover
 
 
 def test_composed_note_workflow(tmp_path: Path) -> None:
@@ -19,11 +20,17 @@ def test_composed_note_workflow(tmp_path: Path) -> None:
     postgresql = connection.vendor == "postgresql"
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
+    # L4: extraction's shipped map is the only resource awaiting engine support.
+    apps = sorted(
+        manifest.name for _, manifest in discover([root / "addons", root / "examples" / "addons"])
+        if manifest.name != "angee.workflows_extraction"
+    )
     result = subprocess.run(
         [
             sys.executable,
             str(root / "tests" / "composed_host.py"),
             "--runtime-dir", str(tmp_path / "runtime"),
+            *(argument for app in apps for argument in ("--app", app)),
             "--action", "tests",
             "--test-label", "example.notes.tests.test_workflow_steps",
             "--output", str(report),

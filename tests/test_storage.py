@@ -13,7 +13,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import SuspiciousFileOperation
+from django.core.exceptions import SuspiciousFileOperation, ValidationError
 from django.core.management import call_command
 from django.db import close_old_connections, connection, connections, models, transaction
 from django.db.models.signals import post_save
@@ -74,6 +74,80 @@ def test_storage_autoconfig_has_no_runtime_setting_shim() -> None:
     autoconfig = importlib.import_module("angee.storage.autoconfig")
 
     assert not hasattr(autoconfig, "setting")
+
+
+@pytest.mark.parametrize("content", [b"", b"verified bytes"])
+def test_file_verified_read_accepts_content_at_the_limit(monkeypatch: pytest.MonkeyPatch, content: bytes) -> None:
+    """Exact bounds, empty content and retained identities share one reader."""
+
+    digest = hashlib.sha256(content).hexdigest()
+    file = File(content_hash=digest, size_bytes=len(content), upload_state=UploadState.READY)
+    stream = BytesIO(content)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+
+    assert file.read_verified(max_bytes=len(content), expected_digest=digest) == content
+    assert stream.closed
+
+
+@pytest.mark.parametrize(
+    "content,size_delta",
+    [(b"changed bytes!", 0), (b"short", 0), (b"unexpected longer bytes", 0), (b"verified bytes", -1)],
+)
+def test_file_verified_read_rejects_changed_content(
+    monkeypatch: pytest.MonkeyPatch, content: bytes, size_delta: int,
+) -> None:
+    """Neither a changed digest nor a changed size can pass the storage boundary."""
+
+    original = b"verified bytes"
+    file = File(
+        content_hash=hashlib.sha256(original).hexdigest(),
+        size_bytes=len(original) + size_delta,
+        upload_state=UploadState.READY,
+    )
+    stream = BytesIO(content)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+
+    with pytest.raises(ValidationError, match="stored bytes"):
+        file.read_verified(max_bytes=100)
+    assert stream.closed
+
+
+@pytest.mark.parametrize(
+    "state,size,digest", [(UploadState.DRAFT, 1, ""), (UploadState.READY, 11, ""), (UploadState.READY, 1, "changed")],
+)
+def test_file_verified_read_checks_metadata_before_io(
+    monkeypatch: pytest.MonkeyPatch, state: UploadState, size: int, digest: str,
+) -> None:
+    """Unready, oversized and superseded references do not open backend bytes."""
+
+    file = File(content_hash="current", size_bytes=size, upload_state=state)
+    monkeypatch.setattr(File, "open_stream", lambda self: pytest.fail("Metadata failure must not open storage."))
+
+    with pytest.raises(ValidationError):
+        file.read_verified(max_bytes=10, expected_digest=digest)
+
+
+def test_file_verified_read_bounds_short_reads_even_when_metadata_lies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A short-reading backend is stopped after one overflow byte and closed."""
+
+    consumed = 0
+
+    class ShortReader(BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            nonlocal consumed
+            assert size >= 0
+            chunk = super().read(min(size, 2))
+            consumed += len(chunk)
+            return chunk
+
+    stream = ShortReader(b"unbounded content")
+    file = File(content_hash=hashlib.sha256(b"small").hexdigest(), size_bytes=5, upload_state=UploadState.READY)
+    monkeypatch.setattr(File, "open_stream", lambda self: stream)
+
+    with pytest.raises(ValidationError, match="byte limit"):
+        file.read_verified(max_bytes=5)
+    assert consumed == 6
+    assert stream.closed
 
 
 def test_backend_has_no_dormant_default_flag() -> None:

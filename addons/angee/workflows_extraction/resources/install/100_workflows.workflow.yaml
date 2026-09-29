@@ -1,0 +1,49 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: document_extraction
+    fields:
+      key: document_extraction
+      name: Document extraction
+      subject_model: ""
+      publish: true
+      draft:
+        nodes:
+          prepare_pages:
+            step: prepare_pages
+            config: {profile: none}
+            input:
+              files: {from: input, path: [files]}
+              message_parts: {from: input, path: [message_parts]}
+              target_model: {from: input, path: [target_model]}
+              target_id: {from: input, path: [target_id]}
+            next: {prepared: map_pages}
+          map_pages:
+            step: map
+            input: {items: {from: prepare_pages, path: [pages]}}
+            body:
+              step: recognize_page
+              input:
+                page: {from: item}
+                model_id: {from: input, path: [recognition_model]}
+            next: {done: collect_carriers, failed: collect_carriers}
+          collect_carriers:
+            # L4: replace this adapter with the engine's typed map output.
+            step: collect_carriers
+            input:
+              prepared: {from: prepare_pages, path: [prepared]}
+              recognition: {from: map_pages}
+            next: {collected: process_evidence, source_hold: process_evidence}
+          process_evidence:
+            step: process_evidence
+            config: {profile: none, schema: {}}
+            input:
+              prepared: {from: collect_carriers, path: [prepared]}
+              recognition: {from: collect_carriers, path: [recognition]}
+              hold_reasons: {from: collect_carriers, path: [hold_reasons]}
+              target_model: {from: input, path: [target_model]}
+              target_id: {from: input, path: [target_id]}
+              model_id: {from: input, path: [model]}
+              recognition_model_id: {from: input, path: [recognition_model]}
+        results:
+          - {from: process_evidence, when: [processed, source_hold]}

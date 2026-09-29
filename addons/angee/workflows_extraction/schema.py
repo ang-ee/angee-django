@@ -1,0 +1,167 @@
+"""Immutable evidence reads composed through the framework resource owner."""
+
+from __future__ import annotations
+
+from typing import Any, cast
+
+import strawberry_django
+from django.apps import apps
+from strawberry import auto
+from strawberry.scalars import JSON
+
+from angee.base.identity import public_id_for
+from angee.graphql.data import hasura_model_resource
+from angee.graphql.ids import PublicID, optional_public_id
+from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.storage.schema import FileType
+
+Extraction = apps.get_model("workflows_extraction.Extraction")
+ExtractionSource = apps.get_model("workflows_extraction.ExtractionSource")
+ExtractionPage = apps.get_model("workflows_extraction.ExtractionPage")
+ExtractionPart = apps.get_model("workflows_extraction.ExtractionPart")
+
+
+@strawberry_django.type(Extraction)
+class ExtractionType(AngeeNode):
+    """One exact retained revision and its separately authorized source records."""
+
+    revision: auto
+    lineage_key: auto
+    status: auto
+    error_code: auto
+    schema_id: auto
+    schema_digest: auto
+    profile: auto
+    profile_config: JSON
+    schema: JSON
+    result: JSON
+    provenance: JSON
+    document_map: JSON
+    retired_identities: JSON
+    created_at: auto
+    sources: list[ExtractionSourceType] = actor_scoped_to_many("sources")
+    pages: list[ExtractionPageType] = actor_scoped_to_many("pages")
+    parts: list[ExtractionPartType] = actor_scoped_to_many("parts")
+    record_model_label: str = strawberry_django.field(only=["content_type_id", "object_id"])
+    record_public_id: str = strawberry_django.field(only=["content_type_id", "object_id"])
+
+    @strawberry_django.field(only=["model_id"])
+    def model_id(self) -> PublicID | None:
+        """Identify the mapping deployment through its native public-ID owner."""
+        return optional_public_id(public_id_for(apps.get_model("agents.InferenceModel"), cast(Any, self).model_id))
+
+    @strawberry_django.field(only=["recognition_model_id"])
+    def recognition_model_id(self) -> PublicID | None:
+        """Identify the recognition deployment without loading its private configuration."""
+        return optional_public_id(public_id_for(
+            apps.get_model("agents.InferenceModel"), cast(Any, self).recognition_model_id,
+        ))
+
+
+@strawberry_django.type(ExtractionSource)
+class ExtractionSourceType(AngeeNode):
+    """The retained source identity; linked bytes retain storage authorization."""
+
+    extraction: ExtractionType | None = actor_scoped_to_one("extraction")
+    file: FileType | None = actor_scoped_to_one("file")
+    position: auto
+    content_hash: auto
+    mime_type: auto
+
+    @strawberry_django.field(only=["message_part_id"])
+    def message_part_id(self) -> PublicID | None:
+        """Project retained message-part identity; its owner authorizes navigation."""
+        return optional_public_id(public_id_for(apps.get_model("messaging.Part"), cast(Any, self).message_part_id))
+
+
+@strawberry_django.type(ExtractionPage)
+class ExtractionPageType(AngeeNode):
+    """Page dimensions and its independently authorized raster."""
+
+    extraction: ExtractionType | None = actor_scoped_to_one("extraction")
+    source: ExtractionSourceType | None = actor_scoped_to_one("source")
+    carrier_file: FileType | None = actor_scoped_to_one("carrier_file")
+    position: auto
+    source_page: auto
+    width: auto
+    height: auto
+    dpi: auto
+    duration_ms: auto
+    provider_metadata: JSON
+
+
+@strawberry_django.type(ExtractionPart)
+class ExtractionPartType(AngeeNode):
+    """A retained carrier, readable through its evidence revision's policy."""
+
+    extraction: ExtractionType | None = actor_scoped_to_one("extraction")
+    source: ExtractionSourceType | None = actor_scoped_to_one("source")
+    position: auto
+    source_page: auto
+    mime_type: auto
+    kind: auto
+    method: auto
+    content_hash: auto
+    value: JSON
+    metadata: JSON
+    width: auto
+    height: auto
+    dpi: auto
+    duration_ms: auto
+
+
+_EXTRACTIONS = hasura_model_resource(
+    ExtractionType,
+    model=Extraction,
+    filterable=["id", "lineage_key", "status", "schema_id", "revision"],
+    sortable=["created_at", "revision", "status"],
+    aggregatable=["id"],
+    groupable=["status", "schema_id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_SOURCES = hasura_model_resource(
+    ExtractionSourceType,
+    model=ExtractionSource,
+    filterable=["id", "extraction", "file"],
+    sortable=["position"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_PAGES = hasura_model_resource(
+    ExtractionPageType,
+    model=ExtractionPage,
+    filterable=["id", "extraction", "source"],
+    sortable=["position"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_PARTS = hasura_model_resource(
+    ExtractionPartType,
+    model=ExtractionPart,
+    filterable=["id", "extraction", "source", "kind"],
+    sortable=["position"],
+    aggregatable=["id"],
+    insert=False,
+    update=False,
+    delete=False,
+)
+_RESOURCES = (_EXTRACTIONS, _SOURCES, _PAGES, _PARTS)
+schemas = {
+    "console": {
+        "query": [resource.query for resource in _RESOURCES],
+        "types": [
+            ExtractionType,
+            ExtractionSourceType,
+            ExtractionPageType,
+            ExtractionPartType,
+            *(type_ for resource in _RESOURCES for type_ in resource.types),
+        ],
+    }
+}
