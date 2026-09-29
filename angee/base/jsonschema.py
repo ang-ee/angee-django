@@ -1,7 +1,7 @@
 """Draft 2020-12 validation and bounded structural schema composition."""
 
 import copy
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any
 
 from django.core.exceptions import ValidationError
@@ -401,3 +401,31 @@ def embed_schema(
         into.setdefault("allOf", []).append(constraint)
     definitions[name] = embedded
     return constraint
+
+
+def compose_schema(
+    schema: dict[str, Any],
+    constraints: Iterable[tuple[Sequence[str | int], dict[str, Any], bool, bool]],
+) -> dict[str, Any]:
+    """Constrain paths to compatible contracts, preserving their local references.
+
+    Each constraint supplies a path, schema, requiredness and projection flag.
+    Projection permits additional object properties. Other repeated paths require
+    structural equality; this deliberately does not attempt schema implication.
+    """
+    result = copy.deepcopy(schema)
+    definitions = result.setdefault("$defs", {})
+    seen: dict[tuple[str | int, ...], dict[str, Any]] = {}
+    for path, expected, required, project in constraints:
+        identity = tuple(path)
+        known = seen.get(identity) or schema_at(result, path)
+        if known and expected and not schemas_match(known, expected) and not project:
+            raise ValidationError("Consumers declare incompatible schemas for the same path.")
+        seen[identity] = expected or known or {}
+        expected = copy.deepcopy(expected)
+        if project:
+            expected.pop("additionalProperties", None)
+        embed_schema(expected, definitions, path=path, required=required, into=result)
+    if not definitions:
+        result.pop("$defs")
+    return result

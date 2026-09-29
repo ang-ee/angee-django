@@ -39,6 +39,11 @@ class StepContext:
         return self.step_run.state
 
     @property
+    def map_index(self) -> int | None:
+        """Return the item position, including zero, or None outside a map body."""
+        return self.step_run.map_index if self.step_run.is_mapped else None
+
+    @property
     def idempotency_key(self) -> str:
         """Return the persisted random token plus this page's zero-based index.
 

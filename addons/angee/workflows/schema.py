@@ -7,9 +7,11 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db.models import Prefetch
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.scoping import system_queryset
 from angee.decisions.schema import DecisionGroupType
 from angee.graphql.actions import (
     ActionResult,
@@ -117,6 +119,10 @@ class StepRunType(AngeeNode):
     rank: auto
     map_index: auto
     is_mapped: bool = strawberry_django.field(only=["node_key"])
+    map_total: int = strawberry_django.field(only=["input", "node_key", "run_id"], prefetch_related=[Prefetch(
+        "run__version", queryset=system_queryset(WorkflowVersion).only("document"), to_attr="policy_version",
+    )])
+    map_settled: int = strawberry_django.field(annotate={"_map_settled": StepRun.map_settled_expression()})
     status: auto
     waiting_kind: auto
     wait_reason: auto

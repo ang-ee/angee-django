@@ -9,7 +9,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models.functions import Now
+from django.db.models.functions import Coalesce, Now
 from django.utils.functional import cached_property
 from rebac import system_context
 
@@ -242,6 +242,34 @@ class StepRun(AngeeDataModel):
     def is_mapped(self) -> bool:
         """Identify a map body row by its node identity, including item index zero."""
         return self.node_key.endswith(".body")
+
+    def map_rows(self) -> Any:
+        """Select this map's body rows; ordinary nodes have no matching items."""
+        return self.run.step_runs.for_map(self.run_id, self.node_key)
+
+    @property
+    def map_total(self) -> int:
+        """Count admitted items for a map, including after its wait has ended."""
+        if self.is_mapped or not self.input:
+            return 0
+        node = self.run.policy_version.definition.nodes[self.node_key]
+        return len(self.input["items"]) if node.body is not None else 0
+
+    @classmethod
+    def map_settled_expression(cls) -> Coalesce:
+        """Count terminal body rows in one correlated expression for bulk reads."""
+        rows = cast(Any, system_queryset(cls)).for_map(models.OuterRef("run_id"), models.OuterRef("node_key"))
+        counts = (rows.filter(status__in=StepRunStatus.terminal_values()).order_by().values("run_id")
+                  .annotate(total=models.Count("pk")).values("total"))
+        return Coalesce(models.Subquery(counts), 0, output_field=models.IntegerField())
+
+    @property
+    def map_settled(self) -> int:
+        """Use the same progress expression for ordinary model and optimized reads."""
+        if "_map_settled" in self.__dict__:
+            return int(self.__dict__["_map_settled"])
+        return int(system_queryset(type(self)).filter(pk=self.pk)
+                   .annotate(_map_settled=self.map_settled_expression()).values_list("_map_settled", flat=True).get())
 
     @property
     def step(self) -> type[Step]:

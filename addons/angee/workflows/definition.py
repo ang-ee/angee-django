@@ -13,7 +13,15 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import ValidationError as PydanticValidationError
 
-from angee.base.jsonschema import embed_schema, schema_at, schemas_match, unmatched_properties, validate, validator
+from angee.base.jsonschema import (
+    compose_schema,
+    embed_schema,
+    schema_at,
+    schemas_match,
+    unmatched_properties,
+    validate,
+    validator,
+)
 from angee.base.serialization import canonical_json
 from angee.workflows.bindings import (
     ABSENT,
@@ -22,8 +30,17 @@ from angee.workflows.bindings import (
     ValueBinding,
     resolve_bindings,
 )
-from angee.workflows.states import ERROR_OUTCOME, INPUT_SOURCE, ITEM_SOURCE, NodeKey, Outcome, StepRunStatus
-from angee.workflows.steps import Step, resolve_step
+from angee.workflows.maps import Map
+from angee.workflows.states import (
+    ERROR_OUTCOME,
+    INPUT_SOURCE,
+    ITEM_SOURCE,
+    NodeKey,
+    Outcome,
+    StepRunStatus,
+    WaitingKind,
+)
+from angee.workflows.steps import EmptyOutput, Step, resolve_step
 
 
 class Issue(BaseModel):
@@ -48,13 +65,19 @@ class DefinitionInvalid(ValidationError):
         super().__init__([issue.message for issue in issues])
 
 
-class Node(BaseModel):
-    """One registered step and its data/control declarations."""
+class Body(BaseModel):
+    """A nested step's input and configuration, without graph edges."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     step: str
     config: dict[str, Any] = Field(default_factory=dict)
     input: InputBinding | None = None
+
+
+class Node(Body):
+    """One registered step and its data/control declarations."""
+
+    body: Body | None = None
     join: Literal["any", "all"] = "any"
     next: dict[Outcome, str | list[str]] = Field(default_factory=dict)
 
@@ -85,6 +108,8 @@ class StepRow(Protocol):
     map_index: int
     status: str
     outcome: str
+    input: Any
+    waiting_kind: str
 
 
 @dataclass(frozen=True)
@@ -94,6 +119,8 @@ class PlannedNode:
     node_key: str
     status: Literal["ready", "skipped"]
     rank: int
+    map_index: int = 0
+    existing: bool = False
 
 
 class Definition(BaseModel):
@@ -120,9 +147,22 @@ class Definition(BaseModel):
             ]
         return definition, definition.issues(subject_model=subject_model)
 
-    def node(self, key: str) -> Node:
+    def node(self, key: str) -> Body:
         """Return the declaration for one stable node key."""
-        return self.nodes[key]
+        parent, separator, suffix = key.partition(".")
+        node = self.nodes[parent]
+        if not separator:
+            return node
+        if suffix != "body" or node.body is None:
+            raise KeyError(key)
+        return node.body
+
+    def declarations(self) -> Iterator[tuple[str, Body, list[str | int]]]:
+        """Visit graph nodes and their nested bodies at authored document paths."""
+        for key, node in self.nodes.items():
+            yield key, node, ["nodes", key]
+            if node.body is not None:
+                yield f"{key}.body", node.body, ["nodes", key, "body"]
 
     @cached_property
     def _steps(self) -> dict[str, type[Step[Any, Any, Any]]]:
@@ -134,6 +174,44 @@ class Definition(BaseModel):
         if key not in self._steps:
             self._steps[key] = resolve_step(self.node(key).step)
         return self._steps[key]
+
+    def output_schema(self, key: str) -> dict[str, Any]:
+        """Resolve node output, including the map body's typed item contract."""
+        step = self.step(key)
+        return Map.output_schema_for(self.step(f"{key}.body")) if step is Map else step.output_schema()
+
+    def node_input_schema(self, key: str) -> dict[str, Any]:
+        """Give map admission the authored list contract instead of list[Any]."""
+        schema = self.step(key).input_schema()
+        if self.step(key) is Map:
+            schema = copy.deepcopy(schema)
+            schema["properties"]["items"] = embed_schema(self.map_items_schema(key), schema.setdefault("$defs", {}))
+        return schema
+
+    def map_items_schema(self, key: str) -> dict[str, Any]:
+        """Use the producer's array contract or infer external items from the body."""
+        node = self.nodes[key]
+        body = self.node(f"{key}.body")
+        if self.step(f"{key}.body") is Map:
+            return {}
+        binding = node.input if isinstance(node.input, SourceBinding) else (node.input or {}).get("items")
+        if isinstance(binding, SourceBinding):
+            for source in binding.sources:
+                if source in self.ancestors(key):
+                    path = [*binding.path, *(["items"] if binding is node.input else [])]
+                    return schema_at(self.output_schema(source), path) or {}
+        if node.input is None and self.predecessors[key]:
+            source = next(iter(self.predecessors[key]))
+            return schema_at(self.output_schema(source), ["items"]) or {}
+        target = self.step(f"{key}.body").input_schema()
+        item = target if body.input is None else compose_schema({}, (
+            (value.path, expected, field is None or field in target.get("required", []), value.project)
+            for field, value in self._bindings(body.input).items()
+            if isinstance(value, SourceBinding) and ITEM_SOURCE in value.sources
+            and (expected := self._field_schema(target, field)) is not None
+        ))
+        definitions: dict[str, Any] = {}
+        return {"type": "array", "items": embed_schema(item, definitions), "$defs": definitions}
 
     @cached_property
     def predecessors(self) -> dict[str, dict[str, set[str]]]:
@@ -183,12 +261,12 @@ class Definition(BaseModel):
         """Check registered steps, their declarations, and authored outgoing edges."""
         issues: list[Issue] = []
         offered: dict[str, dict[str, str]] = {}
-        for key, node in self.nodes.items():
+        for key, node, path in self.declarations():
             if key in {INPUT_SOURCE, ITEM_SOURCE}:
                 issues.append(
                     Issue(
                         node=key,
-                        path=["nodes", key],
+                        path=path,
                         code="reserved_node",
                         message="This key is reserved for a binding source.",
                     )
@@ -196,8 +274,12 @@ class Definition(BaseModel):
             try:
                 step = self.step(key)
             except ImproperlyConfigured as error:
-                issues.append(Issue(node=key, path=["nodes", key, "step"], code="unknown_step", message=str(error)))
+                issues.append(Issue(node=key, path=[*path, "step"], code="unknown_step", message=str(error)))
                 continue
+            if step is Map and (not isinstance(node, Node) or node.body is None):
+                issues.append(Issue(node=key, path=path, code="body", message="A map requires one non-map body."))
+            if isinstance(node, Node) and node.body is not None and step is not Map:
+                issues.append(Issue(node=key, path=[*path, "body"], code="body", message="Only a map has a body."))
             required_subject = step.subject
             if (
                 subject_model is not None
@@ -207,7 +289,7 @@ class Definition(BaseModel):
                 issues.append(
                     Issue(
                         node=key,
-                        path=["nodes", key, "step"],
+                        path=[*path, "step"],
                         code="subject",
                         message=f"Step requires subject model {required_subject!r}.",
                     )
@@ -217,17 +299,19 @@ class Definition(BaseModel):
                     schema()
                 except ValidationError as error:
                     issues.append(
-                        Issue(node=key, path=["nodes", key, "step"], code="schema", message=f"{name}: {error}")
+                        Issue(node=key, path=[*path, "step"], code="schema", message=f"{name}: {error}")
                     )
             try:
                 config = step.parse_config(node.config)
             except ValidationError as error:
-                issues.append(Issue(node=key, path=["nodes", key, "config"], code="config", message=str(error)))
+                issues.append(Issue(node=key, path=[*path, "config"], code="config", message=str(error)))
                 continue
             try:
                 outcomes = step.available_outcomes(config, validate=True)
             except ValidationError as error:
-                issues.append(Issue(node=key, path=["nodes", key, "step"], code="outcome", message=str(error)))
+                issues.append(Issue(node=key, path=[*path, "step"], code="outcome", message=str(error)))
+                continue
+            if not isinstance(node, Node):
                 continue
             offered[key] = outcomes
             for outcome in sorted(step.required_outcomes(config)):
@@ -293,21 +377,39 @@ class Definition(BaseModel):
         """Check explicit bindings and the default input supplied by incoming edges."""
         issues: list[Issue] = []
         incoming = self.predecessors
-        for key, node in self.nodes.items():
+        for key, node, path in self.declarations():
             try:
-                target_schema = self.step(key).input_schema()
-            except (ImproperlyConfigured, ValidationError):
+                target_schema = self.node_input_schema(key)
+            except (KeyError, ImproperlyConfigured):
                 continue
+            except ValidationError as error:
+                if self.step(key) is Map:
+                    issues.append(Issue(node=key, path=[*path, "input"], code="input", message=str(error)))
+                continue
+            if self.step(key) is Map and schema_at(self.map_items_schema(key), [0]) is None:
+                issues.append(Issue(
+                    node=key, path=[*path, "input"], code="input", message="Map items require a list schema.",
+                ))
+                continue
+            parent = key.partition(".")[0]
+            mapped = key != parent
             if node.input is not None:
                 issues.extend(
                     self._binding_issues(
                         node.input,
                         target_schema,
                         key,
-                        ["nodes", key, "input"],
-                        allowed=self.ancestors(key) | {INPUT_SOURCE},
+                        [*path, "input"],
+                        allowed=self.ancestors(parent) | {INPUT_SOURCE} | ({ITEM_SOURCE} if mapped else set()),
                     )
                 )
+            elif mapped:
+                actual = schema_at(self.map_items_schema(parent), [0])
+                if target_schema and (actual is None or not schemas_match(actual, target_schema)):
+                    issues.append(Issue(
+                        node=key, path=[*path, "input"], code="input",
+                        message="Incompatible default item input; bind explicitly.",
+                    ))
             elif len(incoming[key]) > 1:
                 issues.append(
                     Issue(
@@ -321,7 +423,7 @@ class Definition(BaseModel):
                 for source_key, routed_outcomes in incoming[key].items():
                     try:
                         source_step = self.step(source_key)
-                        source_schema = source_step.output_schema()
+                        source_schema = self.output_schema(source_key)
                     except (ImproperlyConfigured, ValidationError):
                         continue
                     if (
@@ -423,15 +525,9 @@ class Definition(BaseModel):
         target = schema_at(target, []) or {}
         fields = self._bindings(binding)
         if not isinstance(binding, SourceBinding):
-            for required in set(target.get("required", [])) - binding.keys():
-                issues.append(
-                    Issue(
-                        node=node,
-                        path=[*path, required],
-                        code="binding",
-                        message="A required input field has no binding.",
-                    )
-                )
+            issues.extend(Issue(
+                node=node, path=[*path, required], code="binding", message="A required input field has no binding.",
+            ) for required in sorted(set(target.get("required", [])) - binding.keys()))
         for field, value in fields.items():
             location = path if field is None else [*path, field]
             expected = self._field_schema(target, field)
@@ -444,63 +540,35 @@ class Definition(BaseModel):
                         node=node, path=location, code="binding", message=f"{error.json_path}: {error.message}",
                     ))
                 continue
-            if not value.sources:
-                issues.append(Issue(node=node, path=location, code="binding", message="A source list cannot be empty."))
+            messages = [] if value.sources else ["A source list cannot be empty."]
             if value.project and (field is not None or not target):
-                issues.append(
-                    Issue(
-                        node=node,
-                        path=location,
-                        code="binding",
-                        message="Projection requires a whole-object input binding and target schema.",
-                    )
-                )
+                messages.append("Projection requires a whole-object input binding and target schema.")
             for source in value.sources:
                 if source not in allowed:
-                    issues.append(
-                        Issue(
-                            node=node,
-                            path=location,
-                            code="binding",
-                            message="A binding source must be an allowed producer or control-flow ancestor.",
-                        )
-                    )
+                    messages.append("A binding source must be an allowed producer or control-flow ancestor.")
+                    continue
                 if source == INPUT_SOURCE:
                     continue
                 try:
-                    schema = self.step(source).output_schema()
+                    schema = (schema_at(self.map_items_schema(node.partition(".")[0]), [0]) or {}) if (
+                        source == ITEM_SOURCE and node is not None
+                    ) else self.output_schema(source)
                 except (KeyError, ImproperlyConfigured):
-                    issues.append(
-                        Issue(node=node, path=location, code="binding", message=f"Unknown source {source!r}.")
-                    )
+                    messages.append(f"Unknown source {source!r}.")
                     continue
                 except ValidationError:
                     # The source node already reports its invalid schema declaration.
                     continue
                 actual = schema_at(schema, value.path)
                 if actual is None:
-                    issues.append(
-                        Issue(node=node, path=location, code="binding", message="Unknown source output path.")
-                    )
+                    messages.append("Unknown source output path.")
                 elif expected and value.project:
-                    for name in unmatched_properties(actual, expected):
-                        issues.append(
-                            Issue(
-                                node=node,
-                                path=location,
-                                code="binding",
-                                message=f"Projection cannot supply field {name!r}.",
-                            )
-                        )
-                elif expected and not schemas_match(actual, expected):
-                    issues.append(
-                        Issue(
-                            node=node,
-                            path=location,
-                            code="binding",
-                            message="Source and target schemas differ; compatibility is unproven.",
-                        )
+                    messages.extend(
+                        f"Projection cannot supply field {name!r}." for name in unmatched_properties(actual, expected)
                     )
+                elif expected and not schemas_match(actual, expected):
+                    messages.append("Source and target schemas differ; compatibility is unproven.")
+            issues.extend(Issue(node=node, path=location, code="binding", message=message) for message in messages)
         return issues
 
     @cached_property
@@ -515,7 +583,7 @@ class Definition(BaseModel):
         return self._validators[key]
 
     def _source_schema(self, source: str) -> dict[str, Any]:
-        return self.input_schema if source == INPUT_SOURCE else self.step(source).output_schema()
+        return self.input_schema if source == INPUT_SOURCE else self.output_schema(source)
 
     @staticmethod
     def _field_schema(target: dict[str, Any], field: str | None) -> dict[str, Any] | None:
@@ -552,21 +620,41 @@ class Definition(BaseModel):
 
     def retry_allowed(self, key: str) -> bool:
         """In-place recovery must not replay a failure already routed through error."""
-        return ERROR_OUTCOME not in self.nodes[key].next
+        parent, separator, _ = key.partition(".")
+        return ("failed" if separator else ERROR_OUTCOME) not in self.nodes[parent].next
 
-    def ready_nodes(self, rows: Iterable[StepRow]) -> list[PlannedNode]:
+    def ready_nodes(self, rows: Iterable[StepRow], *, map_concurrency: int = 10) -> list[PlannedNode]:
         """Plan missing rows once all sources settle, propagating skips in one pass.
 
         Incoming edges are grouped by source: two alternative outcomes leading
         to the same target count as one predecessor for an ``all`` join.
         Failed ``error`` edges are live, matching the failure-routing contract.
         """
-        existing = {row.node_key: row for row in rows if row.map_index == 0}
+        if type(map_concurrency) is not int or map_concurrency < 1:
+            raise ValueError("Map concurrency must be a positive integer.")
+        rows = list(rows)
+        existing = {row.node_key: row for row in rows if row.node_key in self.nodes}
         incoming = self.predecessors
         planned: list[PlannedNode] = []
         skipped: set[str] = set()
         for key, rank in self.ranks.items():
             if key in existing:
+                parent = existing[key]
+                if (self.nodes[key].body is not None and parent.status == StepRunStatus.WAITING
+                        and parent.waiting_kind == WaitingKind.MAP):
+                    bodies = {row.map_index: row for row in rows if row.node_key == f"{key}.body"}
+                    total = len(parent.input["items"])
+                    open_count = sum(row.status not in StepRunStatus.terminal_values() for row in bodies.values())
+                    if len(bodies) == total and not open_count:
+                        planned.append(PlannedNode(key, "ready", rank, existing=True))
+                    else:
+                        slots = max(0, map_concurrency - open_count)
+                        for index in range(total):
+                            if not slots:
+                                break
+                            if index not in bodies:
+                                planned.append(PlannedNode(f"{key}.body", "ready", rank, map_index=index))
+                                slots -= 1
                 continue
             sources = incoming[key]
             if not sources:
@@ -593,12 +681,15 @@ class Definition(BaseModel):
     def _edge_live(row: StepRow, outcomes: set[str]) -> bool:
         return StepRunStatus(row.status).has_outcome and row.outcome in outcomes
 
-    def input_for(self, key: str, run_input: Any, rows: Iterable[Any]) -> Any:
+    def input_for(self, key: str, run_input: Any, rows: Iterable[Any], *, map_index: int = 0) -> Any:
         """Bind raw node input; the attempt persists it before typed validation."""
         rows = list(rows)
-        node = self.nodes[key]
+        node = self.node(key)
         step = self.step(key)
         outputs = self._outputs(rows)
+        parent, separator, _ = key.partition(".")
+        if separator:
+            outputs[ITEM_SOURCE] = next(row for row in rows if row.node_key == parent).input["items"][map_index]
         if node.input is not None:
             value = resolve_bindings(
                 node.input,
@@ -606,6 +697,8 @@ class Definition(BaseModel):
                 outputs,
                 target_schema=step.input_schema(),
             )
+        elif separator:
+            value = outputs[ITEM_SOURCE]
         elif key == self.entry:
             value = self._entry_input(run_input, step)
         else:
@@ -619,10 +712,10 @@ class Definition(BaseModel):
         return value
 
     def _input_bindings(self) -> Iterator[tuple[SourceBinding, dict[str, Any], bool]]:
-        for key, node in self.nodes.items():
+        for key, node, _ in self.declarations():
             for field, binding in self._bindings(node.input).items():
                 if isinstance(binding, SourceBinding) and INPUT_SOURCE in binding.sources:
-                    target = schema_at(self.step(key).input_schema(), []) or {}
+                    target = schema_at(self.node_input_schema(key), []) or {}
                     expected = self._field_schema(target, field)
                     if expected is None:
                         raise ValidationError("Unknown target input field.")
@@ -637,22 +730,11 @@ class Definition(BaseModel):
         schema implication is deliberately outside the binding contract.
         """
         entry = self.nodes[self.entry]
-        schema = schema_at(self.step(self.entry).input_schema(), []) or {} if entry.input is None else {}
-        definitions = schema.setdefault("$defs", {})
-        seen: dict[tuple[str | int, ...], dict[str, Any]] = {}
-        for binding, expected, required in self._input_bindings():
-            path = tuple(binding.path)
-            known = seen.get(path) or schema_at(schema, path)
-            if known and expected and not schemas_match(known, expected) and not binding.project:
-                raise ValidationError("Workflow input consumers declare incompatible schemas for the same path.")
-            seen[path] = expected or known or {}
-            expected = copy.deepcopy(expected)
-            if binding.project:
-                expected.pop("additionalProperties", None)
-            embed_schema(expected, definitions, path=binding.path, required=required, into=schema)
-        if not definitions:
-            schema.pop("$defs")
-        return schema
+        schema = schema_at(self.node_input_schema(self.entry), []) or {} if entry.input is None else {}
+        return compose_schema(schema, (
+            (binding.path, expected, required, binding.project)
+            for binding, expected, required in self._input_bindings()
+        ))
 
     def validate_input(self, value: Any) -> Any:
         """Normalize the entry and validate the derived workflow-input schema."""
@@ -679,11 +761,11 @@ class Definition(BaseModel):
         if result.output is None:
             step = self.step(result.source)
             if any(result.eligible(outcome) for outcome in step.empty_outcomes):
-                empty: dict[str, Any] = {"const": {}}
-                return {"anyOf": [step.output_schema(), empty]} if (
+                empty = Step._schema(EmptyOutput, "serialization")
+                return {"anyOf": [self.output_schema(result.source), empty]} if (
                     result.when is None or set(result.when) - step.empty_outcomes
                 ) else empty
-            return step.output_schema()
+            return self.output_schema(result.source)
         definitions: dict[str, Any] = {}
         properties: dict[str, Any] = {}
         required: list[str] = []

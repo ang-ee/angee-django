@@ -15,6 +15,7 @@ from rebac import actor_context, system_context
 from rebac.actors import is_sudo
 
 from angee.base.identity import public_id_of
+from angee.base.jsonschema import validator
 from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.exceptions import RetryableDecisionError
@@ -535,7 +536,11 @@ def test_review_closure_edges_and_results_expose_empty_output(review, register_s
     graph = {"nodes": {"review": {"step": TypedQuestion.key}},
              "results": [{"from": "review", "when": ["expired"]}]}
     definition, issues = Definition.check(graph)
-    assert not issues and definition.result_schema(definition.results[0]) == {"const": {}}
+    assert not issues
+    schema = validator(definition.result_schema(definition.results[0]))
+    assert schema.is_valid({})
+    assert not schema.is_valid({"value": 1})
+    assert not schema.is_valid(None)
     graph["results"][0]["output"] = {"from": "review", "path": ["value"]}
     assert any(issue.code == "binding" for issue in Definition.check(graph)[1])
 

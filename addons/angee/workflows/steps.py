@@ -12,7 +12,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.utils import timezone
-from pydantic import BaseModel, Field, PydanticInvalidForJsonSchema
+from pydantic import BaseModel, ConfigDict, Field, PydanticInvalidForJsonSchema
 
 from angee.base.impl import ImplBase, resolve_impl_class
 from angee.base.jsonschema import check_schema
@@ -57,7 +57,7 @@ class RetryPolicy:
 class Settlement:
     """A body's completed, waiting or failed attempt, checked before persistence."""
 
-    kind: Literal["done", "wait", "next_page", "fail", "ask"]
+    kind: Literal["done", "wait", "next_page", "fail", "ask", "map"]
     output: Any = field(default_factory=dict)
     outcome: str = ""
     until: datetime | None = None
@@ -113,6 +113,12 @@ class Fail(Settlement):
 
 
 type _ContinuationOrFailure = Annotated[Wait | NextPage | Fail, Field(discriminator="kind")]
+
+
+class EmptyOutput(BaseModel):
+    """The empty object persisted for a step's declared empty-output outcomes."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class Step[I, O, C](ImplBase):

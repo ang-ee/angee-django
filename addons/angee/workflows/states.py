@@ -84,6 +84,7 @@ class WaitingKind(models.TextChoices):
 
     TIME = "time", "Time"
     DECISION = "decision", "Decision"
+    MAP = "map", "Map"
     OPERATOR = "operator", "Operator"
 
 

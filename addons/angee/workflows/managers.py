@@ -18,8 +18,8 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import F, Max
-from django.db.models.functions import Least, Now
+from django.db.models import F, Max, Value
+from django.db.models.functions import Concat, Least, Now
 from django.utils import timezone
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.actors import is_sudo
@@ -49,6 +49,12 @@ from angee.workflows.steps import Fail, Retryable, Settlement, Superseded, io_ti
 
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
+TICK_CANDIDATE_LIMIT = 1000
+"""Each tick action examines at most 1,000 candidates, including busy runs.
+
+One wide map of 1,000 waiting items fits in a sweep. A locked early candidate
+cannot hide later items within this bound; each is independently rechecked.
+"""
 
 
 def _error_text(value: str, field: Any) -> str:
@@ -330,14 +336,25 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 # changes, but the terminal run and graph plan stay untouched.
                 if not run.is_terminal:
                     with transaction.atomic():
-                        rows = list(step_runs.only("node_key", "map_index", "status", "outcome"))
+                        # The reverse manager needs its connecting FK to populate
+                        # Django's known-related-object cache without one query per row.
+                        rows = list(step_runs.only(
+                            "run_id", "node_key", "map_index", "status", "outcome", "waiting_kind", "input",
+                        ))
                         definition = run.version.definition
                         if definition.unrouted_failure(rows):
                             status, outcome, output = RunStatus.FAILED, ERROR_OUTCOME, {}
                         else:
+                            planned = definition.ready_nodes(
+                                rows, map_concurrency=settings.ANGEE_WORKFLOW_MAP_CONCURRENCY,
+                            )
+                            wake = [node.node_key for node in planned if node.existing]
+                            step_runs.filter(node_key__in=wake).to_ready()
                             step_runs.bulk_create([
-                                step_runs.model(run=run, node_key=node.node_key, status=node.status, rank=node.rank)
-                                for node in definition.ready_nodes(rows)
+                                step_runs.model(
+                                    run=run, node_key=node.node_key, map_index=node.map_index,
+                                    status=node.status, rank=node.rank,
+                                ) for node in planned if not node.existing
                             ])
                             statuses = set(step_runs.values_list("status", flat=True))
                             if statuses & {StepRunStatus.READY, StepRunStatus.RUNNING}:
@@ -439,6 +456,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 class StepRunQuerySet(AngeeQuerySet):
     """Own conditional step transitions and database-clock candidate scopes."""
 
+    def for_map(self, run_id: Any, node_key: Any) -> Any:
+        """Select a containing map's body rows, accepting native ORM expressions."""
+        key = Value(node_key) if isinstance(node_key, str) else node_key
+        return self.filter(run_id=run_id, node_key=Concat(key, Value(".body")))
+
     @staticmethod
     def _cleared_wait() -> dict[str, Any]:
         """Clear the companion columns shared by every non-waiting transition."""
@@ -449,9 +471,10 @@ class StepRunQuerySet(AngeeQuerySet):
         with transaction.atomic(), system_context(reason="workflows.dispatch"):
             ready = self.filter(status=StepRunStatus.READY).exclude(run__status__in=RunStatus.terminal_values())
             selected = ready.order_by("pk").lock_if_supported(no_key=True, skip_locked=True)
-            for pk in list(selected.values_list("pk", flat=True)):
-                if ready.filter(pk=pk).update(dispatched_at=Now(), updated_at=Now()):
-                    enqueue_task("workflows.execute", kwargs={"step_run_id": pk})
+            selected_ids = list(selected.values_list("pk", flat=True))
+            ready.filter(pk__in=selected_ids).update(dispatched_at=Now(), updated_at=Now())
+            for pk in selected_ids:
+                enqueue_task("workflows.execute", kwargs={"step_run_id": pk})
 
     def count_redispatch(self) -> int:
         """Count a tick redelivery without changing status or publishing a change."""
@@ -480,6 +503,7 @@ class StepRunQuerySet(AngeeQuerySet):
                     until = attempt.started_at + io_timeout_budget()
                 step_run.input = step_run.run.version.definition.input_for(
                     step_run.node_key, step_run.run.input, step_run.run.step_runs.all(),
+                    map_index=step_run.map_index,
                 )
                 self.filter(pk=step_run.pk).update(input=step_run.input)
         finally:
@@ -863,7 +887,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
         count = 0
         with system_context(reason="workflows.tick"):
             candidates = candidates.exclude(run__status__in=RunStatus.terminal_values())
-            for pk, run_id in list(candidates.order_by("pk").values_list("pk", "run_id")[:100]):
+            for pk, run_id in list(candidates.order_by("pk").values_list("pk", "run_id")[:TICK_CANDIDATE_LIMIT]):
                 with _record_failure(f"tick candidate {pk}"):
                     with self.run_model.objects.hold(run_id, skip_locked=True) as run:
                         if run is None or run.is_terminal:

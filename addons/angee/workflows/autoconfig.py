@@ -8,7 +8,11 @@ SETTINGS = {
             "options": {"expires": 45},
         },
     },
-    "ANGEE_WORKFLOW_STEP_CLASSES": {"review": "angee.workflows.reviews.Review"},
+    "ANGEE_WORKFLOW_STEP_CLASSES": {
+        "review": "angee.workflows.reviews.Review",
+        "map": "angee.workflows.maps.Map",
+    },
+    "ANGEE_WORKFLOW_MAP_CONCURRENCY": 10,
     "ANGEE_WORKFLOW_MAX_DISPATCHES": 20,
 }
 """Django settings contributed when the workflows addon is installed."""

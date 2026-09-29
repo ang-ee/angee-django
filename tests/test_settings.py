@@ -1733,7 +1733,11 @@ def test_bare_settings_use_addon_owned_defaults(settings):
     assert settings.REBAC_LOCAL_BACKEND_STORAGE == "registry"
     assert settings.REBAC_STRICT_MODE is True
     assert settings.CELERY_WORKER_PREFETCH_MULTIPLIER == 1
-    assert settings.ANGEE_WORKFLOW_STEP_CLASSES == {"review": "angee.workflows.reviews.Review"}
+    assert settings.ANGEE_WORKFLOW_STEP_CLASSES == {
+        "review": "angee.workflows.reviews.Review",
+        "map": "angee.workflows.maps.Map",
+    }
+    assert settings.ANGEE_WORKFLOW_MAP_CONCURRENCY == 10
     assert {"email", "webform", "manual", "fake_live"} <= settings.ANGEE_CHANNEL_BACKEND_CLASSES.keys()
     assert {"anthropic", "openai", "ollama", "stub_inference"} <= settings.ANGEE_INFERENCE_BACKEND_CLASSES.keys()
     assert "pydantic" in settings.ANGEE_AGENT_RUNTIME_CLASSES
