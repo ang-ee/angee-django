@@ -45,7 +45,7 @@ from angee.workflows.steps import GateStep, StepImpl, TransientStepError
 from angee.workflows.testing.drivers import advance_once, execute_started, step_run_for
 from angee.workflows.testing.models import WorkflowDispatch, WorkflowRun
 from angee.workflows_agents import sessions
-from tests.conftest import StubInferenceBackend
+from tests.backend_stubs import StubInferenceBackend
 from tests.test_agents import InferenceModel, _provider
 from tests.test_agents_graphql import Agent, AgentSession, AgentTurn
 from tests.test_workflows_resources import WorkflowResourceLedger  # noqa: F401 -- register before database setup

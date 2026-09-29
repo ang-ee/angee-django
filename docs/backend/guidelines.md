@@ -1117,6 +1117,11 @@ and current contracts before applying a historical example to a new deployment.
 - **A `strawberry_django.field(only=[...])` hint must list every column the resolver dereferences.**
   Include columns read by shared properties the resolver delegates to; otherwise
   selecting that field alone can defer-load the missing column per row.
+- **Type extensions retain native optimizer hints.** Declare hints on the contributed
+  field; [`AngeeSchema`](../../addons/angee/graphql/schema.py) exposes the composed
+  definition to optimizer consumers without mutating shared addon declarations.
+  Exercise narrow list selections at multiple row counts, including named schemas
+  with different extensions.
 - **Explicit delete preflight plus elevated destructive work must test both branches.**
   Storage's soft-delete path and messaging's threaded-record delete path check the
   public `delete` permission themselves, then run the owned destructive work under

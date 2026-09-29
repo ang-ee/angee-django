@@ -783,7 +783,10 @@ def _relation_scalar_queryset(
             expression = actor_scoped_relation_group_expression(queryset, path)
             if is_to_one_relation(field):
                 target = field.target_field if hasattr(field, "target_field") else field.related_model._meta.pk
-                output = target.clone()
+                # A target PK may itself be an MTI parent link. Django's
+                # get_col resolves that chain to its actual scalar field;
+                # cloning the link would leave an unbound relation field.
+                output = target.get_col(target.model._meta.db_table).output_field.clone()
                 output.null = False  # SQL NOT must preserve UNKNOWN for redacted NULLs.
                 output.register_lookup(_RelationExact)
                 output.register_lookup(_RelationIn)
@@ -1069,10 +1072,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         if get_aggregate_queryset is not None
         else _aggregate_queryset(read_queryset)
     )
-    sortable_aliases = {
-        **{path: _relation_axis_alias(path) for path in _relation_axis_fields(model, sortable)},
-        **sortable_aliases,
-    }
+    # Native Hasura aliases cannot shadow a model field (or contain path
+    # separators). Keep the public relation name on the Strawberry input while
+    # its Python name orders the same redacted key used by relation filters.
+    relation_sort_aliases = {path: _relation_axis_alias(path) for path in _relation_axis_fields(model, sortable)}
+    sortable_aliases = {**{alias: alias for alias in relation_sort_aliases.values()}, **sortable_aliases}
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
     active_write_backend = write_backend or AngeeHasuraWriteBackend(model, lines=lines)
@@ -1116,7 +1120,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         model=model,
         name=name,
         filterable=list(filterable),
-        sortable=list(sortable),
+        sortable=[relation_sort_aliases.get(path, path) for path in sortable],
         sortable_aliases=sortable_aliases,
         aggregatable=list(aggregatable),
         groupable=list(active_groupable) or None,
@@ -1144,6 +1148,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         id_decode=id_decode,
         id_column=id_column,
     )
+    if relation_sort_aliases:
+        assert resource.order_by_type is not None
+        wire_names = {alias: path for path, alias in relation_sort_aliases.items()}
+        for field in get_object_definition(resource.order_by_type, strict=True).fields:
+            if field.python_name in wire_names:
+                field.graphql_name = wire_names[field.python_name]
     if relation_filter_aliases:
         assert resource.filter_type is not None
         for field in get_object_definition(resource.query, strict=True).fields:

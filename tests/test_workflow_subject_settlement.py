@@ -21,7 +21,8 @@ from angee.workflows.steps import StepResult, TransientStepError
 from angee.workflows.tasks import consume_workflow_dispatch
 from angee.workflows.testing.drivers import advance_once, execute_started, step_run_for
 from angee.workflows.testing.models import StepAttempt, Workflow, WorkflowDispatch
-from tests.workflows import FixtureStep, start_run, workflow_with_steps
+from tests.workflow_steps import FixtureStep
+from tests.workflows import start_run, workflow_with_steps
 
 
 def settle_fixture(run: Any) -> None:

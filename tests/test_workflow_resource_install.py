@@ -37,7 +37,7 @@ from angee.workflows.resources import WorkflowDefinitionResource
 from angee.workflows.testing.models import Edge, Step, Workflow
 from tests.test_workflows_resources import WorkflowResourceLedger
 from tests.test_workflows_resources import workflow_resource_tables as _workflow_resource_tables  # noqa: F401
-from tests.workflows import FixtureStep
+from tests.workflow_steps import FixtureStep
 
 _OMITTED = object()
 pytestmark = pytest.mark.usefixtures("_workflow_resource_tables")

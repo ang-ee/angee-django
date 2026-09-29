@@ -13,7 +13,8 @@ from angee.workflows import models as workflow_models
 from angee.workflows.steps import DecisionSpec, StepResult
 from angee.workflows.testing.drivers import advance_once, execute_started, step_run_for
 from angee.workflows.testing.models import Decision, Edge, Step, StepRun, Workflow
-from tests.workflows import FixtureStep, start_run
+from tests.workflow_steps import FixtureStep
+from tests.workflows import start_run
 
 User = get_user_model()
 

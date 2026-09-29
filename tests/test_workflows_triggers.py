@@ -36,7 +36,8 @@ from tests.conftest import create_platform_admin as _platform_admin
 from tests.iam_models import Group
 from tests.integrate_models import Integration
 from tests.tables import model_tables
-from tests.workflows import FixtureStep, start_run
+from tests.workflow_steps import FixtureStep
+from tests.workflows import start_run
 
 User = get_user_model()
 

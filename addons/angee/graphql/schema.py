@@ -7,8 +7,8 @@ import logging
 import threading
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
-from functools import partial
+from dataclasses import dataclass, replace
+from functools import lru_cache, partial
 from typing import Any, ClassVar, cast
 
 import strawberry
@@ -20,10 +20,14 @@ from rebac import MissingActorError, PermissionDenied, RebacMixin
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
+from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.tools import merge_types
-from strawberry.types.base import get_object_definition
+from strawberry.types.base import StrawberryObjectDefinition, get_object_definition
+from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.types.execution import ExecutionContext
 from strawberry.types.field import StrawberryField
+from strawberry.types.scalar import ScalarDefinition
+from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
@@ -43,7 +47,7 @@ from angee.graphql.introspection import (
     surface_name,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
-from graphql import GraphQLError, GraphQLSchema
+from graphql import GraphQLError, GraphQLObjectType, GraphQLSchema
 
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
@@ -92,6 +96,31 @@ class AngeeSchema(strawberry.Schema):
 
     angee_resources: tuple[DataResourceMetadata, ...] = ()
     """Model resource metadata carried by this built schema."""
+
+    @lru_cache
+    def get_type_by_name(
+        self, name: str,
+    ) -> StrawberryObjectDefinition | ScalarDefinition | StrawberryEnumDefinition | StrawberryUnion | None:
+        """Expose final extension fields to native schema/optimizer consumers.
+
+        Strawberry merges extensions in graphql-core, while its type map keeps
+        the primary declaration. Project the executable fields (including their
+        native optimizer stores) onto a schema-local definition. Shared addon
+        declarations remain untouched when another named schema is built.
+        """
+
+        definition = super().get_type_by_name(name)
+        graphql_type = self._schema.get_type(name)
+        if (
+            isinstance(definition, StrawberryObjectDefinition)
+            and isinstance(graphql_type, GraphQLObjectType)
+            and graphql_type.extensions.get(GraphQLCoreConverter.OBJECT_EXTENSIONS_BACKREF)
+        ):
+            return replace(definition, fields=[
+                field.extensions[GraphQLCoreConverter.DEFINITION_BACKREF]
+                for field in graphql_type.fields.values()
+            ])
+        return definition
 
     def process_errors(
         self,

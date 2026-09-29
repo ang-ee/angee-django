@@ -64,7 +64,8 @@ from angee.workflows.testing.models import Decision, StepRun, Workflow, Workflow
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.messaging_models import Party
-from tests.workflows import FixtureStep, admit_workflow_actor, start_run, step_for, workflow_with_steps
+from tests.workflow_steps import FixtureStep
+from tests.workflows import admit_workflow_actor, start_run, step_for, workflow_with_steps
 
 User = get_user_model()
 

@@ -16,7 +16,8 @@ from angee.workflows.models import StepRunStatus
 from angee.workflows.steps import StepExecutionMode, StepResult, TransientStepError
 from angee.workflows.testing.drivers import advance_once, execute_started
 from angee.workflows.testing.models import StepAttempt, StepRun, WorkflowDispatch
-from tests.workflows import FixtureStep, start_run, workflow_with_steps
+from tests.workflow_steps import FixtureStep
+from tests.workflows import start_run, workflow_with_steps
 
 
 @pytest.mark.django_db(transaction=True)

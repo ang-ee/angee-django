@@ -23,7 +23,8 @@ from angee.workflows.models import RunStatus, StepRunStatus
 from angee.workflows.steps import StepResult
 from angee.workflows.testing.drivers import advance_once, execute_started, run_to_terminal
 from angee.workflows.testing.models import StepAttempt, StepRun
-from tests.workflows import FixtureStep, start_run, workflow_with_steps
+from tests.workflow_steps import FixtureStep
+from tests.workflows import start_run, workflow_with_steps
 
 
 def _map_workflow(*, item: Any, explicit: bool) -> Any:

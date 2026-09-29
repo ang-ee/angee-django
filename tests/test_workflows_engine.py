@@ -41,7 +41,8 @@ from angee.workflows.testing.models import (
     WorkflowDispatch,
     WorkflowRun,
 )
-from tests.workflows import FixtureStep, admit_workflow_actor, start_run, step_for, workflow_actor, workflow_with_steps
+from tests.workflow_steps import FixtureStep
+from tests.workflows import admit_workflow_actor, start_run, step_for, workflow_actor, workflow_with_steps
 
 User = get_user_model()
 

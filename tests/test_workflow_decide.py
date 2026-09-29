@@ -31,7 +31,8 @@ from tests.test_workflows_gates import (
     _gate_config,
     _open_gate_run,
 )
-from tests.workflows import FixtureStep, start_run, workflow_with_steps
+from tests.workflow_steps import FixtureStep
+from tests.workflows import start_run, workflow_with_steps
 
 User = get_user_model()
 

@@ -8,7 +8,7 @@ following edge (:class:`~angee.posts.managers.FeedFollowManager`), the rolled-up
 :meth:`~angee.posts.models.Feed.sync` delegating to ``Message.objects.ingest`` under
 the public-thread modality with the email quotation builder gated off. The concrete
 test models (composed the way the composer folds each source model onto one runtime
-table) and the ``stub`` feed backend live in ``tests.conftest``.
+table) live in ``tests.conftest``; the feed backend lives in ``tests.backend_stubs``.
 """
 
 from __future__ import annotations
@@ -32,12 +32,12 @@ from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.posts.backends import ParsedMetrics, ParsedPost, ParsedReaction
 from angee.posts.ingest import land_posts
 from angee.posts.models import ThreadPublic
+from tests.backend_stubs import StubFeedBackend
 from tests.conftest import (
     Feed,
     FeedFollow,
     PostMetrics,
     Quota,
-    StubFeedBackend,
     create_user,
     make_integration,
 )

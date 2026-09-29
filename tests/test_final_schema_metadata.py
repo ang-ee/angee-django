@@ -5,7 +5,27 @@ from angee.data.metadata import DataMutationArgument, DataResourceRoots, DataRes
 from angee.graphql.actions import ActionResult
 from angee.graphql.data.final_schema import final_schema_references
 from angee.graphql.data.metadata import _finalize_data_resource
+from angee.graphql.data.resource_fields import final_input_policy_fields
 from angee.graphql.schema import AngeeSchema
+
+
+def test_input_policy_preserves_wire_aliases_and_complete_relation_paths() -> None:
+    @strawberry.input
+    class MetadataOrder:
+        internal_relation: str | None = strawberry.field(name="relation", default=None)
+        internal_path: str | None = strawberry.field(name="relation__name", default=None)
+        renamed: str | None = strawberry.field(name="public_name", default=None)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def result(self, order: MetadataOrder | None = None) -> bool:
+            return order is not None
+
+    schema = AngeeSchema(query=Query)
+    assert final_input_policy_fields(
+        schema._schema, "MetadataOrder", accepted=("relation", "relation__name", "renamed", "absent"),
+    ) == ("relation", "relation__name", "public_name")
 
 
 def test_action_result_sdl_exposes_nullable_code() -> None:

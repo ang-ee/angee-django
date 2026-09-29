@@ -190,9 +190,9 @@ def test_sync_data_views_filter_by_bridge_and_scope_all_read_roots(
     unknown = _execute(
         schema, query, {"bridge": public_id_for(Integration, bridge.pk + other.pk + 1_000_000)}, user=outsider
     )
-    assert hidden.data is unknown.data is None
-    assert hidden.errors and unknown.errors
-    assert [error.formatted for error in hidden.errors] == [error.formatted for error in unknown.errors]
+    assert _data(hidden) == _data(unknown) == {
+        "rows": [], "total": {"aggregate": {"count": 0}}, "groups": [], "group_count": 0,
+    }
 
 
 def test_sync_counts_are_native_annotations_without_row_growth_queries(composed_tables: None) -> None:

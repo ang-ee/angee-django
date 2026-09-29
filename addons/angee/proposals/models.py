@@ -2277,17 +2277,25 @@ class TaskProposalAccess(ImmutableFieldsMixin):
 
     @classmethod
     def clarification_widen_blocker_expression(cls) -> models.Expression:
-        """Compute the publication blocker; callers must authorize its disclosure."""
+        """Compute the publication blocker; callers must authorize its disclosure.
+
+        Keep the hidden asker's identity inside the model-owned system query.
+        The caller projects only the blocker, never a gated column from its
+        actor-scoped outer row.
+        """
         messages = cls.thread_messages_expression(models.OuterRef("pk")).filter(
             created_by_id=models.OuterRef("clarification_asker_id"),
         )
-        return models.Case(
+        blocker = models.Case(
             models.When(
                 cls._hidden_clarification_asker_condition() & models.Q(models.Exists(messages)),
                 then=models.Value("hidden_asker_message"),
             ),
             default=models.Value(None),
             output_field=models.CharField(),
+        )
+        return models.Subquery(
+            system_queryset(cls).filter(pk=models.OuterRef("pk")).annotate(_blocker=blocker).values("_blocker"),
         )
 
     def validate_visibility(self, value: str) -> None:

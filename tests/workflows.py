@@ -11,35 +11,8 @@ from rebac.resources import to_object_ref
 
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
-from angee.workflows.steps import StepImpl, StepResult
 from angee.workflows.testing.drivers import start_run as start_workflow_run
 from angee.workflows.testing.models import Edge, Step, Workflow
-
-
-class FixtureStep(StepImpl):
-    """Concrete configurable operation used only by workflow runtime tests."""
-
-    key = "fixture"
-    label = "Fixture"
-    category = "Tests"
-    selectable = False
-    deterministic = False
-
-    def run(self, step_run: Any, *, now: Any) -> StepResult:
-        """Return the explicitly configured test output and outcome."""
-
-        del self, now
-        config = dict(step_run.step.config)
-        if config.get("mode") == "error":
-            raise RuntimeError(str(config.get("error", "fixture failed")))
-        return StepResult.done(
-            output={
-                "key": step_run.step.key,
-                "input": step_run.input,
-                **dict(config.get("output", {})),
-            },
-            outcome=str(config.get("outcome", "done")),
-        )
 
 
 @pytest.fixture()

@@ -160,14 +160,14 @@ ANGEE_RESOURCE_SOURCE_CLASSES = {
 }
 ANGEE_VCS_BACKEND_CLASSES = {
     "local": "angee.integrate_vcs.backend.LocalVCSBackend",
-    "stub": "tests.conftest.StubVCSBackend",
+    "stub": "tests.backend_stubs.StubVCSBackend",
 }
 ANGEE_INFERENCE_BACKEND_CLASSES = {
     "manual": "angee.agents.backends.ManualInferenceBackend",
     "anthropic": "angee.agents_integrate_anthropic.backend.AnthropicInferenceBackend",
     "ollama": "angee.agents_integrate_ollama.backend.OllamaInferenceBackend",
     "openai": "angee.agents_integrate_openai.backend.OpenAIInferenceBackend",
-    "stub_inference": "tests.conftest.StubInferenceBackend",
+    "stub_inference": "tests.backend_stubs.StubInferenceBackend",
 }
 ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
 ANGEE_AGENT_RUNTIME_CLASSES = {
@@ -183,7 +183,7 @@ ANGEE_WORKFLOW_STEP_CLASSES = {
     "call_workflow": "angee.workflows.steps.CallWorkflow",
     "join_continuation": "angee.workflows.steps.JoinContinuation",
     "emit": "angee.workflows.steps.EmitStep",
-    "fixture": "tests.workflows.FixtureStep",
+    "fixture": "tests.workflow_steps.FixtureStep",
     "archive_probe": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.archive_probe"],
     "archive_gate": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.archive_gate"],
     "archive_execute": WORKFLOWS_INTEGRATE_SETTINGS["ANGEE_WORKFLOW_STEP_CLASSES.archive_execute"],
@@ -239,7 +239,7 @@ ANGEE_CHANNEL_BACKEND_CLASSES = {
 # contributes these). ``stub`` returns canned posts queued by the posts tests.
 ANGEE_POSTS_FEED_BACKEND_CLASSES = {
     "manual": "angee.posts.backends.ManualFeedBackend",
-    "stub": "tests.conftest.StubFeedBackend",
+    "stub": "tests.backend_stubs.StubFeedBackend",
 }
 # OAuth provider types (normally each addon's autoconfig contributes these); the
 # ImplClassField enum requires a non-empty registry at model-import time.

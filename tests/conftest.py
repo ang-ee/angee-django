@@ -22,7 +22,6 @@ from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.addons import addon_manifest
-from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.compose.model_composition import ModelComposition
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
@@ -34,7 +33,6 @@ from angee.integrate.models import ExternalAccount as AbstractExternalAccount
 from angee.integrate.models import OAuthClient as AbstractOAuthClient
 from angee.integrate.models import Vendor as AbstractVendor
 from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscription
-from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
 from angee.integrate_vcs.models import Source as AbstractSource
 from angee.integrate_vcs.models import Template as AbstractTemplate
@@ -48,7 +46,6 @@ from angee.platform.models import Addon as AbstractAddon
 from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
 from angee.platform_integrate_vcs.models import AddonCatalog as AbstractAddonCatalog
 from angee.platform_integrate_vcs.models import CatalogProvenance as AbstractCatalogProvenance
-from angee.posts.backends import FeedBackend, ParsedPost
 from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
@@ -310,111 +307,6 @@ def make_integration(
         if backend_class is not None:
             values["backend_class"] = backend_class
         return model.objects.create(**values)
-
-
-class StubVCSBackend(VCSBackend):
-    """In-memory VCS backend for tests; canned data rides on ``VcsBridge.config``.
-
-    Registered as the ``stub`` key in the test ``ANGEE_VCS_BACKEND_CLASSES`` so a
-    ``VcsBridge(backend_class="stub")`` resolves to it. Each test injects
-    ``stub_repos``/``stub_tree``/``stub_blobs`` through the bridge config.
-    """
-
-    repository_search_scope_config_key = "stub_org"
-
-    def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
-        """Return the configured repositories (filtered to ``org`` when given)."""
-
-        repos = [RepoDescriptor(**spec) for spec in self.bridge.config.get("stub_repos", [])]
-        return [repo for repo in repos if not org or repo.org == org]
-
-    def get_repo(self, name: str) -> RepoDescriptor:
-        """Return one configured repository by name or raise."""
-
-        for spec in self.bridge.config.get("stub_repos", []):
-            if spec["name"] == name:
-                return RepoDescriptor(**spec)
-        raise FileNotFoundError(name)
-
-    def search_repos(self, query: str, *, org: str = "") -> list[RepoDescriptor]:
-        """Return configured repositories whose name contains ``query``."""
-
-        return [repo for repo in self.ls_repos(org=org) if query in repo.name]
-
-    def ls_tree(self, repository: Any, *, ref: str, path: str, recursive: bool = False) -> list[TreeEntry]:
-        """Return the configured tree entries under ``path``."""
-
-        del repository, ref, recursive
-        prefix = path.strip("/")
-        entries = [TreeEntry(**spec) for spec in self.bridge.config.get("stub_tree", [])]
-        return [entry for entry in entries if not prefix or entry.path == prefix or entry.path.startswith(f"{prefix}/")]
-
-    def cat_file(self, repository: Any, *, ref: str, path: str) -> bytes:
-        """Return the configured blob bytes for ``path`` or raise."""
-
-        del repository, ref
-        blobs = self.bridge.config.get("stub_blobs", {})
-        if path in blobs:
-            return str(blobs[path]).encode("utf-8")
-        raise FileNotFoundError(path)
-
-    def rev_parse(self, repository: Any, ref: str) -> str:
-        """Return a fixed stub commit oid."""
-
-        del repository, ref
-        return "stubsha"
-
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
-        """Accept every webhook in tests."""
-
-        del vcs_bridge, request
-        return True
-
-
-class StubInferenceBackend(InferenceBackend):
-    """In-memory inference backend for tests; canned models ride on ``provider.config``.
-
-    Registered as the ``stub_inference`` key in the test ``ANGEE_INFERENCE_BACKEND_CLASSES`` so
-    an ``InferenceProvider(backend_class="stub_inference")`` resolves to it. Each test injects
-    ``stub_models`` (a list of ``InferenceModelSpec`` kwargs) through the provider config.
-    """
-
-    def list_models(self) -> list[InferenceModelSpec]:
-        """Return the models configured on the provider's ``config``."""
-
-        return [InferenceModelSpec(**spec) for spec in self.provider.config.get("stub_models", [])]
-
-
-class StubFeedBackend(FeedBackend):
-    """In-memory feed backend for tests; canned posts are queued per feed row.
-
-    Registered as the ``stub`` key in the test ``ANGEE_POSTS_FEED_BACKEND_CLASSES`` so
-    a ``Feed(backend_class="stub")`` resolves to it. ``ParsedPost`` carries nested
-    dataclasses (not JSON), so a test queues the posts through :meth:`queue` keyed by
-    the feed row rather than riding them on the JSON ``config``; ``fetch_posts`` returns
-    what was queued for the bound feed.
-    """
-
-    key = "stub"
-    label = "Stub"
-    _posts: dict[Any, list[ParsedPost]] = {}
-
-    @classmethod
-    def queue(cls, feed: Any, posts: list[ParsedPost]) -> None:
-        """Queue the posts a subsequent ``feed.sync()`` should fetch."""
-
-        cls._posts[feed.pk] = list(posts)
-
-    @classmethod
-    def reset(cls) -> None:
-        """Drop every queued post (called on fixture teardown)."""
-
-        cls._posts.clear()
-
-    def fetch_posts(self) -> list[ParsedPost]:
-        """Return the posts queued for the bound feed row."""
-
-        return type(self)._posts.get(self.bridge.pk, [])
 
 
 class Link(AbstractLink):

@@ -188,7 +188,10 @@ def relation_grouping_case(transactional_db: None):
                 filterable=[
                     "kind", "target", "metric_target__rank", "target__display_name", "middle__target__display_name",
                 ],
-                sortable=["kind", "id", *declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields")],
+                sortable=[
+                    "kind", "id", "target", "middle__target", "plain",
+                    *declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields"),
+                ],
                 aggregatable=["amount"],
                 groupable=[
                     "target",
@@ -219,7 +222,10 @@ def relation_grouping_case(transactional_db: None):
                 model=GroupParent,
                 name="pinned_group_parents",
                 filterable=["kind", "target", "target__display_name"],
-                sortable=["kind", "id", *declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields")],
+                sortable=[
+                    "kind", "id", "target", "middle__target", "plain",
+                    *declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields"),
+                ],
                 aggregatable=["amount"],
                 groupable=["target"],
                 get_queryset=lambda info: GroupParent.objects.with_actor(alice),
@@ -552,6 +558,39 @@ def test_scalar_relation_filters_redact_every_protected_hop(
     assert {row["id"] for row in alice["nulls"]} == {str(case.parents[index].sqid) for index in null_indexes}
     bob = _query(case, case.bob, document)
     assert len(bob["hidden"]) == bob["groups"] == len(bob["range"]) == 1
+
+
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+@pytest.mark.parametrize("path,kind,null_indexes", [
+    ("target", "target", (2, 5)),
+    ("middle__target", "nested", (7, 8)),
+])
+def test_relation_key_sort_preserves_wire_names_and_redacts_keys(
+    relation_grouping_case: Any, direction: str, path: str, kind: str, null_indexes: tuple[int, int],
+) -> None:
+    case = relation_grouping_case
+    document = (
+        '{ group_parents(where: {kind: {_eq: "KIND"}}, order_by: [{PATH: DIRECTION}]) { id } }'
+        .replace("KIND", kind).replace("PATH", path).replace("DIRECTION", direction)
+    )
+    rows = _query(case, case.alice, document)["group_parents"]
+    ids = [row["id"] for row in rows]
+    null_ids = [str(case.parents[index].sqid) for index in null_indexes]
+    assert ids[ids.index(null_ids[0]):ids.index(null_ids[0]) + 2] == null_ids
+    if path == "target":
+        readable = (0, 1, 3, 4) if direction == "asc" else (4, 3, 0, 1)
+        assert [value for value in ids if value not in null_ids] == [
+            str(case.parents[index].sqid) for index in readable
+        ]
+    assert _query(case, case.bob, document)["group_parents"] != rows
+    pinned = result_data(execute_schema(
+        case.pinned_schema, document.replace("group_parents(", "pinned_group_parents("), user=case.bob,
+    ))
+    assert pinned["pinned_group_parents"] == rows
+    plain_query = '{ group_parents(where: {kind: {_eq: "plain"}}, order_by: [{plain: asc}]) { id } }'
+    assert _query(case, case.alice, plain_query) == {
+        "group_parents": [{"id": str(case.parents[9].sqid)}],
+    }
 
 
 @pytest.mark.parametrize("direction", ["asc", "desc"])

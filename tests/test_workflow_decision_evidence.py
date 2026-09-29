@@ -36,7 +36,8 @@ from angee.workflows.testing.drivers import advance_once, execute_started
 from angee.workflows.testing.models import Decision, StepRun
 from tests.conftest import create_platform_admin
 from tests.messaging_models import Party
-from tests.workflows import FixtureStep, start_run, workflow_with_steps
+from tests.workflow_steps import FixtureStep
+from tests.workflows import start_run, workflow_with_steps
 
 User = get_user_model()
 _APPROVE = (ReviewAction(value="approve", label="Approve", verdict="COMPLETE"),)

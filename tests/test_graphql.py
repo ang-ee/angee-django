@@ -18,6 +18,7 @@ from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models
+from django.db.models.functions import Upper
 from django.test import RequestFactory
 from django_choices_field import IntegerChoicesField
 from graphql import GraphQLEnumType, GraphQLError, GraphQLObjectType, get_named_type
@@ -26,6 +27,7 @@ from rebac import (
     PermissionDenied,
     RebacMixin,
     RelationshipTuple,
+    system_context,
     to_object_ref,
     to_subject_ref,
     write_relationships,
@@ -54,6 +56,7 @@ from angee.graphql.schema import (
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from tests.conftest import make_addon
+from tests.hierdemo.models import HierNode
 
 
 @strawberry.type
@@ -601,6 +604,72 @@ def test_type_extension_is_idempotent_across_collections() -> None:
     sdl = schema.as_str()
     # Exactly one `extra` field — the second collection skipped re-adding it.
     assert sdl.count("extra: Int!") == 1
+
+
+@strawberry_django.type(HierNode)
+class OptimizedExtensionNode:
+    id: strawberry.auto
+
+
+@strawberry_django.type(HierNode, name="OptimizedExtensionNode", extend=True)
+class OptimizedExtensionFields:
+    @strawberry_django.field(annotate={"_upper_name": lambda info: Upper("name")}, name="upper_name")
+    def annotated(self) -> str:
+        return cast(Any, self)._upper_name
+
+    @strawberry_django.field(only=["name"])
+    def label(self) -> str:
+        return cast(Any, self).name
+
+    @strawberry_django.field(only=["parent__name"], select_related=["parent"])
+    def parent_label(self) -> str:
+        return cast(Any, self).parent.name
+
+    @strawberry_django.field(prefetch_related=["children"])
+    def child_labels(self) -> list[str]:
+        return [child.name for child in cast(Any, self).children.all()]
+
+
+@strawberry.type
+class OptimizedExtensionQuery:
+    @strawberry_django.field
+    def nodes(self) -> list[OptimizedExtensionNode]:
+        return HierNode.objects.filter(name="branch")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("count", [1, 6])
+def test_type_extension_optimizer_hints_are_selected_and_batched(count: int, django_assert_num_queries: Any) -> None:
+    """All four native hint kinds survive extension composition and narrow reads."""
+
+    schemas = GraphQLSchemas([addon(
+        public={"query": [OptimizedExtensionQuery]},
+        console={"query": [OptimizedExtensionQuery], "type_extensions": [OptimizedExtensionFields]},
+    )])
+    schema = schemas.build("console")
+    public = schemas.build("public")
+    assert "upper_name" not in public.as_str()
+    assert len(OptimizedExtensionNode.__strawberry_definition__.fields) == 1
+    with system_context(reason="test.graphql.extension_hints"):
+        root = HierNode.objects.create(name="root")
+        for _ in range(count):
+            branch = HierNode.objects.create(name="branch", parent=root)
+            HierNode.objects.create(name="leaf", parent=branch)
+        # An unselected extension field must not install its prefetch.
+        with django_assert_num_queries(1):
+            result = schema.execute_sync("{ nodes { id } }")
+        assert result.errors is None
+        with django_assert_num_queries(2):
+            result = schema.execute_sync("""{
+              nodes { ...Hints }
+            }
+            fragment Hints on OptimizedExtensionNode {
+              value: upper_name label parent_label child_labels
+            }""")
+        assert result.errors is None
+        assert result.data == {"nodes": [
+            {"value": "BRANCH", "label": "branch", "parent_label": "root", "child_labels": ["leaf"]}
+        ] * count}
 
 
 def test_type_extension_rejects_field_collision() -> None:
