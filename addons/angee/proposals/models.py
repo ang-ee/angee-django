@@ -45,6 +45,7 @@ from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
 from angee.base.refs import canonical_record_model
 from angee.base.scoping import bind_actor, system_queryset
 from angee.base.transitions import StateTransitions, save_state, transition
+from angee.base.validation import validate_model
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
@@ -213,10 +214,13 @@ class RoundManager(AngeeManager):
         facilitator: models.Model,
         responders: Iterable[models.Model],
         team: models.Model | None = None,
+        *,
+        requester_party: models.Model | None = None,
+        configuration: Mapping[str, Any] | None = None,
     ) -> Any:
         """Resume a round with the same target, name and declared settings."""
 
-        template = RoundTemplate.model_validate(template)
+        template = validate_model(RoundTemplate, template, field="template")
         target_field = {"projects.project": "project", "projects.task": "task"}.get(target._meta.label_lower)
         if target_field is None:
             raise ValidationError({"target": "Choose a project or task."})
@@ -227,6 +231,9 @@ class RoundManager(AngeeManager):
             candidate = self.model(**{target_field: target}, facilitator=facilitator, team=team)
             project = candidate.target_project()
             values = template.round_values(project)
+            setup_values = self.model.setup_values(**(configuration or {}))
+            if requester_party is not None:
+                setup_values["requester_party_id"] = requester_party.pk
             rows = self.sudo(reason="proposals.round.provision").filter(
                 **{target_field: target},
                 name=template.name,
@@ -234,12 +241,28 @@ class RoundManager(AngeeManager):
             )
             round = rows.first()
             if round is None:
-                round = self.model(**{target_field: target}, facilitator=facilitator, team=team, **values)
+                round = self.model(
+                    **{target_field: target}, facilitator=facilitator, team=team, **values, **setup_values,
+                )
                 round.sudo(reason="proposals.round.provision").save()
+            elif not round.with_actor(actor).has_access("write"):
+                raise PermissionDenied("Round write access is required to resume provisioning.")
             elif any(getattr(round, name) != value for name, value in values.items()) or (
                 round.facilitator_id != facilitator.pk or round.team_id != (team.pk if team else None)
             ):
                 raise ValidationError({"template": "The existing round has different settings."})
+            else:
+                changed = []
+                for name, value in setup_values.items():
+                    previous = getattr(round, name)
+                    if previous == value:
+                        continue
+                    if previous is not None:
+                        raise ValidationError({"round": "The existing round has different setup choices."})
+                    setattr(round, name, value)
+                    changed.append(name)
+                if changed:
+                    round.save(update_fields=(*changed, "updated_at"))
             topic_model = apps.get_model("proposals", "Topic")
             with system_context(reason="proposals.round.provision.topics"):
                 topics = {topic.key: topic for topic in topic_model._base_manager.filter(round=round)}
@@ -291,6 +314,18 @@ def _receipt_user_id(fallback: Any | None = None) -> Any | None:
 
 class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel):
     """A bounded solicitation on one project or task; its chatter is shared."""
+
+    @classmethod
+    def setup_values(cls) -> dict[str, Any]:
+        """Terminal hook for addon-owned round setup fields."""
+
+        return {}
+
+    @classmethod
+    def setup_complete_condition(cls, actor: Any) -> models.Q:
+        """A persisted round is provisioned; routing addons may require more."""
+
+        return models.Q()
 
     runtime = True
     sqid_prefix = "rnd_"
@@ -805,6 +840,23 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 if manager:
                     locked._pass_clarification_locked(task, recipient, "default", manager_ask=True)
         return task
+
+    def resolve_clarification(self, task: Any, *, expected_revision: int) -> Any:
+        """Resolve one question under manager authority and its observed revision."""
+
+        actor = instance_actor(self)
+        with transaction.atomic():
+            locked_round = system_queryset(type(self), lock=("self",)).get(pk=self.pk).with_actor(actor)
+            if not locked_round.has_access("manage"):
+                raise PermissionDenied("Round management is required to resolve a question.")
+            locked = system_queryset(type(task), lock=("self",)).get(pk=task.pk, clarification_round=locked_round)
+            locked.require_revision(expected_revision)
+            if locked.status == "done":
+                return locked
+            if locked.status != "open":
+                raise ValidationError({"task": "Only an open question can be resolved."})
+            locked.with_actor(actor).complete()
+            return locked
 
     def edit_clarification(
         self,
@@ -2122,6 +2174,41 @@ class ProjectProposalAccess(models.Model):
     runtime = False
     rebac_grantable = {"proposal_viewer": "share"}
 
+    def apply_setup(self, *, round: Mapping[str, Any] | None = None, **options: Any) -> None:
+        """Provision the declared round after the project's template acts."""
+
+        if not isinstance(round, Mapping):
+            raise ValidationError({"round": "Declare round setup choices."})
+        super().apply_setup(**options)
+        values = dict(round)
+        template = values.pop("template")
+        facilitator = values.pop("facilitator")
+        responders = values.pop("responders")
+        team = values.pop("team", None)
+        requester = values.pop("requester_party", None)
+        apps.get_model("proposals", "Round").objects.provision(
+            self, template, facilitator, responders, team,
+            requester_party=requester, configuration=values,
+        )
+
+    @classmethod
+    def setup_complete_condition(cls, actor: Any) -> models.Q:
+        """A proposal-enabled project also requires a configured readable round."""
+
+        round_model = apps.get_model("proposals", "Round")
+        rounds = round_model.objects.with_actor(actor).scoped().filter(
+            round_model.setup_complete_condition(actor), project_id=models.OuterRef("pk"),
+        )
+        return super().setup_complete_condition(actor) & models.Q(models.Exists(rounds))
+
+    @classmethod
+    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> models.Expression:
+        """Count readable unanswered questions on this project."""
+
+        return apps.get_model("projects", "Task").question_count_expression(
+            actor, scope=models.Q(project_id=models.OuterRef("pk")), passed_on=passed_on,
+        )
+
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Keep the requester's ceiling on track projects."""
         super().validate_record_access_subject(relation, subject)
@@ -2371,10 +2458,8 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         return self
 
     @classmethod
-    def clarification_waiting_expression(cls, actor: Any) -> models.Expression:
-        """Project unanswered recipients in the task query using native SQL subqueries."""
-        if actor is None:
-            return models.Value([], output_field=models.JSONField())
+    def clarification_waiting_users(cls, actor: Any) -> models.QuerySet:
+        """Own the unanswered-recipient predicate used by projections and counts."""
         round_model = apps.get_model("proposals", "Round")
         proposal_model = apps.get_model("proposals", "Proposal")
         managed = round_model.objects.with_actor(actor).with_action("manage").scoped()
@@ -2425,7 +2510,44 @@ class TaskProposalAccess(ImmutableFieldsMixin):
                     ),
                 )
             )
-            return ClarificationWaitingSubquery(users.values("_recipient"))
+            return users if actor is not None else users.none()
+
+    @classmethod
+    def clarification_waiting_expression(cls, actor: Any) -> models.Expression:
+        """Project the same unanswered recipients in the task's SQL query."""
+
+        if actor is None:
+            return models.Value([], output_field=models.JSONField())
+        return ClarificationWaitingSubquery(cls.clarification_waiting_users(actor).values("_recipient"))
+
+    @classmethod
+    def question_count_expression(cls, actor: Any, *, scope: models.Q, passed_on: bool) -> models.Expression:
+        """Count questions, not recipients, intersecting the native task read scope."""
+
+        if actor is None:
+            return models.Value(0)
+        waiting = cls.clarification_waiting_users(actor)
+        if not passed_on:
+            waiting = waiting.filter(pk=actor_user_id(actor))
+        questions = cls.objects.with_actor(actor).scoped().filter(
+            scope, status="open", clarification_round__isnull=False,
+        ).filter(models.Exists(waiting))
+        if passed_on:
+            managed = apps.get_model("proposals", "Round").objects.with_actor(actor).with_action("manage").scoped()
+            questions = questions.filter(
+                models.Exists(managed.filter(pk=models.OuterRef("clarification_round_id"))),
+                clarification_passed_at__isnull=False,
+            )
+        return questions.readable_count_subquery(actor=actor)
+
+    @classmethod
+    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> models.Expression:
+        """Include this question or the questions filed under this source task."""
+
+        return cls.question_count_expression(
+            actor, scope=models.Q(parent_id=models.OuterRef("pk")) | models.Q(pk=models.OuterRef("pk")),
+            passed_on=passed_on,
+        )
 
     def clarification_waiting(self) -> list[dict[str, Any]]:
         """Read the optimized projection, with the same SQL for a standalone row."""

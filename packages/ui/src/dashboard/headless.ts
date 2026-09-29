@@ -103,6 +103,14 @@ export function widgetColumns(spec: { options: JsonObject }) {
   return v.safeParse(v.optional(WidgetColumnsSchema), spec.options.columns);
 }
 
+/** A readable scope row authorizes listing, independently of the widget's results. */
+export const WidgetVisibilitySchema = v.strictObject({
+  resource: v.pipe(v.string(), v.minLength(1)),
+  key: v.pipe(v.string(), v.minLength(1)),
+  value: v.pipe(v.string(), v.minLength(1)),
+});
+export type WidgetVisibility = v.InferOutput<typeof WidgetVisibilitySchema>;
+
 export const WidgetSpecSchema = v.pipe(v.strictObject({
   schemaVersion: v.literal(DASHBOARD_SCHEMA_VERSION),
   id: v.pipe(v.string(), v.minLength(1)),
@@ -110,6 +118,7 @@ export const WidgetSpecSchema = v.pipe(v.strictObject({
   kind: v.pipe(v.string(), v.minLength(1)),
   kindVersion: PositiveInteger,
   title: v.string(),
+  visibility: v.optional(WidgetVisibilitySchema),
   data: WidgetDataSpecSchema,
   options: v.record(v.string(), JsonValueSchema),
   x: NonNegativeInteger,
@@ -266,6 +275,12 @@ export interface DashboardCatalogueBinding {
 export interface DashboardStore {
   useDashboard: (target: DashboardTarget) => DashboardStoreBinding;
   useCatalogue: () => DashboardCatalogueBinding;
+  /** Actor-scoped policy answers; missing or pending answers never mount gated widgets. */
+  useWidgetVisibility?: (policies: readonly WidgetVisibility[]) => {
+    allowed: readonly boolean[];
+    loading: boolean;
+    error: Error | null;
+  };
 }
 
 export interface DashboardWidgetData {

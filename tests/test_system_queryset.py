@@ -239,3 +239,12 @@ def test_system_queryset_keeps_sqlite_unlocked(system_query_tables: None, model:
 
     assert rows == [instance]
     assert all("FOR UPDATE" not in query["sql"].upper() for query in captured.captured_queries)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_readable_count_subquery_without_actor_is_zero(system_query_tables: None) -> None:
+    row = SystemQueryThing._base_manager.create(name="private")
+    projected = SystemQueryThing._base_manager.annotate(
+        visible_count=SystemQueryThing.objects.filter(pk=OuterRef("pk")).readable_count_subquery(),
+    ).get(pk=row.pk)
+    assert projected.visible_count == 0

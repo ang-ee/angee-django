@@ -8,19 +8,22 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from pydantic import ValidationError as TemplateValidationError
 from rebac import current_actor
 from strawberry import auto
+from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
 from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.graphql.actions import (
     ActionResult,
+    ActionSelectionInput,
     action_guard,
     authorized_action_target,
     authorized_permission_target,
+    many_actions,
 )
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data import (
@@ -31,6 +34,7 @@ from angee.graphql.data import (
     public_pk_decoder,
 )
 from angee.graphql.ids import PublicID, optional_public_id
+from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
@@ -41,6 +45,7 @@ from angee.messaging.schema import MessageType
 from angee.money.schema import CurrencyType
 from angee.parties.schema import PartyType
 from angee.projects.schema import MilestoneType, ProjectType, TaskType
+from angee.proposals.inputs import RoundTemplate, TopicTemplate
 from angee.proposals.models import AnswerVisibility, PassAudience, QuestionAudience, RoundOpeningPolicy
 from angee.spaces.schema import SpaceGroupType
 
@@ -73,6 +78,36 @@ def _user_id(value: Any | None) -> strawberry.ID | None:
     """Project one attribution user id without exposing the user row."""
 
     return cast("strawberry.ID | None", optional_public_id(user_public_id(value)))
+
+
+@pydantic_input(model=TopicTemplate, all_fields=True)
+class ProposalTopicTemplateInput:
+    """Typed topic declaration from its native validation owner."""
+
+
+@pydantic_input(model=RoundTemplate, all_fields=True)
+class ProposalRoundTemplateInput:
+    """Typed round template from its native validation owner."""
+
+
+@strawberry.input
+class ProposalRoundSetupInput:
+    """Round setup references are authorized before the domain sees them."""
+
+    template: ProposalRoundTemplateInput
+    facilitator: PublicID = strawberry.field(metadata={InputReference: InputReference(settings.AUTH_USER_MODEL)})
+    responders: list[PublicID] = strawberry.field(metadata={InputReference: InputReference(settings.AUTH_USER_MODEL)})
+    team: PublicID | None = strawberry.field(default=None, metadata={InputReference: InputReference("spaces.Group")})
+    requester_party: PublicID | None = strawberry.field(
+        default=None, metadata={InputReference: InputReference("parties.Party")},
+    )
+
+
+@strawberry.input(name="ProjectSetupInput", extend=True)
+class ProjectProposalSetupInput:
+    """Proposals contributes its typed setup choices to projects."""
+
+    round: ProposalRoundSetupInput
 
 
 @strawberry.type
@@ -198,9 +233,25 @@ class ProposalRoundType(AuthoredRefMixin, AngeeNode):
         return _user_id(cast(Any, self).closed_by_id)
 
 
+def question_attention_field(model: Any, *, passed_on: bool = False) -> Any:
+    """Bind the same recipient-scope annotation to task and project fields."""
+
+    name = "_questions_passed_on" if passed_on else "_questions_waiting_for_me"
+
+    def resolve(root: Any) -> int:
+        return getattr(root, name)
+
+    return strawberry_django.field(resolver=resolve, annotate={
+        name: lambda info: model.question_attention_expression(current_actor(), passed_on=passed_on),
+    })
+
+
 @strawberry.type
 class TaskProposalsFields:
     """Shared declarations on both task schema nodes."""
+
+    questions_waiting_for_me: int = question_attention_field(Task)
+    questions_passed_on: int = question_attention_field(Task, passed_on=True)
 
     clarification_round: ProposalRoundType | None = actor_scoped_to_one("clarification_round")
     clarification_asker: UserType | None = actor_scoped_to_one("clarification_asker")
@@ -344,15 +395,23 @@ class ConsoleProposalType(ProposalFields):
     responder: UserType | None = actor_scoped_to_one("responder")
 
 
+@strawberry.type
+class ProjectAttentionFields:
+    """Project summaries compose the question owner's recipient scopes."""
+
+    questions_waiting_for_me: int = question_attention_field(Project)
+    questions_passed_on: int = question_attention_field(Project, passed_on=True)
+
+
 @strawberry_django.type(Project, name="ProjectType", extend=True)
-class ProjectProposalsExtension:
+class ProjectProposalsExtension(ProjectAttentionFields):
     """Expose the proposal-owned track relation through the common redaction seam."""
 
     source_proposal: ProposalType | None = actor_scoped_to_one("source_proposal")
 
 
 @strawberry_django.type(Project, name="ConsoleProjectType", extend=True)
-class ConsoleProjectProposalsExtension:
+class ConsoleProjectProposalsExtension(ProjectAttentionFields):
     """Contribute the track relation to the console project node."""
 
     source_proposal: ConsoleProposalType | None = actor_scoped_to_one("source_proposal")
@@ -392,12 +451,25 @@ class ProposalReviewType(AuthoredRefMixin, AngeeNode):
         return _user_id(cast(Any, self).reviewer_id)
 
 
+@action_guard("Resolve question failed.")
+def resolve_proposal_clarification(
+    info: strawberry.Info, task: PublicID, expected_revision: int,
+) -> ActionResult:
+    """Resolve a question through its round's management verb."""
+
+    question = authorized_permission_target(info, Task, task, "write")
+    if question.clarification_round_id is None:
+        raise ValidationError({"task": "Choose a clarification question."})
+    round = question.clarification_round.with_actor(current_actor())
+    result = round.resolve_clarification(question, expected_revision=expected_revision)
+    return ActionResult(ok=True, message="Question resolved.", id=result.sqid)
+
 @strawberry.type
 class ProposalActionMutation:
     """Row-authorized lifecycle, identity, track, and capture verbs."""
 
     @strawberry.mutation
-    @action_guard("Round provisioning failed.", errors=(TemplateValidationError,))
+    @action_guard("Round provisioning failed.")
     def provision_proposal_round(
         self,
         info: strawberry.Info,
@@ -559,6 +631,18 @@ class ProposalActionMutation:
             raise ValidationError({"task": "Question was not found."})
         result = row.edit_clarification(question, title, body, audience, expected_revision)
         return ActionResult(ok=True, message="Question updated.", id=result.sqid)
+
+    resolve_proposal_clarification = strawberry.mutation(resolver=resolve_proposal_clarification)
+
+    @strawberry.mutation
+    def resolve_proposal_clarifications(
+        self, info: strawberry.Info, selection: list[ActionSelectionInput],
+    ) -> list[ActionResult]:
+        """Resolve selected questions; refusals do not roll back eligible rows."""
+
+        return many_actions(selection, lambda item: resolve_proposal_clarification(
+            info, item.id, item.expected_revision,
+        ))
 
     @strawberry.mutation
     @action_guard("Passing question failed.", errors=(StaleRevisionError,))
@@ -989,6 +1073,7 @@ def _proposals_schema_bucket(proposal_resource: Any, proposal_type: type) -> dic
             *proposal_resource.types,
             *_COMMON_RESOURCE_TYPES,
         ],
+        "input_extensions": [ProjectProposalSetupInput],
         "type_extensions": [TaskProposalsExtension, ProjectProposalsExtension],
     }
 

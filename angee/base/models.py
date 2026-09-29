@@ -104,16 +104,26 @@ class AngeeQuerySet(
         """
 
         actor = actor or self.actor() or current_actor()
-        readable = self.with_actor(actor).scoped() if actor is not None else self.none()
+        readable = self.with_actor(actor).scoped() if actor is not None else self
         # The selected field owns the scalar type; only the outer fallback needs
         # a common output type (overriding Subquery changes empty-set compilation).
         scalar = models.Subquery(readable.values(field)[:1])
+        if actor is None:
+            return models.Value(default, output_field=output_field or scalar.output_field)
         if default is None:
             return scalar
         return Coalesce(
             scalar,
             models.Value(default),
             output_field=output_field or scalar.output_field,
+        )
+
+    def readable_count_subquery(self, *, actor: Any = None) -> models.Expression:
+        """Count a correlated actor-scoped row set, returning zero when empty."""
+
+        rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
+        return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
+            "_count", actor=actor, default=0, output_field=models.IntegerField(),
         )
 
     def keyset_page(

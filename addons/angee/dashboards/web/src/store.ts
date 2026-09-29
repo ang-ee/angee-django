@@ -12,6 +12,7 @@ import {
   type DashboardStore,
   type DashboardSummary,
   type DashboardTarget,
+  type WidgetVisibility,
 } from "@angee/ui/dashboard/headless";
 
 import {
@@ -19,6 +20,7 @@ import {
   CreatePersonalDashboardDocument,
   DashboardDocument,
   DashboardSummariesDocument,
+  DashboardWidgetVisibilityDocument,
   DuplicateDashboardDocument,
   ResetDashboardDocument,
   SaveDashboardDocument,
@@ -259,7 +261,19 @@ function useCatalogue(): DashboardCatalogueBinding {
   };
 }
 
+function useWidgetVisibility(policies: readonly WidgetVisibility[]) {
+  const query = useAuthoredQuery(DashboardWidgetVisibilityDocument, { policies: [...policies] }, {
+    models: [...new Set(policies.map(({ resource }) => resource))],
+  });
+  return {
+    allowed: query.data?.dashboard_widget_visibility ?? [],
+    loading: !query.data,
+    error: query.error,
+  };
+}
+
 export const dashboardStore: DashboardStore = {
   useDashboard,
   useCatalogue,
+  useWidgetVisibility,
 };

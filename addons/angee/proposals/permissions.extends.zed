@@ -1,6 +1,6 @@
 // Proposal access through live planning and identity relations.
 // @rebac_package: proposals
-// @rebac_schema_revision: 3
+// @rebac_schema_revision: 4
 
 definition projects/project {
     relation proposal_viewer: auth/user | auth/group#member
@@ -22,7 +22,7 @@ definition projects/task {
     relation manager_asked_round: proposals/round // rebac:field={"path":"clarification_round","filters":{"clarification_by_manager":true}}
     relation clarification_asker: auth/user // rebac:field={"path":"clarification_asker","filters":{"clarification_surrendered":false}}
     relation responder_shared_round: proposals/round // rebac:field={"path":"project__source_proposal__round","filters":{"shared_with_responders":true}}
-    permission read_granted = round_responder + shared_clarification_round->respond + clarification_asker + responder_shared_round->respond
+    permission read_granted = (parent->read & shared_clarification_round->discuss_clarification) + round_responder + shared_clarification_round->respond + clarification_asker + responder_shared_round->respond
     permission withheld = clarification_round->retired
     permission write_withheld = clarification_recipient
     permission read = track_proposal->manage + clarification_round->manage

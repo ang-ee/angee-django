@@ -25,6 +25,21 @@ class RoundQuestionsQueue(models.Model):
     class Meta:
         abstract = True
 
+    @classmethod
+    def setup_values(cls, *, clarification_queue: Any = None, **values: Any) -> dict[str, Any]:
+        """Consume the native queue choice before admitting responders."""
+
+        return {
+            **super().setup_values(**values),
+            **({"clarification_queue_id": clarification_queue.pk} if clarification_queue is not None else {}),
+        }
+
+    @classmethod
+    def setup_complete_condition(cls, actor: Any) -> models.Q:
+        """The bridge's setup is complete when question routing is configured."""
+
+        return super().setup_complete_condition(actor) & models.Q(clarification_queue__isnull=False)
+
     def clean(self) -> None:
         """A round routes questions to a shared queue, never a personal one."""
 

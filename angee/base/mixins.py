@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from enum import Enum
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 import reversion
@@ -20,6 +21,7 @@ from angee.base.errors import DomainError
 from angee.base.fields import SqidField
 from angee.base.indexes import PatternOpsIndex
 from angee.base.scoping import system_queryset
+from angee.base.serialization import canonical_json_sha256, json_safe
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 _ArchiveModelT = TypeVar("_ArchiveModelT", bound=models.Model)
@@ -588,15 +590,21 @@ class CreationKeyQuerySet(models.QuerySet[_ModelT]):
         An empty stored fingerprint is unknown legacy content and permits replay.
         """
 
-        if key is not None and not key.strip():
-            raise ValidationError({"client_creation_key": "A client creation key must not be blank."})
+        if key is not None:
+            try:
+                self.model._meta.get_field("client_creation_key").clean(key, None)
+            except ValidationError as error:
+                raise ValidationError({"client_creation_key": error}) from error
+            if not key.strip():
+                raise ValidationError({"client_creation_key": "A client creation key must not be blank."})
         if scope is None or key is None:
             return None
         model = cast(type[CreationKeyMixin], self.model)
-        row = self.filter(**{model.creation_key_scope: scope, "client_creation_key": key}).first()
-        stored = cast(CreationKeyMixin, row).creation_fingerprint if row is not None else ""
-        if stored and stored != fingerprint:
-            raise CreationKeyConflict("This client creation key was already used for different content.")
+        fields = model.creation_key_scope
+        lookup = {fields: scope} if isinstance(fields, str) else dict(zip(fields, scope, strict=True))
+        row = self.filter(**lookup, client_creation_key=key).first()
+        if row is not None:
+            cast(CreationKeyMixin, row).require_creation_fingerprint(fingerprint)
         return row
 
     def replay_or_insert(
@@ -632,12 +640,35 @@ class CreationKeyMixin(models.Model):
     the system check verifies they agree.
     """
 
-    creation_key_scope: ClassVar[str] = "created_by"
+    creation_key_scope: ClassVar[str | tuple[str, ...]] = "created_by"
     client_creation_key = models.CharField(max_length=128, null=True, blank=True, editable=False)
     creation_fingerprint = models.CharField(max_length=64, blank=True, editable=False)
 
     class Meta:
         abstract = True
+
+    @classmethod
+    def creation_fingerprint_for(cls, values: Any) -> str:
+        """Fingerprint native inputs; model references use immutable row identity."""
+
+        def content(value: Any) -> Any:
+            if isinstance(value, Enum):
+                return content(value.value)
+            if isinstance(value, models.Model):
+                return {"model": value._meta.label_lower, "pk": json_safe(value.pk)}
+            if isinstance(value, Mapping):
+                return {key: content(item) for key, item in value.items()}
+            if isinstance(value, (tuple, list)):
+                return [content(item) for item in value]
+            return json_safe(value)
+
+        return canonical_json_sha256(content(values))
+
+    def require_creation_fingerprint(self, fingerprint: str) -> None:
+        """Validate a known receipt, including rows adopted from legacy partial work."""
+
+        if self.creation_fingerprint and self.creation_fingerprint != fingerprint:
+            raise CreationKeyConflict("This client creation key was already used for different content.")
 
     @classmethod
     def creation_key_actor_scope(cls, actor: Any, values: Mapping[str, Any]) -> Any:
@@ -646,6 +677,8 @@ class CreationKeyMixin(models.Model):
         scope = actor_user_id(actor)
         if scope is None:
             raise ValidationError({"client_creation_key": "A creation key requires a user actor."})
+        if not isinstance(cls.creation_key_scope, str):
+            raise ValidationError({"client_creation_key": "A compound scope requires its domain creation verb."})
         scope_field = cls._meta.get_field(cls.creation_key_scope)
         supplied = values.get(scope_field.attname, values.get(scope_field.name, scope))
         supplied = supplied.pk if isinstance(supplied, models.Model) else supplied
@@ -654,11 +687,15 @@ class CreationKeyMixin(models.Model):
         return scope
 
     @classmethod
-    def creation_key_constraint(cls, *, scope: str | None = None, name: str | None = None) -> models.UniqueConstraint:
+    def creation_key_constraint(
+        cls, *, scope: str | tuple[str, ...] | None = None, name: str | None = None,
+    ) -> models.UniqueConstraint:
         """Declare key uniqueness, optionally preserving an adopter's existing constraint name."""
 
+        scope = scope or cls.creation_key_scope
+        fields = (scope,) if isinstance(scope, str) else scope
         return models.UniqueConstraint(
-            fields=(scope or cls.creation_key_scope, "client_creation_key"),
+            fields=(*fields, "client_creation_key"),
             condition=models.Q(client_creation_key__isnull=False),
             name=name or "%(app_label)s_%(class)s_creation_key",
         )

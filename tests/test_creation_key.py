@@ -1,6 +1,7 @@
 """Stored creation identities are unique within their declared scope."""
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
 from angee.base.mixins import CreationKeyConflict
@@ -64,3 +65,17 @@ def test_database_refuses_duplicate_key_but_allows_multiple_null_keys():
     CreationRow.objects.create(created_by=owner)
     CreationRow.objects.create(created_by=owner)
     assert CreationRow.objects.count() == 3
+
+
+def test_fingerprints_use_canonical_values_and_native_reference_identity():
+    owner = create_user("fingerprint-owner")
+    first = CreationRow.creation_fingerprint_for({"when": "2026-01-01", "owner": owner, "values": [1, 2]})
+    owner.username = "A later display value"
+    assert CreationRow.creation_fingerprint_for({"values": [1, 2], "owner": owner, "when": "2026-01-01"}) == first
+    assert CreationRow.creation_fingerprint_for({"values": [2, 1], "owner": owner, "when": "2026-01-01"}) != first
+
+
+def test_creation_keys_reject_blank_and_overlong_values():
+    for key in ("", "  ", "x" * 129):
+        with pytest.raises(ValidationError):
+            CreationRow.objects.for_creation_key(1, key, "fingerprint")

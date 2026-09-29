@@ -11,10 +11,18 @@ from django.apps import apps
 from django.db.models import F
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
+from angee.graphql.actions import (
+    ActionResult,
+    ActionSelectionInput,
+    action_guard,
+    authorized_action_target,
+    authorized_permission_target,
+    many_actions,
+)
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
+from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
@@ -179,6 +187,57 @@ class ConsoleTaskWorkExtension:
         return cast(Any, self).work_key
 
 
+@strawberry.input(name="ProjectSetupInput", extend=True)
+class ProjectWorkSetupInput:
+    """Work contributes the project team without coupling projects to work."""
+
+    team: PublicID = strawberry.field(metadata={InputReference: InputReference("spaces.Group")})
+
+
+@strawberry.input(name="ProjectMilestoneSetupInput", extend=True)
+class MilestoneWorkSetupInput:
+    """Work contributes the stage mapping to the typed milestone template."""
+
+    active_stage: PublicID | None = strawberry.field(
+        default=None, metadata={InputReference: InputReference("work.Stage")},
+    )
+
+
+@action_guard("Accept task failed.")
+def accept_task(
+    info: strawberry.Info,
+    task: PublicID,
+    stage: PublicID | None = None,
+    expected_revision: int | None = None,
+) -> ActionResult:
+    """Accept one writable triage task into its selected/default stage."""
+
+    target = authorized_action_target(info, Task, task, "write")
+    target_stage = None if stage is None else authorized_permission_target(info, Stage, stage, "read")
+    target.accept(target_stage, expected_revision=expected_revision)
+    return ActionResult(ok=True, message="Task accepted.", id=target.sqid)
+
+@action_guard("Decline task failed.")
+def decline_task(
+    info: strawberry.Info,
+    task: PublicID,
+    reason: DroppedReason,
+    expected_revision: int | None = None,
+) -> ActionResult:
+    """Decline one writable triage task for a closed reason."""
+
+    target = authorized_action_target(info, Task, task, "write")
+    target.decline(reason, expected_revision=expected_revision)
+    return ActionResult(ok=True, message="Task declined.", id=target.sqid)
+
+@action_guard("Remove task failed.")
+def remove_task(info: strawberry.Info, task: PublicID, expected_revision: int) -> ActionResult:
+    """Conceal a writable task through its stage owner."""
+
+    target = authorized_permission_target(info, Task, task, "write")
+    target.remove(expected_revision=expected_revision)
+    return ActionResult(ok=True, message="Task removed.", id=target.sqid)
+
 @strawberry.type
 class WorkActionMutation:
     """Row-authorized task triage and cycle lifecycle actions."""
@@ -201,34 +260,37 @@ class WorkActionMutation:
         target.return_to_triage()
         return ActionResult(ok=True, message="Task returned to triage.", id=target.sqid)
 
-    @strawberry.mutation
-    @action_guard("Accept task failed.")
-    def accept_task(
-        self,
-        info: strawberry.Info,
-        task: PublicID,
-        stage: PublicID | None = None,
-    ) -> ActionResult:
-        """Accept one writable triage task into its selected/default stage."""
+    accept_task = strawberry.mutation(resolver=accept_task)
 
-        target = authorized_action_target(info, Task, task, "write")
-        target_stage = None if stage is None else authorized_permission_target(info, Stage, stage, "read")
-        target.accept(target_stage)
-        return ActionResult(ok=True, message="Task accepted.", id=target.sqid)
+    decline_task = strawberry.mutation(resolver=decline_task)
+
+    remove_task = strawberry.mutation(resolver=remove_task)
 
     @strawberry.mutation
-    @action_guard("Decline task failed.")
-    def decline_task(
-        self,
-        info: strawberry.Info,
-        task: PublicID,
-        reason: DroppedReason,
-    ) -> ActionResult:
-        """Decline one writable triage task for a closed reason."""
+    def accept_tasks(self, info: strawberry.Info, selection: list[ActionSelectionInput]) -> list[ActionResult]:
+        """Accept selected tasks; refusals do not roll back eligible rows."""
 
-        target = authorized_action_target(info, Task, task, "write")
-        target.decline(reason)
-        return ActionResult(ok=True, message="Task declined.", id=target.sqid)
+        return many_actions(selection, lambda item: accept_task(
+            info, item.id, expected_revision=item.expected_revision,
+        ))
+
+    @strawberry.mutation
+    def decline_tasks(
+        self, info: strawberry.Info, selection: list[ActionSelectionInput], reason: DroppedReason,
+    ) -> list[ActionResult]:
+        """Decline selected tasks; refusals do not roll back eligible rows."""
+
+        return many_actions(selection, lambda item: decline_task(
+            info, item.id, reason, expected_revision=item.expected_revision,
+        ))
+
+    @strawberry.mutation
+    def remove_tasks(self, info: strawberry.Info, selection: list[ActionSelectionInput]) -> list[ActionResult]:
+        """Conceal selected tasks; refusals do not roll back eligible rows."""
+
+        return many_actions(selection, lambda item: remove_task(
+            info, item.id, item.expected_revision,
+        ))
 
     @strawberry.mutation
     @action_guard("Snooze task failed.")
@@ -420,6 +482,7 @@ _WORK_SCHEMA_BUCKET: dict[str, list[Any]] = {
         _CYCLE_RESOURCE.mutation,
     ],
     "types": [WorkQueueType, WorkStageType, WorkCycleType, TaskType, *_RESOURCE_TYPES],
+    "input_extensions": [ProjectWorkSetupInput, MilestoneWorkSetupInput],
     "type_extensions": [TaskWorkExtension, ProjectWorkExtension, MilestoneWorkExtension],
 }
 

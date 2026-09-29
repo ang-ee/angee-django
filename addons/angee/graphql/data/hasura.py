@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 import dataclasses
-import hashlib
-import json
 import types as _types
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from enum import Enum
 from functools import partial
 from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.expressions import Combinable, CombinedExpression
 from django.db.models.lookups import Exact, In
@@ -234,8 +230,7 @@ class AngeeHasuraWriteBackend:
         """Fingerprint decoded write inputs, including the declared line envelope."""
 
         content = {"object": data, "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None}
-        encoded = json.dumps(content, cls=_CreationFingerprintEncoder, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(encoded.encode()).hexdigest()
+        return self.model.creation_fingerprint_for(content)
 
     def save(
         self,
@@ -472,17 +467,6 @@ class AngeeHasuraWriteBackend:
             instance = _write_public_instance(related_model, value)
             out[f"{key}_id"] = None if instance is None else instance.pk
         return out
-
-
-class _CreationFingerprintEncoder(DjangoJSONEncoder):
-    """Canonical JSON leaves for decoded mutation input, including M2M rows."""
-
-    def default(self, value: Any) -> Any:
-        if isinstance(value, models.Model):
-            return {"model": value._meta.label_lower, "pk": value.pk}
-        if isinstance(value, Enum):
-            return value.value
-        return super().default(value)
 
 
 def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:
@@ -828,8 +812,8 @@ def declared_hasura_resource_fields(
     setting ``attribute`` on their source model class. The composed runtime model
     inherits those bases; this helper gathers only directly declared attributes
     from the MRO so a downstream extension can contribute without the base addon
-    importing it. Sortable declarations also accept scalar/to-one ORM paths;
-    other declarations retain their concrete-field contract.
+    importing it. Filter/sort and container-scope declarations also accept
+    scalar/to-one ORM paths; write declarations retain concrete-field contracts.
     """
 
     fields: list[str] = []
@@ -844,7 +828,7 @@ def declared_hasura_resource_fields(
         for item in value:
             field = str(item)
             try:
-                if attribute == "hasura_sortable_fields":
+                if attribute in {"hasura_sortable_fields", "hasura_filterable_fields", "hasura_container_scope_fields"}:
                     require_field_for_path(model, field)
                 else:
                     model._meta.get_field(field)
@@ -1041,6 +1025,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``SortAlias`` preparation with protected relation hops redacted to NULL.
     """
 
+    container_scopes = set(declared_hasura_resource_fields(model, "hasura_container_scope_fields"))
+    filterable = tuple(dict.fromkeys((*filterable, *sorted(container_scopes))))
     model_aliases = _declared_sortable_aliases(model)
     if collisions := model_aliases.keys() & (sortable_aliases or {}).keys():
         raise ImproperlyConfigured(f"{model._meta.label} declares duplicate sortable aliases: {sorted(collisions)}.")
@@ -1066,6 +1052,18 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         *sortable,
         *(alias.path if isinstance(alias, SortAlias) else alias for alias in (sortable_aliases or {}).values()),
     )
+    for path in sorted(container_scopes):
+        field = require_field_for_path(model, path)
+        if (
+            "__" not in path or field.is_relation
+            or path in {*sortable, *active_groupable, *aggregatable}
+        ):
+            raise ImproperlyConfigured(
+                f"{model._meta.label}.{path}: container scope keys must be filter-only related scalars."
+            )
+    # Scope membership is intentionally testable without reading the container.
+    # It never changes the actor scope of the root rows or their projections.
+    relation_paths = tuple(path for path in relation_paths if path not in container_scopes)
     read_queryset = _relation_scalar_queryset(model, get_queryset or _model_queryset(model), relation_paths)
     aggregate_source = (
         _relation_scalar_queryset(model, get_aggregate_queryset, relation_paths)

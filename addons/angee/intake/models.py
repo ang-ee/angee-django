@@ -74,6 +74,38 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
         "projects.task": "task",
     }
 
+    def file_task(
+        self, *, queue: Any, title: str, body: str, party: Any, client_creation_key: str,
+        due_date: Any = None, estimate: float | None = None, importance: str = "normal",
+    ) -> Any:
+        """File an actor-owned task and its need atomically, replaying the whole request."""
+
+        if not queue.has_access("read"):
+            raise PermissionDenied("Queue read access is required to select a task container.")
+        if not party.has_access("read"):
+            raise PermissionDenied("Party read access is required to file a request.")
+        task_model = apps.get_model("projects", "Task")
+        actor = current_actor()
+        scope = task_model.creation_key_actor_scope(actor, {})
+        values = dict(queue_id=queue.pk, title=title, note=body, due_date=due_date, estimate=estimate)
+        fingerprint = task_model.creation_fingerprint_for(
+            {"task": values, "party": party, "importance": importance},
+        )
+
+        def insert() -> Any:
+            task = task_model.objects.create(
+                **values, created_by_id=scope, client_creation_key=client_creation_key,
+                creation_fingerprint=fingerprint,
+            )
+            self.capture(target=task, party=party, body=body, importance=importance)
+            return task
+
+        with transaction.atomic():
+            task, _created = task_model.objects.with_actor(actor).replay_or_insert(
+                scope, client_creation_key, fingerprint, insert,
+            )
+            return task
+
     @classmethod
     def target_model(cls, model_label: str) -> type[models.Model]:
         """Return the installed model for one allowed need target label."""
@@ -480,8 +512,8 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
     def save(self, *, _access_decision: bool = False, **kwargs: Any) -> None:
         """Validate assignment, reset its old decision, and follow atomically.
 
-        Only ``decide_access`` supplies ``_access_decision``: its authorized
-        decision already describes the newly assigned account in this save.
+        The access verbs supply ``_access_decision`` after admitting or answering
+        their decision, so assignment persistence does not replace that seat.
         """
 
         update_fields = kwargs.get("update_fields")
@@ -589,6 +621,32 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
 
         return self._decide_access(action, {"reason": reason}, expected_revision=expected_revision)
 
+    def reset_access(self, *, confirmed: bool, expected_revision: int) -> Any:
+        """Retain requester identity and supersede its access answer atomically.
+
+        A fresh pending decision revokes decision-backed requester access. Account
+        credentials and the previous decision's audit history remain with their
+        existing owners.
+        """
+
+        if not confirmed:
+            raise ValidationError({"confirmed": "Confirm resetting requester access."})
+        actor = instance_actor(self)
+        with actor_context(actor), transaction.atomic():
+            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            if not locked.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
+                "share",
+            ):
+                raise PermissionDenied("Resetting access requires need write and target share.")
+            locked.require_revision(expected_revision)
+            locked.access_decision = locked._new_access_decision()
+            locked.save(
+                _access_decision=True, expected_revision=expected_revision,
+                update_fields=("access_decision", "updated_at"),
+            )
+        self.refresh_from_db()
+        return self
+
     def _decide_access(
         self, action: str, values: dict[str, Any], *,
         expected_revision: int | None = None, decision: Any = None, decision_revision: int | None = None,
@@ -673,6 +731,27 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         bind_actor(task, actor)
         self.refresh_from_db()
         return task
+
+
+class ProjectIntakeSetup(models.Model):
+    """Link unassigned request parties before downstream setup admits people."""
+
+    extends = "projects.Project"
+
+    class Meta:
+        abstract = True
+
+    def apply_setup(self, *, party: Any | None = None, **options: Any) -> None:
+        """Retain existing request identities; a new assignment uses its share gate."""
+
+        need_model = apps.get_model("intake", "Need")
+        needs = need_model.objects.filter(task_id=self.converted_from_id, party__isnull=True)
+        for need in needs:
+            if party is None:
+                raise ValidationError({"party": "Choose a party for the unassigned request."})
+            need.party = party
+            need.save(update_fields=("party", "updated_at"))
+        super().apply_setup(**options)
 
 
 class ChannelIntake(models.Model):

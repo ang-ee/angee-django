@@ -7,8 +7,9 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, NoReturn, cast
 
+from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
@@ -21,6 +22,11 @@ from angee.base.mixins import (
     OptimisticLockMixin,
 )
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
+from angee.base.permissions import effective_rebac_definition
+from angee.base.scoping import read_scoped_queryset
+from angee.graphql.access import is_gated_read_axis
+from angee.graphql.data.hasura import declared_hasura_resource_fields
+from angee.graphql.introspection import FieldPathError, require_field_for_path
 from angee.resources.mixins import ResourceLoadMixin
 
 DASHBOARD_SCHEMA_VERSION = 1
@@ -31,6 +37,46 @@ MAX_WIDGET_HEIGHT = 100
 MAX_LAYOUT_ROWS = 1_000
 MAX_FILTER_DEPTH = 10
 MAX_FILTER_CLAUSES = 100
+
+
+def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any) -> list[bool]:
+    """Batch declared listing scopes, never infer authority from result counts.
+
+    ``resource`` declares the container-scope ``key`` (for example Task and
+    queue__slug). Listing admission reads that container, never a source row. The source
+    query still enforces its own row permissions. Unknown/invalid policies fail
+    validation; an inaccessible or missing scope yields false.
+    """
+
+    scopes: dict[tuple[type[models.Model], str], list[tuple[int, Any]]] = {}
+    for index, policy in enumerate(policies):
+        if set(policy) != {"resource", "key", "value"} or not all(
+            isinstance(value, str) and value for value in policy.values()
+        ):
+            raise ValidationError({"visibility": "Declare a resource, key and non-empty value."})
+        try:
+            model = apps.get_model(policy["resource"])
+            if policy["key"] not in declared_hasura_resource_fields(model, "hasura_container_scope_fields"):
+                raise ValidationError({"visibility": "Use a declared container scope key."})
+            field = require_field_for_path(model, policy["key"])
+            container_path, separator, _leaf = policy["key"].rpartition("__")
+            if not separator:
+                raise ValidationError({"visibility": "Use a related container scope key."})
+            container = require_field_for_path(model, container_path).related_model
+        except (LookupError, ValueError, FieldDoesNotExist, FieldPathError) as error:
+            raise ValidationError({"visibility": "The scope resource or key does not exist."}) from error
+        definition = effective_rebac_definition(container)
+        if field.is_relation or not field.unique or definition is None or is_gated_read_axis(model, policy["key"]):
+            raise ValidationError({"visibility": "Use a unique, ungated scalar key on a permission-managed scope."})
+        scopes.setdefault((container, field.name), []).append((index, field.to_python(policy["value"])))
+    allowed = [False] * len(policies)
+    for (model, key), entries in scopes.items():
+        rows = read_scoped_queryset(model, actor)
+        if rows is not None:
+            readable = set(rows.filter(**{f"{key}__in": [value for _, value in entries]}).values_list(key, flat=True))
+            for index, value in entries:
+                allowed[index] = value in readable
+    return allowed
 
 
 class DashboardConflictError(Exception):
@@ -98,6 +144,7 @@ def canonical_dashboard_snapshot(value: Any) -> dict[str, Any]:
             "kind",
             "kindVersion",
             "title",
+            "visibility",
             "data",
             "options",
             "x",
@@ -119,6 +166,10 @@ def canonical_dashboard_snapshot(value: Any) -> dict[str, Any]:
         _as_int(raw.get("kindVersion"), f"{path}.kindVersion", positive=True)
         if not isinstance(raw.get("title"), str) or not isinstance(raw.get("options"), dict):
             raise ValidationError({"snapshot": f"{path} has invalid title or options."})
+        if "visibility" in raw:
+            if not isinstance(raw["visibility"], dict):
+                raise ValidationError({"visibility": "The widget visibility policy must be an object."})
+            widget_visibility_answers([raw["visibility"]], None)
         data = raw.get("data")
         if not isinstance(data, dict) or data.get("shape") not in {"value", "series", "rows", "none"}:
             raise ValidationError({"snapshot": f"{path}.data has an invalid shape."})
@@ -527,6 +578,7 @@ class DashboardManager(AngeeManager.from_queryset(DashboardQuerySet)):  # type: 
                     "title": item["title"],
                     "data": item["data"],
                     "options": item["options"],
+                    "visibility": item.get("visibility"),
                     "x": item["x"],
                     "y": item["y"],
                     "w": item["w"],
@@ -681,6 +733,7 @@ class Dashboard(
                 "title": widget.title,
                 "data": widget.data,
                 "options": widget.options,
+                **({"visibility": widget.visibility} if widget.visibility is not None else {}),
                 "x": widget.x,
                 "y": widget.y,
                 "w": widget.w,
@@ -746,6 +799,7 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, AngeeDataMode
     title = models.CharField(max_length=240)
     data = models.JSONField()
     options = models.JSONField(default=dict, blank=True)
+    visibility = models.JSONField(null=True, blank=True)
     x = models.PositiveSmallIntegerField(default=0)
     y = models.PositiveSmallIntegerField(default=0)
     w = models.PositiveSmallIntegerField(default=1)

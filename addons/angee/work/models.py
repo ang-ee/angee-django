@@ -9,7 +9,7 @@ itself.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -22,7 +22,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator, RegexVa
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
-from rebac import current_actor, system_context
+from rebac import PermissionDenied, current_actor, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
@@ -31,6 +31,7 @@ from angee.base.fields import StateField
 from angee.base.mixins import AuditMixin, ImmutableFieldsMixin
 from angee.base.models import AngeeDataModel, AngeeManager
 from angee.base.refs import canonical_record_target
+from angee.base.scoping import system_queryset
 from angee.base.stages import Stage as StagePrimitive
 from angee.base.stages import StagedModelMixin
 from angee.parties.mixins import LinkSource
@@ -776,6 +777,22 @@ class ProjectWork(models.Model):
 
         abstract = True
 
+    def apply_setup(self, *, team: Any | None = None, **options: Any) -> None:
+        """Set the declared team through the ordinary field-sharing gate."""
+
+        if team is None:
+            raise ValidationError({"team": "Choose a project team."})
+        if self.team_id != team.pk:
+            self.team = team
+            self.save(update_fields=("team", "updated_at"))
+        super().apply_setup(**options)
+
+    @classmethod
+    def setup_complete_condition(cls, actor: Any) -> models.Q:
+        """A work-enabled project also needs its team configured."""
+
+        return super().setup_complete_condition(actor) & models.Q(team__isnull=False)
+
     @transaction.atomic
     def sync_source_task_stage(self) -> None:
         """Apply the current project rule inside its lifecycle event transaction."""
@@ -815,6 +832,19 @@ class MilestoneWork(models.Model):
         """Abstract contribution folded into the concrete milestone table."""
 
         abstract = True
+
+    @classmethod
+    def setup_template_values(cls, values: Mapping[str, Any]) -> dict[str, Any]:
+        """Resolve an optional stage choice while the milestone owns validation."""
+
+        if not isinstance(values, Mapping):
+            raise ValidationError({"milestones": "Each milestone template must be an object."})
+        values = dict(values)
+        stage = values.pop("active_stage", None)
+        return {
+            **super().setup_template_values(values),
+            "active_stage": stage,
+        }
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate phase mappings once at persistence, including generated writes."""
@@ -869,6 +899,8 @@ class TaskWork(StagedModelMixin):
         "triaged_at",
     )
     hasura_filterable_fields = hasura_readable_fields
+    # A stable scope key filters readable tasks without revealing the queue row.
+    hasura_container_scope_fields = ("queue__slug",)
     hasura_sortable_fields = (
         "queue",
         "stage",
@@ -1145,10 +1177,39 @@ class TaskWork(StagedModelMixin):
         self.save(update_fields=("stage", "updated_at"))
         return self
 
+    def _require_work_action(self, expected_revision: int | None) -> None:
+        """Recheck the locked, fresh row before a hand verb, including no-op replay."""
+
+        system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+        self.refresh_from_db()
+        actor, elevated = self.effective_actor(strict=True)
+        if not elevated and not self.with_actor(actor).has_access("write"):
+            raise PermissionDenied("Task write access is required.")
+        if expected_revision is not None:
+            self.require_revision(expected_revision)
+
     @transaction.atomic
-    def accept(self, stage: models.Model | None = None) -> Any:
+    def remove(self, *, expected_revision: int | None = None) -> Any:
+        """Conceal an unpromoted task in its queue; never physically delete it."""
+
+        self._require_work_action(expected_revision)
+        if apps.get_model("projects", "Project")._base_manager.filter(converted_from_id=self.pk).exists():
+            raise ValidationError({"stage": "A promoted task cannot be removed."})
+        target = self.stage_model().for_container(self.queue).filter(conceals=True).first()
+        if target is None:
+            raise ValidationError({"stage": "The queue has no concealing stage."})
+        previous, _following = self._reject_reserved_stage_transition(target=target, lock=True)
+        Stage.validate_transition(previous, target)
+        if self.stage_id != target.pk:
+            self.stage = target
+            self.save(update_fields=("stage", "updated_at"))
+        return self
+
+    @transaction.atomic
+    def accept(self, stage: models.Model | None = None, *, expected_revision: int | None = None) -> Any:
         """Leave triage for a same-queue, non-system stage, idempotently."""
 
+        self._require_work_action(expected_revision)
         if self.queue_id is None:
             raise ValidationError({"queue": "A queued task is required for triage."})
         target = stage or self.resolve_default_stage()
@@ -1192,9 +1253,10 @@ class TaskWork(StagedModelMixin):
         return self
 
     @transaction.atomic
-    def decline(self, reason: Any) -> Any:
+    def decline(self, reason: Any, *, expected_revision: int | None = None) -> Any:
         """Leave triage for the canceled stage with a closed dropped reason."""
 
+        self._require_work_action(expected_revision)
         try:
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
         except ValueError as error:

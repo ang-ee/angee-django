@@ -14,13 +14,13 @@ from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db.models import Q
-from rebac import PermissionDenied
+from rebac import PermissionDenied, current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.identity import instance_from_public_id
 from angee.base.mixins import CreationKeyConflict, StaleRevisionError
-from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot
+from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
 from angee.graphql.capabilities import held_permissions, permission_annotations
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
@@ -47,6 +47,15 @@ class DashboardTargetInput:
     id: PublicID | None = None
 
 
+@strawberry.input
+class DashboardWidgetVisibilityInput:
+    """A stable listing-scope address, separate from a widget's result filter."""
+
+    resource: str
+    key: str
+    value: str
+
+
 @strawberry_django.type(DashboardWidget)
 class DashboardWidgetType(AngeeNode):
     widget_key: auto
@@ -57,6 +66,7 @@ class DashboardWidgetType(AngeeNode):
     title: auto
     data: auto
     options: auto
+    visibility: auto
     x: auto
     y: auto
     w: auto
@@ -228,6 +238,14 @@ def _target_parts(target: DashboardTargetInput, existing: Any | None) -> tuple[s
 
 @strawberry.type
 class DashboardQuery:
+    @strawberry.field
+    def dashboard_widget_visibility(self, policies: list[DashboardWidgetVisibilityInput]) -> list[bool]:
+        """Resolve declared listing policies under the effective actor."""
+
+        if len(policies) > 100:
+            raise ValidationError("At most 100 widget policies may be resolved together.")
+        return widget_visibility_answers([strawberry.asdict(policy) for policy in policies], current_actor())
+
     @strawberry.field
     def dashboard(self, info: strawberry.Info, target: DashboardTargetInput) -> DashboardPayload:
         row = _resolve_target(info, target)

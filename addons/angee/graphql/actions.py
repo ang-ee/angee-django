@@ -14,7 +14,7 @@ from typing import ParamSpec, TypeVar, cast
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
-from django.db import models
+from django.db import models, transaction
 from rebac import PermissionDenied, RebacMixin, system_context
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
@@ -102,6 +102,43 @@ class ActionResult:
             code=getattr(error, "code", None) if isinstance(error, (DomainError, ValidationError)) else None,
             validation_errors=validation_errors,
         )
+
+
+@strawberry.input
+class ActionSelectionInput:
+    """One selected row and the revision the caller actually observed."""
+
+    id: PublicID
+    expected_revision: int
+
+
+def many_actions(
+    selection: list[ActionSelectionInput], run: Callable[[ActionSelectionInput], ActionResult],
+) -> list[ActionResult]:
+    """Compose single verbs in one transaction, retaining eligible-row successes.
+
+    Refused rows roll back to their savepoint and are returned alongside successes
+    in selection order. A whole-request failure rolls back all rows. Replays use
+    each single verb's eligibility and revision contract, never skip stale checks.
+    """
+
+    if not 1 <= len(selection) <= 100 or len({item.id for item in selection}) != len(selection):
+        raise ValidationError({"selection": "Select between 1 and 100 distinct records."})
+    results: dict[str, ActionResult] = {}
+    refused_errors = BASELINE_ACTION_ERRORS + (DomainError, PermissionDenied)
+    with transaction.atomic():
+        # Acquire row locks in one stable order even when callers select differently.
+        for item in sorted(selection, key=lambda item: str(item.id)):
+            try:
+                with transaction.atomic():
+                    result = run(item)
+                    if not result.ok:
+                        transaction.set_rollback(True)
+            except refused_errors as error:
+                result = ActionResult.from_error(error, "Action refused.")
+            result.id = strawberry.ID(str(item.id))
+            results[str(item.id)] = result
+    return [results[str(item.id)] for item in selection]
 
 
 BASELINE_ACTION_ERRORS: tuple[type[Exception], ...] = (

@@ -9,7 +9,7 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, models
 from django.db.migrations.state import ProjectState
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import is_sudo, to_subject_ref
@@ -623,8 +623,12 @@ class NeedAccessTests(IntakeAccessCase):
         with system_context(reason="test restricted request"):
             need.task.set_visibility("restricted")
             need.task.revoke_record_access("reader", self.reader)
-        self.assertTrue(need.task.with_actor(to_subject_ref(self.reader)).has_access("comment"))
-        self.assertFalse(need.task.has_access("read"))
+        requester_task = need.task.with_actor(to_subject_ref(self.reader))
+        for permission in ("read", "comment"):
+            self.assertFalse(requester_task.has_access(permission))
+        self.as_user(need).decide_access("approve")
+        for permission in ("read", "comment"):
+            self.assertTrue(requester_task.has_access(permission))
         for user in (self.owner, self.writer):
             self.assertTrue(self.Party.objects.as_user(user).filter(pk=party.pk).exists())
             self.assertTrue(apps.get_model("parties", "Person").objects.as_user(user).filter(pk=party.pk).exists())
@@ -751,3 +755,48 @@ class NeedAccessTests(IntakeAccessCase):
                 predicate = scope.predicate(model, permission, model._meta.rebac_resource_type)
                 sql, _ = model._base_manager.filter(predicate).query.sql_with_params()
                 self.assertIn("SELECT", sql)
+
+
+class NeedResetAccessTests(IntakeAccessCase):
+    def test_reset_revokes_requester_access_and_preserves_identity_password_and_history(self):
+        party = self.party(self.reader)
+        need = self.need(email="", party=party)
+        with system_context(reason="tests.intake.requester_only"):
+            need.task.set_visibility("restricted")
+            need.task.revoke_record_access("reader", self.reader)
+        self.as_user(need).decide_access("approve")
+        need.refresh_from_db()
+        requester_task = self.Task.objects.as_user(self.reader).filter(pk=need.task_id)
+        self.assertTrue(requester_task.exists())
+        password = self.User._base_manager.get(pk=self.reader.pk).password
+        previous = need.access_decision
+        revision = need.revision
+        with self.assertRaises(PermissionDenied):
+            self.as_user(need, self.writer).reset_access(confirmed=True, expected_revision=revision)
+        owner_need = self.as_user(need, self.owner)
+        with self.assertRaises(ValidationError):
+            owner_need.reset_access(confirmed=False, expected_revision=revision)
+        with self.assertRaises(StaleRevisionError):
+            owner_need.reset_access(confirmed=True, expected_revision=revision + 1)
+        need.refresh_from_db()
+        self.assertEqual(need.access_decision_id, previous.pk)
+        result = self.graphql("""mutation($id: ID!, $revision: Int!) {
+          reset_need_access(need: $id, expected_revision: $revision, confirmed: true) { ok }
+        }""", {"id": need.sqid, "revision": revision}, user=self.owner)
+        self.assertTrue(result["reset_need_access"]["ok"])
+        need.refresh_from_db()
+        previous.refresh_from_db()
+        self.assertEqual(need.party_id, party.pk)
+        self.assertEqual(need.access_verdict, "pending")
+        self.assertEqual(previous.superseded_by_id, need.access_decision_id)
+        self.assertEqual(previous.verdict, "completed")
+        self.assertEqual(self.User._base_manager.get(pk=self.reader.pk).password, password)
+        self.assertFalse(requester_task.exists())
+        self.assertFalse(need.task.with_actor(to_subject_ref(self.reader)).has_access("comment"))
+        with self.assertRaises(StaleRevisionError):
+            owner_need.reset_access(confirmed=True, expected_revision=revision)
+
+
+@override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized")
+class DenormalizedNeedResetAccessTests(NeedResetAccessTests):
+    pass
