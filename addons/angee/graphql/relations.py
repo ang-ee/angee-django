@@ -25,6 +25,32 @@ from angee.graphql.introspection import FieldPathError, fields_for_path
 _UNCACHED = object()
 
 
+class _ActorScopedSubquery(models.Expression):
+    """An uncorrelated scope projected only when the containing SQL uses it.
+
+    Keep the lazy actor-bound queryset outside Django's expression tree until
+    SQL compilation. Otherwise every alias, queryset clone and optimizer pass
+    copies its entire permission graph, including aliases the query never uses.
+    The native aggregate scope still owns authorization and live frontier checks;
+    neither SQL nor permission answers are cached across evaluations.
+    """
+
+    contains_subquery = True
+
+    def __init__(self, queryset: models.QuerySet[Any], field_name: str) -> None:
+        field = queryset.model._meta.pk if field_name == "pk" else queryset.model._meta.get_field(field_name)
+        super().__init__(output_field=field.get_col(queryset.model._meta.db_table).output_field)
+        self.queryset = queryset
+        self.field_name = field_name
+
+    def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
+        queryset = aggregate_scoped_queryset(self.queryset.using(connection.alias))
+        return models.Subquery(queryset.order_by().values(self.field_name)).as_sql(compiler, connection)
+
+    def get_group_by_cols(self) -> list[Any]:
+        return []
+
+
 def actor_scoped_relation_group_expression(
     queryset: models.QuerySet[Any],
     field_path: str,
@@ -72,8 +98,6 @@ def actor_scoped_relation_group_expression(
         related_queryset = read_scoped_queryset(related_model, actor)
         if related_queryset is None:
             related_queryset = related_model._default_manager.none()
-        else:
-            related_queryset = aggregate_scoped_queryset(related_queryset)
 
         if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
             lookup = "__".join((*traversed, relation.attname))
@@ -81,7 +105,7 @@ def actor_scoped_relation_group_expression(
         else:
             lookup = "__".join((*traversed, part, related_model._meta.pk.attname))
             target_name = related_model._meta.pk.attname
-        guards.append(models.Q(**{f"{lookup}__in": related_queryset.values_list(target_name, flat=True)}))
+        guards.append(models.Q(**{f"{lookup}__in": _ActorScopedSubquery(related_queryset, target_name)}))
         traversed.append(part)
 
     if not guards:

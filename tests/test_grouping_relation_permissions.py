@@ -6,7 +6,7 @@ These tests exercise only the public ``hasura_model_resource`` contract.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -175,7 +175,7 @@ def relation_grouping_case(transactional_db: None):
         model_tables(models_in_order),
         patch(
             "angee.graphql.capabilities.effective_rebac_definition",
-            side_effect=lambda model: definition.get_definition(model_resource_type(model)),
+            side_effect=lambda model: definition.get_definition(cast(str, model_resource_type(model))),
         ),
     ):
         try:
@@ -210,8 +210,8 @@ def relation_grouping_case(transactional_db: None):
                     SchemaAddon(
                         {
                             "public": {
-                                "query": [resource.query],
-                                "types": [GroupParentType, *resource.types],
+                                "query": (resource.query,),
+                                "types": (GroupParentType, *resource.types),
                             }
                         }
                     )
@@ -238,11 +238,11 @@ def relation_grouping_case(transactional_db: None):
                     SchemaAddon(
                         {
                             "public": {
-                                "query": [pinned_resource.query],
-                                "types": [
+                                "query": (pinned_resource.query,),
+                                "types": (
                                     GroupParentType,
                                     *pinned_resource.types,
-                                ],
+                                ),
                             }
                         }
                     )
@@ -424,18 +424,18 @@ def test_related_axes_merge_unreadable_identities_into_null(
         case.duplicate_two.sqid: ("Duplicate", 1),
         None: (None, 3),
     }
-    assert sorted(alice["having"], key=lambda row: str(row["key"]["target_id"])) == sorted(
-        [
-            {"key": {"target_id": None, "target__display_name": None}, "aggregate": {"count": 2}},
-            {
-                "key": {
-                    "target_id": case.alpha.sqid,
-                    "target__display_name": "Alpha",
-                },
-                "aggregate": {"count": 2},
+    expected_having: list[dict[str, Any]] = [
+        {"key": {"target_id": None, "target__display_name": None}, "aggregate": {"count": 2}},
+        {
+            "key": {
+                "target_id": case.alpha.sqid,
+                "target__display_name": "Alpha",
             },
-        ],
-        key=lambda row: str(row["key"]["target_id"]),
+            "aggregate": {"count": 2},
+        },
+    ]
+    assert sorted(alice["having"], key=lambda row: str(row["key"]["target_id"])) == sorted(
+        expected_having, key=lambda row: str(row["key"]["target_id"]),
     )
     assert bob["having"] == [
         {
@@ -703,7 +703,7 @@ def test_declared_sort_alias_rejects_field_gated_paths(monkeypatch: pytest.Monke
     """)
     monkeypatch.setattr(
         "angee.graphql.access.effective_rebac_definition",
-        lambda model: definition.get_definition(model_resource_type(model)),
+        lambda model: definition.get_definition(cast(str, model_resource_type(model))),
     )
     with pytest.raises(ImproperlyConfigured, match="field-gated reads"):
         hasura_model_resource(
@@ -831,3 +831,14 @@ def test_relation_in_resolves_all_operands_with_one_read(relation_grouping_case:
              and f'FROM "{GroupParent._meta.db_table}"' not in query["sql"]]
     assert len(reads) == 1
     assert " IN (" in reads[0]
+
+
+def test_unused_relation_axes_do_not_compile_permission_scopes(relation_grouping_case: Any) -> None:
+    """A scalar-only read must not build any declared relation's permission tree."""
+
+    case = relation_grouping_case
+    active = backend()
+    with patch.object(active, "queryset_filter", wraps=active.queryset_filter) as scope:
+        data = _query(case, case.alice, '{ group_parents(where: {kind: {_eq: "target"}}) { id } }')
+    assert data["group_parents"]
+    assert {call.kwargs["model"] for call in scope.call_args_list} == {GroupParent}
