@@ -152,6 +152,8 @@ class ProposalsWorkTests(ClarificationCase):
                     model._base_manager.filter(pk=self.queue.pk).delete()
 
     def test_native_stage_lifecycle_and_manager_ask(self):
+        """D25 gives the manager stage exits; D35 keeps recipients discussion-only."""
+
         self.route()
         task = self.ask()
         self.assertEqual((task.queue_id, task.stage_id), (self.queue.pk, self.ready.pk))

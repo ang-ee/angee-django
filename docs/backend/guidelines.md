@@ -692,6 +692,12 @@ data through REBAC, never a queryset bypass.
   gate every subcommand on that persisted state — so editing the zed can deadlock
   the sync. Unstick with `rebac --skip-checks sync --force-overwrite --yes` then
   `rebac sync`; never smoke-test a zed against the shared example DB.
+- The local permission index must be ready for actor-scoped reads. Provision
+  runs `check --database default` after sync; CI runs `rebac index verify` after
+  provision. The base `post_migrate` receiver rebuilds an already-ready index
+  after migrations containing `RunPython` or `RunSQL`. Other bypass writes,
+  including raw saves and direct SQL, must rebuild and verify the index before
+  readers resume. Initial sync builds an unready index.
 - If a removed or renamed definition in an otherwise composed package fails
   `rebac.E009`, run the check-free `reconcile_permissions` first; it prunes stale
   package-managed schema rows before `makemigrations` / `rebac sync` can run.

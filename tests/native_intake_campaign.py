@@ -139,6 +139,7 @@ class IntakeCampaign(IntakeAccessCase):
             self.assertEqual(list(self.Need.objects.for_project(project).values_list("pk", flat=True)), [direct.pk])
 
     def test_two_requesters_comment_without_writing_and_filer_identity_revokes_with_task(self):
+        """D1 grants requester comment only after an approved access decision."""
         first = self.need(party=self.party(self.reader))
         with system_context(reason="tests.t3.second_requester"):
             second_user = self.User.objects.create_user(username="second-requester", email="second@example.test")

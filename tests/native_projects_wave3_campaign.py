@@ -14,6 +14,7 @@ from rebac.backends import backend
 from rebac.schema.parser import parse_zed
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.testing.rebac import install_manual_schema
 from tests.native_intake_capture import IntakeAccessCase
 from tests.native_work import WorkCase
 from tests.test_work_task_access import withhold_assignees
@@ -50,8 +51,8 @@ class ProjectSurfaceCampaign(WorkCase):
             else definition
             for definition in schema.definitions
         ]
-        active.set_schema(schema)
-        self.addCleanup(active.set_schema, original)
+        install_manual_schema(schema, active=active)
+        self.addCleanup(install_manual_schema, original, active=active)
         data = self.graphql(query, {}, user=self.reader)
         self.assertEqual(
             data,

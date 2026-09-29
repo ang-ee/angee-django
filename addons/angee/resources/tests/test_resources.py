@@ -29,6 +29,7 @@ from angee.resources.widgets import (
     resolve_ledger_xref,
     resolve_xref,
 )
+from angee.testing.rebac import install_manual_schema
 from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
 from tests.tables import model_tables
 
@@ -2128,6 +2129,7 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     ],
     ids=["shared", "child-only", "different-subject", "field-backed", "const-backed"],
 )
+@pytest.mark.django_db(transaction=True)
 def test_mti_grants_follow_ancestor_relation_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parent_relation: str, expected_parent: bool
 ) -> None:
@@ -2140,14 +2142,14 @@ def test_mti_grants_follow_ancestor_relation_contract(
     from angee.resources import grants
 
     active = LocalBackend()
-    active.set_schema(parse_zed(f"""
+    install_manual_schema(parse_zed(f"""
         definition auth/user {{}}
         definition auth/group {{ relation member: auth/user }}
         definition mtidemo/parent {{
             {parent_relation}
         }}
         definition mtidemo/child {{ relation reviewer: auth/user }}
-    """))
+    """), active=active)
     child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
     subject = SubjectRef.of("auth/user", "2")
     # Xref resolution and real MTI identity enumeration are covered by the
@@ -2178,11 +2180,11 @@ def test_invalid_explicit_mti_grant_still_fails_native_validation(
     from angee.resources import grants
 
     active = LocalBackend()
-    active.set_schema(parse_zed("""
+    install_manual_schema(parse_zed("""
         definition auth/user {}
         definition mtidemo/parent {}
         definition mtidemo/child {}
-    """))
+    """), active=active)
     child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
     monkeypatch.setattr(grants, "backend", lambda: active)
     monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args: [child, parent])

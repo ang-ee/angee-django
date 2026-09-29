@@ -49,7 +49,6 @@ class ExtractionLineage(AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "objects"
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         raise ValueError("The extraction lineage head changes only during retention.")
@@ -116,7 +115,6 @@ class Extraction(SqidMixin, AuditMixin, RecordRefMixin, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "system_objects"
         ordering = ("lineage_key", "-revision")
         rebac_resource_type = "workflows_extraction/extraction"
         constraints = (
@@ -285,7 +283,6 @@ class ExtractionSource(SqidMixin, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "system_objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_source"
         constraints = (
@@ -342,7 +339,6 @@ class ExtractionPage(SqidMixin, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "system_objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_page"
         constraints = (
@@ -387,7 +383,6 @@ class ExtractionPart(SqidMixin, AngeeModel):
 
     class Meta:
         abstract = True
-        base_manager_name = "system_objects"
         ordering = ("position",)
         rebac_resource_type = "workflows_extraction/extraction_part"
         constraints = (

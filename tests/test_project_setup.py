@@ -391,6 +391,7 @@ class ServerVerbCase(ProjectSetupFixture):
         return [{"id": str(row.sqid), "expected_revision": row.revision} for row in rows]
 
     def test_question_widening_keeps_recipient_discussion_and_requester_path_explicit(self):
+        """D35 keeps recipients read/comment-only; D38 assigns requester widening to consumers."""
         project, round = self.approved_request()
         self.assertTrue(self.scoped(self.source, self.reader))
         with actor_context(self.manager):

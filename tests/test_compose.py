@@ -1121,7 +1121,7 @@ def test_provision_plan_default_flags_covers_the_no_flag_lifecycle() -> None:
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes"],
-        ["check"],
+        ["check", "--database", "default"],
         ["resources", "load"],
         ["schema"],
     ]
@@ -1165,7 +1165,7 @@ def test_provision_plan_combines_every_flag() -> None:
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],
-        ["check"],
+        ["check", "--database", "default"],
         ["resources", "load", "--include-demo"],
         ["schema"],
         ["bootstrap_admin"],
@@ -1198,9 +1198,9 @@ def test_provision_defers_checks_only_across_the_schema_identity_transition() ->
     assert (
         plan.index(["migrate", "--noinput", "--skip-checks"])
         < plan.index(["rebac", "--skip-checks", "sync", "--yes"])
-        < plan.index(["check"])
+        < plan.index(["check", "--database", "default"])
     )
-    assert plan.index(["check"]) < plan.index(["resources", "load"])
+    assert plan.index(["check", "--database", "default"]) < plan.index(["resources", "load"])
 
 
 @pytest.mark.django_db
@@ -1230,7 +1230,7 @@ def test_provision_plan_can_cross_an_old_persisted_rebac_identity() -> None:
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes"],
-        ["check"],
+        ["check", "--database", "default"],
     ]
 
 

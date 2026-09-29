@@ -19,6 +19,7 @@ from angee.operator import schema as operator_schema
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonError, OperatorDaemonNotFound, _daemon_error_body
 from angee.operator.models import OperatorConnection as _AbstractOperatorConnection
 from angee.operator.models import OperatorRole as _AbstractOperatorRole
+from angee.testing.rebac import install_manual_schema
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token restartJob } }"
 _ACTOR = SubjectRef.of("auth/user", "abc")
@@ -595,7 +596,7 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
     assert reader.backing == ConstBinding(target_id="operator_admin")
 
     backend = LocalBackend()
-    backend.set_schema(schema)
+    install_manual_schema(schema, active=backend)
     operator = SubjectRef.of("auth/user", "operator-1")
     connection_ref = ObjectRef("operator/connection", "default")
 

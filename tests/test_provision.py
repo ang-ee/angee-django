@@ -102,7 +102,7 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
         ["migrate", "--noinput", "--skip-checks"],
         ["reconcile_permissions"],
         ["rebac", "--skip-checks", "sync", "--yes", "--force-overwrite"],
-        ["check"],
+        ["check", "--database", "default"],
         ["resources", "load", "--include-demo"],
         ["schema"],
     ]

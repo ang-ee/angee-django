@@ -189,6 +189,11 @@ jobs:
           uv sync
           uv run manage.py angee build
           uv run manage.py schema
+      - name: Provision and verify the permission index
+        working-directory: stack
+        run: |
+          uv run manage.py angee provision
+          uv run manage.py rebac index verify --database default
       - name: Install the stack JS workspace and generate typed documents
         working-directory: stack
         run: |

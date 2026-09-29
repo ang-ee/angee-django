@@ -33,6 +33,7 @@ from angee.graphql.data import declared_hasura_resource_fields, hasura_model_res
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
+from angee.testing.rebac import install_manual_schema
 from tests.conftest import (
     SchemaAddon,
     execute_schema,
@@ -169,7 +170,6 @@ def relation_grouping_case(transactional_db: None):
         }
         """
     )
-    active.set_schema(definition)
     models_in_order = (GroupLabel, GroupMiddle, PlainGroupLabel, GroupParent)
     with (
         model_tables(models_in_order),
@@ -178,6 +178,7 @@ def relation_grouping_case(transactional_db: None):
             side_effect=lambda model: definition.get_definition(cast(str, model_resource_type(model))),
         ),
     ):
+        install_manual_schema(definition, active=active)
         try:
             alice = SubjectRef.of("auth/user", "alice")
             bob = SubjectRef.of("auth/user", "bob")

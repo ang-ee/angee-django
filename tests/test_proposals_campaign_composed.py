@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection
 from django.db.models.deletion import ProtectedError
@@ -67,6 +68,16 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
 
     __test__ = False
     with_work = False
+
+    def test_permission_index_checks_after_sync(self) -> None:
+        """Every composed profile passes the database-aware 0.23 index checks."""
+
+        failures = [
+            issue.id
+            for issue in checks.run_checks(databases=["default"])
+            if issue.id.startswith("rebac.E01")
+        ]
+        self.assertEqual(failures, [])
 
     def data(self, result: Any) -> dict[str, Any]:
         self.assertIsNone(result.errors, result.errors)
@@ -429,6 +440,7 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
                 self.assertEqual(actual, expected)
 
     def test_passed_question_content_update_is_refused_and_manager_can_complete(self) -> None:
+        """D25 reserves stage exits for managers; D35 leaves recipients discussion-only."""
         task = self.ask()
         with actor_context(self.manager):
             task = self.as_user(self.round, self.manager).pass_clarification(task, self.recipient, audience="asker")

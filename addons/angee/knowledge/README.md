@@ -21,3 +21,7 @@ chatter: [recordPagesContribution({
 
 The configured role is passed to the same binding query and write controls.
 The record owner continues to own the permission arm and any route tab policy.
+
+Page access follows the current schema. The former one-shot author-attribution
+transition and its management command were removed before any deployment used
+them; schema sync is the only policy transition for this addon.

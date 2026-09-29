@@ -10,6 +10,7 @@ from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.schema.parser import parse_zed
 
+from angee.testing.rebac import install_manual_schema
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -28,8 +29,8 @@ def withhold_assignees(case):
         else definition
         for definition in schema.definitions
     ]
-    backend().set_schema(schema)
-    case.addCleanup(backend().set_schema, original)
+    install_manual_schema(schema)
+    case.addCleanup(install_manual_schema, original)
 
 
 class TaskAccessTests(WorkCase):

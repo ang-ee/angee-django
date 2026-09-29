@@ -16,6 +16,7 @@ from rebac.models import Relationship, RelationshipRegistry
 from rebac.preflight import _check_new_model
 from rebac.schema import parse_zed
 
+from angee.testing.rebac import install_manual_schema
 from tests.conftest import create_platform_admin, create_user
 from tests.money_models import Currency, CurrencyRate
 from tests.projects_models import Queue
@@ -34,10 +35,10 @@ def public_policy(request, db, settings):
     active = backend()
     assert isinstance(active, LocalBackend)
     root = Path(__file__).parents[1] / "addons/angee"
-    active.set_schema(parse_zed("\n".join(
+    install_manual_schema(parse_zed("\n".join(
         (root / addon / "permissions.zed").read_text()
         for addon in ("iam", "dashboards", "money", "spaces", "work")
-    )))
+    )), active=active)
     try:
         yield active
     finally:
@@ -155,9 +156,9 @@ def test_create_preflight_matches_persisted_policy(public_policy, candidates, ac
             if permission.name == "create" else permission
             for permission in definition.permissions
         ))
-        public_policy.set_schema(replace(schema, definitions=[
+        install_manual_schema(replace(schema, definitions=[
             updated if item.resource_type == resource_type else item for item in schema.definitions
-        ]))
+        ]), active=public_policy)
     before = _relationship_counts()
     inserted = []
     with patch.object(public_policy, "accessible", side_effect=AssertionError("enumerated resource IDs")):

@@ -12,6 +12,7 @@ from rebac.schema.parser import parse_zed
 
 from angee.projects.access import bind, unbind
 from angee.storage.exceptions import UploadDenied
+from angee.testing.rebac import install_manual_schema
 from tests.conftest import Backend, Drive, File, FileAttachment, Page, RecordBinding, Vault
 from tests.messaging_campaign import grant
 from tests.messaging_models import Person
@@ -112,7 +113,7 @@ def test_phase_only_permission_discloses_name_without_project_access(project_cas
         else definition
         for definition in schema.definitions
     ]
-    active.set_schema(schema)
+    install_manual_schema(schema, active=active)
     try:
         assert task.with_actor(submitter).promoted_phase() == phase.name
         assert not Project.objects.with_actor(submitter).filter(pk=promoted.pk).exists()
@@ -126,7 +127,7 @@ def test_phase_only_permission_discloses_name_without_project_access(project_cas
             assert values == [phase.name]
             assert len(queries) == 1
     finally:
-        active.set_schema(original)
+        install_manual_schema(original, active=active)
 
 
 def test_record_file_follows_task_and_download_rechecks_after_narrowing(project_case):

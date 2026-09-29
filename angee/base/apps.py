@@ -30,3 +30,7 @@ class BaseConfig(AppConfig):
         checks.register(check_creation_key_constraints, checks.Tags.models)
         checks.register(check_ownership, checks.Tags.models)
         checks.register(check_rebac_caveats, checks.Tags.models)
+
+        from angee.base.signals import connect_permission_index_rebuild
+
+        connect_permission_index_rebuild()

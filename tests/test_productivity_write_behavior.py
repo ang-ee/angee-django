@@ -30,6 +30,7 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.intake.models import Need as AbstractNeed
 from angee.projects.models import Task as AbstractTask
+from angee.testing.rebac import install_manual_schema
 from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
 from tests.composed_host import run_composed_tests
@@ -197,7 +198,10 @@ def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any,
             permission read = task->read + project->read
         }
         """)
-    active.set_schema(replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]))
+    install_manual_schema(
+        replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
+        active=active,
+    )
     try:
         admin = create_platform_admin("productivity-create-admin")
         with system_context(reason="tests.productivity.create.queue"):

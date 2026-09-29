@@ -555,7 +555,7 @@ class ExtractionManager(EvidenceManager):
             )
             if extraction is None:
                 raise ValidationError({"extraction": "The retained extraction is unavailable."})
-            lineage_model._base_manager.lock_if_supported().get(key=extraction.lineage_key)
+            system_queryset(lineage_model, lock=("self",)).get(key=extraction.lineage_key)
             binding, selected_parent = self.validate_correction_binding(
                 decision.payload,
                 extraction=extraction,
@@ -920,7 +920,7 @@ class ExtractionManager(EvidenceManager):
                         if lineage is None:
                             lineage = lineage_model(key=values["lineage_key"])
                             lineage.allocate()
-                        lineage = lineage_model._base_manager.lock_if_supported().get(pk=lineage.pk)
+                        lineage = system_queryset(lineage_model, lock=("self",)).get(pk=lineage.pk)
                         previous: Any = lineage.head
                         existing = self.filter(reuse_key=values["reuse_key"]).first()
                         unresolved_failure = (

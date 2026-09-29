@@ -46,7 +46,8 @@ contribution is owned, and revisioned, by the contributing addon.
 With no extension fragments, merging emits nothing. Phase-2 binding still
 connects manifest-declared permission files to the upstream AppConfig seam.
 The runtime's ``angee.E024`` check reads those effective files and rejects
-caveated relation subjects, which the local backend cannot scope through SQL.
+caveated relation subjects because framework actor-scoped querysets have no
+request caveat context, even though the local backend supports point checks.
 """
 
 from __future__ import annotations

@@ -8,7 +8,7 @@ needs no synchronization of unrelated addon schemas.
 import pytest
 from django.conf import settings
 from django.db import models
-from rebac.backends import backend, reset_backend
+from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 
 from angee.base.mixins import (
@@ -23,6 +23,7 @@ from angee.base.mixins import (
     OwnerQuerySet,
 )
 from angee.base.models import AngeeModel, AngeeQuerySet
+from angee.testing.rebac import install_manual_schema
 
 
 class RevisionRow(OptimisticLockMixin):
@@ -99,7 +100,7 @@ definition scopedemo/owned_row {
 
 @pytest.fixture
 def ownership_tables(db):
-    backend().set_schema(parse_zed(OWNERSHIP_SCHEMA))
+    install_manual_schema(parse_zed(OWNERSHIP_SCHEMA))
     try:
         yield
     finally:
