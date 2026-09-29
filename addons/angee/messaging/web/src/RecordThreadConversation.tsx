@@ -1,7 +1,7 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
-import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useUiT } from "@angee/ui";
+import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Skeleton, SkeletonStatus, Tag, Textarea, UploadDropTarget, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useUiT } from "@angee/ui";
 import {
   StorageUploadTasks,
   useStorageUpload,
@@ -338,7 +338,13 @@ export function RecordThreadConversation({
   }, [modelLabel, recordId, markReadMutation, t]);
 
   if (threadQuery.isFetching && threadQuery.data === undefined) {
-    return <LoadingPanel message={t("chatter.loading")} />;
+    return <SkeletonStatus label={t("chatter.loading")} className="flex min-h-72 flex-col gap-4 p-3">
+      <Skeleton className="h-9 w-full" />
+      {[0, 1, 2].map((index) => <div key={index} className="flex gap-3">
+        <Skeleton className="h-8 w-8 rounded-full" />
+        <div className="flex flex-1 flex-col gap-2"><Skeleton className="h-4 w-1/3" /><Skeleton className="h-10 w-3/4" /></div>
+      </div>)}
+    </SkeletonStatus>;
   }
   // Any failure returns a state surface and NO composer — a `record_thread`
   // `NOT_FOUND` (unreadable/nonexistent record) or `BAD_RECORD` (undecodable

@@ -4,7 +4,7 @@ import * as React from "react";
 import { cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
-  Form, List, parsePageActions, parsePageColumns, parsePageFacets, parsePageFields, parsePageGroups,
+  Column, Field, Form, Group, List, parsePageActions, parsePageColumns, parsePageFacets, parsePageFields, parsePageGroups,
   type FormProps, type ListProps, type ListViewProps, type RecordPanelContext, type ResourceListProps,
 } from "@angee/ui";
 
@@ -96,22 +96,45 @@ describe("composable standard project and task declarations", () => {
 
   test("consumer selections keep dependency fields and reuse native groups and verbs", () => {
     const line = () => "Context";
-    const { result: project } = renderHook(() => useProjectFormDeclaration({ groups: ["planning"], verbs: ["complete"], contextLine: line }));
+    const { result: project } = renderHook(() => useProjectFormDeclaration({ groups: ["planning"], verbs: ["complete"], verbLabels: { complete: "Finish" }, contextLine: line }));
     const projectProps = propsOf<FormProps>(project.current);
     expect(projectProps.contextLine).toBe(line);
     expect(parsePageGroups(projectProps.children).map(({ label }) => label)).toEqual(["Planning"]);
     expect(parsePageActions(projectProps.children).map(({ id }) => id)).toEqual(["complete"]);
+    expect(parsePageActions(projectProps.children)[0]?.label).toBe("Finish");
     expect(parsePageFields(projectProps.children).map(({ name }) => name)).toEqual([
       "title", "revision", "status", "current_milestone", "owner", "lead", "start_date",
       "start_date_resolution", "target_date", "target_date_resolution", "body",
     ]);
 
-    const { result: task } = renderHook(() => useTaskFormDeclaration({ groups: ["assignment"], verbs: ["complete"], contextLine: line }));
+    const { result: task } = renderHook(() => useTaskFormDeclaration({ groups: ["assignment"], verbs: ["complete"], verbLabels: { complete: "Finish" }, contextLine: line }));
     const taskProps = propsOf<FormProps>(task.current);
     expect(taskProps.contextLine).toBe(line);
     expect(parsePageGroups(taskProps.children).map(({ label }) => label)).toEqual(["Assignment"]);
     expect(parsePageActions(taskProps.children).map(({ id }) => id)).toEqual(["complete"]);
+    expect(parsePageActions(taskProps.children)[0]?.label).toBe("Finish");
     expect(parsePageFields(taskProps.children).map(({ name }) => name)).toContain("revision");
+  });
+
+  test("a route can select task columns and status while keeping the shared form", () => {
+    const { result: list } = renderHook(() => useTaskListDeclaration({
+      children: <><Column field="title" /><Column field="stage_name" /></>,
+      rowActions: [],
+    }));
+    expect(parsePageColumns(propsOf<ListProps>(list.current).children).map(({ field }) => field))
+      .toEqual(["title", "stage_name"]);
+    expect(propsOf<ListProps>(list.current).rowActions).toEqual([]);
+
+    const { result: form } = renderHook(() => useTaskFormDeclaration({
+      groups: [], verbs: [], statusField: "stage_name", returning: ["created_at"],
+      extraFields: <Group label="Details"><Field name="due_date" /></Group>,
+    }));
+    const props = propsOf<FormProps>(form.current);
+    expect(props.returning).toEqual(["created_at"]);
+    expect(parsePageFields(props.children).find(({ name }) => name === "stage_name")).toMatchObject({
+      status: true, readOnly: true,
+    });
+    expect(parsePageGroups(props.children).map(({ label }) => label)).toEqual(["Details"]);
   });
 
   test("exports the standard record tabs and a timeline scoped to one project's lane", () => {

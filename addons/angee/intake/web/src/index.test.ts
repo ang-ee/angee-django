@@ -25,4 +25,8 @@ describe("intake addon manifest", () => {
     expect(NEED_MODEL).toBe("intake.Need");
     expect(intake.icons?.["intake-needs"]).toBeDefined();
   });
+
+  test("offers the same actor-scoped access projection in the record aside", () => {
+    expect(intake.chatter?.map(({ id }) => id)).toContain("intake.access-decisions");
+  });
 });

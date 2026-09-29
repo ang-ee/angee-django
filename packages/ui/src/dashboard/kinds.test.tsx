@@ -61,6 +61,12 @@ const renderWidget = (node: ReactElement) => render(node, {
 });
 
 describe("dashboard table columns", () => {
+  test("keeps the table footprint while its first actor-scoped read is pending", () => {
+    renderWidget(<TableWidget spec={spec} data={{ ...data, fetching: true }} />);
+    const status = screen.getByRole("status");
+    expect(status.textContent).toContain("Loading");
+    expect(status.querySelectorAll("[aria-hidden='true']").length).toBeGreaterThan(2);
+  });
   test("an explicit record route makes the first cell a native record link", () => {
     const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
     render(<RouterContextProvider router={router}><AppRuntimeProvider runtime={{ routeHref: createRouteHref([{ name: "review.record", path: "/review/$id" }]) }}>

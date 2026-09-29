@@ -5,7 +5,7 @@ import * as v from "valibot";
 import { MetricTile } from "../fragments/MetricStrip";
 import { ErrorBanner } from "../fragments/ErrorBanner";
 import { InlineEmpty } from "../fragments/InlineEmpty";
-import { LoadingPanel } from "../fragments/LoadingPanel";
+import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { widgetColumns, type DashboardWidgetKind, type DashboardWidgetRenderProps, type WidgetColumn } from "./headless";
 import { DashboardBars, DashboardDonut } from "./charts";
@@ -16,11 +16,15 @@ import type { ColumnDescriptor } from "../views/page";
 import { cellContent } from "../views/resource/list-body/cell-utils";
 import { useResourceRecordHrefLookup, useRouteHref } from "../runtime/runtime";
 
-function DataState({ data, children }: DashboardWidgetRenderProps & { children: React.ReactNode }): React.ReactElement {
+function DataState({ data, spec, children }: DashboardWidgetRenderProps & { children: React.ReactNode }): React.ReactElement {
   const t = useDashboardT();
   if (data.error) return <ErrorBanner description={data.error.message} />;
   if (data.fetching && data.value == null && data.series.length === 0 && data.rows.length === 0) {
-    return <LoadingPanel density="inline" message={t("widget.loading")} />;
+    return <SkeletonStatus label={t("widget.loading")} className="flex h-full flex-col gap-3 p-2">
+      {spec.kind === "stat" ? <><Skeleton className="h-5 w-1/2" /><Skeleton className="h-8 w-2/3" /></> :
+        <><Skeleton className="h-5 w-full" />
+          {Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-6 w-full" />)}</>}
+    </SkeletonStatus>;
   }
   return <>{children}</>;
 }

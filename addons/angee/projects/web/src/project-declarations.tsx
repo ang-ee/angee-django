@@ -35,7 +35,10 @@ import { TaskManagementTab } from "./task-declarations";
 export interface ProjectFormSelection {
   groups?: readonly ("planning" | "details")[];
   verbs?: readonly ("pause" | "resume" | "complete" | "drop")[];
+  verbLabels?: Partial<Record<"pause" | "resume" | "complete" | "drop", string>>;
   contextLine?: FormProps["contextLine"];
+  returning?: FormProps["returning"];
+  extraActions?: React.ReactNode;
 }
 
 /** Standard project form, shared by every route mounting projects. */
@@ -64,7 +67,7 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
     <Form
       resource={PROJECT_MODEL}
       layout="tabs"
-      returning={["permissions", "selectable_milestones.id", "current_milestone.name"]}
+      returning={["permissions", "selectable_milestones.id", "current_milestone.name", ...(selection.returning ?? [])]}
       headerExtras={({ record }) => record?.status
         ? <ProjectLifecycleBadge value={String(record.status)} options={statusOptions} />
         : null}
@@ -90,14 +93,14 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
       <Field name="body" widget="markdown.editor" body />
       {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("pause") ? <Action
         id="pause"
-        label={t("project.action.pause")}
+        label={selection.verbLabels?.pause ?? t("project.action.pause")}
         icon="archive"
         run={pauseProject}
         visibleWhen={(record) => projectStatus(record) === "open"}
       /> : null}
       {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("resume") ? <Action
         id="resume"
-        label={t("project.action.resume")}
+        label={selection.verbLabels?.resume ?? t("project.action.resume")}
         icon="activity"
         run={resumeProject}
         visibleWhen={(record) => ["paused", "dropped"].includes(projectStatus(record))}
@@ -105,19 +108,20 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
       {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("complete") ? <Action
         id="complete"
         placement="toolbar"
-        label={t("project.action.complete")}
+        label={selection.verbLabels?.complete ?? t("project.action.complete")}
         icon="check"
         run={completeProject}
         visibleWhen={isActiveProject}
       /> : null}
       {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("drop") ? <Action
         id="drop"
-        label={t("project.action.drop")}
+        label={selection.verbLabels?.drop ?? t("project.action.drop")}
         icon="circle-x"
         danger
         run={dropProject}
         visibleWhen={isActiveProject}
       /> : null}
+      {selection.extraActions}
     </Form>
   );
 }

@@ -12,6 +12,7 @@ import {
   formViewRecordActionsSlot,
   formViewSectionsSlot,
   useRecordChromeContext,
+  type ChatterViewContext,
 } from "@angee/ui";
 import { MessageSquareQuote } from "lucide-react";
 import type { ReactElement } from "react";
@@ -29,6 +30,11 @@ const intake = defineBaseAddon({
   id: "intake",
   i18n: { intake: enIntakeMessages },
   icons: { "intake-needs": MessageSquareQuote },
+  chatter: [{
+    id: "intake.access-decisions", label: "Decisions", sequence: 50,
+    when: (context) => context.view.kind === "record" && context.route?.modelLabel === TASK_MODEL,
+    render: (context) => <TaskAccessChatter context={context} />,
+  }],
   slots: [
     decisionRecordTab(NEED_MODEL),
     {
@@ -92,6 +98,19 @@ function TaskAccessGroup(): ReactElement {
   const t = useIntakeT();
   const query = useAuthoredQuery(TaskAccessNeedsDocument, { task: recordId }, {
     models: [NEED_MODEL, "decisions.Decision"],
+  });
+  if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
+    <Skeleton className="h-16 w-full" />
+  </SkeletonStatus>;
+  if (query.error) return <ErrorBanner description={t("access.error")} />;
+  return <TaskAccessDecisions needs={query.data?.intake_needs ?? []} />;
+}
+
+function TaskAccessChatter({ context }: { context: ChatterViewContext }): ReactElement {
+  const t = useIntakeT();
+  const task = context.view.kind === "record" ? context.view.sqid ?? "" : "";
+  const query = useAuthoredQuery(TaskAccessNeedsDocument, { task }, {
+    enabled: Boolean(task), models: [NEED_MODEL, "decisions.Decision"],
   });
   if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
     <Skeleton className="h-16 w-full" />

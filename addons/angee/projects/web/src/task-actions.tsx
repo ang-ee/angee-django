@@ -70,7 +70,15 @@ export function useTaskRowActions<
 export interface TaskFormSelection {
   groups?: readonly ("placement" | "assignment" | "details")[];
   verbs?: readonly ("complete" | "drop" | "reopen" | "promote")[];
+  verbLabels?: Partial<Record<"complete" | "drop" | "reopen" | "promote", string>>;
   contextLine?: FormProps["contextLine"];
+  returning?: FormProps["returning"];
+  statusField?: "status" | "stage_name";
+  titleLabel?: string;
+  bodyLabel?: string;
+  extraFields?: React.ReactNode;
+  extraActions?: React.ReactNode;
+  readOnlyWhen?: FormProps["readOnlyWhen"];
 }
 
 /** Shared task form for collection routes and board create flows. */
@@ -114,14 +122,17 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
   );
 
   return (
-    <Form resource={TASK_MODEL} layout="tabs" contextLine={selection.contextLine}>
-      <Field name="title" title />
+    <Form resource={TASK_MODEL} layout="tabs" contextLine={selection.contextLine} returning={selection.returning}
+      readOnlyWhen={selection.readOnlyWhen}>
+      <Field name="title" title label={selection.titleLabel} />
       <Field name="allowed_visibility" hidden readOnly />
       <Field name="revision" readOnly hidden />
       <Field name="visibility" widget="visibility" placement="title" options={visibilityOptions}
         visibilityAction={{ document: SetTaskVisibilityDocument, resultField: "set_task_visibility",
           idArgument: "id", revisionArgument: "expected_revision" }} />
-      <Field name="status" widget="statusbar" status options={statusOptions} createOnly />
+      {selection.statusField === "stage_name"
+        ? <Field name="stage_name" widget="statusbar" status readOnly />
+        : <Field name="status" widget="statusbar" status options={statusOptions} createOnly />}
       {(selection.groups ?? ["placement", "assignment", "details"]).includes("placement") ? <Group label={t("task.group.placement")} columns={2}>
         <Field name="project" />
         <Field name="milestone" />
@@ -141,18 +152,19 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
         <Field name="done_at" readOnly />
         <Field name="dropped_at" readOnly />
       </Group> : null}
-      <Field name="note" widget="markdown.editor" body />
+      <Field name="note" widget="markdown.editor" body label={selection.bodyLabel} />
+      {selection.extraFields}
       {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("complete") ? <Action
         id="complete"
         placement="toolbar"
-        label={t("task.action.complete")}
+        label={selection.verbLabels?.complete ?? t("task.action.complete")}
         icon="check"
         run={complete}
         visibleWhen={isOpenTask}
       /> : null}
       {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("drop") ? <Action
         id="drop"
-        label={t("task.action.drop")}
+        label={selection.verbLabels?.drop ?? t("task.action.drop")}
         icon="circle-x"
         danger
         args={[
@@ -168,17 +180,18 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
       /> : null}
       {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("reopen") ? <Action
         id="reopen"
-        label={t("task.action.reopen")}
+        label={selection.verbLabels?.reopen ?? t("task.action.reopen")}
         icon="activity"
         run={reopen}
         visibleWhen={(record) => !isOpenTask(record)}
       /> : null}
       {(selection.verbs ?? ["complete", "drop", "reopen", "promote"]).includes("promote") ? <Action
         id="promote"
-        label={t("task.action.promote")}
+        label={selection.verbLabels?.promote ?? t("task.action.promote")}
         icon="projects"
         run={promote}
       /> : null}
+      {selection.extraActions}
     </Form>
   );
 }

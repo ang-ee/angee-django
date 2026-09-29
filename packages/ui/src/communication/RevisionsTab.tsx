@@ -6,7 +6,7 @@ import { revisionSnapshot } from "@angee/refine";
 import { useUiT } from "../i18n";
 import { EmptyState } from "../fragments/EmptyState";
 import { ErrorBanner } from "../fragments/ErrorBanner";
-import { LoadingPanel } from "../fragments/LoadingPanel";
+import { Skeleton, SkeletonStatus } from "../ui/skeleton";
 import { TimelineEntry } from "../fragments/TimelineEntry";
 
 export interface RevisionsTabProps {
@@ -47,7 +47,14 @@ export function RevisionsTab({
     );
   }
   if (revisions.fetching && revisions.revisions.length === 0) {
-    return <LoadingPanel message={t("revisions.loading")} />;
+    return <SkeletonStatus label={t("revisions.loading")} className="flex flex-col gap-3 p-4">
+      {[0, 1, 2].map((index) => <div key={index} className="flex gap-3">
+        <Skeleton className="h-8 w-8 rounded-full" />
+        <div className="flex flex-1 flex-col gap-2">
+          <Skeleton className="h-4 w-1/2" /><Skeleton className="h-3 w-1/3" />
+        </div>
+      </div>)}
+    </SkeletonStatus>;
   }
   if (revisions.revisions.length === 0) {
     return (

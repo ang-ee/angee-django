@@ -21,18 +21,19 @@ import {
 } from "./task-actions";
 
 /** Task collection columns, facets, grouping and lifecycle row actions. */
-export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActionRow>, "children" | "resource">> = {}): React.ReactElement {
+export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActionRow>, "resource">> = {}): React.ReactElement {
   const t = useProjectsT();
   const rowActions = useTaskRowActions<TaskActionRow>();
+  const { children, ...listOptions } = options;
   return (
     <List<TaskActionRow>
       resource={TASK_MODEL}
       defaultGroup={{ field: "project" }}
       order={{ sort_order: "ASC" }}
       rowActions={rowActions}
-      {...options}
+      {...listOptions}
     >
-      <Facet field="project" label={t("common.project")} />
+      {children ?? <><Facet field="project" label={t("common.project")} />
       <Facet field="visibility" label={t("common.visibility")} />
       <Facet field="assignee" label={t("common.assignee")} />
       <Column field="title" />
@@ -41,7 +42,7 @@ export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActio
       <Column field="status" header={t("common.status")} widget="statusBadge" />
       <Column field="assignee" header={t("common.assignee")} />
       <Column field="priority" header={t("common.priority")} />
-      <Column field="due_date" header={t("common.dueDate")} />
+      <Column field="due_date" header={t("common.dueDate")} /></>}
     </List>
   );
 }
