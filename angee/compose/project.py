@@ -156,7 +156,13 @@ class ProjectContract:
         seed.setdefault("BASE_DIR", root)
 
         if "DATABASE_URL" in os.environ:
-            seed.setdefault("DATABASES", {"default": self.env.db()})
+            database = self.env.db()
+            if "postgresql" in database.get("ENGINE", ""):
+                # Permission scopes compile to large predicates; PostgreSQL's JIT
+                # spends seconds compiling them for millisecond queries.
+                options = database.setdefault("OPTIONS", {})
+                options.setdefault("options", "-c jit=off")
+            seed.setdefault("DATABASES", {"default": database})
         if "CACHE_URL" in os.environ:
             seed.setdefault("CACHES", {"default": self.env.cache()})
         if "EMAIL_BACKEND" in os.environ:
