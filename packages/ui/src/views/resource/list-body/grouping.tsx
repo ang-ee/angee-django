@@ -139,6 +139,12 @@ export function groupLabel(
   t: UiTranslate,
 ): string {
   if (value == null || value === "") return emptyValueLabel;
+  const booleanKey = typeof value === "boolean"
+    ? value
+    : metadata?.fields[group.field]?.scalar === "Boolean" && (value === "true" || value === "false")
+      ? value === "true"
+      : null;
+  if (booleanKey !== null) return t(booleanKey ? "list.yes" : "list.no");
   if (typeof value === "string" && metadata?.fields[group.field]?.kind === "enum") {
     return enumLabelFromMetadata(metadata, group.field, value) ?? value;
   }
