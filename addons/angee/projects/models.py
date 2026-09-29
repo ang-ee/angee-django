@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from typing import Any, cast
@@ -13,10 +11,8 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.core.serializers.json import DjangoJSONEncoder
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
-from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
@@ -30,7 +26,6 @@ from angee.base.actors import actor_user_id
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import (
     AuditMixin,
-    CreationKeyConflict,
     CreationKeyMixin,
     CreationKeyQuerySet,
     HistoryMixin,
@@ -52,7 +47,7 @@ from angee.projects.events import (
     project_status_changed,
     task_promoted,
 )
-from angee.projects.inputs import MilestoneTemplate, setup_reference
+from angee.projects.inputs import MilestoneTemplate
 from angee.scheduling.fields import RecurrenceField
 
 
@@ -64,7 +59,7 @@ class ProjectSetupState(StrEnum):
     COMPLETE = "complete"
 
 
-class ProjectQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any]):
+class ProjectQuerySet(OwnerQuerySet[Any], AngeeQuerySet[Any]):
     """Project rows with the shared ownership release contract."""
 
     def update(self, **kwargs: Any) -> int:
@@ -97,23 +92,19 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
         self, task: Any, *, configuration: Mapping[str, Any], client_creation_key: str,
         expected_revision: int | None = None,
     ) -> Any:
-        """Complete or resume setup in one transaction, retaining prior partial work.
+        """Apply all setup acts atomically; replay never overwrites subsequent edits.
 
-        The task lock serializes promotion and setup. A completed request records
-        its original configuration on the project through the shared creation-key
-        contract. Replays still require task and project write access, but do not
-        reset phases, re-admit people or overwrite later edits.
+        Receipts belong to the actor, task and client key, independently of
+        ordinary Project inserts. Existing partial projects can be completed;
+        failed invocations leave neither partial acts nor a receipt.
         """
 
-        if not client_creation_key or not client_creation_key.strip() or len(client_creation_key) > 128:
-            raise ValidationError({"client_creation_key": "Use a non-blank key of at most 128 characters."})
-        if not isinstance(configuration, Mapping):
-            raise ValidationError({"configuration": "Project setup configuration must be an object."})
-        fingerprint = hashlib.sha256(json.dumps(
-            {"task": str(task.pk), "configuration": configuration}, cls=DjangoJSONEncoder,
-            sort_keys=True, separators=(",", ":"),
-        ).encode()).hexdigest()
         actor, bypass = task.effective_actor(strict=True)
+        actor_id = actor_user_id(actor)
+        if actor_id is None:
+            raise ValidationError({"client_creation_key": "Setup requires a user actor."})
+        receipt_model = apps.get_model("projects", "ProjectSetupReceipt")
+        fingerprint = receipt_model.creation_fingerprint_for(configuration)
         with transaction.atomic():
             locked = system_queryset(type(task), lock=("self",)).get(pk=task.pk)
             bind_actor(locked, actor)
@@ -124,20 +115,25 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
                 bind_actor(project, actor)
                 if not bypass and not project.has_access("write"):
                     raise PermissionDenied("Project write access is required for setup.")
-                if project.client_creation_key:
-                    if project.client_creation_key != client_creation_key:
-                        raise CreationKeyConflict("The project already has a different creation key.")
-                    project.require_creation_fingerprint(fingerprint)
-                    return project
-            if expected_revision is not None:
-                locked.require_revision(expected_revision)
-            if project is None:
-                project = self.from_task(locked)
-            project.apply_setup(**dict(configuration))
-            project.client_creation_key = client_creation_key
-            project.creation_fingerprint = fingerprint
-            project.save(update_fields=("client_creation_key", "creation_fingerprint", "updated_at"))
-            return project
+
+            def insert() -> Any:
+                if expected_revision is not None:
+                    locked.require_revision(expected_revision)
+                target = project if project is not None else self.from_task(locked)
+                target.apply_setup(**configuration)
+                return receipt_model.objects.create(
+                    actor_id=actor_id, task=locked, project=target,
+                    client_creation_key=client_creation_key, creation_fingerprint=fingerprint,
+                )
+
+            receipt, _created = receipt_model.objects.replay_or_insert(
+                (actor_id, locked.pk), client_creation_key, fingerprint, insert,
+            )
+            result = receipt.project
+            bind_actor(result, actor)
+            if not bypass and not result.has_access("write"):
+                raise PermissionDenied("Project write access is required for setup replay.")
+            return result
 
     def from_task(self, task: Any, *, expected_revision: int | None = None) -> models.Model:
         """Return the one project promoted from ``task``, creating it if needed."""
@@ -182,6 +178,21 @@ class ProjectManager(AngeeManager.from_queryset(ProjectQuerySet)):  # type: igno
             task.refresh_from_db()
             bind_actor(project, verified_actor)
             return project
+
+
+class ProjectSetupReceipt(CreationKeyMixin, models.Model):
+    """Internal receipt for one actor/task/key; only the setup owner writes it."""
+
+    runtime = True
+    creation_key_scope = ("actor", "task")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    task = models.ForeignKey("projects.Task", on_delete=models.CASCADE, related_name="+")
+    project = models.ForeignKey("projects.Project", on_delete=models.CASCADE, related_name="+")
+    objects = models.Manager.from_queryset(CreationKeyQuerySet)()
+
+    class Meta:
+        abstract = True
+        constraints = (CreationKeyMixin.creation_key_constraint(scope=("actor", "task")),)
 
 
 class TaskQuerySet(CreationKeyQuerySet[Any], OwnerQuerySet[Any], AngeeQuerySet[Any]):
@@ -371,7 +382,6 @@ class ProjectBindingQuerySet(AngeeQuerySet[Any]):
 
 
 class Project(
-    CreationKeyMixin,
     OwnerMixin,
     ItemOwnershipMixin,
     OptimisticLockMixin,
@@ -463,7 +473,6 @@ class Project(
         ordering = ("status", "target_date", "title", "sqid")
         rebac_resource_type = "projects/project"
         constraints = (
-            CreationKeyMixin.creation_key_constraint(),
             models.UniqueConstraint(
                 fields=("converted_from",),
                 name="uq_projects_project_converted_from",
@@ -476,7 +485,7 @@ class Project(
         return self.title
 
     def apply_setup(
-        self, *, milestones: list[dict[str, Any]] | None = None, vault_template: str | None = None, **options: Any,
+        self, *, milestones: list[dict[str, Any]] | None = None, vault_template: Any = None,
     ) -> None:
         """Terminal cooperative hook; contributors consume their own named inputs.
 
@@ -485,8 +494,6 @@ class Project(
         missing nullable choices and retaining their existing values.
         """
 
-        if options:
-            raise ValidationError({"configuration": f"Unknown setup inputs: {', '.join(sorted(options))}."})
         if not isinstance(milestones, list) or not milestones:
             raise ValidationError({"milestones": "Declare at least one milestone."})
         milestone_model = apps.get_model("projects", "Milestone")
@@ -510,8 +517,9 @@ class Project(
         if not binding_model.objects.filter(project=self, content_type=content_type).exists():
             if vault_template is None:
                 raise ValidationError({"vault_template": "Choose a vault template."})
-            template = setup_reference("knowledge.Vault", vault_template)
-            vault = vault_model.objects.create_from(template, name=self.title, client_creation_key=f"project:{self.pk}")
+            vault = vault_model.objects.create_from(
+                vault_template, name=self.title, client_creation_key=f"project:{self.pk}",
+            )
             bind(project=self, target=vault)
 
     @classmethod
@@ -538,19 +546,16 @@ class Project(
         )
 
     @classmethod
-    def overdue_milestone_count_expression(cls, actor: Any) -> models.Expression:
-        """Count the readable current milestone only while the project is open."""
+    def overdue_milestone_count_expression(cls, actor: Any, *, milestone_name: str | None = None) -> models.Expression:
+        """Count the named unfinished phase, or the current phase when omitted."""
 
-        if actor is None:
-            return models.Value(0)
-        milestones = apps.get_model("projects", "Milestone").objects.with_actor(actor).scoped()
-        return models.Case(
-            models.When(
-                Q(status=cls.ProjectStatus.OPEN) & Q(models.Exists(milestones.filter(
-                    pk=models.OuterRef("current_milestone_id"), target_date__lt=timezone.localdate(),
-                ))), then=models.Value(1),
-            ), default=models.Value(0), output_field=models.IntegerField(),
+        milestones = apps.get_model("projects", "Milestone").objects.overdue().filter(
+            project_id=models.OuterRef("pk"),
         )
+        milestones = milestones.filter(name=milestone_name) if milestone_name is not None else milestones.filter(
+            pk=models.OuterRef("current_milestone_id"),
+        )
+        return milestones.readable_count_subquery(actor=actor)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Require target authority before a folder edit can widen project access."""
@@ -667,6 +672,11 @@ class Project(
 
 class MilestoneQuerySet(CreationKeyQuerySet[Any], AngeeQuerySet[Any]):
     """Milestone rows with the shared creation replay contract."""
+
+    def overdue(self) -> Any:
+        """Unfinished milestones past their target on open projects."""
+
+        return self.filter(target_date__lt=timezone.localdate(), reached_at__isnull=True, project__status="open")
 
 
 class Milestone(CreationKeyMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
@@ -936,25 +946,23 @@ class Task(
             return models.Value(ProjectSetupState.NOT_SET_UP.value)
         project = apps.get_model("projects", "Project")
         rows = project.objects.with_actor(actor).scoped().filter(converted_from_id=models.OuterRef("pk"))
-        return Coalesce(
-            models.Subquery(rows.annotate(_setup=project.setup_state_expression(actor)).values("_setup")[:1]),
-            models.Value(ProjectSetupState.NOT_SET_UP.value), output_field=models.CharField(),
+        return rows.annotate(_setup=project.setup_state_expression(actor)).readable_scalar_subquery(
+            "_setup", actor=actor, default=ProjectSetupState.NOT_SET_UP.value, output_field=models.CharField(),
         )
 
     @classmethod
-    def overdue_milestone_count_expression(cls, actor: Any) -> models.Expression:
-        """Count overdue current milestones on readable linked or promoted projects."""
+    def overdue_milestone_count_expression(cls, actor: Any, *, milestone_name: str | None = None) -> models.Expression:
+        """Count readable linked/promoted projects with an overdue named/current phase."""
 
         if actor is None:
             return models.Value(0)
         project = apps.get_model("projects", "Project")
         rows = project.objects.with_actor(actor).scoped().filter(
             Q(converted_from_id=models.OuterRef("pk")) | Q(pk=models.OuterRef("project_id")),
-        ).alias(_overdue=project.overdue_milestone_count_expression(actor)).filter(_overdue=1)
-        total = rows.order_by().annotate(_attention_group=models.Value(1)).values("_attention_group").annotate(
-            total=models.Count("pk"),
-        ).values("total")
-        return Coalesce(models.Subquery(total, output_field=models.IntegerField()), models.Value(0))
+        ).alias(
+            _overdue=project.overdue_milestone_count_expression(actor, milestone_name=milestone_name),
+        ).filter(_overdue__gt=0)
+        return rows.readable_count_subquery(actor=actor)
 
     def allocate_ordering_ranks(self) -> None:
         """Fill omitted project and parent ordering ranks through their fields."""

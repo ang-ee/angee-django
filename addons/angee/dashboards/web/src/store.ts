@@ -267,7 +267,7 @@ function useWidgetVisibility(policies: readonly WidgetVisibility[]) {
   });
   return {
     allowed: query.data?.dashboard_widget_visibility ?? [],
-    loading: query.isFetching || !query.data,
+    loading: !query.data,
     error: query.error,
   };
 }

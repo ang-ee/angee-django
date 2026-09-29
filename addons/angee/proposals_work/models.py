@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from django.apps import apps
@@ -10,8 +9,6 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
-
-from angee.projects.inputs import setup_reference
 
 
 class RoundQuestionsQueue(models.Model):
@@ -29,21 +26,19 @@ class RoundQuestionsQueue(models.Model):
         abstract = True
 
     @classmethod
-    def setup_values(cls, values: Mapping[str, Any]) -> dict[str, Any]:
-        """Consume the queue choice before the round admits its responders."""
+    def setup_values(cls, *, clarification_queue: Any = None, **values: Any) -> dict[str, Any]:
+        """Consume the native queue choice before admitting responders."""
 
-        values = dict(values)
-        queue = values.pop("clarification_queue", None)
         return {
-            **super().setup_values(values),
-            **({"clarification_queue_id": setup_reference("work.Queue", queue).pk} if queue is not None else {}),
+            **super().setup_values(**values),
+            **({"clarification_queue_id": clarification_queue.pk} if clarification_queue is not None else {}),
         }
 
     @classmethod
-    def setup_complete_condition(cls) -> models.Q:
+    def setup_complete_condition(cls, actor: Any) -> models.Q:
         """The bridge's setup is complete when question routing is configured."""
 
-        return super().setup_complete_condition() & models.Q(clarification_queue__isnull=False)
+        return super().setup_complete_condition(actor) & models.Q(clarification_queue__isnull=False)
 
     def clean(self) -> None:
         """A round routes questions to a shared queue, never a personal one."""

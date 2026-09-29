@@ -24,6 +24,9 @@ from angee.base.mixins import (
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.permissions import effective_rebac_definition
 from angee.base.scoping import read_scoped_queryset
+from angee.graphql.access import is_gated_read_axis
+from angee.graphql.data.hasura import declared_hasura_resource_fields
+from angee.graphql.introspection import FieldPathError, require_field_for_path
 from angee.resources.mixins import ResourceLoadMixin
 
 DASHBOARD_SCHEMA_VERSION = 1
@@ -39,8 +42,8 @@ MAX_FILTER_CLAUSES = 100
 def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any) -> list[bool]:
     """Batch declared listing scopes, never infer authority from result counts.
 
-    ``resource`` is the model owning list admission (for example a queue),
-    addressed by a unique, non-gated scalar ``key`` and ``value``. The source
+    ``resource`` declares the container-scope ``key`` (for example Task and
+    queue__slug). Listing admission reads that container, never a source row. The source
     query still enforces its own row permissions. Unknown/invalid policies fail
     validation; an inaccessible or missing scope yields false.
     """
@@ -53,15 +56,19 @@ def widget_visibility_answers(policies: Sequence[Mapping[str, Any]], actor: Any)
             raise ValidationError({"visibility": "Declare a resource, key and non-empty value."})
         try:
             model = apps.get_model(policy["resource"])
-            field = model._meta.get_field(policy["key"])
-        except (LookupError, ValueError, FieldDoesNotExist) as error:
+            if policy["key"] not in declared_hasura_resource_fields(model, "hasura_container_scope_fields"):
+                raise ValidationError({"visibility": "Use a declared container scope key."})
+            field = require_field_for_path(model, policy["key"])
+            container_path, separator, _leaf = policy["key"].rpartition("__")
+            if not separator:
+                raise ValidationError({"visibility": "Use a related container scope key."})
+            container = require_field_for_path(model, container_path).related_model
+        except (LookupError, ValueError, FieldDoesNotExist, FieldPathError) as error:
             raise ValidationError({"visibility": "The scope resource or key does not exist."}) from error
-        definition = effective_rebac_definition(model)
-        if field.is_relation or not field.unique or definition is None or any(
-            permission.name == f"read__{field.name}" for permission in definition.permissions
-        ):
+        definition = effective_rebac_definition(container)
+        if field.is_relation or not field.unique or definition is None or is_gated_read_axis(model, policy["key"]):
             raise ValidationError({"visibility": "Use a unique, ungated scalar key on a permission-managed scope."})
-        scopes.setdefault((model, field.name), []).append((index, field.to_python(policy["value"])))
+        scopes.setdefault((container, field.name), []).append((index, field.to_python(policy["value"])))
     allowed = [False] * len(policies)
     for (model, key), entries in scopes.items():
         rows = read_scoped_queryset(model, actor)

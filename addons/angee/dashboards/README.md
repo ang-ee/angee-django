@@ -5,13 +5,14 @@ The dashboards addon validates their queries against the composed console
 resource metadata after resource loading and when saving a snapshot.
 `@angee/ui` owns the built-in widget renderers.
 
-Widgets may declare `visibility: {resource: "work.Queue", key: "slug", value:
+Widgets may declare `visibility: {resource: "projects.Task", key: "queue__slug", value:
 "incoming"}` to require read access to their listing scope. The key must be a
-unique, ungated scalar on the scope resource. This policy is independent of the
+declared container-scope key whose leaf is a unique, ungated scalar. This policy is independent of the
 source query's results: an authorized empty widget remains visible. The store
 resolves policies under the effective actor; the surface mounts only permitted
 widgets and compacts their layout without deleting hidden declarations.
-Source queries continue to enforce their own row permissions.
+Source queries continue to enforce their own row permissions. Settled visibility
+answers remain in use during refetch, so refresh does not blank the dashboard.
 
 The standard refresh footer belongs to built-in query bindings. Authored
 (`shape: none`) panels provide their own refresh controls when needed.

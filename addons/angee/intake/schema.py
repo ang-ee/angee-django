@@ -18,6 +18,7 @@ from angee.decisions.schema import DecisionVerdict, HumanDecisionType
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
+from angee.graphql.inputs import InputReference
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
@@ -40,6 +41,15 @@ NeedImportance = Need._meta.get_field("importance").choices_enum
 strawberry.enum(cast(Any, NeedImportance))
 NeedAccessVerdict = DecisionVerdict
 strawberry.enum(cast(Any, NeedAccessAction))
+
+
+@strawberry.input(name="ProjectSetupInput", extend=True)
+class ProjectIntakeSetupInput:
+    """Assign the Need's party through the shared setup input."""
+
+    party: PublicID | None = strawberry.field(
+        default=None, metadata={InputReference: InputReference("parties.Party")},
+    )
 
 
 @strawberry.input
@@ -152,6 +162,17 @@ class IntakeActionMutation:
         return ActionResult(ok=True, message="Need converted to task.", id=task.sqid)
 
     @strawberry.mutation
+    @action_guard("Reset request access failed.")
+    def reset_need_access(
+        self, info: strawberry.Info, need: PublicID, confirmed: bool, expected_revision: int,
+    ) -> ActionResult:
+        """Reset the access decision without changing account credentials."""
+
+        target = authorized_permission_target(info, Need, need, "write")
+        target.reset_access(confirmed=confirmed, expected_revision=expected_revision)
+        return ActionResult(ok=True, message="Request access reset.", id=target.sqid)
+
+    @strawberry.mutation
     @action_guard("Request access decision failed.")
     def decide_need_access(
         self,
@@ -228,6 +249,7 @@ _INTAKE_SCHEMA_BUCKET = {
         *_NEED_RESOURCE.types,
     ],
     "type_extensions": [ChannelIntakeExtension],
+    "input_extensions": [ProjectIntakeSetupInput],
 }
 
 schemas = {

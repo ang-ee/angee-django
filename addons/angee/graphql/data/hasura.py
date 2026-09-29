@@ -3,19 +3,15 @@
 from __future__ import annotations
 
 import dataclasses
-import hashlib
-import json
 import types as _types
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from enum import Enum
 from functools import partial
 from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.expressions import Combinable, CombinedExpression
 from django.db.models.lookups import Exact, In
@@ -234,8 +230,7 @@ class AngeeHasuraWriteBackend:
         """Fingerprint decoded write inputs, including the declared line envelope."""
 
         content = {"object": data, "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None}
-        encoded = json.dumps(content, cls=_CreationFingerprintEncoder, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(encoded.encode()).hexdigest()
+        return self.model.creation_fingerprint_for(content)
 
     def save(
         self,
@@ -472,17 +467,6 @@ class AngeeHasuraWriteBackend:
             instance = _write_public_instance(related_model, value)
             out[f"{key}_id"] = None if instance is None else instance.pk
         return out
-
-
-class _CreationFingerprintEncoder(DjangoJSONEncoder):
-    """Canonical JSON leaves for decoded mutation input, including M2M rows."""
-
-    def default(self, value: Any) -> Any:
-        if isinstance(value, models.Model):
-            return {"model": value._meta.label_lower, "pk": value.pk}
-        if isinstance(value, Enum):
-            return value.value
-        return super().default(value)
 
 
 def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:
@@ -1041,6 +1025,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``SortAlias`` preparation with protected relation hops redacted to NULL.
     """
 
+    container_scopes = set(declared_hasura_resource_fields(model, "hasura_container_scope_fields"))
+    filterable = tuple(dict.fromkeys((*filterable, *sorted(container_scopes))))
     model_aliases = _declared_sortable_aliases(model)
     if collisions := model_aliases.keys() & (sortable_aliases or {}).keys():
         raise ImproperlyConfigured(f"{model._meta.label} declares duplicate sortable aliases: {sorted(collisions)}.")
@@ -1066,13 +1052,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         *sortable,
         *(alias.path if isinstance(alias, SortAlias) else alias for alias in (sortable_aliases or {}).values()),
     )
-    container_scopes = set(declared_hasura_resource_fields(model, "hasura_container_scope_fields"))
     for path in sorted(container_scopes):
-        if path not in {*filterable, *sortable, *active_groupable, *aggregatable}:
-            continue
         field = require_field_for_path(model, path)
         if (
-            path not in filterable or "__" not in path or field.is_relation
+            "__" not in path or field.is_relation
             or path in {*sortable, *active_groupable, *aggregatable}
         ):
             raise ImproperlyConfigured(

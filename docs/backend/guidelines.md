@@ -131,8 +131,9 @@ Use these owners instead of maintaining another contract in an addon:
   manager that owns the write.
 - Multi-owner setup belongs to one transactional verb. Projects'
   [`setup_from_task`](../../addons/angee/projects/models.py) calls cooperative
-  `apply_setup` hooks; each contributor consumes its declared data and delegates
-  once. Replays recheck authority and validate the original creation fingerprint;
+  `apply_setup` hooks; each contributor consumes native values from its typed
+  `input_extensions` contribution and delegates
+  once. Replays recheck authority and validate the original setup-receipt fingerprint;
   they do not reset later edits. Resume existing partial rows through their
   owners instead of issuing independent browser writes.
 - Actor summary fields compose native SQL scopes before counting. Proposals'
@@ -144,7 +145,8 @@ Use these owners instead of maintaining another contract in an addon:
   lets a resource declare stable related keys such as `queue__slug`; the
   [Hasura owner](../../addons/angee/graphql/data/hasura.py) keeps the root actor
   scope while permitting this membership test without container read access.
-  Ordinary relation filters and projections retain their redaction guards.
+  Container-scope declarations also admit their keys as filters; do not declare
+  them twice. Ordinary relation filters and projections retain their redaction guards.
 - **Do not add a write API without a consumer.** Delete uncalled write commands;
   keep required writes on their owning manager/queryset, as
   [`DecisionManager.decide`](../../addons/angee/workflows/managers.py) does.

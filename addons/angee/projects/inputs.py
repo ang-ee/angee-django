@@ -5,11 +5,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from django.apps import apps
-from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic import ValidationError as InputValidationError
-from rebac import current_actor
+
+from angee.base.validation import validate_model
 
 
 class MilestoneTemplate(BaseModel):
@@ -25,18 +23,4 @@ class MilestoneTemplate(BaseModel):
     def values(cls, value: Any) -> dict[str, Any]:
         """Translate template errors into the standard model validation contract."""
 
-        try:
-            return cls.model_validate(value).model_dump()
-        except InputValidationError as error:
-            raise ValidationError({"milestones": [issue["msg"] for issue in error.errors()]}) from error
-
-
-def setup_reference(model_label: str, value: str, *, permission: str = "read") -> Any:
-    """Resolve a declared public reference under the requesting actor's permission."""
-
-    model = apps.get_model(model_label)
-    actor = current_actor()
-    row = None if actor is None else model.objects.with_actor(actor).with_action(permission).from_public_id(str(value))
-    if row is None:
-        raise ValidationError({"configuration": f"An accessible {model_label} is required."})
-    return row
+        return validate_model(cls, value, field="milestones").model_dump()

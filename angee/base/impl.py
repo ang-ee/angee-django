@@ -22,11 +22,11 @@ from django.utils.module_loading import import_string
 from django_choices_field import TextChoicesField
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel
-from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
 from angee.base.fields import enum_member_for
 from angee.base.jsonschema import LocalSchemaReferences
+from angee.base.validation import validate_model
 
 __all__ = [
     "ImplBase",
@@ -430,15 +430,7 @@ class ImplBase:
 
         if cls.config_model is None:
             return cast(dict[str, Any], value)
-        try:
-            validated = cls.config_model.model_validate(value)
-        except PydanticValidationError as error:
-            messages: dict[str, list[str]] = {}
-            for issue in error.errors(include_url=False, include_context=False, include_input=False):
-                location = ".".join(str(part) for part in issue["loc"])
-                path = f"config.{location}" if location else "config"
-                messages.setdefault(path, []).append(str(issue["msg"]))
-            raise ValidationError(messages) from None
+        validated = validate_model(cls.config_model, value, field="config")
         return validated.model_dump(mode="json", by_alias=True)
 
     @classmethod

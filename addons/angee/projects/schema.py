@@ -9,9 +9,11 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from graphql import GraphQLError
+from graphql.execution.values import get_argument_values
 from rebac import current_actor
 from rebac.resources import model_for_resource_type
 from strawberry import auto
+from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
 from angee.graphql import capabilities
@@ -25,6 +27,7 @@ from angee.graphql.data import (
     public_pk_decoder,
 )
 from angee.graphql.ids import PublicID, optional_public_id, require_public_id
+from angee.graphql.inputs import InputReference, input_values
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.revisions import revisions
@@ -34,6 +37,7 @@ from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
 from angee.projects.access import bind, unbind
+from angee.projects.inputs import MilestoneTemplate
 from angee.projects.models import ProjectSetupState
 from angee.storage.schema import FolderType
 
@@ -121,6 +125,19 @@ TaskVisibility = Task._meta.get_field("visibility").choices_enum
 strawberry.enum(cast(Any, TaskVisibility))
 
 
+@pydantic_input(model=MilestoneTemplate, all_fields=True)
+class ProjectMilestoneSetupInput:
+    """Typed milestone template; addons contribute native setup choices."""
+
+
+@strawberry.input
+class ProjectSetupInput:
+    """Project-owned setup facts, extended additively by installed addons."""
+
+    milestones: list[ProjectMilestoneSetupInput]
+    vault_template: PublicID = strawberry.field(metadata={InputReference: InputReference("knowledge.Vault")})
+
+
 @strawberry.input
 class ProjectLinkTargetInput:
     """A project or task record that may own an external link."""
@@ -152,21 +169,39 @@ def selectable_project_milestones(root: Any, info: strawberry.Info) -> list["Mil
     return root.selectable_milestones().with_actor(actor)
 
 
+def setup_state_field(model: Any) -> Any:
+    """Bind the shared readiness projection to its runtime model."""
+
+    def resolve(root: Any) -> ProjectSetupState:
+        return ProjectSetupState(root._setup_state)
+
+    return strawberry_django.field(
+        resolver=resolve, annotate={"_setup_state": lambda info: model.setup_state_expression(current_actor())},
+    )
+
+
+def overdue_milestone_count_field(model: Any) -> Any:
+    """Bind the phase-scoped overdue projection to its runtime model."""
+
+    def resolve(root: Any, milestone_name: str | None = None) -> int:
+        return root._overdue_milestone_count
+
+    return strawberry_django.field(resolver=resolve, annotate={
+        "_overdue_milestone_count": lambda info: model.overdue_milestone_count_expression(
+            current_actor(), **get_argument_values(
+                info._raw_info.parent_type.fields[info.field_name],
+                info._raw_info.field_nodes[0], info.variable_values,
+            ),
+        ),
+    })
+
+
 @strawberry.type
 class ProjectSetupFields:
-    """Optimized setup and schedule summaries on both project projections."""
+    """Project readiness and phase attention, shared by both schema projections."""
 
-    @strawberry_django.field(annotate={"_setup_state": lambda info: Project.setup_state_expression(current_actor())})
-    def setup_state(self) -> ProjectSetupState:
-        """Return the owner's persisted readiness projection."""
-        return ProjectSetupState(cast(Any, self)._setup_state)
-
-    @strawberry_django.field(annotate={
-        "_overdue_milestone_count": lambda info: Project.overdue_milestone_count_expression(current_actor()),
-    })
-    def overdue_milestone_count(self) -> int:
-        """Return the actor-readable current-milestone count."""
-        return cast(Any, self)._overdue_milestone_count
+    setup_state: ProjectSetupState = setup_state_field(Project)
+    overdue_milestone_count: int = overdue_milestone_count_field(Project)
 
 
 @strawberry_django.type(Project)
@@ -251,17 +286,8 @@ class MilestoneType(AuthoredRefMixin, AngeeNode):
 class TaskProjectionMixin:
     """Shared SQL scalar projections for public and console task types."""
 
-    @strawberry_django.field(annotate={"_setup_state": lambda info: Task.setup_state_expression(current_actor())})
-    def setup_state(self) -> ProjectSetupState:
-        """Return the readable promoted project's setup state."""
-        return ProjectSetupState(cast(Any, self)._setup_state)
-
-    @strawberry_django.field(annotate={
-        "_overdue_milestone_count": lambda info: Task.overdue_milestone_count_expression(current_actor()),
-    })
-    def overdue_milestone_count(self) -> int:
-        """Return the overdue count on readable related projects."""
-        return cast(Any, self)._overdue_milestone_count
+    setup_state: ProjectSetupState = setup_state_field(Task)
+    overdue_milestone_count: int = overdue_milestone_count_field(Task)
 
     @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
     def priority_rank(self) -> int:
@@ -449,14 +475,14 @@ class ProjectTaskActionMutation:
     @strawberry.mutation
     @action_guard("Project setup failed.")
     def setup_project(
-        self, info: strawberry.Info, id: PublicID, configuration: JSON, client_creation_key: str,
+        self, info: strawberry.Info, id: PublicID, configuration: ProjectSetupInput, client_creation_key: str,
         expected_revision: int | None = None,
     ) -> ActionResult:
         """Complete the composed project setup under its owning transaction."""
 
         task = authorized_action_target(info, Task, id, "write")
         project = Project.objects.setup_from_task(
-            task, configuration=configuration, client_creation_key=client_creation_key,
+            task, configuration=input_values(info, configuration), client_creation_key=client_creation_key,
             expected_revision=expected_revision,
         )
         return ActionResult(ok=True, message="Project set up.", id=project.sqid)

@@ -34,7 +34,7 @@ vi.mock("./data", () => ({
 const widget: WidgetSpec = {
   schemaVersion: 1, kindVersion: 1, id: "private", title: "Incoming requests", kind: "table",
   data: { shape: "rows", source: { resource: "projects.Task" } },
-  visibility: { resource: "work.Queue", key: "slug", value: "incoming" },
+  visibility: { resource: "projects.Task", key: "queue__slug", value: "incoming" },
   options: {}, x: 0, y: 0, w: 6, h: 3, isArchived: false,
 };
 const definition: DashboardDefinition = {

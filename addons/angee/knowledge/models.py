@@ -12,7 +12,6 @@ values and their own sidecar model with a one-to-one to
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import re
 from collections.abc import Iterable, Mapping
@@ -150,9 +149,7 @@ class VaultManager(AngeeManager.from_queryset(VaultQuerySet)):  # type: ignore[m
         user_id = actor_user_id(actor)
         if user_id is None:
             raise PermissionDenied("Cloning a vault requires a user actor.")
-        if client_creation_key == "":
-            raise ValidationError({"client_creation_key": "A client creation key must not be empty."})
-        fingerprint = hashlib.sha256(json.dumps([template.pk, name, owned]).encode()).hexdigest()
+        fingerprint = self.model.creation_fingerprint_for([template.pk, name, owned])
         # A successful ownerless clone is not necessarily readable by its caller.
         # Resolve only this actor's creation receipt, then rebind the returned row.
         replays = self.system_context(reason="knowledge.vault.clone.replay")

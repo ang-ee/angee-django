@@ -43,7 +43,7 @@ class ProjectSetupFixture(WorkCase):
         deadline = timezone.now() + timedelta(days=3)
         self.configuration = {
             "team": str(self.queue.group_ptr.sqid),
-            "submitter": str(self.Person._base_manager.get(user=self.reader).sqid),
+            "party": str(self.Person._base_manager.get(user=self.reader).sqid),
             "milestones": [
                 {"name": "Discovery", "active_stage": str(self.stages["Active"].sqid),
                  "start_date": timezone.localdate().isoformat(), "target_date": deadline.date().isoformat()},
@@ -61,10 +61,27 @@ class ProjectSetupFixture(WorkCase):
             },
         }
 
+    def native_configuration(self, configuration=None):
+        """Non-GraphQL callers resolve references with the actor-scoped query owner."""
+        values = deepcopy(configuration or self.configuration)
+        def row(model, value):
+            return apps.get_model(model).objects.with_actor(self.manager).with_action("read").from_public_id(value)
+        for key, model in (("team", "spaces.Group"), ("party", "parties.Party"), ("vault_template", "knowledge.Vault")):
+            values[key] = row(model, values[key])
+        for milestone in values["milestones"]:
+            milestone["active_stage"] = row("work.Stage", milestone["active_stage"])
+        round = values["round"]
+        for key, model in (("facilitator", "iam.User"), ("team", "spaces.Group"),
+                           ("requester_party", "parties.Party"), ("clarification_queue", "work.Queue")):
+            if key in round:
+                round[key] = row(model, round[key])
+        round["responders"] = [row("iam.User", value) for value in round["responders"]]
+        return values
+
     def setup_project(self, configuration=None, key="setup", expected_revision=None):
         with actor_context(self.manager):
             return self.Project.objects.setup_from_task(
-                self.as_user(self.source, self.manager), configuration=configuration or self.configuration,
+                self.as_user(self.source, self.manager), configuration=self.native_configuration(configuration),
                 client_creation_key=key, expected_revision=expected_revision,
             )
 
@@ -92,6 +109,22 @@ class ProjectSetupCase(ProjectSetupFixture):
         with self.assertRaises(CreationKeyConflict):
             self.setup_project(changed)
 
+    def test_setup_receipt_scope_and_ordinary_project_insert_semantics(self):
+        first = self.setup_project()
+        receipts = apps.get_model("projects", "ProjectSetupReceipt")
+        self.assertEqual(receipts.objects.get(task=self.source).actor_id, self.manager.pk)
+        second_source = self.task(owner=self.manager, title="Second request")
+        with actor_context(self.manager):
+            second = self.Project.objects.setup_from_task(
+                self.as_user(second_source, self.manager), configuration=self.native_configuration(),
+                client_creation_key="setup",
+            )
+        self.assertNotEqual(first.pk, second.pk)
+        # The full schema exists only after this composed host has booted.
+        from angee.graphql.schema import GraphQLSchemas
+        schema = GraphQLSchemas.from_discovery().build("console")
+        self.assertNotIn("client_creation_key", schema._schema.mutation_type.fields["insert_projects_one"].args)
+
     def test_setup_failure_rolls_back_all_new_acts_and_resumes_partial_project(self):
         invalid = deepcopy(self.configuration)
         invalid["round"]["template"]["opens_after"] = "Missing phase"
@@ -113,13 +146,14 @@ class ProjectSetupCase(ProjectSetupFixture):
 
     def test_invalid_setup_shapes_roll_back_and_return_action_errors(self):
         for field, value in (
-            ("milestones", [None]),
-            ("round", {**self.configuration["round"], "template": {}}),
-            ("round", {**self.configuration["round"], "responders": None}),
+            ("milestones", [{"name": ""}]),
+            ("round", {**self.configuration["round"], "template": {
+                **self.configuration["round"]["template"], "opens_after": "missing",
+            }}),
         ):
             invalid = {**self.configuration, field: value}
             data = self.graphql(
-                """mutation($id: ID!, $configuration: JSON!) {
+                """mutation($id: ID!, $configuration: ProjectSetupInput!) {
                   setup_project(id: $id, configuration: $configuration, client_creation_key: "invalid") {
                     ok code
                   }
@@ -134,7 +168,7 @@ class ProjectSetupCase(ProjectSetupFixture):
         partial["round"].pop("clarification_queue")
         with actor_context(self.manager):
             project = self.source.with_actor(self.manager).promote_to_project()
-            project.apply_setup(**partial)
+            project.apply_setup(**self.native_configuration(partial))
         previous_round = self.Round._base_manager.get(project=project)
         completed = self.setup_project()
         previous_round.refresh_from_db()
@@ -163,10 +197,25 @@ class ProjectSetupCase(ProjectSetupFixture):
         self.assertEqual(result["projects_by_pk"]["overdue_milestone_count"], 0)
         self.assertEqual(result["project_tasks_by_pk"]["overdue_milestone_count"], 0)
 
+    def test_named_overdue_phase_does_not_count_another_phase(self):
+        project = self.setup_project()
+        with system_context(reason="tests.setup.named_overdue"):
+            self.Milestone.objects.filter(project=project, name="Delivery").update(
+                target_date=timezone.localdate() - timedelta(days=1),
+            )
+        query = """query($id: String!, $phase: String!) {
+          projects_by_pk(id: $id) { overdue_milestone_count(milestone_name: $phase) }
+        }"""
+        for phase, count in (("Discovery", 0), ("Delivery", 1)):
+            data = self.graphql(query, {"id": project.sqid, "phase": phase}, user=self.manager)
+            self.assertEqual(data["projects_by_pk"]["overdue_milestone_count"], count)
+
     def test_graphql_setup_and_actor_safe_state(self):
         data = self.graphql(
-            """mutation Setup($id: ID!, $configuration: JSON!, $key: String!) {
-              setup_project(id: $id, configuration: $configuration, client_creation_key: $key) { ok id message }
+            """mutation Setup($id: ID!, $configuration: ProjectSetupInput!, $key: String!) {
+              setup_project(id: $id, configuration: $configuration, client_creation_key: $key) {
+                ok id message validation_errors
+              }
             }""", {"id": self.source.sqid, "configuration": self.configuration, "key": "graphql"},
             user=self.manager,
         )["setup_project"]
@@ -295,7 +344,7 @@ class DashboardVisibilityCase(WorkCase):
           dashboard_widget_visibility(policies: $policies)
           project_tasks(where: {queue__slug: {_eq: "empty"}}) { id }
         }"""
-        variables = {"policies": [{"resource": "work.Queue", "key": "slug", "value": empty.slug}]}
+        variables = {"policies": [{"resource": "projects.Task", "key": "queue__slug", "value": empty.slug}]}
         visible = self.graphql(query, variables, user=self.manager, bucket="console")
         hidden = self.graphql(query, variables, user=self.outsider, bucket="console")
         self.assertEqual(visible, {"dashboard_widget_visibility": [True], "project_tasks": []})
@@ -311,7 +360,7 @@ class DashboardVisibilityCase(WorkCase):
 
     def test_widget_policy_survives_snapshot_persistence(self):
         dashboard_model = apps.get_model("dashboards", "Dashboard")
-        policy = {"resource": "work.Queue", "key": "slug", "value": self.queue.slug}
+        policy = {"resource": "projects.Task", "key": "queue__slug", "value": self.queue.slug}
         snapshot = {"schemaVersion": 1, "columns": 12, "widgets": [{
             "schemaVersion": 1, "kindVersion": 1, "id": "summary", "kind": "authored", "title": "Summary",
             "data": {"shape": "none", "binding": {"dashboardKey": "summary", "widgetId": "summary"}},
@@ -328,6 +377,104 @@ class DashboardVisibilityCase(WorkCase):
             self.assertEqual(updated.snapshot()["widgets"][0]["visibility"], policy)
 
 
+class ServerVerbCase(ProjectSetupFixture):
+    """Requester permissions and partial-success batches in both relationship stores."""
+
+    def approved_request(self):
+        project = self.setup_project()
+        with actor_context(self.admin):
+            self.as_user(self.need, self.admin).decide_access("approve")
+        self.need.refresh_from_db()
+        return project, self.Round._base_manager.get(project=project)
+
+    def selection(self, *rows):
+        return [{"id": str(row.sqid), "expected_revision": row.revision} for row in rows]
+
+    def test_question_inherits_only_read_and_comment_when_widened(self):
+        project, round = self.approved_request()
+        with actor_context(self.manager):
+            question = self.as_user(round, self.manager).ask("Question", "Details", recipient=self.member)
+        self.assertFalse(self.scoped(question, self.reader))
+        self.assertTrue(self.scoped(question, self.member))
+        self.assertFalse(self.scoped(question, self.member, "write"))
+        with actor_context(self.manager):
+            self.as_user(question, self.manager).set_visibility("inherited")
+        for user in (self.reader, self.member):
+            self.assertTrue(self.scoped(question, user))
+            self.assertTrue(self.scoped(question, user, "comment"))
+            for permission in ("write", "share", "delete"):
+                self.assertFalse(self.scoped(question, user, permission))
+        self.assertTrue(self.scoped(question, self.manager, "write"))
+        self.assertFalse(self.scoped(project, self.reader))
+        with actor_context(self.manager):
+            self.as_user(self.need, self.manager).reset_access(
+                confirmed=True, expected_revision=self.need.revision,
+            )
+        self.assertFalse(self.scoped(question, self.reader))
+
+    def test_accept_and_decline_many_commit_eligible_rows_and_report_stale_denied_ineligible(self):
+        for verb, arguments in (("accept_tasks", ""), ("decline_tasks", ", reason: DECLINED")):
+            good = self.task("Triage")
+            stale = self.task("Triage")
+            ineligible = self.task("Doing")
+            denied = self.task("Triage", visibility="restricted")
+            selection = self.selection(good, stale, ineligible, denied)
+            selection[1]["expected_revision"] += 1
+            mutation = f"""mutation($selection: [ActionSelectionInput!]!) {{
+              {verb}(selection: $selection{arguments}) {{ ok code id }}
+            }}"""
+            rows = self.graphql(mutation, {"selection": selection}, user=self.manager)[verb]
+            self.assertEqual([row["id"] for row in rows], [item["id"] for item in selection])
+            self.assertEqual([row["ok"] for row in rows], [True, False, False, False])
+            self.assertEqual(rows[1]["code"], "STALE_REVISION")
+            good.refresh_from_db()
+            stale.refresh_from_db()
+            self.assertNotEqual(good.stage_id, self.stages["Triage"].pk)
+            self.assertEqual(stale.stage_id, self.stages["Triage"].pk)
+            replay = self.graphql(mutation, {"selection": selection}, user=self.manager)[verb]
+            self.assertEqual(replay[0]["code"], "STALE_REVISION")
+
+    def test_remove_many_conceals_and_refuses_promoted_tasks(self):
+        good = self.task()
+        promoted = self.source
+        with actor_context(self.manager):
+            self.as_user(promoted, self.manager).promote_to_project()
+        promoted.refresh_from_db()
+        rows = self.graphql("""mutation($selection: [ActionSelectionInput!]!) {
+          remove_tasks(selection: $selection) { ok }
+        }""", {"selection": self.selection(good, promoted)}, user=self.manager)["remove_tasks"]
+        self.assertEqual([row["ok"] for row in rows], [True, False])
+        good.refresh_from_db()
+        self.assertTrue(good.stage.conceals)
+        self.assertTrue(self.Task._base_manager.filter(pk=good.pk).exists())
+        with actor_context(self.manager), self.assertRaises(PermissionDenied):
+            self.as_user(good, self.manager).accept()
+
+    def test_resolve_many_is_a_manager_operation_with_per_question_revision(self):
+        project = self.setup_project()
+        round = self.Round._base_manager.get(project=project)
+        with actor_context(self.manager):
+            first = self.as_user(round, self.manager).ask("First", "Details", recipient=self.member)
+            second = self.as_user(round, self.manager).ask("Second", "Details", recipient=self.member)
+        mutation = """mutation($selection: [ActionSelectionInput!]!) {
+          resolve_proposal_clarifications(selection: $selection) { ok code }
+        }"""
+        rows = self.graphql(mutation, {"selection": self.selection(first)}, user=self.member)
+        self.assertFalse(rows["resolve_proposal_clarifications"][0]["ok"])
+        selection = self.selection(first, second, self.source)
+        selection[1]["expected_revision"] += 1
+        rows = self.graphql(mutation, {"selection": selection}, user=self.manager)
+        self.assertEqual([row["ok"] for row in rows["resolve_proposal_clarifications"]], [True, False, False])
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.status, "done")
+        self.assertEqual(second.status, "open")
+
+
+class DenormalizedServerVerbCase(ServerVerbCase):
+    storage = "denormalized"
+
+
 class DenormalizedProjectSetupCase(ProjectSetupCase):
     storage = "denormalized"
 
@@ -341,7 +488,9 @@ class DenormalizedDashboardVisibilityCase(DashboardVisibilityCase):
 
 
 @pytest.mark.parametrize("storage", ("registry", "denormalized"))
-@pytest.mark.parametrize("group", ("ProjectSetupCase", "ProjectAttentionCase", "DashboardVisibilityCase"))
+@pytest.mark.parametrize(
+    "group", ("ProjectSetupCase", "ProjectAttentionCase", "DashboardVisibilityCase", "ServerVerbCase"),
+)
 def test_project_setup_contracts(tmp_path: Path, storage: str, group: str):
     case = ("Denormalized" if storage == "denormalized" else "") + group
     run_composed_tests(

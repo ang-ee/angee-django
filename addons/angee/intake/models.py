@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from collections.abc import Iterator
 from typing import Any, Self, cast
@@ -11,7 +9,6 @@ from typing import Any, Self, cast
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.serializers.json import DjangoJSONEncoder
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
 from django.db.models.functions import NullIf
@@ -26,7 +23,6 @@ from angee.base.scoping import bind_actor, system_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
-from angee.projects.inputs import setup_reference
 
 logger = logging.getLogger(__name__)
 
@@ -88,16 +84,13 @@ class NeedManager(AngeeManager.from_queryset(NeedQuerySet)):  # type: ignore[mis
             raise PermissionDenied("Queue read access is required to select a task container.")
         if not party.has_access("read"):
             raise PermissionDenied("Party read access is required to file a request.")
-        if not client_creation_key or not client_creation_key.strip() or len(client_creation_key) > 128:
-            raise ValidationError({"client_creation_key": "Use a non-blank key of at most 128 characters."})
         task_model = apps.get_model("projects", "Task")
         actor = current_actor()
         scope = task_model.creation_key_actor_scope(actor, {})
         values = dict(queue_id=queue.pk, title=title, note=body, due_date=due_date, estimate=estimate)
-        fingerprint = hashlib.sha256(json.dumps(
-            {"task": values, "party": str(party.pk), "importance": importance}, cls=DjangoJSONEncoder,
-            sort_keys=True, separators=(",", ":"),
-        ).encode()).hexdigest()
+        fingerprint = task_model.creation_fingerprint_for(
+            {"task": values, "party": party, "importance": importance},
+        )
 
         def insert() -> Any:
             task = task_model.objects.create(
@@ -519,8 +512,8 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
     def save(self, *, _access_decision: bool = False, **kwargs: Any) -> None:
         """Validate assignment, reset its old decision, and follow atomically.
 
-        Only ``decide_access`` supplies ``_access_decision``: its authorized
-        decision already describes the newly assigned account in this save.
+        The access verbs supply ``_access_decision`` after admitting or answering
+        their decision, so assignment persistence does not replace that seat.
         """
 
         update_fields = kwargs.get("update_fields")
@@ -628,6 +621,32 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
 
         return self._decide_access(action, {"reason": reason}, expected_revision=expected_revision)
 
+    def reset_access(self, *, confirmed: bool, expected_revision: int) -> Any:
+        """Retain requester identity and supersede its access answer atomically.
+
+        A fresh pending decision revokes decision-backed requester access. Account
+        credentials and the previous decision's audit history remain with their
+        existing owners.
+        """
+
+        if not confirmed:
+            raise ValidationError({"confirmed": "Confirm resetting requester access."})
+        actor = instance_actor(self)
+        with actor_context(actor), transaction.atomic():
+            locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
+            if not locked.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
+                "share",
+            ):
+                raise PermissionDenied("Resetting access requires need write and target share.")
+            locked.require_revision(expected_revision)
+            locked.access_decision = locked._new_access_decision()
+            locked.save(
+                _access_decision=True, expected_revision=expected_revision,
+                update_fields=("access_decision", "updated_at"),
+            )
+        self.refresh_from_db()
+        return self
+
     def _decide_access(
         self, action: str, values: dict[str, Any], *,
         expected_revision: int | None = None, decision: Any = None, decision_revision: int | None = None,
@@ -722,15 +741,15 @@ class ProjectIntakeSetup(models.Model):
     class Meta:
         abstract = True
 
-    def apply_setup(self, *, submitter: str | None = None, **options: Any) -> None:
+    def apply_setup(self, *, party: Any | None = None, **options: Any) -> None:
         """Retain existing request identities; a new assignment uses its share gate."""
 
         need_model = apps.get_model("intake", "Need")
         needs = need_model.objects.filter(task_id=self.converted_from_id, party__isnull=True)
         for need in needs:
-            if submitter is None:
-                raise ValidationError({"submitter": "Choose a party for the unassigned request."})
-            need.party = setup_reference("parties.Party", submitter)
+            if party is None:
+                raise ValidationError({"party": "Choose a party for the unassigned request."})
+            need.party = party
             need.save(update_fields=("party", "updated_at"))
         super().apply_setup(**options)
 

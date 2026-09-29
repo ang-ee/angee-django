@@ -1,22 +1,22 @@
 # Projects
 
 [`Project.objects.setup_from_task`](models.py) promotes a writable task and
-completes its setup in one transaction. The `setup_project` GraphQL verb accepts
-data-only configuration, a `client_creation_key`, and an optional task revision.
-It resumes an existing promoted project, adopts milestones by unique template
-name, fills missing nullable milestone choices without overwriting prior values,
-selects the initial milestone only if none is selected, and clones and
-binds a vault only if none is bound. Addons extend the cooperative `apply_setup`
-hook and consume their own named inputs before delegating once.
+completes all setup acts in one transaction. Its dedicated `ProjectSetupReceipt`
+identifies the actor, task and client key. Replay rechecks task and project write
+authority and compares the canonical input fingerprint without reapplying setup.
+Ordinary Project insertion retains ordinary insert semantics.
 
-The committed request fingerprint makes response-loss retries safe without
-reapplying setup after later edits. A failed invocation rolls back its own work;
-earlier partial setup remains available for another attempt. Actor-scoped
-`setup_state` and `overdue_milestone_count` projections work on projects and tasks
-without per-record queries. See the [emitted-model contracts](../../../tests/test_project_setup.py).
+The GraphQL `setup_project` verb accepts `ProjectSetupInput`. Addons extend it
+through `input_extensions`, including nested milestone and round inputs;
+Strawberry rejects field collisions and unknown input fields. Declared public
+references resolve at the schema boundary through `InputReference`. Cooperative
+`apply_setup` hooks consume native rows. Other callers resolve their references
+with the native actor-scoped queryset before calling the same domain owner.
 
-Configuration uses `milestones: [{name, description?, start_date?, target_date?}]`
-and `vault_template` (a readable vault public ID). Work adds `team` and milestone
-`active_stage`; proposals adds `round`; intake adds `submitter`. The respective
-addon READMEs describe those inputs. Unknown keys fail validation. Templates are
-request data, while each composed model owns its validation and persistence.
+An existing partial project can be completed by adopting uniquely named
+milestones and filling missing choices. A failed invocation leaves no new acts
+or receipt. `setup_state` reports actor-readable persisted evidence.
+`overdue_milestone_count(milestone_name: ...)` counts the specified unfinished
+phase past its target on an open project; omitting the name selects the current
+phase. Consumers must name the phase when their queue is phase-specific.
+See the [emitted-model contracts](../../../tests/test_project_setup.py).

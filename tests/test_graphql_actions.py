@@ -28,9 +28,11 @@ from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.actions import (
     ActionResult,
+    ActionSelectionInput,
     action_guard,
     action_target,
     authorized_action_target,
+    many_actions,
     resolve_action_target,
 )
 from angee.graphql.schema import AngeeSchema
@@ -493,3 +495,41 @@ def test_action_guard_maps_authorized_action_target_failures_in_band(composed_ta
     assert result.validation_errors == {
         NON_FIELD_ERRORS: ["Document 'sd_missing' was not found."]
     }
+
+
+@pytest.mark.parametrize("ids", [[], ["same", "same"], [str(index) for index in range(101)]])
+def test_many_actions_bound_selection_before_any_call(ids):
+    called = []
+    with pytest.raises(ValidationError):
+        many_actions([ActionSelectionInput(id=value, expected_revision=1) for value in ids], called.append)
+    assert called == []
+
+
+@pytest.mark.django_db
+def test_many_actions_rollback_refused_row_and_keep_eligible_successes():
+    selection = [ActionSelectionInput(id=value, expected_revision=1) for value in ("good", "refused", "last")]
+
+    def run(item):
+        Group.objects.create(name=item.id)
+        if item.id == "refused":
+            raise ValidationError({"stage": "Ineligible"})
+        return ActionResult(ok=True, message="Applied")
+
+    results = many_actions(selection, run)
+    assert [result.ok for result in results] == [True, False, True]
+    assert set(Group.objects.values_list("name", flat=True)) == {"good", "last"}
+
+
+@pytest.mark.django_db
+def test_many_actions_unexpected_failure_rolls_back_the_whole_call():
+    selection = [ActionSelectionInput(id=value, expected_revision=1) for value in ("first", "second")]
+
+    def run(item):
+        Group.objects.create(name=item.id)
+        if item.id == "second":
+            raise RuntimeError("Infrastructure failure")
+        return ActionResult(ok=True, message="Applied")
+
+    with pytest.raises(RuntimeError):
+        many_actions(selection, run)
+    assert not Group.objects.exists()

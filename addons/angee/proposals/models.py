@@ -21,10 +21,9 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
-from django.db.models.functions import Coalesce, JSONObject, Lower
+from django.db.models.functions import JSONObject, Lower
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from pydantic import ValidationError as InputValidationError
 from rebac import (
     PermissionDenied,
     actor_context,
@@ -46,11 +45,11 @@ from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
 from angee.base.refs import canonical_record_model
 from angee.base.scoping import bind_actor, system_queryset
 from angee.base.transitions import StateTransitions, save_state, transition
+from angee.base.validation import validate_model
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
 from angee.projects.access import bind
-from angee.projects.inputs import setup_reference
 from angee.proposals.inputs import RoundTemplate
 
 _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
@@ -221,10 +220,7 @@ class RoundManager(AngeeManager):
     ) -> Any:
         """Resume a round with the same target, name and declared settings."""
 
-        try:
-            template = RoundTemplate.model_validate(template)
-        except InputValidationError as error:
-            raise ValidationError({"template": [issue["msg"] for issue in error.errors()]}) from error
+        template = validate_model(RoundTemplate, template, field="template")
         target_field = {"projects.project": "project", "projects.task": "task"}.get(target._meta.label_lower)
         if target_field is None:
             raise ValidationError({"target": "Choose a project or task."})
@@ -235,7 +231,7 @@ class RoundManager(AngeeManager):
             candidate = self.model(**{target_field: target}, facilitator=facilitator, team=team)
             project = candidate.target_project()
             values = template.round_values(project)
-            setup_values = self.model.setup_values(configuration or {})
+            setup_values = self.model.setup_values(**(configuration or {}))
             if requester_party is not None:
                 setup_values["requester_party_id"] = requester_party.pk
             rows = self.sudo(reason="proposals.round.provision").filter(
@@ -320,15 +316,13 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     """A bounded solicitation on one project or task; its chatter is shared."""
 
     @classmethod
-    def setup_values(cls, values: Mapping[str, Any]) -> dict[str, Any]:
+    def setup_values(cls) -> dict[str, Any]:
         """Terminal hook for addon-owned round setup fields."""
 
-        if values:
-            raise ValidationError({"round": f"Unknown round setup inputs: {', '.join(sorted(values))}."})
         return {}
 
     @classmethod
-    def setup_complete_condition(cls) -> models.Q:
+    def setup_complete_condition(cls, actor: Any) -> models.Q:
         """A persisted round is provisioned; routing addons may require more."""
 
         return models.Q()
@@ -846,6 +840,23 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
                 if manager:
                     locked._pass_clarification_locked(task, recipient, "default", manager_ask=True)
         return task
+
+    def resolve_clarification(self, task: Any, *, expected_revision: int) -> Any:
+        """Resolve one question under manager authority and its observed revision."""
+
+        actor = instance_actor(self)
+        with transaction.atomic():
+            locked_round = system_queryset(type(self), lock=("self",)).get(pk=self.pk).with_actor(actor)
+            if not locked_round.has_access("manage"):
+                raise PermissionDenied("Round management is required to resolve a question.")
+            locked = system_queryset(type(task), lock=("self",)).get(pk=task.pk, clarification_round=locked_round)
+            locked.require_revision(expected_revision)
+            if locked.status == "done":
+                return locked
+            if locked.status != "open":
+                raise ValidationError({"task": "Only an open question can be resolved."})
+            locked.with_actor(actor).complete()
+            return locked
 
     def edit_clarification(
         self,
@@ -2170,22 +2181,14 @@ class ProjectProposalAccess(models.Model):
             raise ValidationError({"round": "Declare round setup choices."})
         super().apply_setup(**options)
         values = dict(round)
-        try:
-            template = values.pop("template")
-            facilitator = setup_reference(settings.AUTH_USER_MODEL, values.pop("facilitator"))
-            responder_ids = values.pop("responders")
-            if not isinstance(responder_ids, list):
-                raise ValidationError({"responders": "Declare a list of responder public IDs."})
-            responders = [setup_reference(settings.AUTH_USER_MODEL, value) for value in responder_ids]
-        except KeyError as error:
-            raise ValidationError({"round": f"Missing setup input: {error.args[0]}."}) from error
+        template = values.pop("template")
+        facilitator = values.pop("facilitator")
+        responders = values.pop("responders")
         team = values.pop("team", None)
         requester = values.pop("requester_party", None)
         apps.get_model("proposals", "Round").objects.provision(
-            self, template, facilitator, responders,
-            setup_reference("spaces.Group", team) if team is not None else None,
-            requester_party=setup_reference("parties.Party", requester) if requester is not None else None,
-            configuration=values,
+            self, template, facilitator, responders, team,
+            requester_party=requester, configuration=values,
         )
 
     @classmethod
@@ -2194,7 +2197,7 @@ class ProjectProposalAccess(models.Model):
 
         round_model = apps.get_model("proposals", "Round")
         rounds = round_model.objects.with_actor(actor).scoped().filter(
-            round_model.setup_complete_condition(), project_id=models.OuterRef("pk"),
+            round_model.setup_complete_condition(actor), project_id=models.OuterRef("pk"),
         )
         return super().setup_complete_condition(actor) & models.Q(models.Exists(rounds))
 
@@ -2535,10 +2538,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
                 models.Exists(managed.filter(pk=models.OuterRef("clarification_round_id"))),
                 clarification_passed_at__isnull=False,
             )
-        total = questions.order_by().annotate(_attention_group=models.Value(1)).values("_attention_group").annotate(
-            total=models.Count("pk"),
-        ).values("total")
-        return Coalesce(models.Subquery(total, output_field=models.IntegerField()), models.Value(0))
+        return questions.readable_count_subquery(actor=actor)
 
     @classmethod
     def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> models.Expression:
