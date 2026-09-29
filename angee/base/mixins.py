@@ -594,9 +594,8 @@ class CreationKeyQuerySet(models.QuerySet[_ModelT]):
             return None
         model = cast(type[CreationKeyMixin], self.model)
         row = self.filter(**{model.creation_key_scope: scope, "client_creation_key": key}).first()
-        stored = cast(CreationKeyMixin, row).creation_fingerprint if row is not None else ""
-        if stored and stored != fingerprint:
-            raise CreationKeyConflict("This client creation key was already used for different content.")
+        if row is not None:
+            cast(CreationKeyMixin, row).require_creation_fingerprint(fingerprint)
         return row
 
     def replay_or_insert(
@@ -638,6 +637,12 @@ class CreationKeyMixin(models.Model):
 
     class Meta:
         abstract = True
+
+    def require_creation_fingerprint(self, fingerprint: str) -> None:
+        """Validate a known receipt, including rows adopted from legacy partial work."""
+
+        if self.creation_fingerprint and self.creation_fingerprint != fingerprint:
+            raise CreationKeyConflict("This client creation key was already used for different content.")
 
     @classmethod
     def creation_key_actor_scope(cls, actor: Any, values: Mapping[str, Any]) -> Any:

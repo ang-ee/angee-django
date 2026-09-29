@@ -165,6 +165,12 @@ shared UI copy through an addon bundle.
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
 - React does not own business logic, permissions, models, or persistence.
+- Dashboard widget visibility is declared separately from its data filter.
+  [`WidgetSpec.visibility`](../../packages/ui/src/dashboard/headless.ts) names
+  the resource scope that authorizes listing; the dashboards backend answers
+  for the current actor before the UI mounts queries and packs visible widgets.
+  An authorized empty result remains visible. Authored widgets own their refresh
+  controls; the shared footer appears only for built-in data bindings.
 - **React state has one owner.** Keep canonical facts in the smallest owner:
   route/search facts in TanStack Router/nuqs, server facts in Refine core reads
   and TanStack Query, native controlled table state in `ResourceViewProvider`,

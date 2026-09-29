@@ -129,6 +129,22 @@ Use these owners instead of maintaining another contract in an addon:
 - Manager/QuerySet canon: chainable read scopes live on a `*QuerySet` exposed
   through `Manager.from_queryset(...)`. Factories and mutations stay on the
   manager that owns the write.
+- Multi-owner setup belongs to one transactional verb. Projects'
+  [`setup_from_task`](../../addons/angee/projects/models.py) calls cooperative
+  `apply_setup` hooks; each contributor consumes its declared data and delegates
+  once. Replays recheck authority and validate the original creation fingerprint;
+  they do not reset later edits. Resume existing partial rows through their
+  owners instead of issuing independent browser writes.
+- Actor summary fields compose native SQL scopes before counting. Proposals'
+  [`clarification_waiting_users`](../../addons/angee/proposals/models.py) owns
+  both recipient projections and attention counts, so hidden questions and
+  answered recipients cannot inflate dashboard totals.
+- A container scope key is an explicit filter-only contract, not a readable
+  relation. [`hasura_container_scope_fields`](../../addons/angee/work/models.py)
+  lets a resource declare stable related keys such as `queue__slug`; the
+  [Hasura owner](../../addons/angee/graphql/data/hasura.py) keeps the root actor
+  scope while permitting this membership test without container read access.
+  Ordinary relation filters and projections retain their redaction guards.
 - **Do not add a write API without a consumer.** Delete uncalled write commands;
   keep required writes on their owning manager/queryset, as
   [`DecisionManager.decide`](../../addons/angee/workflows/managers.py) does.

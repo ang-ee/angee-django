@@ -1,5 +1,11 @@
 import { graphql } from "@angee/gql/console";
 
+export const DashboardWidgetVisibilityDocument = graphql(`
+  query DashboardWidgetVisibility($policies: [DashboardWidgetVisibilityInput!]!) {
+    dashboard_widget_visibility(policies: $policies)
+  }
+`);
+
 export const DashboardDocument = graphql(`
   query Dashboard($target: DashboardTargetInput!) {
     dashboard(target: $target) {

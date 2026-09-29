@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, cast
 
 import strawberry
@@ -95,6 +95,23 @@ class ChannelIntakeExtension:
 @strawberry.type
 class IntakeActionMutation:
     """Row-authorized manual capture and Need-to-Task conversion actions."""
+
+    @strawberry.mutation
+    @action_guard("File task with need failed.")
+    def file_task_with_need(
+        self, info: strawberry.Info, queue: PublicID, title: str, body: str, party: PublicID,
+        client_creation_key: str, due_date: date | None = None, estimate: float | None = None,
+        importance: NeedImportance = NeedImportance.NORMAL,  # type: ignore[valid-type]
+    ) -> ActionResult:
+        """Dispatch the atomic, replay-safe intake factory."""
+
+        task = Need.objects.file_task(
+            queue=authorized_permission_target(info, Queue, queue, "read"),
+            party=authorized_permission_target(info, Party, party, "read"),
+            title=title, body=body, client_creation_key=client_creation_key,
+            due_date=due_date, estimate=estimate, importance=importance,
+        )
+        return ActionResult(ok=True, message="Task and need filed.", id=task.sqid)
 
     @strawberry.mutation
     @action_guard("Capture need failed.")

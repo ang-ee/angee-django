@@ -202,6 +202,20 @@ class ProposalRoundType(AuthoredRefMixin, AngeeNode):
 class TaskProposalsFields:
     """Shared declarations on both task schema nodes."""
 
+    @strawberry_django.field(annotate={
+        "_questions_waiting_for_me": lambda info: Task.question_attention_expression(current_actor()),
+    })
+    def questions_waiting_for_me(self) -> int:
+        """Count readable unanswered questions assigned to the actor."""
+        return cast(Any, self)._questions_waiting_for_me
+
+    @strawberry_django.field(annotate={
+        "_questions_passed_on": lambda info: Task.question_attention_expression(current_actor(), passed_on=True),
+    })
+    def questions_passed_on(self) -> int:
+        """Count readable passed questions still awaiting a reply in managed rounds."""
+        return cast(Any, self)._questions_passed_on
+
     clarification_round: ProposalRoundType | None = actor_scoped_to_one("clarification_round")
     clarification_asker: UserType | None = actor_scoped_to_one("clarification_asker")
     clarification_by_manager: auto
@@ -344,15 +358,34 @@ class ConsoleProposalType(ProposalFields):
     responder: UserType | None = actor_scoped_to_one("responder")
 
 
+@strawberry.type
+class ProjectAttentionFields:
+    """Project summaries reuse the task owner's unanswered-recipient predicate."""
+
+    @strawberry_django.field(annotate={
+        "_questions_waiting_for_me": lambda info: Project.question_attention_expression(current_actor()),
+    })
+    def questions_waiting_for_me(self) -> int:
+        """Count readable questions waiting for the actor."""
+        return cast(Any, self)._questions_waiting_for_me
+
+    @strawberry_django.field(annotate={
+        "_questions_passed_on": lambda info: Project.question_attention_expression(current_actor(), passed_on=True),
+    })
+    def questions_passed_on(self) -> int:
+        """Count managed, readable passed questions still awaiting a reply."""
+        return cast(Any, self)._questions_passed_on
+
+
 @strawberry_django.type(Project, name="ProjectType", extend=True)
-class ProjectProposalsExtension:
+class ProjectProposalsExtension(ProjectAttentionFields):
     """Expose the proposal-owned track relation through the common redaction seam."""
 
     source_proposal: ProposalType | None = actor_scoped_to_one("source_proposal")
 
 
 @strawberry_django.type(Project, name="ConsoleProjectType", extend=True)
-class ConsoleProjectProposalsExtension:
+class ConsoleProjectProposalsExtension(ProjectAttentionFields):
     """Contribute the track relation to the console project node."""
 
     source_proposal: ConsoleProposalType | None = actor_scoped_to_one("source_proposal")

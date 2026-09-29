@@ -328,19 +328,46 @@ function useResponsiveColumns(canonical: number): [React.RefObject<HTMLDivElemen
   return [ref, columns];
 }
 
-function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onWidgetsChange }: {
+function DashboardGrid(props: React.ComponentProps<typeof DashboardLayout>): React.ReactElement {
+  const policies = props.snapshot.widgets.flatMap((widget) =>
+    !widget.isArchived && widget.visibility ? [{ id: widget.id, policy: widget.visibility }] : [],
+  );
+  const useVisibility = props.registry.store?.useWidgetVisibility;
+  if (policies.length && useVisibility) {
+    return <DashboardVisibility {...props} policies={policies} useVisibility={useVisibility} />;
+  }
+  return <DashboardLayout {...props} visibleIds={props.snapshot.widgets
+    .filter((widget) => !widget.visibility).map(({ id }) => id)} />;
+}
+
+function DashboardVisibility({ policies, useVisibility, ...props }: React.ComponentProps<typeof DashboardLayout> & {
+  policies: readonly { id: string; policy: NonNullable<WidgetSpec["visibility"]> }[];
+  useVisibility: NonNullable<NonNullable<DashboardRegistry["store"]>["useWidgetVisibility"]>;
+}): React.ReactElement {
+  const t = useDashboardT();
+  const visibility = useVisibility(policies.map(({ policy }) => policy));
+  if (visibility.error) return <ErrorBanner description={visibility.error.message} />;
+  if (visibility.loading) return <SkeletonStatus label={t("surface.loading")} />;
+  const permitted = new Set(policies.filter((_, index) => visibility.allowed[index] === true).map(({ id }) => id));
+  return <DashboardLayout {...props} visibleIds={props.snapshot.widgets
+    .filter((widget) => !widget.visibility || permitted.has(widget.id)).map(({ id }) => id)} />;
+}
+
+function DashboardLayout({ snapshot, registry, definition, editing, pageScope, onWidgetsChange, visibleIds }: {
   snapshot: DashboardSnapshot;
   registry: DashboardRegistry;
   definition?: DashboardDefinition;
   editing: boolean;
   pageScope?: DashboardPageScope;
   onWidgetsChange: (widgets: readonly WidgetSpec[]) => void;
+  visibleIds?: readonly string[];
 }): React.ReactElement {
   const t = useDashboardT();
   const sensors = useDndKitSensors(6);
   const [containerRef, responsiveColumns] = useResponsiveColumns(snapshot.columns);
   const columns = editing ? snapshot.columns : responsiveColumns;
-  const active = snapshot.widgets.filter((widget) => !widget.isArchived);
+  const active = snapshot.widgets.filter((widget) => !widget.isArchived && (!visibleIds || visibleIds.includes(widget.id)));
+  const retained = snapshot.widgets.filter((widget) => !active.includes(widget));
   const projected = editing
     ? packDashboardLayout(active, columns)
     : columns < snapshot.columns
@@ -364,7 +391,7 @@ function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onW
       { x: widget.x + Math.round(delta.x / (cellWidth + GRID_GAP)), y: widget.y + Math.round(delta.y / (ROW_HEIGHT + GRID_GAP)) },
       columns,
     );
-    onWidgetsChange([...moved, ...snapshot.widgets.filter((item) => item.isArchived)]);
+    onWidgetsChange([...moved, ...retained]);
   };
   return (
     <div ref={containerRef} className={cn("min-h-0 flex-1 overflow-auto p-3", editing && "min-w-[720px]")}>
@@ -383,11 +410,11 @@ function DashboardGrid({ snapshot, registry, definition, editing, pageScope, onW
                 onUpdate={(patch) => onWidgetsChange(snapshot.widgets.map((item) => item.id === widget.id ? { ...item, ...patch } : item))}
                 onMove={(dx, dy) => onWidgetsChange([
                   ...moveDashboardRect(active, widget.id, { x: widget.x + dx, y: widget.y + dy }, columns),
-                  ...snapshot.widgets.filter((item) => item.isArchived),
+                  ...retained,
                 ])}
                 onResize={(dw, dh) => onWidgetsChange([
                   ...resizeDashboardRect(active, widget.id, { w: widget.w + dw, h: widget.h + dh }, columns),
-                  ...snapshot.widgets.filter((item) => item.isArchived),
+                  ...retained,
                 ])}
               />
             ))}
@@ -529,13 +556,13 @@ function WidgetDataBody({ widget, kind, definition, pageScope, titleId }: {
       <div className={cn("min-h-0 flex-1", kind.shape === "rows" ? "overflow-auto" : "overflow-hidden")}>
         <Component spec={widget} data={data} titleId={titleId} authored={Authored ? <Authored /> : undefined} />
       </div>
-      <footer className="flex shrink-0 items-center justify-end gap-2 pt-1 text-2xs text-fg-subtle">
-        {pageScope && widget.data.shape !== "none" ? (
+      {widget.data.shape !== "none" ? <footer className="flex shrink-0 items-center justify-end gap-2 pt-1 text-2xs text-fg-subtle">
+        {pageScope ? (
           <span>{pageScope.resource === widget.data.source.resource ? t("surface.pageFilters") : t("surface.independentSource")}</span>
         ) : null}
         <span>{data.live ? t("surface.live") : data.updatedAt ? t("surface.readAt", { time: new Date(data.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }) : t("surface.manual")}</span>
         <button type="button" className="rounded-4 px-1 text-fg-muted hover:text-fg focus-visible:focus-ring" onClick={data.refetch}>{t("surface.refresh")}</button>
-      </footer>
+      </footer> : null}
     </div>
   );
 }

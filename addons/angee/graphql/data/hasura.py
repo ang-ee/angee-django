@@ -828,8 +828,8 @@ def declared_hasura_resource_fields(
     setting ``attribute`` on their source model class. The composed runtime model
     inherits those bases; this helper gathers only directly declared attributes
     from the MRO so a downstream extension can contribute without the base addon
-    importing it. Sortable declarations also accept scalar/to-one ORM paths;
-    other declarations retain their concrete-field contract.
+    importing it. Filter/sort and container-scope declarations also accept
+    scalar/to-one ORM paths; write declarations retain concrete-field contracts.
     """
 
     fields: list[str] = []
@@ -844,7 +844,7 @@ def declared_hasura_resource_fields(
         for item in value:
             field = str(item)
             try:
-                if attribute == "hasura_sortable_fields":
+                if attribute in {"hasura_sortable_fields", "hasura_filterable_fields", "hasura_container_scope_fields"}:
                     require_field_for_path(model, field)
                 else:
                     model._meta.get_field(field)
@@ -1066,6 +1066,21 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         *sortable,
         *(alias.path if isinstance(alias, SortAlias) else alias for alias in (sortable_aliases or {}).values()),
     )
+    container_scopes = set(declared_hasura_resource_fields(model, "hasura_container_scope_fields"))
+    for path in sorted(container_scopes):
+        if path not in {*filterable, *sortable, *active_groupable, *aggregatable}:
+            continue
+        field = require_field_for_path(model, path)
+        if (
+            path not in filterable or "__" not in path or field.is_relation
+            or path in {*sortable, *active_groupable, *aggregatable}
+        ):
+            raise ImproperlyConfigured(
+                f"{model._meta.label}.{path}: container scope keys must be filter-only related scalars."
+            )
+    # Scope membership is intentionally testable without reading the container.
+    # It never changes the actor scope of the root rows or their projections.
+    relation_paths = tuple(path for path in relation_paths if path not in container_scopes)
     read_queryset = _relation_scalar_queryset(model, get_queryset or _model_queryset(model), relation_paths)
     aggregate_source = (
         _relation_scalar_queryset(model, get_aggregate_queryset, relation_paths)

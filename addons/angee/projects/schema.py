@@ -34,6 +34,7 @@ from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
 from angee.projects.access import bind, unbind
+from angee.projects.models import ProjectSetupState
 from angee.storage.schema import FolderType
 
 Project = apps.get_model("projects", "Project")
@@ -50,6 +51,7 @@ User = get_user_model()
 
 _PROJECT_PERMISSIONS = ("write", "share", "delete")
 _TASK_PERMISSIONS = (*_PROJECT_PERMISSIONS, "narrow", "widen", "comment")
+strawberry.enum(ProjectSetupState)
 
 _PROJECT_EXTENSION_FILTER_FIELDS = declared_hasura_resource_fields(
     Project,
@@ -150,8 +152,25 @@ def selectable_project_milestones(root: Any, info: strawberry.Info) -> list["Mil
     return root.selectable_milestones().with_actor(actor)
 
 
+@strawberry.type
+class ProjectSetupFields:
+    """Optimized setup and schedule summaries on both project projections."""
+
+    @strawberry_django.field(annotate={"_setup_state": lambda info: Project.setup_state_expression(current_actor())})
+    def setup_state(self) -> ProjectSetupState:
+        """Return the owner's persisted readiness projection."""
+        return ProjectSetupState(cast(Any, self)._setup_state)
+
+    @strawberry_django.field(annotate={
+        "_overdue_milestone_count": lambda info: Project.overdue_milestone_count_expression(current_actor()),
+    })
+    def overdue_milestone_count(self) -> int:
+        """Return the actor-readable current-milestone count."""
+        return cast(Any, self)._overdue_milestone_count
+
+
 @strawberry_django.type(Project)
-class ProjectType(AuthoredRefMixin, AngeeNode):
+class ProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
     """GraphQL projection of a bounded project."""
 
     title: auto
@@ -183,7 +202,7 @@ class ProjectType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Project)
-class ConsoleProjectType(AuthoredRefMixin, AngeeNode):
+class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
     """Console project projection with a label-bearing lead relation."""
 
     title: auto
@@ -231,6 +250,18 @@ class MilestoneType(AuthoredRefMixin, AngeeNode):
 @strawberry.type
 class TaskProjectionMixin:
     """Shared SQL scalar projections for public and console task types."""
+
+    @strawberry_django.field(annotate={"_setup_state": lambda info: Task.setup_state_expression(current_actor())})
+    def setup_state(self) -> ProjectSetupState:
+        """Return the readable promoted project's setup state."""
+        return ProjectSetupState(cast(Any, self)._setup_state)
+
+    @strawberry_django.field(annotate={
+        "_overdue_milestone_count": lambda info: Task.overdue_milestone_count_expression(current_actor()),
+    })
+    def overdue_milestone_count(self) -> int:
+        """Return the overdue count on readable related projects."""
+        return cast(Any, self)._overdue_milestone_count
 
     @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
     def priority_rank(self) -> int:
@@ -414,6 +445,21 @@ class ProjectBindingType(AuthoredRefMixin, AngeeNode):
 @strawberry.type
 class ProjectTaskActionMutation:
     """Row-authorized lifecycle and maturation actions."""
+
+    @strawberry.mutation
+    @action_guard("Project setup failed.")
+    def setup_project(
+        self, info: strawberry.Info, id: PublicID, configuration: JSON, client_creation_key: str,
+        expected_revision: int | None = None,
+    ) -> ActionResult:
+        """Complete the composed project setup under its owning transaction."""
+
+        task = authorized_action_target(info, Task, id, "write")
+        project = Project.objects.setup_from_task(
+            task, configuration=configuration, client_creation_key=client_creation_key,
+            expected_revision=expected_revision,
+        )
+        return ActionResult(ok=True, message="Project set up.", id=project.sqid)
 
     @strawberry.mutation
     @action_guard("Pause project failed.")
