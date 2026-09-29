@@ -55,7 +55,10 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_workflows_review_concurrency.py),
 [execution links](../tests/test_workflows_review_graphql.py), and
 [inbox predicates](../tests/test_decisions_inbox.py). The selection
-runs serially with `--nomigrations` and must finish with zero skips. The full
+runs with four xdist workers grouped by file, `--nomigrations`, a JUnit report,
+and a zero-skip gate. Pytest-django creates a separate PostgreSQL test database
+for each worker. The composed-host subprocess tests use Django's test runner to
+create separate worker-named secondary test databases. The full
 suite runs on SQLite with migrations enabled and `DATABASE_URL` unset; do not
 apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
 skip explicitly on SQLite. Report those skips separately from the PostgreSQL
@@ -207,8 +210,9 @@ pushes to `main`. The current tiers are:
 - **SQLite:** the full framework Python suite once, with `-n auto --dist loadfile`
   and the 25 slowest test durations, with migrations enabled and `DATABASE_URL`
   unset. Structural tests remain part of this suite.
-- **PostgreSQL:** the named workflow and decision selection runs serially with
-  `--nomigrations`, followed by a check that it did not skip tests.
+- **PostgreSQL:** the named workflow and decision selection runs with
+  `-n 4 --dist loadfile --nomigrations`, writes JUnit output, and checks that it
+  did not skip tests.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents

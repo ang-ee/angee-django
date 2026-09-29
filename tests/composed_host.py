@@ -37,7 +37,12 @@ def boot(
         database = environ.Env.db_url_config(database_url)
         if database["ENGINE"] != "django.db.backends.postgresql":
             raise ValueError("--test-postgresql requires a PostgreSQL DATABASE_URL.")
-        database["TEST"] = {"NAME": f"test_composed_{database['NAME']}"}
+        # DiscoverRunner creates this secondary database. A composed-host test
+        # can run beside another one on a different xdist worker, so give each
+        # worker its own name just as pytest-django does for the primary database.
+        worker = os.environ.get("PYTEST_XDIST_WORKER")
+        suffix = f"_{worker}" if worker else ""
+        database["TEST"] = {"NAME": f"test_composed_{database['NAME']}{suffix}"}
     addon_dirs = [source_root / "addons"]
     if include_examples:
         addon_dirs.append(source_root / "examples" / "addons")

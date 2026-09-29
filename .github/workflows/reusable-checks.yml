@@ -96,7 +96,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
         run: |
-          uv run --locked python -m pytest -q --nomigrations --junitxml=workflow-concurrency.xml \
+          uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --junitxml=workflow-concurrency.xml \
             tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
             tests/test_workflows_runtime.py tests/test_workflows_install.py \
             tests/test_workflows_subject.py tests/test_workflows_publication.py \
