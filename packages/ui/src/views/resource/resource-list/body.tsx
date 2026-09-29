@@ -151,7 +151,7 @@ export function ResourceListBody<TRow extends Row = Row>({
     ...(handleSelectRecord ? { onSelect: handleSelectRecord } : {}),
     onSetPage: resourceView.setPage,
     selectFirstRecord,
-    firstSelectionKey: stableSerialize(baseFilter ?? null),
+    firstSelectionKey: stableSerialize([baseFilter, resourceView.fixedFilter]),
     onClearSelection: clearSelection,
   });
   React.useEffect(() => {

@@ -8,6 +8,7 @@ import type { BaseAddonRoute } from "./define-base-addon";
 import {
   childRoutesByParentName,
   fullRoutePath,
+  inheritedRouteRecordModel,
   trailingRouteParamName,
 } from "./route-paths";
 
@@ -43,8 +44,17 @@ export function chatterRouteIndex(
       ...(modelLabel ? { modelLabel } : {}),
       ...(canonicalLabel ? { canonicalLabel } : {}),
       ...(recordParam ? { recordParam } : {}),
+      chatter: inheritedChatterPolicy(route, routesByName),
     };
   });
+}
+
+function inheritedChatterPolicy(
+  route: BaseAddonRoute,
+  routesByName: ReadonlyMap<string, BaseAddonRoute>,
+): BaseAddonRoute["chatter"] {
+  const parent = route.parent ? routesByName.get(route.parent) : undefined;
+  return route.chatter ?? (parent ? inheritedChatterPolicy(parent, routesByName) : "auto");
 }
 
 function routeChatterViewType(
@@ -70,17 +80,6 @@ function routeChatterViewType(
     if (recordChild) return routeNameViewType(recordChild.name);
   }
   return routeNameViewType(route.name);
-}
-
-function inheritedRouteRecordModel(
-  route: BaseAddonRoute,
-  routesByName: ReadonlyMap<string, BaseAddonRoute>,
-): string | undefined {
-  if (route.recordModel) return route.recordModel;
-  if (route.resource) return route.resource;
-  if (!route.parent) return undefined;
-  const parent = routesByName.get(route.parent);
-  return parent ? inheritedRouteRecordModel(parent, routesByName) : undefined;
 }
 
 function resourceFactsByModelLabel(

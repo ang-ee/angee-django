@@ -86,7 +86,7 @@ function ValidatedListViewBody<TRow extends Row>(
         props.resourceView.state,
         query,
       ).queryError;
-      query.toWhere(props.baseFilter, props.resourceView.state.filter);
+      query.toWhere(Filter.combineOptional(props.baseFilter, props.resourceView.fixedFilter), props.resourceView.state.filter);
       const group =
         (props.resourceView.state.view === "board" || props.resourceView.state.view === "gantt") && props.laneSource
           ? { field: props.laneSource.field }
@@ -274,8 +274,8 @@ function ListViewBody<TRow extends Row = Row>({
     [columns, modelMetadata, schemaMetadata],
   );
   const mergedFilter = React.useMemo(
-    () => Filter.combineOptional(baseFilter, resourceView.state.filter),
-    [resourceView.state.filter, baseFilter],
+    () => Filter.combineOptional(Filter.combineOptional(baseFilter, resourceView.fixedFilter), resourceView.state.filter),
+    [resourceView.state.filter, resourceView.fixedFilter, baseFilter],
   );
   const declaredFacets = useRelationFacets(
     source ? "" : resource,

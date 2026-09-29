@@ -19,7 +19,7 @@ import {
   type AppRuntime,
   type ChatterViewContext,
 } from "../runtime";
-import { Chatter } from "./Chatter";
+import { Chatter, useChatterVisible } from "./Chatter";
 import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
 import { useRecordPeek } from "./record-peek";
 import { registerForm, type RegisteredFormProps } from "../views/form/registered-form";
@@ -307,22 +307,24 @@ function useCommentsCount(
   return context.view.sqid === "rec_1" ? 7 : undefined;
 }
 
-function renderChatter(runtime: Partial<AppRuntime>): void {
+function renderChatter(runtime: Partial<AppRuntime>, record = true, layoutChatter?: boolean): void {
+  function VisibilityProbe() { return <span>{useChatterVisible(layoutChatter) ? "Aside available" : "Aside hidden"}</span>; }
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const recordRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: "/records/$id",
+    path: record ? "/records/$id" : "/records",
     component: () => (
-      <AppRuntimeProvider runtime={{ icons: baseIcons, ...runtime }}>
+      <AppRuntimeProvider runtime={{ icons: baseIcons, chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" }], ...runtime }}>
         <ChatterProvider defaultTab="agents">
-          <Chatter />
+          <VisibilityProbe />
+          <Chatter showDefaultTabs={layoutChatter} />
         </ChatterProvider>
       </AppRuntimeProvider>
     ),
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([recordRoute]),
-    history: createMemoryHistory({ initialEntries: ["/records/rec_1"] }),
+    history: createMemoryHistory({ initialEntries: [record ? "/records/rec_1" : "/records"] }),
   });
 
   render(<RouterProvider router={router} />);
@@ -344,3 +346,44 @@ function chatterContentView(children: React.ReactNode, defaultTab: string, runti
 function renderChatterContent(children: React.ReactNode, defaultTab: string) {
   return render(chatterContentView(children, defaultTab));
 }
+
+
+test("non-record pages hide empty chatter and admit a contributed inbox", async () => {
+  renderChatter({}, false);
+  expect(await screen.findByText("Aside hidden")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
+  expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
+  cleanup();
+  renderChatter({ chatter: [{ id: "inbox", label: "Inbox", render: () => <span>Inbox content</span> }] }, false);
+  expect(await screen.findByRole("tab", { name: "Inbox" })).toBeTruthy();
+  expect(screen.getByText("Aside available")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
+});
+
+test("a hidden record route suppresses the aside before contributions execute", async () => {
+  const renderTab = vi.fn(() => <span>Private panel</span>);
+  renderChatter({
+    chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id", chatter: "hidden" }],
+    chatter: [{ id: "extra", render: renderTab }],
+  }, true, true);
+  expect(await screen.findByText("Aside hidden")).toBeTruthy();
+  expect(screen.queryByRole("tab")).toBeNull();
+  expect(renderTab).not.toHaveBeenCalled();
+});
+
+test("a route can explicitly opt a non-record page into default chatter", async () => {
+  renderChatter({ chatterRoutes: [{ name: "notes.all", path: "/records", viewType: "notes/note", chatter: "visible" }] }, false);
+  expect(await screen.findByText("Aside available")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
+});
+
+test("layout defaults can opt non-record pages in and records out", async () => {
+  renderChatter({}, false, true);
+  expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
+  expect(screen.getByText("Aside available")).toBeTruthy();
+  cleanup();
+  renderChatter({}, true, false);
+  expect(await screen.findByText("Aside hidden")).toBeTruthy();
+  expect(screen.queryByRole("tab")).toBeNull();
+});

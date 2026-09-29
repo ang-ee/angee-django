@@ -159,7 +159,7 @@ function ProjectTasksTab({ recordId }: RecordPanelContext): React.ReactElement {
       baseFilter={{ project: { exact: recordId } }}
       order={{ sort_order: "ASC" }}
       rowActions={rowActions}
-      rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
+      rowHref={(row) => routeHref.record(TASK_MODEL, row.id)}
       emptyContent={t("project.empty.tasks")}
     >
       <Column field="title" />

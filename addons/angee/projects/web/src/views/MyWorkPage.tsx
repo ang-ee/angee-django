@@ -41,7 +41,7 @@ export function MyWorkPage(): React.ReactElement {
             baseFilter={taskFilter}
             order={{ due_date: "ASC", sort_order: "ASC" }}
             rowActions={taskActions}
-            rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
+            rowHref={(row) => routeHref.record(TASK_MODEL, row.id)}
             emptyContent={t("myWork.empty.tasks")}
           >
             <Column field="title" />

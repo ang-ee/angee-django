@@ -6,7 +6,7 @@ import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
 import { DocumentTitle } from "../chrome/DocumentTitle";
 import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar } from "../chrome/TopBar";
-import { Chatter } from "../communication/Chatter";
+import { Chatter, useChatterVisible } from "../communication/Chatter";
 import { ChatterProvider, useChatter, type ChatterPaneController } from "../communication/chatter-context";
 import { useUiT } from "../i18n";
 import { cn } from "../lib/cn";
@@ -33,15 +33,21 @@ export const CONSOLE_NOTICE_SLOT = "console.notice";
 
 export interface ConsoleLayoutProps {
   children: React.ReactNode;
+  /** Auto by default: records and contributed content; route policy overrides this choice. */
   showChatter?: boolean;
   className?: string;
 }
 
-export function ConsoleLayout({
+export function ConsoleLayout(props: ConsoleLayoutProps): React.ReactElement {
+  return <ChatterProvider defaultCollapsed><ConsoleLayoutBody {...props} /></ChatterProvider>;
+}
+
+function ConsoleLayoutBody({
   children,
-  showChatter = true,
+  showChatter: layoutChatter,
   className,
 }: ConsoleLayoutProps): React.ReactElement {
+  const showChatter = useChatterVisible(layoutChatter);
   const notices = useSlot(CONSOLE_NOTICE_SLOT);
   const [controlHost, setControlHost] =
     React.useState<HTMLDivElement | null>(null);
@@ -90,117 +96,116 @@ export function ConsoleLayout({
     [],
   );
   return (
-    <ChatterProvider defaultCollapsed>
-      <PrimaryPaneProvider>
-        <DrawerProvider>
-          <ControlBandProvider host={controlHost}>
-            <StatuslineProvider host={statusHost}>
-              <BreadcrumbLabelProvider>
-                <DocumentTitle />
-                <div
-                  style={{
-                    "--rail-current-w": mobileViewport
-                      ? "0px"
-                      : railWidth ?? "var(--spacing-rail-w)",
-                  } as React.CSSProperties}
-                  className={cn(
-                    "console-grid h-dvh min-h-0 w-full min-w-0 max-w-full overflow-hidden bg-canvas text-fg",
-                    className,
-                  )}
-                >
-                  {mobileViewport ? null : (
-                    <AppRail
-                      onWidthChange={setRailWidth}
-                      onOpenNavigation={largeViewport ? undefined : openNavigation}
-                    />
-                  )}
-                  <TopBar
-                    className="area-topbar"
-                    navigation={mobileViewport ? {
-                      open: navigationOpen,
-                      toggle: () => {
-                        if (navigationOpen) setNavigation(null);
-                        else openNavigation(null);
-                      },
-                    } : undefined}
-                    primaryPane={
-                      primaryController
-                        ? {
-                            collapsed: primaryController.collapsed,
-                            toggle: () => {
-                              setNavigation(null);
-                              primaryController.toggle();
-                            },
-                          }
-                        : undefined
-                    }
-                    chatterPane={compactChatterController ? {
-                      collapsed: compactChatterController.collapsed,
-                      toggle: () => {
-                        setNavigation(null);
-                        compactChatterController.toggle();
-                      },
-                    } : undefined}
-                    showChatterToggle={showChatter}
-                    showUserMenu
+    <PrimaryPaneProvider>
+      <DrawerProvider>
+        <ControlBandProvider host={controlHost}>
+          <StatuslineProvider host={statusHost}>
+            <BreadcrumbLabelProvider>
+              <DocumentTitle />
+              <div
+                style={{
+                  "--rail-current-w": mobileViewport
+                    ? "0px"
+                    : railWidth ?? "var(--spacing-rail-w)",
+                } as React.CSSProperties}
+                className={cn(
+                  "console-grid h-dvh min-h-0 w-full min-w-0 max-w-full overflow-hidden bg-canvas text-fg",
+                  className,
+                )}
+              >
+                {mobileViewport ? null : (
+                  <AppRail
+                    onWidthChange={setRailWidth}
+                    onOpenNavigation={largeViewport ? undefined : openNavigation}
                   />
-                  <div className="area-control min-w-0">
-                    <div className="contents" data-console-notices>
-                      <SlotOutlet entries={notices} />
-                    </div>
-                    <div
-                      ref={setControlHost}
-                      className="contents"
-                      data-console-controls
-                    />
+                )}
+                <TopBar
+                  className="area-topbar"
+                  navigation={mobileViewport ? {
+                    open: navigationOpen,
+                    toggle: () => {
+                      if (navigationOpen) setNavigation(null);
+                      else openNavigation(null);
+                    },
+                  } : undefined}
+                  primaryPane={
+                    primaryController
+                      ? {
+                          collapsed: primaryController.collapsed,
+                          toggle: () => {
+                            setNavigation(null);
+                            primaryController.toggle();
+                          },
+                        }
+                      : undefined
+                  }
+                  chatterPane={compactChatterController ? {
+                    collapsed: compactChatterController.collapsed,
+                    toggle: () => {
+                      setNavigation(null);
+                      compactChatterController.toggle();
+                    },
+                  } : undefined}
+                  showChatterToggle={showChatter}
+                  showUserMenu
+                />
+                <div className="area-control min-w-0">
+                  <div className="contents" data-console-notices>
+                    <SlotOutlet entries={notices} />
                   </div>
-                  <ConsoleWorkbench
-                    showChatter={showChatter}
-                    onPrimaryController={handlePrimaryController}
-                    onCompactChatterController={setCompactChatterController}
-                  >
-                    {children}
-                  </ConsoleWorkbench>
-                  {/* Optional statusline; the row collapses while this host is empty. */}
                   <div
-                    ref={setStatusHost}
-                    className="area-status console-statusline-host"
+                    ref={setControlHost}
+                    className="contents"
+                    data-console-controls
                   />
                 </div>
-                <Drawer.Root
-                  open={!largeViewport && navigationOpen}
-                  onOpenChange={(open) => {
-                    if (!open) setNavigation(null);
-                  }}
+                <ConsoleWorkbench
+                  showChatter={showChatter}
+                  showDefaultChatterTabs={layoutChatter}
+                  onPrimaryController={handlePrimaryController}
+                  onCompactChatterController={setCompactChatterController}
                 >
-                  <Drawer.Portal>
-                    <Drawer.Backdrop />
-                    <Drawer.Content
-                      side="left"
-                      aria-label="Primary navigation"
-                      className="w-[min(20rem,calc(100vw-2rem))] border-0 bg-rail p-0"
-                    >
-                      <AppRail
-                        presentation="drawer"
-                        navigationTarget={navigation?.target ?? null}
-                      />
-                    </Drawer.Content>
-                  </Drawer.Portal>
-                </Drawer.Root>
-                {/* Drawers live at shell level (above the grid + router outlet) so
-                    the open drawer's content mounts once and survives navigation.
-                    Overlays render first, rails last, so a tab stays clickable to
-                    toggle its drawer closed even while the panel is open. */}
-                <DrawerOverlay edge="right" />
-                <DrawerOverlay edge="bottom" />
-                <DrawerRail edge="right" />
-                <DrawerRail edge="bottom" />
-              </BreadcrumbLabelProvider>
-            </StatuslineProvider>
-          </ControlBandProvider>
-        </DrawerProvider>
-      </PrimaryPaneProvider>
-    </ChatterProvider>
+                  {children}
+                </ConsoleWorkbench>
+                {/* Optional statusline; the row collapses while this host is empty. */}
+                <div
+                  ref={setStatusHost}
+                  className="area-status console-statusline-host"
+                />
+              </div>
+              <Drawer.Root
+                open={!largeViewport && navigationOpen}
+                onOpenChange={(open) => {
+                  if (!open) setNavigation(null);
+                }}
+              >
+                <Drawer.Portal>
+                  <Drawer.Backdrop />
+                  <Drawer.Content
+                    side="left"
+                    aria-label="Primary navigation"
+                    className="w-[min(20rem,calc(100vw-2rem))] border-0 bg-rail p-0"
+                  >
+                    <AppRail
+                      presentation="drawer"
+                      navigationTarget={navigation?.target ?? null}
+                    />
+                  </Drawer.Content>
+                </Drawer.Portal>
+              </Drawer.Root>
+              {/* Drawers live at shell level (above the grid + router outlet) so
+                  the open drawer's content mounts once and survives navigation.
+                  Overlays render first, rails last, so a tab stays clickable to
+                  toggle its drawer closed even while the panel is open. */}
+              <DrawerOverlay edge="right" />
+              <DrawerOverlay edge="bottom" />
+              <DrawerRail edge="right" />
+              <DrawerRail edge="bottom" />
+            </BreadcrumbLabelProvider>
+          </StatuslineProvider>
+        </ControlBandProvider>
+      </DrawerProvider>
+    </PrimaryPaneProvider>
   );
 }
 
@@ -216,11 +221,13 @@ export function ConsoleLayout({
  */
 function ConsoleWorkbench({
   showChatter,
+  showDefaultChatterTabs,
   onPrimaryController,
   onCompactChatterController,
   children,
 }: {
   showChatter: boolean;
+  showDefaultChatterTabs?: boolean;
   onPrimaryController: (controller: PaneToggleController | null) => void;
   onCompactChatterController: (controller: PaneToggleController | null) => void;
   children: React.ReactNode;
@@ -310,7 +317,7 @@ function ConsoleWorkbench({
         }
         secondary={desktopChatter ? (
           <ControlBandProvider host={undefined}>
-            <Chatter />
+            <Chatter showDefaultTabs={showDefaultChatterTabs} />
           </ControlBandProvider>
         ) : undefined}
         onPrimaryController={setDesktopPrimaryController}
@@ -347,7 +354,7 @@ function ConsoleWorkbench({
             className="w-[min(28rem,calc(100vw-1rem))] p-0"
           >
             <ControlBandProvider host={undefined}>
-              <Chatter />
+              <Chatter showDefaultTabs={showDefaultChatterTabs} />
             </ControlBandProvider>
           </Drawer.Content>
         </Drawer.Portal>

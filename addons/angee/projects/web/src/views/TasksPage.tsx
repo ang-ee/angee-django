@@ -75,7 +75,7 @@ function TaskSubtasksTab({ recordId }: RecordPanelContext): React.ReactElement {
       baseFilter={{ parent: { exact: recordId } }}
       order={{ sub_sort_order: "ASC" }}
       rowActions={rowActions}
-      rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
+      rowHref={(row) => routeHref.record(TASK_MODEL, row.id)}
       emptyContent={t("task.empty.subtasks")}
     >
       <Column field="title" />

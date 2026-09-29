@@ -8,6 +8,14 @@ Install: `pnpm add @angee/ui`
 the active breadcrumb with that brand. `GanttView` is the presentational date
 axis; the `gantt` collection kind composes the list owner's filter, grouping and
 row paging alongside list, board and calendar views.
+Resource record links resolve through the active app with
+`useRouteHref().record(model, id)` or the optional resource href hooks.
+ResourceView consumes [addon presets and scoped vocabulary](../app/README.md#app-vocabulary-and-shipped-views)
+from runtime: fixed filters stay separate from editable URL state, and native
+column visibility survives saved views. Relation columns retain their authored
+field as their table ID even when metadata resolves a different display path.
+Console chatter defaults to record routes and contributed page content; use the
+route policy or `ConsoleLayout.showChatter` for an explicit visibility choice.
 Gantt `renderRowContent` replaces the sidebar title. Use `sidebarWidth` and
 `minRowHeight` to size rich labels; overlapping bars grow both panes together.
 Collection Date fields include the target calendar day and show date-only labels.

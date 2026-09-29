@@ -1,5 +1,5 @@
-import { useId, useState, type ReactElement } from "react";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { createContext, useContext, useId, useState, type ReactElement } from "react";
+import { Link, useLinkProps, useRouterState } from "@tanstack/react-router";
 
 import { useUiT, type UiTranslate } from "../i18n";
 import { toneGlyph } from "../lib/tones";
@@ -10,7 +10,9 @@ import { Badge, CountBadge } from "../ui/badge";
 import { Collapsible } from "../ui/collapsible";
 import { railLinkToggleProps } from "./app-rail-model";
 import { Glyph } from "./Glyph";
-import type { ChromeMenuNode } from "./menu-tree";
+import { MenuTree, type ChromeMenuNode } from "./menu-tree";
+
+const ActiveMenuItemContext = createContext<string | undefined>(undefined);
 
 export const appRailTreeVariants = tv({
   slots: {
@@ -75,49 +77,51 @@ export function AppRailTree({
   const idPrefix = `app-rail-${useId().replaceAll(":", "")}`;
   const styles = appRailTreeVariants();
   const [onlyRoot] = roots;
+  const activeItemId = MenuTree.from(roots).activeItem(pathname)?.id;
 
   return (
-    <div className={styles.root({ className })}>
-      {scope === "settings" ? (
-        <div className={styles.header()}>
-          <Link
-            to="/"
-            aria-label={t("chrome.back")}
-            className={styles.trigger()}
+    <ActiveMenuItemContext.Provider value={activeItemId}>
+      <div className={styles.root({ className })}>
+        {scope === "settings" ? (
+          <div className={styles.header()}>
+            <Link
+              to="/"
+              aria-label={t("chrome.back")}
+              className={styles.trigger()}
+            >
+              <Glyph name="chevron-left" aria-hidden="true" />
+            </Link>
+            <h2 className={styles.title()}>{t("chrome.settings")}</h2>
+          </div>
+        ) : null}
+        <div className={styles.tree()}>
+          {flat && roots.length === 1 && onlyRoot ? (
+            (onlyRoot.targetedChildren.length ? onlyRoot.targetedChildren : roots).map((item) => (
+              <NestedMenuItem key={item.id} idPrefix={idPrefix} item={item}
+                pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
+            ))
+          ) : <Accordion.Root
+            variant="flush"
+            value={openRootId ? [openRootId] : []}
+            onValueChange={(value) => {
+              setOpenRootId(String(value[0] ?? "") || null);
+            }}
           >
-            <Glyph name="chevron-left" aria-hidden="true" />
-          </Link>
-          <h2 className={styles.title()}>{t("chrome.settings")}</h2>
+            {roots.map((item) => (
+              <RootMenuItem
+                key={item.id}
+                idPrefix={idPrefix}
+                item={item}
+                open={openRootId === item.id}
+                pathname={pathname}
+                styles={styles}
+                onActiveToggle={onActiveToggle}
+              />
+            ))}
+          </Accordion.Root>}
         </div>
-      ) : null}
-      <div className={styles.tree()}>
-        {flat && roots.length === 1 && onlyRoot ? (
-          (onlyRoot.targetedChildren.length ? onlyRoot.targetedChildren : roots).map((item) => (
-            <NestedMenuItem key={item.id} idPrefix={idPrefix} item={item}
-              pathname={pathname} styles={styles} onActiveToggle={onActiveToggle} />
-          ))
-        ) : <Accordion.Root
-          variant="flush"
-          value={openRootId ? [openRootId] : []}
-          onValueChange={(value) => {
-            setOpenRootId(String(value[0] ?? "") || null);
-          }}
-        >
-          {roots.map((item) => (
-            <RootMenuItem
-              key={item.id}
-              active={activeRootId === item.id}
-              idPrefix={idPrefix}
-              item={item}
-              open={openRootId === item.id}
-              pathname={pathname}
-              styles={styles}
-              onActiveToggle={onActiveToggle}
-            />
-          ))}
-        </Accordion.Root>}
       </div>
-    </div>
+    </ActiveMenuItemContext.Provider>
   );
 }
 
@@ -140,7 +144,6 @@ function useDerivedOverride<T>(
 type AppRailTreeStyles = ReturnType<typeof appRailTreeVariants>;
 
 function RootMenuItem({
-  active,
   idPrefix,
   item,
   open,
@@ -148,7 +151,6 @@ function RootMenuItem({
   styles,
   onActiveToggle,
 }: {
-  active: boolean;
   idPrefix: string;
   item: ChromeMenuNode;
   open: boolean;
@@ -163,7 +165,6 @@ function RootMenuItem({
     return (
       <div className={styles.rootItem()}>
         <MenuLink
-          active={active}
           item={item}
           pathname={pathname}
           styles={styles}
@@ -178,7 +179,6 @@ function RootMenuItem({
     <Accordion.Item value={item.id} className={styles.rootItem()}>
       <Accordion.Header className={styles.row()}>
         <MenuLink
-          active={active}
           item={item}
           pathname={pathname}
           styles={styles}
@@ -254,12 +254,10 @@ function NestedMenuItem({
     activeChildId !== null,
     activeChildId ?? "",
   );
-  const active = item.matchesPath(pathname);
   if (!item.target) return null;
   if (!children.length) {
     return (
       <MenuLink
-        active={active}
         item={item}
         pathname={pathname}
         styles={styles}
@@ -277,7 +275,6 @@ function NestedMenuItem({
     >
       <div className={styles.row()}>
         <MenuLink
-          active={active}
           item={item}
           pathname={pathname}
           styles={styles}
@@ -308,26 +305,29 @@ function NestedMenuItem({
 }
 
 function MenuLink({
-  active,
   item,
   pathname,
   styles,
   onActiveToggle,
 }: {
-  active: boolean;
   item: ChromeMenuNode;
   pathname: string;
   styles: AppRailTreeStyles;
   onActiveToggle?: (() => void) | undefined;
 }): ReactElement | null {
+  const current = useContext(ActiveMenuItemContext) === item.id;
+  const linkProps = useLinkProps({
+    to: item.target,
+    href: item.target,
+    ...railLinkToggleProps(item.target, pathname, onActiveToggle, true),
+  });
   if (!item.target) return null;
-  const current = active && item.activeTargetedChild(pathname) === undefined;
   return (
-    <Link
-      to={item.target}
+    <a
+      {...linkProps}
       aria-current={current ? "page" : undefined}
-      data-active={active}
-      {...railLinkToggleProps(item.target, pathname, onActiveToggle, true)}
+      data-active={current}
+      data-status={current ? "active" : undefined}
       className={styles.link()}
     >
       <span className={item.tone ? toneGlyph(item.tone) : undefined}>
@@ -335,7 +335,7 @@ function MenuLink({
       </span>
       <span className="min-w-0 flex-1 truncate">{item.displayLabel}</span>
       <MenuItemMetadata item={item} styles={styles} />
-    </Link>
+    </a>
   );
 }
 

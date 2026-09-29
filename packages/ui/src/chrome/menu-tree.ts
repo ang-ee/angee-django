@@ -57,7 +57,8 @@ export function pathMatchesTarget(
   target: string | undefined,
 ): boolean {
   if (!target || target === "#") return false;
-  return pathname === target || pathname.startsWith(`${target}/`);
+  const path = target.split("?")[0]!;
+  return pathname === path || pathname.startsWith(`${path}/`);
 }
 
 /** Resolve authored route targets once, before the chrome builds its menu tree. */
@@ -91,7 +92,7 @@ function resolveMenuRouteTarget(
   let routePath: string | undefined;
   if (item.route) {
     try {
-      routePath = routeHref(item.route, item.params);
+      routePath = routeHref(item.route, item.params, item.defaultResourceView ? { preset: item.defaultResourceView } : undefined);
     } catch (error) {
       if (error instanceof UnknownRouteError) {
         throw new Error(
@@ -124,6 +125,7 @@ export class ChromeMenuNode implements ChromeMenuItem {
   label?: string;
   route?: string;
   params?: RouteHrefParams;
+  defaultResourceView?: string;
   to?: string;
   icon?: string;
   children?: readonly ChromeMenuNode[];
@@ -216,7 +218,17 @@ export class MenuTree {
   confineTo(rootId: string): MenuTree {
     const root = this.roots.find((item) => item.id === rootId);
     if (!root) throw new Error(`Unknown menu root "${rootId}" in confineTo.`);
-    return MenuTree.from([{ ...root, appRoot: true, group: "domain" }]);
+    const settings: ChromeMenuItem[] = [];
+    const project = (item: ChromeMenuNode): ChromeMenuItem => ({
+      ...item,
+      children: item.children?.flatMap((child) => {
+        if (child.group !== "platform") return [project(child)];
+        settings.push({ ...child, parentId: undefined, appRoot: false });
+        return [];
+      }),
+    });
+    const app = { ...project(root), appRoot: true, group: "domain" as const };
+    return MenuTree.from([app, ...settings]);
   }
 
   /** Explicit app roots win; without an opt-in every root remains an app. */
@@ -322,6 +334,21 @@ export class MenuTree {
     return deepestTargetMatch(this.roots, pathname);
   }
 
+  /** One highlighted destination; ancestors remain expanded, not selected. */
+  activeItem(pathname: string): ChromeMenuNode | undefined {
+    let best: ChromeMenuNode | undefined;
+    let bestLength = -1;
+    for (const item of this.byId.values()) {
+      if (!item.to || !item.matchesPath(pathname)) continue;
+      const length = item.to.split("?")[0]!.length;
+      if (length >= bestLength) {
+        best = item;
+        bestLength = length;
+      }
+    }
+    return best;
+  }
+
   /** Ancestor stack from root to `itemId`; throws if parent links cycle. */
   trailFor(itemId: string): readonly ChromeMenuNode[] {
     const item = this.byId.get(itemId);
@@ -368,9 +395,10 @@ function deepestTargetMatch<T extends ChromeMenuNode>(
     for (const candidate of menuNodeDescendants(root)) {
       const target = candidate.target;
       if (!target || !candidate.matchesPath(pathname)) continue;
-      if (target.length > bestLength) {
+      const length = target.split("?")[0]!.length;
+      if (length > bestLength) {
         best = root;
-        bestLength = target.length;
+        bestLength = length;
       }
     }
   }

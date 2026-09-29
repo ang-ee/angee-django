@@ -275,7 +275,7 @@ describe("ConsoleLayout", () => {
     document.documentElement.removeAttribute("data-theme");
   });
 
-  test("composes rail navigation, top chrome, breadcrumbs, content, and chatter", async () => {
+  test("composes console chrome without an empty chatter pane on a non-record page", async () => {
     renderInRouter(
       <ConsoleLayout>
         <section aria-label="Page body">Body content</section>
@@ -287,7 +287,7 @@ describe("ConsoleLayout", () => {
     const rail = screen.getByRole("navigation", { name: "Primary navigation" });
     const notesLink = within(rail).getByRole("link", { name: "Notes" });
     expect(notesLink.getAttribute("href")).toBe("/notes");
-    expect(notesLink.getAttribute("data-active")).toBe("true");
+    expect(notesLink.getAttribute("data-active")).toBe("false");
     expect(within(rail).getByRole("link", { name: "Ops" })).toBeTruthy();
     const notesDisclosure = within(rail).getByRole("button", {
       name: "Collapse Notes",
@@ -295,7 +295,7 @@ describe("ConsoleLayout", () => {
     expect(notesDisclosure.getAttribute("aria-expanded")).toBe("true");
     expect(document.getElementById(notesDisclosure.getAttribute("aria-controls")!))
       .toBeTruthy();
-    expect(within(rail).getByRole("link", { name: "All notes" })).toBeTruthy();
+    expect(within(rail).getByRole("link", { name: "All notes" }).getAttribute("data-active")).toBe("true");
 
     // The rail is one scrolling list for the active domain place. Settings is
     // selected through the app chooser rather than duplicated in this tree.
@@ -337,8 +337,8 @@ describe("ConsoleLayout", () => {
       .toBe("page");
 
     expect(screen.getByRole("main").textContent).toContain("Body content");
-    expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
 
     fireEvent.click(railToggle);
@@ -653,7 +653,7 @@ function ChatterFormBandPublisher(): ReactNode {
           <button type="button" onClick={() => setRecord("b")}>Next file</button>
         </section>
       ),
-    }],
+    }, { id: "comments", label: "Comments", children: <span>File discussion</span> }],
   }), [record]);
   useChatterContent(content);
   return <ControlBand><button type="button">Main file action</button></ControlBand>;

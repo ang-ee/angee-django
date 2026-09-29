@@ -183,6 +183,8 @@ export interface ResourceViewSwitcherProps<TView extends string = ResourceViewKi
   kinds?: readonly ResourceViewKind[];
   ariaLabel?: string;
   className?: string;
+  favorites?: readonly ResourceViewFavorite[];
+  onFavoriteSelect?: (favorite: ResourceViewFavorite) => void;
 }
 
 /** Per-kind switcher chrome — the label key + glyph, keyed by kind. */
@@ -350,6 +352,8 @@ export function ResourceToolbar({
           <ResourceViewSwitcher
             view={view}
             kinds={availableViews}
+            favorites={favorites}
+            onFavoriteSelect={onFavoriteSelect}
             onViewChange={onViewChange}
           />
         ) : null}
@@ -497,7 +501,7 @@ function FilterPicker({
   const [favoriteOpen, setFavoriteOpen] = React.useState(false);
   const [favoriteLabel, setFavoriteLabel] =
     React.useState(defaultFavoriteLabel);
-  const favoritesEnabled = onFavoriteSave !== undefined;
+  const favoritesEnabled = onFavoriteSave !== undefined || favorites.length > 0;
   const {
     draft: draftFilterText,
     setDraft: setDraftFilterText,
@@ -822,14 +826,14 @@ function FilterPicker({
                 icon={<Glyph name="star" className="size-3.5" />}
                 title={t("resourceToolbar.favorites")}
               >
-                <PickerButton
+                {onFavoriteSave ? <PickerButton
                   active={favoriteOpen}
                   muted={!favoriteOpen}
                   onClick={() => setFavoriteOpen((value) => !value)}
                 >
                   <Glyph name="plus" className="size-3" />
                   {t("resourceToolbar.saveCurrentSearch")}
-                </PickerButton>
+                </PickerButton> : null}
                 {favoriteOpen ? (
                   <form
                     className="mt-2 grid gap-2 rounded-6 border border-border-subtle bg-sheet p-2 shadow-xs"
@@ -1245,6 +1249,8 @@ export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
   kinds,
   ariaLabel,
   className,
+  favorites = [],
+  onFavoriteSelect,
 }: ResourceViewSwitcherProps<TView>): ReactElement {
   const t = useUiT();
   const options = mode === "layout"
@@ -1271,6 +1277,19 @@ export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
       role="group"
       aria-label={ariaLabel ?? t("resourceToolbar.viewSwitcher")}
     >
+      {favorites.length > 0 ? (
+        <Select
+          size="sm"
+          value={null}
+          placeholder={t("resourceToolbar.favorites")}
+          aria-label={t("resourceToolbar.favorites")}
+          options={favorites.map((favorite) => ({ value: favorite.id, label: favorite.label }))}
+          onValueChange={(value) => {
+            const favorite = favorites.find((item) => item.id === value);
+            if (favorite) onFavoriteSelect?.(favorite);
+          }}
+        />
+      ) : null}
       {options.map((option) => (
         <Button
           key={option.value}

@@ -17,6 +17,12 @@ export type RouteHrefSearch =
   | string
   | Readonly<Record<string, RouteHrefSearchValue>>;
 
+/** Collection/record route names selected by the app's resource projection. */
+export interface RuntimeResourceRoutes {
+  collection: string;
+  record?: { name: string; param: string };
+}
+
 /** Build one href from a composed route name, its params, and optional search. */
 export interface RouteHref {
   (
@@ -24,6 +30,8 @@ export interface RouteHref {
     params?: RouteHrefParams,
     search?: RouteHrefSearch,
   ): string;
+  /** Resolve a canonical model's record through the active app's projection. */
+  record(resource: string, id: string | number, search?: RouteHrefSearch): string;
   /** Probe an optional/cross-addon route without turning absence into a render error. */
   maybe(
     name: string,
@@ -50,6 +58,7 @@ export class UnknownRouteError extends Error {
  */
 export function createRouteHref(
   descriptors: readonly RuntimeRouteDescriptor[],
+  resources: Readonly<Record<string, RuntimeResourceRoutes>> = {},
 ): RouteHref {
   for (const descriptor of descriptors) validateRouteTemplate(descriptor);
   const routesByName = new Map(
@@ -96,6 +105,11 @@ export function createRouteHref(
   };
 
   return Object.assign(resolve, {
+    record(resource: string, id: string | number, search?: RouteHrefSearch) {
+      const record = resources[resource]?.record;
+      if (!record) throw new Error(`Resource "${resource}" has no record route.`);
+      return resolve(record.name, { [record.param]: id }, search);
+    },
     maybe(name: string, params?: RouteHrefParams, search?: RouteHrefSearch) {
       try {
         return resolve(name, params, search);

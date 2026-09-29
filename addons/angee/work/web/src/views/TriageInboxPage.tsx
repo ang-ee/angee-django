@@ -70,7 +70,7 @@ export function TriageInboxPage(): React.ReactElement {
           }
           order={{ started_triage_at: "ASC" }}
           rowActions={actions.rowActions}
-          rowHref={(row) => routeHref("projects.tasks.record", { id: row.id })}
+          rowHref={(row) => routeHref.record(TASK_MODEL, row.id)}
           emptyContent={{
             title: t("triage.empty"),
             description: t("triage.empty.description"),

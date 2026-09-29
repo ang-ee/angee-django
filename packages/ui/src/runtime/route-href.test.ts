@@ -9,6 +9,14 @@ const routeHref = createRouteHref([
 ]);
 
 describe("routeHref", () => {
+  test("resolves projected record links with the declared param and search", () => {
+    const href = createRouteHref([
+      { name: "desk.notes", path: "/desk/notes" },
+      { name: "desk.note", path: "/desk/notes/$noteId" },
+    ], { "notes.Note": { collection: "desk.notes", record: { name: "desk.note", param: "noteId" } } });
+    expect(href.record("notes.Note", "a/b", { tab: "files" })).toBe("/desk/notes/a%2Fb?tab=files");
+    expect(() => href.record("missing.Model", "1")).toThrow(/no record route/);
+  });
   test("resolves a collection route", () => {
     expect(routeHref("notes.list")).toBe("/notes");
   });

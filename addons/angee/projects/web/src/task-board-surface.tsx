@@ -23,7 +23,7 @@ export function TaskBoardSurface<TRow extends TaskActionRow>({
   const [creating, setCreating] = React.useState(false);
   const form = useTaskFormDeclaration();
   const taskHref = React.useCallback(
-    (id: string) => routeHref("projects.tasks.record", { id }),
+    (id: string) => routeHref.record(TASK_MODEL, id),
     [routeHref],
   );
   const select = React.useCallback(

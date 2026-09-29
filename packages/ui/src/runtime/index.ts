@@ -66,6 +66,8 @@ export {
 } from "./route-href";
 export { isModelScopedSlot, type RuntimeFormRegistration } from "./contracts";
 export type {
+  AppVocabulary,
+  RuntimeVocabulary,
   ChatterContribution,
   ChatterRoute,
   ChatterView,

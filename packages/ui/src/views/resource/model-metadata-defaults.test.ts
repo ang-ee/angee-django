@@ -30,11 +30,12 @@ import {
   relationFieldInfoForDescriptor,
   relationListFieldInfo,
 } from "./model-metadata-defaults";
-const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 import { requestedFieldPaths } from "./resource-view-codecs";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
 import { relationFilterFields } from "../relation/relation-filter";
+import { buildColumns } from "./resource-view-list-body";
 
+const DATE_EXTRACTIONS = ["day", "week", "month", "quarter", "year"];
 const STATUS_VALUES = [{ value: "DRAFT", description: "Draft" }, { value: "IN_REVIEW" }, { value: "ACTIVE" }];
 const dateAxis = (field: string) => testQueryAxis(field, {
   kind: "date", server: { input: field.toUpperCase(), key: field },
@@ -86,6 +87,14 @@ const STATUS_OPTIONS = [
 ];
 
 describe("resource metadata defaults", () => {
+  test("scoped vocabulary overrides authored shared form and column labels", () => {
+    const scoped: ModelMetadata = { ...NOTE_METADATA, fields: {
+      ...NOTE_METADATA.fields, title: { ...NOTE_METADATA.fields.title!, label: "Subject" },
+    } };
+    expect(columnsWithMetadataDefaults([{ field: "title", header: "Title" }], scoped)[0]?.header).toBe("Subject");
+    expect(fieldsWithMetadataDefaults([{ name: "title", label: "Title" }], scoped)[0]?.label).toBe("Subject");
+    expect(NOTE_METADATA.fields.title?.label).toBeUndefined();
+  });
   const columns: readonly ColumnDescriptor<Row>[] = [
     { field: "title" },
     { field: "status", widget: "statusBadge" },
@@ -702,6 +711,8 @@ describe("relation column read expansion", () => {
       schema,
     );
     expect(column?.field).toBe("product.display_name");
+    expect(column?.id).toBe("product");
+    expect(buildColumns([column!], {})[0]?.id).toBe("product");
     expect(column?.selectionPaths).toEqual([
       "product.id",
       "product.display_name",

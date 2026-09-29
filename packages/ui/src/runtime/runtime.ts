@@ -9,6 +9,7 @@ import {
 } from "@angee/metadata";
 
 import type {
+  RuntimeVocabulary,
   ChatterContribution,
   ChatterRoute,
   DrawerContribution,
@@ -25,7 +26,9 @@ import { createAngeeI18nInstance } from "./i18n";
 import {
   createRouteHref,
   type RouteHref,
+  type RuntimeResourceRoutes,
 } from "./route-href";
+import type { ResourceViewPreset } from "../views/resource/model/favorites";
 import type { DashboardRegistry } from "../dashboard/headless";
 import type { ThemeContribution } from "../theme";
 import type { StatusToneMap } from "../widgets/status-tones";
@@ -70,14 +73,7 @@ export function readRuntimeRouteShortcuts(
   });
 }
 
-/** Route names derived from one resource-tagged collection declaration. */
-export interface RuntimeResourceRoutes {
-  collection: string;
-  record?: {
-    name: string;
-    param: string;
-  };
-}
+export type { RuntimeResourceRoutes } from "./route-href";
 
 export type ResourceRecordHrefLookup = (
   resource: string,
@@ -96,6 +92,9 @@ export interface AppRuntime {
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: RuntimeI18n | null;
+  vocabulary: RuntimeVocabulary;
+  resourceViews: Readonly<Record<string, ResourceViewPreset>>;
+  defaultResourceView?: string;
   auth: RuntimeAuthState;
   logoutAction: RuntimeLogoutAction;
   userPreferences: RuntimeUserPreferencesState;
@@ -200,6 +199,8 @@ const EMPTY_RUNTIME: AppRuntime = {
   widgets: {},
   statusTones: {},
   i18n: null,
+  vocabulary: { resources: {}, menus: {} },
+  resourceViews: {},
   auth: ANONYMOUS_RUNTIME_AUTH,
   logoutAction: {
     logout: async () => false,

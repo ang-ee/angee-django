@@ -11,6 +11,7 @@ import {
 
 import {
   usePreferenceSlice,
+  useAppRuntime,
   type RuntimeUserPreferences,
 } from "../../runtime";
 import {
@@ -69,6 +70,7 @@ export function useResourceViewFavorites(
   collectionKey?: string,
 ): ResourceViewFavoritesState {
   const metadata = useSchemaFieldMetadata();
+  const { resourceViews } = useAppRuntime();
   const canonicalModel = useMemo(
     () =>
       collectionKey
@@ -91,9 +93,13 @@ export function useResourceViewFavorites(
     readResourceViewFavoritesSlice,
     writeResourceViewFavoritesSlice,
   );
-  const savedFavorites = canonicalModel
+  const userFavorites = canonicalModel
     ? favoritesSlice.document.models[canonicalModel] ?? EMPTY_FAVORITES
     : EMPTY_FAVORITES;
+  const savedFavorites = useMemo(() => [
+    ...Object.values(resourceViews).filter((preset) => preset.resource === canonicalModel),
+    ...userFavorites,
+  ], [resourceViews, canonicalModel, userFavorites]);
   const writable =
     available && favoritesSlice.writable && canonicalModel !== null;
 
@@ -109,7 +115,7 @@ export function useResourceViewFavorites(
     [canonicalModel, savedFavorites, state, updateFavorites, writable],
   );
 
-  if (!writable) return { savedFavorites: EMPTY_FAVORITES };
+  if (!writable) return { savedFavorites };
   return { savedFavorites, saveFavorite };
 }
 

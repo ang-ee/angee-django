@@ -6,5 +6,5 @@ export { createResourceViewState } from "./model/state";
 export type { ResourceViewState } from "./model/state";
 export { RESOURCE_VIEW_SEARCH_KEYS, resourceViewStateToSearch, resourceViewSearchToState, mergeResourceViewSearch, todayCalendarAnchor, resourceViewGroupsEqual } from "./model/search";
 export type { ResourceViewSearchKey, ResourceViewSearch } from "./model/search";
-export { ResourceViewFavoriteSchema, resourceViewFavoritesFromJson, resourceViewFavoritesFromUnknown } from "./model/favorites";
-export type { ResourceViewFavorite } from "./model/favorites";
+export { validateResourceViewPreset, ResourceViewFavoriteSchema, resourceViewFavoritesFromJson, resourceViewFavoritesFromUnknown } from "./model/favorites";
+export type { ResourceViewFavorite, ResourceViewPreset } from "./model/favorites";

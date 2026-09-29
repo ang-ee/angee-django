@@ -24,12 +24,15 @@ export interface ChatterProps {
   tabs?: readonly ChatterTab[];
   composer?: React.ReactNode;
   className?: string;
+  /** Layout opt-in to placeholders on non-record routes; route policy wins. */
+  showDefaultTabs?: boolean;
 }
 
 export function Chatter({
   tabs,
   composer,
   className,
+  showDefaultTabs,
 }: ChatterProps): React.ReactElement | null {
   const t = useUiT();
   const { activeTab, content, setActiveTab, setCollapsed } = useChatter();
@@ -69,7 +72,7 @@ export function Chatter({
   const activeContributions = React.useMemo(
     () =>
       (runtime.chatter ?? []).filter((contribution) =>
-        contributionMatches(contribution, viewContext),
+        viewContext.route?.chatter !== "hidden" && contributionMatches(contribution, viewContext),
       ),
     [runtime.chatter, viewContext],
   );
@@ -78,7 +81,7 @@ export function Chatter({
     [activeContributions, viewContext, counts],
   );
   const resolvedTabs = mergeChatterTabs(
-    defaultTabs(t),
+    (viewContext.route?.chatter === "visible" || (showDefaultTabs ?? viewContext.view.kind === "record")) ? defaultTabs(t) : [],
     contributedTabs,
     tabs ?? content?.tabs ?? [],
   );
@@ -98,7 +101,7 @@ export function Chatter({
 
   // Collapse is owned by the enclosing SplitPane (it collapses the pane to zero
   // width); Chatter only bails when it has no tab to show.
-  if (!active) return null;
+  if (!active || viewContext.route?.chatter === "hidden") return null;
 
   return (
     <aside
@@ -159,6 +162,18 @@ export function Chatter({
   );
 }
 
+/** Shared shell visibility; non-record pages never acquire empty default tabs. */
+export function useChatterVisible(layoutDefault?: boolean): boolean {
+  const runtime = useAppRuntime();
+  const context = useActiveChatterView(runtime.chatterRoutes ?? []);
+  const { content } = useChatter();
+  if (context.route?.chatter === "hidden") return false;
+  if (context.route?.chatter === "visible") return true;
+  if (layoutDefault !== undefined) return layoutDefault;
+  return context.view.kind === "record" || Boolean(content?.tabs?.length)
+    || (runtime.chatter ?? []).some((entry) => entry.render && contributionMatches(entry, context));
+}
+
 /** Visit lazily, then retain this record's draft input while peeking at sources. */
 function ChatterPanels({ tabs, active }: { tabs: readonly ChatterTab[]; active: string }): React.ReactElement {
   const [visited, setVisited] = React.useState<readonly string[]>([active]);
@@ -205,7 +220,7 @@ function useActiveChatterView(
     select: (state) => state.location.pathname,
   });
   return React.useMemo(() => {
-    const route = routes.find((candidate) => candidate.path === match.fullPath);
+    const route = routes.find((candidate) => candidate.path.replace(/\/$/, "") === match.fullPath.replace(/\/$/, ""));
     const params = normalizeRouteParams(match.params);
     const selectedId =
       route?.recordParam && params[route.recordParam]
