@@ -29,7 +29,6 @@ from rebac import (
 )
 from rebac.backends import backend
 from rebac.backends.local import LocalBackend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.evaluator import evaluator_scope
 from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
@@ -202,14 +201,10 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_in_one
             resource_type = model_resource_type(model)
             assert resource_type is not None
             for action in ("read", "read_private") if model != Tie else ("read",):
-                predicate = LocalQueryScope(local, to_subject_ref(f.reader), "default").predicate(
-                    model,
-                    action,
-                    resource_type,
-                )
+                scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
                 for size in (2, 50):
                     ids = [row.pk for row in rows[:size]] if model != Tie else [tie.pk]
-                    query = model._base_manager.filter(predicate, pk__in=ids).values_list("pk", flat=True)
+                    query = scoped.filter(pk__in=ids).values_list("pk", flat=True)
                     sql, parameters = query.query.sql_with_params()
                     assert "SELECT" in sql and parameters
                     (tmp_path / f"{model.__name__}-{action}-{size}.sql").write_text(

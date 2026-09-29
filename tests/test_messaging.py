@@ -65,10 +65,8 @@ from angee.parties.models import Circle as AbstractCircle
 from angee.parties.models import CircleMember as AbstractCircleMember
 from angee.parties.models import MergeVeto as AbstractMergeVeto
 from angee.parties.models import Organization as AbstractOrganization
-from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Relationship as AbstractRelationship
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
-from angee.workflows_parties.models import PartyHandle as WorkflowPartyHandleContribution
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (
@@ -82,6 +80,7 @@ from tests.messaging_models import (
     MessageSubtype,
     Part,
     Party,
+    PartyHandle,
     Person,
     Thread,
     ThreadActivity,
@@ -93,7 +92,6 @@ from tests.messaging_models import (
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_agents_graphql import Agent
 
-_PartyHandleMeta = getattr(AbstractPartyHandle, "Meta", object)
 _OrganizationMeta = getattr(AbstractOrganization, "Meta", object)
 _AddressMeta = getattr(AbstractAddress, "Meta", object)
 
@@ -132,18 +130,6 @@ class Address(AbstractAddress):
         app_label = "parties"
         db_table = "test_parties_address"
         rebac_resource_type = "parties/address"
-
-
-class PartyHandle(WorkflowPartyHandleContribution, AbstractPartyHandle):
-    """Concrete identity link used when messaging attributes a user-owned handle."""
-
-    class Meta(_PartyHandleMeta):
-        """Django model options for the canonical test party-handle."""
-
-        abstract = False
-        app_label = "parties"
-        db_table = "test_parties_party_handle"
-        rebac_resource_type = "parties/party_handle"
 
 
 class Circle(AbstractCircle):

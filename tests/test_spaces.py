@@ -12,12 +12,10 @@ import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, transaction
 from django.test import override_settings
-from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.models import SchemaRelation, active_relationship_model
 
 from angee.compose.permissions import (
@@ -650,13 +648,10 @@ def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
 def _vault_scope_pks(actor: Any, action: str) -> tuple[set[Any], str]:
     """Compile the actor's vault permission to one SQL predicate and return its rows."""
 
-    scope = LocalQueryScope(backend(), to_subject_ref(actor), "default")
     with patch.object(backend(), "accessible", side_effect=AssertionError("enumerated resource IDs")):
-        predicate = scope.predicate(Vault, action, "knowledge/vault")
-        with CaptureQueriesContext(connection) as captured:
-            sql, _params = Vault._base_manager.filter(predicate).order_by().query.sql_with_params()
-        assert len(captured) == 0
-        return set(Vault._base_manager.filter(predicate).values_list("pk", flat=True)), sql
+        scoped = Vault.objects.with_actor(actor).with_action(action).scoped()
+        sql, _params = scoped.order_by().query.sql_with_params()
+        return set(scoped.values_list("pk", flat=True)), sql
 
 
 @pytest.mark.parametrize("storage", ["denormalized", "registry"])

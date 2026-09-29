@@ -2,15 +2,11 @@
 
 from copy import deepcopy
 from pathlib import Path
-from unittest.mock import patch
 
-from django.core.exceptions import EmptyResultSet
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
+from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
-from rebac.conf import app_settings
 from rebac.models import active_relationship_model
 from rebac.schema.parser import parse_zed
 
@@ -99,32 +95,20 @@ class TaskAccessTests(WorkCase):
             self.assertFalse(self.scoped(row, self.member))
             self.assertTrue(self.scoped(row, self.moderator))
 
-    def test_all_permissions_compile_within_frame_limit(self):
-        deepest = 0
-        original = LocalQueryScope.permission
-
-        def traced(scope, resource_type, action, model, identity, seen, *args, **kwargs):
-            nonlocal deepest
-            deepest = max(deepest, len(seen) + 1)
-            return original(scope, resource_type, action, model, identity, seen, *args, **kwargs)
-
-        with patch.object(LocalQueryScope, "permission", traced):
-            for model in (self.Task, self.Queue, self.Stage, self.Cycle, self.Project, self.Milestone, self.Link):
-                definition = backend().schema().get_definition(model._meta.rebac_resource_type)
-                for permission in definition.permissions:
-                    predicate = LocalQueryScope(backend(), to_subject_ref(self.member), "default").predicate(
-                        model,
-                        permission.name,
-                        definition.resource_type,
-                    )
-                    try:
-                        sql = model._base_manager.filter(predicate).query.sql_with_params()[0]
-                    except EmptyResultSet:
-                        # A declared nil permission compiles to an empty predicate.
-                        continue
-                    self.assertIn("SELECT", sql)
-        self.assertLessEqual(deepest, app_settings.REBAC_DEPTH_LIMIT)
-        print(f"Work SQL compilation ({self.storage}): maximum {deepest}/{app_settings.REBAC_DEPTH_LIMIT} frames")
+    def test_all_permissions_have_actor_scoped_querysets(self):
+        for model in (self.Task, self.Queue, self.Stage, self.Cycle, self.Project, self.Milestone, self.Link):
+            definition = backend().schema().get_definition(model._meta.rebac_resource_type)
+            for permission in definition.permissions:
+                with self.subTest(model=model, permission=permission.name):
+                    scoped = model.objects.with_actor(self.member).with_action(permission.name).scoped()
+                    row = model._base_manager.first()
+                    if row is None:
+                        self.assertEqual(list(scoped.values_list("pk", flat=True)), [])
+                    else:
+                        self.assertEqual(
+                            scoped.filter(pk=row.pk).exists(),
+                            row.with_actor(self.member).has_access(permission.name),
+                        )
 
 
 class TaskAccessDenormalizedTests(TaskAccessTests):

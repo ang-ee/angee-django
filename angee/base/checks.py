@@ -21,7 +21,7 @@ def check_rebac_caveats(
     app_configs: Sequence[AppConfig] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
-    """Reject caveated subjects in effective schemas before SQL scoping falls back to enumeration."""
+    """Keep framework read scopes independent of request caveat context."""
 
     del kwargs
     configs = apps.get_app_configs() if app_configs is None else app_configs
@@ -36,7 +36,7 @@ def check_rebac_caveats(
                     errors.append(
                         checks.Error(
                             f"{config.name}: {definition.resource_type}#{relation.name} declares a caveated subject.",
-                            hint="Use live field-backed relations; caveats cannot be compiled into SQL read scopes.",
+                            hint="Use live field-backed relations; actor-scoped querysets have no caveat context.",
                             obj=config,
                             id="angee.E024",
                         )

@@ -5,11 +5,9 @@ from decimal import Decimal
 
 import pytest
 from django.contrib.contenttypes.models import ContentType
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count
-from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_object_ref
-from rebac.backends.local_query import LocalQueryScope
 
 from tests.money_models import Currency, CurrencyRate
 from tests.t3_campaign import relationship_snapshot
@@ -32,12 +30,6 @@ def test_non_user_public_read_scopes_filter_aggregates_without_enumeration(
     before = relationship_snapshot()
     monkeypatch.setattr(public_policy, "accessible", lambda **kwargs: pytest.fail("Read scope enumerated IDs"))
     model = type(matching)
-    scope = LocalQueryScope(public_policy, subject, "default")
-    with CaptureQueriesContext(connection) as compilation:
-        predicate = scope.predicate(model, "read", model._meta.rebac_resource_type)
-        sql, _ = model._base_manager.filter(predicate).query.sql_with_params()
-    assert len(compilation) == 0
-    assert "SELECT" in sql
     rows = model.objects.with_actor(subject).filter(pk__in=(matching.pk, hidden.pk))
     assert rows.aggregate(total=Count("pk")) == {"total": 1}
     assert list(rows.values("pk").annotate(total=Count("pk"))) == [{"pk": matching.pk, "total": 1}]

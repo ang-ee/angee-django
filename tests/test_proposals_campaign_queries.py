@@ -10,7 +10,6 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.backends import backend
 from rebac.backends.local import LocalBackend
-from rebac.backends.local_query import LocalQueryScope
 
 from angee.graphql.capabilities import held_permissions, permission_annotations
 from tests.projects_models import Task
@@ -103,19 +102,16 @@ def test_round_and_proposal_read_scopes_compile_to_sql_for_non_admins(campaign: 
     local = backend()
     assert isinstance(local, LocalBackend)
     for model in (Round, Proposal):
-        # A recursive role must fail this proof rather than silently enumerate ids.
-        predicate = LocalQueryScope(local, to_subject_ref(actor), "default").predicate(
-            model,
-            "read",
-            model._meta.rebac_resource_type,
-        )
-        query = model._base_manager.filter(predicate)
+        query = model.objects.with_actor(actor).scoped()
         sql, _params = query.query.sql_with_params()
         assert "SELECT" in sql.upper()
 
 
 def test_waiting_list_is_one_query_per_page_and_private_to_each_recipient(campaign: ProposalCampaign) -> None:
     c = campaign
+    # Django probes SQLite JSON support on first use; that connection setup is
+    # outside the per-page projection budget.
+    assert connection.features.supports_json_field
     round = c.round()
     for seat in ("responder", "peer", "third"):
         c.admit(round, seat)

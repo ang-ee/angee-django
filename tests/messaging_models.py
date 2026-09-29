@@ -23,11 +23,13 @@ from angee.parties.models import Directory as AbstractDirectory
 from angee.parties.models import Folder as AbstractContactFolder
 from angee.parties.models import Handle as AbstractHandle
 from angee.parties.models import Party as AbstractParty
+from angee.parties.models import PartyHandle as AbstractPartyHandle
 from angee.parties.models import Person as AbstractPerson
 from angee.posts.models import MessagePublic, ThreadPublic
 from angee.projects.models import ThreadProjects
 from angee.spaces.models import ChannelSpace, ThreadSpace
 from angee.workflows_parties.models import Handle as WorkflowHandleContribution
+from angee.workflows_parties.models import PartyHandle as WorkflowPartyHandleContribution
 from tests import spaces_models  # noqa: F401 -- register Thread's group relation target
 from tests.integrate_models import Integration
 
@@ -94,6 +96,16 @@ class Handle(WorkflowHandleContribution, AbstractHandle):
         app_label = "parties"
         db_table = "test_parties_handle"
         rebac_resource_type = "parties/handle"
+
+
+class PartyHandle(WorkflowPartyHandleContribution, AbstractPartyHandle):
+    """Concrete identity link registered before source-model test table setup."""
+
+    class Meta(AbstractPartyHandle.Meta):
+        abstract = False
+        app_label = "parties"
+        db_table = "test_parties_party_handle"
+        rebac_resource_type = "parties/party_handle"
 
 
 class Fragment(AbstractFragment):

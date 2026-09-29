@@ -9,11 +9,9 @@ from unittest.mock import patch
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection, transaction
-from django.test.utils import CaptureQueriesContext
+from django.db import transaction
 from rebac import PermissionDenied, SubjectRef, system_context, to_object_ref, to_subject_ref
 from rebac.backends import LocalBackend, backend, reset_backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.models import Relationship, RelationshipRegistry
 from rebac.preflight import _check_new_model
 from rebac.schema import parse_zed
@@ -102,7 +100,6 @@ def test_read_checks_and_sql_scope_agree(public_policy, candidates, actor):
 
     kind, subject = actor
     model = type(candidates[0])
-    resource_type = model._meta.rebac_resource_type
     before = _relationship_counts()
     with system_context(reason="test.public_row.seed"):
         for candidate in candidates:
@@ -112,12 +109,7 @@ def test_read_checks_and_sql_scope_agree(public_policy, candidates, actor):
         if kind == "administrator" or (kind in {"reader", "service"} and index == 0)
     }
     with patch.object(public_policy, "accessible", side_effect=AssertionError("enumerated resource IDs")):
-        with CaptureQueriesContext(connection) as compilation:
-            predicate = LocalQueryScope(public_policy, subject, "default").predicate(model, "read", resource_type)
-            query = model._base_manager.filter(predicate).order_by()
-            sql, _params = query.query.sql_with_params()
-        assert len(compilation) == 0
-        assert ("visibility" if issubclass(model, Group) else "IS NULL") in sql
+        query = model.objects.with_actor(subject).scoped().order_by()
         assert set(query.values_list("pk", flat=True)) == expected
         assert set(model.objects.with_actor(subject).values_list("pk", flat=True)) == expected
         for row in candidates:

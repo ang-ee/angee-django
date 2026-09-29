@@ -16,8 +16,6 @@ from django.test.utils import CaptureQueriesContext
 from graphql import parse, validate
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import is_sudo, to_subject_ref
-from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.roles import grant as grant_role
 
 from angee.base.errors import RecordAccessSubjectRefused
@@ -731,7 +729,6 @@ class NeedAccessTests(IntakeAccessCase):
         )
 
     def test_intake_permissions_compile_to_sql(self):
-        scope = LocalQueryScope(backend(), to_subject_ref(self.owner), "default")
         permissions = [
             (self.Need, name)
             for name in (
@@ -755,8 +752,7 @@ class NeedAccessTests(IntakeAccessCase):
         ]
         for model, permission in permissions:
             with self.subTest(model=model, permission=permission):
-                predicate = scope.predicate(model, permission, model._meta.rebac_resource_type)
-                sql, _ = model._base_manager.filter(predicate).query.sql_with_params()
+                sql, _ = model.objects.with_actor(self.owner).with_action(permission).scoped().query.sql_with_params()
                 self.assertIn("SELECT", sql)
 
 

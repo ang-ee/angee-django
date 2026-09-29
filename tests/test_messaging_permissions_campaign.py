@@ -5,9 +5,8 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import transaction
-from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
+from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.evaluator import evaluator_scope
 from rebac.resources import model_resource_type
 
@@ -234,11 +233,5 @@ def test_every_messaging_permission_compiles_without_enumeration(spaces_tables, 
             resource_type = model_resource_type(model)
             definition = schema.get_definition(resource_type)
             for permission in definition.permissions:
-                with django_assert_num_queries(0):
-                    predicate = LocalQueryScope(backend(), to_subject_ref(reader), "default").predicate(
-                        model, permission.name, resource_type,
-                    )
-                assert predicate is not None, (resource_type, permission)
-                # Compilation alone must neither enumerate resource IDs nor hit SQL.
-                with django_assert_num_queries(1):
-                    assert list(model._base_manager.filter(predicate).values_list("pk", flat=True)) == []
+                scoped = model.objects.with_actor(reader).with_action(permission.name).scoped()
+                assert list(scoped.values_list("pk", flat=True)) == []

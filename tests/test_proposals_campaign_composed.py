@@ -428,7 +428,7 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
                 )
                 self.assertEqual(actual, expected)
 
-    def test_passed_question_generated_content_update_is_refused_but_completion_is_allowed(self) -> None:
+    def test_passed_question_content_update_is_refused_and_manager_can_complete(self) -> None:
         task = self.ask()
         with actor_context(self.manager):
             task = self.as_user(self.round, self.manager).pass_clarification(task, self.recipient, audience="asker")
@@ -441,7 +441,14 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
         )
         self.assertTrue(result.errors)
         self.assertEqual(self.Task._base_manager.get(pk=task.pk).title, "Question")
-        completed = self.task_action("complete_task", task, self.recipient)
+        refused = self.execute(
+            "mutation($id: ID!) { complete_task(id: $id) { ok } }",
+            {"id": str(task.sqid)},
+            self.recipient,
+        )
+        self.assertIsNone(refused.errors, refused.errors)
+        self.assertFalse(refused.data["complete_task"]["ok"])
+        completed = self.task_action("complete_task", task, self.manager)
         self.assertEqual(completed.status, "done")
         with actor_context(self.recipient), self.assertRaises(PermissionDenied):
             row = self.as_user(task, self.recipient)
@@ -594,5 +601,5 @@ class DenormalizedBridgeCampaign(RegistryBridgeCampaign):
     ),
 )
 def test_proposal_campaign_on_composed_profiles(tmp_path: Path, profile: tuple[str, ...], case: str) -> None:
-    """Known E026 startup errors remain failures; no check is silenced or xfailed."""
+    """Exercise proposal behavior under each composed addon profile."""
     run_composed_tests(tmp_path, f"tests.test_proposals_campaign_composed.{case}", app=profile)

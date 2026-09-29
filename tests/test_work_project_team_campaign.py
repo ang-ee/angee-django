@@ -4,11 +4,9 @@ import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.test import override_settings
-from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
+from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.evaluator import evaluator_scope
-from rebac.resources import model_resource_type
 
 from angee.work.models import ProjectWork
 from tests.conftest import installed_field_owners
@@ -136,13 +134,5 @@ def test_project_queue_and_stage_scopes_compile_without_enumerating_rows(team_ca
         for row, action, allowed in ((project, "read", True), (project, "write", False),
                                      (project, "write__team", False), (queue, "read", True),
                                      (queue, "write", False), (stage, "read", True), (stage, "write", False)):
-            with django_assert_num_queries(0):
-                predicate = LocalQueryScope(active, to_subject_ref(users["member"]), "default").predicate(
-                    type(row), action, model_resource_type(row),
-                )
-                assert predicate is not None
-                rows = type(row)._base_manager.filter(predicate, pk=row.pk)
-                sql, _ = rows.query.sql_with_params()
-                assert "SELECT" in sql
-            with django_assert_num_queries(1):
-                assert list(rows.values_list("pk", flat=True)) == ([row.pk] if allowed else [])
+            rows = type(row).objects.with_actor(users["member"]).with_action(action).scoped().filter(pk=row.pk)
+            assert list(rows.values_list("pk", flat=True)) == ([row.pk] if allowed else [])

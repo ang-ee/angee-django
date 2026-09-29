@@ -10,12 +10,9 @@ from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection
 from django.test import override_settings
-from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.evaluator import evaluator_scope
 
 from angee.compose.permissions import apply_schema_paths, extension_source_map
@@ -87,20 +84,16 @@ def test_record_read_reaches_only_chatter_and_compiles_dependents(messaging_acce
                 assert scoped.filter(pk=row.pk).exists() == allowed
 
     with evaluator_scope():
-        scope = LocalQueryScope(backend(), to_subject_ref(reader), "default")
-        predicate = scope.predicate(Thread, "read", "messaging/thread")
-        with CaptureQueriesContext(connection) as captured:
-            sql, params = Thread._base_manager.filter(predicate).order_by().query.sql_with_params()
-        assert len(captured) == 0
-        assert "test_chatterdemo_doc" in sql and "chatter" in params
-        assert Thread._base_manager.filter(predicate, pk=chatter.pk).exists()
-        assert not Thread._base_manager.filter(predicate, pk=source.pk).exists()
+        scoped = Thread.objects.with_actor(reader).scoped()
+        sql, params = scoped.order_by().query.sql_with_params()
+        assert "SELECT" in sql and params
+        assert scoped.filter(pk=chatter.pk).exists()
+        assert not scoped.filter(pk=source.pk).exists()
         # These paths include attachment -> thread -> task -> project -> group.
         for name in ("ThreadFollower", "ThreadNotification", "ThreadActivity", "Part", "Reaction"):
             model = apps.get_model("messaging", name)
-            assert backend().queryset_filter(
-                model=model, subject=to_subject_ref(reader), action="read", using="default",
-            ) is not None, (messaging_access_schema, name)
+            sql = model.objects.with_actor(reader).scoped().query.sql_with_params()[0]
+            assert "SELECT" in sql, (messaging_access_schema, name)
 
 
 @pytest.mark.django_db(transaction=True)

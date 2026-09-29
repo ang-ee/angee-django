@@ -390,8 +390,9 @@ class ServerVerbCase(ProjectSetupFixture):
     def selection(self, *rows):
         return [{"id": str(row.sqid), "expected_revision": row.revision} for row in rows]
 
-    def test_question_inherits_only_read_and_comment_when_widened(self):
+    def test_question_widening_keeps_recipient_discussion_and_requester_path_explicit(self):
         project, round = self.approved_request()
+        self.assertTrue(self.scoped(self.source, self.reader))
         with actor_context(self.manager):
             question = self.as_user(round, self.manager).ask("Question", "Details", recipient=self.member)
         self.assertFalse(self.scoped(question, self.reader))
@@ -399,7 +400,11 @@ class ServerVerbCase(ProjectSetupFixture):
         self.assertFalse(self.scoped(question, self.member, "write"))
         with actor_context(self.manager):
             self.as_user(question, self.manager).set_visibility("inherited")
-        for user in (self.reader, self.member):
+        # A consumer contributes any parent-requester path; the framework
+        # proposal fragment grants this widened question to round responders.
+        self.assertFalse(self.scoped(question, self.reader))
+        self.assertFalse(self.scoped(question, self.reader, "comment"))
+        for user in (self.member,):
             self.assertTrue(self.scoped(question, user))
             self.assertTrue(self.scoped(question, user, "comment"))
             for permission in ("write", "share", "delete"):

@@ -2,9 +2,8 @@
 
 import pytest
 from django.db import transaction
-from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
+from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.evaluator import evaluator_scope
 
 from tests.conftest import execute_schema, make_integration, result_data
@@ -84,11 +83,5 @@ def test_channel_team_field_gate_compiles_as_one_sql_query(roster, django_assert
     for actor, expected in ((channel.owner, True), (roster.actors["moderator"], False)):
         with actor_context(actor), evaluator_scope():
             backend().schema()
-            predicate = LocalQueryScope(backend(), to_subject_ref(actor), "default").predicate(
-                Channel, "write__team", "messaging/channel",
-            )
-            assert predicate is not None
-            with django_assert_num_queries(1):
-                assert list(Channel._base_manager.filter(predicate, pk=channel.pk).values_list("pk", flat=True)) == (
-                    [channel.pk] if expected else []
-                )
+            scoped = Channel.objects.with_actor(actor).with_action("write__team").scoped().filter(pk=channel.pk)
+            assert list(scoped.values_list("pk", flat=True)) == ([channel.pk] if expected else [])

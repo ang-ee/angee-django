@@ -601,15 +601,13 @@ data through REBAC, never a queryset bypass.
 - **Always-shared reference data reads through `authenticated`.** A resource
   every signed-in subject reads unions the library's `authenticated` builtin into
   `read` and stores no wildcard tuple; [`tags/tag`](../../addons/angee/tags/permissions.zed)
-  is the reference. `authenticated` also admits non-user subjects. It is safe only
-  where the permission compiles to a SQL scope, so no permission that reaches it,
-  directly or through an arrow, may contain or arrow into a self-recursive role
-  arm (`includes->effective_member`); [`angee.E026`](../../angee/base/checks.py)
-  refuses that schema.
-- **Caveated relations are refused.** [`angee.E024`](../../angee/base/checks.py)
-  rejects caveated subjects in every effective schema: the local backend cannot
-  compile them into SQL read scopes and would fall back to enumerating readable
-  records. Express the condition as a live field-backed relation.
+  is the reference. `authenticated` also admits non-user subjects. The local
+  backend resolves these reads through its permission index.
+- **Caveated relations are refused in framework fragments.**
+  [`angee.E024`](../../angee/base/checks.py) rejects caveated subjects in every
+  effective schema. The 0.23 permission index supports caveated point checks and
+  context-bearing enumeration, but actor-scoped querysets carry no caveat
+  context. Express row-dependent conditions as live field-backed relations.
 - Bracket every server-side read/write in `system_context`/`asystem_context` and
   resolve the actor with `@rebac_subject`; a bare `Model.objects.create()` under
   an actor is denied.

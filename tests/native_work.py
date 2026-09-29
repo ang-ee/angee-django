@@ -7,8 +7,6 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
-from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.roles import grant
 
 
@@ -101,12 +99,7 @@ class WorkCase(TransactionTestCase):
             write_relationships([RelationshipTuple(to_object_ref(row), relation, to_subject_ref(user))])
 
     def scoped(self, row, user, permission="read"):
-        predicate = LocalQueryScope(backend(), to_subject_ref(user), "default").predicate(
-            type(row),
-            permission,
-            row._meta.rebac_resource_type,
-        )
-        rows = type(row)._base_manager.filter(predicate, pk=row.pk)
+        rows = type(row).objects.with_actor(user).with_action(permission).scoped().filter(pk=row.pk)
         sql, _ = rows.query.sql_with_params()
         self.assertIn("SELECT", sql)
         return rows.exists()

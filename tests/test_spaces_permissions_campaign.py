@@ -5,7 +5,6 @@ from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.evaluator import evaluator_scope
 from rebac.models import SchemaPermission
 
@@ -106,14 +105,8 @@ def test_roster_and_holder_permissions_compile_to_sql(roster, django_assert_num_
             (roster.rows["member"], "write", True), (roster.rows["moderator"], "set_notifications", True),
             (roster.rows["pending"], "set_notifications", False),
         ):
-            predicate = LocalQueryScope(backend(), to_subject_ref(actor), "default").predicate(
-                type(row), permission, to_object_ref(row).resource_type,
-            )
-            assert predicate is not None
-            with django_assert_num_queries(1):
-                assert list(type(row)._base_manager.filter(predicate, pk=row.pk).values_list("pk", flat=True)) == (
-                    [row.pk] if allowed else []
-                )
+            scoped = type(row).objects.with_actor(actor).with_action(permission).scoped().filter(pk=row.pk)
+            assert list(scoped.values_list("pk", flat=True)) == ([row.pk] if allowed else [])
 
 
 @pytest.mark.parametrize("verb", ("confirm", "dismiss"))

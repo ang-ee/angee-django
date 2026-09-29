@@ -141,14 +141,20 @@ class IntakeCampaign(IntakeAccessCase):
     def test_two_requesters_comment_without_writing_and_filer_identity_revokes_with_task(self):
         first = self.need(party=self.party(self.reader))
         with system_context(reason="tests.t3.second_requester"):
-            second = self.Need.objects.create(task=first.task, party=self.party(self.writer), body="Another request")
-        for user in (self.reader, self.writer):
+            second_user = self.User.objects.create_user(username="second-requester", email="second@example.test")
+            second = self.Need.objects.create(task=first.task, party=self.party(second_user), body="Another request")
+            first.task.set_visibility("restricted")
+            for user in (self.reader, second_user):
+                first.task.revoke_record_access("reader", user)
+        for user in (self.reader, second_user):
+            self.assertFalse(first.task.with_actor(user).has_access("comment"))
+        self.as_user(first).decide_access("approve")
+        self.as_user(second).decide_access("approve")
+        for user in (self.reader, second_user):
             self.assertTrue(first.task.with_actor(user).has_access("comment"))
         self.assertFalse(first.task.with_actor(self.reader).has_access("write"))
-        with actor_context(self.owner):
-            task = first.task.with_actor(self.owner)
-            task.set_visibility("restricted")
-            task.revoke_record_access("reader", self.reader)
+        current = self.as_user(first)
+        current.reset_access(confirmed=True, expected_revision=current.revision)
         self.assertFalse(self.Task.objects.as_user(self.reader).filter(pk=first.task_id).exists())
         self.assertFalse(self.Party.objects.as_user(self.reader).filter(pk=second.party_id).exists())
         with actor_context(self.reader), self.assertRaises(PermissionDenied):

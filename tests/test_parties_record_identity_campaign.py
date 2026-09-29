@@ -4,9 +4,8 @@ import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import actor_context, system_context
 from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import execute_schema, result_data
@@ -57,12 +56,7 @@ def test_record_follower_sql_is_one_query_and_unfollow_revokes_parent_and_child(
     local = backend()
     monkeypatch.setattr(type(local), "accessible", lambda *args, **kwargs: pytest.fail("Enumerated identity IDs"))
     for model in (Party, Person):
-        predicate = LocalQueryScope(local, to_subject_ref(reader), "default").predicate(
-            model,
-            "read",
-            model._meta.rebac_resource_type,
-        )
-        query = model._base_manager.filter(predicate, pk=person.pk)
+        query = model.objects.with_actor(reader).scoped().filter(pk=person.pk)
         # Compile once first: Django resolves content types while compiling, and
         # those cold lookups are not part of the scoped read being counted.
         str(query.query)

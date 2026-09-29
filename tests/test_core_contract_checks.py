@@ -1,6 +1,5 @@
 """Positive and negative system-check contracts for persistence and SQL scopes."""
 
-from pathlib import Path
 
 import pytest
 from django.apps import apps
@@ -8,7 +7,6 @@ from django.core.checks.registry import registry
 from django.db import models
 
 from angee.base.checks import (
-    check_authenticated_scopes,
     check_creation_key_constraints,
     check_ownership,
     check_rebac_caveats,
@@ -16,7 +14,6 @@ from angee.base.checks import (
 from angee.base.mixins import CreationKeyMixin
 from angee.compose.permissions import apply_schema_paths, extension_source_map
 from tests.core_persistence import OWNERSHIP_SCHEMA, CreationRow, OwnedRow
-from tests.test_tags import Tag, TagAssignment
 from tests.test_zed_extensions import _base_addon, _contrib_addon
 
 
@@ -26,7 +23,7 @@ def ownership_schema(tmp_path, monkeypatch):
     path = tmp_path / "ownership.zed"
     path.write_text(OWNERSHIP_SCHEMA)
     monkeypatch.setattr(config, "rebac_schema", str(path), raising=False)
-    monkeypatch.setattr(config, "get_models", lambda **kwargs: iter([OwnedRow]))
+    monkeypatch.setattr(config, "get_models", lambda *args, **kwargs: iter([OwnedRow]))
     return config, path
 
 
@@ -143,40 +140,6 @@ def test_e024_accepts_the_installed_composed_schema():
     assert check_rebac_caveats() == []
 
 
-@pytest.mark.django_db
-@pytest.mark.parametrize("recursive", [False, True])
-def test_e026_checks_authenticated_and_dependent_arrow_without_queries(
-    tmp_path, monkeypatch, recursive, django_assert_num_queries,
-):
-    config = apps.get_app_config("tags")
-    text = (Path(config.path) / "permissions.zed").read_text()
-    if recursive:
-        text = text.replace("definition tags/role {", "definition tags/role {\n    relation includes: tags/role")
-        text = text.replace(
-            "permission effective_member = member + admin->member",
-            "permission effective_member = member + admin->member + includes->effective_member",
-        )
-    path = tmp_path / "tags.zed"
-    path.write_text(text)
-    monkeypatch.setattr(config, "rebac_schema", str(path), raising=False)
-    with django_assert_num_queries(0):
-        errors = check_authenticated_scopes([config])
-    if recursive:
-        assert {error.id for error in errors} == {"angee.E026"}
-        assert {Tag, TagAssignment} <= {error.obj for error in errors}
-        assert any("tags/tag_assignment#read" in error.msg for error in errors)
-    else:
-        assert errors == []
-
-
-def test_e026_leaves_missing_arrow_diagnostics_to_native_schema_validation(tmp_path, monkeypatch):
-    config = apps.get_app_config("tags")
-    path = tmp_path / "unknown-arrow.zed"
-    path.write_text("definition tags/tag { permission read = absent->read }")
-    monkeypatch.setattr(config, "rebac_schema", str(path), raising=False)
-    assert check_authenticated_scopes([config]) == []
-
-
 def test_contract_checks_are_registered_once_by_base():
-    for check in (check_ownership, check_creation_key_constraints, check_rebac_caveats, check_authenticated_scopes):
+    for check in (check_ownership, check_creation_key_constraints, check_rebac_caveats):
         assert sum(candidate is check for candidate in registry.registered_checks) == 1

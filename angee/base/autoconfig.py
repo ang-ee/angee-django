@@ -10,10 +10,6 @@ SETTINGS = {
     "REBAC_LINT_BARE_PREFETCH": False,
     "REBAC_FIELD_READ_MODE": "redact",
     "REBAC_ALLOW_SUDO": True,
-    # The composed graph chains follower, thread, task, project, proposal, round,
-    # roster and role reads: up to 11 permission frames. The library's default of
-    # 8 stops short and silently falls back from SQL scopes to enumeration.
-    "REBAC_DEPTH_LIMIT": 12,
     # Admin reach is expressed in the schema (const-backed `admin` relations
     # -> angee/role:admin), so all actors use grants unless a host opts into the native bypass.
     "REBAC_SUPERUSER_BYPASS": False,

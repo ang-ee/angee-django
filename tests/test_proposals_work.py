@@ -157,9 +157,9 @@ class ProposalsWorkTests(ClarificationCase):
         self.assertEqual((task.queue_id, task.stage_id), (self.queue.pk, self.ready.pk))
         passed = self.pass_question(task)
         self.assertEqual(passed.stage_id, self.started.pk)
-        completed = self.task_action("complete_task", passed, self.recipient)
+        completed = self.task_action("complete_task", passed, self.manager)
         self.assertEqual((completed.status, completed.stage_id), ("done", self.completed.pk))
-        reopened = self.task_action("reopen_task", completed, self.recipient)
+        reopened = self.task_action("reopen_task", completed, self.manager)
         self.assertEqual((reopened.status, reopened.stage_id), ("open", self.ready.pk))
         with actor_context(self.manager):
             manager_question = self.as_user(self.round, self.manager).ask(

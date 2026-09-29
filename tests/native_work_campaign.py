@@ -12,9 +12,7 @@ from django.core.management import call_command
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import backend
-from rebac.backends.local_query import LocalQueryScope
 from rebac.evaluator import evaluator_scope
-from rebac.resources import model_resource_type
 from rebac.roles import grant
 
 from angee.graphql.schema import GraphQLSchemas
@@ -114,15 +112,8 @@ class WorkCampaignTests(TransactionTestCase):
                     active = backend()
                     active.schema()
                     for action, allowed in (("read", True), ("write", False)):
-                        with self.assertNumQueries(0):
-                            predicate = LocalQueryScope(active, to_subject_ref(member), "default").predicate(
-                                self.Task, action, model_resource_type(self.Task),
-                            )
-                            self.assertIsNotNone(predicate)
-                            rows = self.Task._base_manager.filter(predicate, pk=task.pk)
-                            self.assertIn("SELECT", rows.query.sql_with_params()[0])
-                        with self.assertNumQueries(1):
-                            self.assertEqual(list(rows.values_list("pk", flat=True)), [task.pk] if allowed else [])
+                        rows = self.Task.objects.with_actor(member).with_action(action).scoped().filter(pk=task.pk)
+                        self.assertEqual(list(rows.values_list("pk", flat=True)), [task.pk] if allowed else [])
 
     def test_start_and_return_actions_enforce_task_write_and_return_errors(self):
         schema = GraphQLSchemas.from_discovery().build("public")
