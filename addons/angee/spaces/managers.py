@@ -6,7 +6,7 @@ from typing import Any, Self
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from rebac import PermissionDenied
+from rebac import PermissionDenied, SubjectRef, current_actor
 
 from angee.base.fields import enum_member_for
 from angee.base.mixins import HierarchyQuerySet
@@ -34,6 +34,28 @@ class MembershipQuerySet(AngeeQuerySet):
 
 class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type: ignore[misc]
     """Own confirmed manual roster writes under the roster's role permissions."""
+
+    def check_role_create(self, *, group: Any, role: Any) -> SubjectRef:
+        """Check the selected role through the same REBAC preflight as admission."""
+
+        relationships = {"group": (group,)}
+        if role in (self.model.MembershipRole.MEMBER, self.model.MembershipRole.VIEWER):
+            relationships[f"{role.value}_of"] = (group,)
+        return self.check_create(relationships)
+
+    def available_roles(self, *, group: Any) -> list[Any]:
+        """Return roles the ambient actor may create on this group's roster."""
+
+        if current_actor() is None:
+            return []
+        roles = []
+        for role in self.model.MembershipRole:
+            try:
+                self.check_role_create(group=group, role=role)
+            except PermissionDenied:
+                continue
+            roles.append(role)
+        return roles
 
     def add_confirmed(self, *, group: Any, party: Any, role: Any) -> Any:
         """Create or confirm one manual membership with the selected group role.
@@ -68,10 +90,7 @@ class MembershipManager(AngeeManager.from_queryset(MembershipQuerySet)):  # type
                 membership.save(update_fields=update_fields)
                 return membership
 
-            relationships = {"group": (group,)}
-            if role_member in (self.model.MembershipRole.MEMBER, self.model.MembershipRole.VIEWER):
-                relationships[f"{role_member.value}_of"] = (group,)
-            actor = self.check_create(relationships)
+            actor = self.check_role_create(group=group, role=role_member)
             membership = self.model(
                 group=group,
                 party=party,
