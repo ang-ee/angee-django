@@ -359,6 +359,8 @@ export const RecordThreadDocument = graphql(`
     ) {
       error
       error_code
+      thread_post_access
+      permissions
       thread {
         ...RecordThreadSummaryFields
       }

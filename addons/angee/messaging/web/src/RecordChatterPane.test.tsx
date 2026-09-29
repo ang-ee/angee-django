@@ -83,6 +83,8 @@ function message(overrides: Partial<RecordMessageRow> = {}): RecordMessageRow {
 function threadPayload(messages: RecordMessageRow[]): unknown {
   return {
     record_thread: {
+      thread_post_access: "write",
+      permissions: ["write"],
       error: null,
       error_code: null,
       thread: { id: "thr_1", title: { text: "Rec" }, message_count: messages.length, last_message_at: null },

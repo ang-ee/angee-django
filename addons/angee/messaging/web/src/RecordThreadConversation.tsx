@@ -1,6 +1,6 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
-import { Avatar, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants } from "@angee/ui";
+import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useUiT } from "@angee/ui";
 import {
   useStorageUpload,
   type UploadedFile,
@@ -75,12 +75,16 @@ export interface RecordThreadConversationProps {
   header?: (chrome: RecordThreadConversationChrome) => React.ReactNode;
   /** Override the label used when an exchange was recorded on a later day. */
   activityCopy?: { recordedOn: (day: string) => string };
+  /** Already translated consumer copy; omitted entries use messaging defaults. */
+  composerCopy?: { audience?: string; help?: string };
 }
 
 /** The reusable record-thread conversation: the message transcript + composer over
  *  a record's chatter thread (`record_thread`/`post_record_message`), live-refetched
  *  through the `READ_MODELS` invalidation set. Owns reading, posting, editing,
- *  reactions, stars, mark-done, and mark-read for a `{modelLabel, recordId}`. The
+ *  reactions, stars, mark-done, and mark-read for a `{modelLabel, recordId}`.
+ *  The composer requires the record's projected post permission and stays
+ *  read-only during view-as preview. The
  *  chatter-specific chrome (follow, notification subtypes, follower counts) is NOT
  *  baked in — it rides the `header` render-prop, so both the record-chatter pane and
  *  a discuss room compose one transcript owner. This is deliberately NOT
@@ -91,8 +95,11 @@ export function RecordThreadConversation({
   recordId,
   header,
   activityCopy,
+  composerCopy,
 }: RecordThreadConversationProps): React.ReactElement {
   const t = useMessagingT();
+  const preview = useRuntimeViewAs();
+  const readOnly = Boolean(preview.viewAs || preview.pending);
   const enabled = Boolean(modelLabel && recordId);
   const [search, setSearch] = React.useState("");
   const [debouncedSearch] = useDebounce(search.trim(), SEARCH_DEBOUNCE_MS);
@@ -109,11 +116,17 @@ export function RecordThreadConversation({
     enabled,
     models: READ_MODELS,
   });
+  const threadPayload = threadQuery.data?.record_thread;
+  const canPost = Boolean(
+    enabled && !threadQuery.error && !threadPayload?.error_code &&
+    threadPayload?.thread_post_access &&
+    threadPayload.permissions.includes(threadPayload.thread_post_access),
+  );
   const recipientVariables = React.useMemo(() => ({ limit: 100 }), []);
   const recipientUsersQuery = useAuthoredQuery(
     MessagingRecipientUsersDocument,
     recipientVariables,
-    { enabled, models: RECIPIENT_MODELS },
+    { enabled: canPost, models: RECIPIENT_MODELS },
   );
   const [postMessage, postState] = useAuthoredMutation(PostRecordMessageDocument, {
     invalidateModels: READ_MODELS,
@@ -150,7 +163,6 @@ export function RecordThreadConversation({
   const [error, setError] = React.useState<string | null>(null);
   const postAttempt = React.useRef<{ intent: string; clientCreationKey: string } | null>(null);
 
-  const threadPayload = threadQuery.data?.record_thread;
   const recipientOptions = React.useMemo(
     () =>
       recipientOptionsFrom(
@@ -205,11 +217,12 @@ export function RecordThreadConversation({
   );
 
   const handleStartReply = React.useCallback((message: RecordMessageRow) => {
+    if (!canPost || readOnly) return;
     setError(null);
     setEditingMessageId(null);
     setReplyToMessage(message);
     setPostKind(message.message_type === "NOTIFICATION" ? "note" : "comment");
-  }, []);
+  }, [canPost, readOnly]);
 
   const handleDeleteMessage = React.useCallback(
     async (message: RecordMessageRow): Promise<void> => {
@@ -272,6 +285,7 @@ export function RecordThreadConversation({
 
   const handlePost = React.useCallback(
     async (args: PostArgs): Promise<boolean> => {
+      if (!canPost || readOnly) return false;
       setError(null);
       try {
         const input = {
@@ -305,7 +319,7 @@ export function RecordThreadConversation({
         return false;
       }
     },
-    [modelLabel, recordId, postKind, replyToMessage, postMessage, t],
+    [canPost, readOnly, modelLabel, recordId, postKind, replyToMessage, postMessage, t],
   );
 
   const handleMarkRead = React.useCallback(async (): Promise<void> => {
@@ -365,6 +379,8 @@ export function RecordThreadConversation({
                 key={`message:${entry.message.id}`}
                 message={entry.message}
                 editing={editingMessageId === entry.message.id}
+                canReply={canPost}
+                readOnly={readOnly}
                 t={t}
                 onStartEdit={handleStartEdit}
                 onCancelEdit={handleCancelEdit}
@@ -388,18 +404,22 @@ export function RecordThreadConversation({
           className="min-h-40 p-4"
         />
       )}
-      <ChatterComposer
-        t={t}
-        postKind={postKind}
-        onPostKindChange={setPostKind}
-        replyToMessage={replyToMessage}
-        onClearReply={() => setReplyToMessage(null)}
-        recipientOptions={recipientOptions}
-        recipientsLoading={recipientUsersQuery.isFetching}
-        posting={postState.fetching}
-        onPost={handlePost}
-        onError={setError}
-      />
+      {canPost ? (
+        <ChatterComposer
+          t={t}
+          copy={composerCopy}
+          readOnly={readOnly}
+          postKind={postKind}
+          onPostKindChange={setPostKind}
+          replyToMessage={replyToMessage}
+          onClearReply={() => setReplyToMessage(null)}
+          recipientOptions={recipientOptions}
+          recipientsLoading={recipientUsersQuery.isFetching}
+          posting={postState.fetching}
+          onPost={handlePost}
+          onError={setError}
+        />
+      ) : null}
       {/* The shared danger banner announces via role="alert" and is dismissable —
           `description={null}` renders nothing, so this is the "no error" state too. */}
       <ErrorBanner
@@ -508,6 +528,8 @@ function renderThreadError(errorCode: string | null, t: MessagingT): React.React
 
 interface ChatterComposerProps {
   t: MessagingT;
+  copy: RecordThreadConversationProps["composerCopy"];
+  readOnly: boolean;
   postKind: ChatterPostKind;
   onPostKindChange: (kind: ChatterPostKind) => void;
   replyToMessage: RecordMessageRow | null;
@@ -521,6 +543,8 @@ interface ChatterComposerProps {
 
 function ChatterComposer({
   t,
+  copy,
+  readOnly,
   postKind,
   onPostKindChange,
   replyToMessage,
@@ -531,6 +555,8 @@ function ChatterComposer({
   onPost,
   onError,
 }: ChatterComposerProps): React.ReactElement {
+  const uiT = useUiT();
+  const disabled = readOnly || posting;
   const [body, setBody] = React.useState("");
   const [selectedRecipientIds, setSelectedRecipientIds] = React.useState<readonly string[]>([]);
   const [autofollowRecipients, setAutofollowRecipients] = React.useState(false);
@@ -548,6 +574,7 @@ function ChatterComposer({
   const canSubmit = body.trim() !== "" || attachmentDrafts.length > 0;
 
   function handleKindChange(next: ChatterPostKind): void {
+    if (disabled) return;
     onPostKindChange(next);
     if (next === "note") {
       setSelectedRecipientIds([]);
@@ -556,12 +583,13 @@ function ChatterComposer({
   }
 
   function handleFiles(files: FileList | readonly File[] | null): void {
-    if (!files || files.length === 0) return;
+    if (disabled || !files || files.length === 0) return;
     onError(null);
     uploads.upload(Array.from(files));
   }
 
   async function submit(): Promise<void> {
+    if (disabled || uploadBusy) return;
     const next = body.trim();
     const attachmentIds = attachmentDrafts.map((file) => file.id);
     if (!next && attachmentIds.length === 0) return;
@@ -590,7 +618,7 @@ function ChatterComposer({
     // Enter-to-submit here; Shift+Enter keeps the newline. Skip while an IME is composing.
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
-    if (!posting && !uploadBusy && canSubmit) void submit();
+    if (canSubmit) void submit();
   }
 
   const selectedRecipients = recipientOptions.filter((option) =>
@@ -602,14 +630,18 @@ function ChatterComposer({
 
   return (
     <form
-      className="mt-auto"
+      className="mt-auto space-y-2"
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
       }}
     >
+      {readOnly ? <Banner tone="warning">{uiT("viewAs.readOnly")}</Banner> : null}
+      <p className={textRoleVariants({ role: "caption" })}>
+        {copy?.audience ?? t("composer.audience")}
+      </p>
       <UploadDropTarget
-        disabled={posting}
+        disabled={disabled}
         overlay={t("composer.dropFiles")}
         overlayClassName="rounded-6"
         onFiles={handleFiles}
@@ -629,6 +661,7 @@ function ChatterComposer({
                         variant="ghost"
                         size="iconSm"
                         aria-label={t("composer.removeAttachment", { name: file.filename })}
+                        disabled={disabled}
                         onClick={() =>
                           setAttachmentDrafts((current) =>
                             current.filter((item) => item.id !== file.id),
@@ -658,6 +691,7 @@ function ChatterComposer({
                     variant="ghost"
                     size="iconSm"
                     aria-label={t("composer.clearUploads")}
+                    disabled={disabled}
                     onClick={uploads.clearFinished}
                   >
                     <Glyph name="x" />
@@ -684,6 +718,7 @@ function ChatterComposer({
                     variant="ghost"
                     size="iconSm"
                     aria-label={t("composer.cancelReply")}
+                    disabled={disabled}
                     onClick={onClearReply}
                   >
                     <Glyph name="x" />
@@ -691,6 +726,7 @@ function ChatterComposer({
                 </div>
               ) : null}
               <SegmentedControl<ChatterPostKind>
+                disabled={disabled}
                 value={postKind}
                 onValueChange={handleKindChange}
                 options={[
@@ -701,6 +737,7 @@ function ChatterComposer({
               {postKind === "comment" ? (
                 <ComposerRecipients
                   t={t}
+                  disabled={disabled}
                   selected={selectedRecipients}
                   available={availableRecipients}
                   loading={recipientsLoading}
@@ -727,7 +764,7 @@ function ChatterComposer({
                 // user entered during the round-trip. readOnly keeps the value visible
                 // (unlike disabled) and is race-free — the send button is already
                 // disabled while posting.
-                readOnly={posting}
+                readOnly={disabled}
                 className={messageComposerInputClassName}
                 aria-label={t("composer.messageLabel")}
                 placeholder={
@@ -746,7 +783,7 @@ function ChatterComposer({
                 size="iconSm"
                 aria-label={t("composer.attach")}
                 title={t("composer.attach")}
-                disabled={posting}
+                disabled={disabled}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Glyph name="attachment" />
@@ -755,7 +792,7 @@ function ChatterComposer({
                 type="submit"
                 variant="primary"
                 size="sm"
-                disabled={posting || uploadBusy || !canSubmit}
+                disabled={disabled || uploadBusy || !canSubmit}
               >
                 <Glyph name="send" />
                 {postKind === "note" ? t("composer.log") : t("composer.send")}
@@ -766,6 +803,7 @@ function ChatterComposer({
         <input
           ref={fileInputRef}
           type="file"
+          disabled={disabled}
           multiple
           className="hidden"
           onChange={(event) => {
@@ -774,12 +812,16 @@ function ChatterComposer({
           }}
         />
       </UploadDropTarget>
+      <p className={textRoleVariants({ role: "caption" })}>
+        {copy?.help ?? t("composer.help")}
+      </p>
     </form>
   );
 }
 
 function ComposerRecipients({
   t,
+  disabled,
   selected,
   available,
   loading,
@@ -789,6 +831,7 @@ function ComposerRecipients({
   onAutofollowChange,
 }: {
   t: MessagingT;
+  disabled: boolean;
   selected: readonly RecipientOption[];
   available: readonly RecipientOption[];
   loading: boolean;
@@ -808,7 +851,7 @@ function ComposerRecipients({
         <Glyph decorative name="users" className="shrink-0 text-fg-muted" />
         <Select
           value=""
-          disabled={loading || available.length === 0}
+          disabled={disabled || loading || available.length === 0}
           placeholder={placeholder}
           aria-label={t("composer.addRecipient")}
           className="min-w-0 flex-1"
@@ -824,6 +867,7 @@ function ComposerRecipients({
           <FieldRoot className="inline-flex h-8 items-center gap-1.5 rounded-6 border border-border-subtle px-2 text-12 text-fg-muted">
             <FieldRoot.Item>
             <Checkbox
+              disabled={disabled}
               size="sm"
               checked={autofollow}
               onCheckedChange={(next) => onAutofollowChange(next)}
@@ -853,6 +897,7 @@ function ComposerRecipients({
               <button
                 type="button"
                 aria-label={t("composer.removeRecipient", { name: option.label })}
+                disabled={disabled}
                 onClick={() => onRemove(option.id)}
                 className="shrink-0 text-fg-muted outline-none hover:text-fg focus-visible:focus-ring"
               >
@@ -874,6 +919,8 @@ function ComposerRecipients({
 interface MessageFeedRowProps {
   message: RecordMessageRow;
   editing: boolean;
+  canReply: boolean;
+  readOnly: boolean;
   t: MessagingT;
   onStartEdit: (messageId: string) => void;
   onCancelEdit: () => void;
@@ -888,6 +935,8 @@ interface MessageFeedRowProps {
 const MessageFeedRow = React.memo(function MessageFeedRow({
   message,
   editing,
+  canReply,
+  readOnly,
   t,
   onStartEdit,
   onCancelEdit,
@@ -983,15 +1032,18 @@ const MessageFeedRow = React.memo(function MessageFeedRow({
               <Glyph name="check" />
             </Button>
           ) : null}
-          <Button
-            type="button"
-            variant="ghost"
-            size="iconSm"
-            aria-label={t("message.reply")}
-            onClick={() => onStartReply(message)}
-          >
-            <Glyph name="quote" />
-          </Button>
+          {canReply ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="iconSm"
+              aria-label={t("message.reply")}
+              disabled={readOnly}
+              onClick={() => onStartReply(message)}
+            >
+              <Glyph name="quote" />
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="ghost"

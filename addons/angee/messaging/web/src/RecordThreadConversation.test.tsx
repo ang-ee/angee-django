@@ -2,8 +2,9 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { AppRuntimeProvider } from "@angee/ui";
 
-import type { RecordActivityRow, RecordMessageRow } from "./documents";
+import type { RecordActivityRow, RecordMessageRow, RecordThreadPayload } from "./documents";
 import type { RecordThreadConversationChrome } from "./RecordThreadConversation";
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   mutateCalls: [] as Array<{ op: string; vars: Record<string, unknown> }>,
   failOps: new Set<string>(),
   useAuthoredQuery: vi.fn(),
+  upload: vi.fn(),
 }));
 
 function operationName(document: unknown): string {
@@ -54,7 +56,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 }));
 
 vi.mock("@angee/storage", () => ({
-  useStorageUpload: () => ({ tasks: [], upload: vi.fn(), clearFinished: vi.fn() }),
+  useStorageUpload: () => ({ tasks: [], upload: mocks.upload, clearFinished: vi.fn() }),
 }));
 
 import { RecordThreadConversation } from "./RecordThreadConversation";
@@ -91,9 +93,17 @@ function activity(overrides: Partial<RecordActivityRow> = {}): RecordActivityRow
   };
 }
 
-function threadPayload(messages: RecordMessageRow[], activities: RecordActivityRow[] = [], glyph = "phone"): unknown {
+function threadPayload(
+  messages: RecordMessageRow[],
+  activities: RecordActivityRow[] = [],
+  glyph = "phone",
+  access: Pick<RecordThreadPayload, "permissions" | "thread_post_access"> = {
+    permissions: ["write"], thread_post_access: "write",
+  },
+) {
   return {
     record_thread: {
+      ...access,
       error: null,
       error_code: null,
       thread: { id: "thr_1", title: { text: "Room" }, message_count: messages.length, last_message_at: null },
@@ -118,7 +128,27 @@ function threadPayload(messages: RecordMessageRow[], activities: RecordActivityR
   };
 }
 
+function conversationPreview(active: boolean, pending = false) {
+  const user = { id: "usr_preview", name: "Preview viewer" };
+  return (
+    <AppRuntimeProvider runtime={{
+      auth: {
+        user, status: "authenticated", hasRole: () => false,
+        viewAs: {
+          viewAs: active ? { userId: user.id } : null,
+          currentUser: user,
+          realUser: { id: "usr_admin", name: "Administrator" },
+          viewablePeople: [user], enter: vi.fn(), exit: vi.fn(), pending,
+        },
+      },
+    }}>
+      <RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />
+    </AppRuntimeProvider>
+  );
+}
+
 beforeEach(() => {
+  mocks.upload.mockReset();
   mocks.mutateCalls = [];
   mocks.failOps = new Set();
   mocks.recipientData = { colleagues: [] };
@@ -140,6 +170,121 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("RecordThreadConversation", () => {
+  test.each([
+    { permissions: [], thread_post_access: "write" },
+    { permissions: ["write"], thread_post_access: "comment" },
+    { permissions: ["write"], thread_post_access: null },
+  ])("keeps the transcript without a composer or reply when post access is absent: %j", (access) => {
+    mocks.threadData = threadPayload([message()], [], "phone", access);
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+
+    expect(screen.getByText("Ping the room")).toBeTruthy();
+    expect(screen.queryByLabelText("Message")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reply to message" })).toBeNull();
+    expect(mocks.mutateCalls).toEqual([]);
+    expect(mocks.useAuthoredQuery.mock.calls.find(
+      ([document]) => operationName(document) === "MessagingRecipientUsers",
+    )?.[2]).toMatchObject({ enabled: false });
+  });
+
+  test("does not show a composer before permissions have loaded", () => {
+    mocks.threadData = undefined;
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    expect(screen.queryByLabelText("Message")).toBeNull();
+  });
+
+  test("uses the record's post permission even when it is not write", () => {
+    mocks.threadData = threadPayload([message()], [], "phone", {
+      thread_post_access: "comment", permissions: ["comment"],
+    });
+    render(<RecordThreadConversation modelLabel="projects.Task" recordId="task_1" />);
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "A comment" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(mocks.mutateCalls).toEqual([expect.objectContaining({
+      op: "MessagingPostRecordMessage",
+      vars: expect.objectContaining({ body: "A comment", modelLabel: "projects.Task" }),
+    })]);
+  });
+
+  test("removes a drafted composer when posting permission is revoked", () => {
+    const view = <RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />;
+    const { rerender } = render(view);
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Draft" } });
+    mocks.threadData = threadPayload([message()], [], "phone", {
+      thread_post_access: "write", permissions: [],
+    });
+    rerender(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    expect(screen.queryByLabelText("Message")).toBeNull();
+    expect(screen.getByText("Ping the room")).toBeTruthy();
+    expect(mocks.mutateCalls).toEqual([]);
+  });
+
+  test.each(["comment", "note"])("freezes a permitted %s draft in preview and blocks every submission path", (kind) => {
+    const { rerender, container } = render(conversationPreview(false));
+    if (kind === "note") fireEvent.click(screen.getByRole("button", { name: "Note" }));
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Keep this draft" } });
+
+    rerender(conversationPreview(true));
+    const input = screen.getByLabelText<HTMLTextAreaElement>("Message");
+    const send = screen.getByRole<HTMLButtonElement>("button", { name: kind === "note" ? "Log" : "Send" });
+    expect(input.readOnly).toBe(true);
+    expect(input.value).toBe("Keep this draft");
+    expect(send.disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Attach files" }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Reply to message" }).disabled).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain("This preview is read-only.");
+    expect(screen.getByText("Ping the room")).toBeTruthy();
+    fireEvent.click(send);
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.submit(input.closest("form")!);
+    const files = [new File(["attachment"], "note.txt", { type: "text/plain" })];
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files } });
+    fireEvent.drop(input, { dataTransfer: { files, types: ["Files"] } });
+    expect(mocks.mutateCalls).toEqual([]);
+    expect(mocks.upload).not.toHaveBeenCalled();
+
+    rerender(conversationPreview(false));
+    expect(screen.getByLabelText<HTMLTextAreaElement>("Message").readOnly).toBe(false);
+    fireEvent.keyDown(screen.getByLabelText("Message"), { key: "Enter" });
+    expect(mocks.mutateCalls).toEqual([expect.objectContaining({
+      op: "MessagingPostRecordMessage",
+      vars: expect.objectContaining({ body: "Keep this draft", kind }),
+    })]);
+  });
+
+  test("keeps posting disabled while the preview identity is changing", () => {
+    render(conversationPreview(false, true));
+    expect(screen.getByLabelText<HTMLTextAreaElement>("Message").readOnly).toBe(true);
+  });
+
+  test("does not show a disabled composer for a preview viewer without permission", () => {
+    mocks.threadData = threadPayload([message()], [], "phone", {
+      thread_post_access: "write", permissions: [],
+    });
+    render(conversationPreview(true));
+    expect(screen.getByText("Ping the room")).toBeTruthy();
+    expect(screen.queryByLabelText("Message")).toBeNull();
+    expect(screen.queryByText("This preview is read-only.")).toBeNull();
+  });
+
+  test("defaults composer copy and accepts independently translated consumer overrides", () => {
+    const { rerender } = render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    expect(screen.getByText("Visible to people with access to this record.")).toBeTruthy();
+    expect(screen.getByText("Use comments for discussion and notes for internal updates.")).toBeTruthy();
+
+    rerender(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1"
+      composerCopy={{ audience: "For the project team" }} />);
+    expect(screen.getByText("For the project team")).toBeTruthy();
+    expect(screen.getByText("Use comments for discussion and notes for internal updates.")).toBeTruthy();
+
+    rerender(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1"
+      composerCopy={{ audience: "For the project team", help: "Share the next step" }} />);
+    expect(screen.getByText("Share the next step")).toBeTruthy();
+    expect(screen.queryByText("Use comments for discussion and notes for internal updates.")).toBeNull();
+    expect(screen.getAllByRole("list", { name: "Comments" })).toHaveLength(1);
+  });
+
   test("merges exchanges without reordering equal instants from the server", () => {
     mocks.threadData = threadPayload([
       message({ id: "first", preview: "First from server", parts: [], sent_at: "2026-07-06T12:00:00+02:00" }),
@@ -297,6 +442,6 @@ describe("RecordThreadConversation", () => {
     await screen.findByRole("alert");
     const posts = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage");
     expect(posts).toHaveLength(2);
-    expect(posts[1].vars.clientCreationKey).toBe(first?.vars.clientCreationKey);
+    expect(posts[1]?.vars.clientCreationKey).toBe(first?.vars.clientCreationKey);
   });
 });
