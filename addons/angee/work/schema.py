@@ -11,6 +11,7 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
@@ -51,6 +52,7 @@ class WorkQueueType(AngeeNode):
     auto_close_months: auto
     created_at: auto
     updated_at: auto
+    permissions = permissions_field(("read", "write", "share"))
 
     parent: SpaceGroupType | None = actor_scoped_to_one("parent")
     default_stage: "WorkStageType | None" = actor_scoped_to_one("default_stage")

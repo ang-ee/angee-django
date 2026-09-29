@@ -4,6 +4,7 @@ import type { ActionOutcome } from "@angee/refine";
 import type { CrudFilter } from "@refinedev/core";
 
 import type { PromptOptions } from "../../feedback";
+import type { RelationCreateConfig } from "../relation/RelationPicker";
 import type { FieldDescriptor } from "./Field";
 import { PAGE_ELEMENT_SLOT } from "./types";
 
@@ -87,6 +88,12 @@ export interface ActionRelationArg extends ActionArgBase {
   resource: string;
   /** Server-side filters narrowing the relation rows offered by the picker. */
   filters?: readonly CrudFilter[];
+  /**
+   * Inline create forwarded to the picker (`RelationPicker.create`): a no-match
+   * typed query offers "Create …", `actionLabel` also exposes the form as a
+   * visible button, and the saved record becomes the selection.
+   */
+  create?: RelationCreateConfig;
 }
 
 /**
@@ -99,6 +106,12 @@ export interface ActionRelationListArg extends ActionArgBase {
   resource: string;
   /** Server-side filters narrowing the rows offered by this multi-picker. */
   filters?: readonly CrudFilter[];
+  /**
+   * Inline create forwarded to the multi-picker (`RelationPicker.create`): a
+   * visible "New …" button (or `actionLabel`) opens the related model's create
+   * form, and the saved record joins the selection.
+   */
+  create?: RelationCreateConfig;
   /**
    * Prefill the selected ids from the invoking context. Defaults to the invoking
    * selection, else the open record's id. A user edit overrides the prefill.

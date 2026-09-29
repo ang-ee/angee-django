@@ -467,7 +467,9 @@ history uses native Query pages with domain-owned
   *selected* record in a form dialog) — wired by `RelationFieldWidget` from the
   related model's fields, so a relation is created, edited, and followed without
   leaving the parent form. The create-form override stays create-only: an edit
-  dialog renders the passed `fields` (the registered form is not reused for edit).
+  dialog renders the passed `fields`. A complete form registered through
+  [`registerForm`](../../packages/ui/src/views/form/registered-form.ts) instead
+  owns both create and edit, including the shared relation dialog.
 - Toolbar/action dialogs with ordinary field inputs compose `MutationDialog` from
   `@angee/ui`. It owns the `DialogForm` scaffold, value reset, required gating,
   submit busy/error state, and FieldDescriptor widget rendering; addons provide

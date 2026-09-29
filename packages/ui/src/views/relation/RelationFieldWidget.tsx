@@ -11,7 +11,7 @@ import {
   formFieldsFromMetadata,
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
-import { RelationPicker } from "./RelationPicker";
+import { RelationPicker, type RelationCreateConfig } from "./RelationPicker";
 import { useRelationPickerOptions } from "./relation-options";
 
 export interface RelationFieldWidgetProps {
@@ -22,6 +22,12 @@ export interface RelationFieldWidgetProps {
   relation: RelationFieldInfo;
   /** Server-side filters narrowing the rows offered by this relation picker. */
   filters?: readonly CrudFilter[];
+  /**
+   * Explicit inline-create configuration for the picker. Overrides the default
+   * derived from the related model's metadata (offered when it has a create
+   * mutation and form fields). Pass null to disable creation explicitly.
+   */
+  create?: RelationCreateConfig | null;
   searchFields?: readonly string[];
   /**
    * The already-loaded selected record as a picker option (id + folded label),
@@ -51,6 +57,7 @@ export function RelationFieldWidget(
   readOnly,
   relation,
   filters,
+  create,
   searchFields,
   selectedOption,
   placeholder,
@@ -76,6 +83,12 @@ export function RelationFieldWidget(
   const recordHref = useResourceRecordHref(relation.resource);
   const followHref = recordHref && value ? recordHref(value) : undefined;
 
+  function refreshOptions(): void {
+    // An explicit create or pencil edit can save before the picker ever opens.
+    picker.activate();
+    picker.list.refetch();
+  }
+
   return (
     <RelationPicker
       controlRef={controlRef}
@@ -91,15 +104,17 @@ export function RelationFieldWidget(
       onSearchChange={picker.onSearchChange}
       searchState={picker.searchState}
       create={
-        relation.canCreate && createFields.length > 0
-          ? {
-              resource: relation.resource,
-              fields: createFields,
-              prefillField: relation.labelField,
-            }
-          : undefined
+        create === undefined
+          ? relation.canCreate && createFields.length > 0
+            ? {
+                resource: relation.resource,
+                fields: createFields,
+                prefillField: relation.labelField,
+              }
+            : undefined
+          : create ?? undefined
       }
-      onCreated={() => picker.list.refetch()}
+      onCreated={refreshOptions}
       // Edit is offered whenever the resource has editable fields — intentionally
       // UX-only, not gated on a `canEdit` flag (resource metadata exposes no
       // per-relation edit capability). The server is the authorization boundary: a denied
@@ -109,12 +124,7 @@ export function RelationFieldWidget(
           ? { resource: relation.resource, fields: createFields }
           : undefined
       }
-      onEdited={() => {
-        // A pencil-edit relabel can happen without the dropdown ever opening;
-        // enable the option query so the refetch carries the fresh label.
-        picker.activate();
-        picker.list.refetch();
-      }}
+      onEdited={refreshOptions}
     />
   );
 }

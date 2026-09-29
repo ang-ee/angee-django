@@ -28,10 +28,11 @@ import { useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
-import { AppRuntimeProvider } from "../../runtime";
+import { AppRuntimeProvider, type FormOverrideMap } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
-import { ActionFormDialog, serializeActionArgValues } from "./ActionFormDialog";
-import type { ActionArg, ActionDescriptor, ActionFormContext } from "../page";
+import { ActionFormDialog, serializeActionArgValues } from "../form/ActionFormDialog";
+import { registerForm, type RegisteredFormProps } from "../form/registered-form";
+import type { ActionArg, ActionDescriptor, ActionFormContext } from ".";
 
 // cmdk scrolls the active option into view; happy-dom has no layout engine.
 Element.prototype.scrollIntoView = vi.fn();
@@ -108,8 +109,11 @@ function resourceMetadata(
     roots: { list: listRoot },
     typeNames: { node: typeName },
     recordRepresentation: representation,
-    fields: [scalarField("id", "ID"), scalarField(representation, "String")],
-    capabilities: ["list"],
+    fields: [
+      scalarField("id", "ID"),
+      { ...scalarField(representation, "String"), creatable: true },
+    ],
+    capabilities: ["list", "create"],
   });
 }
 
@@ -189,6 +193,7 @@ function renderDialog(
   action: ActionDescriptor,
   onSucceeded?: (outcome: { ok: boolean; message: string; id?: string }) => void,
   onParentSubmit?: () => void,
+  forms?: FormOverrideMap,
 ): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
@@ -206,7 +211,7 @@ function renderDialog(
       <ModalsHost>
         <ToastProvider>
           <ModelMetadataProvider metadata={metadata}>
-            <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+            <AppRuntimeProvider runtime={{ widgets: defaultWidgets, forms }}>
               {onParentSubmit ? <form onSubmit={(event) => {
                 event.preventDefault();
                 onParentSubmit();
@@ -369,6 +374,7 @@ describe("ActionFormDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listOptions.length = 0;
+    listRows.collections.splice(2);
   });
 
   test("prefills the relation list from context and renders every arg", async () => {
@@ -400,6 +406,93 @@ describe("ActionFormDialog", () => {
       }),
     );
   });
+
+  test("offers the picker's inline create only for relation args that declare it", async () => {
+    renderDialog({
+      id: "collect", label: "Collect", submit: vi.fn(),
+      args: [
+        {
+          name: "collection", argKind: "relation", resource: "Collection", label: "Collection",
+          create: { resource: "Collection", fields: [{ name: "name", label: "Name", title: true }] },
+        },
+        {
+          name: "documentIds", argKind: "relationList", resource: "Document", label: "Documents",
+          create: { resource: "Document" },
+        },
+      ],
+    });
+
+    // The relation list exposes the create form as a visible button (default title).
+    expect(screen.getByRole("button", { name: "New document" })).toBeTruthy();
+    // The single relation offers "Create …" for a query no option matches.
+    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: "Zed" } });
+    expect(await screen.findByText("Create “Zed”")).toBeTruthy();
+  });
+
+  test("offers no inline create without create even for creatable resources", async () => {
+    renderDialog(registerReviewAction(vi.fn()));
+
+    await screen.findByText("DOC-1");
+    expect(screen.queryByRole("button", { name: "New document" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Collection" }));
+    const search = await screen.findByPlaceholderText<HTMLInputElement>("Search…");
+    fireEvent.change(search, { target: { value: "Zed" } });
+    // Server-side search keeps the (mocked) options listed; the create row is
+    // decided in the same render that reflects the typed query.
+    await waitFor(() => expect(search.value).toBe("Zed"));
+    expect(await screen.findByText("Primary Collection")).toBeTruthy();
+    expect(screen.queryByText("Create “Zed”")).toBeNull();
+  });
+
+  test.each(["relation", "relationList"] as const)(
+    "%s creation opens the registered form and submits the saved relation",
+    async (argKind) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Collected" });
+      const renderForm = vi.fn();
+      const CompleteForm = (props: RegisteredFormProps) => {
+        renderForm(props);
+        return <button type="button" onClick={() => {
+          listRows.collections.push({ id: "created-1", name: "Created collection" });
+          props.onSaved?.({ id: "created-1" });
+        }}>
+          Save related record
+        </button>;
+      };
+      renderDialog({
+        id: "collect",
+        label: "Collect",
+        submit,
+        args: [{
+          name: "target",
+          argKind,
+          resource: "Collection",
+          label: "Target",
+          create: {
+            resource: "Collection",
+            actionLabel: "Add collection",
+            title: "Create collection",
+            defaultValues: { name: "Seeded collection", parent: "parent-1" },
+          },
+        }],
+      }, undefined, undefined, { Collection: registerForm("Collection", CompleteForm) });
+
+      fireEvent.click(screen.getByRole("button", { name: "Add collection" }));
+      expect(await screen.findByRole("dialog", { name: "Create collection" })).toBeTruthy();
+      expect(renderForm).toHaveBeenLastCalledWith(expect.objectContaining({
+        resource: "Collection",
+        id: null,
+        defaultValues: { name: "Seeded collection", parent: "parent-1" },
+      }));
+      fireEvent.click(screen.getByRole("button", { name: "Save related record" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Create collection" })).toBeNull());
+      expect(await screen.findByText("Created collection")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+      await waitFor(() => expect(submit).toHaveBeenCalledWith({
+        target: argKind === "relation" ? "created-1" : ["doc-1", "doc-2", "created-1"],
+      }, context));
+    },
+  );
 
   test("forwards a relation-list argument's declared filters to its option query", async () => {
     renderDialog(registerReviewAction(vi.fn()));

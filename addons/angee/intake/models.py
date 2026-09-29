@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
+from django.db.models.functions import NullIf
 from rebac import PermissionDenied, actor_context, current_actor, system_context
 
 from angee.base.actors import instance_actor
@@ -321,6 +322,11 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
     runtime = True
     sqid_prefix = "ned_"
     access_actions = (ApproveNeedAccess, DenyNeedAccess)
+    # The requester's name is a sort axis through the linked party: an empty
+    # name and an unreadable party both tie as NULL through the shared guard.
+    hasura_sortable_aliases = {
+        "filer_name": NullIf(models.F("party__display_name"), models.Value(""), output_field=models.TextField()),
+    }
 
     party = models.ForeignKey(
         "parties.Party",

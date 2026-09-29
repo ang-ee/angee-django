@@ -634,6 +634,64 @@ class NeedAccessTests(IntakeAccessCase):
             self.assertTrue(apps.get_model("parties", "Person").objects.as_user(user).filter(pk=party.pk).exists())
             self.assertTrue(self.reader.with_actor(to_subject_ref(user)).has_access("view_as"))
 
+    def test_filer_name_sorts_readable_requesters_and_redacts_hidden_parties(self):
+        with system_context(reason="test filer parties"):
+            stranger = self.User.objects.create_user(username="request-stranger", email="stranger@example.com")
+            project = apps.get_model("projects", "Project").objects.create(title="Project", owner=self.owner)
+            project.grant_record_access("reader", self.writer)
+            parties = {
+                name: self.party(user)
+                for name, user in (("Bea", self.reader), ("Al", self.owner), ("Zed", stranger), ("", self.writer))
+            }
+            for name, party in parties.items():
+                self.Party._base_manager.filter(pk=party.pk).update(display_name=name)
+            # A project request's party is not readable through a filed task.
+            hidden = self.Need.objects.create(project=project, party=parties["Zed"], body="Request")
+        bea = self.need(party=parties["Bea"])
+        al = self.need(party=parties["Al"])
+        unnamed = self.need()
+        blank = self.need(party=parties[""])
+
+        def ordered(user, direction):
+            document = "{ intake_needs(order_by: [{filer_name: DIRECTION}]) { id } }".replace("DIRECTION", direction)
+            return [row["id"] for row in self.graphql(document, {}, user=user)["intake_needs"]]
+
+        def assert_ordering(user, readable, null_group):
+            for direction, expected in (("asc", readable), ("desc", list(reversed(readable)))):
+                ids = ordered(user, direction)
+                self.assertEqual([value for value in ids if value not in null_group], expected, direction)
+                positions = sorted(ids.index(value) for value in null_group)
+                self.assertEqual(positions, list(range(positions[0], positions[0] + len(null_group))), direction)
+
+        self.assertFalse(self.Party.objects.as_user(self.writer).filter(pk=parties["Zed"].pk).exists())
+        assert_ordering(self.admin, [al.sqid, bea.sqid, hidden.sqid], [unnamed.sqid, blank.sqid])
+        assert_ordering(self.writer, [al.sqid, bea.sqid], [unnamed.sqid, hidden.sqid, blank.sqid])
+        before = {direction: ordered(self.writer, direction) for direction in ("asc", "desc")}
+        with system_context(reason="test hidden filer rename"):
+            self.Party._base_manager.filter(pk=parties["Zed"].pk).update(display_name="Aaron")
+        for direction in ("asc", "desc"):
+            self.assertEqual(ordered(self.writer, direction), before[direction])
+        assert_ordering(self.admin, [hidden.sqid, al.sqid, bea.sqid], [unnamed.sqid, blank.sqid])
+
+    def test_filer_name_places_missing_names_last_in_both_directions(self):
+        """The required placement contract also covers empty display names."""
+
+        named_party = self.party(self.reader)
+        blank_party = self.party(self.writer)
+        with system_context(reason="test filer null placement"):
+            self.Party._base_manager.filter(pk=named_party.pk).update(display_name="Named requester")
+            self.Party._base_manager.filter(pk=blank_party.pk).update(display_name="")
+        unnamed = self.need()
+        named = self.need(party=named_party)
+        blank = self.need(party=blank_party)
+        for direction in ("asc", "desc"):
+            with self.subTest(direction=direction):
+                document = "{ intake_needs(order_by: [{filer_name: DIRECTION}]) { id } }".replace(
+                    "DIRECTION", direction,
+                )
+                rows = self.graphql(document, {}, user=self.writer)["intake_needs"]
+                self.assertEqual([row["id"] for row in rows], [named.sqid, unnamed.sqid, blank.sqid])
+
     def test_duplicate_refusal_returns_code_and_rolls_back_all_movers(self):
         source = self.need(party=self.party(self.reader))
         canonical = self.need()

@@ -1,9 +1,17 @@
-import { useMemo, type ReactElement } from "react";
+import { useMemo, useState, type ReactElement } from "react";
 import type { CrudFilter } from "@refinedev/core";
 
-import type { WidgetField } from "../../widgets/types";
+import { useUiT } from "../../i18n";
+import { Button } from "../../ui/button";
+import { relationIdList, type WidgetField } from "../../widgets/types";
 import { Many2ManyCellEdit, Many2ManyEdit } from "../../widgets/many2many";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
+import type { RelationCreateConfig } from "./RelationPicker";
+import {
+  RelationRecordDialog,
+  relationCreateTitle,
+  type RelationDialogState,
+} from "./RelationRecordDialog";
 import { relationSelectedOption, useRelationOptions } from "./relation-options";
 
 export interface RelationMultiFieldWidgetProps {
@@ -16,6 +24,12 @@ export interface RelationMultiFieldWidgetProps {
   relation: RelationFieldInfo;
   /** Server-side filters narrowing the rows offered by the multi-picker. */
   filters?: readonly CrudFilter[];
+  /**
+   * Enables inline creation: a visible button (`actionLabel`, else `New <model>`)
+   * opens the related model's create form, and the saved record joins the
+   * selection. The same config `RelationPicker.create` takes.
+   */
+  create?: RelationCreateConfig;
   "aria-label"?: string;
 }
 
@@ -35,9 +49,12 @@ export function RelationMultiFieldWidget({
   compact = false,
   relation,
   filters,
+  create,
   "aria-label": ariaLabel,
 }: RelationMultiFieldWidgetProps): ReactElement {
-  const { options } = useRelationOptions(relation, {
+  const t = useUiT();
+  const [dialog, setDialog] = useState<RelationDialogState | null>(null);
+  const { options, list } = useRelationOptions(relation, {
     enabled: !readOnly,
     filters,
     sort: true,
@@ -56,12 +73,38 @@ export function RelationMultiFieldWidget({
     [options, value, relation.labelField, ariaLabel],
   );
   const Edit = compact ? Many2ManyCellEdit : Many2ManyEdit;
-  return (
+  const control = (
     <Edit
       value={value ?? []}
       onChange={onChange}
       readOnly={readOnly}
       field={field}
     />
+  );
+  if (!create || readOnly) return control;
+  return (
+    <>
+      <div className="flex min-w-0 items-start gap-1">
+        <div className="min-w-0 flex-1">{control}</div>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="shrink-0"
+          onClick={() => setDialog({ mode: "create", query: "" })}
+        >
+          {create.actionLabel ?? relationCreateTitle(create, t)}
+        </Button>
+      </div>
+      <RelationRecordDialog
+        dialog={dialog}
+        create={create}
+        onClose={() => setDialog(null)}
+        onCreated={(id) => {
+          onChange?.(relationIdList([...(value ?? []), id]));
+          list.refetch();
+        }}
+      />
+    </>
   );
 }
