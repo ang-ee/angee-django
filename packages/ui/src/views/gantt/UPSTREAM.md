@@ -11,7 +11,8 @@ Local adaptations: relative imports, Angee glyphs, token names, radius and butto
 recipes, explicit primitive portals/positioners, scroll-area parts, and type annotations for
 checked array bounds under `noUncheckedIndexedAccess`. Generic React context
 boundaries erase data to `unknown` and restore it in the typed hooks. Recurrence,
-baselines and the upstream drawing/interaction algorithms remain intact.
+baselines, packing and interaction algorithms remain intact; layout adaptations
+are listed below.
 
 Original SHA-256:
 
@@ -40,3 +41,14 @@ boundary), `gantt-surface.tsx` (read-only presentation wrapper) and
 `gantt-recurrence.tsx` replaces the unary `+y` coercion with `Number(y)`.
 `warnOnce` drops upstream's `process.env.NODE_ENV` guard: the composed host
 typechecks without Node types, and a once-per-key warning is harmless in production.
+
+Projects timeline adaptations: packed rows and their body cannot flex-shrink
+below the shared calculated height. Flat, checkbox-free trees omit the unused
+toggle gutter. Zoom controls occupy a reserved row above both scrolling panes;
+the former floating-control/offscreen-chip collision shifting is removed.
+`GanttRowLayout` exposes sidebar width and minimum row height through the public
+view and collection spec, reusing the existing tree-panel and metrics contracts.
+The headless state accepts a controlled `range`, used by the read-only surface's
+initial week-aligned fit-to-events window; navigation returns to native periods.
+The collection adapter uses metadata Date fields as inclusive calendar days,
+translated to the existing exclusive-end/all-day event contract.

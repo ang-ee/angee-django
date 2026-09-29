@@ -3,7 +3,8 @@ import { Filter, ResourceQuery, rowPublicId, type Row } from "@angee/metadata";
 import { MAX_PAGE_SIZE, useAngeeListBatch } from "@angee/refine";
 import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
-import { parseISO } from "date-fns";
+import { addDays } from "date-fns";
+import { dateFromUnknown } from "../../widgets/date-format";
 import { errorFromUnknown } from "../../data/errors";
 import { useUiT } from "../../i18n";
 import { toneColorVar } from "../../lib/tones";
@@ -145,21 +146,23 @@ export function GanttCollectionSurface<TRow extends Row>({
         const endValue = readPath(row, endField);
         // Unscheduled records have no bar; their catalogue row remains visible.
         if (startValue == null || endValue == null) return [];
-        const start = startValue instanceof Date ? startValue : parseISO(String(startValue));
-        const end = endValue instanceof Date ? endValue : parseISO(String(endValue));
-        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end < start) {
+        const start = dateFromUnknown(startValue);
+        const end = dateFromUnknown(endValue);
+        if (!start || !end || end < start) {
           skipped += 1;
           return [];
         }
         const tone = toneField ? resolveTone(String(readPath(row, toneField) ?? "")) : "brand";
-        return [{ id, title: String(readPath(row, label) ?? id), start, end, resourceId: group.key,
+        // Date fields include the target day; ReUI uses exclusive ends.
+        const allDay = metadata?.fields[startField]?.scalar === "Date" && metadata?.fields[endField]?.scalar === "Date";
+        return [{ id, title: String(readPath(row, label) ?? id), start, end: allDay ? addDays(end, 1) : end, allDay, resourceId: group.key,
           color: toneColorVar(tone), readOnly: true }];
       }));
       return { resources, events, skipped, error: null };
     } catch (cause) {
       return { resources: [], events: [], skipped: records.skipped, error: errorFromUnknown(cause) };
     }
-  }, [tableRows, laneSource, lanes, records.skipped, startField, endField, toneField, label, resolveTone, t]);
+  }, [metadata, tableRows, laneSource, lanes, records.skipped, startField, endField, toneField, label, resolveTone, t]);
   const toolbarInputs = useListViewToolbarInputs({ ...input, rows, list, serverGrouping: false });
   const toolbar = useResourceToolbarProps({
     ...toolbarInputs, resourceView, availableViews, view: "gantt", groupStack,
@@ -184,7 +187,8 @@ export function GanttCollectionSurface<TRow extends Row>({
     <ResourceListFrame toolbar={toolbar} presentation={presentation} className={className} error={list.error ?? projection.error} onRetry={refetch} loadingFooter={fetching}
       summary={projection.skipped ? t("gantt.skipped", { count: projection.skipped }) : undefined}>
       <GanttView
-        resources={projection.resources} events={projection.events} date={anchor} onDateChange={onDateChange} defaultScale="month" loading={fetching}
+        resources={projection.resources} events={projection.events} date={anchor} onDateChange={onDateChange} defaultScale="quarter" loading={fetching}
+        fitToEvents={resourceView.state.anchor === calendarDateToAnchor(new Date())} sidebarWidth={gantt.sidebarWidth} minRowHeight={gantt.minRowHeight}
         renderRowContent={renderRowContent ? renderResourceContent : undefined}
         onEventClick={onRowClick || rowHref ? handleEventClick : undefined}
       />

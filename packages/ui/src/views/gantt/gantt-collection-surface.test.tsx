@@ -13,6 +13,8 @@ import { ganttResources, ganttLane, ganttLanes, ganttRecord, scheduledRecord } f
 import { ListView } from "../resource/ListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "../resource/resource-view-context";
 import type { GanttViewProps } from "./GanttView";
+import { mergeGanttI18n } from "./gantt-i18n";
+import { calendarDateToAnchor } from "../calendar/calendar-view-controls";
 
 // ReUI's drawing is tested at its own boundary; all query/state/toolbar owners run here.
 const drawing = vi.hoisted(() => ({ props: null as GanttViewProps | null }));
@@ -31,7 +33,7 @@ beforeEach(() => { drawing.props = null; });
 afterEach(() => { cleanup(); clearClients(); });
 
 function renderCollection(options: {
-  rows?: Row[]; total?: number; page?: number; pageSize?: number; strict?: boolean;
+  rows?: Row[]; total?: number; page?: number; pageSize?: number; strict?: boolean; anchor?: string;
   resources?: readonly DataResourceMetadata[];
   getList?: (params: Partial<GetListParams>) => Promise<{ data: Row[]; total: number }>;
   onRowClick?: (row: Row) => void;
@@ -51,13 +53,49 @@ function renderCollection(options: {
   }
   const view = render(<RouterContextProvider router={router}><Provider resources={options.resources ?? ganttResources} dataProvider={{ getList }}>
     <ResourceViewProvider resource={ganttRecord.modelLabel} scope="local" initialState={{
-      view: "gantt", anchor: "2026-09-01", page: options.page ?? 1, pageSize: options.pageSize ?? 10,
+      view: "gantt", anchor: options.anchor ?? "2026-09-01", page: options.page ?? 1, pageSize: options.pageSize ?? 10,
     }}><Collection /></ResourceViewProvider>
   </Provider></RouterContextProvider>, { reactStrictMode: options.strict ?? false });
   return { ...view, getList, state: () => state, barRequests: () => getList.mock.calls.filter(([params]) => params.resource === "schedules") };
 }
 
 describe("Gantt collection over native list data", () => {
+  test("fits today's initial collection window while honoring an explicit historical anchor", async () => {
+    const f = renderCollection({ anchor: calendarDateToAnchor(new Date()) });
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    expect(drawing.props?.fitToEvents).toBe(true);
+    act(() => f.state().setAnchor("2020-01-01"));
+    expect(drawing.props?.fitToEvents).toBe(false);
+  });
+  test.each([
+    ["2026-09-24", "2026-10-08", "Sep 24 - Oct 8, 2026"],
+    ["2026-09-24", "2026-09-24", "Sep 24, 2026"],
+    ["2026-03-07", "2026-03-09", "Mar 7 - Mar 9, 2026"],
+  ])("preserves Date calendar days, including inclusive ends: %s to %s", async (start, end, label) => {
+    renderCollection({ rows: [{ ...scheduledRecord, start, end }] });
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    const event = drawing.props!.events[0]!;
+    expect(event.allDay).toBe(true);
+    expect(event.start.getHours()).toBe(0);
+    expect(event.end.getHours()).toBe(0);
+    expect(mergeGanttI18n().functions.formatEventTime(event.start, event.end, event.allDay!)).toBe(label);
+    expect(drawing.props?.defaultScale).toBe("quarter");
+  });
+
+  test("retains DateTime instants and time labels", async () => {
+    const start = "2026-09-24T14:00:00Z";
+    const end = "2026-09-24T16:00:00Z";
+    renderCollection({ rows: [{ ...scheduledRecord, start, end }], resources: [{ ...ganttRecord,
+      fields: ganttRecord.fields.map((field) => ["start", "end"].includes(field.name) ? { ...field, scalar: "DateTime" } : field),
+    }, ganttLane] });
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    const event = drawing.props!.events[0]!;
+    expect(event.allDay).toBe(false);
+    expect(event.start.toISOString()).toBe("2026-09-24T14:00:00.000Z");
+    expect(event.end.toISOString()).toBe("2026-09-24T16:00:00.000Z");
+    expect(mergeGanttI18n().functions.formatEventTime(event.start, event.end, false)).toMatch(/\d:\d\d/);
+  });
+
   test("projects records as read-only bars and retains a catalogue row without bars and its content slot", async () => {
     const f = renderCollection();
     await waitFor(() => expect(drawing.props?.events).toHaveLength(1));

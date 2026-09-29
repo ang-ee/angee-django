@@ -2205,7 +2205,8 @@ function GanttView({
   // Header label offset = the row cell's ps-3 (0.75rem) left gutter + the
   // toggle/checkbox gutter (w-5 + me-1 = 1.5rem) + the reorder grip (0.875rem)
   // when present, so "Resources" lines up with the row titles below it.
-  const namePaddingStart = reorderEnabled ? "3.125rem" : "2.25rem"
+  const showTreeGutter = viewConfig.rowCheckboxes || rows.some((row) => row.isGroup)
+  const namePaddingStart = `${0.75 + (showTreeGutter ? 1.5 : 0) + (reorderEnabled ? 0.875 : 0)}rem`
   const treeContent = (
     <div
       className={cn(
@@ -2275,6 +2276,7 @@ function GanttView({
             bandRem={rowBars.get(row.resource.id)?.bandRem ?? minRowRem}
             columns={columns}
             nameWidth={treeConfig.nameColumnWidth}
+            showTreeGutter={showTreeGutter}
             dimmed={reorder?.resourceId === row.resource.id}
             selected={selectedSet.has(row.resource.id)}
             onSelectedChange={row.isGroup ? undefined : toggleRowSelected}
@@ -2449,7 +2451,7 @@ function GanttView({
           here that is not a bar or a hint tile begins a scroll pan - the whole
           panel is a draggable canvas, not just the rows. */}
       <div
-        className="relative flex min-h-0 grow flex-col"
+        className="relative flex grow shrink-0 flex-col"
         onPointerDown={beginHeaderPan}
       >
         {/* off-day / today / now backdrop only; vertical gridlines are
@@ -2584,6 +2586,75 @@ function GanttView({
       className
     ),
     children: (
+      <>
+          {viewConfig.zoomControl && (
+            <div
+              data-slot="gantt-zoom"
+              className="bg-sheet flex shrink-0 items-center justify-end gap-1 border-b p-1"
+            >
+              {/* aria-disabled instead of disabled: the not-allowed cursor
+                  must still show at the zoom limits */}
+              <TooltipProvider delay={600} closeDelay={0} timeout={300}>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="iconSm"
+                        aria-label={settings.i18n.labels.zoomIn}
+                        aria-disabled={!canZoomIn || undefined}
+                        className="text-fg-muted hover:text-fg aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent"
+                        onClick={() => {
+                          if (!canZoomIn) return
+                          // controlled zoom anchors via fineCenterRef when
+                          // the parent adopts; a pre-set anchor would leak
+                          // stale if the parent ignores the proposal
+                          if (viewConfig.zoom === undefined) anchorZoomCenter()
+                          setZoomValue(
+                            +(zoom + (zoomRange.step ?? 0.25)).toFixed(2)
+                          )
+                        }}
+                      />
+                    }
+                  >
+                    <Glyph name="plus"
+                      className="size-3"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPortal><TooltipPositioner side="bottom"><TooltipContent>
+                    {settings.i18n.labels.zoomIn}
+                  </TooltipContent></TooltipPositioner></TooltipPortal>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="iconSm"
+                        aria-label={settings.i18n.labels.zoomOut}
+                        aria-disabled={!canZoomOut || undefined}
+                        className="text-fg-muted hover:text-fg aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent"
+                        onClick={() => {
+                          if (!canZoomOut) return
+                          if (viewConfig.zoom === undefined) anchorZoomCenter()
+                          setZoomValue(
+                            +(zoom - (zoomRange.step ?? 0.25)).toFixed(2)
+                          )
+                        }}
+                      />
+                    }
+                  >
+                    <Glyph name="minus"
+                      className="size-3"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPortal><TooltipPositioner side="bottom"><TooltipContent>
+                    {settings.i18n.labels.zoomOut}
+                  </TooltipContent></TooltipPositioner></TooltipPortal>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          )}
       <div ref={bodyRef} className="relative flex min-h-0 flex-1">
         {/* Tree pane */}
         <div
@@ -2712,78 +2783,6 @@ function GanttView({
           data-slot="gantt-timeline-pane"
           className="relative h-full min-w-0 flex-1"
         >
-          {viewConfig.zoomControl && (
-            <div
-              data-slot="gantt-zoom"
-              /* --gantt-zoom-shift comes from the offscreen-chips measure
-                 pass: the control glides inward while a chip occupies its
-                 band, because the chips' position IS their meaning and this
-                 corner spot is merely a habit */
-              className="bg-sheet absolute end-[calc(0.75rem+var(--gantt-zoom-shift,0px))] bottom-5 z-40 flex flex-col rounded-6 border shadow-sm transition-[inset-inline-end] duration-200"
-            >
-              {/* aria-disabled instead of disabled: the not-allowed cursor
-                  must still show at the zoom limits */}
-              <TooltipProvider delay={600} closeDelay={0} timeout={300}>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="iconSm"
-                        aria-label={settings.i18n.labels.zoomIn}
-                        aria-disabled={!canZoomIn || undefined}
-                        className="text-fg-muted hover:text-fg size-5! rounded-b-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent"
-                        onClick={() => {
-                          if (!canZoomIn) return
-                          // controlled zoom anchors via fineCenterRef when
-                          // the parent adopts; a pre-set anchor would leak
-                          // stale if the parent ignores the proposal
-                          if (viewConfig.zoom === undefined) anchorZoomCenter()
-                          setZoomValue(
-                            +(zoom + (zoomRange.step ?? 0.25)).toFixed(2)
-                          )
-                        }}
-                      />
-                    }
-                  >
-                    <Glyph name="plus"
-                      className="size-3"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPortal><TooltipPositioner side="left"><TooltipContent>
-                    {settings.i18n.labels.zoomIn}
-                  </TooltipContent></TooltipPositioner></TooltipPortal>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="iconSm"
-                        aria-label={settings.i18n.labels.zoomOut}
-                        aria-disabled={!canZoomOut || undefined}
-                        className="text-fg-muted hover:text-fg size-5! rounded-t-none border-t aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent"
-                        onClick={() => {
-                          if (!canZoomOut) return
-                          if (viewConfig.zoom === undefined) anchorZoomCenter()
-                          setZoomValue(
-                            +(zoom - (zoomRange.step ?? 0.25)).toFixed(2)
-                          )
-                        }}
-                      />
-                    }
-                  >
-                    <Glyph name="minus"
-                      className="size-3"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPortal><TooltipPositioner side="left"><TooltipContent>
-                    {settings.i18n.labels.zoomOut}
-                  </TooltipContent></TooltipPositioner></TooltipPortal>
-                </Tooltip>
-              </TooltipProvider>
-            </div>
-          )}
           {customScrollbars ? (
             // The vertical scrollbar is inset into the body lane: it starts
             // below the sticky 65px two-row header (otherwise its top slides
@@ -2849,6 +2848,7 @@ function GanttView({
           <GanttCustomDragLayer />
         )}
       </div>
+      </>
     ),
   }
 
@@ -3086,6 +3086,7 @@ const GanttTreeRow = memo(function GanttTreeRow({
   bandRem,
   columns,
   nameWidth,
+  showTreeGutter,
   dimmed,
   selected,
   onSelectedChange,
@@ -3097,6 +3098,7 @@ const GanttTreeRow = memo(function GanttTreeRow({
   bandRem: number
   columns: GanttColumn[]
   nameWidth: number
+  showTreeGutter: boolean
   dimmed: boolean
   selected: boolean
   onSelectedChange?: (id: string, checked: boolean) => void
@@ -3127,7 +3129,7 @@ const GanttTreeRow = memo(function GanttTreeRow({
       data-gantt-row-id={row.resource.id}
       data-selected={selected || undefined}
       className={cn(
-        "group/gantt-row data-hover:bg-inset/40 data-selected:bg-brand/5 data-selected:data-hover:bg-brand/5 flex border-b",
+        "group/gantt-row data-hover:bg-inset/40 data-selected:bg-brand/5 data-selected:data-hover:bg-brand/5 flex shrink-0 border-b",
         dimmed && "opacity-50"
       )}
       style={{ height: `${heightRem}rem` }}
@@ -3198,7 +3200,7 @@ const GanttTreeRow = memo(function GanttTreeRow({
             />
             {/* fixed gutter: groups toggle here, leaves carry the checkbox -
               titles of one level share the same x either way */}
-            <span className="me-1 flex w-5 shrink-0 items-center justify-start">
+            <span className={cn("me-1 flex w-5 shrink-0 items-center justify-start", !showTreeGutter && "hidden")}>
               {row.isGroup ? (
                 <Button
                   variant="ghost"
@@ -3554,7 +3556,7 @@ const GanttTimelineRow = memo(function GanttTimelineRow({
       data-drop-target={dragTarget ?? undefined}
       data-selected={selected || undefined}
       className={cn(
-        "data-hover:bg-inset/30 data-selected:bg-brand/5 data-selected:data-hover:bg-brand/5 relative w-full min-w-0",
+        "data-hover:bg-inset/30 data-selected:bg-brand/5 data-selected:data-hover:bg-brand/5 relative w-full min-w-0 shrink-0",
         // The ring is pointer-events-none, so a cursor set on IT can never be
         // reached - the row is the element actually under the pointer, so the
         // cursor belongs here. Gated on the same flag as the ring: wherever the
@@ -4265,21 +4267,6 @@ function GanttOffscreenChips({
       const trackW = viewport.scrollWidth
       const visibleStart = getScrollStart(viewport)
       const visibleEnd = visibleStart + viewport.clientWidth
-      // The floating zoom control shares the right edge. The chips stay in
-      // their column - a shifted chip reads as misaligned, and its position
-      // IS its meaning - so it is the ZOOM CONTROL that glides inward while
-      // any end chip occupies its band (published as --gantt-zoom-shift,
-      // written imperatively like the rest of this measure pass). The band
-      // test uses the control's VERTICAL extent only, which a horizontal
-      // dodge never changes, so the loop cannot oscillate.
-      const zoomEl = pane.querySelector<HTMLElement>("[data-slot=gantt-zoom]")
-      const zoom = zoomEl
-        ? {
-            top: zoomEl.getBoundingClientRect().top - paneRect.top - 8,
-            bottom: zoomEl.getBoundingClientRect().bottom - paneRect.top + 8,
-          }
-        : null
-      let chipInZoomBand = false
       const next: OffscreenChip[] = []
       for (const rowEl of viewport.querySelectorAll<HTMLElement>(
         "[data-gantt-row]"
@@ -4307,9 +4294,6 @@ function GanttOffscreenChips({
             target: startPx - 24,
           })
         } else if (startPx >= visibleEnd - 2) {
-          if (zoom && top >= zoom.top && top <= zoom.bottom) {
-            chipInZoomBand = true
-          }
           next.push({
             ...base,
             side: "end",
@@ -4317,11 +4301,6 @@ function GanttOffscreenChips({
           })
         }
       }
-      // 28px clears the 20px chip column plus breathing room on both sides
-      zoomEl?.style.setProperty(
-        "--gantt-zoom-shift",
-        chipInZoomBand ? "28px" : "0px"
-      )
       setChips((prev) => (sameChips(prev, next) ? prev : next))
     }
     const schedule = () => {
@@ -4335,10 +4314,6 @@ function GanttOffscreenChips({
       viewport.removeEventListener("scroll", schedule)
       observer.disconnect()
       if (raf) cancelAnimationFrame(raf)
-      // the zoom control returns to its corner once no chip can collide
-      pane
-        .querySelector<HTMLElement>("[data-slot=gantt-zoom]")
-        ?.style.removeProperty("--gantt-zoom-shift")
     }
   }, [paneRef, occurrences, refreshKey])
 

@@ -23,6 +23,7 @@ import type {
 import type { ColumnDescriptor, FacetDescriptor } from "../page";
 import type { Occurrence } from "../calendar/CalendarView";
 import type { AnyCalendarWindowSource } from "../calendar/use-calendar-window";
+import type { GanttRowLayout } from "../gantt/gantt-types";
 import type { DndPayload } from "../../lib/dnd";
 import type { RowActionDeclaration } from "./RowActions";
 import type { CrudFilter, CrudSort } from "@refinedev/core";
@@ -71,7 +72,7 @@ export interface BoardLaneSource {
 }
 
 /** Read-only schedules on rows supplied by the list's related lane source. */
-export interface GanttViewSpec {
+export interface GanttViewSpec extends GanttRowLayout {
   start: string;
   end: string;
   /** Defaults to the resource's record representation. */
@@ -80,7 +81,7 @@ export interface GanttViewSpec {
   tone?: string;
   /** Additional fields selected on the related row for renderRowContent. */
   rowFields?: readonly string[];
-  /** Content beside the related row's name, including rows without schedules. */
+  /** Replaces the related row's name, including rows without schedules. */
   renderRowContent?: (row: Row) => ReactNode;
 }
 

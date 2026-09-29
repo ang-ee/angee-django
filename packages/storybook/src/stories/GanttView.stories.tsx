@@ -22,7 +22,10 @@ const meta = {
       { id: "two", title: "Delivery", resourceId: "north", start: new Date("2026-09-12T00:00:00Z"), end: new Date("2026-09-22T00:00:00Z"), color: toneColorVar("success") },
       { id: "three", title: "Planning", resourceId: "south", start: new Date("2026-09-10T00:00:00Z"), end: new Date("2026-09-16T00:00:00Z"), color: toneColorVar("warning") },
     ],
-    renderRowContent: (row) => row.id === "west" ? <Badge tone="neutral">Available</Badge> : null,
+    renderRowContent: (row) => <div className="flex min-w-0 items-center gap-2">
+      <span className="truncate" title={row.title}>{row.title}</span>
+      {row.id === "west" ? <Badge tone="neutral">Available</Badge> : null}
+    </div>,
   },
   decorators: [(Story) => <div className="h-[600px] bg-sheet"><Story /></div>],
 } satisfies Meta<typeof GanttView>;

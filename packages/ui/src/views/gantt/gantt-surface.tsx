@@ -1,4 +1,5 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { addWeeks, startOfDay, startOfWeek, subMilliseconds } from "date-fns";
 import { cn } from "../../lib/cn";
 import { useUiT } from "../../i18n";
 import { Gantt, type GanttProps } from "./gantt";
@@ -9,8 +10,31 @@ import type { GanttViewProps } from "./GanttView";
 
 const READ_ONLY = { drag: false, resize: false, selectSlot: false };
 
-export default function GanttSurface({ resources, events, renderRowContent, onEventClick, className, ...props }: GanttViewProps) {
+export default function GanttSurface({ resources, events, renderRowContent, onEventClick, className,
+  sidebarWidth = 224, minRowHeight = 3.5, fitToEvents = false, onDateChange, ...props }: GanttViewProps) {
   const t = useUiT();
+  const [today] = useState(() => startOfDay(new Date()));
+  const [navigated, setNavigated] = useState(false);
+  const fitting = fitToEvents && !navigated;
+  const range = useMemo(() => {
+    if (!fitting) return undefined;
+    let first = today;
+    let last = today;
+    for (const event of events) {
+      if (event.start < first) first = event.start;
+      const end = event.end > event.start ? subMilliseconds(event.end, 1) : event.end;
+      if (end > last) last = end;
+    }
+    return { start: startOfWeek(first, { weekStartsOn: 1 }), end: addWeeks(startOfWeek(last, { weekStartsOn: 1 }), 2) };
+  }, [fitting, events, today]);
+  const handleDateChange = useCallback((date: Date) => {
+    setNavigated(true);
+    onDateChange?.(date);
+  }, [onDateChange]);
+  const handleScaleChange = useCallback(() => setNavigated(true), []);
+  const treePanel = useMemo(() => ({ width: sidebarWidth, minWidth: sidebarWidth, maxWidth: sidebarWidth,
+    nameColumnWidth: sidebarWidth, resizable: false }), [sidebarWidth]);
+  const metrics = useMemo(() => ({ minRowHeight }), [minRowHeight]);
   const labels = useMemo<GanttI18nConfig["labels"]>(() => ({
     today: t("gantt.today"), previous: t("gantt.previous"), next: t("gantt.next"),
     addEvent: t("gantt.addEvent"), addTask: t("gantt.addTask"), allDay: t("gantt.allDay"),
@@ -30,10 +54,9 @@ export default function GanttSurface({ resources, events, renderRowContent, onEv
   const i18n = useMemo(() => ({ labels }), [labels]);
   const renderNoResources = useCallback(() => t("gantt.empty"), [t]);
   const renderResourceLabel = useCallback<NonNullable<GanttProps["renderResourceLabel"]>>(({ resource }) => (
-    <span className="flex min-w-0 items-center gap-2">
-      <span className="truncate">{resource.title}</span>
-      {renderRowContent?.(resource)}
-    </span>
+    <div className="min-w-0 flex-1">
+      {renderRowContent ? renderRowContent(resource) : <span className="block truncate" title={resource.title}>{resource.title}</span>}
+    </div>
   ), [renderRowContent]);
   const handleEventClick = useCallback<NonNullable<GanttProps["onEventClick"]>>(
     (occurrence) => onEventClick?.(occurrence.event), [onEventClick],
@@ -41,6 +64,15 @@ export default function GanttSurface({ resources, events, renderRowContent, onEv
   return (
     <Gantt
       {...props}
+      defaultScale={props.defaultScale ?? (fitToEvents ? "quarter" : undefined)}
+      range={range}
+      weekStartsOn={1}
+      onDateChange={handleDateChange}
+      onScaleChange={handleScaleChange}
+      treePanel={treePanel}
+      metrics={metrics}
+      rowAlign="center"
+      infiniteScroll={!fitting}
       className={cn("h-full flex-1", className)}
       resources={resources}
       events={events}
@@ -48,7 +80,7 @@ export default function GanttSurface({ resources, events, renderRowContent, onEv
       i18n={i18n}
       rowCheckboxes={false}
       scheduleMode="multiple"
-      initialCenter="anchor"
+      initialCenter={range?.start ?? "anchor"}
       renderNoResources={renderNoResources}
       renderResourceLabel={renderResourceLabel}
       onEventClick={onEventClick ? handleEventClick : undefined}

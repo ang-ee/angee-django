@@ -8,6 +8,11 @@ Install: `pnpm add @angee/ui`
 the active breadcrumb with that brand. `GanttView` is the presentational date
 axis; the `gantt` collection kind composes the list owner's filter, grouping and
 row paging alongside list, board and calendar views.
+Gantt `renderRowContent` replaces the sidebar title. Use `sidebarWidth` and
+`minRowHeight` to size rich labels; overlapping bars grow both panes together.
+Collection Date fields include the target calendar day and show date-only labels.
+The initial collection window fits schedules and today at week granularity;
+an explicit historical anchor and subsequent navigation use native scale periods.
 
 `useRuntimeViewAs`, `ViewAsBanner` and `ViewAsPicker` consume an injected
 `RuntimeAuthState.viewAs` controller. Its identity and selectable people come from the

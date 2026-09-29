@@ -4,19 +4,22 @@ import { LoadingPanel } from "../../fragments/LoadingPanel";
 import { Button } from "../../ui/button";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { useUiT } from "../../i18n";
-import type { GanttEvent, GanttResource, GanttScale } from "./gantt-types";
+import type { GanttEvent, GanttResource, GanttScale, GanttRowLayout } from "./gantt-types";
 
 export type { GanttEvent, GanttResource, GanttScale } from "./gantt-types";
 
-export interface GanttViewProps {
+export interface GanttViewProps extends GanttRowLayout {
   resources: readonly GanttResource[];
   events: readonly GanttEvent[];
   date?: Date;
   defaultDate?: Date;
   onDateChange?: (date: Date) => void;
   defaultScale?: GanttScale;
+  /** Fit the initial window to whole weeks around events and today. Navigation exits it. */
+  fitToEvents?: boolean;
   loading?: boolean;
   nowIndicator?: boolean;
+  /** Replaces the default sidebar title, including on rows without schedules. */
   renderRowContent?: (resource: GanttResource) => ReactNode;
   onEventClick?: (event: GanttEvent) => void;
   className?: string;

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { addWeeks, startOfDay, startOfWeek } from "date-fns";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, createAngeeI18nInstance } from "../../runtime";
 import type { GanttProps } from "./gantt";
@@ -39,9 +40,42 @@ describe("Gantt drawing adapter", () => {
     expect(drawing.props?.resources).toBe(resources);
     expect(drawing.props?.events).toBe(events);
     expect(drawing.props?.date).toBe(date);
-    expect(drawing.props?.onDateChange).toBe(onDateChange);
+    act(() => drawing.props?.onDateChange?.(date));
+    expect(onDateChange).toHaveBeenCalledWith(date);
     view.rerender(<GanttSurface resources={resources} events={events} date={date} onDateChange={onDateChange} />);
     expect(drawing.props?.i18n).toBe(labels);
+  });
+
+  test("custom row content replaces the title inside the fixed sidebar contract", () => {
+    const resource = { id: "lane", title: "Default title" };
+    render(<GanttSurface resources={[resource]} events={[]} sidebarWidth={240} minRowHeight={4}
+      renderRowContent={() => <a href="/lane">Custom title</a>} />);
+    expect(drawing.props?.treePanel).toMatchObject({ width: 240, minWidth: 240, maxWidth: 240, nameColumnWidth: 240, resizable: false });
+    expect(drawing.props?.metrics?.minRowHeight).toBe(4);
+    render(<>{drawing.props?.renderResourceLabel?.({ resource, depth: 0, isGroup: false, collapsed: false })}</>);
+    expect(screen.getByRole("link", { name: "Custom title" })).toBeTruthy();
+    expect(screen.queryByText("Default title")).toBeNull();
+  });
+
+  test("fits every bar and today to weeks, then releases the range on navigation", () => {
+    const today = startOfDay(new Date());
+    const first = addWeeks(today, -10);
+    const last = addWeeks(today, 10);
+    render(<GanttSurface resources={[]} events={[{ id: "bar", title: "Interval", start: first, end: last }]} fitToEvents />);
+    expect(drawing.props?.range).toEqual({ start: startOfWeek(first, { weekStartsOn: 1 }), end: addWeeks(startOfWeek(last, { weekStartsOn: 1 }), 2) });
+    expect(drawing.props?.initialCenter).toEqual(startOfWeek(first, { weekStartsOn: 1 }));
+    expect(drawing.props?.infiniteScroll).toBe(false);
+    act(() => drawing.props?.onDateChange?.(addWeeks(today, 1)));
+    expect(drawing.props?.range).toBeUndefined();
+    expect(drawing.props?.infiniteScroll).toBe(true);
+  });
+
+  test("includes today for past-only or empty schedules and releases fitting on scale change", () => {
+    const today = startOfDay(new Date());
+    render(<GanttSurface resources={[]} events={[]} fitToEvents />);
+    expect(drawing.props?.range).toEqual({ start: startOfWeek(today, { weekStartsOn: 1 }), end: addWeeks(startOfWeek(today, { weekStartsOn: 1 }), 2) });
+    act(() => drawing.props?.onScaleChange?.("week"));
+    expect(drawing.props?.range).toBeUndefined();
   });
 
   test.each([0, 1, 2])("resolves native English plurals for %s events and days", (count) => {

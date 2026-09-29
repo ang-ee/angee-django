@@ -5,6 +5,14 @@ type GanttBarId = string
 
 type GanttScale = "day" | "week" | "month" | "quarter" | "year"
 
+/** Geometry shared by the sidebar content and the packed timeline rows. */
+interface GanttRowLayout {
+  /** Fixed sidebar width in pixels, including cell padding. Default 224. */
+  sidebarWidth?: number
+  /** Minimum row height in rem; overlapping schedules can grow it. Default 3.5. */
+  minRowHeight?: number
+}
+
 /** Row drag-reorder proposal: `parentId` null is root, `resources` is the tree with the move applied. */
 interface GanttResourceReorder {
   resourceId: string
@@ -261,6 +269,7 @@ export type {
   GanttEvent,
   GanttDataAdapter,
   GanttDateRange,
+  GanttRowLayout,
   GanttDragState,
   GanttBarId,
   GanttInteractions,

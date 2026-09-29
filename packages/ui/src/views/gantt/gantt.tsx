@@ -144,6 +144,8 @@ interface UseGanttStateOptions<TData = unknown> extends GanttCallbacks<TData> {
   defaultScale?: GanttScale
   date?: Date
   defaultDate?: Date
+  /** Explicit displayed window; omit to use the scale and anchor period. */
+  range?: GanttDateRange
   selection?: GanttSelection
   defaultSelection?: GanttSelection
   interactions?: Partial<GanttInteractions>
@@ -389,15 +391,13 @@ function createGanttStore<TData>(
       timeZone: settings.timeZone,
       weekStartsOn: settings.weekStartsOn,
     }
-    const { visibleRange: baseRange, activeRange } = getGanttDateRange(
-      scale,
-      date,
-      rangeOpts
-    )
+    const ranges = getGanttDateRange(scale, date, rangeOpts)
+    const baseRange = options.range ?? ranges.visibleRange
+    const activeRange = options.range ?? ranges.activeRange
     // Infinite scroll: widen by whole periods; the anchor period stays put
     const { before, after } = internal.rangeWindow
     let visibleRange = baseRange
-    if (before > 0 || after > 0) {
+    if (!options.range && (before > 0 || after > 0)) {
       let earlier = date
       for (let i = 0; i < before; i++) {
         earlier = stepGanttDate(scale, earlier, -1, rangeOpts)
@@ -780,6 +780,7 @@ function createGanttStore<TData>(
     "events",
     "scale",
     "date",
+    "range",
     "selection",
     "interactions",
     "loading",
@@ -1324,7 +1325,7 @@ interface GanttViewConfig<TData = unknown> {
    * flow (onCreateTask). Shown only when canCreateTask allows it. Default off.
    */
   displayCreateTaskHint: boolean
-  /** Floating zoom in/out control over the track. Default on. */
+  /** Zoom in/out controls in a reserved row above the track. Default on. */
   zoomControl: boolean
   /**
    * Ctrl/Cmd + wheel over the timeline zooms the time range, anchored on the
@@ -1379,7 +1380,7 @@ interface GanttViewConfig<TData = unknown> {
    * (the anchor period stays the nav title). Default true.
    */
   infiniteScroll: boolean
-  /** Zoom bounds and button step for the floating control. Default 0.5 - 3, step 0.25. */
+  /** Zoom bounds and button step. Default 0.5 - 3, step 0.25. */
   zoomRange?: { min?: number; max?: number; step?: number }
   /** Layout metric overrides (row/lane/unit geometry, thresholds). */
   metrics?: GanttMetrics
@@ -1616,6 +1617,7 @@ const OPTION_KEYS: Array<keyof UseGanttStateOptions> = [
   "defaultScale",
   "date",
   "defaultDate",
+  "range",
   "selection",
   "defaultSelection",
   "interactions",
