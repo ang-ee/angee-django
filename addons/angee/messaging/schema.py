@@ -1130,6 +1130,10 @@ class RecordThreadStatePayload:
 class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
     """A record chatter thread, or the error that prevented resolving it."""
 
+    # The record model is polymorphic: project its own posting permission name,
+    # rather than assuming every threaded model uses "write".
+    thread_post_access: str | None = strawberry.field(name="thread_post_access", default=None)
+    permissions: list[str] = strawberry.field(default_factory=list)
     messages: list[RecordMessageType] = strawberry.field(default_factory=list)
     message_result_count: int = strawberry.field(name="message_result_count", default=0)
     self_follower: RecordThreadFollowerType | None = strawberry.field(name="self_follower", default=None)
@@ -2424,10 +2428,11 @@ def _record_thread_payload(
         if thread is not None and user is not None
         else 0
     )
+    record_access = _record_message_access(record, user)
     if messages:
         # Posting and moderation are record-level facts shared by the whole page.
         # Prime both through their owner instead of re-walking each message's record.
-        _record_message_access_cache(info)[messages[0].thread_id] = _record_message_access(record, user)
+        _record_message_access_cache(info)[messages[0].thread_id] = record_access
     if messages and thread is not None and user is not None:
         # One receipt-anchored scan primes the page's needaction flags — the same
         # unread set the badge counts, restricted to the rows on this page.
@@ -2444,6 +2449,8 @@ def _record_thread_payload(
         else 0
     )
     return RecordThreadPayload(
+        thread_post_access=record.thread_post_access,
+        permissions=[record.thread_post_access] if record_access[0] else [],
         thread=thread,
         messages=messages,
         message_result_count=message_result_count,

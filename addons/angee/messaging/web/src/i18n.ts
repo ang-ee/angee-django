@@ -66,6 +66,8 @@ export const enMessagingMessages: Record<string, string> = {
   "message.directionOutbound": "Outbound",
 
   // Composer.
+  "composer.audience": "Visible to people with access to this record.",
+  "composer.help": "Use comments for discussion and notes for internal updates.",
   "composer.comment": "Comment",
   "composer.note": "Note",
   "composer.cancelReply": "Cancel reply",
