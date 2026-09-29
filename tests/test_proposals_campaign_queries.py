@@ -199,3 +199,73 @@ def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipie
         as_actor(task, c.person("responder")).message_post("Answered")
     with actor_context(manager):
         assert as_actor(task, manager).clarification_waiting() == []
+
+
+def test_active_project_round_uses_live_targets_and_tracks(campaign: ProposalCampaign) -> None:
+    c = campaign
+    round = c.round()
+    proposal = c.admit(round, "responder", track=True)
+    manager = c.person("facilitator")
+    with actor_context(manager), system_context(reason="tests.round.targets"):
+        assert Round.objects.active_for_project(round.project).get().pk == round.pk
+        assert Round.objects.active_for_project(proposal.track).get().pk == round.pk
+        Round._base_manager.filter(pk=round.pk).update(status="cancelled")
+        assert not Round.objects.active_for_project(round.project).exists()
+
+
+def test_task_audience_projection_shares_publication_constraints(campaign: ProposalCampaign) -> None:
+    c = campaign
+    round = c.round()
+    c.admit(round, "responder")
+    question = c.ask(round)
+    manager = c.person("facilitator")
+
+    def choices(actor: Any) -> list[str]:
+        row = Task._base_manager.filter(pk=question.pk).annotate(**{
+            f"allowed_{value}": Task.visibility_allowed_expression(actor, value)
+            for value in Task.TaskVisibility.values
+        }).get()
+        return [value for value in Task.TaskVisibility.values if getattr(row, f"allowed_{value}")]
+
+    with actor_context(manager):
+        assert set(choices(manager)) == {"inherited", "restricted"}
+        assert choices(c.person("outsider")) == []
+        as_actor(round, manager).pass_clarification(question, c.person("recipient"))
+        assert choices(manager) == ["inherited"]
+
+
+def test_answer_audience_choices_match_the_locked_verb(campaign: ProposalCampaign) -> None:
+    c = campaign
+    round = c.round()
+    proposal = c.admit(round, "responder")
+    answer = c.answer(proposal)
+    responder, manager = c.person("responder"), c.person("facilitator")
+    with actor_context(responder):
+        row = as_actor(answer, responder)
+        row.set_visibility("responder")
+        assert row.allowed_visibility() == ["responder", "sealed"]
+    with actor_context(manager):
+        assert set(as_actor(answer, manager).allowed_visibility()) == {"round", "responder", "sealed"}
+
+
+def test_task_audience_list_projection_has_constant_query_count(campaign: ProposalCampaign) -> None:
+    c = campaign
+    round = c.round()
+    manager = c.person("project-owner")
+    with system_context(reason="tests.task.audiences"):
+        for index in range(50):
+            Task.objects.create(project=round.project, title=f"Item {index}")
+    def read(limit: int) -> list[Any]:
+        return list(Task.objects.as_user(manager).annotate(**{
+            f"allowed_{value}": Task.visibility_allowed_expression(manager, value)
+            for value in Task.TaskVisibility.values
+        }).order_by("pk")[:limit])
+    with actor_context(manager):
+        read(5)
+        counts = []
+        for limit in (5, 50):
+            with CaptureQueriesContext(connection) as queries:
+                rows = read(limit)
+            assert len(rows) == limit
+            counts.append(len(queries))
+        assert counts[0] == counts[1], counts

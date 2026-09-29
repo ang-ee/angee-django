@@ -13,6 +13,7 @@ import {
 import * as React from "react";
 
 import { useProposalsT } from "./i18n";
+import { ProjectRoundRecord, RoundRecordSection } from "./round-record";
 import { ROUND_MODEL } from "./resources";
 import { TaskResponderShareAction } from "./task-responder-share";
 
@@ -79,7 +80,40 @@ function RecordRoundsPane({
   );
 }
 
+function RoundTabLabel({ name }: { name: "people" | "approach" }): React.ReactElement {
+  const t = useProposalsT();
+  return <>{t(name === "people" ? "round.tabs.people" : "round.tabs.approach")}</>;
+}
+
 export const roundRecordSlots = [
+  {
+    ...formViewRecordActionsSlot(ROUND_MODEL), id: "proposals.round-open", sequence: 30,
+    content: <RoundRecordSection surface="primary" />,
+  },
+  {
+    ...formViewRecordActionsSlot(PROJECT_MODEL), id: "proposals.project-round-open", sequence: 30,
+    content: <ProjectRoundRecord surface="primary" />,
+  },
+  {
+    ...formViewRecordActionsSlot(ROUND_MODEL), id: "proposals.round-verbs", sequence: 35,
+    recordActionPlacement: "menu", content: <RoundRecordSection surface="actions" />,
+  },
+  {
+    ...formViewRecordActionsSlot(PROJECT_MODEL), id: "proposals.project-round-verbs", sequence: 35,
+    recordActionPlacement: "menu", content: <ProjectRoundRecord surface="actions" />,
+  },
+  {
+    ...formViewSectionsSlot(ROUND_MODEL), id: "proposals.round-people", sequence: 40,
+    content: <Tab id="round-people" label={<RoundTabLabel name="people" />}><RoundRecordSection surface="people" /></Tab>,
+  },
+  {
+    ...formViewSectionsSlot(PROJECT_MODEL), id: "proposals.project-people", sequence: 40,
+    content: <Tab id="round-people" label={<RoundTabLabel name="people" />}><ProjectRoundRecord surface="people" /></Tab>,
+  },
+  {
+    ...formViewSectionsSlot(PROJECT_MODEL), id: "proposals.project-approach", sequence: 35,
+    content: <Tab id="approach" label={<RoundTabLabel name="approach" />}><ProjectRoundRecord surface="approach" /></Tab>,
+  },
   {
     ...formViewRecordActionsSlot(TASK_MODEL),
     id: "proposals.task-responder-share",

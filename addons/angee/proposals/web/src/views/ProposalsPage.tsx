@@ -17,6 +17,7 @@ import {
 import * as React from "react";
 
 import { useProposalsT } from "../i18n";
+import { AnswerVisibility } from "../answer-visibility";
 import { useAnswerActions } from "../answer-actions";
 import { useProposalFormDeclaration, writeEnumOptions } from "../proposal-form";
 import {
@@ -87,7 +88,8 @@ function ProposalAnswersPanel({ recordId }: RecordPanelContext): React.ReactElem
         <Field name="permissions" hidden readOnly />
         <Field name="revision" hidden readOnly />
         <Field name="proposal" readOnly />
-        <Field name="topic" createOnly />
+        <Field name="topic" title createOnly labelAccessory={(record, state) => <AnswerVisibility record={record} disabled={state.disabled} />} />
+        <Field name="allowed_visibility" hidden readOnly />
         <Field name="visibility" createOnly options={visibilityOptions} />
         <Field name="shared_with_responders" readOnly />
         <Field name="body" widget="markdown.editor" body />

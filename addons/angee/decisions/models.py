@@ -11,6 +11,7 @@ from django.db import models, transaction
 from django.db.models.deletion import Collector, ProtectedError, RestrictedError
 from rebac import system_context
 
+from angee.base.actors import instance_actor
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import OptimisticLockMixin
@@ -158,6 +159,22 @@ class Decision(OptimisticLockMixin, RecordRefMixin, AngeeDataModel):
     def is_open(self) -> bool:
         """Return whether this snapshot still accepts an answer."""
         return self.verdict == Verdict.PENDING and self.closed_reason is None
+
+    @classmethod
+    def can_revisit_expression(cls, actor: Any) -> models.Expression:
+        """Subject owners contribute successor eligibility; ordinary decisions are final."""
+        return models.Value(False)
+
+    @property
+    def can_revisit(self) -> bool:
+        """Use the same eligibility rule as optimized list projections."""
+        return system_queryset(type(self)).filter(pk=self.pk).annotate(
+            _can_revisit=type(self).can_revisit_expression(instance_actor(self)),
+        ).values_list("_can_revisit", flat=True).get()
+
+    def revisit(self, *, actor: Any, revision: int) -> Any:
+        """Admit a successor through a domain donor without editing this answer."""
+        raise ValidationError("This decision is final.")
 
     def decide(self, *, actor: Any, revision: int, action: str, values: dict[str, Any]) -> Any:
         """Dispatch an answer; consumer donors may compose an atomic domain action.

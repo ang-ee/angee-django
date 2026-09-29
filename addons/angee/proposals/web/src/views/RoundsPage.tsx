@@ -22,7 +22,6 @@ import {
   useProposalFormDeclaration,
   writeEnumOptions,
 } from "../proposal-form";
-import { useRoundCeremonyActions } from "../round-actions";
 import { PROPOSAL_MODEL, ROUND_MODEL, TOPIC_MODEL } from "../resources";
 
 interface ProposalShellRow extends StringIdRow {
@@ -38,7 +37,6 @@ export function RoundsPage(): React.ReactElement {
   const openingPolicyOptions = writeEnumOptions(
     useEnumOptions(ROUND_MODEL, "opening_policy"),
   );
-  const actions = useRoundCeremonyActions(recordId ?? "");
   const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
     () => [
       {
@@ -95,7 +93,6 @@ export function RoundsPage(): React.ReactElement {
       <Form
         resource={ROUND_MODEL}
         layout="tabs"
-        actions={[actions.open, actions.close, actions.transfer, actions.cancel, actions.admit, actions.remove, actions.widen]}
       >
         <Field name="permissions" hidden readOnly />
         <Field name="revision" hidden readOnly />

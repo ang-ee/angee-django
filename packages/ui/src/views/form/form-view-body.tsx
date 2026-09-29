@@ -197,6 +197,7 @@ export function FormViewRecordHeader({
           ) : null}
           {!compact ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
         </div>
+        {currentTitleField?.labelAccessory && displayRecord ? currentTitleField.labelAccessory(displayRecord, { disabled: surface.formReadOnly || surface.formIsDirty || surface.pending || surface.isCreate }) : null}
         {currentStatusField && compact ? (
           <Controller
             control={form.control}

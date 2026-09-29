@@ -28,3 +28,16 @@ The mutation dispatches through `Decision.decide`; a model donor can compose a
 domain transaction there and delegate the final transition to the manager.
 Intake uses this seam so inbox answers obey the same account-linking checks as
 `Need.decide_access`. All answer writes remain conditional under the group lock.
+
+
+The `@angee/decisions` web addon contributes frozen form actions and Revisit to
+saved decision records. `decisionRecordTab(model)` adds a generic subject tab;
+`DecisionsList` presents an explicitly scoped set using standard resource views.
+The console `subject_decisions` field checks the subject's read permission and
+retains the decision collection's own read scope.
+
+Revisit dispatches to the subject owner's `Decision.revisit` donor with the
+expected revision. Ordinary decisions remain final. Intake re-admits a declined
+access question under its Need lock, checks Need write and target share, and
+retains the old answer and successor link. Approved access remains final.
+Intake also contributes current access decisions on the Task owning each Need.

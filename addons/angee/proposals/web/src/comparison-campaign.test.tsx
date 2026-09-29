@@ -55,3 +55,15 @@ test("redacted statements stay empty and removing a disclosed column removes its
   expect(screen.getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["—"]);
   expect(screen.getByRole("table").getAttribute("aria-colcount")).toBe("2");
 });
+
+
+test("audience is stated once per column while cells contain only their answer", () => {
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <RoundComparisonGrid facts={[]} topics={[{ id: "topic", key: "scope", name: "Scope" }]}
+      proposals={[{ id: "proposal", state: "DRAFT" }]}
+      answers={[{ id: "answer", topic: { id: "topic" }, proposal: { id: "proposal" },
+        visibility: "RESPONDER", body: "The proposed approach" }]} />
+  </AppRuntimeProvider>);
+  expect(screen.getAllByText(/Audience:/)).toHaveLength(1);
+  expect(screen.getByRole("cell").textContent).toBe("The proposed approach");
+});

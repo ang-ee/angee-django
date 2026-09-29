@@ -16,6 +16,7 @@ import { DialogForm } from "../../fragments/DialogForm";
 import { RecordActionBar } from "./RecordActionBar";
 import { RecordActionTrigger } from "./RecordActionMenu";
 import { createUiTestProviders } from "../../testing";
+import { RecordChromeProvider } from "../resource/record-chrome-context";
 import { AppRuntimeProvider } from "../../runtime";
 
 const { Provider, clearClients } = createUiTestProviders({
@@ -25,6 +26,32 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 
 describe("RecordActionBar", () => {
+  test("contributed descriptors compose into the existing Actions menu", async () => {
+    const run = vi.fn();
+    renderActionBar(<RecordActionBar record={record} actions={[]} contributedActions={
+      <RecordActionBar record={record} actions={[
+        { id: "publish", label: "Publish", run },
+        { id: "hidden", label: "Hidden", run, visibleWhen: () => false },
+      ]} />
+    } />);
+    expect(screen.getAllByRole("button", { name: "Actions" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(screen.queryByRole("menuitem", { name: "Hidden" })).toBeNull();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Publish" }));
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(run.mock.calls[0]?.[0].record).toEqual(record);
+  });
+  test("primary contributed descriptors inherit the saved form's dirty gate", () => {
+    const run = vi.fn();
+    renderActionBar(<RecordChromeProvider value={{ resource: "example.Item", canonicalResource: "example.Item",
+      recordId: "item-1", dataProviderName: "console", record, formReadOnly: false, actionsBlocked: true }}>
+      <RecordActionBar record={record} actions={[{ id: "open", label: "Open", placement: "toolbar", run }]} />
+    </RecordChromeProvider>);
+    const button = screen.getByRole("button", { name: "Open" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(run).not.toHaveBeenCalled();
+  });
   test("toolbar actions use the same confirmation and form blocking as menu actions", async () => {
     const run = vi.fn();
     const action = { id: "archive", label: "Archive", placement: "toolbar" as const, run,

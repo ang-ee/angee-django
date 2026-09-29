@@ -365,6 +365,19 @@ class ProposalAnswerType(AuthoredRefMixin, AngeeNode):
     revision: auto
     visibility: auto
     shared_with_responders: auto
+
+    @strawberry_django.field(only=["visibility"], annotate={
+        "_angee_permission_actor": lambda info: permission_annotations(Answer, ())["_angee_permission_actor"],
+        **{f"_angee_permission_{name}": partial(_permission_annotation, Answer, name)
+           for name in ("narrow", "manage")},
+    })
+    def allowed_visibility(self) -> list[AnswerVisibility]:
+        """Project the answer verb's permission-dependent choices."""
+        held = held_permissions(cast(Any, self), ("narrow", "manage"))
+        return [AnswerVisibility(value) for value in cast(Any, self).allowed_visibility(
+            narrow="narrow" in held, manage="manage" in held,
+        )]
+
     permissions = permissions_field(("write", "narrow", "manage"))
 
     body: auto
@@ -956,11 +969,23 @@ _COMMON_RESOURCE_TYPES = [
 ]
 
 
+@strawberry.type
+class ProposalRecordQuery:
+    """Record projections keep round selection at the proposals owner."""
+
+    @strawberry_django.field
+    def active_proposal_round(self, info: strawberry.Info, project: PublicID) -> ProposalRoundType | None:
+        """Return the readable active round for a readable project."""
+        target = authorized_permission_target(info, Project, project, "read")
+        return Round.objects.active_for_project(target)
+
+
 def _proposals_schema_bucket(proposal_resource: Any, proposal_type: type) -> dict[str, Any]:
     """Return the shared proposal surface with its schema-specific Proposal node."""
 
     return {
         "query": [
+            ProposalRecordQuery,
             _ROUND_RESOURCE.query,
             _TOPIC_RESOURCE.query,
             proposal_resource.query,

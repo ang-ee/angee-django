@@ -112,3 +112,22 @@ export const ANSWER_SHARE = graphql(`
     }
   }
 `);
+
+export const ROUND_RECORD = graphql(`
+  fragment ProposalRoundRecord on ProposalRoundType {
+    id name status opening_policy permissions can_open can_admit revision
+    roster { user name track_status }
+  }
+`);
+
+export const RECORD_ROUND = graphql(`
+  query ProposalRecordRound($id: String!) {
+    proposal_rounds_by_pk(id: $id) { ...ProposalRoundRecord }
+  }
+`);
+
+export const PROJECT_ROUND = graphql(`
+  query ProjectActiveProposalRound($project: ID!) {
+    active_proposal_round(project: $project) { ...ProposalRoundRecord }
+  }
+`);

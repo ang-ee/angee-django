@@ -1,4 +1,4 @@
-"""Read resources and the human deciding action for the inbox."""
+"""Read resources and subject-owned decision verbs for the inbox."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
+from rebac import current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
 
@@ -19,6 +20,7 @@ from angee.graphql.data import hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
 
 DecisionGroup = apps.get_model("decisions", "DecisionGroup")
@@ -62,6 +64,14 @@ class HumanDecisionType(AngeeNode):
     created_at: auto
     updated_at: auto
     permissions = permissions_field(("act",))
+    is_open: bool = strawberry_django.field(only=["verdict", "closed_reason"])
+    @strawberry_django.field(annotate={
+        "_can_revisit": lambda info: Decision.can_revisit_expression(current_actor()),
+    })
+    def can_revisit(self) -> bool:
+        """Read subject-owned eligibility from the optimized query."""
+        return cast(Any, self)._can_revisit
+
     record_model_label: str = strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
     record_public_id: str = strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["kind"])
@@ -94,8 +104,33 @@ _EVIDENCE = hasura_model_resource(
 
 
 @strawberry.type
+class HumanDecisionQuery:
+    """Read a subject's decision identities through both owners' read scopes."""
+
+    @strawberry_django.field
+    def subject_decisions(
+        self, info: strawberry.Info, model_label: str, record_id: PublicID,
+    ) -> list[HumanDecisionType]:
+        """Return the record's seats; resource views own their further presentation."""
+        model = apps.get_model(model_label)
+        subject = authorized_permission_target(info, model, record_id, "read")
+        return Decision.objects.for_subject(subject).order_by("-created_at", "-pk")
+
+
+@strawberry.type
 class HumanDecisionMutation:
     """Dispatch deciding through the exact action permission and manager."""
+
+    @strawberry.mutation
+    @action_guard("Could not revisit the decision.", camel_case_keys=False)
+    def revisit_human_decision(self, info: strawberry.Info, id: PublicID, revision: int) -> ActionResult:
+        """Ask the subject owner for a new seat, retaining the earlier answer."""
+        decision = authorized_permission_target(info, Decision, id, "act")
+        try:
+            successor = decision.revisit(actor=info.context.request.user, revision=revision)
+        except (StaleRevisionError, RetryableDecisionError) as error:
+            raise ValidationError({"conflict": error.code}) from error
+        return ActionResult(ok=True, message="Decision reopened for review.", id=successor.sqid)
 
     @strawberry.mutation
     @action_guard("Could not decide.", camel_case_keys=False)
@@ -115,12 +150,13 @@ class HumanDecisionMutation:
 
 schemas = {
     "console": {
-        "query": [_GROUPS.query, _DECISIONS.query, _EVIDENCE.query],
+        "query": [HumanDecisionQuery, _GROUPS.query, _DECISIONS.query, _EVIDENCE.query],
         "mutation": [HumanDecisionMutation],
+        "subscription": [changes(Decision, field="humanDecisionChanged")],
         "types": [
             DecisionGroupType, HumanDecisionType, DecisionEvidenceType,
             *_GROUPS.types, *_DECISIONS.types, *_EVIDENCE.types,
         ],
     },
 }
-"""Console read resources and the sole human answer mutation."""
+"""Console read resources, answer dispatch and subject-owned successor admission."""

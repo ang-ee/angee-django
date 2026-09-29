@@ -2,7 +2,6 @@ import { createNamespaceT } from "@angee/ui";
 
 export const enProjectsMessages: Record<string, string> = {
   "common.visibility": "Visibility",
-  "task.action.visibility": "Change visibility",
   "milestone.action.reach": "Mark reached",
   "project.phase.select": "Select current phase",
   "project.phase.none": "No current phase",

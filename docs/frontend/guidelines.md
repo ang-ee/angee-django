@@ -455,6 +455,29 @@ shared UI copy through an addon bundle.
   Hasura resource owns filter/order/group/facet capabilities; the list owns
   controls, paging and `rowActions`, including confirmations for generated action
   callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
+- **Record verbs compose the shared action owner.** A slot contribution may render
+  `RecordActionBar` with server-gated descriptors; inside the record Actions menu
+  it renders items in that menu and retains the shared confirmation, typed form,
+  pending and preview behavior. Record chrome carries `actionsBlocked` so primary
+  toolbar contributions inherit the same dirty/pending gate. Run/submit-only contributions need no generated
+  patch function. See [round record contributions](../../addons/angee/proposals/web/src/round-record.tsx).
+- **Inline audience controls bind a server verb.** The registered `visibility`
+  widget accepts `field.visibility` (`allowedValues`, `onSelect`, optional
+  `monotone` and `disabled`). Choices come from the owning record projection;
+  `onSelect` returns its `ActionOutcome`. A sole destination is a direct label
+  action; multiple choices and monotone ladders use the audience menu.
+  The widget settles feedback and waits
+  for the acknowledged record instead of patching visibility optimistically.
+  A monotone ladder orders options from narrow to wide and locks earlier steps.
+  Saved title fields place it through `labelAccessory(record, { disabled })`;
+  pass that disabled state to the control while the form is read-only, dirty or pending.
+  See [TaskVisibility](../../addons/angee/projects/web/src/task-visibility.tsx) and
+  [AnswerVisibility](../../addons/angee/proposals/web/src/answer-visibility.tsx).
+- **Human decision subjects opt into the generic tab.** Compose
+  `decisionRecordTab(model)` from `@angee/decisions`; the server resolves the
+  canonical `Decision.subject` identity. Frozen action branches use shared
+  FormSpec fields and `useActionForm`, preserving server validation and revision
+  conflicts. Subject addons own any successor admission.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the

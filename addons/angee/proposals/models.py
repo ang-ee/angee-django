@@ -22,6 +22,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models.functions import JSONObject, Lower
+from django.db.models.lookups import Exact
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rebac import (
@@ -41,7 +42,7 @@ from angee.base.actors import actor_user_id, instance_actor, subject_reaches_use
 from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, CreationKeyConflict, ImmutableFieldsMixin, OptimisticLockMixin, OwnerQuerySet
-from angee.base.models import AngeeDataModel, AngeeManager, role_anchor
+from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, role_anchor
 from angee.base.refs import canonical_record_model
 from angee.base.scoping import bind_actor, system_queryset
 from angee.base.transitions import StateTransitions, save_state, transition
@@ -203,7 +204,20 @@ class ClarificationWaitingSubquery(models.Subquery):
         )
 
 
-class RoundManager(AngeeManager):
+class RoundQuerySet(AngeeQuerySet):
+    """Round collection scopes shared by record projections."""
+
+    def active_for_project(self, project: Any) -> Any:
+        """Select the newest live round targeting this project, its source task or track."""
+        targets = models.Q(project=project) | models.Q(proposals__track=project)
+        if project.converted_from_id is not None:
+            targets |= models.Q(task_id=project.converted_from_id)
+        return self.filter(targets, status__in=(RoundStatus.COLLECTING, RoundStatus.OPENED)).distinct().order_by(
+            "-created_at", "-pk",
+        )
+
+
+class RoundManager(AngeeManager.from_queryset(RoundQuerySet)):  # type: ignore[misc]
     """Provision rounds by composing the native topic and admission owners."""
 
     def provision(
@@ -2298,23 +2312,19 @@ class TaskProposalAccess(ImmutableFieldsMixin):
             system_queryset(cls).filter(pk=models.OuterRef("pk")).annotate(_blocker=blocker).values("_blocker"),
         )
 
-    def validate_visibility(self, value: str) -> None:
-        """Keep question publication safe under projects' task-row lock."""
-        super().validate_visibility(value)
-        if self.clarification_round_id is None:
-            return
-        if value == "restricted" and self.visibility == "inherited" and self.clarification_passed_at is not None:
-            raise PublishedQuestion()
+    @classmethod
+    def visibility_blockers(cls, value: str) -> tuple[tuple[models.Q, type[ValidationError]], ...]:
+        """Keep question publication rules on the task verb's shared predicate seam."""
+        blockers = super().visibility_blockers(value)
+        if value == "restricted":
+            return (*blockers, (models.Q(
+                clarification_round__isnull=False, visibility="inherited", clarification_passed_at__isnull=False,
+            ), PublishedQuestion))
         if value == "inherited":
-            blocker = (
-                system_queryset(type(self))
-                .filter(pk=self.pk)
-                .annotate(_blocker=self.clarification_widen_blocker_expression())
-                .values_list("_blocker", flat=True)
-                .get()
-            )
-            if blocker is not None:
-                raise ClarificationWidenBlocked()
+            return (*blockers, (models.Q(Exact(
+                cls.clarification_widen_blocker_expression(), models.Value("hidden_asker_message"),
+            )), ClarificationWidenBlocked))
+        return blockers
 
     def _message_post(self, body: str, **kwargs: Any) -> models.Model:
         """Serialize user comments and notes with publication on the task row.
@@ -2543,6 +2553,17 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
                 raise PermissionDenied("Only a round manager may insert an answer shared with responders.")
         super().save(*args, **kwargs)
 
+    def allowed_visibility(self, *, narrow: bool | None = None, manage: bool | None = None) -> list[str]:
+        """Use the verb's ordered audience contract for both choices and writes."""
+        narrow = self.has_access("narrow") if narrow is None else narrow
+        manage = self.has_access("manage") if manage is None else manage
+        if not narrow:
+            return []
+        choices = ANSWER_VISIBILITY_ORDER if manage else ANSWER_VISIBILITY_ORDER[
+            ANSWER_VISIBILITY_ORDER.index(self.visibility):
+        ]
+        return [str(value) for value in choices]
+
     def set_visibility(self, value: str, expected_revision: int | None = None) -> Self:
         """Narrow the inherited audience, or let a manager select any audience."""
         if value not in AnswerVisibility.values:
@@ -2554,8 +2575,7 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
             locked = type(self).objects.sudo(reason="proposals.answer.visibility").lock_if_supported().get(pk=self.pk)
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
-            order = ANSWER_VISIBILITY_ORDER
-            if not manager and order.index(value) < order.index(locked.visibility):
+            if value not in locked.allowed_visibility(narrow=True, manage=manager):
                 raise PermissionDenied("Only a manager may widen an answer.")
             if locked.visibility != value:
                 locked.visibility = value

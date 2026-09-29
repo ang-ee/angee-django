@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any, cast
 
 import strawberry
@@ -228,9 +229,21 @@ class MilestoneType(AuthoredRefMixin, AngeeNode):
     project: ProjectType | None = actor_scoped_to_one("project")
 
 
+def _visibility_allowed(value: str, info: Any) -> Any:
+    return Task.visibility_allowed_expression(current_actor(), value)
+
+
 @strawberry.type
 class TaskProjectionMixin:
     """Shared SQL scalar projections for public and console task types."""
+
+    @strawberry_django.field(annotate={
+        f"_visibility_allowed_{value}": partial(_visibility_allowed, value) for value in Task.TaskVisibility.values
+    })
+    def allowed_visibility(self) -> list[TaskVisibility]:  # type: ignore[valid-type]
+        """Choices returned by the same owner that validates visibility writes."""
+        return [TaskVisibility(value) for value in Task.TaskVisibility.values
+                if getattr(self, f"_visibility_allowed_{value}")]
 
     @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.objects.priority_rank_expression()})
     def priority_rank(self) -> int:
@@ -507,7 +520,7 @@ class ProjectTaskActionMutation:
     ) -> ActionResult:
         """Change a task audience through its narrowing or widening permission."""
 
-        permission = "narrow" if visibility == TaskVisibility.RESTRICTED else "widen"
+        permission = Task.visibility_permission(visibility)
         target = authorized_permission_target(info, Task, id, permission)
         target.set_visibility(visibility, expected_revision=expected_revision)
         return ActionResult(ok=True, message="Task visibility changed.", id=target.sqid)

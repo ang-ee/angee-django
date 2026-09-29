@@ -642,6 +642,25 @@ class Need(OptimisticLockMixin, AuditMixin, AngeeDataModel):
         self.refresh_from_db()
         return user
 
+    def revisit_access(self, *, decision: Any, revision: int) -> Any:
+        """Re-admit a declined access question; approved access remains final."""
+        actor = instance_actor(self)
+        with actor_context(actor), transaction.atomic():
+            locked = type(self).objects.sudo(reason="intake.need.revisit_access.lock").locked_get(pk=self.pk)
+            if not self.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
+                "share"
+            ):
+                raise PermissionDenied("Revisiting access requires need write and target share.")
+            if locked.access_decision_id != decision.pk:
+                raise ValidationError({"revision": "The access question has changed; reload it."})
+            locked.access_decision.require_revision(revision)
+            if locked.access_verdict != Verdict.REJECTED:
+                raise ValidationError("Only declined access can be revisited.")
+            locked.access_decision = locked._new_access_decision()
+            locked.save(_access_decision=True, update_fields=("access_decision",))
+        self.refresh_from_db()
+        return self.access_decision
+
     def convert_to_task(self, queue: models.Model) -> models.Model:
         """Return this need's task; its clean concurrent no-op is SELECT-FOR-UPDATE-backed."""
 
@@ -847,6 +866,33 @@ class DecisionIntake(models.Model):
         need = self.intake_need.with_actor(actor)
         need._decide_access(action, values, decision=self, decision_revision=revision)
         return need.access_decision
+
+    @classmethod
+    def can_revisit_expression(cls, actor: Any) -> models.Expression:
+        """Batch current declined seats and both intake permissions through native scopes."""
+        if actor is None:
+            return super().can_revisit_expression(actor)
+        need_model = apps.get_model("intake", "Need")
+        needs = need_model.objects.with_actor(actor).with_action("write").scoped_for_aggregate()
+        sharable = need_model.objects.with_actor(actor).with_action("share").scoped_for_aggregate()
+        seats = cls.objects.with_actor(actor).with_action("act").scoped_for_aggregate()
+        eligible = models.Exists(seats.filter(
+            pk=models.OuterRef("pk"), verdict=Verdict.REJECTED, superseded_by__isnull=True,
+            intake_need__in=needs.filter(pk__in=sharable.values("pk")),
+            intake_need__access_decision_id=models.F("pk"),
+        ))
+        return models.Case(
+            models.When(intake_need__isnull=False, then=eligible),
+            default=super().can_revisit_expression(actor), output_field=models.BooleanField(),
+        )
+
+    def revisit(self, *, actor: Any, revision: int) -> Any:
+        """Keep successor admission in the request's locked access transaction."""
+        if self.intake_need_id is None:
+            return super().revisit(actor=actor, revision=revision)
+        if not self.with_actor(actor).has_access("act"):
+            raise PermissionDenied("Act access is required.")
+        return self.intake_need.with_actor(actor).revisit_access(decision=self, revision=revision)
 
     def save(self, **kwargs: Any) -> None:
         """Bind the domain's subject once, during the decision owner's admission."""

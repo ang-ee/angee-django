@@ -1,4 +1,3 @@
-import { extractActionOutcome, type DocumentVariables } from "@angee/refine";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   Action,
@@ -10,7 +9,6 @@ import {
   useActionResultMutation,
   useActionOutcomeMutation,
   useEnumOptions,
-  useAuthoredResourceMutation,
   useActionResultRun,
   useRecordAction,
   useRecordActionMutation,
@@ -21,7 +19,7 @@ import {
 } from "@angee/ui";
 import * as React from "react";
 
-import { SetTaskVisibilityDocument } from "./documents";
+import { TaskVisibility } from "./task-visibility";
 import { useProjectsT } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
@@ -93,25 +91,6 @@ export function useTaskFormDeclaration(): React.ReactElement {
   const [dropTask] = useActionOutcomeMutation<ActionFieldName>("drop_task", {
     invalidateModels: [TASK_MODEL],
   });
-  const [setVisibility] = useAuthoredResourceMutation(SetTaskVisibilityDocument, {
-    invalidateModels: [TASK_MODEL],
-    shouldInvalidate: (data) => data?.set_task_visibility.ok === true,
-  });
-  const visibilitySubmit = React.useCallback<NonNullable<ActionDescriptor["submit"]>>(
-    async (values, context) => {
-      const id = context.record?.id;
-      const value = canonicalOptionValue(visibilityOptions, values.visibility);
-      if (typeof id !== "string" || value === undefined) {
-        return { ok: false, message: t("task.action.failed") };
-      }
-      return extractActionOutcome(await setVisibility({
-        id,
-        visibility: value as DocumentVariables<typeof SetTaskVisibilityDocument>["visibility"],
-        expected_revision: typeof context.record?.revision === "number" ? context.record.revision : undefined,
-      }), "set_task_visibility");
-    },
-    [setVisibility, visibilityOptions, t],
-  );
   const dropSubmit = React.useCallback<
     NonNullable<ActionDescriptor["submit"]>
   >(
@@ -129,7 +108,8 @@ export function useTaskFormDeclaration(): React.ReactElement {
 
   return (
     <Form resource={TASK_MODEL} layout="tabs">
-      <Field name="title" title />
+      <Field name="title" title labelAccessory={(record, state) => <TaskVisibility record={record} disabled={state.disabled} />} />
+      <Field name="allowed_visibility" hidden readOnly />
       <Field name="revision" readOnly hidden />
       <Field name="visibility" options={visibilityOptions} createOnly />
       <Field name="status" widget="statusbar" options={statusOptions} createOnly />
@@ -157,13 +137,6 @@ export function useTaskFormDeclaration(): React.ReactElement {
         <Field name="dropped_at" readOnly />
       </Group>
       <Field name="note" widget="markdown.editor" body />
-      <Action
-        id="visibility"
-        label={t("task.action.visibility")}
-        icon="eye"
-        args={[{ name: "visibility", label: t("common.visibility"), widget: "select", options: visibilityOptions }]}
-        submit={visibilitySubmit}
-      />
       <Action
         id="complete"
         label={t("task.action.complete")}

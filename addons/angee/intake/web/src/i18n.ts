@@ -1,6 +1,8 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enIntakeMessages: Record<string, string> = {
+  "access.label": "Access decisions",
+  "access.error": "Access decisions could not be loaded.",
   "needs.label": "Needs",
   "needs.body": "Need",
   "needs.party": "Party",

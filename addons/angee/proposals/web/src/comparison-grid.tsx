@@ -57,6 +57,7 @@ export function RoundComparisonGrid({
                 proposal={proposal}
                 href={proposalHref?.(proposal.id)}
                 content={renderColumnHeader?.(proposal)}
+                answers={answers.filter((answer) => answer.proposal?.id === proposal.id)}
               />
             ))}
           </TableRow>
@@ -89,12 +90,23 @@ export function RoundComparisonGrid({
 
 function ProposalHeader({
   proposal,
-  href, content,
+  href, content, answers,
 }: {
   proposal: ComparisonProposal;
   href?: string;
   content?: React.ReactNode;
+  answers: readonly ComparisonAnswer[];
 }): React.ReactElement {
+  const t = useProposalsT();
+  const labels = new Map([
+    ["round", t("answer.visibility.round")],
+    ["responder", t("answer.visibility.responder")],
+    ["sealed", t("answer.visibility.sealed")],
+  ]);
+  const audience = [...new Set(answers.flatMap((answer) => {
+    const label = labels.get(String(answer.visibility ?? "").toLowerCase());
+    return [...(label ? [label] : []), ...(answer.shared_with_responders === true ? [t("comparison.audience.shared")] : [])];
+  }))].join(" · ");
   const label = proposalColumnLabel(proposal);
   const header = content !== undefined ? content : (href ? <TextLink href={href}>{label}</TextLink> : label);
   return (
@@ -114,6 +126,7 @@ function ProposalHeader({
           readOnly
         />
       </div>
+      {audience ? <div className="text-xs font-normal text-fg-muted">{t("comparison.audience", { audience })}</div> : null}
     </TableHead>
   );
 }

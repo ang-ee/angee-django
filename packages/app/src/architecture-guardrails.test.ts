@@ -94,6 +94,8 @@ interface DynamicI18nKeyFamily {
 }
 
 const FRAMEWORK_CRITICAL_EXPORTS: readonly CriticalExportDeclaration[] = [
+  frameworkCriticalExport("RecordActionBar", "@angee/ui", "src/views/form/RecordActionBar.tsx"),
+  frameworkCriticalExport("VisibilityControl", "@angee/ui", "src/widgets/visibility.tsx"),
   frameworkCriticalExport("useRuntimeBrand", "@angee/ui", "src/runtime/runtime.ts"),
   frameworkCriticalExport("DocumentTitle", "@angee/ui", "src/chrome/DocumentTitle.tsx"),
   frameworkCriticalExport("GanttView", "@angee/ui", "src/views/gantt/GanttView.tsx"),

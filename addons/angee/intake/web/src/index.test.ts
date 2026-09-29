@@ -11,6 +11,8 @@ describe("intake addon manifest", () => {
 
   test("contributes one form-section pane to project and task records", () => {
     expect((intake.slots ?? []).map(({ id, model, slot }) => [id, model, slot])).toEqual([
+      ["decisions.subject.intake.Need", NEED_MODEL, "form-view.sections"],
+      ["intake.task-access-decisions", TASK_MODEL, "form-view.sections"],
       ["intake.project-needs", PROJECT_MODEL, "form-view.sections"],
       ["intake.task-needs", TASK_MODEL, "form-view.sections"],
     ]);

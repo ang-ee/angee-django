@@ -21,3 +21,9 @@ export const CaptureNeedDocument = graphql(`
     }
   }
 `);
+
+export const TaskAccessDecisionsDocument = graphql(`
+  query IntakeTaskAccessDecisions($task: String!) {
+    intake_needs(where: {task: {_eq: $task}}) { id access_decision { id } }
+  }
+`);

@@ -1,6 +1,14 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enProposalsMessages: Record<string, string> = {
+  "round.tabs.people": "People",
+  "round.tabs.approach": "Approach",
+  "round.record.empty": "No active round",
+  "round.record.error": "The round could not be loaded.",
+  "round.action.removeTitle": "Remove this responder?",
+  "round.action.removeBody": "Their participation and round-derived access will be retired.",
+  "comparison.audience": "Audience: {audience}",
+  "comparison.audience.shared": "Shared with responders",
   "common.name": "Name",
   "task.action.share": "Share with responders",
   "task.action.unshare": "Clear responder sharing",
@@ -37,7 +45,6 @@ export const enProposalsMessages: Record<string, string> = {
   "round.action.responder": "Responder",
   "round.action.track": "Create a private track",
   "round.action.widen": "Widen opening policy",
-  "answer.action.visibility": "Change audience",
   "answer.action.share": "Share with responders",
   "answer.action.unshare": "Clear responder sharing",
   "comparison.fact.statement": "Statement",

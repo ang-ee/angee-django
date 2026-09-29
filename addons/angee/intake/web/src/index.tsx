@@ -1,3 +1,4 @@
+import { decisionRecordTab } from "@angee/decisions";
 import { defineBaseAddon } from "@angee/app";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
 import {
@@ -10,6 +11,8 @@ import { MessageSquareQuote } from "lucide-react";
 import type { ReactElement } from "react";
 
 import { enIntakeMessages, useIntakeT } from "./i18n";
+import { TaskAccessDecisions } from "./TaskAccessDecisions";
+import { NEED_MODEL } from "./resources";
 import { RecordNeedsPane } from "./RecordNeedsPane";
 
 export { NEED_MODEL } from "./resources";
@@ -19,6 +22,11 @@ const intake = defineBaseAddon({
   i18n: { intake: enIntakeMessages },
   icons: { "intake-needs": MessageSquareQuote },
   slots: [
+    decisionRecordTab(NEED_MODEL),
+    {
+      ...formViewSectionsSlot(TASK_MODEL), id: "intake.task-access-decisions", sequence: 50,
+      content: <Tab id="access-decisions" label={<AccessLabel />}><TaskAccessDecisions /></Tab>,
+    },
     {
       ...formViewSectionsSlot(PROJECT_MODEL),
       id: "intake.project-needs",
@@ -71,3 +79,8 @@ function NeedsLabel(): ReactElement {
 }
 
 export default intake;
+
+function AccessLabel(): ReactElement {
+  const t = useIntakeT();
+  return <>{t("access.label")}</>;
+}

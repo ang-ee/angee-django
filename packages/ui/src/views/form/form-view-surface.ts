@@ -480,6 +480,7 @@ export function useFormViewSurface({
     isCreate,
     record: tabRecord,
     formReadOnly: save.formReadOnly,
+    actionsBlocked: save.formIsDirty || save.pending,
   });
 
   React.useEffect(() => {

@@ -96,6 +96,7 @@ export {
   ActionFormDialog,
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
+export { RecordActionBar } from "./form/RecordActionBar";
 export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
   formLevelMessage,

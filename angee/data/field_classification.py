@@ -21,7 +21,7 @@ RESOURCE_FIELD_SCALARS = frozenset(
 """Supported GraphQL scalar families in data-resource field metadata."""
 
 RESOURCE_FIELD_WIDGETS = frozenset(
-    {"select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json"}
+    {"select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json", "visibility"}
 )
 """Widget vocabulary owned by backend data-resource metadata."""
 

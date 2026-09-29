@@ -7,9 +7,11 @@ import { DropdownMenu } from "../../ui/dropdown-menu";
 import { Glyph } from "../../chrome/Glyph";
 import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
-import { RecordActionMenuItems } from "./RecordActionMenu";
+import { RecordActionMenuItems, RecordActionTrigger } from "./RecordActionMenu";
+import { RecordActionMenuContext } from "../../ui/record-action-context";
 import type { ActionDescriptor, ActionResult } from "../page";
 import { useRuntimeViewAs } from "../../runtime";
+import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useLatestRef } from "../../lib/use-latest-ref";
 
 export interface RecordDeleteAction {
@@ -36,16 +38,16 @@ interface ActionMutationVariables {
 export function RecordActionBar({
   record,
   actions,
-  applyPatch,
-  reload,
+  applyPatch = unavailablePatch,
+  reload = noop,
   deleteAction,
   contributedActions,
   blocked: blockedByForm = false,
 }: {
   record: Row | null;
   actions: readonly ActionDescriptor[];
-  applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
-  reload: () => void;
+  applyPatch?: (patch: Record<string, unknown>) => Promise<Row | null>;
+  reload?: () => void;
   deleteAction?: RecordDeleteAction;
   /** Addon-contributed verbs rendered inside this same Actions menu. */
   contributedActions?: React.ReactNode;
@@ -53,7 +55,9 @@ export function RecordActionBar({
   blocked?: boolean;
 }): React.ReactElement | null {
   const preview = useRuntimeViewAs();
-  const blocked = blockedByForm || Boolean(preview.viewAs || preview.pending);
+  const menu = React.useContext(RecordActionMenuContext);
+  const chrome = useRecordChromeContextMaybe();
+  const blocked = blockedByForm || menu?.blocked || chrome?.actionsBlocked || Boolean(preview.viewAs || preview.pending);
   const blockedRef = useLatestRef(blocked);
   const confirm = useConfirm();
   const prompt = usePrompt();
@@ -163,6 +167,14 @@ export function RecordActionBar({
 
   return (
     <>
+      {menu ? visibleActions.map((action) => (
+        <RecordActionTrigger key={action.id} glyph={action.icon}
+          variant={action.danger ? "danger" : "secondary"}
+          disabled={disabled(action)} loading={pendingId === action.id}
+          onClick={() => void runAction(action)}>
+          {action.label}
+        </RecordActionTrigger>
+      )) : <>
       {toolbarActions.map((action) => (
         <Button key={action.id} type="button" size="sm" variant={action.danger ? "danger" : "secondary"}
           disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
@@ -229,6 +241,7 @@ export function RecordActionBar({
           </DropdownMenu.Positioner>
         </DropdownMenu.Portal>
       </DropdownMenu.Root> : null}
+      </>}
       {formAction ? (
         <ActionFormDialog
           key={formAction.id}
@@ -246,6 +259,12 @@ export function RecordActionBar({
       ) : null}
     </>
   );
+}
+
+function noop(): void {}
+
+async function unavailablePatch(): Promise<never> {
+  throw new Error("A patch action requires its record form's applyPatch binding.");
 }
 
 // A rich (non-string) label can't title a toast; fall back to the action id so
