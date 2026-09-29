@@ -67,7 +67,7 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
     <Form
       resource={PROJECT_MODEL}
       layout="tabs"
-      returning={["permissions", "selectable_milestones.id", "current_milestone.name", ...(selection.returning ?? [])]}
+      returning={["permissions", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(selection.returning ?? [])]}
       headerExtras={({ record }) => record?.status
         ? <ProjectLifecycleBadge value={String(record.status)} options={statusOptions} />
         : null}

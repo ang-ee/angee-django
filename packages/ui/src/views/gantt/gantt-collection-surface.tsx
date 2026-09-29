@@ -63,7 +63,7 @@ export function GanttCollectionSurface<TRow extends Row>({
     page: resourceView.state.pagination.pageIndex + 1,
     pageSize,
     filters: laneSource.filters,
-    sorters: laneSource.sorters ?? [{ field: "id", order: "asc" }],
+    sorters: laneSource.sorters,
   });
   const lanes = catalogue.options;
   const label = labelField ?? dataResource?.recordRepresentation ?? "id";

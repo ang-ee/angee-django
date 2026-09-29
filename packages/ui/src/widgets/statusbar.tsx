@@ -18,8 +18,6 @@ function Statusbar({
   readOnly,
 }: WidgetRenderProps<string>): ReactElement {
   const steps = field?.options ?? [];
-  const current = statusIndex(value, steps);
-  const interactive = Boolean(onChange) && !readOnly;
   if (steps.length === 0) {
     return (
       <span className="inline-flex h-6 items-center rounded-6 bg-inset px-2 text-xs font-medium text-fg-muted">
@@ -27,8 +25,35 @@ function Statusbar({
       </span>
     );
   }
+  return <StatusbarSteps steps={steps} value={value} onChange={onChange} readOnly={readOnly} />;
+}
+
+export interface StatusbarStepsProps {
+  /** Ordered lifecycle steps; a disabled step is shown but cannot be chosen. */
+  steps: readonly WidgetOption[];
+  value: string | null | undefined;
+  onChange?: (value: string) => void;
+  readOnly?: boolean;
+  "aria-label"?: string;
+}
+
+/**
+ * The chevron statusbar: every step in order, earlier steps completed, the
+ * current one emphasised. The `statusbar` widget renders a field's static
+ * options through it; owners whose steps are records (a project's phases)
+ * pass those steps directly.
+ */
+export function StatusbarSteps({
+  steps,
+  value,
+  onChange,
+  readOnly,
+  "aria-label": ariaLabel,
+}: StatusbarStepsProps): ReactElement {
+  const current = statusIndex(value, steps);
+  const interactive = Boolean(onChange) && !readOnly;
   return (
-    <div className="isolate inline-flex items-stretch" role="list">
+    <div className="isolate inline-flex items-stretch" role="list" aria-label={ariaLabel}>
       {steps.map((step, index) => {
         const currentStep = index === current;
         const completed = current >= 0 && index < current;
@@ -54,7 +79,9 @@ function Statusbar({
               tone.border,
               !disabled ? "cursor-pointer" : "cursor-default",
             )}
-            onClick={() => onChange?.(step.value)}
+            onClick={() => {
+              if (!currentStep) onChange?.(step.value);
+            }}
           >
             <span
               className={cn(

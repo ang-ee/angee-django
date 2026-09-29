@@ -661,7 +661,7 @@ function ChatterComposer({
         onFiles={handleFiles}
       >
         <MessageComposer
-          hint={<MessageComposerHint />}
+          hint={<MessageComposerHint submitKey={submitKey} />}
           attachments={
             attachmentDrafts.length > 0 ? attachmentDrafts.map((file) => (
               <MessageAttachmentChip

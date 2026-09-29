@@ -74,7 +74,7 @@ export function TaskManagementTab({ recordId, relation, projectIds }: TaskManage
     gantt: { start: "due_date", end: "due_date", label: "title" },
   });
   const form = useTaskFormDeclaration();
-  return <DrawerResourceList<TaskActionRow> resource={TASK_MODEL} baseFilter={baseFilter} createDefaults={createDefaults}>
+  return <DrawerResourceList<TaskActionRow> resource={TASK_MODEL} createDefaults={createDefaults}>
     {list}
     {form}
   </DrawerResourceList>;

@@ -3,7 +3,7 @@ import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { PARTIES_OVERVIEW_SLOT } from "@angee/parties";
 import { useAuthoredQuery } from "@angee/refine";
 import { type BaseMenuItem } from "@angee/ui";
-import type { ChatterViewContext } from "@angee/ui/runtime";
+import type { ChatterContribution, ChatterViewContext } from "@angee/ui/runtime";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import * as React from "react";
 import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
@@ -82,6 +82,15 @@ export interface MessagingAddonOptions {
   submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
 }
 
+/** The shared Comments tab, configurable without constructing another addon. */
+export function recordCommentsContribution({ id = "comments", submitKey = "enter" }: MessagingAddonOptions & { id?: string } = {}): ChatterContribution {
+  return {
+    id, sequence: 10, label: "Comments", icon: "comments",
+    useCount: useRecordCommentsUnread,
+    render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
+  };
+}
+
 /** Configure messaging's app contribution through the existing addon manifest. */
 export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOptions = {}) => defineBaseAddon({
   id: "messaging",
@@ -107,14 +116,7 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
   i18n: { messaging: enMessagingMessages },
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
   chatter: [
-    {
-      id: "comments",
-      sequence: 10,
-      label: "Comments",
-      icon: "comments",
-      useCount: useRecordCommentsUnread,
-      render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
-    },
+    recordCommentsContribution({ submitKey }),
     {
       id: "activity",
       sequence: 20,

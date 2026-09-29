@@ -61,6 +61,8 @@ const MARKDOWN_EXTENSIONS = [
   markdown(),
   keymap.of(markdownEditorKeymap),
   EditorView.lineWrapping,
+  // Prose, not code: no line-number gutter.
+  EditorView.theme({ ".cm-gutters": { display: "none" } }),
 ];
 
 function MarkdownEdit({
@@ -71,7 +73,8 @@ function MarkdownEdit({
   controlRef,
 }: WidgetRenderProps<string>): ReactElement {
   const t = useUiT();
-  const [mode, setMode] = useState<MarkdownMode>("source");
+  // Saved prose opens rendered; an empty field opens ready for writing.
+  const [mode, setMode] = useState<MarkdownMode>(value ? "preview" : "source");
   const [linkDraft, setLinkDraft] = useState("");
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useCodeMirrorEditor(hostRef, {

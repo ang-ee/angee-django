@@ -44,6 +44,7 @@ export type {
   WidgetFocusTarget,
 } from "./types";
 export { canonicalOptionValue, optionLabel, optionToken, relationValueId } from "./types";
+export { StatusbarSteps, type StatusbarStepsProps } from "./statusbar";
 export { VisibilityControl } from "./visibility";
 export type { VisibilityControlProps } from "./visibility";
 export { JsonValueSchema } from "./json-value";

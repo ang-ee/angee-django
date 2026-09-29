@@ -287,13 +287,11 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
       {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
     </>
   );
-  const formTitle = awaitingRecord
-    ? t("form.loading")
-    : typeof title === "function" ? title(recordToolbarContext) : title;
+  const formTitle = typeof title === "function" ? title(recordToolbarContext) : title;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
   const headerContextLine = awaitingRecord ? undefined : contextLine?.(recordToolbarContext);
   const recordHeader = (compact = false) => {
-    const header = <FormViewRecordHeader surface={surface} compact={compact} title={formTitle}
+    const header = <FormViewRecordHeader surface={surface} compact={compact} awaiting={awaitingRecord} title={formTitle}
       extra={headerExtra} contextLine={headerContextLine} />;
     return recordChromeContext
       ? <RecordChromeProvider value={recordChromeContext}>{header}</RecordChromeProvider>

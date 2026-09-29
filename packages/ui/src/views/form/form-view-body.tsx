@@ -78,12 +78,15 @@ export const FORM_VIEW_COLUMN_CLASS =
 export function FormViewRecordHeader({
   surface,
   compact = false,
+  awaiting = false,
   title,
   extra,
   contextLine,
 }: {
   surface: FormViewSurface;
   compact?: boolean;
+  /** The saved record has not arrived yet: render the header's shape. */
+  awaiting?: boolean;
   title?: React.ReactNode;
   extra?: React.ReactNode;
   contextLine?: React.ReactNode;
@@ -126,6 +129,17 @@ export function FormViewRecordHeader({
         titleRelation.labelField,
       )
     : undefined;
+  if (awaiting) {
+    return (
+      <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
+        <SkeletonStatus label={t("form.loading")} className={cn("grid", compact ? "gap-1" : "gap-3")}>
+          {statusField && !compact ? <Skeleton className="h-6 w-72" /> : null}
+          <Skeleton shape="text" className={compact ? "h-5 w-1/2" : "h-9 w-2/3"} />
+          {!compact ? <Skeleton shape="text" className="h-3 w-64" /> : null}
+        </SkeletonStatus>
+      </header>
+    );
+  }
   return (
     <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
       {currentStatusField && compact && fieldWidgetId(currentStatusField) === "statusbar" ? (
@@ -250,7 +264,9 @@ export function FormViewRecordHeader({
             {titleFieldMessages.join(", ")}
           </p>
         ) : null}
-        {!compact ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
+        {/* A declared context line is the record's one compact subtitle; the
+            generic id/created/updated line is the fallback for forms without one. */}
+        {!compact && !contextLine ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
         {contextLine ? <p className="mt-1 truncate text-xs text-fg-muted">{contextLine}</p> : null}
       </div>
       {extra ? <div className={compact ? "pt-1" : undefined}>{extra}</div> : null}

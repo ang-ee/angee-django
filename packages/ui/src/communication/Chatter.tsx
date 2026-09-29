@@ -89,11 +89,18 @@ export function Chatter({
     () => tabsFromContributions(activeContributions, viewContext, counts),
     [activeContributions, viewContext, counts],
   );
-  const resolvedTabs = mergeChatterTabs(
+  // A route that lists its tabs admits them and orders them: the first listed
+  // tab is the one the aside opens on.
+  const merged = mergeChatterTabs(
     (viewContext.view.kind === "record" || admit !== undefined) ? baseTabs : [],
     contributedTabs,
     publishedTabs,
-  ).filter((tab) => admit === undefined || admit.includes(tab.id));
+  );
+  const resolvedTabs = admit === undefined
+    ? merged
+    : merged
+      .filter((tab) => admit.includes(tab.id))
+      .sort((left, right) => admit.indexOf(left.id) - admit.indexOf(right.id));
   const resolvedComposer = composer ?? content?.composer;
   const requestedTabAvailable = Boolean(
     requestedTab && resolvedTabs.some((tab) => tab.id === requestedTab),

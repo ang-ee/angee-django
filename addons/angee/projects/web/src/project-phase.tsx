@@ -1,6 +1,9 @@
+import { holdsPermission } from "@angee/metadata";
 import { extractActionOutcome } from "@angee/refine";
 import {
-  RelationPicker,
+  Skeleton,
+  SkeletonStatus,
+  StatusbarSteps,
   relationValueId,
   useActionResultRun,
   useAuthoredResourceMutation,
@@ -17,26 +20,30 @@ import { MILESTONE_MODEL, PROJECT_MODEL, TASK_MODEL } from "./resources";
 
 const milestoneRelation = { resource: MILESTONE_MODEL, labelField: "name", canCreate: false };
 
-interface PhaseRecord {
+type PhaseRecord = {
   id?: string;
   revision?: number;
   permissions?: readonly string[];
   current_milestone?: { id: string; name: string } | null;
   selectable_milestones?: readonly { id: string }[];
-}
+};
 
-/** Saved project phase status widget; form selection supplies every project fact. */
+/**
+ * The project's phase statusbar: every milestone of the project in order, the
+ * current one emphasised and earlier ones completed. A writer moves the phase
+ * by choosing a selectable milestone; the form selection supplies every fact.
+ */
 export function ProjectPhaseControl({ value, row, readOnly = false }: WidgetRenderProps<unknown, PhaseRecord>): React.ReactElement | null {
   const t = useProjectsT();
   const preview = useRuntimeViewAs();
   const confirm = useConfirm();
   const settle = useActionResultRun();
   const recordId = row?.id;
-  const canWrite = Boolean(recordId && !readOnly && !preview.viewAs && !preview.pending && row?.permissions?.includes("write"));
-  const eligibleIds = canWrite ? row?.selectable_milestones?.map((item) => item.id) ?? [] : [];
+  const canWrite = Boolean(recordId && !readOnly && !preview.viewAs && !preview.pending && holdsPermission(row, "write"));
+  const selectable = new Set(canWrite ? row?.selectable_milestones?.map((item) => item.id) ?? [] : []);
   const { options, list } = useRelationOptions(milestoneRelation, {
-    enabled: eligibleIds.length > 0,
-    filters: [{ field: "id", operator: "in", value: eligibleIds }],
+    enabled: Boolean(recordId),
+    filters: recordId ? [{ field: "project", operator: "eq", value: recordId }] : [],
     sorters: [{ field: "sort_order", order: "asc" }],
   });
   const [selectPhase, state] = useAuthoredResourceMutation(SetProjectCurrentMilestoneDocument, {
@@ -45,22 +52,31 @@ export function ProjectPhaseControl({ value, row, readOnly = false }: WidgetRend
   });
   if (!recordId) return null;
   const current = row?.current_milestone;
-  return <RelationPicker
+  if (list.fetching && options.length === 0) {
+    return (
+      <SkeletonStatus label={t("project.phase.select")} className="flex gap-1">
+        <Skeleton className="h-6 w-24" />
+        <Skeleton className="h-6 w-24" />
+        <Skeleton className="h-6 w-24" />
+        <Skeleton className="h-6 w-24" />
+      </SkeletonStatus>
+    );
+  }
+  const steps = options.map((option) => ({ ...option, disabled: !selectable.has(option.value) }));
+  return <StatusbarSteps
     aria-label={t("project.phase.select")}
-    value={relationValueId(value) || current?.id || ""}
-    options={eligibleIds.length > 0 ? options : []}
-    placeholder={current?.name ?? t("project.phase.none")}
-    readOnly={!canWrite || state.fetching || eligibleIds.length === 0}
-    searchState={{ pending: list.fetching, error: list.error, retry: list.refetch }}
+    steps={steps}
+    value={relationValueId(value) || current?.id}
+    readOnly={!canWrite || state.fetching || selectable.size === 0}
     onChange={async (id) => {
-      if (!canWrite) return;
+      if (!canWrite || !selectable.has(id)) return;
       const selected = options.find((option) => option.value === id);
       if (!selected) return;
       if (!await confirm({
         title: t("project.phase.select"),
         body: t("project.phase.confirm", {
           previous: current?.name ?? t("project.phase.none"),
-          selected: selected.label,
+          selected: String(selected.label),
         }),
       })) return;
       await settle(async () => extractActionOutcome(await selectPhase({
