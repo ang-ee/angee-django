@@ -1096,6 +1096,8 @@ class RecordErrorPayload:
         """Project one caught chatter error without changing its legacy envelope."""
 
         code = "PERMISSION_DENIED" if isinstance(error, PermissionDenied) else invalid_code
+        if isinstance(error, ValidationError):
+            code = getattr(error, "code", None) or code
         message = " ".join(error.messages) if isinstance(error, ValidationError) else str(error)
         return cls(error=message, error_code=code)
 

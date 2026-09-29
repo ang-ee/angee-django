@@ -271,9 +271,10 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
             )
         )["project_tasks_by_pk"]
         self.assertIsNone(hidden)
-        mismatch = self.data(self.execute(document, {**variables, "body": "Changed"}, self.asker))["ask_proposal_round"]
-        self.assertFalse(mismatch["ok"])
-        self.assertEqual(mismatch["code"], "CREATION_KEY_CONFLICT")
+        mismatch = self.execute(document, {**variables, "body": "Changed"}, self.asker)
+        self.assertIsNotNone(mismatch.errors)
+        self.assertEqual(len(mismatch.errors), 1)
+        self.assertEqual(mismatch.errors[0].extensions["code"], "CREATION_KEY_CONFLICT")
         self.assertEqual(self.Task._base_manager.filter(clarification_round=self.round).count(), 1)
 
     def test_generated_writes_reject_stale_round_proposal_and_answer_revisions(self) -> None:

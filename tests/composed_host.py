@@ -91,6 +91,7 @@ def boot(
             "ANGEE_ADDON_DIRS": tuple(addon_dirs),
             "INSTALLED_APPS": installed_apps,
             "DATABASES": {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+            "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
         },
     )
     namespace = {name: value for name, value in namespace.items() if name.isupper() and not name.startswith("_")}
@@ -241,11 +242,13 @@ def main() -> None:
         assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
         assert settings.DATABASES["default"]["NAME"] == ":memory:"
         settings.ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
-        settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
-        # Without migrations the permission library's schema-revision witness (a
-        # row and its triggers, created by its own migration) does not exist; the
-        # library then loads the schema uncached, which is its documented mode.
-        settings.SILENCED_SYSTEM_CHECKS = [*settings.SILENCED_SYSTEM_CHECKS, "rebac.E012"]
+        # Generated apps have no migration history in this disposable host.
+        # Keep REBAC's native migrations and their contenttypes dependency: the
+        # library owns the schema witness required by its cached evaluator.
+        settings.MIGRATION_MODULES = {
+            config.label: None for config in apps.get_app_configs()
+            if config.label not in {"rebac", "contenttypes"}
+        }
         failures = ComposedTestRunner(verbosity=1, interactive=False).run_tests(args.test_label)
         args.output.write_text(json.dumps({"failures": failures}) + "\n")
         raise SystemExit(bool(failures))

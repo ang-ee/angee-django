@@ -915,7 +915,7 @@ class ThreadedModelMixin(models.Model):
         has_access = getattr(self, "has_access", None)
         if not callable(has_access):
             return True
-        return bool(has_access(self.thread_post_access))
+        return self._message_read_allowed() and bool(has_access(self.thread_post_access))
 
     def _message_read_allowed(self) -> bool:
         """Return whether the ambient actor can read personal chatter state."""

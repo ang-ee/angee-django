@@ -467,17 +467,13 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertEqual(need.access_resolution, {})
 
     def test_historical_backfill_approves_only_accounts_reconciliation_keeps(self):
-        unconfirmed = self.legacy_need()
-        confirmed = self.legacy_need(confirmed=True)
-        edited = self.legacy_need(touched=True)
-        manual = self.need(email="", party=self.party(self.reader))
+        # Reproduce pre-adoption rows without creating then deleting retained seats.
+        with patch.object(self.Need, "_new_access_decision", return_value=None):
+            unconfirmed = self.legacy_need()
+            confirmed = self.legacy_need(confirmed=True)
+            edited = self.legacy_need(touched=True)
+            manual = self.need(email="", party=self.party(self.reader))
         historical = ProjectState.from_apps(apps).apps
-        old_needs = (unconfirmed, confirmed, edited, manual)
-        old_groups = [need.access_decision.group_id for need in old_needs]
-        historical.get_model("intake", "Need")._base_manager.order_by().filter(
-            pk__in=[need.pk for need in old_needs],
-        ).update(access_decision_id=None)
-        historical.get_model("decisions", "DecisionGroup")._base_manager.filter(pk__in=old_groups).delete()
         stores = [apps.get_model("rebac", name) for name in ("Relationship", "RelationshipRegistry")]
         tuples_before = [list(store._base_manager.order_by("pk").values()) for store in stores]
         with connection.schema_editor() as editor:
@@ -532,7 +528,7 @@ class NeedAccessTests(IntakeAccessCase):
         decisions = apps.get_model("decisions", "Decision")
         groups = apps.get_model("decisions", "DecisionGroup")
         decision = need.access_decision
-        self.assertFalse(decision.assignees.exists())
+        self.assertFalse(decision.assignees.sudo(reason="tests.intake.no_assignee_snapshot").exists())
         for user, allowed in ((self.owner, True), (self.writer, False), (self.reader, False)):
             self.assertEqual(decisions.objects.as_user(user).filter(pk=decision.pk).exists(), allowed)
             self.assertEqual(groups.objects.as_user(user).filter(pk=decision.group_id).exists(), allowed)

@@ -14,7 +14,7 @@ from django.db import connection
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import ObjectRef, RelationshipTuple, actor_context, system_context, to_subject_ref, write_relationships
 
 from angee.graphql.schema import GraphQLSchemas
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
@@ -49,6 +49,9 @@ class PublicationCases(TransactionTestCase):
             for name in ("manager", "asker", "recipient", "reader")
         )
         with system_context(reason="tests.proposals.publication.setup"):
+            write_relationships([
+                RelationshipTuple(ObjectRef("iam/directory", "main"), "reader", to_subject_ref(self.manager)),
+            ])
             self.project = apps.get_model("projects", "Project").objects.create(
                 title="Question audience", owner=self.manager,
             )
@@ -237,14 +240,14 @@ class PublicationCases(TransactionTestCase):
             record = self.as_user(question, self.manager)
             record.grant_record_access("reader", self.reader)
             record.grant_record_access("reader", self.recipient)
-        document = "query { tasks { id clarificationWidenBlocker } }"
+        document = "query { project_tasks { id clarification_widen_blocker } }"
         for schema_name in ("public", "console"):
             for actor in (self.manager, self.asker, self.recipient, self.reader):
                 with self.subTest(schema=schema_name, actor=actor.username):
-                    rows = self.data(self.execute(document, {}, actor, schema_name=schema_name))["tasks"]
+                    rows = self.data(self.execute(document, {}, actor, schema_name=schema_name))["project_tasks"]
                     self.assertEqual(rows, [{
                         "id": str(question.sqid),
-                        "clarificationWidenBlocker": "hidden_asker_message" if actor == self.manager else None,
+                        "clarification_widen_blocker": "hidden_asker_message" if actor == self.manager else None,
                     }])
         # Narrow selection: no dependency columns selected to conceal an N+1.
         self.data(self.execute(document, {}, self.manager))
@@ -254,7 +257,7 @@ class PublicationCases(TransactionTestCase):
         for _ in range(9):
             self.question()
         with CaptureQueriesContext(connection) as queries:
-            rows = self.data(self.execute(document, {}, self.manager))["tasks"]
+            rows = self.data(self.execute(document, {}, self.manager))["project_tasks"]
         self.assertEqual(len(rows), 10)
         self.assertEqual(len(queries), baseline)
 
@@ -264,23 +267,23 @@ class PublicationCases(TransactionTestCase):
         before = self.Task._base_manager.filter(pk=question.pk).values().get()
         payload = self.data(self.execute(
             """mutation($id: ID!) {
-              setTaskVisibility(id: $id, visibility: INHERITED) { ok validationErrors }
+              set_task_visibility(id: $id, visibility: INHERITED) { ok validation_errors }
             }""",
             {"id": str(question.sqid)}, self.manager,
-        ))["setTaskVisibility"]
+        ))["set_task_visibility"]
         self.assertFalse(payload["ok"])
-        self.assertIn("hidden asker", str(payload["validationErrors"]))
+        self.assertIn("hidden asker", str(payload["validation_errors"]))
         payload = self.data(self.execute(
             """mutation($round: ID!, $task: ID!, $recipient: ID!) {
-              passProposalRoundClarification(round: $round, task: $task, recipient: $recipient) {
-                ok validationErrors
+              pass_proposal_round_clarification(round: $round, task: $task, recipient: $recipient) {
+                ok validation_errors
               }
             }""",
             {"round": str(self.round.sqid), "task": str(question.sqid), "recipient": str(self.recipient.sqid)},
             self.manager,
-        ))["passProposalRoundClarification"]
+        ))["pass_proposal_round_clarification"]
         self.assertFalse(payload["ok"])
-        self.assertIn("hidden asker", str(payload["validationErrors"]))
+        self.assertIn("hidden asker", str(payload["validation_errors"]))
         self.assertEqual(self.Task._base_manager.filter(pk=question.pk).values().get(), before)
 
     def test_graphql_visibility_refusal_codes(self) -> None:
@@ -294,10 +297,10 @@ class PublicationCases(TransactionTestCase):
             with self.subTest(code=code):
                 payload = self.data(self.execute(
                     """mutation($id: ID!, $visibility: TaskVisibility!) {
-                      setTaskVisibility(id: $id, visibility: $visibility) { ok code }
+                      set_task_visibility(id: $id, visibility: $visibility) { ok code }
                     }""",
                     {"id": str(question.sqid), "visibility": visibility}, self.manager,
-                ))["setTaskVisibility"]
+                ))["set_task_visibility"]
                 self.assertEqual(payload, {"ok": False, "code": code})
 
     def test_graphql_post_refuses_hidden_asker_in_band(self) -> None:

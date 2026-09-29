@@ -168,15 +168,12 @@ class IntakeCampaign(IntakeAccessCase):
             self.assertEqual(row.party_id is None, row.pk == eligible.pk)
 
     def test_historical_migration_creates_imported_and_pending_seats_idempotently(self):
-        linked = self.need(email="", party=self.party(self.reader))
-        waiting = self.need(email="")
+        # Legacy requests predate automatic seat admission.
+        with patch.object(self.Need, "_new_access_decision", return_value=None):
+            linked = self.need(email="", party=self.party(self.reader))
+            waiting = self.need(email="")
         historical = ProjectState.from_apps(apps).apps
-        rows = historical.get_model("intake", "Need")
-        groups = historical.get_model("decisions", "DecisionGroup")
         seats = historical.get_model("decisions", "Decision")
-        old_groups = [row.access_decision.group_id for row in (linked, waiting)]
-        rows._base_manager.order_by().filter(pk__in=(linked.pk, waiting.pk)).update(access_decision_id=None)
-        groups._base_manager.filter(pk__in=old_groups).delete()
         before = self.tuples()
         with connection.schema_editor() as editor:
             forwards(historical, editor)

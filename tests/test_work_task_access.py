@@ -102,10 +102,10 @@ class TaskAccessTests(WorkCase):
         deepest = 0
         original = LocalQueryScope.permission
 
-        def traced(scope, resource_type, action, model, identity, seen):
+        def traced(scope, resource_type, action, model, identity, seen, *args, **kwargs):
             nonlocal deepest
             deepest = max(deepest, len(seen) + 1)
-            return original(scope, resource_type, action, model, identity, seen)
+            return original(scope, resource_type, action, model, identity, seen, *args, **kwargs)
 
         with patch.object(LocalQueryScope, "permission", traced):
             for model in (self.Task, self.Queue, self.Stage, self.Cycle, self.Project, self.Milestone, self.Link):
