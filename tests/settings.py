@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "angee.workflows",
     "angee.decisions",
     "angee.workflows_extraction",
+    "angee.workflows_integrate",
     "angee.knowledge",
     "angee.mcp",
     "angee.storage",

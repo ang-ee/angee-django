@@ -1,0 +1,9 @@
+[addon]
+name = "angee.workflows_integrate"
+description = "Reviewed archive imports through integration extractors"
+keywords = ["workflows", "integrate", "archive"]
+category = "Workflows"
+depends_on = ["angee.workflows", "angee.decisions", "angee.integrate", "angee.storage"]
+
+[resources]
+install = ["resources/install/100_workflows.workflow.yaml"]
