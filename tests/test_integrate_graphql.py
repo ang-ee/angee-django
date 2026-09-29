@@ -1732,7 +1732,7 @@ def test_conflict_action_forwards_explicit_choice_to_owner(
     monkeypatch: pytest.MonkeyPatch,
     keep: str,
 ) -> None:
-    admin = _platform_admin(f"conflict-choice-{keep}")
+    admin = _platform_admin(f"conflict-choice-{keep}-admin")
     bridge = make_integration(f"conflict-choice-{keep}", model=Channel)
     with system_context(reason="test explicit conflict action"):
         stream = SyncStream.objects.current(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)

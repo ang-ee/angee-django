@@ -29,7 +29,7 @@ from angee.resources.widgets import (
     resolve_ledger_xref,
     resolve_xref,
 )
-from tests.conftest import make_addon
+from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
 from tests.tables import model_tables
 
 
