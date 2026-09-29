@@ -85,7 +85,10 @@ class WorkCase(TransactionTestCase):
             )
 
     def task(self, stage="Ready", **fields):
-        values = {"title": "Request", "queue": self.queue, "owner": self.owner, "stage": self.stages[stage]}
+        values = {
+            "title": "Request", "queue": self.queue, "owner": self.owner,
+            "stage": self.stages[stage] if stage is not None else None,
+        }
         values.update(fields)
         with system_context(reason="tests.work.task"):
             return self.Task.objects.create(**values).unsudo()

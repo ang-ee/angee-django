@@ -9,7 +9,15 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import (
+    ObjectRef,
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_subject_ref,
+    write_relationships,
+)
 
 from tests.composed_host import run_composed_tests
 from tests.test_proposals_clarifications import ClarificationCase
@@ -21,6 +29,10 @@ class ProposalsWorkTests(ClarificationCase):
         self.Queue = apps.get_model("work", "Queue")
         self.Stage = apps.get_model("work", "Stage")
         with system_context(reason="tests.proposals_work.queue"):
+            # Generated relation inputs resolve through the actor's readable directory.
+            write_relationships([
+                RelationshipTuple(ObjectRef("iam/directory", "main"), "reader", to_subject_ref(self.manager)),
+            ])
             self.queue = self.Queue.objects.create(
                 name="Questions", key="QUEST", owner=self.manager, provision_stages=False
             )
@@ -285,10 +297,14 @@ class ProposalsWorkTests(ClarificationCase):
             self.assertEqual(stored.queue_id, queue.pk)
             self.assertEqual(stored.project_id, track.pk)
             deferred = self.Task._base_manager.defer("project", "created_at").get(pk=task.pk)
+            self.assertTrue({"project_id", "created_at"} <= deferred.get_deferred_fields())
             deferred.title = "Deferred rename"
             deferred.save()
-            self.assertNotIn("project_id", deferred.__dict__)
-            self.assertNotIn("created_at", deferred.__dict__)
+            # Save hooks may load deferred dependencies; they must preserve their values.
+            saved = self.Task._base_manager.get(pk=task.pk)
+            self.assertEqual((saved.project_id, saved.queue_id), (track.pk, queue.pk))
+            self.assertEqual(saved.created_at, stored.created_at)
+            self.assertEqual(saved.title, "Deferred rename")
 
 
 class DenormalizedProposalsWorkTests(ProposalsWorkTests):
