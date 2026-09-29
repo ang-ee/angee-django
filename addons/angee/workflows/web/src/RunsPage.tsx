@@ -56,10 +56,10 @@ export function RunsList({ baseFilter, embedded = false }: {
         <Field name="outcome" label={t("run.outcome")} />
         <Field name="reprocess_of" label={t("run.reprocessOf")} />
       </Group>
-      <Field name="error" label={t("run.retainedError")} widget="textarea" />
+      <Field name="error" label={t("run.retainedError")} widget="textarea" showWhen={(row) => Boolean(row.error)} />
       <Field name="input" label={t("run.input")} widget="json" />
       <Field name="output" label={t("run.output")} widget="json" />
-      <Action id="cancel" label={t("action.cancel_workflow_run")} danger
+      <Action id="cancel" label={t("action.cancel_workflow_run")} primary danger
         visibleWhen={(record) => record.can_cancel === true} run={cancel}
         confirm={{ title: t("action.cancel_workflow_run"), body: t("action.cancelDescription"), danger: true }} />
       <Action id="reprocess" label={t("action.reprocess_workflow_run")}

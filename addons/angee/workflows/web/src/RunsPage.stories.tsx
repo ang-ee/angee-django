@@ -24,7 +24,7 @@ export const ActionRejected = { render: () => <RunStory rejectAction /> };
 const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 export type RunRequest = v.InferOutput<typeof RequestSchema>;
 const mappedSteps = Array.from({ length: 11 }, (_, index) => stepRunFixture({
-  id: `wsr_mapped_${index}`, node_key: "mapped", is_mapped: true, map_index: index, rank: 0,
+  id: `wsr_mapped_${index}`, node_key: "mapped.body", is_mapped: true, map_index: index, rank: 0,
   can_retry: false, attempts: [], artifacts: [],
 }));
 const documents = { console: operationDocuments };

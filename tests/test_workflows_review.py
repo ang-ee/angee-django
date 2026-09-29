@@ -233,7 +233,8 @@ def test_review_round_limit_fails_with_actual_cause(review):
         step = system_queryset(StepRun).get(pk=step.pk)
     assert run.status == "failed" and step.outcome == "error"
     assert system_queryset(DecisionGroup).count() == question.max_rounds
-    assert "Please revise" in system_queryset(StepAttempt).get(step_run=step, number=step.attempt).error
+    attempt = system_queryset(StepAttempt).get(step_run=step, number=step.attempt)
+    assert attempt.error == "note: Please revise the answer."
 
 
 @pytest.mark.parametrize("closure", ["expired", "superseded"])
@@ -412,14 +413,22 @@ def test_single_consumer_and_delete_protection(review):
         group.delete()
 
 
-def test_cancel_closes_pending_review_seats(review):
-    actor, _people, _sent, _question = review
+@pytest.mark.parametrize("answered", [0, 1, 2])
+def test_cancel_closes_pending_review_seats_and_reports_only_changed_work(review, answered):
+    actor, people, _sent, _question = review
     run, step = start_review(review, input={"two": True, "policy": "all"})
+    for seat, person in zip(seats(step)[:answered], people, strict=False):
+        answer(seat, person)
     result = WorkflowRun.objects.cancel(run, actor=actor)
     assert result.canceled and result.steps == 1
-    assert all(seat.closed_reason == "canceled" for seat in seats(step))
+    assert result.reviews == 2 - answered
+    suffix = {0: "; 2 pending reviews closed", 1: "; 1 pending review closed", 2: ""}[answered]
+    assert result.message == f"Run canceled; 1 open step canceled{suffix}."
+    assert [seat.closed_reason for seat in seats(step)] == ["resolved"] * answered + ["canceled"] * (2 - answered)
     assert system_queryset(StepRun).get(pk=step.pk).status == "canceled"
     assert StepRun.objects.wake_decisions() == 0
+    repeated = WorkflowRun.objects.cancel(run, actor=actor)
+    assert (repeated.steps, repeated.reviews, repeated.message) == (0, 0, "Nothing to cancel.")
 
 
 @pytest.mark.parametrize("policy,actions,outcome", [

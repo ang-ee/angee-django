@@ -11,6 +11,7 @@ import { decisionFixture, decisionGroupFixture, decisionResourceFixture, decisio
 export default { title: "Decisions/Inbox", parameters: { layout: "fullscreen" } };
 export const Open = { render: () => <DecisionStory /> };
 export const Settled = { render: () => <DecisionStory settled /> };
+export const SettledWithoutFacts = { render: () => <DecisionStory settled emptyFacts /> };
 export const Inbox = { render: () => <DecisionStory inbox /> };
 export const Conflict = { render: () => <DecisionStory conflict /> };
 export const InvalidAttempt = { render: () => <DecisionStory invalidAttempt /> };
@@ -19,13 +20,16 @@ export const ReadOnly = { render: () => <DecisionStory readOnly /> };
 const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 const documents = { console: operationDocuments };
 const runtime = {
-  routeHref: createRouteHref([{ name: "decisions.inbox", path: "/decisions" }, { name: "decisions.inbox.record", path: "/decisions/$id" }]),
-  routesByResource: { [DECISION_MODEL]: { collection: "decisions.inbox", record: { name: "decisions.inbox.record", param: "id" } } },
+  routeHref: createRouteHref([{ name: "decisions.inbox", path: "/decisions" }, { name: "decisions.inbox.record", path: "/decisions/$id" }, { name: "notes", path: "/notes" }, { name: "notes.record", path: "/notes/$id" }]),
+  routesByResource: {
+    [DECISION_MODEL]: { collection: "decisions.inbox", record: { name: "decisions.inbox.record", param: "id" } },
+    "notes.Note": { collection: "notes", record: { name: "notes.record", param: "id" } },
+  },
   auth: { user: { id: "usr_reviewer", name: "Reviewer" }, status: "authenticated" as const, hasRole: () => false },
 };
 
-function DecisionStory({ settled = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false }: {
-  settled?: boolean; inbox?: boolean; conflict?: boolean; invalidAttempt?: boolean; readOnly?: boolean;
+function DecisionStory({ settled = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false, emptyFacts = false }: {
+  settled?: boolean; inbox?: boolean; conflict?: boolean; invalidAttempt?: boolean; readOnly?: boolean; emptyFacts?: boolean;
 }) {
   const schemas = useMemo(() => {
     let conflicting = conflict;
@@ -33,6 +37,7 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
     let current = decisionFixture({ can_act: !readOnly, context: { facts: [{ pointer: "/reference", label: "Reference", value: "R-7", authority: "source" }], references: [] } });
     if (settled) current = { ...current, is_open: false, can_act: false, verdict: "COMPLETED", closed_reason: "RESOLVED", resolution: { action: "accept", note: "Already reviewed", reference: "R-7" },
       resolved_by: { display_name: "Reviewer" }, resolved_at: "2026-09-29T09:30:00Z" };
+    if (emptyFacts) current = { ...current, expires_at: null, resolved_by: null, resolved_at: null, closed_reason: null };
     const fixture = storySchema(async (_input, init) => {
       const { query, variables } = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       if (query.includes("decide(")) {
@@ -60,7 +65,7 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
       decisionGroupFixture,
       decisionSubjectFixture,
     ] } } } };
-  }, [settled, conflict, invalidAttempt, readOnly]);
+  }, [settled, conflict, invalidAttempt, readOnly, emptyFacts]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/decisions" initialEntry={inbox ? "/decisions" : "/decisions/dcn_review"}
     runtime={runtime} resourceName={DECISION_MODEL} resourceLabel="Decisions" operationDocuments={documents}>
     <InboxPage />

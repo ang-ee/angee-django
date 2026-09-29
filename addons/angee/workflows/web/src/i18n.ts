@@ -25,6 +25,8 @@ export const enWorkflowsMessages = {
   "catalogue.waitingRuns": "Waiting runs",
   "step.attempts": "Attempts",
   "step.mapIndex": "Map index",
+  "step.mapSettled": "Map items settled",
+  "step.mapTotal": "Map items total",
   "step.result": "Result",
   "step.waitKind": "Wait kind",
   "step.waitReason": "Wait reason",

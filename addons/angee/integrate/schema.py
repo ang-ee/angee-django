@@ -28,6 +28,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.pagination import OffsetPaginated
 
+from angee.base.exceptions import exception_text
 from angee.base.identity import public_id_of
 from angee.graphql.actions import (
     ActionResult,
@@ -1012,7 +1013,7 @@ class ConnectionMutation:
                 deleted, _details = Credential.objects.filter(pk=credential.pk).with_action("delete").delete()
             return UnlinkAccountResult(ok=deleted > 0)
         except ValidationError as error:
-            return UnlinkAccountResult(ok=False, error="; ".join(error.messages), error_code=error.code)
+            return UnlinkAccountResult(ok=False, error=exception_text(error), error_code=error.code)
 
 
 @strawberry.type

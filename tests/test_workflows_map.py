@@ -88,8 +88,13 @@ def test_empty_map_finishes_without_body_rows(execution, map_steps):
     run, mapped = start_map(actor, [])
     assert run.status == "succeeded" and run.output == [] and run.outcome == "done"
     assert not body_rows(run).exists()
+    assert mapped.is_map and not mapped.is_mapped
     assert mapped.map_total == mapped.map_settled == 0
     assert mapped.attempt == 1
+    schema = addon_schema(workflow_schema.schemas, "console")
+    assert result_data(execute_schema(schema, "{ steprun { is_map is_mapped map_total } }", user=actor)) == {
+        "steprun": [{"is_map": True, "is_mapped": False, "map_total": 0}],
+    }
 
 
 def test_context_map_index_distinguishes_zero_from_an_ordinary_row(execution, map_steps, register_step):
@@ -373,14 +378,16 @@ def test_map_progress_and_body_identity_are_resource_owned(execution, map_steps,
     schema = addon_schema(workflow_schema.schemas, "console")
     result = result_data(execute_schema(schema, """query($run: String!) {
       steprun(where: {run: {_eq: $run}}, order_by: [{rank: asc}, {map_index: asc}]) {
-        node_key rank map_index is_mapped map_total map_settled
+        node_key display_name rank map_index is_map is_mapped map_total map_settled
       }
     }""", {"run": run.sqid}, user=actor))["steprun"]
     parent = next(row for row in result if not row["is_mapped"])
     assert parent == {
-        "node_key": "items", "rank": mapped.rank, "map_index": 0,
-        "is_mapped": False, "map_total": 3, "map_settled": 1,
+        "node_key": "items", "display_name": "items", "rank": mapped.rank, "map_index": 0,
+        "is_map": True, "is_mapped": False, "map_total": 3, "map_settled": 1,
     }
     bodies = [row for row in result if row["is_mapped"]]
     assert [row["map_index"] for row in bodies] == [0, 1, 2]
+    assert [row["display_name"] for row in bodies] == [f"items.body [{index}]" for index in range(3)]
+    assert all(not row["is_map"] for row in bodies)
     assert all(row["rank"] == mapped.rank and row["map_total"] == row["map_settled"] == 0 for row in bodies)

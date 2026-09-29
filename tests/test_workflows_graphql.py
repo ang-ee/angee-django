@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
@@ -13,6 +13,7 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 from angee.base.scoping import system_queryset
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.workflows import schema as workflow_schema
+from angee.workflows.definition import Definition
 from angee.workflows.states import AttemptResult, RunStatus, StepRunStatus
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
@@ -122,6 +123,32 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
         assert hidden == {f"{name}_by_pk": None}
     with pytest.raises(PermissionDenied), transaction.atomic():
         StepArtifact.objects.with_actor(owner).create(step_run=step, record=run, label="Forbidden insertion")
+
+    labels = """{
+      workflow { display_name }
+      workflowversion { display_name }
+      workflowrun { display_name }
+      steprun { display_name }
+      stepattempt { display_name }
+      stepartifact { display_name }
+    }"""
+    with CaptureQueriesContext(connection) as one:
+        assert result_data(execute_schema(schema, labels, user=owner)) == {
+            "workflow": [{"display_name": workflow.name}],
+            "workflowversion": [{"display_name": "Version 1"}],
+            "workflowrun": [{"display_name": run.sqid}],
+            "steprun": [{"display_name": "entry"}],
+            "stepattempt": [{"display_name": "Attempt 1"}],
+            "stepartifact": [{"display_name": "Execution evidence"}],
+        }
+    second = start_run(workflow, actor=owner)
+    run_until(second)
+    with CaptureQueriesContext(connection) as many:
+        expanded = result_data(execute_schema(schema, labels, user=owner))
+    assert len(expanded["workflowrun"]) == len(expanded["stepartifact"]) == 2
+    assert len(many) == len(one)
+    artifact.label = ""
+    assert str(artifact) == artifact.sqid
 
 
 def test_cancel_action_checks_requester_before_calling_owner(schema, callers):
@@ -295,6 +322,27 @@ def test_attempt_error_and_stacktrace_share_the_declared_field_gate(schema, call
             assert "ValueError" in data["stepattempt_by_pk"]["stacktrace"]
         else:
             assert data["stepattempt_by_pk"] is None
+
+
+def test_run_validation_failure_retains_field_context(schema, execution, monkeypatch):
+    """A run-level failure renders validation text without replacing successful step evidence."""
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), actor=actor)
+    run = start_run(workflow, actor=actor)
+
+    def invalid_result(*args, **kwargs):
+        raise ValidationError({"result": "The result is no longer available."})
+
+    monkeypatch.setattr(Definition, "result_for", invalid_result)
+    run_until(run)
+    assert run.status == RunStatus.FAILED
+    assert result_data(execute_schema(schema, """{
+      workflowrun { error }
+      stepattempt { error result }
+    }""", user=actor)) == {
+        "workflowrun": [{"error": "result: The result is no longer available."}],
+        "stepattempt": [{"error": "", "result": "SUCCEEDED"}],
+    }
 
 
 def test_terminal_cancel_reports_open_step_cleanup_without_claiming_run_cancellation(schema, execution):

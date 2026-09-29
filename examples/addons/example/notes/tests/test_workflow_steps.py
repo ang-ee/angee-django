@@ -103,6 +103,44 @@ class NoteWorkflowStepTests(TransactionTestCase):
             self.assertEqual(note.history.first().status, Note.Status.ACTIVE)
         self.assertGreaterEqual(self.sent.call_count, 4)
 
+    def test_shipped_map_reviews_each_note_and_collects_independent_answers(self) -> None:
+        """Two mapped bodies retain distinct seats and a typed successor counts both outcomes."""
+        workflow = load_workflow("example.notes.note_review_batch", actor=self.admin, allow_non_dev=True)
+        workflow.with_actor(self.admin).grant_record_access("starter", self.owner)
+        notes = [self.note(title="First note"), self.note(title="Second note")]
+        run = start_run(workflow, actor=self.owner, input={"items": [note.publication_summary() for note in notes]})
+        run_until(run)
+        with system_context(reason="mapped note review waiting assertions"):
+            parent = StepRun.objects.get(run=run, node_key="reviews")
+            bodies = list(parent.map_rows().order_by("map_index"))
+            decisions = [Decision.objects.get(group=body.decision_group) for body in bodies]
+            self.assertEqual((parent.map_total, parent.map_settled), (2, 0))
+            self.assertEqual([body.map_index for body in bodies], [0, 1])
+            self.assertTrue(all(body.status == StepRunStatus.WAITING for body in bodies))
+            self.assertTrue(all(body.waiting_kind == WaitingKind.DECISION for body in bodies))
+            self.assertNotEqual(decisions[0].group_id, decisions[1].group_id)
+            self.assertEqual([decision.record_public_id for decision in decisions], [note.sqid for note in notes])
+            self.assertEqual([decision.basis["title"] for decision in decisions], [note.title for note in notes])
+        Decision.objects.decide(decisions[0].pk, actor=self.reviewer, revision=decisions[0].revision,
+                                action="approve", values={})
+        run_until(run)
+        with system_context(reason="mapped note review partial settlement assertions"):
+            parent.refresh_from_db()
+            decisions[1].refresh_from_db()
+            self.assertEqual((parent.map_total, parent.map_settled), (2, 1))
+            self.assertTrue(decisions[1].is_open)
+            self.assertFalse(StepRun.objects.filter(run=run, node_key="summarize").exists())
+        Decision.objects.decide(decisions[1].pk, actor=self.reviewer, revision=decisions[1].revision,
+                                action="reject", values={"reason": "Needs revision"})
+        run_until(run)
+        self.assertEqual(run.status, RunStatus.SUCCEEDED)
+        self.assertEqual(run.output, {"approved": 1, "rejected": 1})
+        with system_context(reason="mapped note review result assertions"):
+            parent.refresh_from_db()
+            self.assertEqual([item["output"]["id"] for item in parent.output], [note.sqid for note in notes])
+            self.assertEqual((parent.map_total, parent.map_settled), (2, 2))
+            self.assertEqual(StepRun.objects.get(run=run, node_key="summarize").input, parent.output)
+
     def test_rejection_preserves_the_note_and_returns_the_review_result(self) -> None:
         """A rejected answer ends the branch without any publication write."""
 
@@ -271,7 +309,9 @@ class NoteWorkflowStepTests(TransactionTestCase):
 
         for step in (ValidateNotePublication, ReviewNotePublication, PublishNote):
             self.assertEqual(step.output_schema(), NotePublicationOutput.model_json_schema())
+        for step in (ValidateNotePublication, PublishNote):
             self.assertEqual(step.subject, "notes.note")
+        self.assertIsNone(ReviewNotePublication.subject)
         self.assertEqual(ValidateNotePublication.available_outcomes(None), {
             "needs_review": "Needs review", "ok": "Ready", "error": "Error",
         })

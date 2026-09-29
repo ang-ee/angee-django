@@ -92,6 +92,10 @@ class WorkflowVersion(AngeeDataModel):
 
     objects = WorkflowVersionManager()
 
+    def __str__(self) -> str:
+        """Identify the published version within its workflow."""
+        return f"Version {self.number}"
+
     class Meta:
         """Django options for immutable workflow snapshots."""
 
@@ -141,6 +145,10 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     finished_at = models.DateTimeField(null=True, blank=True)
 
     objects = WorkflowRunManager()
+
+    def __str__(self) -> str:
+        """Use the public execution identity without loading its workflow."""
+        return str(self.sqid)
 
     @cached_property
     def policy_version(self) -> Any:
@@ -235,10 +243,19 @@ class StepRun(AngeeDataModel):
 
     objects = StepRunManager()
 
+    def __str__(self) -> str:
+        """Distinguish mapped items while preserving the authored node name."""
+        return f"{self.node_key} [{self.map_index}]" if self.is_mapped else self.node_key
+
     @property
     def is_mapped(self) -> bool:
         """Identify a map body row by its node identity, including item index zero."""
         return self.node_key.endswith(".body")
+
+    @property
+    def is_map(self) -> bool:
+        """Identify a map parent from its declaration, including an empty map."""
+        return not self.is_mapped and self.run.policy_version.definition.nodes[self.node_key].body is not None
 
     def map_rows(self) -> Any:
         """Select this map's body rows; ordinary nodes have no matching items."""
@@ -247,10 +264,7 @@ class StepRun(AngeeDataModel):
     @property
     def map_total(self) -> int:
         """Count admitted items for a map, including after its wait has ended."""
-        if self.is_mapped or not self.input:
-            return 0
-        node = self.run.policy_version.definition.nodes[self.node_key]
-        return len(self.input["items"]) if node.body is not None else 0
+        return len(self.input["items"]) if self.input and self.is_map else 0
 
     @classmethod
     def map_settled_expression(cls) -> Coalesce:
@@ -365,6 +379,10 @@ class StepAttempt(AngeeDataModel):
 
     objects = AngeeManager.from_queryset(StepAttemptQuerySet)()
 
+    def __str__(self) -> str:
+        """Identify this retained claim within its step."""
+        return f"Attempt {self.number}"
+
     class Meta:
         """Django options for one attempt per claim number."""
 
@@ -386,6 +404,10 @@ class StepArtifact(RecordRefMixin, AngeeDataModel):
     object_id = models.PositiveBigIntegerField()
     record = GenericForeignKey("content_type", "object_id")
     label = models.CharField(max_length=200, blank=True, default="")
+
+    def __str__(self) -> str:
+        """Use the authored evidence label, falling back to its public identity."""
+        return self.label or str(self.sqid)
 
     class Meta:
         """Django options for actor-readable execution artifacts."""

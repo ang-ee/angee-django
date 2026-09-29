@@ -16,6 +16,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from rebac import system_context
 
+from angee.base.exceptions import exception_text
 from angee.base.impl import resolve_impl_class
 from angee.integrate.impl import BridgeImpl
 from angee.storage.exceptions import UploadError
@@ -352,7 +353,7 @@ def _local_folder_validation_reason(path: Path) -> str:
     try:
         validate_local_folder_root(str(path))
     except ValidationError as error:
-        return "; ".join(error.messages)
+        return exception_text(error)
     return ""
 
 

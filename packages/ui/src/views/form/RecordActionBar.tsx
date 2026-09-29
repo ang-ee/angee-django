@@ -144,6 +144,10 @@ export function RecordActionBar({
     (action) =>
       !action.visibleWhen || (record != null && action.visibleWhen(record)),
   );
+  const primaryActions = visibleActions.filter((action) => action.primary);
+  const menuActions = visibleActions.filter((action) => !action.primary);
+  const actionDisabled = (action: ActionDescriptor) => blocked || Boolean(action.disabled)
+    || pendingId !== null || (recordId === null && !action.run && !action.submit);
   if (
     visibleActions.length === 0 &&
     deleteAction === undefined &&
@@ -153,69 +157,76 @@ export function RecordActionBar({
 
   return (
     <>
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger
-          render={
-            // A DropdownMenu.Item closes the menu on click, so the item's
-            // pendingId-disabled state is never seen. Drive the affordance from the
-            // trigger instead: while any action runs it shows loading and is
-            // disabled, so a slow non-navigating action gives feedback and can't be
-            // re-fired from a reopened menu.
-            <Button
-              ref={actionsTriggerRef}
-              type="button"
-              variant="ghost"
-              size="md"
-              loading={pendingId !== null}
-            >
-              <Glyph name="more-vertical" />
-              Actions
-            </Button>
-          }
-        />
-        <DropdownMenu.Portal keepMounted>
-          <DropdownMenu.Positioner sideOffset={6} align="start">
-            <DropdownMenu.Content className="w-52">
-              {deleteAction !== undefined ? (
-                <DropdownMenu.Item
-                  variant="danger"
-                  disabled={blocked || !deleteAction.canDelete || deleteAction.isPending}
-                  onClick={deleteAction.onDelete}
-                >
-                  <Glyph name="trash" />
-                  Delete
-                </DropdownMenu.Item>
-              ) : null}
-              {deleteAction !== undefined && visibleActions.length > 0 ? (
-                <DropdownMenu.Separator />
-              ) : null}
-              {visibleActions.map((action) => (
-                <DropdownMenu.Item
-                  key={action.id}
-                  variant={action.danger ? "danger" : "default"}
-                  disabled={
-                    blocked || Boolean(action.disabled) ||
-                    pendingId === action.id ||
-                    (recordId === null && !action.run && !action.submit)
-                  }
-                  onClick={() => void runAction(action)}
-                >
-                  {action.icon ? <Glyph name={action.icon} /> : null}
-                  {action.label}
-                </DropdownMenu.Item>
-              ))}
-              {contributedActions != null ? (
-                <RecordActionMenuItems
-                  blocked={blocked}
-                  finalFocusRef={actionsTriggerRef}
-                >
-                  {contributedActions}
-                </RecordActionMenuItems>
-              ) : null}
-            </DropdownMenu.Content>
-          </DropdownMenu.Positioner>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+      {primaryActions.map((action) => (
+        <Button key={action.id} type="button" size="md"
+          variant={action.danger ? "danger" : "primary"}
+          disabled={actionDisabled(action)} loading={pendingId === action.id}
+          onClick={() => void runAction(action)}>
+          {action.icon ? <Glyph name={action.icon} /> : null}
+          {action.label}
+        </Button>
+      ))}
+      {menuActions.length > 0 || deleteAction !== undefined || contributedActions != null ? (
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            render={
+              // A DropdownMenu.Item closes the menu on click, so the item's
+              // pendingId-disabled state is never seen. Drive the affordance from the
+              // trigger instead: while any action runs it shows loading and is
+              // disabled, so a slow non-navigating action gives feedback and can't be
+              // re-fired from a reopened menu.
+              <Button
+                ref={actionsTriggerRef}
+                type="button"
+                variant="ghost"
+                size="md"
+                loading={pendingId !== null}
+              >
+                <Glyph name="more-vertical" />
+                Actions
+              </Button>
+            }
+          />
+          <DropdownMenu.Portal keepMounted>
+            <DropdownMenu.Positioner sideOffset={6} align="start">
+              <DropdownMenu.Content className="w-52">
+                {deleteAction !== undefined ? (
+                  <DropdownMenu.Item
+                    variant="danger"
+                    disabled={blocked || !deleteAction.canDelete || deleteAction.isPending}
+                    onClick={deleteAction.onDelete}
+                  >
+                    <Glyph name="trash" />
+                    Delete
+                  </DropdownMenu.Item>
+                ) : null}
+                {deleteAction !== undefined && menuActions.length > 0 ? (
+                  <DropdownMenu.Separator />
+                ) : null}
+                {menuActions.map((action) => (
+                  <DropdownMenu.Item
+                    key={action.id}
+                    variant={action.danger ? "danger" : "default"}
+                    disabled={actionDisabled(action)}
+                    onClick={() => void runAction(action)}
+                  >
+                    {action.icon ? <Glyph name={action.icon} /> : null}
+                    {action.label}
+                  </DropdownMenu.Item>
+                ))}
+                {contributedActions != null ? (
+                  <RecordActionMenuItems
+                    blocked={blocked}
+                    finalFocusRef={actionsTriggerRef}
+                  >
+                    {contributedActions}
+                  </RecordActionMenuItems>
+                ) : null}
+              </DropdownMenu.Content>
+            </DropdownMenu.Positioner>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      ) : null}
       {formAction ? (
         <ActionFormDialog
           key={formAction.id}

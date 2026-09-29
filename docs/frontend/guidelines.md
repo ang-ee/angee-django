@@ -438,11 +438,11 @@ history uses native Query pages with domain-owned
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
-  relation widget resolves it through `useResourceRoute(resource)` to show a
-  "follow" arrow to the selected record's detail page. Refine owns the route
+  relation widget resolves its registered record route. Read-only fields render
+  `RecordReference` links; editable pickers show a "follow" arrow. Refine owns the route
   trail, while the routed record surface replaces the generic action leaf with
   the model's `recordRepresentation`. A resource with no routed page simply shows
-  no arrow.
+  the retained label without a link.
 - Register a resource's create form once via `defineAddon`'s
   `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
   wherever that resource is created, including the relation-picker inline create. Use

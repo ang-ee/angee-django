@@ -25,6 +25,7 @@ import {
   } from "@tanstack/react-router";
 import {
   AppRuntimeProvider,
+  createRouteHref,
   type AppRuntime,
   type FormOverrideMap,
   } from "../../runtime";
@@ -932,6 +933,20 @@ describe("FormView", () => {
 
     expect(await screen.findByRole("heading", { name: "Daily briefing" })).toBeTruthy();
     expect(screen.queryByText("[object Object]")).toBeNull();
+  });
+
+  test("read-only relation fields render retained references rather than picker controls", async () => {
+    sdkMocks.record = { id: "run-1", workflow: { id: "workflow-1", name: "Daily briefing" } };
+    renderWithProviders(<FormView resource="workflows.Run" id="run-1" readOnly
+      fields={[{ name: "workflow", label: "Workflow" }]} />, workflowRelationMetadata(), undefined, {
+      routeHref: createRouteHref([{ name: "workflows", path: "/workflows" }, { name: "workflow.record", path: "/workflows/$id" }]),
+      routesByResource: { "workflows.Workflow": { collection: "workflows", record: { name: "workflow.record", param: "id" } } },
+    });
+    expect((await screen.findByRole("link", { name: "Daily briefing" })).getAttribute("href")).toBe("/workflows/workflow-1");
+    expect(screen.queryByRole("button", { name: /Workflow/ })).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(sdkMocks.getList).not.toHaveBeenCalled();
+    expect(sdkMocks.getOne).toHaveBeenCalledOnce();
   });
 
   test("selects dotted scalar and relation fields from their owning model metadata", async () => {
@@ -2524,17 +2539,16 @@ describe("FormView", () => {
     const run = vi.fn(async () => undefined);
     renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly>
       <Field name="title" label="Title" title />
-      <Action id="review" label="Review" run={run} />
+      <Action id="review" label="Review" primary run={run} />
       <Action id="rename" label="Rename" set={{ title: "Changed" }} />
     </FormView>);
     expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Review" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
     await waitFor(() => expect(run).toHaveBeenCalledOnce());
   });
 

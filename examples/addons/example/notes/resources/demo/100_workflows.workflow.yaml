@@ -22,3 +22,19 @@ rows:
         results:
           - {from: publish}
           - {from: review, when: [rejected, expired, superseded]}
+  - xref: note_review_batch
+    fields:
+      key: note-review-batch
+      name: Note review batch
+      description: Review each note independently and summarize the mapped outcomes.
+      publish: true
+      draft:
+        nodes:
+          reviews:
+            step: map
+            body: {step: note_review_publication}
+            next: {done: summarize, failed: summarize}
+          summarize:
+            step: note_collect_reviews
+        results:
+          - {from: summarize}

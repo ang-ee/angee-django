@@ -9,8 +9,12 @@ beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
 afterEach(cleanup);
 
 async function action(label: string, scope: HTMLElement = document.body) {
-  fireEvent.click((await within(scope).findAllByRole("button", { name: "Actions" })).at(-1)!);
-  fireEvent.click(await screen.findByRole("menuitem", { name: label }));
+  if (label === "Reprocess run") {
+    fireEvent.click((await within(scope).findAllByRole("button", { name: "Actions" })).at(-1)!);
+    fireEvent.click(await screen.findByRole("menuitem", { name: label }));
+  } else {
+    fireEvent.click(await within(scope).findByRole("button", { name: label }));
+  }
   return screen.findByRole(label === "Retry accepting a possible duplicate" ? "dialog" : "alertdialog", { name: label });
 }
 
@@ -27,6 +31,7 @@ test("routed record uses the framework action menu, facts and retained JSON", as
   expect(screen.getByRole("tab", { name: "Step runs" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /Save|Delete|New/ })).toBeNull();
   expect(screen.queryByRole("button", { name: "Reprocess run" })).toBeNull();
+  expect(screen.queryByText("Retained error")).toBeNull();
   await waitFor(() => expect(document.body.textContent).toContain("R-7"));
 });
 
@@ -64,11 +69,50 @@ test("step rows are paged in execution order without per-row detail queries", as
   expect(requests.some(({ query }) => query.includes("steprun_by_pk"))).toBe(false);
 });
 
+test("map facts distinguish ordinary steps, item zero, and empty map parents", async () => {
+  const steps = [
+    stepRunFixture(),
+    stepRunFixture({ id: "wsr_map", node_key: "reviews", rank: 1, is_map: true, map_total: 2, map_settled: 1 }),
+    stepRunFixture({ id: "wsr_body", node_key: "reviews.body", rank: 1, is_mapped: true, map_index: 0 }),
+    stepRunFixture({ id: "wsr_empty", node_key: "empty_reviews", rank: 2, is_map: true }),
+  ];
+  render(<RunStory steps={steps} />);
+  fireEvent.click(await screen.findByRole("tab", { name: "Step runs" }));
+  await screen.findByRole("button", { name: "Open empty_reviews" });
+  const headers = screen.getAllByRole("columnheader");
+  const indexes = ["Map index", "Map items settled", "Map items total"]
+    .map((label) => headers.findIndex((header) => header.textContent === label));
+  for (const [name, values] of [
+    ["inspect", ["", "", ""]],
+    ["reviews", ["", "1", "2"]],
+    ["reviews.body", ["0", "", ""]],
+    ["empty_reviews", ["", "0", "0"]],
+  ] as const) {
+    const row = screen.getByRole("button", { name: `Open ${name}` }).closest("tr")!;
+    const cells = within(row).getAllByRole("cell");
+    expect(indexes.map((index) => cells[index]?.textContent)).toEqual(values);
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Open reviews.body" }));
+  const body = await screen.findByRole("dialog", { name: "Step Run" });
+  expect(await within(body).findByText("Map index")).toBeTruthy();
+  expect(within(body).queryByText("Map items total")).toBeNull();
+  fireEvent.click(within(body).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Step Run" })).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Open empty_reviews" }));
+  const parent = await screen.findByRole("dialog", { name: "Step Run" });
+  expect(await within(parent).findByText("Map items settled")).toBeTruthy();
+  expect(within(parent).getByText("Map items total")).toBeTruthy();
+  expect(within(parent).queryByText("Map index")).toBeNull();
+});
+
 test("selected step opens in the shared drawer with attempts and artifacts", async () => {
   render(Recovery.render());
   const step = await openStep();
   expect(await within(step).findByRole("heading", { name: "inspect" })).toBeTruthy();
   expect(within(step).queryByText("Wait reason")).toBeNull();
+  expect(within(step).queryByText("Map index")).toBeNull();
+  expect(within(step).queryByText("Map items settled")).toBeNull();
+  expect(within(step).queryByText("Map items total")).toBeNull();
   fireEvent.click(within(step).getByRole("tab", { name: "Attempts" }));
   expect(await screen.findByText("The operation did not finish.")).toBeTruthy();
   fireEvent.click(await within(step).findByRole("button", { name: "Open 1" }));

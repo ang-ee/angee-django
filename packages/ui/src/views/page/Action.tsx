@@ -169,6 +169,8 @@ export interface ActionProps extends ActionBinding {
   icon?: string;
   disabled?: boolean;
   danger?: boolean;
+  /** Show a visible primary button on the record bar instead of an overflow item. */
+  primary?: boolean;
   /** Static confirmation copy, or copy derived from the loaded record. */
   confirm?: ActionConfirm | ((record: Row) => ActionConfirm);
   /**

@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -32,6 +33,65 @@ describe("RecordActionBar", () => {
   afterEach(() => {
     cleanup();
     clearClients();
+  });
+
+  test("promotes declared primary actions while retaining other verbs in overflow", async () => {
+    const run = vi.fn();
+    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
+      actions={[
+        { id: "review", label: "Review", primary: true, run },
+        { id: "archive", label: "Archive", run },
+        { id: "hidden", label: "Hidden", primary: true, run, visibleWhen: () => false },
+      ]} />);
+    expect(screen.getByRole("button", { name: "Review" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Hidden" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Archive" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Review" })).toBeNull();
+  });
+
+  test("primary actions share confirmation, pending feedback and success settling", async () => {
+    let finish!: (message: string) => void;
+    const run = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
+      actions={[{ id: "cancel", label: "Cancel task", primary: true, danger: true, run,
+        confirm: { title: "Cancel task", body: "Close the pending task?", danger: true } }]} />);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel task" }));
+    const confirmation = await screen.findByRole("alertdialog", { name: "Cancel task" });
+    expect(run).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel task" }));
+    await waitFor(() => expect(run).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel task" }).getAttribute("aria-busy")).toBe("true"));
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Cancel task" }).disabled).toBe(true);
+    await act(async () => { finish("Pending task closed."); });
+    expect(await screen.findByText("Pending task closed.")).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Cancel task" }).disabled).toBe(false);
+  });
+
+  test("primary actions respect explicit disabling and the form's blocked state", () => {
+    const run = vi.fn();
+    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
+      blocked actions={[{ id: "review", label: "Review", primary: true, run }]} />);
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review" }).disabled).toBe(true);
+    cleanup();
+    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
+      actions={[{ id: "review", label: "Review", primary: true, disabled: true, run }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test("a primary action opens the existing typed-args form directly", async () => {
+    const submit = vi.fn(async () => ({ ok: true, message: "Review recorded." }));
+    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
+      actions={[{ id: "review", label: "Review", primary: true, args: [], submit }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review" });
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Review" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({}, expect.objectContaining({ record, selectedIds: [record.id] })));
+    expect(await screen.findByText("Review recorded.")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull();
   });
 
   test("keeps a schema draft across refresh and submits with the latest record revision", async () => {

@@ -59,6 +59,16 @@ def test_kind_label_and_record_representation_share_the_model_owner(inbox):
     assert decision.kind_label == str(decision) == "Note publication"
 
 
+def test_group_and_evidence_display_names_use_public_identity(inbox):
+    _issuer, _requester, reviewer, _outsider, _subject, group, _decision = inbox
+    result = query(reviewer, "{ decision_groups { display_name } decision_evidence { id display_name } }")
+    assert result["decision_groups"] == [{"display_name": f"Decision group {group.sqid}"}]
+    assert result["decision_evidence"] == [{
+        "id": row["id"], "display_name": f"Evidence {row['id']}",
+    } for row in result["decision_evidence"]]
+    assert len(result["decision_evidence"]) == 1
+
+
 def test_can_act_is_the_permission_owners_current_active_person_rule(inbox):
     issuer, requester, reviewer, _outsider, _subject, _group, decision = inbox
     document = "query { decisions { can_act } }"

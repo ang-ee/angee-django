@@ -83,8 +83,8 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
   recordRepresentation: "node_key",
   fields: [
     ...["id", "run", "node_key", "outcome", "waiting_kind", "wait_reason"].map((name) => retainedField(name)),
-    ...["rank", "map_index", "attempt"].map((name) => retainedField(name, "Int")),
-    ...["can_retry", "requires_duplicate_acknowledgement", "is_mapped"].map((name) => retainedField(name, "Boolean")),
+    ...["rank", "map_index", "map_settled", "map_total", "attempt"].map((name) => retainedField(name, "Int")),
+    ...["can_retry", "requires_duplicate_acknowledgement", "is_mapped", "is_map"].map((name) => retainedField(name, "Boolean")),
     ...["input", "output"].map((name) => retainedField(name, "JSON")),
     { ...retainedField("status"), kind: "enum", values: runStates },
   ],
@@ -95,6 +95,9 @@ export const stepRunResourceFixture = testDataResource("workflows.StepRun", {
     rank: testQueryField("rank", { scalar: "Int", sort: { field: "rank" } }),
     map_index: testQueryField("map_index", { scalar: "Int", sort: { field: "map_index" } }),
     is_mapped: testQueryField("is_mapped", { scalar: "Boolean" }),
+    is_map: testQueryField("is_map", { scalar: "Boolean" }),
+    map_settled: testQueryField("map_settled", { scalar: "Int" }),
+    map_total: testQueryField("map_total", { scalar: "Int" }),
   } }),
 });
 
@@ -160,7 +163,7 @@ export function runFixture(overrides: Partial<Run> = {}): Run {
 
 export function stepRunFixture(overrides: Partial<StepRun> = {}): StepRun {
   return {
-    id: "wsr_inspect", node_key: "inspect", map_index: 0, is_mapped: false, rank: 0,
+    id: "wsr_inspect", node_key: "inspect", map_index: 0, is_mapped: false, is_map: false, map_settled: 0, map_total: 0, rank: 0,
     can_retry: true, requires_duplicate_acknowledgement: false,
     status: "FAILED", outcome: "error", attempt: 1, waiting_kind: null, wait_reason: "",
     input: { reference: "R-7" }, output: {},

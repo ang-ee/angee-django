@@ -37,6 +37,9 @@ StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
 StepArtifact = apps.get_model("workflows", "StepArtifact")
 DecisionGroup = apps.get_model("decisions", "DecisionGroup")
+_STEP_POLICY_VERSION = Prefetch(
+    "run__version", queryset=system_queryset(WorkflowVersion).only("document"), to_attr="policy_version",
+)
 
 
 @strawberry_django.type(Workflow)
@@ -55,6 +58,7 @@ class WorkflowType(AngeeNode):
 class WorkflowVersionType(AngeeNode):
     """The immutable graph selected by an admitted run."""
 
+    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["number"])
     number: auto
     document: JSON
     content_hash: auto
@@ -107,6 +111,7 @@ class WorkflowRunType(AngeeNode):
 class StepRunType(AngeeNode):
     """A node's retained execution and wait state; transitions use actions."""
 
+    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["node_key", "map_index"])
     run: WorkflowRunType | None = actor_scoped_to_one("run")
     decision_group: DecisionGroupType | None = actor_scoped_to_one("decision_group")
     attempts: list[StepAttemptType] = actor_scoped_to_many("attempts")
@@ -115,9 +120,10 @@ class StepRunType(AngeeNode):
     rank: auto
     map_index: auto
     is_mapped: bool = strawberry_django.field(only=["node_key"])
-    map_total: int = strawberry_django.field(only=["input", "node_key", "run_id"], prefetch_related=[Prefetch(
-        "run__version", queryset=system_queryset(WorkflowVersion).only("document"), to_attr="policy_version",
-    )])
+    is_map: bool = strawberry_django.field(only=["node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION])
+    map_total: int = strawberry_django.field(
+        only=["input", "node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION],
+    )
     map_settled: int = strawberry_django.field(annotate={"_map_settled": StepRun.map_settled_expression()})
     status: auto
     waiting_kind: auto
@@ -157,6 +163,7 @@ class DecisionGroupWorkflowExtension:
 class StepAttemptType(AngeeNode):
     """One claim's timing, effect marker, failure and operator acknowledgment."""
 
+    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["number"])
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
     number: auto
     started_at: auto
@@ -176,6 +183,7 @@ class StepAttemptType(AngeeNode):
 class StepArtifactType(AngeeNode):
     """A step's labeled reference to a record, governed by its execution policy."""
 
+    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["label"])
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
     label: auto
     created_at: auto

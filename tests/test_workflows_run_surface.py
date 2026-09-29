@@ -260,7 +260,7 @@ def test_step_rank_orders_fork_join_nested_and_paginated_resources(schema, execu
     run_until(run)
     assert run.status == "succeeded"
     expected = [
-        {"node_key": key, "rank": rank, "map_index": 0, "is_mapped": False}
+        {"node_key": key, "rank": rank, "map_index": 0, "is_mapped": False, "is_map": False}
         for rank, key in enumerate(("start", "branch_a", "branch_b", "finish"))
     ]
     assert list(system_queryset(StepRun).filter(run=run).order_by("rank").values_list("node_key", "rank")) == [
@@ -268,9 +268,9 @@ def test_step_rank_orders_fork_join_nested_and_paginated_resources(schema, execu
     ]
     query = """query($id: String!, $offset: Int!) {
       steprun(where: {run: {_eq: $id}}, order_by: [{rank: asc}, {map_index: asc}], limit: 2, offset: $offset) {
-        node_key rank map_index is_mapped
+        node_key rank map_index is_mapped is_map
       }
-      workflowrun_by_pk(id: $id) { step_runs { node_key rank map_index is_mapped } }
+      workflowrun_by_pk(id: $id) { step_runs { node_key rank map_index is_mapped is_map } }
       narrow: workflowrun_by_pk(id: $id) { step_runs { node_key } }
     }"""
     for offset in (0, 2):

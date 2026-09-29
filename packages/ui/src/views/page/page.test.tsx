@@ -58,6 +58,7 @@ describe("page element markers", () => {
 
   test("parse column markers and ignore unrelated children", () => {
     const renderTitle = (row: TestRow) => row.title.toUpperCase();
+    const showTitle = (row: TestRow) => Boolean(row.title);
 
     const columns = parsePageColumns<TestRow>(
       <>
@@ -71,6 +72,7 @@ describe("page element markers", () => {
           aggregate="count"
           align="left"
           render={renderTitle}
+          showWhen={showTitle}
         />
         <span>ignored</span>
         <Column field="updatedAt" header="Updated" align="right" />
@@ -89,6 +91,7 @@ describe("page element markers", () => {
       align: "left",
     });
     expect(columns[0]?.render).toBe(renderTitle);
+    expect(columns[0]?.showWhen).toBe(showTitle);
     expect(columns[1]).toMatchObject({
       field: "updatedAt",
       header: "Updated",

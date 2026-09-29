@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 
-import { Conflict, Inbox, InvalidAttempt, ReadOnly, Settled } from "./InboxPage.stories";
+import { Conflict, Inbox, InvalidAttempt, Open, ReadOnly, Settled, SettledWithoutFacts } from "./InboxPage.stories";
 
 beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
 afterEach(cleanup);
@@ -16,13 +16,32 @@ async function chooseAction(label: string) {
 }
 
 describe("decision stories with native router, queries, and generated mutations", () => {
+  test("pending records link the subject, promote Decide, and hide settlement facts", async () => {
+    render(Open.render());
+    expect(await screen.findByRole("button", { name: "Decide" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    expect((await screen.findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
+    for (const label of ["Subject model", "notes.Note", "nte_7", "Expires", "Resolved by", "Resolved at", "Closed reason"]) {
+      expect(screen.queryByText(label)).toBeNull();
+    }
+  });
+
+  test("settled records omit empty facts and retain populated settlement facts", async () => {
+    const { unmount } = render(SettledWithoutFacts.render());
+    await screen.findByText(/Already reviewed/);
+    for (const label of ["Expires", "Resolved by", "Resolved at", "Closed reason"]) expect(screen.queryByText(label)).toBeNull();
+    unmount();
+    render(Settled.render());
+    await screen.findByText(/Already reviewed/);
+    for (const label of ["Expires", "Resolved by", "Resolved at", "Closed reason"]) expect(screen.getByText(label)).toBeTruthy();
+  });
+
   test("opens an inbox seat, validates its action branch, and records the answer through the real transport", async () => {
     render(Inbox.render());
     fireEvent.click(await screen.findByRole("link", { name: "Open Review" }));
     expect(document.querySelectorAll("main")).toHaveLength(1);
     expect(await screen.findByRole("heading", { name: "Review" })).toBeTruthy();
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Decide" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Decide" }));
     expect((await screen.findByRole("textbox", { name: "Note" }) as HTMLInputElement).value).toBe("Read");
     expect(screen.queryByRole("textbox", { name: "Reference" })).toBeNull();
     await chooseAction("Reject");
@@ -41,14 +60,12 @@ describe("decision stories with native router, queries, and generated mutations"
 
   test("refreshes a conflicting snapshot before a second generated deciding mutation succeeds", async () => {
     render(Conflict.render());
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Decide" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Decide" }));
     fireEvent.click(await screen.findByRole("button", { name: "Decide" }));
     expect(await screen.findByText("This decision has changed. Close and reopen Decide to review the current question.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Decide" }).hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Decide" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Decide" }));
     fireEvent.click(screen.getByRole("button", { name: "Decide" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Decide" })).toBeNull());
     expect((await screen.findAllByText("Completed")).length).toBeGreaterThan(0);
@@ -66,8 +83,7 @@ describe("decision stories with native router, queries, and generated mutations"
 
   test("retains the answer draft and refreshes the revision after a rejected attempt", async () => {
     render(InvalidAttempt.render());
-    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Decide" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Decide" }));
     fireEvent.change(await screen.findByRole("textbox", { name: "Note" }), { target: { value: "Draft answer" } });
     fireEvent.click(screen.getByRole("button", { name: "Decide" }));
     expect(await screen.findByText("Add the missing detail.")).toBeTruthy();

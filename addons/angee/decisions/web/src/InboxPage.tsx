@@ -1,4 +1,5 @@
 import { useAuthoredQuery } from "@angee/refine";
+import { rowValueAtPath } from "@angee/metadata";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useMemo, type ReactElement } from "react";
 import {
@@ -52,21 +53,21 @@ export function InboxPage(): ReactElement {
         <Column field="expires_at" header={t("inbox.expiresAt")} />
         <Column field="verdict" header={t("inbox.verdict")} widget="statusBadge" />
       </List>
-      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "can_act", "form_schema", "resolution"]}>
+      <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "can_act", "form_schema", "resolution", "record_model_label", "record_public_id"]}
+        headerExtras={({ record }) => typeof record?.record_model_label === "string" && typeof record.record_public_id === "string"
+          ? <RecordReference model={record.record_model_label} id={record.record_public_id} /> : null}>
         <Field name="is_open" hidden />
         <Field name="kind_label" title />
         <Field name="verdict" widget="statusbar" options={verdicts} />
         <Group label={t("decision.title")} columns={2}>
           <Field name="requester.display_name" label={t("decision.requester")} />
-          <Field name="record_model_label" label={t("decision.subjectModel")} />
-          <Field name="record_public_id" label={t("decision.subject")} />
-          <Field name="expires_at" label={t("decision.expiry")} />
-          <Field name="resolved_by.display_name" label={t("decision.resolver")} />
-          <Field name="resolved_at" label={t("decision.resolvedAt")} />
-          <Field name="closed_reason" label={t("decision.closedReason")} />
+          <Field name="expires_at" label={t("decision.expiry")} showWhen={(row) => row.is_open === false && Boolean(row.expires_at)} />
+          <Field name="resolved_by.display_name" label={t("decision.resolver")} showWhen={(row) => row.is_open === false && Boolean(rowValueAtPath(row, "resolved_by.display_name"))} />
+          <Field name="resolved_at" label={t("decision.resolvedAt")} showWhen={(row) => row.is_open === false && Boolean(row.resolved_at)} />
+          <Field name="closed_reason" label={t("decision.closedReason")} showWhen={(row) => row.is_open === false && Boolean(row.closed_reason)} />
         </Group>
         <Field name="resolution" widget="json" label={t("decision.answer")} showWhen={(record) => record.is_open === false} />
-        <Action id="decide" label={t("decision.submit")} icon="check"
+        <Action id="decide" label={t("decision.submit")} primary icon="check"
           visibleWhen={(record) => record.is_open === true && record.can_act === true}
           args={({ record }) => {
             const definition = jsonSchemaActionArgs(record?.form_schema, widgets, { initialValues: record?.resolution, translate: uiT });

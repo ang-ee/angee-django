@@ -19,6 +19,22 @@ vi.mock("../../i18n", () => ({
   useUiT: () => (key: string) => key,
 }));
 
+test.each([undefined, "text", "statusBadge"])("conditional cells hide ordinary values and %s widgets", (widget) => {
+  const column = { field: "status", widget, showWhen: (row: { visible: boolean }) => row.visible };
+  const { container, rerender } = render(<ListCellContent column={column} row={{ status: "ACTIVE", visible: false }} />);
+  expect(container.textContent).toBe("");
+  rerender(<ListCellContent column={column} row={{ status: "ACTIVE", visible: true }} />);
+  expect(container.textContent).not.toBe("");
+});
+
+test("conditional cells do not invoke a hidden custom renderer", () => {
+  const renderValue = vi.fn(() => "Visible value");
+  const { rerender } = render(<ListCellContent column={{ field: "value", showWhen: () => false, render: renderValue }} row={{ value: 0 }} />);
+  expect(renderValue).not.toHaveBeenCalled();
+  rerender(<ListCellContent column={{ field: "value", showWhen: () => true, render: renderValue }} row={{ value: 0 }} />);
+  expect(screen.getByText("Visible value")).toBeTruthy();
+});
+
 test("renders a visually hidden list-column header", () => {
   const [column] = buildColumns(
     [

@@ -25,6 +25,7 @@ from rebac import actor_context, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
 from angee.base.actors import actor_user_id
+from angee.base.exceptions import exception_text
 from angee.base.identity import instance_from_public_id
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
@@ -94,16 +95,21 @@ class Cancellation:
 
     canceled: bool
     steps: int
+    reviews: int = 0
 
     @property
     def message(self) -> str:
         """Describe the actual transition, including terminal-run cleanup."""
-        if self.canceled:
-            return "Run canceled."
+        changes = []
         if self.steps:
             noun = "step" if self.steps == 1 else "steps"
-            return f"Run already finished; {self.steps} open {noun} canceled."
-        return "Nothing to cancel."
+            changes.append(f"{self.steps} open {noun} canceled")
+        if self.reviews:
+            noun = "review" if self.reviews == 1 else "reviews"
+            changes.append(f"{self.reviews} pending {noun} closed")
+        if not self.canceled and not changes:
+            return "Nothing to cancel."
+        return "; ".join(["Run canceled" if self.canceled else "Run already finished", *changes]) + "."
 
 
 class WorkflowManager(AngeeManager):
@@ -375,7 +381,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     or step_run is not None and step_run.step.mode == "IO"
                 ):
                     raise
-                run_error = str(failure)
+                run_error = exception_text(failure)
                 timed_out = isinstance(failure, SoftTimeLimitExceeded)
                 if step_run is not None:
                     with _record_failure("settlement failure"):
@@ -389,7 +395,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     if step_run is not None:
                         closed = step_run.attempts.close(
                             AttemptResult.TIMED_OUT if timed_out else AttemptResult.FAILED,
-                            str(failure) if timed_out else settlement.error if settlement else "",
+                            run_error if timed_out else settlement.error if settlement else "",
                             traceback.format_exc() if timed_out else settlement.stacktrace if settlement else "",
                         )
                         if timed_out and closed:
@@ -422,14 +428,14 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     return Cancellation(False, 0)
                 with system_context(reason="workflows.cancel"):
                     canceled = not locked.is_terminal
-                    changed = locked.step_runs.cancel_open()
+                    changed, reviews = locked.step_runs.cancel_open()
                     if not locked.is_terminal:
                         self._write_state(locked, status=RunStatus.CANCELED, outcome=CANCELED_OUTCOME, output={})
                     elif not changed:
                         return Cancellation(False, 0)
                     locked.refresh_from_db()
                     publish_change(locked, action="update", update_fields=None)
-                    return Cancellation(canceled, changed)
+                    return Cancellation(canceled, changed, reviews)
         except OperationalError as error:
             if _sqlstate(error) == "55P03":
                 raise ValidationError("The run is still running; retry cancellation.") from error
@@ -606,20 +612,22 @@ class StepRunQuerySet(AngeeQuerySet):
             page_index=F("page_index") + 1 if next_page else F("page_index"),
         )
 
-    def cancel_open(self) -> int:
-        """Cancel unsettled rows without disturbing completed branch evidence."""
+    def cancel_open(self) -> tuple[int, int]:
+        """Return canceled step and pending-review counts, preserving completed evidence."""
         opened = self.exclude(status__in=StepRunStatus.terminal_values())
         list(opened.order_by("pk").lock_if_supported(no_key=True).values_list("pk", flat=True))
         attempts = self.model._meta.get_field("attempts").related_model
         decisions = apps.get_model("decisions", "Decision").objects
+        reviews = 0
         for group_id in opened.exclude(decision_group_id=None).order_by("decision_group_id").values_list(
             "decision_group_id", flat=True,
         ):
-            decisions.cancel_group(group_id)
+            reviews += decisions.cancel_group(group_id)
         attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
-        return opened.update(
+        changed = opened.update(
             **self._cleared_wait(), status=StepRunStatus.CANCELED,
         )
+        return changed, reviews
 
     def due(self) -> Any:
         """Return time waits whose database deadline has arrived."""
@@ -737,7 +745,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
     @staticmethod
     def _failure(failure: Exception) -> Fail:
         return Fail(
-            error=str(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
+            error=exception_text(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
             retryable=isinstance(failure, (Retryable, RetryableDecisionError)) or (
                 isinstance(failure, OperationalError)
                 and _sqlstate(failure) in RETRYABLE_SQLSTATES
@@ -928,7 +936,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
             with transaction.atomic():
                 run.step_runs.expire(step_run)
         except ImproperlyConfigured as failure:
-            step_run.attempts.filter(number=step_run.attempt).close(AttemptResult.TIMED_OUT, str(failure))
+            step_run.attempts.filter(number=step_run.attempt).close(AttemptResult.TIMED_OUT, exception_text(failure))
             run.step_runs.filter(pk=step_run.pk).to_waiting(
                 kind=WaitingKind.OPERATOR,
                 reason="The step implementation is unavailable; restore its registration before retrying.",

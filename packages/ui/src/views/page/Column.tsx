@@ -30,6 +30,8 @@ export interface ColumnProps<TRow extends object = Record<string, unknown>> {
   /** The cell owns interactive controls; the row supplies keyboard activation without wrapping them. */
   interactive?: boolean;
   render?: (row: TRow) => ReactNode;
+  /** Render this cell only when the row predicate matches; the column remains aligned. */
+  showWhen?: (row: TRow) => boolean;
   tone?: Record<string, Tone>;
 }
 
@@ -53,6 +55,8 @@ export interface ColumnDescriptor<
   /** The cell owns interactive controls; the row supplies keyboard activation without wrapping them. */
   interactive?: boolean;
   render?: (row: TRow) => ReactNode;
+  /** Render this cell only when the row predicate matches; the column remains aligned. */
+  showWhen?: (row: TRow) => boolean;
   tone?: Record<string, Tone>;
   /** Money widget: path to the FK owning the row's currency (see `WidgetField.currencyField`). */
   currencyField?: string;

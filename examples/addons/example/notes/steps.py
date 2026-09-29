@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, Field
 
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
+from angee.workflows.maps import MapItem
 from angee.workflows.reviews import ReviewStep
-from angee.workflows.steps import Done, Step
+from angee.workflows.steps import Done, EmptyOutput, Step
 
 
 class NotePublicationOutput(BaseModel):
@@ -57,19 +60,18 @@ class RejectNote(Action, value="reject", label="Reject", verdict=Verdict.REJECTE
 
 
 class ReviewNotePublication(ReviewStep[NotePublicationOutput, NotePublicationOutput, None, NoteReviewBasis]):
-    """Ask the assigned reader before the run actor publishes the note."""
+    """Review the input note, independently of a containing run's subject."""
 
     key = "note_review_publication"
     label = "Review note"
     category = "Activity"
-    subject = "notes.note"
     kind = "note_publication"
     actions = (ApproveNote, RejectNote)
 
     def ask(self, ctx: Any) -> Any:
         """Freeze the summary and retain a link covered by standing reviewer access."""
 
-        note = ctx.subject
+        note = ctx.load(apps.get_model("notes", "Note"), ctx.input.id)
         return ctx.ask(DecisionRequest(
             kind=self.kind, subject=note, assignees=(note.reviewer,), actions=self.actions,
             basis={**note.publication_summary(), "body": note.body},
@@ -82,9 +84,22 @@ class ReviewNotePublication(ReviewStep[NotePublicationOutput, NotePublicationOut
         """Re-ask changed text before routing the answer under the run actor."""
 
         answer = settled[0]
-        if answer.basis.body != ctx.subject_for_update().body:
+        note = ctx.load(apps.get_model("notes", "Note"), ctx.input.id, lock=True)
+        if answer.basis.body != note.body:
             raise ValidationError({"body": "The note changed after review; review its body again."})
         return ctx.done(answer.basis, outcome=answer.action.outcome)
+
+
+class CollectNoteReviews(Step[list[MapItem[NotePublicationOutput | EmptyOutput]], dict[str, int], None]):
+    """Count each mapped review's outcome, including failed or unanswered items."""
+
+    key = "note_collect_reviews"
+    label = "Summarize note reviews"
+    category = "Activity"
+
+    def run(self, ctx: Any) -> Done:
+        """Consume the map owner's typed, ordered results without reloading notes."""
+        return ctx.done(dict(Counter(item.outcome for item in ctx.input)))
 
 
 class PublishNote(Step[NotePublicationOutput, NotePublicationOutput, None]):

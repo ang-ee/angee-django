@@ -187,6 +187,7 @@ function columnDescriptor<TRow extends object = Record<string, unknown>>(
     ...(props.aggregate !== undefined ? { aggregate: props.aggregate } : {}),
     ...(props.align !== undefined ? { align: props.align } : {}),
     ...(props.render !== undefined ? { render: props.render } : {}),
+    ...(props.showWhen !== undefined ? { showWhen: props.showWhen } : {}),
     ...(props.interactive !== undefined
       ? { interactive: props.interactive }
       : {}),
@@ -214,6 +215,7 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
     ...(props.icon !== undefined ? { icon: props.icon } : {}),
     ...(props.disabled !== undefined ? { disabled: props.disabled } : {}),
     ...(props.danger !== undefined ? { danger: props.danger } : {}),
+    ...(props.primary !== undefined ? { primary: props.primary } : {}),
     ...(props.confirm !== undefined ? { confirm: props.confirm } : {}),
     ...(props.set !== undefined ? { set: props.set } : {}),
     ...(props.prompt !== undefined ? { prompt: props.prompt } : {}),

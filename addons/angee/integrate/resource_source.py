@@ -22,6 +22,7 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
+from angee.base.exceptions import exception_text
 from angee.integrate.http import HttpClient
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
@@ -56,7 +57,7 @@ def _materialize_url(entry: ResourceEntry) -> Path:
     try:
         response = HttpClient().get(url, follow_redirects=True)
     except ValidationError as error:
-        raise ResourceLoadError(f"{url!r}: {'; '.join(error.messages)}") from error
+        raise ResourceLoadError(f"{url!r}: {exception_text(error)}") from error
     except (httpx.RequestError, OSError) as error:
         raise ResourceLoadError(f"{url!r}: fetch failed: {error}") from error
     if not response.is_success:

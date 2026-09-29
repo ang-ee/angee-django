@@ -38,6 +38,10 @@ class DecisionGroup(AngeeDataModel):
     settled_at = models.DateTimeField(null=True, blank=True)
     objects = DecisionGroupManager()
 
+    def __str__(self) -> str:
+        """Identify the retained round without loading any of its seats."""
+        return f"Decision group {self.sqid}"
+
     class Meta:
         """Compose the group as a retained permission resource."""
 
@@ -198,6 +202,10 @@ class DecisionEvidence(RecordRefMixin, AngeeDataModel):
     object_id = models.PositiveBigIntegerField()
     record = GenericForeignKey("content_type", "object_id")
     objects = DecisionEvidenceManager()
+
+    def __str__(self) -> str:
+        """Identify retained evidence without loading its referenced record."""
+        return f"Evidence {self.sqid}"
 
     class Meta:
         """Index the canonical evidence identity once per decision."""
