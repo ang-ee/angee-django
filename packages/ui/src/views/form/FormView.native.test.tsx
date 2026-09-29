@@ -71,10 +71,11 @@ test("preview keeps form submit visible and disabled, including Enter and native
   f.rerender({ viewFields: [{ name: "title", label: "Title" }] });
   const button = await screen.findByRole("button", { name: "Create" });
   expect(button.hasAttribute("disabled")).toBe(true);
-  const input = screen.getByRole("textbox", { name: "Title" });
-  fireEvent.keyDown(input, { key: "Enter" });
+  // Preview renders fields read-only, so there is no editable textbox to press Enter in.
+  expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+  fireEvent.keyDown(button, { key: "Enter" });
   fireEvent.click(button);
-  const form = input.closest("form");
+  const form = button.closest("form");
   if (!form) throw new Error("Missing form");
   await act(async () => { fireEvent.submit(form); });
   expect(submit).not.toHaveBeenCalled();
