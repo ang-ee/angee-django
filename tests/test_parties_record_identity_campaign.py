@@ -63,6 +63,9 @@ def test_record_follower_sql_is_one_query_and_unfollow_revokes_parent_and_child(
             model._meta.rebac_resource_type,
         )
         query = model._base_manager.filter(predicate, pk=person.pk)
+        # Compile once first: Django resolves content types while compiling, and
+        # those cold lookups are not part of the scoped read being counted.
+        str(query.query)
         with CaptureQueriesContext(connection) as queries:
             assert list(query.values_list("pk", flat=True)) == [person.pk]
         assert len(queries) == 1
