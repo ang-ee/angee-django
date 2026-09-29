@@ -230,6 +230,20 @@ class RecordBindingType(AngeeNode):
     created_at: auto
     updated_at: auto
 
+    @strawberry_django.field(only=["page_id", "page__title"])
+    def page_title(self) -> str | None:
+        """Return a readable bound page's title, when this edge owns a page."""
+
+        page = cast(Any, self).page
+        return None if page is None else str(page.title)
+
+    @strawberry_django.field(only=["page_id"])
+    def page_can_write(self) -> bool:
+        """Expose the page end's write permission for binding controls."""
+
+        page = cast(Any, self).page
+        return page is not None and bool(page.has_access("write"))
+
     @strawberry_django.field(only=["page_id"])
     def page(self) -> PublicID | None:
         """Return the bound page id, if this is a page binding."""
@@ -474,6 +488,13 @@ class KnowledgeQuery:
             "list[RecordBindingType]",
             list(RecordBinding._default_manager.for_record(record, role=role)),
         )
+
+    @strawberry.field(name="record_knowledge_can_bind")
+    def record_knowledge_can_bind(self, model_label: str, record_id: PublicID) -> bool:
+        """Report the record end's write scope; page writes remain independent."""
+
+        record = _record_for_binding(model_label, record_id)
+        return record is not None and bool(record.has_access("write"))
 
     @strawberry.field(name="page_record_bindings")
     def page_record_bindings(

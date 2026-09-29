@@ -6,6 +6,8 @@
 
 import { graphql, type DocumentType } from "@angee/gql/console";
 
+export const KNOWLEDGE_LIST_LIMIT = 500;
+
 export const PAGE_MODEL = "knowledge.Page";
 export const MARKDOWN_PAGE_MODEL = "knowledge.MarkdownPage";
 export const PAGE_READ_MODELS = [PAGE_MODEL, MARKDOWN_PAGE_MODEL] as const;
@@ -61,6 +63,7 @@ export const KnowledgePages = graphql(`
   query KnowledgePages($limit: Int, $offset: Int) {
     pages(limit: $limit, offset: $offset) {
       id
+      permissions
       title
       kind
       icon
@@ -69,6 +72,31 @@ export const KnowledgePages = graphql(`
       updated_at
       created_by_label
     }
+  }
+`);
+
+export const KnowledgeRecordPages = graphql(`
+  query KnowledgeRecordPages($modelLabel: String!, $recordId: ID!, $role: String) {
+    record_knowledge_bindings(model_label: $modelLabel, record_id: $recordId, role: $role) {
+      id
+      role
+      page
+      page_title
+      page_can_write
+    }
+    record_knowledge_can_bind(model_label: $modelLabel, record_id: $recordId)
+  }
+`);
+
+export const KnowledgeBindRecord = graphql(`
+  mutation KnowledgeBindRecord($input: RecordBindingInput!) {
+    bind_knowledge_record(input: $input) { id page role }
+  }
+`);
+
+export const KnowledgeUnbindRecord = graphql(`
+  mutation KnowledgeUnbindRecord($input: RecordBindingInput!) {
+    unbind_knowledge_record(input: $input)
   }
 `);
 

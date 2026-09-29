@@ -5,6 +5,13 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enKnowledgeMessages: Record<string, string> = {
+  "record.loading": "Loading bound pages",
+  "record.loadingPages": "Loading available pages",
+  "record.empty": "No pages bound",
+  "record.choosePage": "Choose a page",
+  "record.bind": "Bind",
+  "record.unbind": "Unbind",
+  "record.writeError": "Could not change the page binding.",
   "loading": "Loading knowledge",
   "vaults.unavailableTitle": "Knowledge unavailable",
   "vaults.emptyTitle": "No vaults",

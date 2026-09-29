@@ -1,5 +1,5 @@
 import { useAuthoredQuery } from "@angee/refine";
-import { ErrorBanner, LoadingPanel } from "@angee/ui";
+import { ErrorBanner, Skeleton, SkeletonStatus } from "@angee/ui";
 import { useCallback, useRef, useState, type ReactElement } from "react";
 
 import { KnowledgePage, PAGE_READ_MODELS } from "./data/documents";
@@ -42,7 +42,9 @@ function KnowledgePageContent({
     setEditing(false);
   }
   if (!detail) {
-    if (query.isPending) return <LoadingPanel message={t("page.loading")} />;
+    if (query.isPending) return <SkeletonStatus label={t("page.loading")} className="space-y-3 p-4">
+      <Skeleton className="h-7 w-2/3" /><Skeleton className="h-4" /><Skeleton className="h-4 w-5/6" />
+    </SkeletonStatus>;
     if (query.error) return <ErrorBanner description={query.error.message} />;
     return null;
   }

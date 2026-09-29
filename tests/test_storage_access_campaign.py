@@ -14,10 +14,11 @@ from rebac.models import active_relationship_model
 
 from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.identity import public_subject_ref
+from angee.base.refs import canonical_record_target
 from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
-from angee.storage.models import FileVisibility
+from angee.storage.models import FileAttachmentManager, FileVisibility
 from angee.storage.uploads import DOWNLOAD_TOKEN_SALT
 from tests.conftest import (
     Drive,
@@ -37,6 +38,51 @@ from tests.test_storage import PNG_BYTES, _proxy_upload
 from tests.test_storage import drive as drive
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+@pytest.mark.parametrize("schema_name", ["public", "console"])
+def test_record_files_query_requires_record_and_file_read_and_reports_arm(
+    drive: Any, monkeypatch: pytest.MonkeyPatch, schema_name: str,
+) -> None:
+    reader, stranger = create_user("record-files-reader"), create_user("record-files-stranger")
+    with system_context(reason="test.storage.record_files.seed"):
+        file = File.objects.create(
+            drive=drive, filename="attached.txt", content_hash="d" * 64, visibility="record",
+            owner=drive.alice, upload_state="ready",
+        )
+        attachment = FileAttachment.objects.attach(file, drive)
+    with actor_context(drive.alice):
+        drive.with_actor(drive.alice).grant_record_access("viewer", reader)
+    assert not FileAttachment.objects.has_record_arm(canonical_record_target(drive))
+    # The capability branch is isolated here; the native arm's actual presence
+    # is covered by record upload tests, and the file edge still scopes itself.
+    monkeypatch.setattr(FileAttachmentManager, "has_record_arm", lambda *_: True)
+    schema = addon_schema(storage_schema.schemas, schema_name)
+    query = """query ($model: String!, $id: ID!) {
+      record_files(model_label: $model, record_id: $id) {
+        available can_upload attachments { id file { id filename } }
+      }
+    }"""
+    variables = {"model": "storage.Drive", "id": str(drive.sqid)}
+    visible = result_data(execute_schema(schema, query, variables, user=reader))["record_files"]
+    assert visible == {
+        "available": True, "can_upload": False,
+        "attachments": [],
+    }
+    owner_view = result_data(execute_schema(schema, query, variables, user=drive.alice))["record_files"]
+    assert owner_view == {
+        "available": True, "can_upload": True,
+        "attachments": [{"id": str(attachment.sqid),
+                         "file": {"id": str(file.sqid), "filename": "attached.txt"}}],
+    }
+    assert result_data(execute_schema(schema, query, variables, user=stranger))["record_files"] == {
+        "available": False, "can_upload": False, "attachments": [],
+    }
+    monkeypatch.undo()
+    no_arm = result_data(execute_schema(schema, query, {
+        "model": "storage.Drive", "id": str(drive.sqid),
+    }, user=drive.alice))["record_files"]
+    assert no_arm == {"available": False, "can_upload": False, "attachments": []}
 
 
 @pytest.mark.parametrize("schema_name", ["public", "console"])

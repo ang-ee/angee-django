@@ -42,6 +42,7 @@ import {
 } from "@angee/ui";
 
 import {
+  STORAGE_CATALOGUE_LIMIT,
   StorageBackends,
   StorageDrives,
   StorageFileById,
@@ -74,7 +75,6 @@ import { useStorageT } from "../i18n";
 
 // Drives and backends are small catalogues. Files page through their resource
 // and folders load lazily per parent for the active drive.
-const STORAGE_CATALOGUE_LIMIT = 500;
 const FILE_MODEL = "storage.File";
 const FOLDER_MODEL = "storage.Folder";
 const FOLDER_MODELS = [FOLDER_MODEL] as const;

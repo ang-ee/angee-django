@@ -1,11 +1,13 @@
 """Knowledge reads fail closed and authored actions retain replay semantics."""
 
 import pytest
+from django.contrib.contenttypes.models import ContentType
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.knowledge.models import RecordBindingManager
 from angee.knowledge.schema import schemas
 from tests.conftest import (
     Page,
@@ -28,6 +30,49 @@ mutation Clone($template: ID!, $name: String!, $owned: Boolean!, $key: String) {
   }
 }
 """
+
+
+def test_record_pages_projection_respects_role_and_both_write_ends(
+    composed_tables, monkeypatch,
+):
+    del composed_tables
+    owner, reader = create_user("page-owner"), create_user("page-reader")
+    vault = vault_for(owner, name="Pages")
+    record = vault_for(owner, name="Record")
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Guide")
+        binding = RecordBinding.objects.upsert(page=page, target=record, role="reference")
+        RecordBinding.objects.upsert(page=page, target=record, role="related")
+    _grant(record, "viewer", reader)
+    _grant(vault, "viewer", reader)
+    # This projection test supplies the record owner's read arm. The separate
+    # no-arm regression above proves production binding reads fail closed.
+    def record_arm(self, target, *, role=None):
+        rows = self.model._base_manager.filter(
+            content_type=ContentType.objects.get_for_model(target), object_id=target.pk,
+        )
+        return rows if role is None else rows.filter(role=role)
+
+    monkeypatch.setattr(RecordBindingManager, "for_record", record_arm)
+    schema = addon_schema(schemas, "console")
+    query = """query ($id: ID!, $role: String) {
+      record_knowledge_bindings(model_label: "knowledge.Vault", record_id: $id, role: $role) {
+        id page page_title page_can_write role
+      }
+      record_knowledge_can_bind(model_label: "knowledge.Vault", record_id: $id)
+    }"""
+    variables = {"id": str(record.sqid), "role": "reference"}
+    visible = result_data(execute_schema(schema, query, variables, user=reader))
+    assert visible == {
+        "record_knowledge_bindings": [{
+            "id": str(binding.sqid), "page": str(page.sqid), "page_title": "Guide",
+            "page_can_write": False, "role": "reference",
+        }],
+        "record_knowledge_can_bind": False,
+    }
+    owner_view = result_data(execute_schema(schema, query, variables, user=owner))
+    assert owner_view["record_knowledge_can_bind"] is True
+    assert owner_view["record_knowledge_bindings"][0]["page_can_write"] is True
 
 
 @pytest.mark.parametrize("seat", ["neither", "record", "knowledge", "both", "administrator"])

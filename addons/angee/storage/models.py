@@ -715,7 +715,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         except (PermissionDenied, ObjectDoesNotExist, ValueError) as error:
             raise exceptions.UploadRecordDenied() from error
         if visibility == FileVisibility.RECORD and target is not None:
-            self._require_record_arm(target)
+            attachments.require_record_arm(target)
 
         digest = _normalized_hash(content_hash) if content_hash else ""
         actor = current_actor()
@@ -763,32 +763,6 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         if actor is not None:
             row.with_actor(actor)
         return row
-
-    def _require_record_arm(self, target: CanonicalRecordTarget) -> None:
-        """Require the canonical record's declared attachment read/write arms.
-
-        The effective REBAC schema owns this capability. Native introspection
-        and backing resolution validate it without an addon-local registry.
-        """
-
-        schema = rebac_backend().schema()
-        resource_type = model_resource_type(self.model) or ""
-        definition = schema.get_definition(resource_type)
-        if definition is not None:
-            reads = permission_sources(schema, resource_type, "read").arrows
-            writes = permission_sources(schema, resource_type, "write").arrows
-            for relation in definition.relations:
-                if (relation.name, "read") not in reads or (relation.name, "write") not in writes:
-                    continue
-                backing = resolve_field_backing(definition, relation)
-                if (
-                    backing is not None
-                    and backing.path.startswith("attachments__")
-                    and backing.filters == {"visibility": FileVisibility.RECORD}
-                    and backing.target_model is target.content_type.model_class()
-                ):
-                    return
-        raise exceptions.UploadError("record model has no file attachment read/write arm")
 
     def ingest_bytes(
         self,
@@ -1758,6 +1732,43 @@ class FileAttachmentManager(AngeeManager):
             ).allowed:
                 raise PermissionDenied("write access to the attachment target is required")
         return target
+
+    def for_record(self, record: models.Model) -> models.QuerySet[Any]:
+        """Return actor-readable file edges for a canonical record."""
+
+        target = canonical_record_target(record)
+        return self.get_queryset().filter(
+            content_type=target.content_type, object_id=target.object_id, file__is_trashed=False,
+        ).select_related("file")
+
+    def has_record_arm(self, target: CanonicalRecordTarget) -> bool:
+        """Read the effective REBAC schema's storage attachment capability."""
+
+        schema = rebac_backend().schema()
+        resource_type = model_resource_type(self.model._meta.get_field("file").related_model) or ""
+        definition = schema.get_definition(resource_type)
+        if definition is None:
+            return False
+        reads = permission_sources(schema, resource_type, "read").arrows
+        writes = permission_sources(schema, resource_type, "write").arrows
+        for relation in definition.relations:
+            if (relation.name, "read") not in reads or (relation.name, "write") not in writes:
+                continue
+            backing = resolve_field_backing(definition, relation)
+            if (
+                backing is not None
+                and backing.path.startswith("attachments__")
+                and backing.filters == {"visibility": FileVisibility.RECORD}
+                and backing.target_model is target.content_type.model_class()
+            ):
+                return True
+        return False
+
+    def require_record_arm(self, target: CanonicalRecordTarget) -> None:
+        """Reject record-scoped uploads without the declared read/write arm."""
+
+        if not self.has_record_arm(target):
+            raise exceptions.UploadError("record model has no file attachment read/write arm")
 
     def _lock_target(self, target: CanonicalRecordTarget) -> None:
         """Lock the canonical target before a file insert or attachment write."""
