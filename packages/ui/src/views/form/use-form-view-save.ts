@@ -318,15 +318,16 @@ export function useFormViewSave({
   }, [dataResource, id, invalidate]);
 
   const values = React.useMemo(() => {
-    if (acknowledgedSource !== undefined) {
+    if (acknowledgedSource !== undefined || isCreate) {
+      const sourceValues = acknowledgedSource !== undefined ? acknowledgedSource.values : emptyValues;
       const local = localAcknowledgementRef.current;
-      if (local && replaceEqualDeep(local.previous, acknowledgedSource.values) === local.previous) {
+      if (local && replaceEqualDeep(local.previous, sourceValues) === local.previous) {
         return local.accepted;
       }
       localAcknowledgementRef.current = null;
-      return acknowledgedSource.values ?? emptyValues;
+      return sourceValues ?? emptyValues;
     }
-    return isCreate ? emptyValues : record
+    return record
       ? recordToValues(record, formFields, linesSeed(seedLineRows)) : emptyValues;
   }, [acknowledgedSource, emptyValues, formFields, isCreate, linesSeed, record, seedLineRows]);
   const recordUnavailable = !isCreate && record == null;
@@ -494,6 +495,14 @@ export function useFormViewSave({
       if (!mounted.current) return;
       const savedValues = options.acceptedValues
         ?? recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
+      if (isCreate || (options.acceptedValues && acknowledgedSource !== undefined)) {
+        // Until the source changes, a descriptor rerender must retain the save
+        // acknowledgement instead of replaying the original create defaults.
+        localAcknowledgementRef.current = {
+          previous: acknowledgedSource !== undefined ? acknowledgedSource.values : emptyValues,
+          accepted: savedValues,
+        };
+      }
       const currentValues = form.getValues();
       const savedLines = linesField ? savedValues[linesField] : undefined;
       const submittedLines = linesField ? options.submitted?.[linesField] : undefined;
@@ -522,9 +531,9 @@ export function useFormViewSave({
           }
         }
       } else {
-        // Advancing only the submitted defaults makes RHF identify edits made
-        // during the request without a second dirty-value comparison engine.
-        resetDefaultValues({ ...form.formState.defaultValues, ...submitted }, { keepIsValid: true });
+        // The full pre-request draft includes values omitted from the wire patch.
+        // RHF then preserves only edits made while this submission was pending.
+        resetDefaultValues(options.submitted ?? form.formState.defaultValues ?? {}, { keepIsValid: true });
         syncRecordValues(savedValues, linesField
           ? reconciledLines ? savedLines
             : options.createdLines ? submitted[linesField] : savedLines
@@ -555,7 +564,7 @@ export function useFormViewSave({
         || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
       )) reload();
     },
-    [acknowledgedSource, detailKey, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues, t, toast],
+    [acknowledgedSource, detailKey, emptyValues, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues, t, toast],
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
@@ -602,12 +611,6 @@ export function useFormViewSave({
           const response = result.data;
           const acknowledgement = isFormSubmitAcknowledgement(response) ? response : undefined;
           const saved: Row = acknowledgement ? acknowledgement.record : response as Row;
-          if (acknowledgement && acknowledgedSource !== undefined) {
-            localAcknowledgementRef.current = {
-              previous: acknowledgedSource.values,
-              accepted: acknowledgement.values,
-            };
-          }
           commitSavedRecord(saved, {
             submitted: value,
             submittedFields: acknowledgement
@@ -728,6 +731,7 @@ export function useFormViewSave({
     [formReadOnly],
   );
   const discardChanges = React.useCallback(() => {
+    if (isCreate) localAcknowledgementRef.current = null;
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     resetHistory();
     activeFieldInteractions.current.clear();

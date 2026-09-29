@@ -863,6 +863,35 @@ test("a delayed toolbar patch preserves a dirty draft while adopting clean respo
   expect(f.surface().formIsDirty).toBe(true);
 });
 
+test.each([false, true])("a native create accepts an unmounted server-assigned relation and preserves later edits (%s)", async (laterEdit) => {
+  const title: FieldDescriptor = { name: "title", label: "Title", prefill: () => ({ parent: null }) };
+  const f = await fixture({ id: null, mountedFields: [], boundFields: [{ field: title }] });
+  f.rerender({ viewFields: fields.map((field) => field.name === "parent"
+    ? { ...field, omittable: false, readOnly: true } : field) });
+  let resolve!: (value: { data: Row }) => void;
+  f.update.mockImplementationOnce(() => new Promise<{ data: Row }>((done) => { resolve = done; }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Submitted title" } });
+  expect(f.surface().form.getValues("parent")).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Parent" })).toBeNull();
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
+  expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { title: "Submitted title", body: "" } }));
+  if (laterEdit) fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Later title" } });
+  const parent = { id: "note-parent", title: "Server-assigned parent" };
+  const accepted = { id: "note-created", title: "Submitted title", body: "", parent };
+  await act(async () => { resolve({ data: accepted }); await saving; });
+  expect(f.surface().form.getValues("parent")).toEqual(parent);
+  expect(f.surface().form.formState.defaultValues?.parent).toEqual(parent);
+  expect(f.surface().form.getFieldState("parent").isDirty).toBe(false);
+  expect(f.surface().form.getValues("title")).toBe(laterEdit ? "Later title" : "Submitted title");
+  expect(f.surface().formIsDirty).toBe(laterEdit);
+  expect(f.onSaved).toHaveBeenCalledWith(accepted);
+  const leaving = f.surface().requestLeave();
+  if (laterEdit) fireEvent.click(await screen.findByRole("button", { name: "Stay" }));
+  await expect(leaving).resolves.toBe(!laterEdit);
+});
+
 test("recreated field descriptors read the accepted native cache and retain later edits", async () => {
   const f = await fixture();
   edit("title", "Saved title");
@@ -875,6 +904,45 @@ test("recreated field descriptors read the accepted native cache and retain late
   f.rerender({ viewFields: fields.map((field) => ({ ...field })) });
   expect(f.surface().form.getValues("title")).toBe("Later title");
   expect(f.surface().formIsDirty).toBe(true);
+});
+
+test.each([false, true])("a created record survives descriptor rerenders and preserves later edits (%s)", async (laterEdit) => {
+  const f = await fixture({ id: null });
+  let resolve!: (value: { data: Row }) => void;
+  f.update.mockImplementationOnce(() => new Promise<{ data: Row }>((done) => { resolve = done; }));
+  edit("title", "Submitted title");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
+  if (laterEdit) edit("title", "Later title");
+  const accepted = { id: "note-created", title: "Submitted title", body: "", deadline: "" };
+  await act(async () => { resolve({ data: accepted }); await saving; });
+  f.rerender({ viewFields: fields.map((field) => ({ ...field })) });
+  expect(f.surface().form.getValues("title")).toBe(laterEdit ? "Later title" : "Submitted title");
+  expect(f.surface().form.formState.defaultValues?.title).toBe("Submitted title");
+  expect(f.surface().formIsDirty).toBe(laterEdit);
+  expect(f.onSaved).toHaveBeenCalledWith(accepted);
+  if (laterEdit) {
+    const leaving = f.surface().requestLeave();
+    fireEvent.click(await screen.findByRole("button", { name: "Stay" }));
+    await expect(leaving).resolves.toBe(false);
+  } else {
+    await expect(f.surface().requestLeave()).resolves.toBe(true);
+  }
+  act(() => f.surface().discardChanges());
+  f.rerender({ viewFields: fields.map((field) => ({ ...field })) });
+  expect(f.surface().form.getValues("title")).toBe("");
+  expect(f.surface().formIsDirty).toBe(false);
+});
+
+test("a new create seed replaces a locally acknowledged create", async () => {
+  const f = await fixture({ id: null });
+  edit("title", "Saved title");
+  await act(async () => f.surface().submitForm());
+  f.rerender({ viewFields: fields.map((field) => field.name === "title"
+    ? { ...field, defaultValue: "Next draft" } : { ...field }) });
+  expect(f.surface().form.getValues("title")).toBe("Next draft");
+  expect(f.surface().formIsDirty).toBe(false);
 });
 
 test("a later edit equal to the canonical accepted value becomes clean", async () => {
