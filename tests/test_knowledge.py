@@ -136,6 +136,28 @@ def test_page_inherits_vault_read(composed_tables: None) -> None:
     assert [row.name for row in Vault.objects.as_user(bob)] == ["Research"]
 
 
+def test_vault_viewer_share_is_managed_by_share_holders(composed_tables: None) -> None:
+    """The vault's only grantable relation is ``viewer``, managed under ``share``."""
+
+    alice = create_user("alice")
+    editor = create_user("editor")
+    bob = create_user("bob")
+    vault = vault_for(alice)
+    _grant(vault, "editor", editor)
+
+    with actor_context(editor), pytest.raises(PermissionDenied):
+        vault.with_actor(editor).grant_record_access("viewer", bob)
+    assert list(Vault.objects.as_user(bob)) == []
+
+    with actor_context(alice):
+        vault.with_actor(alice).grant_record_access("viewer", bob)
+        assert [row.name for row in Vault.objects.as_user(bob)] == ["Research"]
+        vault.revoke_record_access("viewer", bob)
+        assert list(Vault.objects.as_user(bob)) == []
+        with pytest.raises(ValueError):
+            vault.grant_record_access("editor", bob)
+
+
 def test_page_inherits_parent_read(composed_tables: None) -> None:
     """A grant on a folder page cascades to its children via ``parent->read``."""
 

@@ -24,6 +24,8 @@ from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
     hasura_model_resource,
     public_pk_decoder,
 )
@@ -344,17 +346,36 @@ class PageWriteBackend(AngeeHasuraWriteBackend):
         return Page._default_manager.create_in(vault, parent=parent, **payload)
 
 
+# Same-row donors on the vault declare their own resource fields; the vault
+# resource composes them without naming any contributor.
+_VAULT_EXTENSION_PUBLIC_ID_FIELDS = declared_hasura_write_relation_fields(Vault)
 _VAULT_RESOURCE = hasura_model_resource(
     VaultType,
     model=Vault,
     name="vaults",
-    filterable=["id", "name", "updated_at"],
-    sortable=["name", "created_at", "updated_at"],
-    aggregatable=["id"],
-    groupable=["updated_at"],
-    insertable=["name", "description", "icon", "accent"],
-    updatable=["name", "description", "icon", "accent"],
-    write_backend=VaultWriteBackend(Vault),
+    filterable=["id", "name", "updated_at", *declared_hasura_resource_fields(Vault, "hasura_filterable_fields")],
+    sortable=["name", "created_at", "updated_at", *declared_hasura_resource_fields(Vault, "hasura_sortable_fields")],
+    aggregatable=["id", *declared_hasura_resource_fields(Vault, "hasura_aggregatable_fields")],
+    groupable=["updated_at", *declared_hasura_resource_fields(Vault, "hasura_groupable_fields")],
+    insertable=[
+        "name",
+        "description",
+        "icon",
+        "accent",
+        *declared_hasura_resource_fields(Vault, "hasura_insertable_fields"),
+    ],
+    updatable=[
+        "name",
+        "description",
+        "icon",
+        "accent",
+        *declared_hasura_resource_fields(Vault, "hasura_updatable_fields"),
+    ],
+    field_id_decode={
+        name: public_pk_decoder(Vault._meta.get_field(name).related_model)
+        for name in _VAULT_EXTENSION_PUBLIC_ID_FIELDS
+    },
+    write_backend=VaultWriteBackend(Vault, public_id_fields=_VAULT_EXTENSION_PUBLIC_ID_FIELDS),
 )
 _PAGE_RESOURCE = hasura_model_resource(
     PageType,

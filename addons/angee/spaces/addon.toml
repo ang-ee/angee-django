@@ -5,7 +5,7 @@ name = "angee.spaces"
 description = "Shared groups with canonical rosters, role-derived access, and group threads"
 keywords = ["spaces", "groups", "rosters", "roles"]
 category = "Data"
-depends_on = ["angee.iam", "angee.parties", "angee.messaging"]
+depends_on = ["angee.iam", "angee.parties", "angee.messaging", "angee.knowledge"]
 
 [[migrations]]
 name = "drop_stored_roster"

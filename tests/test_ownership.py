@@ -4,9 +4,18 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db.models.signals import post_save
-from rebac import actor_context, system_context
+from rebac import (
+    ObjectRef,
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    system_context,
+    to_subject_ref,
+    write_relationships,
+)
 from rebac.errors import PermissionDenied
 
+from angee.base.actors import subject_reaches_user
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow, OwnershipContainer, ownership_tables  # noqa: F401
 
@@ -184,3 +193,23 @@ def test_deleting_owner_clears_owner_and_preserves_other_authors():
         owner.delete()
         row.refresh_from_db()
     assert (row.owner_id, row.created_by_id) == (None, author.pk)
+
+
+def test_subject_reaches_user_by_identity_wildcard_or_userset_membership():
+    """The one holder predicate: the user's own reference, a wildcard, or a containing userset."""
+
+    user, other = create_user("reached"), create_user("other")
+    containing = SubjectRef.of("auth/group", "29", "member")
+    empty = SubjectRef.of("auth/group", "31", "member")
+    with system_context(reason="test.ownership.userset"):
+        write_relationships([RelationshipTuple(ObjectRef("auth/group", "29"), "member", to_subject_ref(user))])
+
+    assert subject_reaches_user(user, user.pk)
+    assert subject_reaches_user(SubjectRef.of("auth/user", str(user.pk)), user.pk)
+    assert subject_reaches_user(SubjectRef.of("auth/user", "*"), user.pk)
+    assert subject_reaches_user(containing, user.pk)
+    assert not subject_reaches_user(other, user.pk)
+    assert not subject_reaches_user(empty, user.pk)
+    assert not subject_reaches_user(containing, other.pk)
+    assert not subject_reaches_user(SubjectRef.of("auth/user", "*"), None)
+    assert not subject_reaches_user(user, None)

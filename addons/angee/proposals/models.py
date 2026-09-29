@@ -37,7 +37,7 @@ from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationships
 from rebac.types import RelationshipFilter, SubjectRef
 
-from angee.base.actors import actor_user_id, instance_actor
+from angee.base.actors import actor_user_id, instance_actor, subject_reaches_user
 from angee.base.errors import DomainError, RecordAccessSubjectRefused
 from angee.base.fields import FractionalRankField, StateField
 from angee.base.mixins import AuditMixin, CreationKeyConflict, ImmutableFieldsMixin, OptimisticLockMixin, OwnerQuerySet
@@ -258,6 +258,17 @@ class RoundManager(AngeeManager):
             for responder in responders:
                 round.admit(responder, track=template.tracks)
         return round.with_actor(actor)
+
+    def for_track(self, project_id: Any) -> Any | None:
+        """Return the round whose admitted shell owns ``project_id`` as its track, else ``None``.
+
+        Track items keep the round's holder ceiling and manager-only sharing; an
+        ordinary project or a question on the round's target project has no round here.
+        """
+
+        if project_id is None:
+            return None
+        return system_queryset(self.model).filter(proposals__track_id=project_id).order_by("pk").first()
 
 
 def _adopt(instance: models.Model, source: models.Model, fields: Iterable[str]) -> None:
@@ -562,16 +573,8 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
 
     def validate_build_subject(self, subject: Any) -> None:
         """Refuse holders that would admit the requester to build content."""
-        user_id = self.requester_user_id()
-        if user_id is None:
-            return
-        subject = to_subject_ref(subject)
-        requester = SubjectRef.of("auth/user", str(user_id))
-        if subject == requester or subject.subject_id == "*":
+        if subject_reaches_user(subject, self.requester_user_id()):
             raise RecordAccessSubjectRefused()
-        if subject.subject_type == "auth/group" and subject.optional_relation == "member":
-            if backend().check_access(subject=requester, action="member", resource=subject.object).allowed:
-                raise RecordAccessSubjectRefused()
 
     def admit(self, user: models.Model, party: models.Model | None = None, track: bool = False) -> Any:
         """Create the unique shell and optionally its owning track, idempotently."""
@@ -2123,9 +2126,9 @@ class ProjectProposalAccess(models.Model):
         """Keep the requester's ceiling on track projects."""
         super().validate_record_access_subject(relation, subject)
         with system_context(reason="proposals.track.subject"):
-            proposal = apps.get_model("proposals", "Proposal")._base_manager.filter(track_id=self.pk).first()
-            if proposal is not None:
-                proposal.round.validate_build_subject(subject)
+            round = apps.get_model("proposals", "Round").objects.for_track(self.pk)
+            if round is not None:
+                round.validate_build_subject(subject)
 
     def selectable_milestones(self) -> models.QuerySet:
         """Limit unopened rounds to the boundary and its immediate successor."""
@@ -2238,26 +2241,11 @@ class TaskProposalAccess(ImmutableFieldsMixin):
         """Reject content changes after the first pass, including generated writes."""
         if self._state.adding and self.shared_with_responders:
             actor = instance_actor(self)
-            proposal = (
-                system_queryset(apps.get_model("proposals", "Proposal"))
-                .filter(
-                    track_id=self.project_id,
-                )
-                .select_related("round")
-                .first()
-                if self.project_id is not None
-                else None
-            )
+            round = apps.get_model("proposals", "Round").objects.for_track(self.project_id)
             if (
-                proposal is None
+                round is None
                 or actor is None
-                or not backend()
-                .check_access(
-                    subject=actor,
-                    action="manage",
-                    resource=to_object_ref(proposal.round),
-                )
-                .allowed
+                or not backend().check_access(subject=actor, action="manage", resource=to_object_ref(round)).allowed
             ):
                 raise PermissionDenied("Only a round manager may insert a task shared with responders.")
         update_fields = kwargs.get("update_fields")
@@ -2345,11 +2333,17 @@ class TaskProposalAccess(ImmutableFieldsMixin):
             return super()._message_post(body, **kwargs)
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
-        """Delegate track-holder validation; ordinary tasks and questions stay native."""
+        """Keep the requester's ceiling on track items; other tasks and questions stay native.
+
+        Only a task on a responder's track asks the round. A question or any task
+        on the round's own target project never consults that project's holder
+        policy, which stays that project's business.
+        """
         super().validate_record_access_subject(relation, subject)
-        if self.project_id is not None:
-            with system_context(reason="proposals.task.subject"):
-                self.project.validate_record_access_subject(relation, subject)
+        with system_context(reason="proposals.task.subject"):
+            round = apps.get_model("proposals", "Round").objects.for_track(self.project_id)
+            if round is not None:
+                round.validate_build_subject(subject)
 
     def set_responder_share(self, shared: bool, expected_revision: int | None = None) -> Any:
         """Share a track item with every current responder or clear that audience."""
@@ -2359,7 +2353,7 @@ class TaskProposalAccess(ImmutableFieldsMixin):
             locked = type(self).objects.lock_if_supported().get(pk=self.pk)
             if expected_revision is not None:
                 locked.require_revision(expected_revision)
-            if not apps.get_model("proposals", "Proposal")._base_manager.filter(track_id=locked.project_id).exists():
+            if apps.get_model("proposals", "Round").objects.for_track(locked.project_id) is None:
                 raise ValidationError("Responder sharing requires a task on a proposal track.")
             if locked.shared_with_responders != shared:
                 locked.shared_with_responders = shared

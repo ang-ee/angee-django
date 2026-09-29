@@ -6,15 +6,18 @@ import importlib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
+from rebac.backends.local_query import LocalQueryScope
 from rebac.models import SchemaRelation, active_relationship_model
 
 from angee.compose.permissions import (
@@ -28,12 +31,15 @@ from angee.fs import write_atomic
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from tests import test_messaging_graphql
 from tests.conftest import (
+    Page,
     SchemaAddon,
+    Vault,
     assert_private_hasura_insert_access,
     create_user,
     execute_schema,
     installed_field_owners,
     result_data,
+    vault_for,
 )
 from tests.projects_models import Queue
 from tests.spaces_models import Group, Membership
@@ -639,6 +645,136 @@ def test_group_owner_and_moderator_write_bound_thread_but_outsider_cannot(
         denied.visibility = Thread.Visibility.RESTRICTED
         with pytest.raises(PermissionDenied):
             denied.save(update_fields=["visibility", "updated_at"])
+
+
+def _vault_scope_pks(actor: Any, action: str) -> tuple[set[Any], str]:
+    """Compile the actor's vault permission to one SQL predicate and return its rows."""
+
+    scope = LocalQueryScope(backend(), to_subject_ref(actor), "default")
+    with patch.object(backend(), "accessible", side_effect=AssertionError("enumerated resource IDs")):
+        predicate = scope.predicate(Vault, action, "knowledge/vault")
+        with CaptureQueriesContext(connection) as captured:
+            sql, _params = Vault._base_manager.filter(predicate).order_by().query.sql_with_params()
+        assert len(captured) == 0
+        return set(Vault._base_manager.filter(predicate).values_list("pk", flat=True)), sql
+
+
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_team_vault_follows_the_roster_and_compiles_to_sql(spaces_tables: None, settings: Any, storage: str) -> None:
+    """A team's vault: the roster reads, moderators and owners write, viewers and outsiders see nothing."""
+
+    del spaces_tables
+    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
+    owner, owner_person = _person_for("spaces-vault-owner")
+    moderator, moderator_person = _person_for("spaces-vault-moderator")
+    member, member_person = _person_for("spaces-vault-member")
+    viewer, viewer_person = _person_for("spaces-vault-viewer")
+    outsider = create_user("spaces-vault-outsider")
+    alice = create_user("spaces-vault-alice")
+    private = vault_for(alice, name="Private")
+    with system_context(reason="spaces team vault"):
+        group = Group.objects.create(name="Managers", slug="managers")
+        for person, role in (
+            (owner_person, Membership.MembershipRole.OWNER),
+            (moderator_person, Membership.MembershipRole.MODERATOR),
+            (member_person, Membership.MembershipRole.MEMBER),
+            (viewer_person, Membership.MembershipRole.VIEWER),
+        ):
+            Membership.objects.create(group=group, party=person, role=role, is_confirmed=True)
+        vault = Vault.objects.create(name="Handbook", team=group)
+        page = Page.objects.create(vault=vault, title="Onboarding")
+    assert vault.owner_id is None
+    assert _group_relationship_count(group) == 0
+
+    for actor, readable in ((owner, True), (moderator, True), (member, True), (viewer, False), (outsider, False)):
+        assert Vault.objects.as_user(actor).filter(pk=vault.pk).exists() is readable
+        assert Page.objects.as_user(actor).filter(pk=page.pk).exists() is readable
+        assert not Vault.objects.as_user(actor).filter(pk=private.pk).exists()
+    assert not Vault.objects.as_user(alice).filter(pk=vault.pk).exists()
+
+    for actor in (owner, moderator):
+        with actor_context(actor):
+            writable = Vault.objects.as_user(actor).get(pk=vault.pk)
+            writable.description = f"edited by {actor.username}"
+            writable.save(update_fields=("description",))
+    for actor in (member, viewer, outsider):
+        denied = Vault._base_manager.get(pk=vault.pk).with_actor(actor)
+        denied.description = "vandalised"
+        with pytest.raises(PermissionDenied):
+            denied.save(update_fields=("description",))
+    # Rebinding the team hands the vault to another roster: it follows share, not write.
+    rebinding = Vault._base_manager.get(pk=vault.pk).with_actor(owner)
+    rebinding.team = None
+    with pytest.raises(PermissionDenied):
+        rebinding.save(update_fields=("team",))
+
+    for actor, action, expected in (
+        (member, "read", {vault.pk}),
+        (member, "write", set()),
+        (member, "share", set()),
+        (moderator, "write", {vault.pk}),
+        (viewer, "read", set()),
+        (outsider, "read", set()),
+        (alice, "read", {private.pk}),
+        (alice, "share", {private.pk}),
+    ):
+        pks, sql = _vault_scope_pks(actor, action)
+        assert pks == expected, (actor.username, action)
+        # The roster arrives as a join on the live membership rows, never as tuples.
+        assert Membership._meta.db_table in sql
+
+    with system_context(reason="spaces team vault unbinding"):
+        Vault._base_manager.filter(pk=vault.pk).update(team=None)
+    for actor in (owner, moderator, member):
+        assert not Vault.objects.as_user(actor).filter(pk=vault.pk).exists()
+        assert not Page.objects.as_user(actor).filter(pk=page.pk).exists()
+    assert _group_relationship_count(group) == 0
+
+
+def test_team_member_clones_an_ownerless_template_vault(spaces_tables: None) -> None:
+    """A template vault reachable only through its team is cloned by a member, not by an outsider."""
+
+    del spaces_tables
+    member, person = _person_for("spaces-template-member")
+    outsider = create_user("spaces-template-outsider")
+    with system_context(reason="spaces template vault"):
+        group = Group.objects.create(name="Managers", slug="managers")
+        Membership.objects.create(group=group, party=person, is_confirmed=True)
+        template = Vault.objects.create(name="Intake template", team=group)
+        Page.objects.create(vault=template, title="Checklist", kind=Page.Kind.TEMPLATE)
+    assert template.owner_id is None
+
+    with actor_context(member):
+        clone = Vault.objects.create_from(template, name="Intake 12")
+    assert (clone.owner_id, clone.team_id) == (member.pk, None)
+    assert [row.title for row in Page.objects.as_user(member).filter(vault=clone)] == ["Checklist"]
+    with actor_context(outsider), pytest.raises(Vault.DoesNotExist):
+        Vault.objects.create_from(template, name="Taken")
+
+
+def test_spaces_fragment_binds_the_vault_to_its_team_roster() -> None:
+    """The composed vault reads and writes through its team; delete and share stay the owner's."""
+
+    app_configs = list(apps.get_app_configs())
+    merged = merged_schemas(app_configs, field_owners=installed_field_owners(app_configs))
+    knowledge = merged["angee.knowledge"]
+    definition = knowledge.get_definition("knowledge/vault")
+    assert definition is not None
+    assert "team" in {relation.name for relation in definition.relations}
+
+    rendered = render_zed("angee.knowledge", knowledge)
+    assert "relation team: spaces/group // rebac:field=team" in rendered
+    block = rendered.split("definition knowledge/vault {", maxsplit=1)[1].split("\n}", maxsplit=1)[0]
+    permissions = {
+        line.split("=", maxsplit=1)[0].split()[1]: line
+        for line in block.splitlines()
+        if line.strip().startswith("permission ")
+    }
+    assert "team->post" in permissions["read"]
+    assert "team->write" in permissions["write"]
+    assert "share" in permissions["write__team"]
+    assert "team" not in permissions["delete"]
+    assert "team" not in permissions["share"]
 
 
 def test_spaces_fragment_merges_only_read_and_write_into_messaging_thread() -> None:

@@ -219,10 +219,12 @@ class Vault(SqidMixin, OwnerMixin, CreationKeyMixin, AngeeModel, HistoryMixin):
     Deleting a vault cascade-deletes every page inside it; the crud delete
     mutation previews that blast radius before confirming. Ownership can be
     transferred or cleared without changing attribution; deleting a user clears
-    ownership and retains their vaults.
+    ownership and retains their vaults. Whoever may ``share`` the vault manages
+    its direct ``viewer`` shares; editor and role reach stay administrative.
     """
 
     runtime = True
+    rebac_grantable = {"viewer": "share"}
 
     sqid_prefix = "vlt_"
     name = models.CharField(max_length=200)

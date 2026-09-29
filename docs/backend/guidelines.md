@@ -1641,7 +1641,11 @@ the permission required to manage it. The model remains the policy owner:
 subset, and `validate_record_access_target()` enforces model-specific target
 rules for listing, options, grants, and revocations. For example, Workflow
 accepts grants only on its lineage head; GraphQL must not infer that rule from
-Workflow fields.
+Workflow fields. A `validate_record_access_subject()` override that keeps one
+user out of a record's holders raises `RecordAccessSubjectRefused` when
+[`subject_reaches_user`](../../angee/base/actors.py), the one predicate for
+whether a subject reference resolves to, or contains, that user, answers true;
+it never decodes wildcards or usersets itself.
 
 The public GraphQL recipient is typed as either a user or group. It resolves to
 the canonical REBAC subject (`auth/user:<id>` or

@@ -55,6 +55,7 @@ from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
 from angee.projects.models import DriveProjects, FolderProjects, VaultProjects
 from angee.proposals.models import DriveProposalAccess, FileProposalAccess
+from angee.spaces.models import VaultSpace
 from angee.storage.models import Backend as AbstractStorageBackend
 from angee.storage.models import Drive as AbstractDrive
 from angee.storage.models import File as AbstractFile
@@ -152,8 +153,10 @@ class WebhookSubscription(AbstractWebhookSubscription):
         rebac_resource_type = "integrate/webhook_subscription"
 
 
-class Vault(VaultProjects, AbstractVault):
-    """Concrete knowledge vault used by source-addon tests."""
+class Vault(VaultSpace, VaultProjects, AbstractVault):
+    """Concrete knowledge vault carrying the projects binding and spaces team donors."""
+
+    rebac_grantable = AbstractVault.rebac_grantable
 
     class Meta(AbstractVault.Meta):
         """Django model options for the canonical test vault."""

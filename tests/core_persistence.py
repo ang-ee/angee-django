@@ -82,6 +82,9 @@ class ReceiptRow(ImmutableFieldsMixin):
 
 OWNERSHIP_SCHEMA = """
 definition auth/user {}
+definition auth/group {
+    relation member: auth/user
+}
 definition scopedemo/owned_row {
     relation owner: auth/user // rebac:field=owner
     permission read = owner
