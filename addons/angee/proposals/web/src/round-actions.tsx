@@ -300,10 +300,6 @@ function roundState(record: Row): string {
   return String(record.status ?? "").trim().toLowerCase();
 }
 
-function isCollectingRound(record: Row): boolean {
-  return roundState(record) === "collecting";
-}
-
 function isOpenedRound(record: Row): boolean {
   return roundState(record) === "opened";
 }
