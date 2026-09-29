@@ -9,6 +9,7 @@ import type { ResourceProps } from "@refinedev/core";
 import type { ResourceMutationOperations } from "@angee/refine";
 import {
   MenuTree,
+  pathMatchesTarget,
   type ChromeMenuNode,
 } from "@angee/ui/chrome/menu-tree";
 import type { RuntimeResourceRoutes } from "@angee/ui/runtime";
@@ -17,6 +18,7 @@ import type { BaseAddonRoute } from "./define-base-addon";
 import {
   childRoutesByParentName,
   fullRoutePath,
+  inheritedRouteFact,
   routeChildHasTrailingParam,
   trailingRouteParamName,
 } from "./route-paths";
@@ -67,6 +69,7 @@ export function refineRouteResourceProjection(
   routes: readonly BaseAddonRoute[],
   menuTree: MenuTree,
   navigationTree: MenuTree = menuTree,
+  selectedRoutes?: Readonly<Record<string, RuntimeResourceRoutes>>,
 ): RefineRouteResourceProjection {
   const resourcesByIdentifier = new Map<string, ResourceProps>();
   const metadataByResource: Record<string, RefineResourceMetadata> = {};
@@ -88,14 +91,15 @@ export function refineRouteResourceProjection(
   }
 
   for (const route of routes) {
-    if (!route.resource) continue;
+    const resource = route.resource ?? route.recordModel;
+    if (!resource || (selectedRoutes && selectedRoutes[resource]?.collection !== route.name)) continue;
     const selected = menuNodeForRoute(route, menuTree);
     const trail = selected
       ? breadcrumbTrailFromMenuTrail(menuTree.trailFor(selected.id))
       : [];
     const leaf = trail.at(-1);
     const parent = trail.length > 1 ? trail[trail.length - 2] : undefined;
-    metadataByResource[route.resource] = {
+    metadataByResource[resource] = {
       ...(leaf ? { label: leaf.displayLabel } : routeLabel(route)),
       ...(leaf ? { icon: leaf.iconName } : routeIcon(route)),
       ...(parent ? { parent: menuRouteResourceIdentifier(parent.id) } : {}),
@@ -135,9 +139,10 @@ export function resourceRouteIndex(
         `Route "${route.name}" claims resource "${route.resource}" already claimed by another route.`,
       );
     }
-    const recordRoute = childrenByParentName
-      .get(route.name)
-      ?.find((candidate) => trailingRouteParamName(candidate.path));
+    const recordRoutes = (childrenByParentName.get(route.name) ?? [])
+      .filter((candidate) => routeChildHasTrailingParam(candidate, route));
+    if (recordRoutes.length > 1) throw new Error(`Route "${route.name}" has multiple record routes.`);
+    const recordRoute = recordRoutes[0];
     const recordParam = recordRoute
       ? trailingRouteParamName(recordRoute.path)
       : undefined;
@@ -149,6 +154,128 @@ export function resourceRouteIndex(
     };
   }
   return byResource;
+}
+
+/** One projection for app resource claims, navigation membership and admission. */
+export class AppRouteProjection {
+  readonly navigationTree: MenuTree;
+  readonly canonical: Readonly<Record<string, RuntimeResourceRoutes>>;
+  private readonly roots = new Map<string, string | undefined>();
+  private readonly claims = new Map<string, Map<string, RuntimeResourceRoutes[]>>();
+  private readonly recordDestinations = new Map<string, Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>>();
+  private readonly routesByName: ReadonlyMap<string, BaseAddonRoute>;
+
+  constructor(
+    readonly routes: readonly BaseAddonRoute[],
+    readonly menuTree: MenuTree,
+    readonly confineTo?: string,
+  ) {
+    this.navigationTree = confineTo === undefined ? menuTree : menuTree.confineTo(confineTo);
+    this.routesByName = new Map(routes.map((route) => [route.name, route]));
+    const appIds = new Set(menuTree.roots.filter((root) => root.appRoot === true || root.id === confineTo).map((root) => root.id));
+    const canonical: BaseAddonRoute[] = [];
+    // Menu order selects the app's fallback when it has several views of a model.
+    const order = [...menuTree.byId.values()].map((item) => item.route);
+    const ordered = [...routes].sort((a, b) => {
+      const left = order.indexOf(a.name);
+      const right = order.indexOf(b.name);
+      return (left < 0 ? Infinity : left) - (right < 0 ? Infinity : right)
+        || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    });
+    for (const route of ordered) {
+      const root = this.rootFor(route);
+      const resource = route.resource ?? route.recordModel;
+      if (!resource || !root || !appIds.has(root)) {
+        canonical.push(route);
+        continue;
+      }
+      if (route.path.includes("$")) {
+        if (route.resource) resourceRouteIndex([route]); // Same collection contract in every scope.
+        continue;
+      }
+      const claim = resourceRouteIndex([
+        { ...route, resource },
+        ...routes.filter((child) => child.parent === route.name),
+      ])[resource]!;
+      if (route.recordMatch && !claim.record) {
+        throw new Error(`Route "${route.name}" declares recordMatch without a record child.`);
+      }
+      if (route.recordMatch && claim.record) {
+        const byResource = this.recordDestinations.get(root) ?? new Map<string, NonNullable<RuntimeResourceRoutes["recordDestinations"]>>();
+        const destinations = byResource.get(resource) ?? [];
+        if (destinations.some((item) => item.match.field === route.recordMatch?.field && item.match.equals === route.recordMatch?.equals)) {
+          throw new Error(`Resource "${resource}" has duplicate record match "${route.recordMatch.field}=${route.recordMatch.equals}".`);
+        }
+        byResource.set(resource, [...destinations, { record: claim.record, match: route.recordMatch }]);
+        this.recordDestinations.set(root, byResource);
+      }
+      const resources = this.claims.get(root) ?? new Map<string, RuntimeResourceRoutes[]>();
+      resources.set(resource, [...(resources.get(resource) ?? []), claim]);
+      this.claims.set(root, resources);
+    }
+    this.canonical = resourceRouteIndex(canonical);
+  }
+
+  rootFor(route: BaseAddonRoute, visited = new Set<string>()): string | undefined {
+    if (this.roots.has(route.name)) return this.roots.get(route.name);
+    if (visited.has(route.name)) throw new Error(`Route "${route.name}" creates a parent cycle.`);
+    visited.add(route.name);
+    // Record children inherit their collection owner; an app's Settings link
+    // admits that target without transferring ownership of the foreign route.
+    const parent = route.parent ? this.routesByName.get(route.parent) : undefined;
+    const selected = route.menu ? menuNodeForRoute(route, this.menuTree) : undefined;
+    const refs = selected ? [selected] : this.menuTree.itemsForRoute(route.name);
+    const roots = new Set(refs.map((item) => this.menuTree.trailFor(item.id)[0]?.id));
+    if (roots.size > 1 && this.confineTo !== undefined && !parent) {
+      throw new Error(`Route "${route.name}" is referenced by different menu roots; declare route.menu.`);
+    }
+    const root = parent && !selected ? this.rootFor(parent, visited)
+      : roots.size === 1 ? roots.values().next().value : undefined;
+    this.roots.set(route.name, root);
+    return root;
+  }
+
+  activeApp(pathname: string): string | undefined {
+    return this.confineTo ?? this.menuTree.activeAppRoot(pathname)?.id;
+  }
+
+  /** Collection defaults are inherited by its record children. */
+  defaultResourceView(routeName?: string): string | undefined {
+    const route = routeName ? this.routesByName.get(routeName) : undefined;
+    return route ? inheritedRouteFact(route, this.routesByName, (item) => item.defaultResourceView) : undefined;
+  }
+
+  resourceRoutes(app?: string, activeRoute?: string): Readonly<Record<string, RuntimeResourceRoutes>> {
+    const result = { ...this.canonical };
+    const route = activeRoute ? this.routesByName.get(activeRoute) : undefined;
+    for (const [resource, claims] of this.claims.get(app ?? "") ?? []) {
+      const selected = claims.find((claim) => route && inheritedRouteFact(route, this.routesByName,
+        (ancestor) => ancestor.name === claim.collection ? true : undefined)) ?? claims[0]!;
+      const record = selected.record ?? claims.find((claim) => claim.record)?.record ?? this.canonical[resource]?.record;
+      result[resource] = { ...selected, ...(record ? { record } : {}) };
+    }
+    for (const [resource, destinations] of this.recordDestinations.get(app ?? "") ?? []) {
+      const selected = result[resource];
+      if (!selected) continue;
+      result[resource] = {
+        ...selected,
+        recordDestinations: destinations,
+        ...(this.canonical[resource]?.record ? { recordFallback: this.canonical[resource].record } : {}),
+      };
+    }
+    return result;
+  }
+
+  allows(route: BaseAddonRoute, pathname: string): boolean {
+    if (this.confineTo === undefined) return true;
+    const root = this.rootFor(route);
+    if (root === undefined || root === this.confineTo) return true;
+    return [...this.navigationTree.byId.values()].some((item) => {
+      const target = item.route ? this.routesByName.get(item.route) : undefined;
+      return target && this.rootFor(target) !== this.confineTo
+        && pathMatchesTarget(pathname, item.target);
+    });
+  }
 }
 
 function addMenuRouteResource(

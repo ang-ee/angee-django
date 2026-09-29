@@ -12,7 +12,7 @@ import {
 } from "@angee/ui";
 import * as React from "react";
 
-import { useProposalsT } from "./i18n";
+import { enProposalsMessages, useProposalsT } from "./i18n";
 import { ROUND_MODEL } from "./resources";
 import { TaskResponderShareAction } from "./task-responder-share";
 
@@ -24,10 +24,6 @@ interface RoundPaneRow extends StringIdRow {
   facilitator?: unknown;
 }
 
-function RoundPaneLabel(): React.ReactElement {
-  const t = useProposalsT();
-  return <>{t("round.pane.label")}</>;
-}
 
 function RecordRoundsSection({
   targetField,
@@ -93,7 +89,7 @@ export const roundRecordSlots = [
     content: (
       <Tab
         id="proposal-rounds"
-        label={<RoundPaneLabel />}
+        label={{ namespace: "proposals", key: "round.pane.label", fallback: enProposalsMessages["round.pane.label"] }}
         icon={<Glyph decorative name="proposals-round" />}
       >
         <RecordRoundsSection targetField="project" />
@@ -107,7 +103,7 @@ export const roundRecordSlots = [
     content: (
       <Tab
         id="proposal-rounds"
-        label={<RoundPaneLabel />}
+        label={{ namespace: "proposals", key: "round.pane.label", fallback: enProposalsMessages["round.pane.label"] }}
         icon={<Glyph decorative name="proposals-round" />}
       >
         <RecordRoundsSection targetField="task" />

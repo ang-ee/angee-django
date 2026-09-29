@@ -94,6 +94,7 @@ const fields = [
     name: "status",
     label: "Status",
     widget: "statusbar",
+    status: true,
     options: statusOptions,
   },
   {
@@ -2091,15 +2092,15 @@ describe("FormView", () => {
     expect(sdkMocks.recordSelection).not.toContain("reminderAt");
   });
 
-  test("places one custom status control before the hero and the lead body before secondary fields", async () => {
-    renderWithProviders(<FormView resource="notes.Note" id="note-1" statusbar={({ recordId }) => <div>Phase for {recordId}</div>}>
+  test("places the declared status field before the hero and the lead body before secondary fields", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
       <Field name="title" label="Title" title />
-      <Field name="status" label="Status" widget="statusbar" options={statusOptions} />
+      <Field name="status" label="Status" widget="statusbar" status options={statusOptions} />
       <Group label="Details"><Field name="wordCount" label="Words" /></Group>
       <Field name="body" label="Lead body" body />
     </FormView>);
     const title = await screen.findByDisplayValue("First");
-    const status = screen.getByText("Phase for note-1");
+    const status = screen.getByRole("list");
     expect(status.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByLabelText("Status")).toBeNull();
     expect(screen.getByText("Lead body").compareDocumentPosition(screen.getByText("Details")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

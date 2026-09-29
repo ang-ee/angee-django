@@ -1,6 +1,8 @@
 import * as React from "react";
 import { DndContext, useDraggable, type DragEndEvent } from "@dnd-kit/core";
 import { useModelMetadata } from "@angee/metadata";
+import { Link } from "@tanstack/react-router";
+import { useResourceRoute, useRouteHref } from "../runtime/runtime";
 import { useDashboardRegistry } from "../runtime/runtime";
 import { useDndKitSensors } from "../lib/dnd";
 import { cn } from "../lib/cn";
@@ -424,6 +426,10 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
 }): React.ReactElement {
   const t = useDashboardT();
   const sourceResource = widget.data.shape === "none" ? "" : widget.data.source.resource;
+  const resourceRoute = useResourceRoute(sourceResource);
+  const routeHref = useRouteHref();
+  const fullViewRoute = typeof widget.options.fullViewRoute === "string" ? widget.options.fullViewRoute : undefined;
+  const fullViewHref = fullViewRoute ? routeHref.maybe(fullViewRoute) : resourceRoute;
   const sourceMetadata = useModelMetadata(sourceResource);
   const resourceLabel = sourceMetadata?.resource.modelName
     ? titleCase(sourceMetadata.resource.modelName)
@@ -463,7 +469,10 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
       }}
     >
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border-subtle px-2">
-        <h3 id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1 truncate text-13 font-medium text-fg"}>{visibleTitle}</h3>
+        <h3 id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1 truncate text-13 font-medium text-fg"}>
+          {!editing && fullViewHref ? <Link to={fullViewHref} className="hover:underline">{visibleTitle}</Link> : visibleTitle}
+        </h3>
+        {!editing && fullViewHref ? <Link to={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} className="shrink-0 rounded-4 p-1 text-fg-muted hover:text-fg focus-visible:focus-ring"><Glyph name="arrow-up-right" size={14} /></Link> : null}
         {editing ? <button type="button" className="cursor-grab rounded-4 p-1 text-fg-muted focus-visible:focus-ring" aria-label={t("surface.move", { title: visibleTitle })} {...drag.attributes} {...drag.listeners}><Glyph name="grip-vertical" fallbackName="more-vertical" size={14} /></button> : null}
         {editing ? (
           <Input

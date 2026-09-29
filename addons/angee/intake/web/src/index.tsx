@@ -9,7 +9,7 @@ import {
 import { MessageSquareQuote } from "lucide-react";
 import type { ReactElement } from "react";
 
-import { enIntakeMessages, useIntakeT } from "./i18n";
+import { enIntakeMessages } from "./i18n";
 import { RecordNeedsPane } from "./RecordNeedsPane";
 
 export { NEED_MODEL } from "./resources";
@@ -26,7 +26,7 @@ const intake = defineBaseAddon({
       content: (
         <Tab
           id="needs"
-          label={<NeedsLabel />}
+          label={{ namespace: "intake", key: "needs.label", fallback: enIntakeMessages["needs.label"] }}
           icon={<Glyph decorative name="intake-needs" />}
         >
           <RecordNeedsSection targetField="project" />
@@ -40,7 +40,7 @@ const intake = defineBaseAddon({
       content: (
         <Tab
           id="needs"
-          label={<NeedsLabel />}
+          label={{ namespace: "intake", key: "needs.label", fallback: enIntakeMessages["needs.label"] }}
           icon={<Glyph decorative name="intake-needs" />}
         >
           <RecordNeedsSection targetField="task" />
@@ -65,9 +65,5 @@ function RecordNeedsSection({
   );
 }
 
-function NeedsLabel(): ReactElement {
-  const t = useIntakeT();
-  return <>{t("needs.label")}</>;
-}
 
 export default intake;

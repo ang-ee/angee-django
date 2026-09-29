@@ -10,8 +10,7 @@ import {
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
 
-import { useAppRuntime, useFormOverride, useModelSlot } from "../../runtime";
-import { admittedContributions, assertContributionIds } from "../../runtime/contribution-selection";
+import { useFormOverride, useModelSlot } from "../../runtime";
 import { useUiT, type UiTranslate } from "../../i18n";
 import {
   hasDirectPageElement,
@@ -26,6 +25,7 @@ import {
   type FieldDescriptor,
   type GroupDescriptor,
   type TabDescriptor,
+  type TabLabel,
 } from "../page";
 import {
   fieldsWithMetadataDefaults,
@@ -99,7 +99,7 @@ export interface RecordToolbarContext {
 
 export interface RecordTabDescriptor {
   id: string;
-  label: React.ReactNode;
+  label: TabLabel;
   icon?: React.ReactNode;
   /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */
   badge?: React.ReactNode;
@@ -236,19 +236,11 @@ export function useFormViewSurface({
     () => [...new Set([canonicalResource, modelLabel])].map(formViewSectionsSlot),
     [canonicalResource, modelLabel],
   );
-  const { slots } = useAppRuntime();
-  // Validate against every implementation of this model, including verbs whose
-  // implementation key has not loaded yet. Visibility never makes an id unknown.
-  const contributionInventory = slots.filter((entry) =>
-    (entry.model === canonicalResource || entry.model === modelLabel)
-      && (entry.slot === FORM_VIEW_SECTIONS_SLOT || entry.slot === FORM_VIEW_RECORD_ACTIONS_SLOT),
-  );
-  assertContributionIds(admitContributions, contributionInventory, `FormView "${resource}"`);
-  const allSectionEntries = useModelSlot(sectionTargets);
-  const sectionEntries = React.useMemo(
-    () => admittedContributions(allSectionEntries, admitContributions),
-    [allSectionEntries, admitContributions],
-  );
+  const sectionEntries = useModelSlot(sectionTargets, {
+    admit: admitContributions,
+    inventorySlots: [FORM_VIEW_SECTIONS_SLOT, FORM_VIEW_RECORD_ACTIONS_SLOT],
+    owner: `FormView "${resource}"`,
+  });
   React.useEffect(() => {
     if (!developmentMode()) return;
     for (const entry of sectionEntries) {

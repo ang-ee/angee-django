@@ -109,7 +109,7 @@ export function RoundsPage(): React.ReactElement {
           <Field name="opens_after" />
           <Field name="clarifications_shared_until" />
         </Group>
-        <Field name="status" widget="statusbar" readOnly />
+        <Field name="status" widget="statusbar" status readOnly />
         {recordId === "new" ? (
           <>
             <Group label={t("round.group.target")} columns={2}>

@@ -85,6 +85,20 @@ test("copied record links restore native query navigation, page edges preserve t
   expect(f.router.state.location.search).toEqual({ group: "updated_at:month", page: "3", keep: "external" });
 });
 
+test("a routed row link survives reload and browser back/forward", async () => {
+  const f = await fixture("/notes");
+  const href = screen.getByText("Open second").getAttribute("href")!;
+  fireEvent.click(screen.getByText("Open second"));
+  await waitFor(() => expect(screen.getByTestId("record").textContent).toBe("b"));
+  await act(async () => { f.router.history.back(); });
+  await waitFor(() => expect(screen.getByTestId("record").textContent).toBe("collection"));
+  await act(async () => { f.router.history.forward(); });
+  await waitFor(() => expect(screen.getByTestId("record").textContent).toBe("b"));
+  cleanup();
+  await fixture(href);
+  expect(screen.getByTestId("record").textContent).toBe("b");
+});
+
 test.each(["", "?recordNav=broken", "?recordNav=%7B%7D"])("a context-free or malformed routed record has no list fallback: %s", async (query) => {
   const f = await fixture(`/notes/b${query}`);
   expect(screen.getByTestId("record").textContent).toBe("b");

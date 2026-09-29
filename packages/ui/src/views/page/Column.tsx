@@ -37,6 +37,8 @@ export interface ColumnDescriptor<
   TRow extends object = Record<string, unknown>,
 > {
   field: string;
+  /** Native table identity retained when metadata projects a relation's display path. */
+  id?: string;
   /** Native query metadata for a resolved column's projected values. */
   queryField?: QueryField;
   /** Concrete GraphQL leaf paths selected when `field` names an object relation. */

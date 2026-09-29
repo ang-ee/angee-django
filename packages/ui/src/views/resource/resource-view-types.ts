@@ -75,6 +75,8 @@ export interface BoardLaneSource {
 export interface GanttViewSpec extends GanttRowLayout {
   start: string;
   end: string;
+  /** Bars from another resource; the list resource itself supplies lanes, filters, presets, and selection. */
+  linked?: { resource: string; lane: string; filter?: ResourceFilter<ResourceTypeName> };
   /** Defaults to the resource's record representation. */
   label?: string;
   /** A status field resolved through the runtime's status-tone vocabulary. */
@@ -179,7 +181,7 @@ export interface ListViewProps<TRow extends Row = Row> {
   /** Calendar data + interaction seams. When declared, the Calendar kind is offered
    * in the switcher and rendered as a windowed-collection surface (no `useList`). */
   calendar?: CalendarViewSpec;
-  /** Date-scaled bars on related rows; requires laneSource. Pages by row. */
+  /** Date-scaled bars on related rows or a linked resource. */
   gantt?: GanttViewSpec;
   /** Declared board lanes for a relation group field; empty lanes render too. */
   laneSource?: BoardLaneSource;

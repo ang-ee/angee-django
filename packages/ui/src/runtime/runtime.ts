@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import { useMatches } from "@tanstack/react-router";
 import type {
   MessageResources,
   MessageVars,
@@ -9,6 +10,7 @@ import {
 } from "@angee/metadata";
 
 import type {
+  RuntimeVocabulary,
   ChatterContribution,
   ChatterRoute,
   DrawerContribution,
@@ -25,7 +27,9 @@ import { createAngeeI18nInstance } from "./i18n";
 import {
   createRouteHref,
   type RouteHref,
+  type RuntimeResourceRoutes,
 } from "./route-href";
+import type { ResourceViewPreset } from "../views/resource/model/favorites";
 import type { DashboardRegistry } from "../dashboard/headless";
 import type { ThemeContribution } from "../theme";
 import type { StatusToneMap } from "../widgets/status-tones";
@@ -70,18 +74,12 @@ export function readRuntimeRouteShortcuts(
   });
 }
 
-/** Route names derived from one resource-tagged collection declaration. */
-export interface RuntimeResourceRoutes {
-  collection: string;
-  record?: {
-    name: string;
-    param: string;
-  };
-}
+export type { RuntimeResourceRoutes } from "./route-href";
 
 export type ResourceRecordHrefLookup = (
   resource: string,
   id: string,
+  row?: Readonly<Record<string, unknown>>,
 ) => string | undefined;
 
 /**
@@ -96,14 +94,16 @@ export interface AppRuntime {
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: RuntimeI18n | null;
+  vocabulary: RuntimeVocabulary;
+  resourceViews: Readonly<Record<string, ResourceViewPreset>>;
+  defaultResourceView?: string;
   auth: RuntimeAuthState;
   logoutAction: RuntimeLogoutAction;
   userPreferences: RuntimeUserPreferencesState;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
-  /** App-wide chatter admission. Omit for all; routes can override it. */
-  chatterAdmitContributions?: readonly string[];
+  /** Inherited route policies for the shell aside. */
   chatterRoutes: readonly ChatterRoute[];
   slots: readonly SlotContribution[];
   /** Addon-owned detail search keys cleared by routed record navigation. */
@@ -202,6 +202,8 @@ const EMPTY_RUNTIME: AppRuntime = {
   widgets: {},
   statusTones: {},
   i18n: null,
+  vocabulary: { resources: {}, menus: {} },
+  resourceViews: {},
   auth: ANONYMOUS_RUNTIME_AUTH,
   logoutAction: {
     logout: async () => false,
@@ -308,18 +310,27 @@ function useResourceRoutes(resource: string): RuntimeResourceRoutes | undefined 
 /** Build record hrefs from a resource's composed collection route, when routed. */
 export function useResourceRecordHref(
   resource: string,
-): ((id: string) => string | undefined) | undefined {
-  const record = useResourceRoutes(resource)?.record;
+): ((id: string, row?: Readonly<Record<string, unknown>>) => string | undefined) | undefined {
+  const routes = useResourceRoutes(resource);
   const routeHref = useAppRuntime().routeHref;
   return useMemo(
     () =>
-      record === undefined
+      routes?.record === undefined
         ? undefined
-        : (id: string) => routeHref.maybe(record.name, {
+        : (id: string, row?: Readonly<Record<string, unknown>>) => {
+          const record = recordDestination(routes, row);
+          return record ? routeHref.maybe(record.name, {
             [record.param]: id,
-          }),
-    [record, routeHref],
+          }) : undefined;
+        },
+    [routes, routeHref],
   );
+}
+
+/** Row projections needed to choose an app-owned record destination. */
+export function useResourceRecordMatchFields(resource: string): readonly string[] {
+  const routes = useResourceRoutes(resource);
+  return useMemo(() => [...new Set(routes?.recordDestinations?.map(({ match }) => match.field) ?? [])], [routes]);
 }
 
 /** Resolve any resource-backed record href, degrading when its addon is absent. */
@@ -327,7 +338,7 @@ export function useResourceRecordHrefLookup(): ResourceRecordHrefLookup {
   const metadata = useSchemaFieldMetadata();
   const { routesByResource, routeHref } = useAppRuntime();
   return useCallback(
-    (resource: string, id: string) => {
+    (resource: string, id: string, row?: Readonly<Record<string, unknown>>) => {
       if (!resource || !id) return undefined;
       const canonicalResource = canonicalModelLabelOrNull(
         metadata.resources ?? [],
@@ -335,7 +346,7 @@ export function useResourceRecordHrefLookup(): ResourceRecordHrefLookup {
         "resource record route lookup",
       );
       const record = canonicalResource
-        ? routesByResource?.[canonicalResource]?.record
+        ? recordDestination(routesByResource?.[canonicalResource], row)
         : undefined;
       return record
         ? routeHref.maybe(record.name, { [record.param]: id })
@@ -345,9 +356,33 @@ export function useResourceRecordHrefLookup(): ResourceRecordHrefLookup {
   );
 }
 
+function recordDestination(
+  routes: RuntimeResourceRoutes | undefined,
+  row?: Readonly<Record<string, unknown>>,
+): RuntimeResourceRoutes["record"] {
+  if (!routes) return undefined;
+  if (!routes.recordDestinations?.length) return routes.record;
+  const matching = routes.recordDestinations.filter(({ match }) => {
+    const value = match.field.split(".").reduce<unknown>((current, key) =>
+      current && typeof current === "object" ? (current as Record<string, unknown>)[key] : undefined, row);
+    return value === match.equals;
+  });
+  if (matching.length > 1) throw new Error("Record matches more than one app route.");
+  return matching[0]?.record ?? routes.recordFallback;
+}
+
 /** The app-composed, fail-fast route href builder. */
 export function useRouteHref(): RouteHref {
   return RuntimeContext.use().routeHref;
+}
+
+/** Resolve the active declaration by the router's matched path. */
+export function useActiveRoute<T extends { path: string }>(routes: readonly T[]): T | undefined {
+  const fullPath = useMatches({ select: (matches) => matches.at(-1)?.fullPath });
+  return useMemo(
+    () => routes.find((route) => route.path.replace(/\/$/, "") === fullPath?.replace(/\/$/, "")),
+    [routes, fullPath],
+  );
 }
 
 /** The app-owned login destination used by shell and IAM surfaces. */
@@ -396,21 +431,32 @@ export function useSlot(
  */
 export function useModelSlot(
   target: ModelSlotTarget | readonly ModelSlotTarget[],
+  options: { admit?: readonly string[]; inventorySlots?: readonly string[]; owner?: string } = {},
 ): readonly SlotContribution[] {
   const { slots } = useAppRuntime();
   return useMemo(() => {
     const targets: readonly ModelSlotTarget[] = Array.isArray(target)
       ? target as readonly ModelSlotTarget[]
       : [target as ModelSlotTarget];
+    if (options.admit !== undefined) {
+      const models = new Set(targets.map((candidate) => candidate.model));
+      const slotNames = new Set(options.inventorySlots ?? targets.map((candidate) => candidate.slot));
+      const known = new Set(slots.filter((entry) =>
+        models.has(entry.model ?? "") && slotNames.has(entry.slot),
+      ).map((entry) => entry.id));
+      for (const id of options.admit) {
+        if (!known.has(id)) throw new Error(`${options.owner ?? "Model slot"} admits unknown contribution id "${id}".`);
+      }
+    }
     return targets.flatMap((candidate) =>
       slots.filter(
         (entry) =>
           entry.slot === candidate.slot
           && entry.model === candidate.model
           && entry.impl === candidate.impl,
-      ),
+      ).filter((entry) => options.admit === undefined || options.admit.includes(entry.id)),
     );
-  }, [slots, target]);
+  }, [slots, target, options.admit, options.inventorySlots, options.owner]);
 }
 
 /** The addon-contributed file-preview renderers, in composed order. */

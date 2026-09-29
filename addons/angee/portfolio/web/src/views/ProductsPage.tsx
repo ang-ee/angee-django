@@ -66,7 +66,7 @@ export function ProductsPage(): React.ReactElement {
         <Field name="name" title />
         <Field
           name="lifecycle"
-          widget="statusbar"
+          widget="statusbar" status
           options={lifecycleOptions}
         />
         <Group label={t("product.group.provenance")} columns={2}>
@@ -97,7 +97,7 @@ function ProductReleasesTab({ recordId }: RecordPanelContext): React.ReactElemen
       </List>
       <Form resource={RELEASE_MODEL}>
         <Field name="name" title />
-        <Field name="status" widget="statusbar" options={statusOptions} />
+        <Field name="status" widget="statusbar" status options={statusOptions} />
         <Field name="product" readOnly />
         <Group label={t("release.group.dates")} columns={2}>
           <Field name="target_date" />

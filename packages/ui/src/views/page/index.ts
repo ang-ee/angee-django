@@ -15,7 +15,7 @@ import type { ColumnDescriptor, ColumnProps } from "./Column";
 import type { FacetDescriptor, FacetProps } from "./Facet";
 import type { FieldDescriptor, FieldProps } from "./Field";
 import type { GroupDescriptor, GroupProps } from "./Group";
-import type { TabDescriptor, TabProps } from "./Tab";
+import type { TabDescriptor, TabLabel, TabProps } from "./Tab";
 import { pageChildren, pageChildrenCacheKey, pageElementProps } from "./types";
 
 export { Action, type ActionConfirm } from "./Action";
@@ -33,7 +33,7 @@ export {
   type PageFieldKind,
 } from "./Field";
 export { Group } from "./Group";
-export { Tab } from "./Tab";
+export { Tab, resolveTabLabel } from "./Tab";
 export {
   PAGE_ELEMENT_SLOT,
   pageChildren,
@@ -61,6 +61,7 @@ export type {
   GroupDescriptor,
   GroupProps,
   TabDescriptor,
+  TabLabel,
   TabProps,
 };
 

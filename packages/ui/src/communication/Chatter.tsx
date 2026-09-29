@@ -9,9 +9,9 @@ import { Glyph } from "../chrome/Glyph";
 import { EmptyState } from "../fragments/EmptyState";
 import { useUiT, type UiMessageVars } from "../i18n";
 import { cn } from "../lib/cn";
-import { admittedContributions, assertContributionIds } from "../runtime/contribution-selection";
 import {
   useAppRuntime,
+  useActiveRoute,
   type ChatterContribution,
   type ChatterRoute,
   type ChatterView,
@@ -22,15 +22,12 @@ import { Tabs } from "../ui/tabs";
 import { CHATTER_TAB_SEARCH_KEY, useChatter, type ChatterTab } from "./chatter-context";
 
 export interface ChatterProps {
-  /** Override route/app admission for this shell surface. Omit for inherited admission. */
-  admitContributions?: readonly string[];
   tabs?: readonly ChatterTab[];
   composer?: React.ReactNode;
   className?: string;
 }
 
 export function Chatter({
-  admitContributions,
   tabs,
   composer,
   className,
@@ -69,27 +66,34 @@ export function Chatter({
   // page's published tabs (explicit prop or context) win last. A same-id tab
   // replaces its predecessor in place; a new id appends. So a page contributing a
   // `details`/`backlinks` tab keeps the defaults it does not override.
-  const viewContext = useActiveChatterView(runtime.chatterRoutes ?? []);
-  const admit = admitContributions ?? viewContext.route?.admitContributions ?? runtime.chatterAdmitContributions;
+  const { context: viewContext, visible } = useChatterPresentation();
+  const policy = viewContext.route?.chatter;
+  const admit = policy === "hidden" ? [] : policy?.tabs;
   const baseTabs = defaultTabs(t);
   const publishedTabs = tabs ?? content?.tabs ?? [];
-  assertContributionIds(admit, [...baseTabs, ...(runtime.chatter ?? []), ...publishedTabs], "Chatter");
+  if (admit !== undefined) {
+    const known = new Set([...baseTabs, ...(runtime.chatter ?? []), ...publishedTabs].map((tab) => tab.id));
+    for (const id of admit) {
+      if (!known.has(id)) throw new Error(`Chatter admits unknown contribution id "${id}".`);
+    }
+  }
   const activeContributions = React.useMemo(
     () =>
-      admittedContributions(runtime.chatter ?? [], admit).filter((contribution) =>
-        contributionMatches(contribution, viewContext),
+      (runtime.chatter ?? []).filter((contribution) =>
+        visible && (admit === undefined || admit.includes(contribution.id))
+          && contributionMatches(contribution, viewContext),
       ),
-    [runtime.chatter, viewContext, admit],
+    [runtime.chatter, viewContext, admit, visible],
   );
   const contributedTabs = React.useMemo(
     () => tabsFromContributions(activeContributions, viewContext, counts),
     [activeContributions, viewContext, counts],
   );
-  const resolvedTabs = admittedContributions(mergeChatterTabs(
-    baseTabs,
+  const resolvedTabs = mergeChatterTabs(
+    (viewContext.view.kind === "record" || admit !== undefined) ? baseTabs : [],
     contributedTabs,
     publishedTabs,
-  ), admit);
+  ).filter((tab) => admit === undefined || admit.includes(tab.id));
   const resolvedComposer = composer ?? content?.composer;
   const requestedTabAvailable = Boolean(
     requestedTab && resolvedTabs.some((tab) => tab.id === requestedTab),
@@ -106,7 +110,7 @@ export function Chatter({
 
   // Collapse is owned by the enclosing SplitPane (it collapses the pane to zero
   // width); Chatter only bails when it has no tab to show.
-  if (!active) return null;
+  if (!active || !visible) return null;
 
   return (
     <aside
@@ -167,6 +171,23 @@ export function Chatter({
   );
 }
 
+/** The route owns aside visibility and tab selection for shell and pane alike. */
+export function useChatterPresentation(): { context: ChatterViewContext; visible: boolean } {
+  const runtime = useAppRuntime();
+  const context = useActiveChatterView(runtime.chatterRoutes ?? []);
+  const { content } = useChatter();
+  const policy = context.route?.chatter;
+  const admit = policy === "hidden" ? [] : policy?.tabs;
+  const visible = policy !== "hidden" && (
+    (context.view.kind === "record" && (admit === undefined || admit.includes("comments") || admit.includes("activity")))
+    || Boolean(content?.tabs?.some((tab) => admit === undefined || admit.includes(tab.id)))
+    || (runtime.chatter ?? []).some((entry) =>
+      Boolean(entry.render) && (admit === undefined || admit.includes(entry.id)) && contributionMatches(entry, context))
+    || Boolean(admit?.length)
+  );
+  return { context, visible };
+}
+
 /** Visit lazily, then retain this record's draft input while peeking at sources. */
 function ChatterPanels({ tabs, active }: { tabs: readonly ChatterTab[]; active: string }): React.ReactElement {
   const [visited, setVisited] = React.useState<readonly string[]>([active]);
@@ -209,11 +230,11 @@ function useActiveChatterView(
   routes: readonly ChatterRoute[],
 ): ChatterViewContext {
   const match = useMatches({ select: leafMatch });
+  const route = useActiveRoute(routes);
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
   return React.useMemo(() => {
-    const route = routes.find((candidate) => candidate.path === match.fullPath);
     const params = normalizeRouteParams(match.params);
     const selectedId =
       route?.recordParam && params[route.recordParam]
@@ -231,7 +252,7 @@ function useActiveChatterView(
       ...(route ? { route } : {}),
       view,
     };
-  }, [match.fullPath, match.params, pathname, routes]);
+  }, [match.params, pathname, route]);
 }
 
 function leafMatch(matches: readonly AnyRouteMatch[]): {

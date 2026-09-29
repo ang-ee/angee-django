@@ -1,8 +1,7 @@
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { Tab, formViewSectionsSlot, useT } from "@angee/ui";
+import { Tab, formViewSectionsSlot } from "@angee/ui";
 import { ExtractionEvidencePanel } from "./ExtractionEvidencePanel";
-
 import { enWorkflowsExtractionMessages } from "./i18n";
 
 export { ExtractionRecordEvidenceDocument } from "./documents";
@@ -21,11 +20,6 @@ export default defineBaseAddon({
     ...formViewSectionsSlot("workflows_extraction.Extraction"),
     id: "workflows-extraction.evidence",
     sequence: 10,
-    content: <Tab id="evidence" label={<EvidenceLabel />}><ExtractionEvidencePanel /></Tab>,
+    content: <Tab id="evidence" label={{ namespace: "workflowsExtraction", key: "evidence", fallback: enWorkflowsExtractionMessages["evidence"] }}><ExtractionEvidencePanel /></Tab>,
   }],
 });
-
-function EvidenceLabel() {
-  const t = useT("workflowsExtraction");
-  return <>{t("evidence")}</>;
-}

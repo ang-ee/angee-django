@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, render, screen } from "@testing-library/react";
+import type * as React from "react";
 import { addWeeks, startOfDay, startOfWeek } from "date-fns";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, createAngeeI18nInstance } from "../../runtime";
@@ -21,6 +22,7 @@ describe("Gantt drawing adapter", () => {
     render(<GanttSurface resources={[]} events={[]} date={new Date(2026, 8, 1)} />);
     expect(drawing.props?.interactions).toEqual({ drag: false, resize: false, selectSlot: false });
     expect(drawing.props?.rowCheckboxes).toBe(false);
+    expect(drawing.props?.zoomControl).toBe(false);
     expect(drawing.props?.scheduleMode).toBe("multiple");
     expect(drawing.props?.initialCenter).toBe("anchor");
     expect(drawing.props?.onEventUpdate).toBeUndefined();
@@ -28,6 +30,20 @@ describe("Gantt drawing adapter", () => {
     expect(drawing.props?.onSelectSlot).toBeUndefined();
     expect(drawing.props?.onSelectedRowsChange).toBeUndefined();
     expect(drawing.props?.onResourceReorder).toBeUndefined();
+  });
+
+  test("forwards lane selection and lane clicks without enabling schedule edits", () => {
+    const onSelectedRowsChange = vi.fn();
+    const onResourceClick = vi.fn();
+    const resource = { id: "lane-a", title: "Alpha" };
+    render(<GanttSurface resources={[resource]} events={[]} selectedRows={["lane-a"]}
+      onSelectedRowsChange={onSelectedRowsChange} onResourceClick={onResourceClick} />);
+    expect(drawing.props?.rowCheckboxes).toBe(true);
+    expect(drawing.props?.selectedRows).toEqual(["lane-a"]);
+    act(() => drawing.props?.onSelectedRowsChange?.(["lane-a"]));
+    act(() => drawing.props?.onResourceClick?.({ resource, depth: 0, isGroup: false, collapsed: false }, {} as React.MouseEvent));
+    expect(onSelectedRowsChange).toHaveBeenCalledWith(["lane-a"]);
+    expect(onResourceClick).toHaveBeenCalledWith(resource);
   });
 
   test("forwards controlled dates and retains readonly array identities", () => {

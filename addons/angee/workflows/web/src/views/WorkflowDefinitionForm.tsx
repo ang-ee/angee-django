@@ -499,7 +499,7 @@ function workflowFields(t: ReturnType<typeof useWorkflowsT>, subjectOptions: rea
     <Field name="name" title />
     <Field name="description" />
     <Group label={t("form.definition")} columns={2}>
-      <Field name="status" readOnly widget="statusbar" />
+      <Field name="status" readOnly widget="statusbar" status />
       <Field name="version" readOnly />
       <Field name="lineage_id" label={t("form.lineage")} readOnly />
       <Field name="subject_declaration" label={t("form.subjectDeclaration")} description={t("form.subjectDeclarationDescription")} widget="select" options={subjectOptions} />

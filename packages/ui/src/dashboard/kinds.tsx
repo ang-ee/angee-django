@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Link } from "@tanstack/react-router";
 import { rowPublicId } from "@angee/metadata";
 import * as v from "valibot";
 import { MetricTile } from "../fragments/MetricStrip";
@@ -13,6 +14,7 @@ import { titleCase } from "../lib/titleCase";
 import { useUiT } from "../i18n";
 import type { ColumnDescriptor } from "../views/page";
 import { cellContent } from "../views/resource/list-body/cell-utils";
+import { useResourceRecordHrefLookup, useRouteHref } from "../runtime/runtime";
 
 function DataState({ data, children }: DashboardWidgetRenderProps & { children: React.ReactNode }): React.ReactElement {
   const t = useDashboardT();
@@ -53,14 +55,19 @@ function DonutWidget(props: DashboardWidgetRenderProps): React.ReactElement {
 function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
   const t = useDashboardT();
   const uiT = useUiT();
+  const recordHref = useResourceRecordHrefLookup();
+  const routeHref = useRouteHref();
+  const recordRoute = typeof props.spec.options.recordRoute === "string" ? props.spec.options.recordRoute : undefined;
+  const recordParam = typeof props.spec.options.recordParam === "string" ? props.spec.options.recordParam : "id";
   const identityField = props.data.identity?.field;
   const defaultColumns = React.useMemo<WidgetColumn[]>(() => {
     const fields = props.spec.data.shape === "rows"
       ? props.spec.data.source.fields ?? (identityField ? [identityField] : [])
       : [];
-    return fields
+    const visible = fields
       .filter((field) => field !== identityField && props.data.queryFields[field]?.row)
       .map((path) => ({ path }));
+    return visible.length ? visible : identityField && props.data.queryFields[identityField]?.row ? [{ path: identityField }] : [];
   }, [props.spec.data, props.data.queryFields, identityField]);
   const { columns, error } = React.useMemo(() => {
     const parsed = widgetColumns({ options: props.spec.options });
@@ -79,13 +86,18 @@ function TableWidget(props: DashboardWidgetRenderProps): React.ReactElement {
         <Table density="compact" className="table-fixed" aria-labelledby={props.titleId} aria-label={props.titleId ? undefined : props.spec.title}>
           <TableHeader><TableRow>{columns.map(({ path, column }) => <TableHead key={path} className="max-w-64">{column.header}</TableHead>)}</TableRow></TableHeader>
           <TableBody>
-            {props.data.rows.map((row, index) => (
-              <TableRow key={rowPublicId(row, resource) ?? index}>{columns.map(({ path, column }) => (
+            {props.data.rows.map((row, index) => {
+              const id = rowPublicId(row, resource);
+              const href = id && props.spec.data.shape === "rows"
+                ? recordRoute ? routeHref.maybe(recordRoute, { [recordParam]: id })
+                  : recordHref(props.spec.data.source.resource, id, row)
+                : undefined;
+              return <TableRow key={id ?? index} interactive={Boolean(href)}>{columns.map(({ path, column }, columnIndex) => (
                 <TableCell key={path} className="max-w-64 truncate">
-                  {cellContent(column, row, uiT)}
+                  {href && columnIndex === 0 ? <Link to={href} className="block truncate focus-visible:focus-ring">{cellContent(column, row, uiT)}</Link> : cellContent(column, row, uiT)}
                 </TableCell>
-              ))}</TableRow>
-            ))}
+              ))}</TableRow>;
+            })}
           </TableBody>
         </Table>
       )}

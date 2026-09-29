@@ -28,6 +28,8 @@ export {
   resourceOperationTarget,
   schemaFieldMetadataFromAngeeSchemaMetadata,
   schemaFieldMetadataFromDataResources,
+  schemaFieldMetadataWithVocabulary,
+  type ResourceVocabulary,
   useActiveGraphQLSchemaName,
   useModelMetadata,
   useModelRootFields,

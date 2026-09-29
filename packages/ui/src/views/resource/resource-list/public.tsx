@@ -258,6 +258,7 @@ export function ResourceList<TRow extends Row = Row>({
   return withResourceViewScope({
     ambient: resourceView,
     resource: props.resource,
+    baseFilter: declarations.list?.props.baseFilter ?? props.baseFilter,
     // A routed collection owns the route query even if its visual presentation
     // is embedded. Callers can still explicitly request local state.
     scope: scope ?? (props.routed ? "inherit" : undefined),

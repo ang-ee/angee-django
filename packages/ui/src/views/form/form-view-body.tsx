@@ -28,7 +28,7 @@ import {
 } from "./EditableLines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
-import type { FieldDescriptor } from "../page";
+import { fieldWidgetId, type FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
@@ -80,13 +80,13 @@ export function FormViewRecordHeader({
   compact = false,
   title,
   extra,
-  statusbar,
+  contextLine,
 }: {
   surface: FormViewSurface;
   compact?: boolean;
   title?: React.ReactNode;
   extra?: React.ReactNode;
-  statusbar?: React.ReactNode;
+  contextLine?: React.ReactNode;
 }): React.ReactElement {
   const statusTone = useStatusTone();
   const {
@@ -127,7 +127,7 @@ export function FormViewRecordHeader({
     : undefined;
   return (
     <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
-      {statusbar !== undefined ? statusbar : currentStatusField && compact ? (
+      {currentStatusField && compact && fieldWidgetId(currentStatusField) === "statusbar" ? (
         <Controller
           control={form.control}
           name={currentStatusField.name}
@@ -157,6 +157,7 @@ export function FormViewRecordHeader({
                 controlRef={controller.ref}
                 field={currentStatusField}
                 value={controller.value}
+                row={displayRecord ?? undefined}
                 readOnly={fieldReadOnly(currentStatusField)}
                 onChange={(next) => {
                   startFieldInteraction(currentStatusField.name);
@@ -239,6 +240,7 @@ export function FormViewRecordHeader({
           </p>
         ) : null}
         {!compact ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
+        {contextLine ? <p className="mt-1 truncate text-xs text-fg-muted">{contextLine}</p> : null}
       </div>
       {extra ? <div className={compact ? "pt-1" : undefined}>{extra}</div> : null}
     </header>

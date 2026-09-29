@@ -11,9 +11,10 @@ import {
   type SlotContribution,
 } from "../../runtime";
 import { optionToken } from "../../widgets/types";
-import { admittedContributions } from "../../runtime/contribution-selection";
 import type { RecordChromeContext } from "../resource/record-chrome-context";
 import {
+  FORM_VIEW_RECORD_ACTIONS_SLOT,
+  FORM_VIEW_SECTIONS_SLOT,
   formViewRecordActionsSlot,
 } from "./form-view-slots";
 
@@ -70,14 +71,18 @@ export function useFormViewRecordChrome({
     }
     return targets;
   }, [canonicalResource, dataResource, modelLabel, record]);
-  const recordActionEntries = useModelSlot(recordActionTargets);
+  const recordActionEntries = useModelSlot(recordActionTargets, {
+    admit: admitContributions,
+    inventorySlots: [FORM_VIEW_SECTIONS_SLOT, FORM_VIEW_RECORD_ACTIONS_SLOT],
+    owner: `FormView "${modelLabel}"`,
+  });
   const recordActions = React.useMemo(() => {
     const byId = new Map<string, SlotContribution>();
-    for (const entry of admittedContributions(recordActionEntries, admitContributions)) byId.set(entry.id, entry);
+    for (const entry of recordActionEntries) byId.set(entry.id, entry);
     return [...byId.values()].sort(
       (left, right) => (left.sequence ?? 0) - (right.sequence ?? 0),
     );
-  }, [recordActionEntries, admitContributions]);
+  }, [recordActionEntries]);
 
   return { recordChromeContext, recordActions };
 }

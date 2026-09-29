@@ -61,10 +61,6 @@ export function integrationHasStreams(record: Row): boolean {
   return typeof record.stream_count === "number" && record.stream_count > 0;
 }
 
-export function StreamsLabel(): ReactElement {
-  const t = useIntegrateT();
-  return <>{t("streams.title")}</>;
-}
 
 /** The parent record owns scope; route search owns the portable drill-down. */
 export function IntegrationStreamsPane(): ReactElement {

@@ -97,7 +97,7 @@ function InferenceProviderForm({ resource: _resource, ...props }: RegisteredForm
           <Field name="vendor" />
           <Field name="credential" />
           <Field name="account" />
-          <Field name="lifecycle" widget="statusbar" />
+          <Field name="lifecycle" widget="statusbar" status />
           <Field name="runtime_status" readOnly />
         </Group>
         <Group label={t("inference.provider")} columns={2}>
@@ -170,7 +170,7 @@ export function InferenceModelsPage(): React.ReactElement {
           <Field name="provider" createOnly />
           <Field name="publisher" />
           <Field name="model_use" widget="select" options={modelUseOptions} createOnly />
-          <Field name="status" widget="statusbar" />
+          <Field name="status" widget="statusbar" status />
           <Field name="is_default" />
           <Field name="context_window" />
           <Field name="max_output_tokens" />

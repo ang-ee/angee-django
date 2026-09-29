@@ -19,7 +19,7 @@ import {
   type AppRuntime,
   type ChatterViewContext,
 } from "../runtime";
-import { Chatter } from "./Chatter";
+import { Chatter, useChatterPresentation } from "./Chatter";
 import { ChatterProvider, useChatterContent, type ChatterContent } from "./chatter-context";
 import { useRecordPeek } from "./record-peek";
 import { registerForm, type RegisteredFormProps } from "../views/form/registered-form";
@@ -27,10 +27,10 @@ import { registerForm, type RegisteredFormProps } from "../views/form/registered
 afterEach(() => cleanup());
 
 describe("Chatter", () => {
-  test("app admission filters default and contributed tabs before rendering or counting", async () => {
+  test("route tabs admit defaults and contributions before rendering or counting", async () => {
     const excludedRender = vi.fn(() => <span>Excluded content</span>);
     const excludedCount = vi.fn(() => 9);
-    renderChatter({ chatterAdmitContributions: ["comments"], chatter: [
+    renderChatter({ chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", recordParam: "id", chatter: { tabs: ["comments"] } }], chatter: [
       { id: "agents", label: "Agents", useCount: excludedCount, render: excludedRender },
     ] });
     expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
@@ -40,11 +40,10 @@ describe("Chatter", () => {
     expect(excludedCount).not.toHaveBeenCalled();
   });
 
-  test("a route overrides app admission while conditional known ids remain valid", async () => {
+  test("route selection can admit a conditional tab", async () => {
     const hiddenRender = vi.fn(() => <span>Not yet visible</span>);
     renderChatter({
-      chatterAdmitContributions: ["comments"],
-      chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/record", recordParam: "id", admitContributions: ["activity", "conditional"] }],
+      chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/record", recordParam: "id", chatter: { tabs: ["activity", "conditional"] } }],
       chatter: [{ id: "conditional", when: () => false, render: hiddenRender }],
     });
     expect(await screen.findByRole("tab", { name: "Activity" })).toBeTruthy();
@@ -52,30 +51,20 @@ describe("Chatter", () => {
     expect(hiddenRender).not.toHaveBeenCalled();
   });
 
-  test("an empty admit list removes the aside, including published tabs", () => {
+  test("an empty route tab list removes the aside, including published tabs", () => {
     render(chatterContentView(<PublishedContent content={{ tabs: [{ id: "local", label: "Local", children: <span>Local content</span> }] }} />,
-      "local", { chatterAdmitContributions: [] }));
+      "local", { chatterRoutes: [{ name: "notes.home", path: "/", viewType: "notes/home", chatter: { tabs: [] } }] }));
     expect(screen.queryByRole("complementary")).toBeNull();
-    expect(screen.queryByRole("tab")).toBeNull();
   });
 
-  test("a shell's explicit admission overrides route and app defaults", async () => {
-    renderChatter({
-      chatterAdmitContributions: ["comments"],
-      chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/record", admitContributions: ["activity"] }],
-      chatter: [{ id: "agents", label: "Agents", render: () => <span>Agent panel</span> }],
-    }, ["agents"]);
-    expect(await screen.findByRole("tab", { name: "Agents" })).toBeTruthy();
-    expect(screen.queryAllByRole("tab")).toHaveLength(1);
-  });
-
-  test("unknown admitted ids fail before a contribution's render or count hook", () => {
+  test("unknown route tabs fail before a contribution's render or count hook", () => {
     const excludedRender = vi.fn(() => null);
     const excludedCount = vi.fn(() => 0);
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(() => render(chatterContentView(null, "comments", {
-        chatterAdmitContributions: ["typo"], chatter: [{ id: "known", render: excludedRender, useCount: excludedCount }],
+        chatterRoutes: [{ name: "notes.home", path: "/", viewType: "notes/home", chatter: { tabs: ["typo"] } }],
+        chatter: [{ id: "known", render: excludedRender, useCount: excludedCount }],
       }))).toThrow('unknown contribution id "typo"');
       expect(excludedRender).not.toHaveBeenCalled();
       expect(excludedCount).not.toHaveBeenCalled();
@@ -362,22 +351,24 @@ function useCommentsCount(
   return context.view.sqid === "rec_1" ? 7 : undefined;
 }
 
-function renderChatter(runtime: Partial<AppRuntime>, admitContributions?: readonly string[]): void {
+function renderChatter(runtime: Partial<AppRuntime>, record = true): void {
+  function VisibilityProbe() { return <span>{useChatterPresentation().visible ? "Aside available" : "Aside hidden"}</span>; }
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const recordRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: "/records/$id",
+    path: record ? "/records/$id" : "/records",
     component: () => (
-      <AppRuntimeProvider runtime={{ icons: baseIcons, ...runtime }}>
+      <AppRuntimeProvider runtime={{ icons: baseIcons, chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" }], ...runtime }}>
         <ChatterProvider defaultTab="agents">
-          <Chatter admitContributions={admitContributions} />
+          <VisibilityProbe />
+          <Chatter />
         </ChatterProvider>
       </AppRuntimeProvider>
     ),
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([recordRoute]),
-    history: createMemoryHistory({ initialEntries: ["/records/rec_1"] }),
+    history: createMemoryHistory({ initialEntries: [record ? "/records/rec_1" : "/records"] }),
   });
 
   render(<RouterProvider router={router} />);
@@ -399,3 +390,43 @@ function chatterContentView(children: React.ReactNode, defaultTab: string, runti
 function renderChatterContent(children: React.ReactNode, defaultTab: string) {
   return render(chatterContentView(children, defaultTab));
 }
+
+
+test("non-record pages hide empty chatter and admit a contributed inbox", async () => {
+  renderChatter({}, false);
+  expect(await screen.findByText("Aside hidden")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
+  expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
+  cleanup();
+  renderChatter({ chatter: [{ id: "inbox", label: "Inbox", render: () => <span>Inbox content</span> }] }, false);
+  expect(await screen.findByRole("tab", { name: "Inbox" })).toBeTruthy();
+  expect(screen.getByText("Aside available")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
+});
+
+test("a hidden record route suppresses the aside before contributions execute", async () => {
+  const renderTab = vi.fn(() => <span>Private panel</span>);
+  renderChatter({
+    chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id", chatter: "hidden" }],
+    chatter: [{ id: "extra", render: renderTab }],
+  }, true);
+  expect(await screen.findByText("Aside hidden")).toBeTruthy();
+  expect(screen.queryByRole("tab")).toBeNull();
+  expect(renderTab).not.toHaveBeenCalled();
+});
+
+test("a route can explicitly opt a non-record page into default chatter", async () => {
+  renderChatter({ chatterRoutes: [{ name: "notes.all", path: "/records", viewType: "notes/note", chatter: { tabs: ["comments", "activity"] } }] }, false);
+  expect(await screen.findByText("Aside available")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();
+});
+
+test("record and non-record defaults follow the route", async () => {
+  renderChatter({}, false);
+  expect(await screen.findByText("Aside hidden")).toBeTruthy();
+  cleanup();
+  renderChatter({}, true);
+  expect(await screen.findByText("Aside available")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
+});

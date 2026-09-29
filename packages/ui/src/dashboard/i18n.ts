@@ -30,6 +30,7 @@ export const enDashboardMessages: Record<string, string> = {
   "surface.wider": "Make wider",
   "surface.widgetKindUnavailable": "Widget kind {kind} v{version} is unavailable.",
   "surface.widgetTitle": "Widget title",
+  "surface.fullView": "Open {title} in full view",
   "surface.byField": "By {field}",
   "surface.total": "Total",
   "widget.authoredUnavailable": "The authored panel is unavailable.",

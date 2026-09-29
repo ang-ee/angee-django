@@ -1,18 +1,5 @@
 import { graphql } from "@angee/gql/console";
 
-/** Phase eligibility is projected by the project owner. */
-export const ProjectPhaseDocument = graphql(`
-  query ProjectsPhase($id: String!) {
-    projects_by_pk(id: $id) {
-      id
-      revision
-      permissions
-      current_milestone { id name }
-      selectable_milestones { id }
-    }
-  }
-`);
-
 /** A phase selection carries the revision shown when the choice was made. */
 export const SetProjectCurrentMilestoneDocument = graphql(`
   mutation ProjectsSetCurrentMilestone($id: ID!, $milestone: ID!, $expected_revision: Int) {

@@ -9,6 +9,14 @@ const routeHref = createRouteHref([
 ]);
 
 describe("routeHref", () => {
+  test("resolves a declared record route with its param and search", () => {
+    const href = createRouteHref([
+      { name: "desk.notes", path: "/desk/notes" },
+      { name: "desk.note", path: "/desk/notes/$noteId" },
+    ]);
+    expect(href("desk.note", { noteId: "a/b" }, { tab: "files" })).toBe("/desk/notes/a%2Fb?tab=files");
+    expect(href.maybe("missing.record", { id: "1" })).toBeUndefined();
+  });
   test("resolves a collection route", () => {
     expect(routeHref("notes.list")).toBe("/notes");
   });

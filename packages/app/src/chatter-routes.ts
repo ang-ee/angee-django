@@ -8,6 +8,7 @@ import type { BaseAddonRoute } from "./define-base-addon";
 import {
   childRoutesByParentName,
   fullRoutePath,
+  inheritedRouteFact,
   trailingRouteParamName,
 } from "./route-paths";
 
@@ -27,7 +28,7 @@ export function chatterRouteIndex(
     const parent = route.parent ? routesByName.get(route.parent) : undefined;
     const path = fullRoutePath(route, parent);
     const recordParam = trailingRouteParamName(path);
-    const modelLabel = inheritedRouteRecordModel(route, routesByName);
+    const modelLabel = inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource);
     const canonicalLabel = modelLabel
       ? resourceFactsByModel[modelLabel]?.canonicalLabel
       : undefined;
@@ -43,18 +44,9 @@ export function chatterRouteIndex(
       ...(modelLabel ? { modelLabel } : {}),
       ...(canonicalLabel ? { canonicalLabel } : {}),
       ...(recordParam ? { recordParam } : {}),
-      admitContributions: inheritedChatterAdmission(route, routesByName),
+      chatter: inheritedRouteFact(route, routesByName, (item) => item.chatter),
     };
   });
-}
-
-function inheritedChatterAdmission(
-  route: BaseAddonRoute,
-  routesByName: ReadonlyMap<string, BaseAddonRoute>,
-): readonly string[] | undefined {
-  if (route.chatterAdmitContributions !== undefined) return route.chatterAdmitContributions;
-  const parent = route.parent ? routesByName.get(route.parent) : undefined;
-  return parent ? inheritedChatterAdmission(parent, routesByName) : undefined;
 }
 
 function routeChatterViewType(
@@ -63,7 +55,7 @@ function routeChatterViewType(
   childrenByParentName: ReadonlyMap<string, readonly BaseAddonRoute[]>,
   resourceFactsByModel: Readonly<Record<string, ResourceFacts>>,
 ): string {
-  const resource = inheritedRouteRecordModel(route, routesByName);
+  const resource = inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource);
   if (resource) {
     const facts = resourceFactsByModel[resource];
     if (!facts) {
@@ -80,17 +72,6 @@ function routeChatterViewType(
     if (recordChild) return routeNameViewType(recordChild.name);
   }
   return routeNameViewType(route.name);
-}
-
-function inheritedRouteRecordModel(
-  route: BaseAddonRoute,
-  routesByName: ReadonlyMap<string, BaseAddonRoute>,
-): string | undefined {
-  if (route.recordModel) return route.recordModel;
-  if (route.resource) return route.resource;
-  if (!route.parent) return undefined;
-  const parent = routesByName.get(route.parent);
-  return parent ? inheritedRouteRecordModel(parent, routesByName) : undefined;
 }
 
 function resourceFactsByModelLabel(

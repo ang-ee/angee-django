@@ -1,5 +1,6 @@
 import {
   Action,
+  Badge,
   Column,
   Facet,
   Field,
@@ -9,32 +10,40 @@ import {
   ListView,
   type GanttViewSpec,
   useEnumOptions,
+  useStatusTone,
+  optionLabel,
   useActionResultMutation,
   useRecordAction,
   defineRowAction,
   type StringIdRow,
-  useResourceRecordHref,
+  type WidgetOption,
   type RecordPanelContext,
   type RecordTabDescriptor,
+  type FormProps,
 } from "@angee/ui";
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
 
-import { ProjectPhaseControl } from "./project-phase";
-import { useProjectsT, type enProjectsMessages } from "./i18n";
+import { enProjectsMessages, useProjectsT } from "./i18n";
 import {
   MILESTONE_MODEL,
   PARTICIPANT_MODEL,
   PROJECT_MODEL,
   TASK_MODEL,
 } from "./resources";
-import { useTaskRowActions, type TaskActionRow } from "./task-actions";
+import { TaskManagementTab } from "./task-declarations";
+
+export interface ProjectFormSelection {
+  groups?: readonly ("planning" | "details")[];
+  verbs?: readonly ("pause" | "resume" | "complete" | "drop")[];
+  contextLine?: FormProps["contextLine"];
+}
 
 /** Standard project form, shared by every route mounting projects. */
-export function useProjectFormDeclaration(): React.ReactElement {
+export function useProjectFormDeclaration(selection: ProjectFormSelection = {}): React.ReactElement {
   const t = useProjectsT();
   const startResolutionOptions = useEnumOptions(PROJECT_MODEL, "start_date_resolution");
   const targetResolutionOptions = useEnumOptions(PROJECT_MODEL, "target_date_resolution");
+  const statusOptions = useEnumOptions(PROJECT_MODEL, "status");
   const [pause] = useActionResultMutation("pause_project", {
     invalidateModels: [PROJECT_MODEL],
   });
@@ -55,59 +64,67 @@ export function useProjectFormDeclaration(): React.ReactElement {
     <Form
       resource={PROJECT_MODEL}
       layout="tabs"
-      statusbar={({ recordId, form }) => recordId
-        ? <ProjectPhaseControl recordId={recordId} readOnly={form.formReadOnly} />
+      returning={["permissions", "selectable_milestones.id", "current_milestone.name"]}
+      headerExtras={({ record }) => record?.status
+        ? <ProjectLifecycleBadge value={String(record.status)} options={statusOptions} />
         : null}
+      contextLine={selection.contextLine}
     >
       <Field name="title" title />
       <Field name="revision" readOnly hidden />
       <Field name="status" readOnly hidden />
-      <Group label={t("project.group.planning")} columns={2}>
+      <Field name="current_milestone" status widget="projects.phase" />
+      {(selection.groups ?? ["planning", "details"]).includes("planning") ? <Group label={t("project.group.planning")} columns={2}>
         <Field name="owner" readOnly />
         <Field name="lead" />
         <Field name="start_date" />
         <Field name="start_date_resolution" options={startResolutionOptions} />
         <Field name="target_date" />
         <Field name="target_date_resolution" options={targetResolutionOptions} />
-      </Group>
-      <Group label={t("project.group.details")} columns={2} collapsible defaultOpen={false}>
+      </Group> : null}
+      {(selection.groups ?? ["planning", "details"]).includes("details") ? <Group label={t("project.group.details")} columns={2} collapsible defaultOpen={false}>
         <Field name="owns_items" />
         <Field name="folder" />
         <Field name="converted_from" readOnly />
-      </Group>
+      </Group> : null}
       <Field name="body" widget="markdown.editor" body />
-      <Action
+      {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("pause") ? <Action
         id="pause"
         label={t("project.action.pause")}
         icon="archive"
         run={pauseProject}
         visibleWhen={(record) => projectStatus(record) === "open"}
-      />
-      <Action
+      /> : null}
+      {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("resume") ? <Action
         id="resume"
         label={t("project.action.resume")}
         icon="activity"
         run={resumeProject}
         visibleWhen={(record) => ["paused", "dropped"].includes(projectStatus(record))}
-      />
-      <Action
+      /> : null}
+      {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("complete") ? <Action
         id="complete"
         placement="toolbar"
         label={t("project.action.complete")}
         icon="check"
         run={completeProject}
         visibleWhen={isActiveProject}
-      />
-      <Action
+      /> : null}
+      {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("drop") ? <Action
         id="drop"
         label={t("project.action.drop")}
         icon="circle-x"
         danger
         run={dropProject}
         visibleWhen={isActiveProject}
-      />
+      /> : null}
     </Form>
   );
+}
+
+function ProjectLifecycleBadge({ value, options }: { value: string; options: readonly WidgetOption[] }): React.ReactElement {
+  const tone = useStatusTone();
+  return <Badge tone={tone(value)} density="compact" shape="pill">{optionLabel(options, value)}</Badge>;
 }
 
 function isActiveProject(record: { status?: unknown }): boolean {
@@ -117,33 +134,6 @@ function isActiveProject(record: { status?: unknown }): boolean {
 
 function projectStatus(record: { status?: unknown }): string {
   return String(record.status ?? "").trim().toLowerCase();
-}
-
-function ProjectTasksTab({ recordId }: RecordPanelContext): React.ReactElement {
-  const t = useProjectsT();
-  const recordHref = useResourceRecordHref(TASK_MODEL);
-  const navigate = useNavigate();
-  const rowActions = useTaskRowActions<TaskActionRow>();
-  return (
-    <List<TaskActionRow>
-      resource={TASK_MODEL}
-      scope="local"
-      baseFilter={{ project: { exact: recordId } }}
-      order={{ sort_order: "ASC" }}
-      rowActions={rowActions}
-      onRowClick={recordHref ? (row) => {
-        const to = recordHref(row.id);
-        if (to) void navigate({ to });
-      } : undefined}
-      emptyContent={t("project.empty.tasks")}
-    >
-      <Column field="title" />
-      <Column field="status" widget="statusBadge" />
-      <Column field="assignee" />
-      <Column field="priority" />
-      <Column field="due_date" />
-    </List>
-  );
 }
 
 interface MilestoneRow extends StringIdRow {
@@ -204,9 +194,15 @@ function ProjectParticipantsTab({ recordId }: RecordPanelContext): React.ReactEl
   );
 }
 
+/** Project rows own lanes and view state; milestone rows supply their bars. */
+export const projectGanttSpec: GanttViewSpec = {
+  linked: { resource: MILESTONE_MODEL, lane: "project" },
+  start: "start_date", end: "target_date", label: "name", current: "current_milestone",
+};
+
 /** The project collection's columns, facets and initial group. */
 export const projectListDeclaration = (
-  <List resource={PROJECT_MODEL} defaultGroup={{ field: "status" }} order={{ updated_at: "DESC" }}>
+  <List resource={PROJECT_MODEL} defaultGroup={{ field: "status" }} order={{ updated_at: "DESC" }} gantt={projectGanttSpec}>
     <Facet field="lead" />
     <Column field="title" />
     <Column field="current_milestone" />
@@ -216,11 +212,6 @@ export const projectListDeclaration = (
     <Column field="updated_at" />
   </List>
 );
-
-function ProjectTabLabel({ message }: { message: keyof typeof enProjectsMessages }): React.ReactElement {
-  const t = useProjectsT();
-  return <>{t(message)}</>;
-}
 
 /** Milestone bars and task due-date markers on project lanes, including empty projects. */
 export const projectTimelineSpec: GanttViewSpec = {
@@ -246,14 +237,26 @@ function ProjectTimelineTab({ recordId }: RecordPanelContext): React.ReactElemen
 
 /** A record-tab-ready timeline; also part of the standard project tabs. */
 export const projectTimelineTab: RecordTabDescriptor = {
-  id: "timeline", label: <ProjectTabLabel message="project.tabs.timeline" />,
+  id: "timeline", label: { namespace: "projects", key: "project.tabs.timeline", fallback: enProjectsMessages["project.tabs.timeline"] },
   render: (context) => <ProjectTimelineTab {...context} />,
 };
 
 /** Standard saved-project panels, reusable without mounting the Projects route. */
-export const projectRecordTabs: readonly RecordTabDescriptor[] = [
+export interface ProjectTabSelection {
+  tabs?: readonly ("timeline" | "tasks" | "milestones" | "participants")[];
+  /** Include consumer-owned descendant project tracks in the task scope. */
+  taskProjectIds?: (context: RecordPanelContext) => readonly string[];
+}
+
+/** Select standard project tabs without copying their implementations. */
+export function projectRecordTabsFor(selection: ProjectTabSelection = {}): readonly RecordTabDescriptor[] {
+  const tabs: readonly RecordTabDescriptor[] = [
   projectTimelineTab,
-  { id: "tasks", label: <ProjectTabLabel message="project.tabs.tasks" />, render: (context) => <ProjectTasksTab {...context} /> },
-  { id: "milestones", label: <ProjectTabLabel message="project.tabs.milestones" />, render: (context) => <ProjectMilestonesTab {...context} /> },
-  { id: "participants", label: <ProjectTabLabel message="project.tabs.participants" />, render: (context) => <ProjectParticipantsTab {...context} /> },
-];
+  { id: "tasks", label: { namespace: "projects", key: "project.tabs.tasks", fallback: enProjectsMessages["project.tabs.tasks"] }, render: (context) => <TaskManagementTab {...context} relation="project" projectIds={selection.taskProjectIds?.(context)} /> },
+  { id: "milestones", label: { namespace: "projects", key: "project.tabs.milestones", fallback: enProjectsMessages["project.tabs.milestones"] }, render: (context) => <ProjectMilestonesTab {...context} /> },
+  { id: "participants", label: { namespace: "projects", key: "project.tabs.participants", fallback: enProjectsMessages["project.tabs.participants"] }, render: (context) => <ProjectParticipantsTab {...context} /> },
+  ];
+  return tabs.filter(({ id }) => !selection.tabs || selection.tabs.includes(id as "timeline" | "tasks" | "milestones" | "participants"));
+}
+
+export const projectRecordTabs = projectRecordTabsFor();

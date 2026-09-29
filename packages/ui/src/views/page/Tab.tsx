@@ -11,9 +11,27 @@ import { PAGE_ELEMENT_SLOT } from "./types";
  * `<Tab>` constants and `parsePageTabs` discovers them (flattening fragments and
  * asserting unique ids) wherever they are composed.
  */
+export interface TabLabelKey {
+  namespace: string;
+  key: string;
+  /** English from the addon's own message bundle for provider-less previews. */
+  fallback?: string;
+}
+
+export type TabLabel = ReactNode | TabLabelKey;
+
+export function resolveTabLabel(label: TabLabel, i18n: { getFixedT: (language: null, namespace: string) => (key: string, options?: { defaultValue?: string }) => unknown } | null): ReactNode {
+  if (label && typeof label === "object" && !Array.isArray(label) && "namespace" in label && "key" in label) {
+    const value = label as TabLabelKey;
+    const translated = i18n?.getFixedT(null, value.namespace)(value.key, { defaultValue: value.fallback ?? value.key });
+    return translated == null ? value.fallback ?? value.key : String(translated);
+  }
+  return label as ReactNode;
+}
+
 export interface TabProps {
   id: string;
-  label: ReactNode;
+  label: TabLabel;
   icon?: ReactNode;
   badge?: ReactNode;
   hidden?: boolean;

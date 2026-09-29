@@ -323,6 +323,7 @@ function RuntimeShortcutItem({ expanded, icon, label, pathname, to }: {
   const link = (
     <Link
       to={to}
+      href={to}
       aria-label={label}
       aria-current={active ? "page" : undefined}
       data-active={active}
@@ -391,6 +392,7 @@ function RailSettingsItem({
   const link = (
     <Link
       to={to}
+      href={to}
       aria-label={label}
       aria-current={active ? "page" : undefined}
       data-active={active}
@@ -722,6 +724,7 @@ function RailItem({
       <Tooltip label={title} side="right">
         <Link
           to={target}
+          href={target}
           aria-label={label}
           aria-current={active ? "page" : undefined}
           aria-expanded={ariaExpanded}

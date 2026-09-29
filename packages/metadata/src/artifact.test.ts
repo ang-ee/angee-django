@@ -1,7 +1,22 @@
 import { describe, expect, test } from "vitest";
 
-import { defineAngeeSchemaMetadata, resourceOperationTarget } from "./artifact";
+import { defineAngeeSchemaMetadata, resourceOperationTarget, schemaFieldMetadataFromDataResources, schemaFieldMetadataWithVocabulary } from "./artifact";
 import { testDataResource } from "./testing";
+
+test("scoped vocabulary projects labels without altering resource or query identity", () => {
+  const resource = testDataResource("notes.Note", { fields: [{ name: "title", kind: "scalar", scalar: "String", readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }] });
+  const base = schemaFieldMetadataFromDataResources([resource]);
+  const scoped = schemaFieldMetadataWithVocabulary(base, {
+    "notes.Note": { label: "Document", pluralLabel: "Documents", fields: { title: "Subject" } },
+  });
+  const model = scoped.labels["notes.Note"]!;
+  expect(model).toBe(scoped.types["NoteType"]);
+  expect(model).toMatchObject({ label: "Document", pluralLabel: "Documents", fields: { title: { label: "Subject" } } });
+  expect(model.resource).toBe(base.labels["notes.Note"]!.resource);
+  expect(scoped.resources).toBe(base.resources);
+  expect(base.labels["notes.Note"]!.fields.title?.label).toBeUndefined();
+});
 
 describe("generated subtitle metadata", () => {
   test("accepts declared dotted selection paths", () => {

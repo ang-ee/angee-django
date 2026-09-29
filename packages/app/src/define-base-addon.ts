@@ -37,16 +37,11 @@ export interface BaseAddonRoute extends AddonRoute {
   icon?: string;
   /** Dashboard definition registered with this routed page. */
   dashboard?: DashboardDefinition;
-  /**
-   * Model displayed by this route when another route owns the resource
-   * registration. Record chrome uses this for subject-aware contributions.
-   */
-  recordModel?: string;
 }
 
 export interface ResourcePageRoutesOptions {
-  /** Chatter admission shared by the collection and its record route. */
-  chatterAdmitContributions?: AddonRoute["chatterAdmitContributions"];
+  /** Aside policy inherited by the record route. */
+  chatter?: AddonRoute["chatter"];
   /** Layout for both routes. Defaults to the rendered addon's console layout. */
   layout?: string;
   /** Menu id that owns the list route chrome. */
@@ -61,6 +56,9 @@ export interface ResourcePageRoutesOptions {
   detailComponent?: RouteComponent;
   /** Model displayed when this route deliberately does not own a resource. */
   recordModel?: string;
+  recordMatch?: AddonRoute["recordMatch"];
+  /** Named shipped view to seed this collection and its record navigation. */
+  defaultResourceView?: string;
 }
 
 export function resourcePageRoutes(
@@ -80,8 +78,10 @@ export function resourcePageRoutes(
       ...(options.detailComponent ? { indexComponent: component } : { component }),
       ...(resource ? { resource } : {}),
       ...(options.recordModel ? { recordModel: options.recordModel } : {}),
+      ...(options.recordMatch ? { recordMatch: options.recordMatch } : {}),
       ...(options.menu ? { menu: options.menu } : {}),
-      ...(options.chatterAdmitContributions !== undefined ? { chatterAdmitContributions: options.chatterAdmitContributions } : {}),
+      ...(options.chatter !== undefined ? { chatter: options.chatter } : {}),
+      ...(options.defaultResourceView ? { defaultResourceView: options.defaultResourceView } : {}),
     },
     {
       name: options.detailName ?? `${name}.record`,

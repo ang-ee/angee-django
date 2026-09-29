@@ -62,6 +62,29 @@ function renderCollection(options: {
 }
 
 describe("Gantt collection over native list data", () => {
+  test("linked bars use the visible lane page while the lane resource owns view scope and selection", async () => {
+    const getList = vi.fn(async ({ resource }: Partial<GetListParams>) => resource === "lanes"
+      ? { data: ganttLanes, total: 2 }
+      : { data: [scheduledRecord], total: 1 });
+    const onRowClick = vi.fn();
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<RouterContextProvider router={router}><Provider resources={ganttResources} dataProvider={{ getList }}>
+      <ResourceViewProvider resource={ganttLane.modelLabel} scope="local" initialState={{ view: "gantt", anchor: "2026-09-01" }}>
+        <ListView resource={ganttLane.modelLabel} columns={[{ field: "name" }]}
+          gantt={{ linked: { resource: ganttRecord.modelLabel, lane: "lane" }, start: "start", end: "end", label: "name" }}
+          onRowClick={onRowClick} />
+      </ResourceViewProvider>
+    </Provider></RouterContextProvider>);
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    expect(drawing.props?.resources.map(({ id }) => id)).toEqual(["lane-a", "lane-b"]);
+    expect(drawing.props?.events[0]?.resourceId).toBe("lane-a");
+    expect(getList.mock.calls.find(([params]) => params.resource === "lanes")?.[0].pagination?.currentPage).toBe(1);
+    expect(JSON.stringify(getList.mock.calls.find(([params]) => params.resource === "schedules")?.[0].meta?.gqlVariables?.where)).toContain("lane-a");
+    act(() => drawing.props?.onEventClick?.(drawing.props!.events[0]!));
+    expect(onRowClick).toHaveBeenCalledWith(ganttLanes[0]);
+    act(() => drawing.props?.onSelectedRowsChange?.(["lane-b"]));
+    expect(drawing.props?.selectedRows).toEqual(["lane-b"]);
+  });
   test.each([false, true])("emphasizes only each lane's declared current bar (relation=%s)", async (relation) => {
     const currentLane = { ...ganttLane,
       fields: [...ganttLane.fields, { ...ganttLane.fields[0]!, name: "current", kind: relation ? "relation" as const : "scalar" as const,

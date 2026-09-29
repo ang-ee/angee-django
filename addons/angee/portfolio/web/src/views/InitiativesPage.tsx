@@ -60,7 +60,7 @@ export function InitiativesPage(): React.ReactElement {
       </List>
       <Form resource={INITIATIVE_MODEL} layout="tabs">
         <Field name="name" title />
-        <Field name="status" widget="statusbar" options={statusOptions} />
+        <Field name="status" widget="statusbar" status options={statusOptions} />
         <Group label={t("initiative.group.identity")} columns={2}>
           <Field name="owner" />
           <Field name="parent" />

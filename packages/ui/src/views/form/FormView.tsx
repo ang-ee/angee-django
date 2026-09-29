@@ -36,6 +36,8 @@ import {
 import type { EditableLineSupplementalColumn, EditableLinesProps } from "./EditableLines";
 import { recordRepresentationValue, titleText } from "./form-view-model";
 import { useRuntimeViewAs } from "../../runtime";
+import { useAppRuntime } from "../../runtime";
+import { resolveTabLabel } from "../page";
 
 export {
   acknowledgeFormSubmit,
@@ -83,8 +85,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   formExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** Compact read-only content rendered with the record heading. */
   headerExtras?: (context: RecordToolbarContext) => React.ReactNode;
-  /** Domain status control above the hero. Replaces the declared status field's control. */
-  statusbar?: (context: RecordToolbarContext) => React.ReactNode;
+  /** One concise domain context line under the record title. */
+  contextLine?: (context: RecordToolbarContext) => React.ReactNode;
   /** Group presentation; ungrouped/title/body/status placement is unchanged. */
   layout?: "stacked" | "tabs";
   /** Place the first two unlabeled groups side by side within one form overview. */
@@ -125,6 +127,7 @@ export function FormView(props: FormViewProps): React.ReactElement {
 }
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
+  const { i18n } = useAppRuntime();
   const preview = useRuntimeViewAs();
   const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const {
@@ -158,7 +161,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     recordExtras,
     formExtras,
     headerExtras,
-    statusbar,
+    contextLine,
     layout = "stacked",
     groupLayout = "stacked",
     bodyTabs,
@@ -284,6 +287,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     ? t("form.loading")
     : typeof title === "function" ? title(recordToolbarContext) : title;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
+  const headerContextLine = awaitingRecord ? undefined : contextLine?.(recordToolbarContext);
 
   const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
     if (
@@ -385,7 +389,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             : "pb-12",
         )}
       >
-        <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} statusbar={statusbar?.(recordToolbarContext)} />
+        <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} contextLine={headerContextLine} />
         {saveErrorBanner}
         {tabbed ? (
           <>
@@ -396,7 +400,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
                   value={tab.id}
                   icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
                 >
-                  {tab.label}
+                  {resolveTabLabel(tab.label, i18n)}
                   {"badge" in tab && tab.badge != null ? (
                     <Tabs.Count>{tab.badge}</Tabs.Count>
                   ) : null}
@@ -430,7 +434,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 py-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} statusbar={statusbar?.(recordToolbarContext)} />
+            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} contextLine={headerContextLine} />
             {saveErrorBanner}
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
@@ -461,7 +465,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} statusbar={statusbar?.(recordToolbarContext)} />
+            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} contextLine={headerContextLine} />
             {saveErrorBanner}
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (
@@ -470,7 +474,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
                   value={tab.id}
                   icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
                 >
-                  {tab.label}
+                  {resolveTabLabel(tab.label, i18n)}
                   {"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : null}
                 </Tabs.Tab>
               ))}

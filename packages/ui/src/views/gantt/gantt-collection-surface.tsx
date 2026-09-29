@@ -3,7 +3,6 @@ import { ResourceQuery, rowPublicId, useModelMetadata, type Row } from "@angee/m
 import { MAX_PAGE_SIZE } from "@angee/refine";
 import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { useNavigate } from "@tanstack/react-router";
-import { addDays } from "date-fns";
 import { dateFromUnknown } from "../../widgets/date-format";
 import { errorFromUnknown } from "../../data/errors";
 import { useUiT } from "../../i18n";
@@ -23,6 +22,7 @@ import { calendarAnchorToDate, calendarDateToAnchor } from "../calendar/calendar
 import { GanttView, type GanttEvent, type GanttResource } from "./GanttView";
 import { ganttLaneFilter, useGanttRecords } from "./gantt-collection-query";
 import { relationValueId } from "../../widgets/types";
+import { ganttBarEvent } from "./gantt-bar-event";
 
 const NO_PLACEMENTS: ReadonlyMap<string, BoardCardPlacement> = new Map();
 
@@ -150,21 +150,12 @@ export function GanttCollectionSurface<TRow extends Row>({
         ? relationValueId(readPath(row, gantt.current)) : ""]));
       let skipped = records.skipped + markers.skipped;
       const events: GanttEvent[] = groups.flatMap((group) => group.rows.flatMap(({ id, original: row }) => {
-        const startValue = readPath(row, startField);
-        const endValue = readPath(row, endField);
-        // Unscheduled records have no bar; their catalogue row remains visible.
-        if (startValue == null || endValue == null) return [];
-        const start = dateFromUnknown(startValue);
-        const end = dateFromUnknown(endValue);
-        if (!start || !end || end < start) {
-          skipped += 1;
-          return [];
-        }
         const tone = toneField ? resolveTone(String(readPath(row, toneField) ?? "")) : "brand";
-        // Date fields include the target day; ReUI uses exclusive ends.
         const allDay = metadata?.fields[startField]?.scalar === "Date" && metadata?.fields[endField]?.scalar === "Date";
-        return [{ id, title: String(readPath(row, label) ?? id), start, end: allDay ? addDays(end, 1) : end, allDay, resourceId: group.key,
-          color: toneColorVar(tone), readOnly: true, current: currentByLane.get(group.key) === id }];
+        const event = ganttBarEvent(row, { id, resourceId: group.key, start: startField, end: endField,
+          label, color: toneColorVar(tone), dateOnly: allDay, current: currentByLane.get(group.key) === id });
+        if (!event && (readPath(row, startField) != null || readPath(row, endField) != null)) skipped += 1;
+        return event ? [event] : [];
       }));
       if (markerSpec && markerMetadata) {
         const label = markerSpec.label ?? markerMetadata.resource.recordRepresentation ?? "id";
@@ -215,6 +206,7 @@ export function GanttCollectionSurface<TRow extends Row>({
       <GanttView
         resources={projection.resources} events={projection.events} date={anchor} onDateChange={onDateChange} defaultScale="quarter" loading={fetching}
         fitToEvents={resourceView.state.anchor === calendarDateToAnchor(new Date())} sidebarWidth={gantt.sidebarWidth} minRowHeight={gantt.minRowHeight}
+        laneHeader={laneMetadata?.pluralLabel ?? laneMetadata?.label}
         renderRowContent={renderRowContent ? renderResourceContent : undefined}
         onEventClick={onRowClick || rowHref ? handleEventClick : undefined}
       />

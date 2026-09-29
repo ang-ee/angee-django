@@ -5,15 +5,14 @@ import { cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   Form, List, parsePageActions, parsePageColumns, parsePageFacets, parsePageFields, parsePageGroups,
-  type FormProps, type ListProps, type ListViewProps, type RecordPanelContext, type RecordToolbarContext, type ResourceListProps,
+  type FormProps, type ListProps, type ListViewProps, type RecordPanelContext, type ResourceListProps,
 } from "@angee/ui";
 
 import {
   MILESTONE_MODEL, PROJECT_MODEL, TASK_MODEL, projectListDeclaration, projectRecordTabs,
-  projectTimelineSpec, projectTimelineTab, taskRecordTabs, useProjectFormDeclaration,
+  projectGanttSpec, projectRecordTabsFor, projectTimelineSpec, projectTimelineTab, taskRecordTabs, taskRecordTabsFor, useProjectFormDeclaration,
   useTaskFormDeclaration, useTaskListDeclaration,
 } from "./index";
-import { ProjectPhaseControl } from "./project-phase";
 import { ProjectsPage } from "./views/ProjectsPage";
 import { TasksPage } from "./views/TasksPage";
 
@@ -53,11 +52,13 @@ describe("composable standard project and task declarations", () => {
     const props = propsOf<ListProps>(projectListDeclaration);
     expect(props.resource).toBe(PROJECT_MODEL);
     expect(props.defaultGroup).toEqual({ field: "status" });
+    expect(props.gantt).toBe(projectGanttSpec);
+    expect(projectGanttSpec.linked).toEqual({ resource: MILESTONE_MODEL, lane: "project" });
     expect(parsePageColumns(props.children).map(({ field }) => field)).toEqual(["title", "current_milestone", "status", "lead", "target_date", "updated_at"]);
     expect(parsePageFacets(props.children).map(({ field }) => field)).toEqual(["lead"]);
   });
 
-  test("the project form owns one phase statusbar, the hero, and lifecycle actions", () => {
+  test("the project form declares its phase status field, hero, and lifecycle actions", () => {
     const { result } = renderHook(useProjectFormDeclaration);
     expect(result.current.type).toBe(Form);
     const props = propsOf<FormProps>(result.current);
@@ -65,20 +66,13 @@ describe("composable standard project and task declarations", () => {
     expect(fields.find(({ name }) => name === "title")?.title).toBe(true);
     expect(fields.find(({ name }) => name === "body")?.body).toBe(true);
     expect(fields.find(({ name }) => name === "status")).toMatchObject({ hidden: true, readOnly: true });
-    expect(fields.some(({ name }) => ["current_milestone", "sort_order", "health"].includes(name))).toBe(false);
+    expect(fields.find(({ name }) => name === "current_milestone")).toMatchObject({ status: true, widget: "projects.phase" });
+    expect(fields.some(({ name }) => ["sort_order", "health"].includes(name))).toBe(false);
     const details = parsePageGroups(props.children).find(({ label }) => label === "Details");
     expect(details).toMatchObject({ collapsible: true, defaultOpen: false });
     expect(details?.fields.map(({ name }) => name)).toEqual(["owns_items", "folder", "converted_from"]);
     expect(parsePageActions(props.children).map(({ id }) => id)).toEqual(["pause", "resume", "complete", "drop"]);
-    // The status owner is the existing phase control; declarations do not mirror its state.
-    const context: RecordToolbarContext = {
-      recordId: "project-a", record: null, patchRecord: vi.fn(), reload: vi.fn(),
-      form: { formReadOnly: true } as RecordToolbarContext["form"],
-    };
-    const phase = props.statusbar?.(context);
-    expect(React.isValidElement(phase) && phase.type).toBe(ProjectPhaseControl);
-    expect(propsOf<{ recordId: string; readOnly: boolean }>(phase)).toEqual({ recordId: "project-a", readOnly: true });
-    expect(props.statusbar?.({ ...context, recordId: null })).toBeNull();
+    expect(props.returning).toContain("permissions");
     const actions = parsePageActions(props.children);
     expect(actions.find(({ id }) => id === "pause")?.visibleWhen?.({ status: "OPEN" })).toBe(true);
     expect(actions.find(({ id }) => id === "resume")?.visibleWhen?.({ status: "DROPPED" })).toBe(true);
@@ -100,10 +94,29 @@ describe("composable standard project and task declarations", () => {
     expect(groups.find(({ label }) => label === "Details")).toMatchObject({ collapsible: true, defaultOpen: false });
   });
 
+  test("consumer selections keep dependency fields and reuse native groups and verbs", () => {
+    const line = () => "Context";
+    const { result: project } = renderHook(() => useProjectFormDeclaration({ groups: ["planning"], verbs: ["complete"], contextLine: line }));
+    const projectProps = propsOf<FormProps>(project.current);
+    expect(projectProps.contextLine).toBe(line);
+    expect(parsePageGroups(projectProps.children).map(({ label }) => label)).toEqual(["Planning"]);
+    expect(parsePageActions(projectProps.children).map(({ id }) => id)).toEqual(["complete"]);
+    expect(parsePageFields(projectProps.children).map(({ name }) => name)).toEqual(["title", "revision", "status", "current_milestone", "body"]);
+
+    const { result: task } = renderHook(() => useTaskFormDeclaration({ groups: ["assignment"], verbs: ["complete"], contextLine: line }));
+    const taskProps = propsOf<FormProps>(task.current);
+    expect(taskProps.contextLine).toBe(line);
+    expect(parsePageGroups(taskProps.children).map(({ label }) => label)).toEqual(["Assignment"]);
+    expect(parsePageActions(taskProps.children).map(({ id }) => id)).toEqual(["complete"]);
+    expect(parsePageFields(taskProps.children).map(({ name }) => name)).toContain("revision");
+  });
+
   test("exports the standard record tabs and a timeline scoped to one project's lane", () => {
     expect(projectRecordTabs.map(({ id }) => id)).toEqual(["timeline", "tasks", "milestones", "participants"]);
     expect(taskRecordTabs.map(({ id }) => id)).toEqual(["subtasks"]);
     expect(projectRecordTabs[0]).toBe(projectTimelineTab);
+    expect(projectRecordTabsFor({ tabs: ["tasks"] }).map(({ id }) => id)).toEqual(["tasks"]);
+    expect(taskRecordTabsFor([])).toEqual([]);
     // This panel needs only the saved id, as a native RecordPanelContext supplies.
     render(projectTimelineTab.render({ recordId: "project-a" } as RecordPanelContext));
     expect(mounted.list).toMatchObject({
@@ -123,7 +136,7 @@ describe("composable standard project and task declarations", () => {
     expect(mounted.props?.recordTabs).toBe(projectRecordTabs);
     expect(mountedDeclaration<ListProps>(List)).toBe(projectListDeclaration.props);
     const props = mountedDeclaration<FormProps>(Form);
-    expect(props.statusbar).toBeTypeOf("function");
+    expect(parsePageFields(props.children).find(({ name }) => name === "current_milestone")?.status).toBe(true);
     expect(parsePageActions(props.children).map(({ id }) => id)).toEqual(["pause", "resume", "complete", "drop"]);
   });
 
