@@ -7,6 +7,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db import models
 from django.db.models import Prefetch
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -22,7 +23,7 @@ from angee.graphql.actions import (
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one, with_record_reference_access
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
@@ -86,7 +87,7 @@ class WorkflowRunType(AngeeNode):
     input: JSON
     output: JSON
     outcome: auto
-    error: auto
+    error: str | None
     request_key: auto
     created_at: auto
     updated_at: auto
@@ -186,8 +187,8 @@ class StepAttemptType(AngeeNode):
     started_at: auto
     finished_at: auto
     result: auto
-    error: auto
-    stacktrace: auto
+    error: str | None
+    stacktrace: str | None
     effect_started_at: auto
 
     @strawberry_django.field(only=["acknowledged_by_id"])
@@ -249,6 +250,11 @@ class TriggerType(AngeeNode):
 class TriggerEventType(AngeeNode):
     """Durable admission evidence independent of the lifetime of its run."""
 
+    @classmethod
+    def get_queryset(cls, queryset: models.QuerySet, info: strawberry.Info) -> models.QuerySet:
+        """Keep record identity private even when the editor can inspect admission."""
+        return with_record_reference_access(queryset)
+
     trigger: TriggerType | None = actor_scoped_to_one("trigger")
     run: WorkflowRunType | None = actor_scoped_to_one("run")
     changed_at: auto
@@ -257,14 +263,17 @@ class TriggerEventType(AngeeNode):
     rejection: auto
 
     @strawberry_django.field(only=["record_content_type_id", "record_object_id"])
-    def record_model(self) -> str:
-        """Expose the recorded model through the reference owner."""
-        return cast(Any, self).record_model_label
+    def record_model(self) -> str | None:
+        """Expose the reference model only while its record is readable."""
+        return cast(Any, self).record_model_label if cast(Any, self)._angee_record_readable else None
 
     @strawberry_django.field(only=["record_content_type_id", "record_object_id"])
     def record_id(self) -> PublicID | None:
-        """Expose its public identity; navigation rechecks record permissions."""
-        return optional_public_id(cast(Any, self).record_public_id or None)
+        """Expose the public identity only while its record is readable."""
+        return (
+            optional_public_id(cast(Any, self).record_public_id or None)
+            if cast(Any, self)._angee_record_readable else None
+        )
 
 
 _WORKFLOW_RESOURCE = hasura_model_resource(
@@ -328,6 +337,7 @@ _TRIGGER_RESOURCE = hasura_model_resource(
 _TRIGGER_EVENT_RESOURCE = hasura_model_resource(
     TriggerEventType, model=TriggerEvent, filterable=["id", "trigger", "run", "admitted_at"],
     record_ref_filters=("record_model", "record_id"),
+    record_ref_requires_read=True,
     sortable=["changed_at", "evaluated_at", "admitted_at"], aggregatable=["id"],
     insert=False, update=False, delete=False,
 )

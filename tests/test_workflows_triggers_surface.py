@@ -4,6 +4,7 @@ import pytest
 import yaml
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from rebac import RelationshipTuple, delete_relationship, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.scoping import system_queryset
 from angee.integrate.schema import ConsoleImplChoicesQuery
@@ -148,8 +149,8 @@ def test_source_choices_follow_workflow_authority_without_widening_other_registr
     }, user=editor).errors
 
 
-def test_trigger_ledger_origin_and_filters_preserve_monitor_visibility(trigger_surface):
-    """Admission evidence is readable to monitors, not every workflow starter."""
+def test_trigger_ledger_origin_and_filters_require_operator_visibility(trigger_surface):
+    """Admission evidence is readable to editors, not ordinary workflow readers."""
     schema, workflow, editor, viewer, starter = trigger_surface
     record = vault_for(editor, name="Ready")
     trigger = Trigger.objects.with_actor(editor).create(
@@ -173,20 +174,92 @@ def test_trigger_ledger_origin_and_filters_preserve_monitor_visibility(trigger_s
         "workflow": workflow.sqid, "trigger": trigger.sqid, "model": "knowledge.Vault",
         "record": record.sqid, "event": event.sqid,
     }
-    visible = result_data(execute_schema(schema, query, variables, user=viewer))
+    visible = result_data(execute_schema(schema, query, variables, user=editor))
     assert visible["trigger"][0]["id"] == trigger.sqid
     ledger = visible["triggerevent"]
     assert len(ledger) == 1 and ledger[0]["record_id"] == record.sqid
     assert ledger[0]["admitted_at"] and ledger[0]["evaluated_at"] and ledger[0]["rejection"] == ""
     assert ledger[0]["run"] == {"id": run.sqid, "origin": "TRIGGER"}
     assert visible["workflowrun"] == [{"id": run.sqid, "origin": "TRIGGER", "trigger_event": {"id": event.sqid}}]
-    restricted = result_data(execute_schema(schema, query, variables, user=starter))
-    assert len(restricted["trigger"]) == 1
-    assert restricted["triggerevent"] == [] and restricted["workflowrun"] == []
+    for reader in (viewer, starter):
+        restricted = result_data(execute_schema(schema, query, variables, user=reader))
+        assert len(restricted["trigger"]) == 1
+        assert restricted["triggerevent"] == []
+        if reader is viewer:
+            assert restricted["workflowrun"] == [{"id": run.sqid, "origin": "TRIGGER", "trigger_event": None}]
+        else:
+            assert restricted["workflowrun"] == []
     resources = {resource.model_label: resource for resource in schema.angee_resources}
     assert "condition" in {field.name for field in resources["workflows.Trigger"].fields}
     mutations = schema._schema.mutation_type.fields
     assert not any("triggerevent" in name for name in mutations)
+
+
+def test_trigger_ledger_redacts_unreadable_source_identity_and_filter_oracles(trigger_surface):
+    """An editor sees admission state but cannot discover a hidden source by identity filters."""
+    schema, workflow, editor, _viewer, source_owner = trigger_surface
+    assert not editor.is_superuser and not source_owner.is_superuser
+    record = vault_for(source_owner, name="Private source")
+    trigger = Trigger.objects.with_actor(editor).create(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+    )
+    Trigger.objects.enable(trigger, actor=editor)
+    TriggerEvent.objects.record_change(Vault, record)
+    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    query = """query($model: String!, $record: String!) {
+      triggerevent { id record_model record_id evaluated_at admitted_at }
+      by_model: triggerevent(where: {record_model: {_eq: $model}}) { id }
+      by_record: triggerevent(where: {record_id: {_eq: $record}}) { id }
+      model_count: triggerevent_aggregate(where: {record_model: {_eq: $model}}) { aggregate { count } }
+      record_count: triggerevent_aggregate(where: {record_id: {_eq: $record}}) { aggregate { count } }
+    }"""
+    variables = {"model": record._meta.label, "record": record.sqid}
+    hidden = result_data(execute_schema(schema, query, variables, user=editor))
+    assert hidden == {
+        "triggerevent": [{"id": event.sqid, "record_model": None, "record_id": None,
+                          "evaluated_at": None, "admitted_at": None}],
+        "by_model": [], "by_record": [],
+        "model_count": {"aggregate": {"count": 0}}, "record_count": {"aggregate": {"count": 0}},
+    }
+    grant = RelationshipTuple(resource=to_object_ref(record), relation="viewer", subject=to_subject_ref(editor))
+    write_relationships([grant])
+    visible = result_data(execute_schema(schema, query, variables, user=editor))
+    assert visible["triggerevent"][0]["record_model"] == record._meta.label
+    assert visible["triggerevent"][0]["record_id"] == record.sqid
+    assert visible["by_model"] == visible["by_record"] == [{"id": event.sqid}]
+    assert visible["model_count"] == visible["record_count"] == {"aggregate": {"count": 1}}
+    Trigger.objects.drain()
+    event.refresh_from_db()
+    assert event.admitted_at is not None, event.rejection
+    nested = "{ workflowrun { trigger_event { id record_model record_id } } }"
+    assert result_data(execute_schema(schema, nested, user=editor)) == {"workflowrun": [{"trigger_event": {
+        "id": event.sqid, "record_model": record._meta.label, "record_id": record.sqid,
+    }}]}
+    delete_relationship(grant)
+    assert result_data(execute_schema(schema, nested, user=editor)) == {"workflowrun": [{"trigger_event": {
+        "id": event.sqid, "record_model": None, "record_id": None,
+    }}]}
+
+
+def test_trigger_ledger_reference_guard_batches_source_reads(trigger_surface):
+    """Reading five ledger references requires the same queries as reading one."""
+    schema, workflow, editor, _viewer, source_owner = trigger_surface
+    trigger = Trigger.objects.with_actor(editor).create(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+    )
+    Trigger.objects.enable(trigger, actor=editor)
+    query = "{ triggerevent { record_model record_id } }"
+    counts = []
+    for count in (1, 5):
+        for index in range(system_queryset(TriggerEvent).count(), count):
+            TriggerEvent.objects.record_change(Vault, vault_for(source_owner, name=f"Private source {index}"))
+        result_data(execute_schema(schema, query, user=editor))
+        with CaptureQueriesContext(connection) as queries:
+            assert result_data(execute_schema(schema, query, user=editor)) == {
+                "triggerevent": [{"record_model": None, "record_id": None}] * count,
+            }
+        counts.append(len(queries))
+    assert counts[0] == counts[1]
 
 
 def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution):

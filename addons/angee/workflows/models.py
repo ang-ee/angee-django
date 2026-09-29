@@ -557,10 +557,15 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
         previous = system_queryset(type(self)).filter(pk=self.pk).first() if self.pk else None
         if previous is not None and self.workflow_id != previous.workflow_id:
             raise ValidationError("A trigger's workflow cannot be changed.")
-        if previous is not None and self.source_model != previous.source_model:
-            raise ValidationError("A trigger's source model cannot change; create a new trigger.")
         if self.enabled and (previous is None or not previous.enabled or self.run_as_id != previous.run_as_id):
             raise ValidationError("Enable triggers through the manager action.")
+        fields = ("condition", "source", "model_label", *self.source_class.scope_fields)
+        if previous is not None and any(
+            getattr(self, self._meta.get_field(name).attname) != getattr(previous, self._meta.get_field(name).attname)
+            for name in fields
+        ):
+            self.enabled = False
+            self.disabled_reason = "Trigger configuration changed; enable it again."
         if not self.enabled:
             self.run_as = None
 
@@ -571,6 +576,8 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
                 system_queryset(type(self)).filter(pk=self.pk).lock_if_supported(no_key=True).get()
             self.clean()
             self.workflow.require_access("write", self.actor())
+            if not self.enabled and kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "enabled", "run_as", "disabled_reason"}
             super().save(*args, **kwargs)
 
     def __str__(self) -> str:

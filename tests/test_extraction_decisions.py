@@ -8,6 +8,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models.deletion import ProtectedError
 from rebac import actor_context, system_context
 
+from angee.base.identity import public_id_of
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
@@ -82,7 +83,7 @@ def correction(evidence, request):
 
 
 def test_decision_correction_is_exact_reusable_and_retains_its_authority(correction):
-    original, values, decision, _reviewer, revise, resolve = correction
+    original, values, decision, reviewer, revise, resolve = correction
     resolve()
     revised = revise()
     assert revised.result["documents"][0]["title"] == "Reviewed"
@@ -91,6 +92,7 @@ def test_decision_correction_is_exact_reusable_and_retains_its_authority(correct
     assert revised.fact_authority("/documents/0/title").kind == "correction"
     assert revised.claims == {}
     assert revised.correction_decision_id == decision.pk
+    assert revised.provenance["corrections"][-1]["decision_resolved_by"] == public_id_of(reviewer)
     assert revise().pk == revised.pk
     source, retained_decision = Extraction.objects.reviewed_correction_authority(
         revised,
@@ -102,6 +104,24 @@ def test_decision_correction_is_exact_reusable_and_retains_its_authority(correct
     assert source.pk == original.pk and retained_decision.pk == decision.pk
     with actor_context(values["actor"]), pytest.raises(ProtectedError):
         decision.group.delete()
+
+
+def test_correction_requires_target_write_even_when_evidence_stays_readable(correction):
+    original, values, _decision, _reviewer, revise, resolve = correction
+    resolve()
+    target, actor = values["target"], values["actor"]
+    owner = create_platform_admin("new-target-owner")
+    with system_context(reason="tests extraction revoke target write"):
+        type(target).objects.filter(pk=target.pk).update(created_by=owner)
+        type(target.drive).objects.filter(pk=target.drive_id).update(created_by=owner)
+    with actor_context(owner):
+        target.grant_record_access("viewer", actor)
+    assert target.with_actor(actor).has_access("read")
+    assert not target.with_actor(actor).has_access("write")
+    assert original.with_actor(actor).has_access("read")
+    with pytest.raises(PermissionDenied, match="Write access"):
+        revise()
+    assert Extraction.objects.count() == 1
 
 
 def test_correction_requires_settlement_and_the_exact_declared_action(correction):

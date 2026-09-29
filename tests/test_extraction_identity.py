@@ -32,7 +32,7 @@ def test_repeated_held_candidate_keeps_successful_authority_until_correspondence
     assert repeated.awaiting_correspondence
     assert repeated.provenance["identity_correspondence"] == {
         "last_known_revision": first.revision,
-        "expected_base_id": first.pk,
+        "expected_base_id": str(first.sqid),
     }
     resolved = retain(
         base=repeated,

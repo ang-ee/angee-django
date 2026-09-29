@@ -10,9 +10,12 @@ from uuid import uuid4
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
-from rebac import system_context, to_subject_ref
+from rebac import delete_relationships, system_context, to_subject_ref, write_relationships
+from rebac.resources import model_resource_type
+from rebac.types import RelationshipFilter
 
 from angee.base.actors import actor_user_id
+from angee.base.identity import public_id_of
 from angee.base.jsonschema import check_schema, validate
 from angee.base.mixins import AppendOnlyQuerySet
 from angee.base.models import AngeeManager, AngeeQuerySet
@@ -58,6 +61,30 @@ class EvidenceSystemManager(EvidenceManager):
 class ExtractionManager(EvidenceManager):
     """Retain evidence after actor, schema, source and identity validation."""
 
+    def resync_target_access(self) -> int:
+        """Restore model-derived target tuples after a grant reset or schema sync.
+
+        Targets are immutable; no step writes these relationships. Maintenance
+        replaces only this model-owned relation, preserving explicit viewers.
+        """
+        resource_type = model_resource_type(self.model)
+        assert resource_type is not None
+        with transaction.atomic(), system_context(reason="extraction target access resync"):
+            delete_relationships(RelationshipFilter(resource_type=resource_type, relation="target"))
+            relationships = [
+                relationship
+                for row in self.model._base_manager.select_related("content_type").order_by("pk")
+                if (relationship := row.target_relationship()) is not None
+            ]
+            write_relationships(relationships)
+        return len(relationships)
+
+    @staticmethod
+    def _require_target_write(target: Any, actor: Any) -> None:
+        """Appending evidence and advancing its shared lineage require target write."""
+        if actor is None or not target.with_actor(actor).has_access("write"):
+            raise PermissionDenied("Write access to the extraction target is required.")
+
     def authorized_document_sources(self, extraction: Any, *, actor: Any) -> tuple[DocumentSource, ...]:
         """Authorize retained inputs before disclosing their carriers to a provider."""
         if actor is None or not (extraction).with_actor(actor).has_access("read"):
@@ -94,6 +121,7 @@ class ExtractionManager(EvidenceManager):
         ``base`` pins the current head and supplies retained sources/pages.
         Exact request retries return their revision even after head advances.
         """
+        self._require_target_write(target, actor)
         if actor is None or not (target).with_actor(actor).has_access("read"):
             raise PermissionDenied("Read access to retained evidence and its sources is required.")
         if not request_key:
@@ -339,7 +367,7 @@ class ExtractionManager(EvidenceManager):
                 document_map, retired = previous.document_map, previous.retired_identities
                 values["provenance"]["identity_correspondence"] = {
                     "last_known_revision": authority.revision,
-                    "expected_base_id": authority.pk,
+                    "expected_base_id": public_id_of(authority),
                 }
             if base is not None and authority is not None and not values["error_code"] and not correction:
                 self._preserve_authority(values, parts, authority, base, document_map, retirement)
@@ -656,6 +684,7 @@ class ExtractionManager(EvidenceManager):
             ):
                 raise ValidationError("The correction decision has another resolution action.")
             original, parent = self._correction_basis(decision, actor=actor)
+            self._require_target_write(original.target, actor)
             self._correction_basis(decision, actor=resolved.resolver)
             self.authorized_document_sources(original, actor=actor)
             self.authorized_document_sources(original, actor=resolved.resolver)
@@ -680,7 +709,7 @@ class ExtractionManager(EvidenceManager):
                 "revision_parent_extraction_id": str(parent.sqid),
                 "revision_parent_extraction_revision": parent.revision,
                 "decision_id": str(decision.sqid),
-                "decision_resolved_by": str(resolved.resolver.pk),
+                "decision_resolved_by": public_id_of(resolved.resolver),
                 "corrected_paths": paths,
                 "result_digest": canonical_json_sha256(result),
             }

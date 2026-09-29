@@ -159,6 +159,20 @@ class MessageTriggerTests(TransactionTestCase):
         self.assertEqual(run.record_ref.public_id, message.sqid)
         self.assertEqual(run.origin, "trigger")
 
+    def test_scope_edit_requires_a_new_enabler(self):
+        """A co-editor cannot borrow the enabling user's authority for another scope."""
+        self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
+        self.workflow.with_actor(self.admin).grant_record_access("editor", self.other)
+        trigger = self.trigger(actor=self.owner)
+        trigger.channel = self.make_channel("replacement-scope")
+        trigger.with_actor(self.other)
+        with actor_context(self.other):
+            trigger.save(update_fields=("channel",))
+        trigger.refresh_from_db()
+        self.assertFalse(trigger.enabled)
+        self.assertIsNone(trigger.run_as_id)
+        self.assertIn("changed", trigger.disabled_reason)
+
     def test_admission_rechecks_current_message_channel(self):
         """Moving a pending message cannot bypass its trigger's authored scope."""
         self.trigger()

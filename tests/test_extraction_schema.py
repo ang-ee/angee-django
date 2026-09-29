@@ -53,9 +53,14 @@ def test_evidence_reader_cannot_expand_access_to_source_files(schema, evidence):
     assert result["record_public_id"] == values["target"].sqid
     assert result["sources"][0]["file"] is None
     assert visible["extractionsource"][0]["file"] is None
-    assert result["parts"][0]["value"] == values["result"].parts[0].value
+    assert result["parts"] == []
+    assert visible["extractionpart"] == []
     assert result["pages"][0]["source"]["id"] == result["sources"][0]["id"]
     assert visible["extractionpage"] == [{"source_page": 0}]
+    values["target"].with_actor(values["actor"]).grant_record_access("viewer", reader)
+    readable = result_data(execute_schema(schema, query, user=reader))
+    assert readable["extraction"][0]["parts"][0]["value"] == values["result"].parts[0].value
+    assert readable["extractionpart"] == [{"value": values["result"].parts[0].value}]
     detail = result_data(execute_schema(
         schema, "query($id: String!) { extraction_by_pk(id: $id) { id } }",
         {"id": row.sqid}, user=reader,

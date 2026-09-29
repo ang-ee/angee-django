@@ -61,7 +61,7 @@ def test_two_saves_racing_admission_retain_one_ledger_and_run(trigger_setup, mon
     assert Trigger.objects.drain() == 0
     assert system_queryset(TriggerEvent).count() == 1
     run = system_queryset(WorkflowRun).get()
-    assert run.request_key == f"trigger:{trigger.pk}:{record.pk}"
+    assert run.request_key == f"trigger:{trigger.sqid}:{record.sqid}"
     event.refresh_from_db()
     assert event.admitted_at and event.run_id == run.pk
 

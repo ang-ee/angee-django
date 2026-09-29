@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from contextvars import Context
 from dataclasses import replace
 from typing import Any
 
 from django.apps import apps
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import transaction
@@ -14,9 +16,11 @@ from django.db.models import F, Q
 from django.db.models.functions import Now
 from django.db.models.signals import post_save
 from rebac import actor_context, system_context, to_subject_ref
+from rebac.actors import is_sudo
 
 from angee.base.actors import actor_user_id
 from angee.base.exceptions import exception_text
+from angee.base.identity import public_id_of
 from angee.base.impl import ImplBase
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
@@ -35,6 +39,8 @@ class TriggerSource(ImplBase):
     """
 
     model_label = ""
+    scope_fields: tuple[str, ...] = ()
+    """Trigger fields whose edits invalidate the enabling user's authority."""
 
     @classmethod
     def choice(cls) -> Any:
@@ -168,17 +174,40 @@ class TriggerEventManager(AngeeManager.from_queryset(TriggerEventQuerySet)):  # 
             logger.exception("Workflow trigger capture failed.")
 
 
-class TriggerManager(AngeeManager):
+class TriggerQuerySet(AngeeQuerySet):
+    """Keep authored writes at the validating model; engine updates use explicit scope."""
+
+    def _check_bulk_write(self) -> None:
+        if not self.is_sudo():
+            raise ValidationError("Edit trigger configuration through model save().")
+
+    def update(self, **kwargs: Any) -> int:
+        """Reserve bulk transitions for the engine's explicitly elevated queryset."""
+        self._check_bulk_write()
+        return super().update(**kwargs)
+
+    def bulk_create(self, *args: Any, **kwargs: Any) -> Any:
+        """Keep signal-free insertion from choosing the server-owned acting identity."""
+        self._check_bulk_write()
+        return super().bulk_create(*args, **kwargs)
+
+
+class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: ignore[misc]
     """Enablement and admission serialize on the trigger before its ledger row."""
 
     def enable(self, trigger: Any, *, actor: Any) -> Any:
         """Require workflow write and pin the enabling user on the server."""
+        if is_sudo():
+            return Context().run(self.enable, trigger, actor=actor)
         user_id = actor_user_id(to_subject_ref(actor)) if actor is not None else None
         if user_id is None:
             raise PermissionDenied("Enabling a trigger requires an acting user.")
+        if not system_queryset(get_user_model()).filter(pk=user_id, is_active=True).exists():
+            raise PermissionDenied("Enabling a trigger requires an active user.")
         trigger.workflow.require_access("write", actor)
-        with transaction.atomic(), system_context(reason="workflows.enable_trigger"):
+        with transaction.atomic(), actor_context(actor):
             current = system_queryset(self.model).filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            current.with_actor(actor)
             current.workflow.require_access("write", actor)
             current.validate_configuration()
             if not current.workflow.published_id:
@@ -211,9 +240,12 @@ class TriggerManager(AngeeManager):
         Native saves already hold their record before capture. Sharing that order
         lets domain admission hooks write it without a record/event lock cycle.
         Busy records stay pending; deleted records proceed to a durable rejection.
+        An isolated context drops a caller's ambient bypass before actor hooks.
         """
+        if is_sudo():
+            return Context().run(self.admit, event)
         events = apps.get_model("workflows", "TriggerEvent")
-        with transaction.atomic(), system_context(reason="workflows.admit_trigger"):
+        with transaction.atomic():
             event = system_queryset(events).filter(pk=event.pk).select_related("record_content_type").first()
             if event is None:
                 return False
@@ -231,6 +263,8 @@ class TriggerManager(AngeeManager):
             if current is None:
                 return False
             try:
+                if not trigger.run_as.is_active:
+                    raise ValidationError("The trigger requires an active acting user.")
                 model, condition = trigger.validate_configuration()
             except (ValidationError, ImproperlyConfigured, LookupError) as error:
                 reason = exception_text(error)
@@ -239,6 +273,7 @@ class TriggerManager(AngeeManager):
                 return False
             try:
                 with transaction.atomic(), actor_context(trigger.run_as):
+                    trigger.with_actor(trigger.run_as)
                     if current.record_content_type_id != ContentType.objects.get_for_model(model).pk:
                         raise ValidationError("The source model changed after this event was recorded.")
                     queryset = read_scoped_queryset(model, trigger.run_as)
@@ -250,7 +285,7 @@ class TriggerManager(AngeeManager):
                     trigger.check_admission(record, actor=trigger.run_as)
                     run = apps.get_model("workflows", "WorkflowRun").objects.start(
                         trigger.workflow, actor=trigger.run_as, subject=record, input=trigger.trigger_input(record),
-                        request_key=f"trigger:{trigger.pk}:{record.pk}",
+                        request_key=f"trigger:{public_id_of(trigger)}:{public_id_of(record)}",
                     )
                     system_queryset(type(run)).filter(pk=run.pk).update(trigger_event=current)
             except Exception as error:

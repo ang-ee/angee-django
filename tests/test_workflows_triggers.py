@@ -8,8 +8,10 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models.functions import Now, Upper
 from django.db.models.signals import post_save
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import actor_context, current_actor, system_context, to_subject_ref
+from rebac.actors import is_sudo
 
+from angee.base.impl import impl_choices_enum
 from angee.base.scoping import system_queryset
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.node import AngeeNode
@@ -101,7 +103,7 @@ def test_current_state_rejection_rearms_and_admission_survives_prune(trigger_set
     event.refresh_from_db()
     assert event.admitted_at and not event.rejection
     run = system_queryset(WorkflowRun).get(pk=event.run_id)
-    assert run.request_key == f"trigger:{trigger.pk}:{record.pk}"
+    assert run.request_key == f"trigger:{trigger.sqid}:{record.sqid}"
     assert run.trigger_event_id == event.pk
     run_until(run)
     system_queryset(WorkflowRun).filter(pk=run.pk).update(finished_at=Now() - timedelta(days=91))
@@ -290,25 +292,135 @@ def test_resource_condition_reuses_expression_extensions_and_public_id_decoders(
     assert list(condition(Vault.objects.with_actor(actor)).values_list("pk", flat=True)) == [record.pk]
 
 
-@pytest.mark.parametrize("captured", [False, True])
-def test_source_model_is_stable_from_creation(execution, trigger_resource_schema, monkeypatch, captured):
-    """The mandated request key omits model identity, so every trigger keeps its model."""
+@pytest.mark.parametrize("field", ["condition", "source", "model_label"])
+def test_configuration_edits_disable_the_previous_enablers_authority(
+    execution, trigger_resource_schema, monkeypatch, settings, field,
+):
+    """A co-editor's native partial save must require a new enabling actor."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="source-stability", actor=actor)
+    editor = create_user("trigger-co-editor")
+    workflow.with_actor(actor).grant_record_access("editor", editor)
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCES,
+        "other_changed": "tests.test_workflows_triggers.OtherChanged",
+    }
+    source_field = Trigger._meta.get_field("source")
+    monkeypatch.setattr(source_field, "choices_enum", impl_choices_enum(source_field.registry_setting))
     monkeypatch.setattr(Page, "workflow_trigger", True, raising=False)
     with actor_context(actor):
         trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
-    if captured:
+    trigger = Trigger.objects.enable(trigger, actor=actor)
+    trigger.with_actor(editor)
+    replacement = {"condition": {"name": {"_eq": "Ready"}}, "source": "other_changed",
+                   "model_label": "knowledge.page"}[field]
+    setattr(trigger, field, replacement)
+    with actor_context(editor):
+        trigger.save(update_fields=(field,))
+    trigger.refresh_from_db()
+    assert not trigger.enabled and trigger.run_as_id is None
+    assert "changed" in trigger.disabled_reason
+
+
+class OtherChanged(triggers.RecordChanged):
+    """An alternate native source used to verify activation invalidation."""
+
+    key = "other_changed"
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+def test_bulk_authoring_cannot_bypass_trigger_configuration_owner(trigger_setup, bulk):
+    """Authored bulk writes cannot retain activation while bypassing model validation."""
+    admin, workflow, _, trigger = trigger_setup
+    editor = create_user("trigger-bulk-editor")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    trigger = Trigger.objects.enable(trigger, actor=admin)
+    original = trigger.condition
+    trigger.condition = {}
+    queryset = Trigger.objects.with_actor(editor).filter(pk=trigger.pk)
+    with pytest.raises(ValidationError, match="save"):
+        if bulk:
+            queryset.bulk_update([trigger], ["condition"])
+        else:
+            queryset.update(condition={})
+    trigger.refresh_from_db()
+    assert trigger.condition == original and trigger.enabled and trigger.run_as_id == admin.pk
+
+
+def test_bulk_creation_cannot_borrow_another_users_trigger_authority(trigger_setup):
+    """A workflow editor must use the enable owner to acquire an acting identity."""
+    admin, workflow, _, trigger = trigger_setup
+    editor = create_user("trigger-bulk-creator")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    forged = Trigger(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+        enabled=True, run_as=admin,
+    )
+    with pytest.raises(ValidationError, match="save"):
+        Trigger.objects.with_actor(editor).bulk_create([forged])
+    assert list(system_queryset(Trigger).values_list("pk", flat=True)) == [trigger.pk]
+    installed = Trigger(workflow=workflow, source="record_changed", model_label="knowledge.vault")
+    assert system_queryset(Trigger).bulk_create([installed]) == [installed]
+    assert not installed.enabled and installed.run_as_id is None
+
+
+@pytest.mark.parametrize("boundary", ["enable", "check_access", "check_admission", "trigger_input"])
+def test_trigger_actor_boundaries_drop_ambient_system_privileges(trigger_setup, monkeypatch, boundary):
+    """Source and domain hooks observe only the non-admin enabling user's rows."""
+    admin, workflow, record, trigger = trigger_setup
+    actor = create_user("trigger-hook-actor")
+    workflow.with_actor(admin).grant_record_access("editor", actor)
+    record = vault_for(actor, name="Ready")
+    hidden = vault_for(admin, name="Hidden")
+    seen = []
+
+    def observe(*args, **kwargs):
+        seen.append((is_sudo(), current_actor(), Vault.objects.filter(pk=hidden.pk).exists()))
+        return {}
+
+    if boundary == "enable":
+        monkeypatch.setattr(triggers.RecordChanged, "check_access", observe)
+    with system_context(reason="test trigger enable actor boundary"):
+        trigger = Trigger.objects.enable(trigger, actor=actor)
+    if boundary != "enable":
+        owner = triggers.RecordChanged if boundary == "check_access" else Trigger
+        monkeypatch.setattr(owner, boundary, observe)
+        capture(record)
+        with system_context(reason="test trigger admission actor boundary"):
+            assert Trigger.objects.drain() == 1
+    assert seen == [(False, to_subject_ref(actor), False)]
+
+
+@pytest.mark.parametrize("active_at_enable", [False, True])
+def test_inactive_trigger_actor_cannot_enable_or_admit(trigger_setup, active_at_enable):
+    """Revocation of the pinned account disables admission without starting a run."""
+    admin, workflow, record, trigger = trigger_setup
+    actor = create_user("trigger-deactivated-actor")
+    workflow.with_actor(admin).grant_record_access("editor", actor)
+    if active_at_enable:
         Trigger.objects.enable(trigger, actor=actor)
-        capture(vault_for(actor))
-    trigger.model_label = "knowledge.page"
-    with actor_context(actor), pytest.raises(ValidationError, match="source model cannot change"):
-        trigger.save()
+        capture(record)
+    system_queryset(type(actor)).filter(pk=actor.pk).update(is_active=False)
+    if active_at_enable:
+        assert Trigger.objects.drain() == 0
+    else:
+        with pytest.raises(PermissionDenied, match="active"):
+            Trigger.objects.enable(trigger, actor=to_subject_ref(actor))
+    trigger.refresh_from_db()
+    assert not trigger.enabled and trigger.run_as_id is None
+    if active_at_enable:
+        assert "active" in trigger.disabled_reason
+        event = system_queryset(TriggerEvent).get()
+        assert event.rejection == trigger.disabled_reason and event.evaluated_at
+    assert not system_queryset(WorkflowRun).exists()
 
 
 def test_domain_hooks_own_input_and_rejections_without_disabling(trigger_setup, monkeypatch):
     """Domain policy runs as run_as and is rolled back when admission rejects."""
-    actor, _, record, trigger = trigger_setup
+    admin, workflow, record, trigger = trigger_setup
+    actor = create_user("trigger-domain-actor")
+    workflow.with_actor(admin).grant_record_access("editor", actor)
+    record = vault_for(actor, name="Ready")
     Trigger.objects.enable(trigger, actor=actor)
     capture(record)
     seen = []

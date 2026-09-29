@@ -1,17 +1,22 @@
 """Record-reference resource filters preserve model identity and viewer scope."""
 
 import pytest
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection
-from django.test.utils import CaptureQueriesContext
+from django.db import connection, models
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import actor_context
 
+from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_group
 from angee.graphql.data import hasura_model_resource
+from angee.graphql.relations import with_record_reference_access
 from angee.workflows.testing.models import Decision
 from tests.conftest import Page, addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.tables import model_tables
 
 pytestmark = pytest.mark.django_db(transaction=True, reset_sequences=True)
 
@@ -118,3 +123,30 @@ def test_reference_filter_declaration_rejects_claimed_decoder_names(name):
             filterable=["id"], sortable=["id"], aggregatable=["id"],
             record_ref_filters=("subject_model", "subject_id"), field_id_decode={name: str},
         )
+
+
+@isolate_apps()
+def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(composed_tables):
+    """A string reference key compares typed target keys and rebinds read scope safely."""
+    class TextReference(RecordRefMixin, models.Model):
+        content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+        object_id = models.CharField(max_length=63)
+        target = GenericForeignKey()
+
+        class Meta:
+            app_label = "auth"
+
+    owner, other = create_user("reference-guard-owner"), create_user("reference-guard-other")
+    owned, hidden = vault_for(owner), vault_for(other)
+    with model_tables((TextReference,)):
+        for record in (owned, hidden):
+            TextReference.objects.create(
+                content_type=ContentType.objects.get_for_model(record), object_id=str(record.pk),
+            )
+        with actor_context(owner):
+            guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
+            assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False]
+            assert "CAST(" in str(guarded.query) and "varchar(63)" in str(guarded.query)
+        with actor_context(other):
+            rebound = with_record_reference_access(guarded)
+            assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True]

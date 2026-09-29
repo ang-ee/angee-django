@@ -18,6 +18,7 @@ from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
+from angee.base.permissions import effective_rebac_definition
 from angee.base.refs import RecordRefMixin
 from angee.base.serialization import canonical_json, canonical_json_sha256
 from angee.workflows_extraction.contracts import (
@@ -92,7 +93,7 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
 
     runtime = True
     sqid_prefix = "ext_"
-    rebac_grantable = {"viewer": "read"}
+    rebac_grantable = {"viewer": "share"}
     revision = models.PositiveIntegerField(default=1, editable=False)
     lineage_key = models.CharField(max_length=64, db_index=True, editable=False)
     reuse_key = models.CharField(max_length=64, unique=True, editable=False)
@@ -147,9 +148,17 @@ class Extraction(RetainedEvidence, SqidMixin, AuditMixin, RecordRefMixin, AngeeM
             write_relationships([relationship])
 
     def target_relationship(self) -> RelationshipTuple | None:
-        """Project the retained source target into the declared access relation."""
+        """Project the immutable target using the schema-owned allowed types.
+
+        Native field backing cannot traverse a generic foreign key. Retention
+        and the manager's resync therefore share this derived relationship.
+        """
         target = self.target
-        if target is None or model_resource_type(type(target)) not in {"storage/file", "messaging/message"}:
+        definition = effective_rebac_definition(type(self))
+        relation = next((item for item in definition.relations if item.name == "target"), None) if definition else None
+        if target is None or relation is None or model_resource_type(type(target)) not in {
+            subject.type for subject in relation.allowed_subjects
+        }:
             return None
         return RelationshipTuple(
             resource=to_object_ref(self), relation="target", subject=SubjectRef(to_object_ref(target))

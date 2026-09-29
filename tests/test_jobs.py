@@ -103,6 +103,30 @@ def test_enqueue_task_propagates_send_failure(monkeypatch: pytest.MonkeyPatch, a
             enqueue_task("test.task", kwargs={})
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("atomic", [False, True])
+def test_robust_enqueue_logs_failure_without_suppressing_later_delivery(monkeypatch, caplog, atomic):
+    """The queue owner owns robustness as well as the single commit boundary."""
+    delivered = []
+
+    def send(name, **kwargs):
+        if name == "unavailable":
+            raise RuntimeError("Transport temporarily unavailable")
+        delivered.append(name)
+
+    monkeypatch.setattr("angee.jobs.enqueue.celery_app.send_task", send)
+    if atomic:
+        with transaction.atomic():
+            enqueue_task("unavailable", kwargs={}, robust=True)
+            enqueue_task("later", kwargs={})
+            assert delivered == []
+    else:
+        enqueue_task("unavailable", kwargs={}, robust=True)
+        enqueue_task("later", kwargs={})
+    assert delivered == ["later"]
+    assert "Transport temporarily unavailable" in caplog.text
+
+
 def test_job_autoconfig_declares_celery_defaults_only() -> None:
     """The framework jobs app owns Celery defaults, not addon task schedules."""
 

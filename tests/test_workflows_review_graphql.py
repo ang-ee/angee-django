@@ -94,6 +94,23 @@ def test_run_operator_reads_linked_decision_but_foreign_starter_cannot(schema, l
         assert not decision.with_actor(operator).has_access("act")
 
 
+@pytest.mark.parametrize("role", ["reader", "viewer"])
+def test_run_readers_do_not_inherit_review_evidence(schema, linked_decision, execution, role):
+    """Execution read grants do not turn their recipients into review operators."""
+    workflow, run, _step, decision, owner, operator, _stranger, _assignee = linked_decision
+    viewer = create_user(f"review-{role}")
+    target = run if role == "reader" else workflow
+    target.with_actor(execution[0]).grant_record_access(role, viewer)
+    assert run.with_actor(viewer).has_access("read")
+    assert not decision.with_actor(viewer).has_access("read")
+    assert not decision.group.with_actor(viewer).has_access("read")
+    assert result_data(execute_schema(schema, "{ decisions { id } decision_groups { id } }", user=viewer)) == {
+        "decisions": [], "decision_groups": [],
+    }
+    assert decision.with_actor(operator).has_access("read")
+    assert decision.with_actor(owner).has_access("read")
+
+
 @pytest.mark.parametrize("path,index", [
     ("group__step_run", 2), ("group__step_run__run", 1), ("group__step_run__run__version__workflow", 0),
 ])

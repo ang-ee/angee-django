@@ -246,10 +246,13 @@ class DecisionManager(AngeeManager.from_queryset(DecisionQuerySet)):  # type: ig
         return group.with_actor(issuer)
 
     def _prepare_evidence(self, prepared: list[_Admission], issuer: Any) -> list[tuple[Any, Any]]:
+        """Require standing evidence access for issuer, assignees, and requester."""
         retained = {}
         for item in prepared:
             request = item.request
             participants = (issuer, *item.assignees)
+            if request.requester is not None and request.requester is not DEFAULT_REQUESTER:
+                participants += (_user(request.requester),)
             refs = list(request.context.records())
             if request.subject is not None:
                 refs.append(DecisionRecordReference(

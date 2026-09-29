@@ -18,7 +18,7 @@ from angee.workflows.states import AttemptResult, RunStatus, StepRunStatus
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, WorkflowRun
-from tests.conftest import SchemaAddon, execute_schema, result_data
+from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
 from tests.workflow_steps import Value, document
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
@@ -59,7 +59,7 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
     assert set(resources) == {
         "workflows.Workflow", "workflows.WorkflowVersion",
         "workflows.WorkflowRun", "workflows.StepRun", "workflows.StepAttempt", "workflows.StepArtifact",
-        "workflows.Trigger", "workflows.TriggerEvent",
+        "workflows.Trigger", "workflows.TriggerEvent", "workflows.StepWatch",
     }
     fields = set(schema._schema.mutation_type.fields)
     assert fields == {
@@ -297,8 +297,8 @@ def test_narrow_step_run_relation_projection_does_not_fetch_each_foreign_key(sch
     assert counts[0] == counts[1]
 
 
-def test_attempt_error_and_stacktrace_share_the_declared_field_gate(schema, callers, register_step):
-    """Every reader of an attempt's error can read its trace; hidden attempts expose neither."""
+def test_diagnostics_distinguish_run_operators_editors_and_readers(schema, callers, register_step):
+    """Errors need editing authority; traces require execution operator authority."""
     admin, owner, other = callers
 
     class DiagnosticFailure(Step[Value, Value, None]):
@@ -314,17 +314,33 @@ def test_attempt_error_and_stacktrace_share_the_declared_field_gate(schema, call
     run = start_run(workflow, actor=owner)
     run_until(run)
     attempt = system_queryset(StepAttempt).get(step_run__run=run)
-    query = "query($id: String!) { stepattempt_by_pk(id: $id) { error stacktrace } }"
-    for actor in (admin, owner, other):
-        allowed = actor != other
-        assert attempt.with_actor(actor).has_access("read__error") is allowed
-        assert attempt.with_actor(actor).has_access("read__stacktrace") is allowed
-        data = result_data(execute_schema(schema, query, {"id": attempt.sqid}, user=actor))
-        if allowed:
-            assert data["stepattempt_by_pk"]["error"] == attempt.error
-            assert "ValueError" in data["stepattempt_by_pk"]["stacktrace"]
-        else:
+    editor, viewer, reader, operator = (create_user(f"diagnostic-{role}")
+                                         for role in ("editor", "viewer", "reader", "operator"))
+    for role, actor in (("editor", editor), ("viewer", viewer)):
+        workflow.with_actor(admin).grant_record_access(role, actor)
+    for role, actor in (("reader", reader), ("operator", operator)):
+        run.with_actor(owner).grant_record_access(role, actor)
+    query = """query($id: String!, $run: String!) {
+      stepattempt_by_pk(id: $id) { error stacktrace }
+      workflowrun_by_pk(id: $run) { error }
+    }"""
+    for actor, error, trace in ((editor, True, False), (admin, True, True), (owner, True, True),
+                                (operator, True, True), (viewer, False, False), (reader, False, False),
+                                (other, False, False)):
+        assert attempt.with_actor(actor).has_access("read__error") is error
+        assert attempt.with_actor(actor).has_access("read__stacktrace") is trace
+        assert run.with_actor(actor).has_access("read__error") is error
+        data = result_data(execute_schema(schema, query, {"id": attempt.sqid, "run": run.sqid}, user=actor))
+        if actor == other:
             assert data["stepattempt_by_pk"] is None
+            assert data["workflowrun_by_pk"] is None
+        else:
+            assert data["stepattempt_by_pk"]["error"] == (attempt.error if error else None)
+            assert data["workflowrun_by_pk"]["error"] == (run.error if error else None)
+            if trace:
+                assert "ValueError" in data["stepattempt_by_pk"]["stacktrace"]
+            else:
+                assert data["stepattempt_by_pk"]["stacktrace"] is None
 
 
 def test_run_validation_failure_retains_field_context(schema, execution, monkeypatch):

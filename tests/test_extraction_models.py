@@ -5,16 +5,19 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
+from io import StringIO
 from threading import Barrier
 from traceback import format_exception
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.management import call_command
 from django.db import close_old_connections, connection, connections
 from django.test import override_settings
-from rebac import actor_context, system_context
+from rebac import actor_context, delete_relationship, system_context
 
+from angee.storage.models import File as AbstractFile
 from angee.workflows_extraction.contracts import (
     DocumentPart,
     DocumentResult,
@@ -61,9 +64,10 @@ SCHEMA = {
 
 
 @pytest.fixture
-def evidence(drive):
+def evidence(drive, monkeypatch):
     """Retain real storage-backed evidence with a registry-selected profile."""
 
+    monkeypatch.setattr(File, "rebac_grantable", AbstractFile.rebac_grantable)
     content = b"Note\nFirst line\nSecond line"
     with actor_context(drive.alice):
         source = File.objects.ingest_bytes(content, filename="note.txt", drive_id=str(drive.sqid))
@@ -359,6 +363,69 @@ def test_target_reader_inherits_evidence_access_without_receiving_ownership(evid
     for evidence_row in (row, row.sources.get(), row.parts.get()):
         assert evidence_row.with_actor(owner).has_access("read")
         assert not evidence_row.with_actor(outsider).has_access("read")
+
+
+def test_target_reader_needs_source_access_for_parts_and_cannot_share(evidence):
+    retain, values = evidence
+    owner = values["actor"]
+    reader = get_user_model().objects.create_user(username="target-only-reader")
+    onward = get_user_model().objects.create_user(username="onward-reader")
+    target = File.objects.ingest_bytes(b"Target", filename="target.txt", drive_id=str(values["target"].drive.sqid))
+    row = retain(target=target)
+    part = row.parts.get()
+    target.with_actor(owner).grant_record_access("viewer", reader)
+    assert row.with_actor(reader).has_access("read")
+    assert not part.with_actor(reader).has_access("read")
+    with actor_context(reader), pytest.raises(PermissionDenied):
+        row.with_actor(reader).grant_record_access("viewer", onward)
+    row.with_actor(owner).grant_record_access("viewer", onward)
+    assert row.with_actor(onward).has_access("read")
+    assert not part.with_actor(onward).has_access("read")
+    values["target"].with_actor(owner).grant_record_access("viewer", reader)
+    assert part.with_actor(reader).has_access("read")
+    values["target"].with_actor(owner).revoke_record_access("viewer", reader)
+    assert not part.with_actor(reader).has_access("read")
+
+
+def test_target_access_resync_restores_derived_relations_after_reset(evidence):
+    retain, values = evidence
+    author = create_platform_admin("resync-author")
+    row = retain(actor=author)
+    relationship = row.target_relationship()
+    with system_context(reason="tests extraction target relationship reset"):
+        delete_relationship(relationship)
+    assert not row.with_actor(values["actor"]).has_access("read")
+    output = StringIO()
+    call_command("resync_extraction_access", stdout=output)
+    assert "Restored 1 extraction target relationship" in output.getvalue()
+    assert Extraction.objects.resync_target_access() == 1
+    assert row.with_actor(values["actor"]).has_access("read")
+
+
+def test_source_and_target_reader_cannot_share_an_extraction_onward(evidence):
+    retain, values = evidence
+    row = retain()
+    reader = get_user_model().objects.create_user(username="source-reader")
+    onward = get_user_model().objects.create_user(username="source-onward-reader")
+    values["target"].with_actor(values["actor"]).grant_record_access("viewer", reader)
+    assert row.with_actor(reader).has_access("read")
+    with actor_context(reader), pytest.raises(PermissionDenied):
+        row.with_actor(reader).grant_record_access("viewer", onward)
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_read_only_target_access_cannot_retain_or_advance_lineage(evidence, existing):
+    retain, values = evidence
+    base = retain() if existing else None
+    reader = get_user_model().objects.create_user(username="retention-reader")
+    values["target"].with_actor(values["actor"]).grant_record_access("viewer", reader)
+    assert values["target"].with_actor(reader).has_access("read")
+    assert not values["target"].with_actor(reader).has_access("write")
+    with pytest.raises(PermissionDenied, match="Write access"):
+        retain(actor=reader, base=base, request_key="read-only-revision")
+    assert Extraction.objects.count() == int(existing)
+    if base is not None:
+        assert ExtractionLineage.objects.get(pk=base.lineage_key).head_id == base.pk
 
 
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")

@@ -149,7 +149,10 @@ def test_non_admin_person_without_seat_cannot_read_or_decide(people):
 
 
 def test_explicit_requester_reads_the_requested_question_without_an_assignment(people):
-    issuer, _reviewer, outsider, _subject = people
+    issuer, _reviewer, outsider, subject = people
+    write_relationships([
+        RelationshipTuple(resource=to_object_ref(subject), relation="viewer", subject=to_subject_ref(outsider)),
+    ])
     group = Decision.objects.admit_group([request_for(people, requester=outsider)], actor=issuer)
     decision = seat(group)
     assert decision.requester_id == outsider.pk
@@ -157,6 +160,54 @@ def test_explicit_requester_reads_the_requested_question_without_an_assignment(p
         assert Decision.objects.filter(pk=decision.pk).exists()
         assert DecisionGroup.objects.filter(pk=group.pk).exists()
         assert not decision.with_actor(outsider).has_access("act")
+
+
+@pytest.mark.parametrize("position", ["subject", "reference", "fact_subject", "fact_evidence", "picker"])
+def test_explicit_requester_requires_standing_access_to_every_evidence_record(people, position):
+    issuer, _reviewer, requester, subject = people
+    assert not issuer.is_superuser and not requester.is_superuser
+    ref = reference(subject)
+    changes = {"requester": requester, "subject": None}
+    if position == "subject":
+        changes["subject"] = subject
+    elif position == "picker":
+        changes.update(actions=(ChooseDocument,), refine={"choose": {"document_id": {
+            "options": [{"value": str(subject.sqid), "label": "Document"}],
+        }}})
+    else:
+        changes["context"] = DecisionContext(
+            references=(ref,) if position == "reference" else (),
+            facts=() if position == "reference" else (
+                DecisionFact(pointer="/note", label="Note", value="Retained", authority="source",
+                             subject=ref if position == "fact_subject" else None,
+                             evidence=(ref,) if position == "fact_evidence" else ()),
+            ),
+        )
+    with pytest.raises(PermissionDenied, match="Every participant"):
+        Decision.objects.admit_group([request_for(people, **changes)], actor=issuer)
+    assert not system_queryset(DecisionGroup).exists()
+    assert not system_queryset(Decision).exists()
+    assert not system_queryset(DecisionEvidence).exists()
+    write_relationships([
+        RelationshipTuple(resource=to_object_ref(subject), relation="viewer", subject=to_subject_ref(requester)),
+    ])
+    group = Decision.objects.admit_group([request_for(people, **changes)], actor=issuer)
+    with actor_context(requester):
+        assert Decision.objects.filter(group=group).exists()
+        assert DecisionGroup.objects.filter(pk=group.pk).exists()
+
+
+def test_reask_rechecks_the_explicit_requesters_standing_evidence_access(people):
+    issuer, reviewer, requester, subject = people
+    grant = RelationshipTuple(resource=to_object_ref(subject), relation="viewer", subject=to_subject_ref(requester))
+    write_relationships([grant])
+    group = Decision.objects.admit_group([request_for(people, requester=requester)], actor=issuer)
+    answer(seat(group), reviewer)
+    delete_relationship(grant)
+    with pytest.raises(PermissionDenied, match="Every participant"):
+        Decision.objects.reask(group.pk, actor=issuer, actions=(Complete, Decline), errors={})
+    assert system_queryset(DecisionGroup).count() == 1
+    assert system_queryset(Decision).count() == 1
 
 
 @pytest.mark.parametrize("model_name", ["group", "decision"])

@@ -88,7 +88,7 @@ from angee.graphql.introspection import (
     FieldPathError,
     require_field_for_path,
 )
-from angee.graphql.relations import actor_scoped_relation_expression
+from angee.graphql.relations import actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
 from graphql import GraphQLError
 
@@ -753,6 +753,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     filterable: Sequence[str],
     filter_expressions: Mapping[str, models.Expression] | None = None,
     record_ref_filters: tuple[str, str] | None = None,
+    record_ref_requires_read: bool = False,
     sortable: Sequence[str],
     sortable_aliases: Mapping[str, str | SortAlias] | None = None,
     aggregatable: Sequence[str],
@@ -816,6 +817,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     public-ID filters for a ``RecordRefMixin`` pointer. The reference owner
     supplies its columns and model-aware identity decoding; list and aggregate
     reads retain the resource's ordinary permission scope.
+    ``record_ref_requires_read`` additionally nulls both reference query axes
+    unless the viewer can read the target, using the shared reference annotation.
 
     Nested relation identity filters require read access at every protected hop,
     sharing the permission-safe scalar expression used by related grouping axes.
@@ -834,6 +837,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             alias: models.ExpressionWrapper(models.F(path), output_field=require_field_for_path(model, path)),
         }
     filterable = (*filterable, *(alias for alias in related_aliases if alias not in filterable))
+    if record_ref_requires_read and record_ref_filters is None:
+        raise ImproperlyConfigured("A record-reference read guard requires record-reference filters.")
     if record_ref_filters is not None:
         if not issubclass(model, RecordRefMixin):
             raise ImproperlyConfigured("Record-reference filters require RecordRefMixin.")
@@ -882,6 +887,13 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
 
     def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
         guarded = {}
+        if record_ref_requires_read:
+            queryset = with_record_reference_access(queryset)
+            for name in record_ref_filters or ():
+                guarded[name] = models.Case(
+                    models.When(_angee_record_readable=True, then=expressions[name]),
+                    default=models.Value(None), output_field=expressions[name].output_field,
+                )
         for path, scalar_path in relation_filters.items():
             expression = actor_scoped_relation_expression(queryset, scalar_path)
             guarded[filter_aliases[path]] = expression if expression is not None else models.F(scalar_path)

@@ -17,6 +17,7 @@ class MessageIngested(TriggerSource):
     key = "message_ingested"
     label = "Message ingested"
     model_label = "messaging.Message"
+    scope_fields = ("channel",)
 
     @classmethod
     def matching_triggers(cls, queryset: Any, record: Any) -> Any:

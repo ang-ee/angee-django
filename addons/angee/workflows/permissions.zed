@@ -1,7 +1,7 @@
 // Authorization schema for the workflows addon.
 // @rebac_package: workflows
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 17
+// @rebac_schema_revision: 18
 
 definition workflows/workflow {
     relation owner: auth/user // rebac:field=created_by
@@ -40,7 +40,9 @@ definition workflows/run {
 
     permission create = workflow->start + admin->member
     permission read = run_as + workflow->monitor + reader + operator + parent->read + admin->member
-    permission write = run_as + workflow->write + operator + admin->member
+    permission operate = run_as + operator + admin->member
+    permission write = operate + workflow->write
+    permission read__error = write
     permission delete = admin->member
 }
 
@@ -50,6 +52,8 @@ definition workflows/step_run {
 
     permission create = admin->member
     permission read = run->read + admin->member
+    permission operate = run->operate
+    permission read_error = run->write
     permission write = admin->member
     permission delete = admin->member
 }
@@ -60,9 +64,8 @@ definition workflows/step_attempt {
 
     permission create = admin->member
     permission read = step_run->read + admin->member
-    // Diagnostic text and its trace share the attempt's error visibility.
-    permission read__error = read
-    permission read__stacktrace = read__error
+    permission read__error = step_run->read_error
+    permission read__stacktrace = step_run->operate
     permission write = admin->member
     permission delete = admin->member
 }
@@ -100,10 +103,11 @@ definition workflows/trigger {
 
 definition workflows/trigger_event {
     relation trigger: workflows/trigger // rebac:field=trigger
+    relation run: workflows/run // rebac:field=run
     relation admin: angee/role // rebac:const=admin
 
     permission create = admin->member
-    permission read = trigger->monitor + admin->member
+    permission read = trigger->write + run->operate + admin->member
     permission write = admin->member
     permission delete = admin->member
 }

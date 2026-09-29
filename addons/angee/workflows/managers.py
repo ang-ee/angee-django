@@ -483,7 +483,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 for child_id in abandoned.order_by("pk").values_list("pk", flat=True):
                     with self.hold_owned(child_id) as children:
                         self._cancel_locked(children)
-            transaction.on_commit(lambda: enqueue_task("workflows.wake_run", kwargs={"run_id": run.pk}), robust=True)
+            enqueue_task("workflows.wake_run", kwargs={"run_id": run.pk}, robust=True)
 
     def _cancel_locked(self, runs: list[Any]) -> Cancellation:
         """Cancel open rows in an already-held tree without rewriting terminal facts."""
@@ -512,7 +512,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         if actor is None:
             raise PermissionDenied("Deferred cancellation requires an actor.")
         payload = {"run_id": run.pk, "actor": str(to_subject_ref(actor))}
-        transaction.on_commit(lambda: enqueue_task("workflows.cancel", kwargs=payload), robust=True)
+        enqueue_task("workflows.cancel", kwargs=payload, robust=True)
 
     def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta | None = timedelta(seconds=5)) -> Cancellation:
         """Cancel open rows after DATABASE work releases its lock, retaining terminal run facts."""
@@ -631,7 +631,7 @@ class StepWatchManager(AngeeManager):
         with system_context(reason="workflows.watch_capture"):
             if self.filter(content_type=target.content_type, object_id=target.object_id).update(pending=True):
                 payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
-                transaction.on_commit(lambda: enqueue_task("workflows.wake_records", kwargs=payload), robust=True)
+                enqueue_task("workflows.wake_records", kwargs=payload, robust=True)
 
 
 class StepRunQuerySet(AngeeQuerySet):

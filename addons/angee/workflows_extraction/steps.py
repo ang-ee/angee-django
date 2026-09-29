@@ -346,6 +346,7 @@ class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOut
             not value.allow_inference or not profile.inference_required(base.result, base.unresolved_reasons)
         ):
             return ctx.done(InferEvidenceOutput(**output), outcome="unchanged")
+        sources = type(base).objects.authorized_document_sources(base, actor=ctx.actor)
         parts = base.document_parts()
         if base.error_code == "source_hold" or not parts:
             return ctx.done(
@@ -354,7 +355,6 @@ class InferEvidenceStep(_ProviderStep, Step[InferEvidenceInput, InferEvidenceOut
                 ),
                 outcome="source_unavailable",
             )
-        sources = type(base).objects.authorized_document_sources(base, actor=ctx.actor)
         model.objects.inference_authority_base(base, actor=ctx.actor)
         model_id = str(base.model.sqid) if base.model_id else ""
         inference_model = _model(
