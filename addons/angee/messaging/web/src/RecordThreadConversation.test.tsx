@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider } from "@angee/ui";
 
@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   failOps: new Set<string>(),
   useAuthoredQuery: vi.fn(),
   upload: vi.fn(),
+  uploadTasks: [] as Array<{ id: string; name: string; status: "uploading" | "failed" | "done" }>,
+  onUploaded: null as null | ((files: readonly { id: string; filename: string }[]) => void),
 }));
 
 function operationName(document: unknown): string {
@@ -56,7 +58,14 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 }));
 
 vi.mock("@angee/storage", () => ({
-  useStorageUpload: () => ({ tasks: [], upload: mocks.upload, clearFinished: vi.fn() }),
+  useStorageT: () => (key: string) => key,
+  useStorageUpload: ({ onUploaded }: { onUploaded: typeof mocks.onUploaded }) => {
+    mocks.onUploaded = onUploaded;
+    return { tasks: mocks.uploadTasks, upload: mocks.upload, clearFinished: vi.fn(), retry: vi.fn() };
+  },
+  StorageUploadTasks: ({ uploads }: { uploads: { tasks: typeof mocks.uploadTasks } }) => (
+    <div data-testid="storage-upload-tasks">{uploads.tasks.map((task) => <span key={task.id}>{task.name}</span>)}</div>
+  ),
 }));
 
 import { RecordThreadConversation } from "./RecordThreadConversation";
@@ -149,6 +158,8 @@ function conversationPreview(active: boolean, pending = false) {
 
 beforeEach(() => {
   mocks.upload.mockReset();
+  mocks.uploadTasks = [];
+  mocks.onUploaded = null;
   mocks.mutateCalls = [];
   mocks.failOps = new Set();
   mocks.recipientData = { colleagues: [] };
@@ -348,6 +359,48 @@ describe("RecordThreadConversation", () => {
     expect(post?.vars.recordId).toBe("rom_1");
     expect(post?.vars.body).toBe("Hello room");
     expect(post?.vars.clientCreationKey).toEqual(expect.any(String));
+  });
+
+  test("defaults to Enter to submit and keeps Shift+Enter for a newline", () => {
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    const input = screen.getByLabelText("Message");
+    fireEvent.change(input, { target: { value: "Hello room" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(mocks.mutateCalls).toHaveLength(0);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mocks.mutateCalls).toHaveLength(1);
+  });
+
+  test("mod-enter keeps plain Enter for a newline and sends with Ctrl or Cmd", () => {
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" submitKey="mod-enter" />);
+    const input = screen.getByLabelText("Message");
+    fireEvent.change(input, { target: { value: "Hello room" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true, ctrlKey: true });
+    expect(mocks.mutateCalls).toHaveLength(0);
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(mocks.mutateCalls).toHaveLength(1);
+  });
+
+  test("mod-enter also sends with Cmd", () => {
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" submitKey="mod-enter" />);
+    const input = screen.getByLabelText("Message");
+    fireEvent.change(input, { target: { value: "Hello room" } });
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    expect(mocks.mutateCalls).toHaveLength(1);
+  });
+
+  test("renders storage upload tasks beside removable send-draft attachments", () => {
+    mocks.uploadTasks = [{ id: "upload-1", name: "pending.txt", status: "uploading" }];
+    const { rerender } = render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    expect(screen.getByTestId("storage-upload-tasks").textContent).toBe("pending.txt");
+    act(() => mocks.onUploaded?.([{ id: "file-1", filename: "ready.txt" }]));
+    expect(screen.getByText("ready.txt")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove ready.txt" })).toBeTruthy();
+    mocks.uploadTasks = [{ id: "upload-1", name: "pending.txt", status: "done" }];
+    rerender(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    expect(screen.queryByTestId("storage-upload-tasks")).toBeNull();
+    expect(screen.getByText("ready.txt")).toBeTruthy();
   });
 
   test("offers visible people from IAM colleagues as message recipients", async () => {

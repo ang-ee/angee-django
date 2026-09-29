@@ -1073,6 +1073,16 @@ class Channel(Bridge):
         backend_class = cast("type[ChannelBackend]", self.resolve_impl("backend_class"))
         return backend_class(self)
 
+    def validate_webform_answers(self, answers: dict[str, Any]) -> None:
+        """Validate domain meaning after the public form's scalar validation.
+
+        Same-row Channel donors may override this hook and call ``super()`` to
+        cooperate with other contributors. Raise ``ValidationError`` with answer
+        field names as keys so the public form can return structured errors.
+        """
+
+        del answers
+
     def test_connection(self) -> str:
         """Exercise the selected backend's connection (the Integration test contract)."""
 

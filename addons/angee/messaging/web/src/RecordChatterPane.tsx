@@ -8,10 +8,12 @@ import { READ_MODELS, SetRecordFollowingDocument } from "./documents";
 import {
   RecordThreadConversation,
   type RecordThreadConversationChrome,
+  type RecordThreadConversationProps,
 } from "./RecordThreadConversation";
 
 export interface RecordChatterPaneProps {
   context: ChatterViewContext;
+  submitKey?: RecordThreadConversationProps["submitKey"];
 }
 
 /** The Comments chatter tab: the record-thread conversation (the shared
@@ -20,7 +22,7 @@ export interface RecordChatterPaneProps {
  *  strip, the follow toggle, and the notification-subtype filters). The transcript
  *  itself is not re-implemented here; a discuss room composes the same owner without
  *  this chrome. */
-export function RecordChatterPane({ context }: RecordChatterPaneProps): React.ReactElement {
+export function RecordChatterPane({ context, submitKey }: RecordChatterPaneProps): React.ReactElement {
   const t = useMessagingT();
   const modelLabel = context.route?.modelLabel;
   const recordId = context.view.kind === "record" ? context.view.sqid : undefined;
@@ -38,6 +40,7 @@ export function RecordChatterPane({ context }: RecordChatterPaneProps): React.Re
     <RecordThreadConversation
       modelLabel={modelLabel}
       recordId={recordId}
+      submitKey={submitKey}
       header={(chrome) => (
         <ChatterConversationHeader
           {...chrome}

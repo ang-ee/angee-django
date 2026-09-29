@@ -50,6 +50,45 @@ test.each([true, false])("embedded form honours showReceipt=%s before and after 
     .toBeTruthy();
 });
 
+test.each([true, false])("published success copy overrides both receipt layouts (%s)", async (showReceipt) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+    if (init?.method === "POST") return Response.json({ submission_id: "campaign-receipt" }, { status: 202 });
+    return Response.json({
+      slug: "campaign-form", title: "Campaign form", schema_version: 1,
+      honeypot_field: null,
+      success: { title: "Response saved", body: "We will follow up soon." },
+      form_schema: { type: "object", properties: { summary: { type: "string", label: "Summary" } } },
+    });
+  });
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <PublicWebform slug="campaign-form" showReceipt={showReceipt} />
+  </AppRuntimeProvider>);
+  fireEvent.change(await screen.findByLabelText("Summary"), { target: { value: "A response" } });
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+  await screen.findByRole("heading", { name: "Response saved" });
+  expect(screen.getByText("We will follow up soon.")).toBeTruthy();
+  expect(screen.queryByTestId("webform-receipt") !== null).toBe(showReceipt);
+});
+
+test("an unset success body keeps the no-receipt translation", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+    if (init?.method === "POST") return Response.json({ submission_id: "campaign-receipt" }, { status: 202 });
+    return Response.json({
+      slug: "campaign-form", title: "Campaign form", schema_version: 1,
+      honeypot_field: null,
+      success: { title: "Response saved", body: null },
+      form_schema: { type: "object", properties: { summary: { type: "string", label: "Summary" } } },
+    });
+  });
+  render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <PublicWebform slug="campaign-form" showReceipt={false} />
+  </AppRuntimeProvider>);
+  fireEvent.change(await screen.findByLabelText("Summary"), { target: { value: "A response" } });
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+  await screen.findByRole("heading", { name: "Response saved" });
+  expect(screen.getByText("Your response was received.")).toBeTruthy();
+});
+
 test("two embedded forms give their honeypots distinct label targets", async () => {
   const { container } = render(
     <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>

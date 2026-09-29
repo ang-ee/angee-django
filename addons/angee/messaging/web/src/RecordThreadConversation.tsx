@@ -2,7 +2,9 @@ import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
 import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useUiT } from "@angee/ui";
 import {
+  StorageUploadTasks,
   useStorageUpload,
+  useStorageT,
   type UploadedFile,
   type UploadTask,
 } from "@angee/storage";
@@ -77,6 +79,8 @@ export interface RecordThreadConversationProps {
   activityCopy?: { recordedOn: (day: string) => string };
   /** Already translated consumer copy; omitted entries use messaging defaults. */
   composerCopy?: { audience?: string; help?: string };
+  /** Per-app composer shortcut; Enter sends by default, or Ctrl/Cmd+Enter sends. */
+  submitKey?: "enter" | "mod-enter";
 }
 
 /** The reusable record-thread conversation: the message transcript + composer over
@@ -96,6 +100,7 @@ export function RecordThreadConversation({
   header,
   activityCopy,
   composerCopy,
+  submitKey = "enter",
 }: RecordThreadConversationProps): React.ReactElement {
   const t = useMessagingT();
   const preview = useRuntimeViewAs();
@@ -408,6 +413,7 @@ export function RecordThreadConversation({
         <ChatterComposer
           t={t}
           copy={composerCopy}
+          submitKey={submitKey}
           readOnly={readOnly}
           postKind={postKind}
           onPostKindChange={setPostKind}
@@ -529,6 +535,7 @@ function renderThreadError(errorCode: string | null, t: MessagingT): React.React
 interface ChatterComposerProps {
   t: MessagingT;
   copy: RecordThreadConversationProps["composerCopy"];
+  submitKey: NonNullable<RecordThreadConversationProps["submitKey"]>;
   readOnly: boolean;
   postKind: ChatterPostKind;
   onPostKindChange: (kind: ChatterPostKind) => void;
@@ -544,6 +551,7 @@ interface ChatterComposerProps {
 function ChatterComposer({
   t,
   copy,
+  submitKey,
   readOnly,
   postKind,
   onPostKindChange,
@@ -556,6 +564,7 @@ function ChatterComposer({
   onError,
 }: ChatterComposerProps): React.ReactElement {
   const uiT = useUiT();
+  const storageT = useStorageT();
   const disabled = readOnly || posting;
   const [body, setBody] = React.useState("");
   const [selectedRecipientIds, setSelectedRecipientIds] = React.useState<readonly string[]>([]);
@@ -569,8 +578,6 @@ function ChatterComposer({
   const uploads = useStorageUpload({ onUploaded: handleUploaded });
   const uploadBusy = uploads.tasks.some((task) => !FINISHED_UPLOAD_STATUSES.has(task.status));
   const taskRows = uploads.tasks.filter(isVisibleComposerUploadTask);
-  const hasFailedUpload = taskRows.some((task) => task.status === "failed");
-  const hasComposerAttachments = attachmentDrafts.length > 0 || taskRows.length > 0;
   const canSubmit = body.trim() !== "" || attachmentDrafts.length > 0;
 
   function handleKindChange(next: ChatterPostKind): void {
@@ -614,9 +621,9 @@ function ChatterComposer({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): void {
-    // The feed composer is a plain form (no assistant-ui ComposerPrimitive), so wire
-    // Enter-to-submit here; Shift+Enter keeps the newline. Skip while an IME is composing.
+    // Shift+Enter stays a newline in either mode. Never submit during IME composition.
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    if (submitKey === "mod-enter" && !event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
     if (canSubmit) void submit();
   }
@@ -649,56 +656,30 @@ function ChatterComposer({
         <MessageComposer
           hint={<MessageComposerHint />}
           attachments={
-            hasComposerAttachments ? (
-              <>
-                {attachmentDrafts.map((file) => (
-                  <MessageAttachmentChip
-                    key={file.id}
-                    icon={<Glyph decorative name="attachment" />}
-                    remove={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="iconSm"
-                        aria-label={t("composer.removeAttachment", { name: file.filename })}
-                        disabled={disabled}
-                        onClick={() =>
-                          setAttachmentDrafts((current) =>
-                            current.filter((item) => item.id !== file.id),
-                          )
-                        }
-                      >
-                        <Glyph name="x" />
-                      </Button>
-                    }
-                  >
-                    {file.filename}
-                  </MessageAttachmentChip>
-                ))}
-                {taskRows.map((task) => (
-                  <MessageAttachmentChip
-                    key={task.id}
-                    tone={task.status === "failed" ? "danger" : "neutral"}
-                    icon={<Glyph decorative name="attachment" />}
-                    remove={<span className="text-2xs">{uploadTaskLabel(task.status, t)}</span>}
-                  >
-                    {task.name}
-                  </MessageAttachmentChip>
-                ))}
-                {hasFailedUpload ? (
+            attachmentDrafts.length > 0 ? attachmentDrafts.map((file) => (
+              <MessageAttachmentChip
+                key={file.id}
+                icon={<Glyph decorative name="attachment" />}
+                remove={
                   <Button
                     type="button"
                     variant="ghost"
                     size="iconSm"
-                    aria-label={t("composer.clearUploads")}
+                    aria-label={t("composer.removeAttachment", { name: file.filename })}
                     disabled={disabled}
-                    onClick={uploads.clearFinished}
+                    onClick={() =>
+                      setAttachmentDrafts((current) =>
+                        current.filter((item) => item.id !== file.id),
+                      )
+                    }
                   >
                     <Glyph name="x" />
                   </Button>
-                ) : null}
-              </>
-            ) : null
+                }
+              >
+                {file.filename}
+              </MessageAttachmentChip>
+            )) : null
           }
           input={
             <div className="space-y-2">
@@ -800,6 +781,7 @@ function ChatterComposer({
             </>
           }
         />
+        {taskRows.length > 0 ? <StorageUploadTasks uploads={{ ...uploads, tasks: taskRows }} t={storageT} /> : null}
         <input
           ref={fileInputRef}
           type="file"
@@ -1251,20 +1233,4 @@ function appendUploadedFiles(
 
 function isVisibleComposerUploadTask(task: UploadTask): boolean {
   return task.status !== "done" && task.status !== "deduped";
-}
-
-function uploadTaskLabel(status: UploadTask["status"], t: MessagingT): string {
-  switch (status) {
-    case "hashing":
-      return t("upload.preparing");
-    case "uploading":
-      return t("upload.uploading");
-    case "finalizing":
-      return t("upload.finalizing");
-    case "failed":
-      return t("upload.failed");
-    case "deduped":
-    case "done":
-      return t("upload.attached");
-  }
 }
