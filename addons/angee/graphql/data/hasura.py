@@ -6,19 +6,23 @@ import dataclasses
 import hashlib
 import json
 import types as _types
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from typing import Any
 
 import strawberry
+from asgiref.sync import sync_to_async
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models, transaction
 from django.db.models.expressions import Combinable, CombinedExpression
+from django.db.models.lookups import Exact, In
 from rebac import PermissionDenied, current_actor, system_context
-from rebac.resources import model_resource_type
+from rebac.relation_loading import relation_actor
+from strawberry.extensions import FieldExtension
+from strawberry.types import get_object_definition
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django_aggregates import (
     default_operators_for,
@@ -40,6 +44,7 @@ from strawberry_django_hasura import (
 
 from angee.base.identity import (
     instance_from_public_id,
+    instances_from_public_ids,
     public_data_id_field,
     public_id_for,
 )
@@ -530,6 +535,141 @@ def _relation_axis_fields(
     return relations
 
 
+class _UnresolvedRelationID(models.Value):
+    """An identity miss, distinct from an explicit NULL comparison operand."""
+
+    def __init__(self) -> None:
+        super().__init__(None, output_field=models.IntegerField())
+
+
+def _nonmatching_relation_sql(lookup: models.Lookup, compiler: Any, connection: Any) -> tuple[str, list[Any]]:
+    """False for a readable key, UNKNOWN for a redacted/missing parent."""
+
+    lhs, params = lookup.process_lhs(compiler, connection)
+    return f"{lhs} <> {lhs}", [*params, *params]
+
+
+class _RelationExact(Exact):
+    def as_sql(self, compiler: Any, connection: Any) -> tuple[str, list[Any]]:
+        if isinstance(self.rhs, _UnresolvedRelationID):
+            return _nonmatching_relation_sql(self, compiler, connection)
+        return super().as_sql(compiler, connection)
+
+
+class _RelationIn(In):
+    rhs: Any
+
+    def get_prep_lookup(self) -> Any:
+        if self.rhs_is_direct_value():
+            self.rhs = [value for value in self.rhs if not isinstance(value, _UnresolvedRelationID)]
+        return super().get_prep_lookup()
+
+    def as_sql(self, compiler: Any, connection: Any) -> tuple[str, list[Any]]:
+        if self.rhs_is_direct_value() and not self.rhs:
+            return _nonmatching_relation_sql(self, compiler, connection)
+        return super().as_sql(compiler, connection)
+
+
+def _relation_axis_alias(path: str) -> str:
+    """An injective ORM alias without lookup separators or model-field names."""
+
+    return f"_angee_relation_{path.encode().hex()}"
+
+
+@dataclass(frozen=True)
+class _DecodedRelationID:
+    value: Any
+
+
+@dataclass(frozen=True)
+class _RelationIDDecoder:
+    """Actor-readable public identities prepared once for each input tree."""
+
+    model: type[models.Model]
+    decoder: Callable[[Any], Any] | None = None
+
+    def __call__(self, value: _DecodedRelationID) -> Any:
+        return value.value
+
+    def resolve(self, values: Iterable[str], actor: Any) -> dict[str, _DecodedRelationID]:
+        queryset = read_scoped_queryset(self.model, actor)
+        if queryset is None:
+            queryset = self.model._default_manager.none()
+        instances = instances_from_public_ids(self.model, values, queryset=queryset)
+        return {
+            value: _DecodedRelationID(self.decoder(value) if self.decoder is not None else instance.pk)
+            for value, instance in instances.items()
+        }
+
+
+class _RelationFilterExtension(FieldExtension):
+    """Batch identity operands; leave bool-expression traversal to Hasura."""
+
+    def __init__(
+        self, decoders: Mapping[str, Callable[[Any], Any]], source: Callable[..., Any],
+        filter_type: type, aliases: Mapping[str, str],
+    ) -> None:
+        self.decoders = {name: decoder for name, decoder in decoders.items() if isinstance(decoder, _RelationIDDecoder)}
+        self.source = source
+        self.filter_type = filter_type
+        self.aliases = aliases
+        # An internal dataclass adapts field names only. The public input and
+        # native Hasura's boolean/operator translation remain unchanged.
+        self.aliased_type = dataclasses.make_dataclass(
+            "RelationFilter", [(aliases.get(field.name, field.name), Any) for field in dataclasses.fields(filter_type)],
+            kw_only=True,
+        )
+
+    def resolve(self, next_: Callable[..., Any], source: Any, info: strawberry.Info, **kwargs: Any) -> Any:
+        kwargs["where"] = self.prepare(info, kwargs.get("where"))
+        return next_(source, info, **kwargs)
+
+    async def resolve_async(
+        self, next_: Callable[..., Awaitable[Any]], source: Any, info: strawberry.Info, **kwargs: Any,
+    ) -> Any:
+        kwargs["where"] = await sync_to_async(self.prepare)(info, kwargs.get("where"))
+        return await next_(source, info, **kwargs)
+
+    def prepare(self, info: strawberry.Info, where: Any) -> Any:
+        comparisons: dict[str, list[Any]] = {}
+
+        def adapt(value: Any) -> Any:
+            if isinstance(value, list):
+                return [adapt(item) for item in value]
+            if not dataclasses.is_dataclass(value) or isinstance(value, type):
+                return value
+            fields = {field.name: adapt(getattr(value, field.name)) for field in dataclasses.fields(value)}
+            if not isinstance(value, self.filter_type):
+                return dataclasses.replace(value, **fields)
+            fields = {self.aliases.get(name, name): item for name, item in fields.items()}
+            for name, item in fields.items():
+                if name in self.decoders and item is not None and item is not strawberry.UNSET:
+                    comparisons.setdefault(name, []).append(item)
+            return self.aliased_type(**fields)
+
+        prepared = adapt(where)
+        if comparisons:
+            actor = relation_actor(self.source(info))
+            for name, items in comparisons.items():
+                operands = [
+                    (item, field.name, getattr(item, field.name))
+                    for item in items for field in dataclasses.fields(item)
+                    if field.name != "is_null" and getattr(item, field.name) not in (None, strawberry.UNSET)
+                ]
+                values = {
+                    str(value) for _, _, operand in operands
+                    for value in (operand if isinstance(operand, list) else [operand])
+                }
+                resolved = self.decoders[name].resolve(values, actor) if values else {}
+                missing = _DecodedRelationID(_UnresolvedRelationID())
+                for item, attribute, operand in operands:
+                    setattr(item, attribute, (
+                        [resolved.get(str(value), missing) for value in operand]
+                        if isinstance(operand, list) else resolved.get(str(operand), missing)
+                    ))
+        return prepared
+
+
 def _relation_filter_decoders(
     model: type[models.Model],
     *,
@@ -549,8 +689,6 @@ def _relation_filter_decoders(
     decoders = dict(declared or {})
     for name, field in _relation_axis_fields(model, filterable).items():
         related = field.related_model
-        if name in decoders and not model_resource_type(related):
-            continue
         if public_data_id_field(related) is None:
             continue
         target = getattr(field, "target_field", None)
@@ -559,7 +697,7 @@ def _relation_filter_decoders(
                 f"{model._meta.label} filter axis {name!r} targets a non-primary "
                 "identity; provide an explicit field_id_decode for that target."
             )
-        decoders[name] = partial(_relation_filter_pk, related, decoder=decoders.get(name))
+        decoders[name] = _RelationIDDecoder(related, decoder=decoders.get(name))
     return decoders or None
 
 
@@ -626,24 +764,33 @@ def _relation_scalar_queryset(
 
     scalar_paths = []
     for path in sorted(set(paths)):
-        if "__" not in path or "." in path:
+        if "." in path:
             continue
         try:
             field = require_field_for_path(model, path)
         except FieldPathError:
             continue
-        if not field.is_relation:
+        if is_to_one_relation(field) or ("__" in path and not field.is_relation):
             scalar_paths.append(path)
     if not scalar_paths:
         return source
 
     def get_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
         queryset = source(info)
-        expressions = {
-            path: expression
-            for path in scalar_paths
-            if (expression := actor_scoped_relation_group_expression(queryset, path)) is not None
-        }
+        expressions = {}
+        for path in scalar_paths:
+            field = require_field_for_path(model, path)
+            expression = actor_scoped_relation_group_expression(queryset, path)
+            if is_to_one_relation(field):
+                target = field.target_field if hasattr(field, "target_field") else field.related_model._meta.pk
+                output = target.clone()
+                output.null = False  # SQL NOT must preserve UNKNOWN for redacted NULLs.
+                output.register_lookup(_RelationExact)
+                output.register_lookup(_RelationIn)
+                expression = models.ExpressionWrapper(expression if expression is not None else models.F(path), output)
+            if expression is not None:
+                alias = _relation_axis_alias(path) if field.is_relation else path
+                expressions[alias] = expression
         return queryset.alias(**expressions) if expressions else queryset
 
     return get_queryset
@@ -786,53 +933,24 @@ def _sortable_alias_expression(
 
 
 def _public_pk(model: type[models.Model], value: Any) -> Any:
-    """Decode one public id through the identity owner, not row permissions."""
+    """Decode identity without an existence check; read roots own row scope."""
 
-    instance = _public_instance(model, value)
+    field = public_data_id_field(model)
+    if field is not None:
+        return field.public_id_to_value(value)
+    instance = instance_from_public_id(model, str(value), queryset=system_queryset(model, lock=None))
     return None if instance is None else instance.pk
-
-
-def _relation_filter_pk(model: type[models.Model], value: Any, *, decoder: Callable[[Any], Any] | None = None) -> Any:
-    """Resolve readable operands, with identical NULL semantics for hidden/unknown ids."""
-
-    queryset = None
-    if model_resource_type(model):
-        queryset = read_scoped_queryset(model, current_actor())
-        if queryset is None:
-            queryset = model._default_manager.none()
-    if value in (None, ""):
-        return None
-    instance = instance_from_public_id(
-        model, str(value), queryset=queryset if queryset is not None else system_queryset(model),
-    )
-    if instance is None:
-        # Django omits NULL operands from IN lists. Scalar comparisons retain
-        # the same NULL semantics for unknown and unreadable identities.
-        return None
-    return decoder(value) if decoder is not None else instance.pk
 
 
 def _write_public_instance(model: type[models.Model], value: Any) -> Any:
     """Decode one write relation public id through the actor-scoped write owner."""
 
-    return _public_instance(model, value, queryset=write_queryset(model))
-
-
-def _public_instance(
-    model: type[models.Model],
-    value: Any,
-    *,
-    queryset: models.QuerySet[Any] | None = None,
-) -> Any:
-    """Decode one public id to a model instance through the identity owner."""
-
     if value in (None, ""):
         return None
-    active_queryset = queryset if queryset is not None else system_queryset(model, lock=None)
     return require_instance_for_id(
         model,
         str(value),
-        queryset=active_queryset,
+        queryset=write_queryset(model),
     )
 
 
@@ -951,6 +1069,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         if get_aggregate_queryset is not None
         else _aggregate_queryset(read_queryset)
     )
+    sortable_aliases = {
+        **{path: _relation_axis_alias(path) for path in _relation_axis_fields(model, sortable)},
+        **sortable_aliases,
+    }
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
     active_write_backend = write_backend or AngeeHasuraWriteBackend(model, lines=lines)
@@ -981,6 +1103,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         filterable=filterable,
         declared=field_id_decode,
     )
+    relation_filter_aliases = {path: _relation_axis_alias(path) for path in _relation_axis_fields(model, filterable)}
+    field_id_decode = {
+        **(field_id_decode or {}),
+        **{alias: field_id_decode[path] for path, alias in relation_filter_aliases.items()
+           if field_id_decode is not None and path in field_id_decode},
+    }
     active_json_paths = dict(json_paths or {})
     filter_lookups = resource_filter_lookups(model, tuple(filterable))
     resource = build_hasura_resource(
@@ -1016,6 +1144,14 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         id_decode=id_decode,
         id_column=id_column,
     )
+    if relation_filter_aliases:
+        assert resource.filter_type is not None
+        for field in get_object_definition(resource.query, strict=True).fields:
+            if any(argument.python_name == "where" for argument in field.arguments):
+                source = read_queryset if field.graphql_name == resource.list_root else aggregate_source
+                field.extensions.append(_RelationFilterExtension(
+                    field_id_decode, source, resource.filter_type, relation_filter_aliases,
+                ))
     if lines is not None:
         resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
     return attach_hasura_resource_metadata(

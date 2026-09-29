@@ -1,4 +1,4 @@
-"""Preview authority is scoped in SQL and bounded before role inspection."""
+"""Preview authority and role exclusions are scoped in SQL before the cap."""
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -38,10 +38,9 @@ def test_viewable_people_excludes_self_inactive_service_staff_superuser_and_effe
         grant_role(actor=group, role="angee/role:admin")
     assert not direct_admin.is_staff and not direct_admin.is_superuser
     assert not inherited_admin.is_staff and not inherited_admin.is_superuser
-    with actor_context(iam_admin):
-        assert target.is_previewable()
-        assert not direct_admin.is_previewable()
-        assert not inherited_admin.is_previewable()
+    assert User.objects.admit_view_as(iam_admin, str(target.sqid)) == target
+    assert User.objects.admit_view_as(iam_admin, str(direct_admin.sqid)) is None
+    assert User.objects.admit_view_as(iam_admin, str(inherited_admin.sqid)) is None
     assert User.objects.viewable_people(iam_admin) == [target]
 
 
@@ -72,8 +71,8 @@ def test_viewable_people_search_and_ordering_precede_limit(iam_admin):
     assert [u.username for u in User.objects.viewable_people(iam_admin, search="unique@")] == ["other"]
 
 
-@pytest.mark.parametrize("limit,scan", [(0, 3), (2, 6), (1000, 75)])
-def test_denied_role_checks_cannot_scan_beyond_three_times_the_capped_limit(iam_admin, monkeypatch, limit, scan):
+@pytest.mark.parametrize("limit,cap", [(0, 1), (2, 2), (1000, 25)])
+def test_picker_applies_sql_admission_before_the_capped_limit(iam_admin, monkeypatch, limit, cap):
     User._base_manager.bulk_create([User(username=f"candidate-{i:03}", password="!") for i in range(80)])
     for name, attrs in [
         ("000-staff", {"is_staff": True}),
@@ -82,22 +81,20 @@ def test_denied_role_checks_cannot_scan_beyond_three_times_the_capped_limit(iam_
         ("000-service", {"kind": "service"}),
     ]:
         User.objects.create_user(name, **attrs)
-    inspected = []
+    def readmission(*args):
+        pytest.fail("The picker must not re-admit individual candidates")
 
-    def deny(person):
-        inspected.append(person.username)
-        return False
-
-    monkeypatch.setattr(User, "is_previewable", deny)
+    monkeypatch.setattr(User._default_manager, "admit_view_as", readmission)
     with CaptureQueriesContext(connection) as captured:
-        assert User.objects.viewable_people(iam_admin, limit=limit) == []
-    assert inspected == [f"candidate-{i:03}" for i in range(scan)]
+        assert [person.username for person in User.objects.viewable_people(iam_admin, limit=limit)] == [
+            f"candidate-{i:03}" for i in range(cap)
+        ]
     selections = [
         q["sql"] for q in captured if q["sql"].startswith("SELECT") and f'FROM "{User._meta.db_table}"' in q["sql"]
     ]
     assert len(selections) == 1
     sql = selections[0]
-    assert f"LIMIT {scan}" in sql
+    assert f"LIMIT {cap}" in sql
     where = sql.split(" WHERE ", 1)[1]
     assert all(f'"{field}"' in where for field in ("kind", "is_active", "is_staff", "is_superuser"))
     assert "person" in where and "NOT" in where

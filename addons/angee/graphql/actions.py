@@ -32,7 +32,6 @@ _P = ParamSpec("_P")
 
 logger = logging.getLogger(__name__)
 
-
 @strawberry.type
 class ActionResult:
     """Outcome of a console domain action: a success flag and a human message.
@@ -139,7 +138,8 @@ def action_guard(
     to the schema's stable-code projection, even when included in ``errors``.
     ``@wraps`` preserves the resolver signature so a
     Strawberry field decorated with it keeps its introspected arguments. Every
-    non-validation failure is logged with the action name before projection.
+    expected refusal is returned without logging its traceback or submitted values;
+    unexpected exceptions admitted by an addon's broad catch are logged at ERROR.
     ``camel_case_keys=False`` preserves authored field names for JSON form payloads.
     """
 
@@ -155,7 +155,8 @@ def action_guard(
             except DomainError:
                 raise
             except caught as error:
-                logger.exception("GraphQL action %s failed", resolver.__name__)
+                if not isinstance(error, (*BASELINE_ACTION_ERRORS, PermissionDenied)):
+                    logger.exception("GraphQL action %s failed", resolver.__name__)
                 return ActionResult.from_error(error, summary, camel_case_keys=camel_case_keys)
 
         return guarded

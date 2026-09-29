@@ -218,7 +218,7 @@ def relation_grouping_case(transactional_db: None):
                 GroupParentType,
                 model=GroupParent,
                 name="pinned_group_parents",
-                filterable=["kind", "target__display_name"],
+                filterable=["kind", "target", "target__display_name"],
                 sortable=["kind", "id", *declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields")],
                 aggregatable=["amount"],
                 groupable=["target"],
@@ -733,6 +733,7 @@ def test_relation_filter_lists_keep_readable_targets_and_hide_unknowns(relation_
     document = """
       query($readable: String!, $hidden: String!, $unknown: String!) {
         mixed: group_parents(where: {target: {_in: [$readable, $hidden, $unknown]}}) { id }
+        excluded: group_parents(where: {target: {_nin: [$readable, $hidden, $unknown]}}) { id }
         hidden: group_parents(where: {target: {_eq: $hidden}}) { id }
         unknown: group_parents(where: {target: {_eq: $unknown}}) { id }
       }
@@ -741,7 +742,53 @@ def test_relation_filter_lists_keep_readable_targets_and_hide_unknowns(relation_
         "readable": case.alpha.sqid, "hidden": case.beta.sqid, "unknown": "unknown",
     }, user=case.alice))
     assert {row["id"] for row in data["mixed"]} == {str(row.sqid) for row in case.parents[:2]}
-    assert data["hidden"] == data["unknown"]
-    assert {row["id"] for row in data["hidden"]} == {
-        str(row.sqid) for row in case.parents if row.target_id is None
-    }
+    assert {row["id"] for row in data["excluded"]} == {str(row.sqid) for row in case.parents[3:5]}
+    assert data["hidden"] == data["unknown"] == []
+
+
+@pytest.mark.parametrize("operator", ["_eq", "_neq", "_in", "_nin", "_is_null"])
+def test_relation_id_predicates_use_redacted_values(relation_grouping_case: Any, operator: str) -> None:
+    case = relation_grouping_case
+    readable = {str(case.parents[index].sqid) for index in (0, 1, 3, 4)}
+    alpha = {str(row.sqid) for row in case.parents[:2]}
+    nulls = {str(row.sqid) for row in case.parents} - readable
+    values = (True, False) if operator == "_is_null" else (
+        str(case.alpha.sqid), str(case.beta.sqid), GroupLabel.public_id_from_pk(999999),
+        "malformed", str(case.parents[0].sqid),
+    )
+    for value in values:
+        operand = [value] if operator in {"_in", "_nin"} else value
+        document = """query($where: group_parents_bool_exp!) {
+            group_parents(where: $where) { id }
+            group_parents_aggregate(where: $where) { aggregate { count } }
+        }"""
+        variables = {"where": {"target": {operator: operand}}}
+        result = result_data(execute_schema(case.schema, document, variables, user=case.alice))
+        if operator == "_is_null":
+            expected = nulls if value else readable
+        else:
+            matches = alpha if value == str(case.alpha.sqid) else set()
+            expected = readable - matches if operator in {"_neq", "_nin"} else matches
+        assert {row["id"] for row in result["group_parents"]} == expected, (operator, value)
+        assert result["group_parents_aggregate"]["aggregate"]["count"] == len(expected)
+        pinned = result_data(execute_schema(
+            case.pinned_schema, document.replace("group_parents", "pinned_group_parents"), variables, user=case.bob,
+        ))
+        assert {row["id"] for row in pinned["pinned_group_parents"]} == expected
+        assert pinned["pinned_group_parents_aggregate"]["aggregate"]["count"] == len(expected)
+
+
+def test_relation_in_resolves_all_operands_with_one_read(relation_grouping_case: Any) -> None:
+    case = relation_grouping_case
+    ids = [str(row.sqid) for row in (case.alpha, case.beta, case.duplicate_one, case.duplicate_two)]
+    document = "query($ids: [String!]!) { group_parents(where: {target: {_in: $ids}}) { id } }"
+    # Warm schema/permission caches before measuring database reads.
+    result_data(execute_schema(case.schema, document, {"ids": ids[:1]}, user=case.alice))
+    with CaptureQueriesContext(connection) as queries:
+        data = result_data(execute_schema(case.schema, document, {"ids": ids + ["malformed"]}, user=case.alice))
+    assert len(data["group_parents"]) == 4
+    reads = [query["sql"] for query in queries if query["sql"].startswith("SELECT")
+             and f'FROM "{GroupLabel._meta.db_table}"' in query["sql"]
+             and f'FROM "{GroupParent._meta.db_table}"' not in query["sql"]]
+    assert len(reads) == 1
+    assert " IN (" in reads[0]

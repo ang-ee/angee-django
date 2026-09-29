@@ -1,6 +1,7 @@
 """The complete roster permission matrix through SQL, models, and GraphQL."""
 
 import pytest
+from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
 from rebac import PermissionDenied, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
@@ -31,12 +32,20 @@ def test_every_group_permission_matches_all_nine_seats(roster):
         "write": MANAGERS | {"moderator"}, "delete": MANAGERS,
         "transfer": {"column_owner", "administrator"}, "manage_roster": MANAGERS,
         "write__owner": {"column_owner", "administrator"},
+        "shared_reader": set(SEATS),
     }
     assert set(SchemaPermission.objects.filter(definition__resource_type="spaces/group")
                .values_list("name", flat=True)) == set(expected)
     for permission, holders in expected.items():
         for seat, actor in roster.actors.items():
             assert_permission(roster.group, actor, permission, seat in holders)
+    assert not backend().check_access(
+        subject=to_subject_ref(AnonymousUser()), action="shared_reader", resource=to_object_ref(roster.group),
+    ).allowed
+    # Arrow-only shared-reader membership grants no access to this private row.
+    outsider = roster.actors["outsider"]
+    for gate in ("read", "post", "write", "delete", "transfer", "manage_roster", "write__owner"):
+        assert_permission(roster.group, outsider, gate, False)
 
 
 def test_every_membership_permission_matches_all_roles_and_nine_seats(roster):

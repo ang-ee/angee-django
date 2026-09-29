@@ -33,18 +33,19 @@ from rebac import (
 )
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
+from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
 from angee.base.errors import DomainError
 from angee.base.fields import StateField
-from angee.base.identity import canonical_subject_ref, instance_from_public_id, public_id_of
+from angee.base.identity import canonical_subject_ref, instance_from_public_id
 from angee.base.mixins import SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, AngeeQuerySet, role_anchor
 from angee.iam.events import person_created
 from angee.iam.identity import user_label
-from angee.iam.roles import platform_admin_role, subject_has_role
+from angee.iam.roles import platform_admin_role
 
 VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
 """Default page size for member-facing people surfaces."""
@@ -53,7 +54,7 @@ VISIBLE_PEOPLE_MAX_LIMIT = 100
 """Upper bound a people-surface caller's ``limit`` is clamped to."""
 
 VIEWABLE_PEOPLE_MAX_LIMIT = 25
-"""Maximum preview results while effective role checks run per candidate."""
+"""Maximum preview results after SQL admission."""
 
 IAMKind = role_anchor("iam/kind", name="IAMKind")
 
@@ -200,9 +201,29 @@ class UserQuerySet(AngeeQuerySet[Any]):
         return self.active_people().search_users(search).ordered_users()
 
     def preview_candidates(self) -> Self:
-        """Filter preview target flags in SQL before checking platform-role reach."""
+        """Exclude non-human, inactive, staff and platform-admin targets in SQL.
 
-        return self.active_people().filter(is_staff=False, is_superuser=False)
+        IAM's platform role admits users and IAM group member sets. Membership
+        exclusions use those declared tuple shapes, including group-held admin.
+        Caveated grants are excluded conservatively: a preview must never gain
+        authority when its context changes.
+        """
+
+        people = self.active_people().filter(is_staff=False, is_superuser=False)
+        role = platform_admin_role()
+        if role is None:
+            return people
+        memberships = active_relationship_model().objects.filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()), relation=ROLE_RELATION,
+        )
+        admins = memberships.filter(resource_type=role.resource_type, resource_id=role.resource_id)
+        groups = admins.filter(subject_type="auth/group", optional_subject_relation="member").values("subject_id")
+        grants = memberships.filter(subject_type=model_resource_type(self.model), optional_subject_relation="").filter(
+            Q(resource_type=role.resource_type, resource_id=role.resource_id)
+            | Q(resource_type="auth/group", resource_id__in=groups)
+        )
+        people = people.alias(_iam_preview_subject=Cast("pk", output_field=TextField()))
+        return people.filter(~Exists(grants.filter(subject_id=OuterRef("_iam_preview_subject"))))
 
     def without_direct_roles(self, grant_rows: Any, role_resource_types: set[str]) -> Self:
         """Return users without direct role memberships in the installed schema."""
@@ -455,22 +476,16 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         search: str = "",
         limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
     ) -> list[Any]:
-        """Return permitted preview targets within the person's authority bound.
+        """Return permitted preview targets, applying admission before the cap."""
 
-        Examine at most three times the capped limit (at most 25 results).
-        Role exclusions can leave fewer results; each check uses the target.
-        """
+        bounded = bounded_limit(limit, maximum=VIEWABLE_PEOPLE_MAX_LIMIT)
+        return [copy(person) for person in self.view_as_queryset(actor).search_users(search).ordered_users()[:bounded]]
+
+    def view_as_queryset(self, actor: Any) -> UserQuerySet:
+        """The single admission scope used by the picker and header lookup."""
 
         subject = to_subject_ref(actor)
-        bounded = bounded_limit(limit, maximum=VIEWABLE_PEOPLE_MAX_LIMIT)
-        queryset = self.with_actor(subject).with_action("view_as").picker(search)
-        people = []
-        for person in queryset[:bounded * 3].iterator(chunk_size=bounded):
-            if (target := self.admit_view_as(actor, public_id_of(person))) is not None:
-                people.append(target)
-                if len(people) == bounded:
-                    break
-        return people
+        return self.with_actor(subject).with_action("view_as").preview_candidates().exclude(pk=subject.subject_id)
 
     def admit_view_as(self, actor: Any, public_id: str) -> Any | None:
         """Admit a preview identity for both the picker and GraphQL header.
@@ -480,15 +495,12 @@ class UserManager(AngeeManager.from_queryset(UserQuerySet), BaseUserManager):  #
         subsequent instance checks therefore follow the preview's ambient actor.
         """
 
-        subject = to_subject_ref(actor)
         candidate = instance_from_public_id(
             self.model,
             str(public_id),
-            queryset=self.with_actor(subject).with_action("view_as").preview_candidates().exclude(pk=subject.subject_id),
+            queryset=self.view_as_queryset(actor),
         )
-        if candidate is None or not candidate.is_previewable():
-            return None
-        return copy(candidate)
+        return copy(candidate) if candidate is not None else None
 
     def active_person_for_subject(self, subject: SubjectRef) -> Any | None:
         """Resolve an accountable human actor from a concrete canonical subject."""
@@ -623,17 +635,6 @@ class User(SqidMixin, AbstractBaseUser, RebacPermissionsMixin, AngeeModel):
             user.sudo(reason="iam.password.issue").save(update_fields=["password"])
             self.password = user.password
         return password
-
-    def is_previewable(self) -> bool:
-        """Whether a preview candidate stays within a person's role authority.
-
-        Callers first select through ``preview_candidates`` and check ``view_as``
-        for the viewer. This remaining invariant checks the target as subject,
-        never the ambient actor, including membership inherited through groups.
-        """
-
-        role = platform_admin_role()
-        return role is None or not subject_has_role(to_subject_ref(self), role)
 
     def update_preferences(self, preferences: Mapping[str, Any]) -> None:
         """Replace this user's private UI preference object."""

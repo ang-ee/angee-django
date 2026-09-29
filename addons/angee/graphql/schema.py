@@ -13,7 +13,7 @@ from typing import Any, ClassVar, cast
 
 import strawberry
 from django.apps import AppConfig, apps
-from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models
 from django.utils.functional import cached_property
 from rebac import MissingActorError, PermissionDenied, RebacMixin
@@ -29,6 +29,7 @@ from strawberry_django_hasura import hasura_config
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
 from angee.base.errors import DomainError
 from angee.base.mixins import StaleRevisionError
+from angee.base.transitions import TransitionNotAllowed
 from angee.data.metadata import DataResourceMetadata, serialize_data_resources
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -101,7 +102,13 @@ class AngeeSchema(strawberry.Schema):
 
         errors_to_log: list[GraphQLError] = []
         for error in errors:
-            refusal = isinstance(error.original_error, DomainError)
+            refusal = (
+                isinstance(error.original_error, (
+                    DomainError, MissingActorError, PermissionDenied, TransitionNotAllowed, ObjectDoesNotExist,
+                ))
+                or _unwrap_validation_error(error.original_error) is not None
+                or (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES
+            )
             if error.path is None and isinstance(error.original_error, GraphQLError):
                 # graphql-core's request coercion errors echo submitted values.
                 # Preserve them for the client without passing them to logging.
@@ -129,6 +136,10 @@ class AngeeSchema(strawberry.Schema):
             error.original_error = None
             return
         if _unwrap_validation_error(original) is not None:
+            return
+        if isinstance(original, TransitionNotAllowed | ObjectDoesNotExist):
+            error.message = "The requested operation was refused."
+            error.extensions = {"code": "BAD_USER_INPUT"}
             return
         if isinstance(original, GraphQLError) and (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES:
             extensions = error.extensions or {}

@@ -28,6 +28,7 @@ from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.middleware import ActorMiddleware
+from rebac.roles import grant as grant_role
 from strawberry.django.views import GraphQLView
 
 from angee.base.identity import (
@@ -41,6 +42,7 @@ from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.events import ChangePayload
 from angee.graphql.schema import AngeeSchema
+from angee.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
@@ -59,6 +61,7 @@ from tests.conftest import (
 )
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
+from tests.iam_models import Group as IAMGroup
 from tests.tables import model_tables
 
 User = get_user_model()
@@ -1871,6 +1874,68 @@ def test_view_as_target_has_no_pinned_admitting_actor(
     assert json.loads(response.content) == {"data": {"targetAuthority": False}}
     assert request.user is admin
     assert not hasattr(request, "view_as")
+
+
+def test_view_as_unknown_operation_uses_strawberry_bad_request(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin = _platform_admin("preview-operation-admin")
+    target = User.objects.create_user("preview-operation-target")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def hello(self) -> str:
+            return "hello"
+
+    schema = AngeeSchema(query=Query, extensions=[ViewAsReadOnlyExtension])
+    view = GraphQLView.as_view(schema=schema)
+    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
+    request = RequestFactory().post(
+        "/graphql/public/", content_type="application/json", HTTP_X_ANGEE_VIEW_AS=_user_public_id(target),
+        data={"query": "query Existing { hello }", "operationName": "Missing"},
+    )
+    request.user = admin
+    response = ActorMiddleware(lambda active: graphql_endpoint(active, "public"))(request)
+    assert response.status_code == 400
+    assert request.user is admin
+    assert not hasattr(request, "view_as")
+
+
+@pytest.mark.parametrize("storage", ["denormalized", "registry"])
+def test_viewable_people_admission_is_batched_before_limit(
+    composed_tables: None, settings: Any, storage: str,
+) -> None:
+    settings.REBAC_LOCAL_BACKEND_STORAGE = storage
+    admin = _platform_admin("picker-query-admin")
+    User._base_manager.bulk_create([User(username=f"picker-person-{index:02}", password="!") for index in range(25)])
+    for username, flags in (
+        ("picker-000-staff", {"is_staff": True}),
+        ("picker-000-superuser", {"is_superuser": True}),
+        ("picker-000-service", {"kind": "service"}),
+        ("picker-000-inactive", {"is_active": False}),
+    ):
+        User.objects.create_user(username, **flags)
+    _platform_admin("picker-000-admin")
+    inherited_admin = User.objects.create_user("picker-000-group-admin")
+    with system_context(reason="test.preview.group_admin"):
+        group = IAMGroup.objects.create(name="Preview administrators")
+        group.add_member(str(to_subject_ref(inherited_admin)))
+        grant_role(actor=group, role="angee/role:admin")
+    assert User.objects.admit_view_as(admin, str(inherited_admin.sqid)) is None
+    assert User.objects.admit_view_as(admin, str(admin.sqid)) is None
+    # Warm native schema caches, then compare the complete picker at each size.
+    User.objects.viewable_people(admin, search="picker-", limit=1)
+    counts = []
+    for limit in (3, 13, 25):
+        with CaptureQueriesContext(connection) as queries:
+            people = User.objects.viewable_people(admin, search="picker-", limit=limit)
+        counts.append(len(queries))
+        assert [person.username for person in people] == [f"picker-person-{index:02}" for index in range(limit)]
+        for person in people:
+            assert person.actor() is None
+            assert User.objects.admit_view_as(admin, str(person.sqid)) == person
+    assert counts[0] == counts[1] == counts[2], counts
 
 
 def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
