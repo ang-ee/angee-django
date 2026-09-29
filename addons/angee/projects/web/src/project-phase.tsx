@@ -1,7 +1,9 @@
 import { extractActionOutcome, useAuthoredQuery } from "@angee/refine";
+import { holdsPermission } from "@angee/metadata";
 import {
   ErrorBanner,
-  LoadingPanel,
+  Skeleton,
+  SkeletonStatus,
   RelationPicker,
   useActionResultRun,
   useAuthoredResourceMutation,
@@ -26,7 +28,7 @@ export function ProjectPhaseControl({ recordId }: { recordId: string }): React.R
     records: [{ model: PROJECT_MODEL, id: recordId }],
   });
   const project = query.data?.projects_by_pk;
-  const canWrite = project?.permissions.includes("write") ?? false;
+  const canWrite = holdsPermission(project, "write");
   const eligibleIds = canWrite ? project?.selectable_milestones.map((row) => row.id) ?? [] : [];
   const { options, list } = useRelationOptions(milestoneRelation, {
     enabled: eligibleIds.length > 0,
@@ -37,7 +39,9 @@ export function ProjectPhaseControl({ recordId }: { recordId: string }): React.R
     invalidateModels: [PROJECT_MODEL, TASK_MODEL],
     shouldInvalidate: (data) => data?.set_project_current_milestone.ok === true,
   });
-  if (query.isFetching && !project) return <LoadingPanel message={t("project.phase.loading")} />;
+  if (query.isFetching && !project) return <SkeletonStatus label={t("project.phase.loading")}>
+    <Skeleton className="h-8 w-52" />
+  </SkeletonStatus>;
   if (query.error || !project) return <ErrorBanner description={t("project.phase.unavailable")} />;
   return <RelationPicker
     aria-label={t("project.phase.select")}

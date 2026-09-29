@@ -63,8 +63,8 @@ export interface FieldDescriptor extends FieldPresentation {
   prefillReplace?: readonly string[];
   /** Source field a `widget="slug"` field derives from on create (see `FieldProps.slugFrom`). */
   slugFrom?: string;
-  /** A saved title's inline accessory, evaluated against persisted record data. */
-  labelAccessory?: (record: Row, state: { disabled: boolean }) => ReactNode;
+  /** Render a saved field beside the title; on create it remains in the form. */
+  placement?: "title";
   title?: boolean;
   body?: boolean;
   kind?: PageFieldKind;

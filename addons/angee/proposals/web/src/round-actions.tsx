@@ -1,4 +1,4 @@
-import type { Row } from "@angee/metadata";
+import { holdsPermission, type Row } from "@angee/metadata";
 import { extractActionOutcome } from "@angee/refine";
 import { OPEN_ROUND, CLOSE_ROUND, CANCEL_ROUND, TRANSFER_ROUND, ADMIT_RESPONDER, REMOVE_RESPONDER, WIDEN_ROUND } from "./documents";
 import {
@@ -306,11 +306,6 @@ function isOpenedRound(record: Row): boolean {
 
 function isNonTerminalRound(record: Row): boolean {
   return ["collecting", "opened"].includes(roundState(record));
-}
-
-/** Permissions selected from the server-owned record projection. */
-export function holdsPermission(record: Row, permission: string): boolean {
-  return Array.isArray(record.permissions) && record.permissions.includes(permission);
 }
 
 export function recordRevision(record: Row | null): number | undefined {

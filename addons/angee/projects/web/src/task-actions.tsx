@@ -19,7 +19,7 @@ import {
 } from "@angee/ui";
 import * as React from "react";
 
-import { TaskVisibility } from "./task-visibility";
+import { SetTaskVisibilityDocument } from "./documents";
 import { useProjectsT } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
 
@@ -108,10 +108,12 @@ export function useTaskFormDeclaration(): React.ReactElement {
 
   return (
     <Form resource={TASK_MODEL} layout="tabs">
-      <Field name="title" title labelAccessory={(record, state) => <TaskVisibility record={record} disabled={state.disabled} />} />
+      <Field name="title" title />
       <Field name="allowed_visibility" hidden readOnly />
       <Field name="revision" readOnly hidden />
-      <Field name="visibility" options={visibilityOptions} createOnly />
+      <Field name="visibility" widget="visibility" placement="title" options={visibilityOptions}
+        visibilityAction={{ document: SetTaskVisibilityDocument, resultField: "set_task_visibility",
+          idArgument: "id", revisionArgument: "expected_revision" }} />
       <Field name="status" widget="statusbar" options={statusOptions} createOnly />
       <Group label={t("task.group.placement")} columns={2}>
         <Field name="project" />

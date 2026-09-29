@@ -15,9 +15,8 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
-    "@angee/refine": "workspace:*",
-    "@angee/ui": "workspace:*",
-    "react-hook-form": "^7.81.0"
+    "@angee/metadata": "workspace:*",
+    "@angee/ui": "workspace:*"
   },
   "peerDependencies": {
     "@tanstack/react-router": "^1",

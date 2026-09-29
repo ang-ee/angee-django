@@ -1,9 +1,8 @@
-# Project record audience
+# Project record visibility
 
-`TaskVisibility` binds the shared inline visibility widget to
-`set_task_visibility`, using the record's `allowed_visibility` and revision.
-Task title fields compose it through `labelAccessory`; dirty and pending forms
-block the independent audience action.
+Task forms declare the shared [visibility field widget](../../../packages/ui/src/widgets/visibility.tsx)
+beside the title. It binds `set_task_visibility` to the record's
+`allowed_visibility` and revision; dirty and pending forms block the verb.
 
 Task domains extend `visibility_blockers(value)` with SQL conditions and their
 validation exceptions. Both the locked verb and optimized choice projection use

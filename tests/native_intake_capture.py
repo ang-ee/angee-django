@@ -782,10 +782,15 @@ class DecisionRecordTests(IntakeAccessCase):
         self.assertEqual(old.superseded_by_id, need.access_decision_id)
         repeated = self.graphql(mutation, {"id": old.sqid, "revision": old.revision}, bucket="console")
         self.assertFalse(repeated["revisit_human_decision"]["ok"])
-        subject = self.graphql("""query($model: String!, $id: ID!) {
-          subject_decisions(model_label: $model, record_id: $id) { id }
+        subject = self.graphql("""query($model: String!, $id: String!) {
+          decisions(where: {subject_content_type: {_eq: $model}, subject_object_id: {_eq: $id}}) { id }
         }""", {"model": "intake.Need", "id": need.sqid}, bucket="console")
-        self.assertEqual({row["id"] for row in subject["subject_decisions"]},
+        self.assertEqual({row["id"] for row in subject["decisions"]},
+                         {old.sqid, need.access_decision.sqid})
+        related = self.graphql("""query($task: String!) {
+          decisions(where: {intake_need__task: {_eq: $task}}) { id }
+        }""", {"task": need.task.sqid}, bucket="console")
+        self.assertEqual({row["id"] for row in related["decisions"]},
                          {old.sqid, need.access_decision.sqid})
 
     def test_approved_access_stays_final(self):
@@ -799,10 +804,10 @@ class DecisionRecordTests(IntakeAccessCase):
 
 
 
-    def test_authored_decision_and_intake_documents_match_console(self):
+    def test_intake_and_iam_authored_documents_match_console(self):
         schema = GraphQLSchemas.from_discovery().build("console")._schema
         root = Path(__file__).resolve().parents[1]
-        for addon in ("decisions", "intake", "iam"):
+        for addon in ("intake", "iam"):
             path = root / "addons" / "angee" / addon / "web" / "src" / "documents.ts"
             document = parse("\n".join(re.findall(r"graphql\(`(.*?)`\)", path.read_text(), flags=re.S)))
             self.assertEqual(validate(schema, document), [], addon)

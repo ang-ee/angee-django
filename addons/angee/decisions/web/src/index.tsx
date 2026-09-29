@@ -12,8 +12,9 @@ export { DecisionsList, RecordDecisions, decisionRecordTab } from "./RecordDecis
 export default defineBaseAddon({
   id: "decisions",
   i18n: { decisions: enDecisionsMessages },
-  routes: resourcePageRoutes("decisions.inbox", "/decisions", lazyRouteComponent(() => import("./DecisionsPage"), "DecisionsPage"), DECISION_MODEL),
-  menus: [{ id: "decisions", label: "Decisions", icon: "check", route: "decisions.inbox" }],
+  routes: resourcePageRoutes("decisions.decisions", "/decisions", lazyRouteComponent(() => import("./DecisionsPage"), "DecisionsPage"), DECISION_MODEL),
+  menus: [{ id: "decisions", label: "Decisions", icon: "check", route: "decisions.decisions" }],
   slots: [{ ...formViewRecordActionsSlot(DECISION_MODEL), id: "decisions.verbs",
-    recordActionPlacement: "menu", content: <DecisionRecordActions /> }],
+    recordActionPlacement: "menu", requiredFields: ["revision", "is_open", "can_revisit", "permissions", "form_schema"],
+    content: <DecisionRecordActions /> }],
 });

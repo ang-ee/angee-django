@@ -4,7 +4,8 @@ import { useAuthoredResourceMutation, type ActionDescriptor } from "@angee/ui";
 import { ANSWER_SHARE } from "./documents";
 import { useProposalsT } from "./i18n";
 import { ANSWER_MODEL } from "./resources";
-import { holdsPermission, recordRevision } from "./round-actions";
+import { holdsPermission } from "@angee/metadata";
+import { recordRevision } from "./round-actions";
 
 /** Answer audience verbs preserve the server's narrowing and revision rules. */
 export function useAnswerActions(): readonly ActionDescriptor[] {

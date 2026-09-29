@@ -90,7 +90,7 @@ const iam = defineBaseAddon({
   menus: identityMenu,
   i18n: { iam: enIamMessages },
   slots: [
-    { ...formViewRecordActionsSlot("iam.User"), id: "iam.issue-password", recordActionPlacement: "menu", content: createElement(IssuePasswordRecordAction) },
+    { ...formViewRecordActionsSlot("iam.User"), id: "iam.issue-password", recordActionPlacement: "menu", requiredFields: ["can_issue_password"], content: createElement(IssuePasswordRecordAction) },
     { slot: FORM_VIEW_RECORD_CHROME_SLOT, id: "iam.share-record", sequence: 20, content: createElement(ShareRecordChrome) },
     { slot: RESOURCE_VIEW_UTILITIES_SLOT, id: "iam.share-list", sequence: 20, content: createElement(ShareListChrome) },
     {

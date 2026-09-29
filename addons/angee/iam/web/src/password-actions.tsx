@@ -1,8 +1,8 @@
 import * as React from "react";
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
-import { ErrorBanner, RecordActionBar, usePrompt, useRecordAction, useRecordChromeContext, type ActionDescriptor } from "@angee/ui";
+import { useAuthoredMutation } from "@angee/refine";
+import { RecordActionBar, usePrompt, useRecordAction, useRecordChromeContext, type ActionDescriptor } from "@angee/ui";
 
-import { IamIssueUserPassword, IamPasswordEligibility } from "./documents";
+import { IamIssueUserPassword } from "./documents";
 import { useIamT } from "./i18n";
 
 /** IAM alone owns issuance; the transient response lives only in the reveal prompt. */
@@ -29,9 +29,7 @@ export function useIssuePasswordAction(): ActionDescriptor {
 
 /** The same issuance verb is inherited by every saved IAM user record. */
 export function IssuePasswordRecordAction(): React.ReactElement | null {
-  const { recordId, dataProviderName } = useRecordChromeContext();
-  const query = useAuthoredQuery(IamPasswordEligibility, { id: recordId }, { dataProviderName, models: ["iam.User"] });
+  const { record } = useRecordChromeContext();
   const action = useIssuePasswordAction();
-  if (query.error) return <ErrorBanner description={query.error.message} />;
-  return query.data?.users_by_pk ? <RecordActionBar record={query.data.users_by_pk} actions={[action]} /> : null;
+  return record ? <RecordActionBar record={record} actions={[action]} /> : null;
 }

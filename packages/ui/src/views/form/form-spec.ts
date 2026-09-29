@@ -64,6 +64,43 @@ export function deserializeFormSpec(
   return deserializeObjectFields(schema, widgets, "form spec", schema, []);
 }
 
+export interface FormSpecBranch {
+  value: string;
+  label: string;
+  fields: readonly FormSpecFieldDescriptor[];
+}
+
+/** Resolve discriminator branches once at the FormSpec owner. */
+export function formSpecBranches(
+  value: unknown,
+  widgets: WidgetMap,
+  discriminator = "action",
+): readonly FormSpecBranch[] {
+  const schema = parseFormSpec(value);
+  const options = schema.properties?.[discriminator]?.options;
+  const branches = schema.oneOf;
+  if (!options?.length || !branches || branches.length !== options.length) {
+    throw new Error(`Missing ${discriminator} form branches.`);
+  }
+  const seen = new Set<string>();
+  return options.map((option) => {
+    const branch = branches.find((candidate) => candidate.properties?.[discriminator]?.const === option.value);
+    if (!branch || seen.has(option.value) || branches.filter((candidate) =>
+      candidate.properties?.[discriminator]?.const === option.value).length !== 1) {
+      throw new Error(`Form branches need one distinct ${discriminator} value.`);
+    }
+    seen.add(option.value);
+    const properties = branch.properties ?? {};
+    const fields = deserializeFormSpec({
+      ...schema,
+      ...branch,
+      oneOf: undefined,
+      propertyOrder: schema.propertyOrder?.filter((name) => Object.hasOwn(properties, name)),
+    }, widgets).filter((field) => field.name !== discriminator);
+    return { value: option.value, label: option.label, fields };
+  });
+}
+
 /** Resolve a form spec against the current app's build-time widget registry. */
 export function useFormSpecFields(
   value: unknown,

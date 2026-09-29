@@ -249,9 +249,3 @@ export type IAMPermissionSchema = IAMResourceSchema["permissions"][number];
 export type IAMRevokeRoleVariables = DocumentVariables<typeof IamRevokeRole>;
 
 export type IAMGrantRoleVariables = DocumentVariables<typeof IamGrantRole>;
-
-export const IamPasswordEligibility = graphql(`
-  query IamPasswordEligibility($id: String!) {
-    users_by_pk(id: $id) { id can_issue_password }
-  }
-`);

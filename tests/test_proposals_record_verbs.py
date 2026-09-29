@@ -19,11 +19,13 @@ class RoundRecordTests(CampaignIdentities, ClarificationCase):
         path = Path(__file__).resolve().parents[1] / "addons/angee/proposals/web/src/documents.ts"
         document = parse("\n".join(re.findall(r"graphql\(`(.*?)`\)", path.read_text(), flags=re.S)))
         self.assertEqual(validate(schema._schema, document), [])
-        result = self.execute("""query($project: ID!) {
-          active_proposal_round(project: $project) { id can_open can_admit roster { user name track_status } }
+        result = self.execute("""query($project: String!) {
+          projects_by_pk(id: $project) {
+            active_proposal_round { id can_open can_admit roster { user name track_status } }
+          }
         }""", {"project": self.project.sqid}, self.manager)
         self.assertIsNone(result.errors, result.errors)
-        self.assertEqual(result.data["active_proposal_round"]["id"], self.round.sqid)
+        self.assertEqual(result.data["projects_by_pk"]["active_proposal_round"]["id"], self.round.sqid)
 
 
 def test_round_record_verbs(tmp_path: Path) -> None:

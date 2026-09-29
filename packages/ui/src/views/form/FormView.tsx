@@ -9,7 +9,7 @@ import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
-import { LoadingPanel } from "../../fragments/LoadingPanel";
+import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import {
   RecordChrome,
   RecordChromeProvider,
@@ -204,6 +204,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     saveError,
     staleRevision,
     declaredActions,
+    actionsBlocked,
     recordChromeContext,
     recordActions,
     recordPanelContext,
@@ -245,7 +246,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
       : toolbarStart;
   const awaitingRecord = !isCreate && displayRecord == null && loading;
   const overview = awaitingRecord ? (
-    <LoadingPanel message={t("form.loading")} />
+    <SkeletonStatus label={t("form.loading")} className="grid gap-4 py-5">
+      <Skeleton shape="text" className="h-6 w-2/3" />
+      <Skeleton className="h-32 w-full" />
+    </SkeletonStatus>
   ) : (
     <FormViewOverview
       surface={surface} layout={layout} groupLayout={groupLayout} bodyTabs={bodyTabs}
@@ -279,6 +283,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     ? t("form.loading")
     : typeof title === "function" ? title(recordToolbarContext) : title;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
+  const recordHeader = (compact = false) => {
+    const header = <FormViewRecordHeader surface={surface} compact={compact} title={formTitle} extra={headerExtra} />;
+    return recordChromeContext ? <RecordChromeProvider value={recordChromeContext}>{header}</RecordChromeProvider> : header;
+  };
 
   const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
     if (
@@ -343,7 +351,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
                 </RecordChromeProvider>
               ) : undefined
             }
-            blocked={formIsDirty || pending}
+            blocked={actionsBlocked}
           />
         ) : null}
         {!readOnly && recordChromeContext ? (
@@ -380,7 +388,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             : "pb-12",
         )}
       >
-        <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} />
+        {recordHeader()}
         {saveErrorBanner}
         {tabbed ? (
           <>
@@ -425,7 +433,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 py-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
+            {recordHeader(true)}
             {saveErrorBanner}
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
@@ -456,7 +464,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
+            {recordHeader(true)}
             {saveErrorBanner}
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (

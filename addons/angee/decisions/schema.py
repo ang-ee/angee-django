@@ -7,16 +7,19 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from rebac import current_actor
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.identity import public_data_id_field
 from angee.base.mixins import StaleRevisionError
+from angee.base.refs import canonical_record_model
 from angee.decisions.exceptions import RetryableDecisionError
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import hasura_model_resource, public_pk_decoder
+from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
@@ -90,31 +93,44 @@ _GROUPS = hasura_model_resource(
     DecisionGroupType, model=DecisionGroup, name="decision_groups", filterable=["id", "settled_at"],
     sortable=["id", "settled_at"], aggregatable=["id"], insert=False, update=False, delete=False,
 )
+
+
+def _subject_content_type(value: Any) -> int:
+    """Resolve a declared subject model to the same canonical type as admission."""
+    try:
+        model = canonical_record_model(apps.get_model(str(value)))
+    except (LookupError, ValueError):
+        return -1
+    return ContentType.objects.get_for_model(model).pk
+
+
+def _subject_object_id(value: Any) -> int:
+    """Let each public-id field decode its own prefixed subject identity."""
+    public_id = str(value)
+    for model in apps.get_models():
+        field = public_data_id_field(model)
+        if field is not None and field.prefix and public_id.startswith(field.prefix):
+            return field.public_id_to_value(public_id) or -1
+    return -1
+
+
 _DECISIONS = hasura_model_resource(
     HumanDecisionType, model=Decision, name="decisions",
-    filterable=["id", "group", "kind", "verdict", "closed_reason", "expires_at", "assignees", "requester"],
+    filterable=["id", "group", "kind", "verdict", "closed_reason", "expires_at", "assignees", "requester",
+                "subject_content_type", "subject_object_id",
+                *declared_hasura_resource_fields(Decision, "hasura_filterable_fields")],
     sortable=["id", "index", "created_at", "expires_at"], aggregatable=["id"],
     groupable=["kind", "verdict", "closed_reason"], insert=False, update=False, delete=False,
-    field_id_decode={"assignees": public_pk_decoder(Decision._meta.get_field("assignees").related_model)},
+    field_id_decode={
+        "assignees": public_pk_decoder(Decision._meta.get_field("assignees").related_model),
+        "subject_content_type": _subject_content_type,
+        "subject_object_id": _subject_object_id,
+    },
 )
 _EVIDENCE = hasura_model_resource(
     DecisionEvidenceType, model=DecisionEvidence, name="decision_evidence", filterable=["id", "decision"],
     sortable=["id"], aggregatable=["id"], insert=False, update=False, delete=False,
 )
-
-
-@strawberry.type
-class HumanDecisionQuery:
-    """Read a subject's decision identities through both owners' read scopes."""
-
-    @strawberry_django.field
-    def subject_decisions(
-        self, info: strawberry.Info, model_label: str, record_id: PublicID,
-    ) -> list[HumanDecisionType]:
-        """Return the record's seats; resource views own their further presentation."""
-        model = apps.get_model(model_label)
-        subject = authorized_permission_target(info, model, record_id, "read")
-        return Decision.objects.for_subject(subject).order_by("-created_at", "-pk")
 
 
 @strawberry.type
@@ -150,7 +166,7 @@ class HumanDecisionMutation:
 
 schemas = {
     "console": {
-        "query": [HumanDecisionQuery, _GROUPS.query, _DECISIONS.query, _EVIDENCE.query],
+        "query": [_GROUPS.query, _DECISIONS.query, _EVIDENCE.query],
         "mutation": [HumanDecisionMutation],
         "subscription": [changes(Decision, field="humanDecisionChanged")],
         "types": [

@@ -1,9 +1,15 @@
 import { decisionRecordTab } from "@angee/decisions";
 import { defineBaseAddon } from "@angee/app";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
+import { useAuthoredQuery } from "@angee/refine";
 import {
+  ErrorBanner,
   Glyph,
+  Group,
+  Skeleton,
+  SkeletonStatus,
   Tab,
+  formViewRecordActionsSlot,
   formViewSectionsSlot,
   useRecordChromeContext,
 } from "@angee/ui";
@@ -12,6 +18,8 @@ import type { ReactElement } from "react";
 
 import { enIntakeMessages, useIntakeT } from "./i18n";
 import { TaskAccessDecisions } from "./TaskAccessDecisions";
+import { TaskAccessActions } from "./TaskAccessActions";
+import { TaskAccessNeedsDocument } from "./documents";
 import { NEED_MODEL } from "./resources";
 import { RecordNeedsPane } from "./RecordNeedsPane";
 
@@ -25,7 +33,12 @@ const intake = defineBaseAddon({
     decisionRecordTab(NEED_MODEL),
     {
       ...formViewSectionsSlot(TASK_MODEL), id: "intake.task-access-decisions", sequence: 50,
-      content: <Tab id="access-decisions" label={<AccessLabel />}><TaskAccessDecisions /></Tab>,
+      content: <Group label={<AccessLabel />} savedOnly content={<TaskAccessGroup />} />,
+    },
+    {
+      ...formViewRecordActionsSlot(TASK_MODEL), id: "intake.task-access-actions", sequence: 50,
+      recordActionPlacement: "menu", requiredFields: ["permissions"],
+      content: <TaskAccessActions />,
     },
     {
       ...formViewSectionsSlot(PROJECT_MODEL),
@@ -76,6 +89,19 @@ function RecordNeedsSection({
 function NeedsLabel(): ReactElement {
   const t = useIntakeT();
   return <>{t("needs.label")}</>;
+}
+
+function TaskAccessGroup(): ReactElement {
+  const { recordId } = useRecordChromeContext();
+  const t = useIntakeT();
+  const query = useAuthoredQuery(TaskAccessNeedsDocument, { task: recordId }, {
+    models: [NEED_MODEL, "decisions.Decision"],
+  });
+  if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
+    <Skeleton className="h-16 w-full" />
+  </SkeletonStatus>;
+  if (query.error) return <ErrorBanner description={t("access.error")} />;
+  return <TaskAccessDecisions needs={query.data?.intake_needs ?? []} />;
 }
 
 export default intake;

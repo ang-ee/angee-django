@@ -66,6 +66,7 @@ export interface FormSectionModel {
 
 export interface FormViewFieldLayout {
   titleField: FieldDescriptor | undefined;
+  titlePlacementField: FieldDescriptor | undefined;
   statusField: FieldDescriptor | undefined;
   bodyField: FieldDescriptor | undefined;
   gridFields: readonly FieldDescriptor[];
@@ -76,11 +77,13 @@ export function formSections(
   fields: readonly FieldDescriptor[],
   groups: readonly GroupDescriptor[],
   sequences: readonly (number | undefined)[] = [],
+  isCreate = false,
 ): readonly FormSectionModel[] {
   if (groups.length === 0) return [{ key: "fields", fields }];
   const groupedNames = new Set<string>();
   const sections: FormSectionModel[] = groups.flatMap((group, index) => {
-    if (group.fields.length === 0) return [];
+    if (isCreate && group.savedOnly) return [];
+    if (group.fields.length === 0 && group.content === undefined) return [];
     for (const field of group.fields) groupedNames.add(field.name);
     return [
       {
@@ -90,6 +93,7 @@ export function formSections(
         collapsible: group.collapsible,
         defaultOpen: group.defaultOpen,
         fields: group.fields,
+        ...(group.content !== undefined ? { render: () => group.content } : {}),
         sequence: sequences[index],
         order: index,
       },
@@ -106,19 +110,22 @@ export function formViewFieldLayout(
   resolvedFields: readonly FieldDescriptor[],
   resolvedGroups: readonly GroupDescriptor[],
   metadata: ModelMetadata | null,
+  isCreate = false,
 ): FormViewFieldLayout {
   const titleField = titleFieldFor(formFields, metadata);
+  const titlePlacementField = isCreate ? undefined : formFields.find((field) => field.placement === "title");
   const statusField = formFields.find(
     (field) => fieldWidgetId(field) === "statusbar" && !field.showWhen,
   );
   const bodyField = bodyFieldFor(formFields, titleField, statusField);
   const excluded = new Set(
-    [titleField?.name, statusField?.name, bodyField?.name].filter(
+    [titleField?.name, titlePlacementField?.name, statusField?.name, bodyField?.name].filter(
       (name): name is string => name !== undefined,
     ),
   );
   return {
     titleField,
+    titlePlacementField,
     statusField,
     bodyField,
     gridFields: resolvedFields.filter((field) => !excluded.has(field.name)),

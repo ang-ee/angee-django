@@ -69,7 +69,7 @@ export function UsersPage(): React.ReactElement {
       resource={MODEL}
       placement="inline"
       routed
-      returning={["assignment_subject"]}
+      returning={["can_issue_password"]}
       recordTabs={[accessTab]}
     >
       {userList}

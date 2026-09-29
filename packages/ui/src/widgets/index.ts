@@ -35,6 +35,7 @@ export {
 export type {
   FieldPresentation,
   VisibilityBinding,
+  VisibilityAction,
   WidgetDefinition,
   WidgetControlProps,
   WidgetField,
@@ -42,7 +43,7 @@ export type {
   WidgetRenderProps,
   WidgetFocusTarget,
 } from "./types";
-export { canonicalOptionValue, optionToken, relationValueId } from "./types";
+export { canonicalOptionValue, optionLabel, optionToken, relationValueId } from "./types";
 export { VisibilityControl } from "./visibility";
 export type { VisibilityControlProps } from "./visibility";
 export { JsonValueSchema } from "./json-value";

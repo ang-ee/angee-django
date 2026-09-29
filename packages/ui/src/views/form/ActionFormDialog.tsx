@@ -11,9 +11,11 @@ import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
 import { relationIdList, relationValueId } from "../../widgets/types";
 import { FieldDescriptorControl } from "./field-descriptor-control";
+import { formSpecInitialValues, normalizeFormSpecValues } from "./form-spec";
 import {
   emptyDialogValue,
   emptyValueForField,
+  LabeledDescriptorField,
   mutationDialogValueCodecs,
 } from "./MutationDialog";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
@@ -59,7 +61,8 @@ export function ActionFormDialog({
   const t = useUiT();
   const args = action.args ?? EMPTY_ARGS;
   const argNames = React.useMemo(
-    () => new Set(args.map((arg) => arg.name)),
+    () => new Set(args.flatMap((arg) => arg.argKind === "formSpec"
+      ? arg.fields.map((field) => field.name) : [arg.name])),
     [args],
   );
   const actionForm = useActionForm<ArgValues>({
@@ -118,7 +121,12 @@ export function ActionFormDialog({
       footer={footer}
       onSubmit={(event) => void submit(event)}
     >
-      {args.map((arg) => (
+      {args.flatMap((arg) => arg.argKind === "formSpec" ? arg.fields.map((field) => (
+        <Controller key={`${arg.name}:${field.name}`} control={form.control} name={field.name}
+          render={({ field: binding }) => <LabeledDescriptorField field={field} value={binding.value}
+            messages={serverErrors[field.name] ?? []} readOnly={submitting || field.readOnly}
+            onChange={(next) => { clearServerError(field.name); binding.onChange(next); }} />} />
+      )) : [(
         <Controller
           key={arg.name}
           control={form.control}
@@ -136,7 +144,7 @@ export function ActionFormDialog({
             />
           )}
         />
-      ))}
+      )])}
       <ErrorBanner description={formError} />
     </DialogForm>
   );
@@ -160,9 +168,9 @@ function ActionSubmitButton({
 }): React.ReactElement {
   const values = useWatch({ control }) as ArgValues;
   const preview = useRuntimeViewAs();
-  const ready = args.every(
-    (arg) => arg.optional || !emptyDialogValue(values[arg.name]),
-  );
+  const ready = args.every((arg) => arg.argKind === "formSpec"
+    ? arg.fields.every((field) => !field.required || !emptyDialogValue(values[field.name]))
+    : arg.optional || !emptyDialogValue(values[arg.name]));
   return (
     <Button
       type="submit"
@@ -243,6 +251,7 @@ function ActionArgControl({
       />
     );
   }
+  if (arg.argKind === "formSpec") throw new Error("FormSpec arguments render their fields directly.");
   return (
     <FieldDescriptorControl
       field={arg}
@@ -343,7 +352,11 @@ export function serializeActionArgValues(
 ): ArgValues {
   const serialized = { ...values };
   for (const arg of args) {
-    if (arg.argKind === "relationList") {
+    if (arg.argKind === "formSpec") {
+      const packed = normalizeFormSpecValues(arg.fields, values);
+      for (const field of arg.fields) delete serialized[field.name];
+      serialized[arg.name] = packed;
+    } else if (arg.argKind === "relationList") {
       serialized[arg.name] = relationIdList(values[arg.name]);
     } else if (
       (arg.argKind === undefined || arg.argKind === "scalar") &&
@@ -362,7 +375,9 @@ function argDefaultValues(
 ): ArgValues {
   const values: ArgValues = {};
   for (const arg of args) {
-    if (arg.argKind === "relationList") {
+    if (arg.argKind === "formSpec") {
+      Object.assign(values, formSpecInitialValues(arg.fields, {}));
+    } else if (arg.argKind === "relationList") {
       const prefill = arg.fromContext ?? defaultRelationListPrefill;
       values[arg.name] = [...prefill(context)];
     } else if (arg.argKind === "relation") {

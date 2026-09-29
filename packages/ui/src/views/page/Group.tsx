@@ -9,6 +9,9 @@ export interface GroupProps {
   columns?: number;
   collapsible?: boolean;
   defaultOpen?: boolean;
+  /** Saved-record content following this group's declared fields. */
+  content?: ReactNode;
+  savedOnly?: boolean;
   children?: ReactNode;
 }
 
@@ -19,6 +22,8 @@ export interface GroupDescriptor {
   defaultOpen?: boolean;
   fields: readonly FieldDescriptor[];
   actions: readonly ActionDescriptor[];
+  content?: ReactNode;
+  savedOnly?: boolean;
 }
 
 function GroupMarker(_props: GroupProps): null {

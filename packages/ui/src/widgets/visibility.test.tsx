@@ -21,19 +21,19 @@ test("offers returned choices and leaves the acknowledged label unchanged on fai
   const onSelect = vi.fn(async () => ({ ok: false, message: "Permission changed" }));
   render(<Provider><ToastProvider><VisibilityControl value="TEAM" options={options}
     allowedValues={["private", "public"]} onSelect={onSelect} /></ToastProvider></Provider>);
-  fireEvent.click(screen.getByRole("button", { name: "Audience" }));
-  expect(screen.queryByRole("menuitem", { name: "Team" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Visibility" }));
+  expect((screen.getByRole("menuitem", { name: /Team/ }) as HTMLElement).getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(await screen.findByRole("menuitem", { name: "Private" }));
   await waitFor(() => expect(onSelect).toHaveBeenCalledExactlyOnceWith("private"));
-  expect(screen.getByRole("button", { name: "Audience" }).textContent).toContain("Team");
+  expect(screen.getByRole("button", { name: "Visibility" }).textContent).toContain("Team");
 });
 
-test("a widening ladder shows lower steps locked even if they are returned", async () => {
+test("the server's allowed values alone determine which options are enabled", async () => {
   const onSelect = vi.fn();
-  render(<Provider><ToastProvider><VisibilityControl value="team" options={options} monotone
-    allowedValues={["private", "team", "public"]} onSelect={onSelect} /></ToastProvider></Provider>);
-  fireEvent.click(screen.getByRole("button", { name: "Audience" }));
-  const lower = await screen.findByRole("menuitem", { name: "Private" });
+  render(<Provider><ToastProvider><VisibilityControl value="team" options={options}
+    allowedValues={["team", "public"]} onSelect={onSelect} /></ToastProvider></Provider>);
+  fireEvent.click(screen.getByRole("button", { name: "Visibility" }));
+  const lower = await screen.findByRole("menuitem", { name: /Private/ });
   expect(lower.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(lower);
   fireEvent.keyDown(lower, { key: "Enter" });
@@ -49,16 +49,16 @@ test("view-as previews cannot invoke audience verbs", () => {
       viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
   } }}><VisibilityControl value="private" options={options} allowedValues={["team"]} onSelect={onSelect} />
   </AppRuntimeProvider></ToastProvider></Provider>);
-  expect((screen.getByRole("button", { name: "Change audience to Team" }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Change audience to Team" }));
+  expect((screen.getByRole("button", { name: "Visibility" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Visibility" }));
   expect(onSelect).not.toHaveBeenCalled();
 });
 
 test("one permitted destination runs directly from the label", async () => {
   const onSelect = vi.fn(async () => ({ ok: true, message: "Audience changed" }));
-  render(<Provider><ToastProvider><VisibilityControl value="team" options={options}
+  render(<Provider><ToastProvider><VisibilityControl value="team" options={options.slice(0, 2)}
     allowedValues={["private", "team"]} onSelect={onSelect} /></ToastProvider></Provider>);
-  fireEvent.click(screen.getByRole("button", { name: "Change audience to Private" }));
+  fireEvent.click(screen.getByRole("button", { name: "Change visibility to Private" }));
   await waitFor(() => expect(onSelect).toHaveBeenCalledExactlyOnceWith("private"));
   expect(screen.queryByRole("menu")).toBeNull();
 });

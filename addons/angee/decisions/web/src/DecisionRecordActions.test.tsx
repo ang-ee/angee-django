@@ -14,12 +14,9 @@ const mocks = vi.hoisted(() => ({ decide: vi.fn(), record: {
     action: { type: "string", const: "approve" }, reason: { type: "string" },
   } }] },
 } }));
-vi.mock("@angee/refine", async (original) => ({ ...await original<object>(),
-  useAuthoredQuery: () => ({ data: { decisions_by_pk: mocks.record }, fetching: false }),
-}));
 vi.mock("@angee/ui", async (original) => ({ ...await original<object>(),
-  useRecordChromeContext: () => ({ recordId: "decision-1", dataProviderName: "console" }),
-  useActionOutcomeMutation: () => [mocks.decide, {}],
+  useRecordChromeContext: () => ({ recordId: "decision-1", dataProviderName: "console", record: mocks.record }),
+  useRecordChromeActionOutcome: () => [mocks.decide, {}],
   useActionResultRun: () => (fire: () => Promise<unknown>) => fire(),
 }));
 const { Provider, clearClients } = createUiTestProviders();
@@ -37,7 +34,8 @@ test("the frozen action is absent without act permission", () => {
 test("server field errors retain the dialog and its opening revision", async () => {
   mocks.decide.mockResolvedValue({ ok: false, message: "Review the form", validationErrors: { reason: ["Add evidence"] } });
   const { rerender } = render(view);
-  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Approve" }));
   const input = await screen.findByRole("textbox");
   fireEvent.change(input, { target: { value: "Reviewed" } });
   mocks.record.revision = 8;

@@ -1,18 +1,25 @@
-import { useAuthoredQuery } from "@angee/refine";
+import type { ResourceFilter } from "@angee/metadata";
 import {
-  Column, ErrorBanner, Field, Form, List, LoadingPanel, ResourceList, Tab,
+  Column, Field, Form, List, ListView, ResourceList, Tab,
   formViewSectionsSlot, useRecordChromeContext,
 } from "@angee/ui";
 import type { ReactElement } from "react";
 
-import { SubjectDecisionsDocument } from "./documents";
 import { useDecisionsT } from "./i18n";
 import { DECISION_MODEL } from "./resources";
 
-/** Standard collection/detail presentation for a server-scoped set of seats. */
-export function DecisionsList({ ids, routed = false }: { ids?: readonly string[]; routed?: boolean }): ReactElement {
+/** One prop-driven decision pane for a resource or a filtered subject. */
+export function DecisionsList({ baseFilter, routed = false }: { baseFilter?: ResourceFilter<string>; routed?: boolean }): ReactElement {
+  const t = useDecisionsT();
+  if (!routed) return <ListView resource={DECISION_MODEL} presentation="embedded" scope="local"
+    fields={["id", "kind", "verdict", "resolved_at"]} baseFilter={baseFilter}
+    order={{ created_at: "DESC" }} columns={[
+      { field: "kind", header: t("decisions.kind") },
+      { field: "verdict", header: t("decisions.verdict"), widget: "statusBadge" },
+      { field: "resolved_at", header: t("decisions.resolved") },
+    ]} />;
   return <ResourceList resource={DECISION_MODEL} presentation={routed ? "page" : "embedded"} placement="inline" hideCreate routed={routed}
-    {...(ids ? { baseFilter: { id: { in: [...ids] } } } : {})}>
+    baseFilter={baseFilter}>
     <List resource={DECISION_MODEL} order={{ created_at: "DESC" }}>
       <Column field="kind" /><Column field="verdict" widget="statusBadge" /><Column field="resolved_at" />
     </List>
@@ -25,14 +32,9 @@ export function DecisionsList({ ids, routed = false }: { ids?: readonly string[]
 }
 
 export function RecordDecisions(): ReactElement {
-  const t = useDecisionsT();
-  const { resource, recordId, dataProviderName } = useRecordChromeContext();
-  const query = useAuthoredQuery(SubjectDecisionsDocument, { model: resource, id: recordId }, {
-    dataProviderName, models: [DECISION_MODEL, resource],
-  });
-  if (query.error) return <ErrorBanner title={t("decisions.error")} description={query.error.message} />;
-  if (!query.data) return <LoadingPanel />;
-  return <DecisionsList ids={query.data.subject_decisions.map((decision) => decision.id)} />;
+  const { resource, recordId } = useRecordChromeContext();
+  return <DecisionsList baseFilter={{ subject_content_type: { exact: resource },
+    subject_object_id: { exact: recordId } }} />;
 }
 
 function DecisionsLabel(): ReactElement {

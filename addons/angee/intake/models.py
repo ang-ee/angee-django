@@ -851,6 +851,7 @@ class DecisionIntake(models.Model):
     """Bind intake seats to their request for live, declared sharer authority."""
 
     extends = "decisions.Decision"
+    hasura_filterable_fields = ("intake_need__task",)
     intake_need = models.ForeignKey(
         "intake.Need", null=True, blank=True, editable=False,
         on_delete=models.SET_NULL, related_name="access_decisions",

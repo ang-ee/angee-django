@@ -20,13 +20,13 @@ import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
 import { optionLabel, relationValueId } from "../../widgets/types";
 import { useStatusTone } from "../../widgets/use-status-tone";
+import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { RelationOption } from "../../widgets/RelationField";
 import {
   EditableLines,
   type EditableLineSupplementalColumn,
   type EditableLinesProps,
 } from "./EditableLines";
-import { FieldDescriptorControl } from "./field-descriptor-control";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import type { FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
@@ -91,6 +91,7 @@ export function FormViewRecordHeader({
     t,
     form,
     titleField,
+    titlePlacementField,
     titleFieldMessages,
     displayRecord,
     modelMetadata,
@@ -197,7 +198,9 @@ export function FormViewRecordHeader({
           ) : null}
           {!compact ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
         </div>
-        {currentTitleField?.labelAccessory && displayRecord ? currentTitleField.labelAccessory(displayRecord, { disabled: surface.formReadOnly || surface.formIsDirty || surface.pending || surface.isCreate }) : null}
+        {titlePlacementField && displayRecord ? <FieldDescriptorControl
+          field={titlePlacementField} value={displayRecord[titlePlacementField.name]}
+          row={displayRecord} readOnly={surface.formReadOnly} /> : null}
         {currentStatusField && compact ? (
           <Controller
             control={form.control}

@@ -65,7 +65,7 @@ export function RecordActionBar({
   const actionsTriggerRef = React.useRef<HTMLElement>(null);
   // The open typed-args action form (F-a), or null. Set after any confirm passes;
   // the dialog owns collecting the args and firing the action's `submit`.
-  const [formAction, setFormAction] = React.useState<ActionDescriptor | null>(
+  const [formAction, setFormAction] = React.useState<{ action: ActionDescriptor; record: Row | null } | null>(
     null,
   );
   const actionMutation = useMutation<
@@ -131,7 +131,7 @@ export function RecordActionBar({
       // A typed-args action collects its args (and merges the record/selection
       // context) in the dialog, which fires `submit` — not the string-only prompt.
       if (action.args && action.submit) {
-        setFormAction(action);
+        setFormAction({ action, record: record ? { ...record } : null });
         return;
       }
       let values: Record<string, string> = {};
@@ -244,10 +244,10 @@ export function RecordActionBar({
       </>}
       {formAction ? (
         <ActionFormDialog
-          key={formAction.id}
-          action={formAction}
+          key={formAction.action.id}
+          action={formAction.action}
           context={{
-            record,
+            record: formAction.record,
             selectedIds: recordId !== null ? [recordId] : [],
           }}
           open

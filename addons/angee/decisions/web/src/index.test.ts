@@ -4,7 +4,7 @@ import decisions, { DECISION_MODEL, decisionRecordTab } from "./index";
 
 test("decisions own their route and record verbs", () => {
   expect(() => expectValidBaseAddon(decisions)).not.toThrow();
-  expect(decisions.routes?.map(({ name }) => name)).toEqual(["decisions.inbox", "decisions.inbox.record"]);
+  expect(decisions.routes?.map(({ name }) => name)).toEqual(["decisions.decisions", "decisions.decisions.record"]);
   expect(decisions.slots).toEqual([expect.objectContaining({ model: DECISION_MODEL, slot: "form-view.record-actions" })]);
 });
 

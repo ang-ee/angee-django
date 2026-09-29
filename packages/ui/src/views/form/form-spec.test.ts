@@ -4,6 +4,7 @@ import { defaultWidgets } from "../../widgets";
 import { FORM_SPEC_ANNOTATIONS } from "./form-spec-schema";
 import {
   deserializeFormSpec,
+  formSpecBranches,
   formSpecInitialValues,
   normalizeFormSpecValues,
 } from "./form-spec";
@@ -13,6 +14,20 @@ test("FormSpec registers only its presentation annotations with JSON Schema vali
     "propertyOrder", "widget", "label", "addLabel", "removeLabel", "placeholder",
     "hidden", "layout", "omittable", "presenceRequired", "defaultValue", "options", "relation",
   ]);
+});
+
+test("FormSpec resolves each discriminator branch and rejects duplicate branches", () => {
+  const schema = { type: "object", properties: {
+    action: { type: "string", options: [{ value: "approve", label: "Approve" }] },
+  }, oneOf: [{ type: "object", properties: {
+    action: { type: "string", const: "approve" },
+    reason: { type: "string", label: "Reason" },
+  } }] };
+  expect(formSpecBranches(schema, defaultWidgets).map((branch) => ({
+    value: branch.value, label: branch.label, fields: branch.fields.map((field) => field.name),
+  }))).toEqual([{ value: "approve", label: "Approve", fields: ["reason"] }]);
+  expect(() => formSpecBranches({ ...schema, oneOf: [...schema.oneOf, schema.oneOf[0]] }, defaultWidgets))
+    .toThrow(/Missing action form branches/);
 });
 
 describe("deserializeFormSpec", () => {

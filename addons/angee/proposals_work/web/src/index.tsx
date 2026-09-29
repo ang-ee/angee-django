@@ -1,4 +1,5 @@
 import { defineBaseAddon } from "@angee/app";
+import { holdsPermission } from "@angee/metadata";
 import { Field, Group, formViewSectionsSlot } from "@angee/ui";
 
 import { enProposalsWorkMessages, useProposalsWorkT } from "./i18n";
@@ -23,7 +24,7 @@ export default defineBaseAddon({
           label={enProposalsWorkMessages["round.queue"]}
           resolve={(values) => ({
             name: "clarification_queue",
-            readOnly: !Array.isArray(values.permissions) || !values.permissions.includes("write"),
+            readOnly: !holdsPermission(values, "write"),
           })}
         />
       </Group>

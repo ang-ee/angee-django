@@ -350,12 +350,20 @@ class ProjectProposalsExtension:
 
     source_proposal: ProposalType | None = actor_scoped_to_one("source_proposal")
 
+    @strawberry_django.field
+    def active_proposal_round(self) -> ProposalRoundType | None:
+        return Round.objects.active_for_project(self)
+
 
 @strawberry_django.type(Project, name="ConsoleProjectType", extend=True)
 class ConsoleProjectProposalsExtension:
     """Contribute the track relation to the console project node."""
 
     source_proposal: ConsoleProposalType | None = actor_scoped_to_one("source_proposal")
+
+    @strawberry_django.field
+    def active_proposal_round(self) -> ProposalRoundType | None:
+        return Round.objects.active_for_project(self)
 
 
 @strawberry_django.type(Answer)
@@ -969,23 +977,11 @@ _COMMON_RESOURCE_TYPES = [
 ]
 
 
-@strawberry.type
-class ProposalRecordQuery:
-    """Record projections keep round selection at the proposals owner."""
-
-    @strawberry_django.field
-    def active_proposal_round(self, info: strawberry.Info, project: PublicID) -> ProposalRoundType | None:
-        """Return the readable active round for a readable project."""
-        target = authorized_permission_target(info, Project, project, "read")
-        return Round.objects.active_for_project(target)
-
-
 def _proposals_schema_bucket(proposal_resource: Any, proposal_type: type) -> dict[str, Any]:
     """Return the shared proposal surface with its schema-specific Proposal node."""
 
     return {
         "query": [
-            ProposalRecordQuery,
             _ROUND_RESOURCE.query,
             _TOPIC_RESOURCE.query,
             proposal_resource.query,

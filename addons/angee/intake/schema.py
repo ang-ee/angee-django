@@ -16,6 +16,7 @@ from angee.base.mixins import StaleRevisionError
 from angee.decisions.exceptions import RetryableDecisionError
 from angee.decisions.schema import DecisionVerdict, HumanDecisionType
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
@@ -57,6 +58,7 @@ class NeedType(AngeeNode):
     importance: auto
     body: auto
     revision: auto
+    permissions = permissions_field(("write",))
     claimed_name: auto
     claimed_email: str | None
     access_decision: HumanDecisionType | None = actor_scoped_to_one("access_decision")

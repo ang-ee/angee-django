@@ -17,7 +17,7 @@ import {
 import * as React from "react";
 
 import { useProposalsT } from "../i18n";
-import { AnswerVisibility } from "../answer-visibility";
+import { ANSWER_VISIBILITY } from "../documents";
 import { useAnswerActions } from "../answer-actions";
 import { useProposalFormDeclaration, writeEnumOptions } from "../proposal-form";
 import {
@@ -73,6 +73,7 @@ function ProposalAnswersPanel({ recordId }: RecordPanelContext): React.ReactElem
   const t = useProposalsT();
   const actions = useAnswerActions();
   const visibilityOptions = writeEnumOptions(useEnumOptions(ANSWER_MODEL, "visibility"));
+  const actionVisibilityOptions = useEnumOptions(ANSWER_MODEL, "visibility", { casing: "upper" });
   return (
     <DrawerResourceList
       resource={ANSWER_MODEL}
@@ -88,9 +89,11 @@ function ProposalAnswersPanel({ recordId }: RecordPanelContext): React.ReactElem
         <Field name="permissions" hidden readOnly />
         <Field name="revision" hidden readOnly />
         <Field name="proposal" readOnly />
-        <Field name="topic" title createOnly labelAccessory={(record, state) => <AnswerVisibility record={record} disabled={state.disabled} />} />
+        <Field name="topic" title createOnly />
         <Field name="allowed_visibility" hidden readOnly />
-        <Field name="visibility" createOnly options={visibilityOptions} />
+        <Field name="visibility" widget="visibility" placement="title" options={visibilityOptions}
+          visibilityAction={{ document: ANSWER_VISIBILITY, resultField: "set_proposal_answer_visibility",
+            idArgument: "answer", revisionArgument: "revision", options: actionVisibilityOptions }} />
         <Field name="shared_with_responders" readOnly />
         <Field name="body" widget="markdown.editor" body />
       </Form>

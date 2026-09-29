@@ -41,6 +41,7 @@ export {
 } from "./resource/collection-source";
 export {
   defineRowAction,
+  useDescriptorRowActions,
   rowIdVariables,
   type AuthoredRowActionDeclaration,
   type PageRowActionDeclaration,
@@ -77,10 +78,12 @@ export {
 export { RowsField, type RowsValue } from "./form/RowsField";
 export {
   deserializeFormSpec,
+  formSpecBranches,
   formSpecInitialValues,
   normalizeFormSpecValues,
   useFormSpecFields,
   type FormSpecFieldDescriptor,
+  type FormSpecBranch,
   type FormSpecFieldType,
   type FormSpecRelationCreate,
 } from "./form/form-spec";

@@ -6,6 +6,7 @@ import type { CrudFilter } from "@refinedev/core";
 import type { PromptOptions } from "../../feedback";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
 import type { FieldDescriptor } from "./Field";
+import type { FormSpecFieldDescriptor } from "../form/form-spec";
 import { PAGE_ELEMENT_SLOT } from "./types";
 
 export interface ActionConfirm {
@@ -119,9 +120,15 @@ export interface ActionRelationListArg extends ActionArgBase {
   fromContext?: (context: ActionFormContext) => readonly string[];
 }
 
+/** Frozen form fields submitted as one object argument by a branched action. */
+export interface ActionFormSpecArg extends ActionArgBase {
+  argKind: "formSpec";
+  fields: readonly FormSpecFieldDescriptor[];
+}
+
 /** One typed argument collected by an action form — scalar, relation, or relation list. */
 export type ActionArg =
-  ActionScalarArg | ActionRelationArg | ActionRelationListArg;
+  ActionScalarArg | ActionRelationArg | ActionRelationListArg | ActionFormSpecArg;
 
 interface ActionBinding {
   /**

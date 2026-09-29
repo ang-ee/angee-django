@@ -1,9 +1,7 @@
 # Intake access decisions
 
-The decisions web addon supplies frozen access actions on Need decision records.
-Intake composes its generic subject tab on Need and an Access tab on the Task
-owning each Need. Access references retain their existing server read gate.
-
-Revisit is available for a current declined access seat. It rechecks decision
-act, Need write and target share, then admits a successor under the Need lock.
-The prior verdict and resolution remain intact. Approved access is final.
+The Task record presents requester access through [Need's decision owner](models.py):
+Approve and Deny answer the current request, and Reset access composes the
+server's confirmed, revision-checked verb. The form group shows decisions for
+the Task's Needs. [Decisions](../decisions/README.md) owns frozen answers and
+the audit history; IAM owns passwords.

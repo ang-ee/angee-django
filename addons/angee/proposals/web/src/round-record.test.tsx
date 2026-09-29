@@ -2,20 +2,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ActionDescriptor } from "@angee/ui";
-import type { Row } from "@angee/metadata";
+import { holdsPermission, type Row } from "@angee/metadata";
 
 import { ProjectRoundRecord } from "./round-record";
-import { holdsPermission } from "./round-actions";
 
 const mocks = vi.hoisted(() => ({ mutate: vi.fn(), round: {
   id: "round-1", name: "Review", status: "COLLECTING", opening_policy: "ANSWERS",
   permissions: ["write"], can_open: true, can_admit: true, revision: 4, roster: [],
 } }));
-vi.mock("@angee/refine", async (original) => ({ ...await original<object>(),
-  useAuthoredQuery: () => ({ data: { active_proposal_round: mocks.round }, fetching: false }),
-}));
 vi.mock("@angee/ui", async (original) => ({ ...await original<object>(),
-  useRecordChromeContext: () => ({ recordId: "project-1", dataProviderName: "console" }),
+  useRecordChromeContext: () => ({ recordId: "project-1", dataProviderName: "console", record: { active_proposal_round: mocks.round } }),
   useAuthoredResourceMutation: () => [mocks.mutate, {}],
   useActionResultRun: () => (fire: () => Promise<unknown>) => fire(),
   RecordActionBar: ({ record, actions }: { record: Row; actions: readonly ActionDescriptor[] }) => <>

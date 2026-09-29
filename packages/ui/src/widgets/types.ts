@@ -1,15 +1,23 @@
 import type { ComponentType, ReactNode } from "react";
 
-import type { ActionOutcome } from "@angee/refine";
+import type { ActionOutcome, AuthoredDocument } from "@angee/refine";
 import type { Tone } from "../lib/tones";
 
 /** A verb binding; allowed values are returned by the record's authorization owner. */
 export interface VisibilityBinding {
   allowedValues: readonly string[];
   onSelect: (value: string) => Promise<ActionOutcome | null | undefined>;
-  /** Options are ordered narrow to wide; earlier steps remain visible but locked. */
-  monotone?: boolean;
   disabled?: boolean;
+}
+
+/** A field's server visibility verb, with argument names declared by its addon. */
+export interface VisibilityAction {
+  document: AuthoredDocument;
+  resultField: string;
+  idArgument: string;
+  revisionArgument?: string;
+  /** Verb enum values may differ from create-input values. */
+  options?: readonly WidgetOption[];
 }
 
 export interface WidgetOption {
@@ -99,8 +107,7 @@ export function optionTextLabel(
 
 /** Presentation facts shared by page descriptors and rendered widget fields. */
 export interface FieldPresentation {
-  /** Inline audience widget binding to the record-owned visibility verb. */
-  visibility?: VisibilityBinding;
+  visibilityAction?: VisibilityAction;
   label?: ReactNode;
   options?: readonly WidgetOption[];
   placeholder?: string;

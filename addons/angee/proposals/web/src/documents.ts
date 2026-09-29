@@ -1,14 +1,5 @@
 import { graphql } from "@angee/gql/console";
 
-export const TASK_RESPONDER_AUDIENCE = graphql(`
-  query ProposalTaskResponderAudience($id: String!) {
-    project_tasks_by_pk(id: $id) {
-      id revision permissions shared_with_responders
-      project { source_proposal { id } }
-    }
-  }
-`);
-
 export const TASK_RESPONDER_SHARE = graphql(`
   mutation SetProposalTaskResponderShare($task: ID!, $revision: Int, $shared: Boolean!) {
     set_task_responder_share(task: $task, expected_revision: $revision, shared: $shared) {
@@ -110,24 +101,5 @@ export const ANSWER_SHARE = graphql(`
     set_proposal_answer_responder_share(answer: $answer, expected_revision: $revision, shared: $shared) {
       ok message id code validation_errors
     }
-  }
-`);
-
-export const ROUND_RECORD = graphql(`
-  fragment ProposalRoundRecord on ProposalRoundType {
-    id name status opening_policy permissions can_open can_admit revision
-    roster { user name track_status }
-  }
-`);
-
-export const RECORD_ROUND = graphql(`
-  query ProposalRecordRound($id: String!) {
-    proposal_rounds_by_pk(id: $id) { ...ProposalRoundRecord }
-  }
-`);
-
-export const PROJECT_ROUND = graphql(`
-  query ProjectActiveProposalRound($project: ID!) {
-    active_proposal_round(project: $project) { ...ProposalRoundRecord }
   }
 `);
