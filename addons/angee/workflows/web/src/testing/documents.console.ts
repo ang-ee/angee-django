@@ -17,6 +17,7 @@ const StepRunFields = graphql(`
     awaited_run { id }
     attempts { id number result started_at finished_at error stacktrace }
     artifacts { id label model_label record_id }
+    watches { id record_model_label record_public_id }
   }
 `);
 const WorkflowFields = graphql(`

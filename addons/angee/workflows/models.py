@@ -23,7 +23,13 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import Definition
 from angee.workflows.fields import RunOriginField
-from angee.workflows.managers import StepAttemptQuerySet, StepRunManager, WorkflowManager, WorkflowRunManager
+from angee.workflows.managers import (
+    StepAttemptQuerySet,
+    StepRunManager,
+    StepWatchManager,
+    WorkflowManager,
+    WorkflowRunManager,
+)
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunRelation, RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
@@ -181,6 +187,15 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     def can_cancel(self, actor: Any) -> bool:
         """A writer may cancel active execution or clean up a terminal run's open rows."""
         return self.with_actor(actor).has_access("write") and self._has_open_owned_work
+
+    def check_await(self, observer: Any, *, expects: str) -> None:
+        """Require an observed run to match the pinned contract without a self-wait."""
+        with system_context(reason="workflows.await_policy"):
+            expected = self.policy_version.workflow.key == expects
+        if not expected:
+            raise ValidationError("The awaited run belongs to a different workflow.")
+        if self.pk == observer.pk:
+            raise ValidationError("A run cannot await itself.")
 
     @property
     def _has_open_owned_work(self) -> bool:
@@ -438,6 +453,29 @@ class StepArtifact(RecordRefMixin, AngeeDataModel):
 
         abstract = True
         rebac_resource_type = "workflows/step_artifact"
+
+
+class StepWatch(RecordRefMixin, AngeeDataModel):
+    """One transactional observation and its durable, coalesced wake obligation."""
+
+    runtime = True
+    sqid_prefix = "wsw_"
+    step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="watches")
+    content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
+    object_id = models.PositiveBigIntegerField()
+    record = GenericForeignKey("content_type", "object_id")
+    pending = models.BooleanField(default=False, editable=False)
+    objects = StepWatchManager()
+
+    class Meta:
+        """Canonical record uniqueness and source capture lookup."""
+
+        abstract = True
+        rebac_resource_type = "workflows/step_watch"
+        constraints = [models.UniqueConstraint(
+            fields=("step_run", "content_type", "object_id"), name="workflows_watch_record_unique",
+        )]
+        indexes = [models.Index(fields=("content_type", "object_id"), name="workflows_watch_record")]
 
 
 class DecisionWorkflow(models.Model):

@@ -91,6 +91,7 @@ class WaitingKind(models.TextChoices):
     """Implemented durable wait kinds."""
 
     TIME = "time", "Time"
+    RECORD = "record", "Record"
     DECISION = "decision", "Decision"
     MAP = "map", "Map"
     RUN = "run", "Run"

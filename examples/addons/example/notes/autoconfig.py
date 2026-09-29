@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SETTINGS = {
+    "ANGEE_WORKFLOW_STEP_CLASSES.note_await_review": "example.notes.steps.AwaitNoteReview",
     "ANGEE_WORKFLOW_STEP_CLASSES.note_validate_publication": (
         "example.notes.steps.ValidateNotePublication"
     ),

@@ -19,6 +19,7 @@ from angee.base.actors import actor_user_id
 from angee.base.exceptions import exception_text
 from angee.base.impl import ImplBase
 from angee.base.models import AngeeManager, AngeeQuerySet
+from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
 
 logger = logging.getLogger(__name__)
@@ -29,9 +30,8 @@ TRIGGER_DRAIN_LIMIT = 100
 class TriggerSource(ImplBase):
     """An event's model and scope; domain policy belongs to Trigger extensions.
 
-    Signal adapters call ``TriggerEvent.objects.record_change(model, record,
-    source=cls.key)``. The model and scope contract is reusable by a future
-    watch owner; current receivers dispatch only to this admission ledger.
+    Signal adapters and explicit bulk writers call ``dispatch(model, record)``
+    inside their write transaction to feed admission and watches together.
     """
 
     model_label = ""
@@ -61,8 +61,41 @@ class TriggerSource(ImplBase):
         """Keep source eligibility identical at declaration, connection and capture."""
         if model._meta.app_label in {"workflows", "decisions"}:
             raise ValidationError("Workflow and decision models cannot be trigger sources.")
+        if cls.model_label and model._meta.label_lower != cls.model_label.lower():
+            raise ValidationError("This model does not belong to the fixed workflow source.")
         if not cls.model_label and not getattr(model, "workflow_trigger", False):
             raise ValidationError("This model has not opted in to workflow triggers.")
+
+    @classmethod
+    def check_watch_model(cls, model: Any) -> None:
+        """Require a registered native source capable of observing this model."""
+        field = apps.get_model("workflows", "Trigger")._meta.get_field("source")
+        for key in field.registered_keys():
+            try:
+                field.resolve_class(key).validate_model(model)
+            except ValidationError:
+                continue
+            return
+        raise ValidationError("This model has no registered workflow event source.")
+
+    @classmethod
+    def dispatch(cls, model: Any, record: Any) -> None:
+        """Capture once under the record lock, never taking a waiting run's lock.
+
+        Locking also covers autocommit saves whose UPDATE preceded post_save.
+        A savepoint contains capture failures without undoing the source write.
+        """
+        try:
+            with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
+                cls.validate_model(model)
+                target = canonical_record_target(record)
+                records = system_queryset(target.content_type.model_class()).filter(pk=target.object_id)
+                if lock_if_supported(records, no_key=True).first() is None:
+                    return
+                apps.get_model("workflows", "TriggerEvent").objects.record_change(model, record, source=cls.key)
+                apps.get_model("workflows", "StepWatch").objects.record_change(record)
+        except Exception:
+            logger.exception("Workflow source capture failed.")
 
     @classmethod
     def matching_triggers(cls, queryset: Any, record: Any) -> Any:
@@ -97,7 +130,7 @@ class RecordChanged(TriggerSource):
     def changed(cls, sender: Any, *, instance: Any, raw: bool = False, **kwargs: Any) -> None:
         """Ignore fixture loading and delegate all durable capture to its owner."""
         if not raw:
-            apps.get_model("workflows", "TriggerEvent").objects.record_change(sender, instance, source=cls.key)
+            cls.dispatch(sender, instance)
 
 
 class TriggerEventQuerySet(AngeeQuerySet):
@@ -114,18 +147,15 @@ class TriggerEventManager(AngeeManager.from_queryset(TriggerEventQuerySet)):  # 
     def record_change(self, model: Any, record: Any, *, source: str = "record_changed") -> None:
         """Upsert concrete reference columns, re-arming rejects; never raise.
 
-        Bulk writers call this explicitly inside their write transaction. The
-        savepoint contains capture failures, preserving their original write.
+        Sources call this through TriggerSource.dispatch so watches also observe
+        their event. The savepoint preserves writes when ledger capture fails.
         """
         try:
             with transaction.atomic(), system_context(reason="workflows.capture"):
                 triggers = apps.get_model("workflows", "Trigger")
                 implementation = triggers._meta.get_field("source").resolve_class(source)
                 queryset = system_queryset(triggers).filter(enabled=True, source=source)
-                if implementation.model_label:
-                    if model._meta.label_lower != implementation.model_label.lower():
-                        return
-                else:
+                if not implementation.model_label:
                     queryset = queryset.filter(model_label=model._meta.label_lower)
                 implementation.validate_model(model)
                 content_type = ContentType.objects.get_for_model(model)

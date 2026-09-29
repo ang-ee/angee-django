@@ -29,6 +29,14 @@ def cancel(run_id: int, actor: str) -> None:
         model.objects.cancel(run, actor=SubjectRef.parse(actor), timeout=None)
 
 
+@shared_task(name="workflows.wake_records")
+def wake_records(content_type_id: int, object_id: int) -> int:
+    """Wake changed-record waiters after the source transaction releases its locks."""
+    return apps.get_model("workflows", "StepRun").objects.wake_records(
+        content_type_id=content_type_id, object_id=object_id,
+    )
+
+
 @shared_task(name="workflows.tick")
 def tick() -> dict[str, int]:
     """Recover due rows on the shared worker, using the database clock."""

@@ -19,6 +19,7 @@ from example.notes.steps import NotePublicationOutput, PublishNote, ReviewNotePu
 
 Note = apps.get_model("notes", "Note")
 StepRun = apps.get_model("workflows", "StepRun")
+StepWatch = apps.get_model("workflows", "StepWatch")
 WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
@@ -69,6 +70,37 @@ class NoteWorkflowStepTests(TransactionTestCase):
         return Resource.objects.load_xref(
             "example.notes.note_review_trigger", model=Trigger, actor=self.admin, allow_non_dev=True,
         )
+
+    def test_watch_wait_resumes_after_note_save_and_rechecks_the_locked_predicate(self) -> None:
+        """The shipped watcher re-arms for irrelevant saves and completes on review."""
+        workflow = load_workflow("example.notes.note_await_review", actor=self.admin, allow_non_dev=True)
+        workflow.with_actor(self.admin).grant_record_access("starter", self.owner)
+        note = self.note(status=Note.Status.DRAFT)
+        run = start_run(workflow, actor=self.owner, subject=note)
+        run_until(run)
+        with system_context(reason="note record watch assertions"):
+            step = StepRun.objects.get(run=run)
+            self.assertEqual((step.status, step.waiting_kind), (StepRunStatus.WAITING, WaitingKind.RECORD))
+            self.assertIsNone(step.wake_at)
+            self.assertEqual(StepWatch.objects.get(step_run=step).record_ref.public_id, note.sqid)
+
+        note.title = "Ready for another look"
+        note.with_actor(self.owner).save()
+        self.assertEqual(StepRun.objects.wake_records(), 1)
+        run_until(run)
+        self.assertEqual(run.status, RunStatus.WAITING)
+        with system_context(reason="note re-armed watch assertions"):
+            self.assertEqual(StepWatch.objects.filter(step_run=step).count(), 1)
+
+        note.status = Note.Status.IN_REVIEW
+        note.with_actor(self.owner).save()
+        self.assertEqual(StepRun.objects.wake_records(), 1)
+        run_until(run)
+        self.assertEqual(run.status, RunStatus.SUCCEEDED)
+        self.assertEqual(run.output, {"id": note.sqid, "title": note.title, "status": "in_review"})
+        with system_context(reason="note completed watch assertions"):
+            self.assertFalse(StepWatch.objects.filter(step_run=step).exists())
+            self.assertEqual(step.attempts.count(), 3)
 
     def test_trigger_installs_disabled_and_writes_no_events_until_enabled(self) -> None:
         """Demo resources cannot establish an acting identity by themselves."""

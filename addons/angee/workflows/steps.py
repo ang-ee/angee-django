@@ -68,8 +68,8 @@ class Settlement:
     timed_out: bool = False
 
     def __post_init__(self) -> None:
-        if self.kind == "wait" and (self.until is None or timezone.is_naive(self.until)):
-            raise ValueError("A time wait requires an aware datetime.")
+        if self.kind == "wait" and self.until is not None and timezone.is_naive(self.until):
+            raise ValueError("A wait deadline requires an aware datetime.")
 
     def admit(self, ctx: Any) -> Settlement:
         """Prepare checked settlement resources inside the body's transaction."""
@@ -89,13 +89,19 @@ class Done(Settlement):
 
 @dataclass(frozen=True)
 class Wait(Settlement):
-    """A time wait preserving the step run's checkpoint and retry count."""
+    """A record or time wait preserving the checkpoint and retry count."""
 
     kind: Literal["wait"] = field(default="wait", init=False)
+    waiting_kind: Literal["time", "record"] = "time"
+
+    def admit(self, ctx: Any) -> Wait:
+        """Let the watch owner choose the wait kind after body validation."""
+        kind = apps.get_model("workflows", "StepWatch").objects.wait_kind(ctx.step_run, self.until)
+        return replace(self, waiting_kind=kind)
 
     def wait_parameters(self) -> dict[str, Any]:
-        """Use the shared time-wait transition with the body's checkpoint."""
-        return {"until": self.until, "state": self.state}
+        """Use the shared wake transition with the body's checkpoint."""
+        return {"kind": self.waiting_kind, "until": self.until, "state": self.state}
 
 
 @dataclass(frozen=True)
@@ -131,6 +137,7 @@ class Step[I, O, C](ImplBase):
 
     input_model: ClassVar[Any] = None
     output_model: ClassVar[Any] = None
+    _model_parameters: ClassVar[tuple[str, ...]] = ("input_model", "output_model", "config_model")
     outcomes: ClassVar[dict[Outcome, str]] = {DONE_OUTCOME: "Done"}
     empty_outcomes: ClassVar[frozenset[str]] = frozenset({ERROR_OUTCOME})
     """Outcomes whose persisted output is the empty object, independent of O."""
@@ -158,10 +165,9 @@ class Step[I, O, C](ImplBase):
             if isinstance(origin, type) and issubclass(origin, Step) and not any(
                 isinstance(arg, TypeVar) for arg in get_args(base)
             ):
-                input_model, output_model, config_model = get_args(base)[:3]
-                cls.input_model = None if input_model is type(None) else input_model
-                cls.output_model = None if output_model is type(None) else output_model
-                cls.config_model = None if config_model is type(None) else config_model
+                for name, model in zip(cls._model_parameters, get_args(base), strict=False):
+                    if name in Step._model_parameters or name not in cls.__dict__:
+                        setattr(cls, name, None if model is type(None) else model)
                 if cls.config_model is not None and not issubclass(cls.config_model, BaseModel):
                     raise TypeError("A step config must be a Pydantic model or None.")
 

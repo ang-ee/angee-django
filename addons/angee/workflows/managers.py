@@ -18,7 +18,7 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import F, Max, Q, Value
+from django.db.models import Exists, F, Max, OuterRef, Q, Subquery, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
 from django.utils import timezone
@@ -30,7 +30,7 @@ from angee.base.exceptions import exception_text
 from angee.base.identity import instance_from_public_id
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
-from angee.base.scoping import read_scoped_queryset, system_queryset
+from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.decisions.exceptions import RetryableDecisionError
 from angee.graphql.publishing import publish_change
@@ -49,6 +49,7 @@ from angee.workflows.states import (
     WaitingKind,
 )
 from angee.workflows.steps import Fail, Retryable, Settlement, Superseded, io_timeout_budget
+from angee.workflows.triggers import TriggerSource
 
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
@@ -587,6 +588,52 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         return count
 
 
+class StepWatchManager(AngeeManager):
+    """Own transactional observation, durable change capture and wait admission."""
+
+    def register(self, step_run: Any, records: tuple[Any, ...], *, actor: Any) -> None:
+        """Observe saves after ordered target locks; precondition reads must also lock.
+
+        Called inside a DATABASE body savepoint. Registration is immediately
+        visible to that body's later saves and rolls back with a failed body.
+        Callers needing an atomic predicate use ctx.load(..., lock=True) first.
+        """
+        targets = {}
+        for record in records:
+            TriggerSource.check_watch_model(type(record))
+            if record.pk is None:
+                raise PermissionDenied("Read access to a saved watched record is required.")
+            target = canonical_record_target(record)
+            targets[(target.content_type.pk, target.object_id)] = target
+        with type(step_run).objects._fenced(step_run):
+            for _, target in sorted(targets.items()):
+                rows = system_queryset(target.content_type.model_class()).filter(pk=target.object_id)
+                lock_if_supported(rows, no_key=True).get()
+            for record in records:
+                readable = read_scoped_queryset(type(record), actor)
+                if readable is None or not readable.filter(pk=record.pk).exists():
+                    raise PermissionDenied("Read access to a saved watched record is required.")
+            for target in targets.values():
+                self.get_or_create(step_run=step_run, content_type=target.content_type, object_id=target.object_id)
+
+    def wait_kind(self, step_run: Any, until: datetime | None) -> str:
+        """Admit a record wait, or require the time wait's explicit deadline."""
+        with system_context(reason="workflows.watch_wait"):
+            if self.filter(step_run=step_run).exists():
+                return str(WaitingKind.RECORD)
+        if until is None:
+            raise ValidationError("A wait requires a deadline or a watched record.")
+        return str(WaitingKind.TIME)
+
+    def record_change(self, record: Any) -> None:
+        """Mark committed observation obligations while shared dispatch holds the record lock."""
+        target = canonical_record_target(record)
+        with system_context(reason="workflows.watch_capture"):
+            if self.filter(content_type=target.content_type, object_id=target.object_id).update(pending=True):
+                payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
+                transaction.on_commit(lambda: enqueue_task("workflows.wake_records", kwargs=payload), robust=True)
+
+
 class StepRunQuerySet(AngeeQuerySet):
     """Own conditional step transitions and database-clock candidate scopes."""
 
@@ -594,6 +641,20 @@ class StepRunQuerySet(AngeeQuerySet):
         """Select a containing map's body rows, accepting native ORM expressions."""
         key = Value(node_key) if isinstance(node_key, str) else node_key
         return self.filter(run_id=run_id, node_key=Concat(key, Value(".body")))
+
+    def collect_map(self, expected_count: int) -> list[dict[str, Any]] | None:
+        """Collect ordered terminal evidence, or None while body rows remain unsettled."""
+        attempt_model = self.model._meta.get_field("attempts").related_model
+        attempts = attempt_model.objects.filter(step_run_id=OuterRef("pk"), number=OuterRef("attempt"))
+        rows = list(self.order_by("map_index").annotate(item_error=Subquery(attempts.values("error")[:1])))
+        if len(rows) != expected_count or any(row.status not in StepRunStatus.terminal_values() for row in rows):
+            return None
+        if any(row.status not in (StepRunStatus.SUCCEEDED, StepRunStatus.FAILED) for row in rows):
+            raise ValidationError("A canceled or skipped map body cannot produce a result.")
+        return [{
+            "index": row.map_index, "outcome": row.outcome,
+            **({"error": row.item_error or ""} if row.status == StepRunStatus.FAILED else {"output": row.output}),
+        } for row in rows]
 
     @staticmethod
     def _cleared_wait() -> dict[str, Any]:
@@ -706,6 +767,8 @@ class StepRunQuerySet(AngeeQuerySet):
                     changed = self.update(**values)
         if changed != 1:
             raise Superseded
+        if wait_parameters is None or wait_parameters.get("kind") != WaitingKind.RECORD:
+            step_run.watches.all().delete()
         if step_run.attempts.filter(number=step_run.attempt).close(
             attempt_result, settlement.error, settlement.stacktrace,
         ) != 1:
@@ -752,14 +815,24 @@ class StepRunQuerySet(AngeeQuerySet):
         ):
             reviews += decisions.cancel_group(group_id)
         attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
+        apps.get_model("workflows", "StepWatch").objects.filter(step_run__in=opened).delete()
         changed = opened.update(
             **self._cleared_wait(), status=StepRunStatus.CANCELED,
         )
         return changed, reviews
 
     def due(self) -> Any:
-        """Return time waits whose database deadline has arrived."""
-        return self.filter(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.TIME, wake_at__lte=Now())
+        """Return time or record waits whose optional database deadline has arrived."""
+        return self.filter(status=StepRunStatus.WAITING,
+                           waiting_kind__in=(WaitingKind.TIME, WaitingKind.RECORD), wake_at__lte=Now())
+
+    def changed_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> Any:
+        """Select each live waiter once, even when several watched records changed."""
+        watches = apps.get_model("workflows", "StepWatch")
+        pending = system_queryset(watches).filter(step_run_id=OuterRef("pk"), pending=True)
+        if content_type_id is not None:
+            pending = pending.filter(content_type_id=content_type_id, object_id=object_id)
+        return self.filter(Exists(pending), status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD)
 
     def settled_decisions(self) -> Any:
         """Select decision waiters whose retained group has durably settled."""
@@ -1021,7 +1094,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
     def tick(self) -> dict[str, int]:
         """Wake waits, reap expired claims and recover missing deliveries in bounded batches."""
         return {"woken": self.wake(), "reaped": self.reap(), "redispatched": self.redispatch(),
-                "decisions": self.wake_decisions(), "runs": self.wake_runs(),
+                "decisions": self.wake_decisions(), "runs": self.wake_runs(), "records": self.wake_records(),
                 "drained": apps.get_model("workflows", "Trigger").objects.drain(),
                 "pruned": self.run_model.objects.prune()}
 
@@ -1037,6 +1110,11 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
         candidates = self.settled_decisions()
         if group_id is not None:
             candidates = candidates.filter(decision_group_id=group_id)
+        return self._each_candidate(candidates, self._wake)
+
+    def wake_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> int:
+        """Share after-commit delivery and pending-watch tick recovery with every wake kind."""
+        candidates = self.changed_records(content_type_id=content_type_id, object_id=object_id)
         return self._each_candidate(candidates, self._wake)
 
     def _each_candidate(self, candidates: Any, action: Callable[[Any, Any], None]) -> int:
@@ -1060,6 +1138,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
 
     def _wake(self, run: Any, step_run: Any) -> None:
         run.step_runs.filter(pk=step_run.pk).to_ready()
+        step_run.watches.all().delete()
         self.run_model.objects.advance(run)
 
     def redispatch(self) -> int:

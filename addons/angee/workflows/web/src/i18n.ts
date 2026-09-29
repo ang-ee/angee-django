@@ -55,6 +55,7 @@ export const enWorkflowsMessages = {
   "step.awaitedRun": "Awaited run",
   "step.waitReason": "Wait reason",
   "step.artifacts": "Artifacts",
+  "step.watches": "Watched records",
   "step.stacktrace": "Stack trace",
   "action.cancel_workflow_run": "Cancel run",
   "action.reprocess_workflow_run": "Reprocess run",

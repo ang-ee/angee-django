@@ -133,6 +133,15 @@ export const userResourceFixture = testDataResource("iam.User", {
   query: testResourceQuery({ fields: { id: testQueryField("id"), display_name: testQueryField("display_name") } }),
 });
 
+export const watchResourceFixture = testDataResource("workflows.StepWatch", {
+  fields: ["id", "step_run", "record_model_label", "record_public_id"].map((name) => retainedField(name)),
+  capabilities: ["list", "detail"], roots: { list: "stepwatch", detail: "stepwatch_by_pk", aggregate: "stepwatch_aggregate" },
+  typeNames: { filter: "stepwatch_bool_exp", order: "stepwatch_order_by" },
+  query: testResourceQuery({ fields: Object.fromEntries(
+    ["id", "step_run", "record_model_label", "record_public_id"].map((name) => [name, testQueryField(name)]),
+  ) }),
+});
+
 export const runSubjectFixture = testDataResource("notes.Note", {
   fields: ["id", "display_name"].map((name) => retainedField(name)),
   capabilities: ["list", "detail"], recordRepresentation: "display_name",
@@ -177,6 +186,7 @@ export function stepRunFixture(overrides: Partial<StepRun> = {}): StepRun {
     attempts: [{ id: "wsa_inspect", number: 1, result: "TIMED_OUT", started_at: "2026-09-29T09:00:00Z",
       finished_at: "2026-09-29T09:01:00Z", error: "The operation did not finish.", stacktrace: "TimeoutError: operation expired" }],
     artifacts: [{ id: "wfa_note", label: "Retained note", model_label: "notes.Note", record_id: "nte_7" }],
+    watches: [],
     ...overrides,
   };
 }

@@ -7,7 +7,6 @@ from typing import Any, Literal
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict
-from rebac import system_context
 
 from angee.base.jsonschema import union_schema, validate, validator
 from angee.base.scoping import system_queryset
@@ -104,11 +103,6 @@ class AwaitRun(Step[AwaitRunInput, Any, AwaitRunConfig]):
     def run(self, ctx: Any) -> Settlement:
         """Load through the actor's read rule; terminal rows require no child lock."""
         child = ctx.load(apps.get_model("workflows", "WorkflowRun"), ctx.input.run_id)
-        with system_context(reason="workflows.await_policy"):
-            expected = child.policy_version.workflow.key == ctx.config.expects
-        if not expected:
-            raise ValidationError("The awaited run belongs to a different workflow.")
-        if child.pk == ctx.run.pk:
-            raise ValidationError("A run cannot await itself.")
+        child.check_await(ctx.run, expects=ctx.config.expects)
         return AwaitedRun(run_id=child.pk, kind="done" if child.is_terminal else "run",
                           output=child.output, outcome=child.outcome)

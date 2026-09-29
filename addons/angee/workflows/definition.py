@@ -758,9 +758,7 @@ class Definition(BaseModel):
         return value
 
     def _entry_input(self, value: Any, step: type[Step[Any, Any, Any]]) -> Any:
-        if not isinstance(value, dict):
-            return value
-        if step.input_model is None:
+        if not isinstance(value, dict) or step.input_model is None:
             return value
         properties = (schema_at(step.input_schema(), []) or {}).get("properties", {})
         additional: set[str | int] = set()

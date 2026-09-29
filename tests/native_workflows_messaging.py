@@ -20,13 +20,15 @@ from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.messaging.events import message_ingested
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, register_steps
+from angee.workflows.testing.drivers import load_workflow, register_steps, run_until
 
 Channel = apps.get_model("messaging.Channel")
 Message = apps.get_model("messaging.Message")
 Trigger = apps.get_model("workflows.Trigger")
 TriggerEvent = apps.get_model("workflows.TriggerEvent")
 WorkflowRun = apps.get_model("workflows.WorkflowRun")
+StepRun = apps.get_model("workflows.StepRun")
+StepWatch = apps.get_model("workflows.StepWatch")
 
 
 class AcceptMessage(Step[None, None, None]):
@@ -39,13 +41,27 @@ class AcceptMessage(Step[None, None, None]):
         return ctx.done()
 
 
+class WatchMessage(Step[None, None, None]):
+    """Observe the fixed message source without a generic post-save opt-in."""
+
+    key = "test_watch_message"
+    subject = "messaging.message"
+
+    def run(self, ctx):
+        """Finish after one committed source event resumes the parked body."""
+        if ctx.state.get("watching"):
+            return ctx.done()
+        ctx.watch(ctx.subject_for_update())
+        return ctx.wait(state={"watching": True})
+
+
 class MessageTriggerTests(TransactionTestCase):
     """Scope, actor loss, transactional emission and channel protection compose."""
 
     def setUp(self):
         """Use real owners, restoring registry overrides and transport after each test."""
         self.enterContext(patch.object(celery_app, "send_task"))
-        self.enterContext(register_steps(AcceptMessage))
+        self.enterContext(register_steps(AcceptMessage, WatchMessage))
         call_command("rebac", "sync", verbosity=0)
         with system_context(reason="message source fixtures"):
             self.admin = get_user_model().objects.create_user(username="message-trigger-admin")
@@ -205,6 +221,38 @@ class MessageTriggerTests(TransactionTestCase):
             message.refresh_from_db()
             message_ingested.send(sender=Message, instance=message)
         self.assertGreater(system_queryset(TriggerEvent).get().changed_at, changed)
+
+    def test_native_message_event_feeds_ledger_and_watches_in_one_transaction(self):
+        """The fixed source wakes once after commit; a rolled-back event is inert."""
+        self.trigger()
+        message = self.ingest()
+        workflow = load_workflow(
+            {"nodes": {"observe": {"step": WatchMessage.key}}, "results": [{"from": "observe"}]},
+            key="message-watch", actor=self.admin, subject_model="messaging.Message",
+        )
+        workflow.with_actor(self.admin).grant_record_access("starter", self.owner)
+        run = WorkflowRun.objects.start(workflow, actor=self.owner, subject=message)
+        run_until(run)
+        step = system_queryset(StepRun).get(run=run)
+        self.assertEqual((step.status, step.waiting_kind), ("waiting", "record"))
+        self.assertEqual(system_queryset(StepWatch).get(step_run=step).record_ref.public_id, message.sqid)
+        changed = system_queryset(TriggerEvent).get().changed_at
+
+        with self.assertRaisesMessage(ValueError, "rollback"), transaction.atomic():
+            message_ingested.send(sender=Message, instance=message)
+            raise ValueError("rollback")
+        self.assertEqual(StepRun.objects.wake_records(), 0)
+        self.assertEqual(system_queryset(TriggerEvent).get().changed_at, changed)
+
+        with transaction.atomic():
+            message_ingested.send(sender=Message, instance=message)
+        self.assertEqual(system_queryset(TriggerEvent).count(), 1)
+        self.assertGreater(system_queryset(TriggerEvent).get().changed_at, changed)
+        self.assertEqual(StepRun.objects.wake_records(), 1)
+        self.assertEqual(StepRun.objects.wake_records(), 0)
+        run_until(run)
+        self.assertEqual(run.status, "succeeded")
+        self.assertFalse(system_queryset(StepWatch).filter(step_run=step).exists())
 
     def test_live_signal_rolls_back_and_historical_replay_stays_silent(self):
         """Capture follows message commits and the messaging owner's replay rules."""

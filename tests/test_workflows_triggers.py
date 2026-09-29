@@ -18,7 +18,7 @@ from angee.knowledge import schema as knowledge_schema
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
 from angee.workflows.testing.drivers import load_workflow, run_until
-from angee.workflows.testing.models import StepAttempt, Trigger, TriggerEvent, WorkflowRun
+from angee.workflows.testing.models import StepAttempt, StepWatch, Trigger, TriggerEvent, WorkflowRun
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.workflow_steps import document
 
@@ -50,7 +50,7 @@ def trigger_setup(execution, trigger_resource_schema):
 
 def capture(record):
     """Bulk and signal writers share the same durable owner."""
-    TriggerEvent.objects.record_change(type(record), record)
+    triggers.RecordChanged.dispatch(type(record), record)
 
 
 def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup):
@@ -229,6 +229,27 @@ def test_capture_failure_preserves_the_enclosing_write(trigger_setup, monkeypatc
         capture(record)
         assert Vault.objects.filter(pk=record.pk, name="Retained").exists()
     assert "Workflow trigger capture failed" in caplog.text
+
+
+def test_watch_capture_failure_preserves_the_native_save(trigger_setup, monkeypatch, caplog):
+    """The shared capture savepoint rolls back its ledger, retaining the source write."""
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+
+    def fail(*args, **kwargs):
+        raise IntegrityError("watch capture failed")
+
+    monkeypatch.setattr(type(StepWatch.objects), "record_change", fail)
+    triggers.RecordChanged.connect()
+    try:
+        with transaction.atomic(), actor_context(actor):
+            record.name = "Retained despite capture failure"
+            record.save()
+            assert Vault.objects.filter(pk=record.pk, name=record.name).exists()
+    finally:
+        post_save.disconnect(sender=Vault, dispatch_uid="workflows.record_changed.knowledge.vault")
+    assert not system_queryset(TriggerEvent).exists()
+    assert "Workflow source capture failed" in caplog.text
 
 
 @pytest.mark.parametrize("model_label", ["workflows.workflow", "decisions.decision", "auth.user"])

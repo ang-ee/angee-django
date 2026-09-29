@@ -109,9 +109,14 @@ class StepContext:
         """Construct this step's completion for checking at the body boundary."""
         return self.step.done(output, outcome=outcome)
 
-    def wait(self, *, until: datetime, state: Any = None) -> Wait:
-        """Wait until an aware time, carrying the supplied checkpoint."""
+    def wait(self, *, until: datetime | None = None, state: Any = None) -> Wait:
+        """Wait for registered records or an aware deadline, retaining the checkpoint."""
         return Wait(until=until, state=state)
+
+    def watch(self, *records: models.Model) -> None:
+        """Observe later saves transactionally; lock records before testing a wait predicate."""
+        self._require_mode("DATABASE")
+        apps.get_model("workflows", "StepWatch").objects.register(self.step_run, records, actor=self.actor)
 
     def next_page(self, state: Any = None) -> NextPage:
         """Continue with a raw checkpoint; checking and retry reset belong to settlement."""

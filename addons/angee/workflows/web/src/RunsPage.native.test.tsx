@@ -70,6 +70,23 @@ test("a run waiter shows its target as a normal record reference", async () => {
   expect((await within(step).findByRole("link", { name: "wfr_child" })).getAttribute("href")).toBe("/workflows/runs/wfr_child");
 });
 
+test("a record waiter reads its watches on demand and follows the shared record route", async () => {
+  const requests: RunRequest[] = [];
+  render(<RunStory run={runFixture({ status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null })}
+    steps={[stepRunFixture({ status: "WAITING", outcome: "", waiting_kind: "RECORD", can_retry: false,
+    watches: [{ id: "wsw_note", record_model_label: "notes.Note", record_public_id: "nte_7" }] })]}
+    onRequest={(request) => requests.push(request)} />);
+  const step = await openStep();
+  const watches = await within(step).findByRole("tab", { name: "Watched records" });
+  expect(requests.some(({ query }) => query.includes("stepwatch"))).toBe(false);
+  fireEvent.click(watches);
+  expect((await within(step).findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
+  const watchRead = requests.find(({ query }) => /\bstepwatch\s*\(/.test(query));
+  expect(watchRead?.variables.where).toEqual({ _and: [{ step_run: { _eq: "wsr_inspect" } }] });
+  expect(watchRead?.query).toContain("record_model_label");
+  expect(watchRead?.query).toContain("record_public_id");
+});
+
 test("trigger origin links to its retained admission event", async () => {
   render(<RunStory run={runFixture({ origin: "TRIGGER", trigger_event: { id: "wte_review" } })} />);
   expect(await screen.findByText("Trigger")).toBeTruthy();

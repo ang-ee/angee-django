@@ -15,7 +15,7 @@ from angee.decisions.states import Verdict
 from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.maps import MapItem
 from angee.workflows.reviews import ReviewStep
-from angee.workflows.steps import Done, EmptyOutput, Step
+from angee.workflows.steps import Done, EmptyOutput, Step, Wait
 
 
 class NotePublicationOutput(BaseModel):
@@ -46,6 +46,23 @@ class ValidateNotePublication(Step[None, NotePublicationOutput, None]):
 
         note = ctx.subject
         return ctx.done(note.publication_summary(), outcome="needs_review" if note.reviewer_id else "ok")
+
+
+class AwaitNoteReview(Step[None, NotePublicationOutput, None]):
+    """Observe note saves until its owner moves it into review."""
+
+    key = "note_await_review"
+    label = "Await note review"
+    category = "Activity"
+    subject = "notes.note"
+
+    def run(self, ctx: Any) -> Done | Wait:
+        """Lock the predicate and watch registration in the same body transaction."""
+        note = ctx.subject_for_update()
+        if note.status == note.Status.IN_REVIEW:
+            return ctx.done(note.publication_summary())
+        ctx.watch(note)
+        return ctx.wait()
 
 
 class ApproveNote(Action, value="approve", label="Approve", verdict=Verdict.COMPLETED, outcome="approved"):

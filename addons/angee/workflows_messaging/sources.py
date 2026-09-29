@@ -1,4 +1,4 @@
-"""Translate messaging's native event into workflow admission ledger changes."""
+"""Translate messaging's native event into workflow admission and watch changes."""
 
 from typing import Any
 
@@ -43,5 +43,5 @@ class MessageIngested(TriggerSource):
 
     @classmethod
     def record(cls, sender: Any, instance: Any, **kwargs: Any) -> None:
-        """Persist admission evidence inside the message owner's transaction."""
-        apps.get_model("workflows", "TriggerEvent").objects.record_change(sender, instance, source=cls.key)
+        """Share durable source capture inside the message owner's transaction."""
+        cls.dispatch(sender, instance)

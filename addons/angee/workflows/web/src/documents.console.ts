@@ -3,7 +3,7 @@ import { graphql } from "@angee/gql/console";
 export const RUN_MODEL = "workflows.WorkflowRun";
 export const STEP_RUN_MODEL = "workflows.StepRun";
 export const STEP_EVIDENCE_MODELS = ["workflows.StepAttempt", "workflows.StepArtifact"] as const;
-export const RUN_MODELS = [RUN_MODEL, STEP_RUN_MODEL, ...STEP_EVIDENCE_MODELS] as const;
+export const RUN_MODELS = [RUN_MODEL, STEP_RUN_MODEL, "workflows.StepWatch", ...STEP_EVIDENCE_MODELS] as const;
 
 export const DecisionWaitingRunsDocument = graphql(`
   query DecisionWaitingRuns($group: String!) {

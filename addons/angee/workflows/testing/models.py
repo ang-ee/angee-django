@@ -80,6 +80,18 @@ class StepArtifact(sources.StepArtifact):
         rebac_resource_type = "workflows/step_artifact"
 
 
+class StepWatch(sources.StepWatch):
+    """Concrete watch registered and captured inside native test transactions."""
+
+    class Meta(sources.StepWatch.Meta):
+        """Retain source observation constraints on the shared test table."""
+
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_watch"
+        rebac_resource_type = "workflows/step_watch"
+
+
 class DecisionGroup(decision_sources.DecisionGroup):
     """Concrete group retained by its workflow step and later review rounds."""
 

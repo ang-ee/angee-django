@@ -3,12 +3,10 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal, Self
 
-from django.core.exceptions import ValidationError
-from django.db.models import OuterRef, Subquery
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.experimental.missing_sentinel import MISSING
 
-from angee.workflows.states import ERROR_OUTCOME, Outcome, StepRunStatus, WaitingKind
+from angee.workflows.states import ERROR_OUTCOME, Outcome, WaitingKind
 from angee.workflows.steps import EmptyOutput, Settlement, Step
 
 
@@ -85,15 +83,7 @@ class Map(Step[MapInput, list[MapItem[Any]], None]):
 
     def run(self, ctx: Any) -> Settlement:
         """Wait for bodies or return ordered typed evidence with one error query."""
-        rows = ctx.step_run.map_rows().order_by("map_index")
-        attempts = ctx.step_run.attempts.model.objects.filter(step_run_id=OuterRef("pk"), number=OuterRef("attempt"))
-        rows = list(rows.annotate(item_error=Subquery(attempts.values("error")[:1])))
-        if len(rows) != len(ctx.input.items) or any(row.status not in StepRunStatus.terminal_values() for row in rows):
-            return MapWait()
-        if any(row.status not in (StepRunStatus.SUCCEEDED, StepRunStatus.FAILED) for row in rows):
-            raise ValidationError("A canceled or skipped map body cannot produce a result.")
-        items = [{
-            "index": row.map_index, "outcome": row.outcome,
-            **({"error": row.item_error or ""} if row.status == StepRunStatus.FAILED else {"output": row.output}),
-        } for row in rows]
-        return self.done(items, outcome="failed" if any(row.status == StepRunStatus.FAILED for row in rows) else "done")
+        items = ctx.step_run.map_rows().collect_map(len(ctx.input.items))
+        return MapWait() if items is None else self.done(
+            items, outcome="failed" if any("error" in item for item in items) else "done",
+        )

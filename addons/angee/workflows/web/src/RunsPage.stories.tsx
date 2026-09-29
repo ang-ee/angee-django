@@ -6,7 +6,7 @@ import { createRouteHref, JsonValueSchema } from "@angee/ui";
 
 import { RunsPage } from "./RunsPage";
 import type { Run, StepRun } from "./testing/documents.console";
-import { runFixture, runResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture } from "./testing";
+import { runFixture, runResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
 import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
 
@@ -14,6 +14,10 @@ export default { title: "Workflows/Run page", parameters: { layout: "fullscreen"
 export const Recovery = { render: () => <RunStory /> };
 export const Runs = { render: () => <RunStory list /> };
 export const Waiting = { render: () => <RunStory waiting /> };
+export const Watching = { render: () => <RunStory
+  run={runFixture({ status: "WAITING", can_cancel: true, can_reprocess: false, finished_at: null })}
+  steps={[stepRunFixture({ status: "WAITING", outcome: "", waiting_kind: "RECORD", can_retry: false,
+    watches: [{ id: "wsw_note", record_model_label: "notes.Note", record_public_id: "nte_7" }] })]} /> };
 export const DuplicateRisk = { render: () => <RunStory steps={[stepRunFixture({ requires_duplicate_acknowledgement: true })]} /> };
 export const ReadOnly = { render: () => <RunStory run={runFixture({ can_reprocess: false })} steps={[stepRunFixture({ can_retry: false })]} /> };
 export const Mapped = { render: () => <RunStory steps={mappedSteps} /> };
@@ -96,7 +100,7 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
       if (query.includes("steprun_by_pk")) return jsonResponse({ data: { steprun_by_pk: currentSteps.find((step) => step.id === variables.id) ?? null } });
       if (query.includes("stepattempt_by_pk")) return jsonResponse({ data: { stepattempt_by_pk: currentSteps.flatMap((step) => step.attempts).find((attempt) => attempt.id === variables.id) } });
-      for (const [name, rows] of [["stepattempt", currentSteps.flatMap((step) => step.attempts)], ["stepartifact", currentSteps.flatMap((step) => step.artifacts)]] as const) {
+      for (const [name, rows] of [["stepattempt", currentSteps.flatMap((step) => step.attempts)], ["stepartifact", currentSteps.flatMap((step) => step.artifacts)], ["stepwatch", currentSteps.flatMap((step) => step.watches)]] as const) {
         if (query.includes(name)) return jsonResponse({ data: { [name]: rows, [`${name}_aggregate`]: { aggregate: { count: rows.length } } } });
       }
       if (/\bsteprun(?:\s*\(|\s*\{)/.test(query)) {
@@ -117,7 +121,7 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
-      triggerEventResourceFixture,
+      triggerEventResourceFixture, watchResourceFixture,
     ] } } } };
   }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"

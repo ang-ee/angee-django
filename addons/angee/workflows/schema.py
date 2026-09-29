@@ -36,6 +36,7 @@ WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
 StepArtifact = apps.get_model("workflows", "StepArtifact")
+StepWatch = apps.get_model("workflows", "StepWatch")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 DecisionGroup = apps.get_model("decisions", "DecisionGroup")
@@ -123,6 +124,7 @@ class StepRunType(AngeeNode):
     decision_group: DecisionGroupType | None = actor_scoped_to_one("decision_group")
     attempts: list[StepAttemptType] = actor_scoped_to_many("attempts")
     artifacts: list[StepArtifactType] = actor_scoped_to_many("artifacts")
+    watches: list[StepWatchType] = actor_scoped_to_many("watches")
     node_key: auto
     rank: auto
     map_index: auto
@@ -192,6 +194,15 @@ class StepAttemptType(AngeeNode):
     def acknowledged_by(self) -> PublicID | None:
         """Return the operator's public identity without exposing a user row."""
         return optional_public_id(user_public_id(cast(Any, self).acknowledged_by_id))
+
+
+@strawberry_django.type(StepWatch)
+class StepWatchType(AngeeNode):
+    """A waiting step's reference, visible through its execution read policy."""
+
+    step_run: StepRunType | None = actor_scoped_to_one("step_run")
+    record_model_label: str = strawberry_django.field(only=["content_type_id", "object_id"])
+    record_public_id: str = strawberry_django.field(only=["content_type_id", "object_id"])
 
 
 @strawberry_django.type(StepArtifact)
@@ -295,6 +306,10 @@ _ARTIFACT_RESOURCE = hasura_model_resource(
     filterable=["id", "step_run", "label"], sortable=["created_at", "label"], aggregatable=["id"],
     insert=False, update=False, delete=False,
 )
+_WATCH_RESOURCE = hasura_model_resource(
+    StepWatchType, model=StepWatch, filterable=["id", "step_run"], sortable=["id"], aggregatable=["id"],
+    insert=False, update=False, delete=False,
+)
 _TRIGGER_INSERT = ("workflow", "source", "model_label", "condition",
                    *declared_hasura_resource_fields(Trigger, "hasura_insertable_fields"))
 _TRIGGER_UPDATE = ("source", "model_label", "condition",
@@ -375,7 +390,7 @@ class WorkflowActionMutation:
 
 _RESOURCES = (
     _WORKFLOW_RESOURCE, _VERSION_RESOURCE, _RUN_RESOURCE, _STEP_RESOURCE, _ATTEMPT_RESOURCE, _ARTIFACT_RESOURCE,
-    _TRIGGER_RESOURCE, _TRIGGER_EVENT_RESOURCE,
+    _WATCH_RESOURCE, _TRIGGER_RESOURCE, _TRIGGER_EVENT_RESOURCE,
 )
 schemas = {
     "console": {
@@ -385,7 +400,7 @@ schemas = {
         "types": [
             RunOrigin,
             WorkflowType, WorkflowVersionType, WorkflowRunType, StepRunType, StepAttemptType, StepArtifactType,
-            TriggerType, TriggerEventType,
+            StepWatchType, TriggerType, TriggerEventType,
             *(type_ for resource in _RESOURCES for type_ in resource.types),
         ],
     },

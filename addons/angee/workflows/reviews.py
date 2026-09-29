@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
-from types import get_original_bases
-from typing import Any, ClassVar, Literal, cast, get_args, get_origin
+from typing import Any, ClassVar, Literal, cast
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -57,6 +56,7 @@ class ReviewStep[I, O, C, B](Step[I, O, C]):
     """
 
     basis_model: ClassVar[Any] = None
+    _model_parameters = (*Step._model_parameters, "basis_model")
     actions: ClassVar[tuple[type[Action], ...]] = ()
     outcomes: ClassVar[dict[Outcome, str]] = {}
     empty_outcomes = Step.empty_outcomes | {"expired", "superseded"}
@@ -65,10 +65,6 @@ class ReviewStep[I, O, C, B](Step[I, O, C]):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        for base in get_original_bases(cls):
-            if get_origin(base) is ReviewStep and "basis_model" not in cls.__dict__:
-                basis = get_args(base)[3]
-                cls.basis_model = None if basis is type(None) else basis
         if cls.mode != "DATABASE":
             raise ImproperlyConfigured("Review steps require DATABASE mode.")
         if cls.max_rounds < 1:
