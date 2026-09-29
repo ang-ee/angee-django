@@ -18,7 +18,6 @@ class BaseConfig(AppConfig):
         super().ready()
         # The check imports REBAC models, which require completed app population.
         from angee.base.checks import (
-            check_authenticated_scopes,
             check_creation_key_constraints,
             check_hierarchy_queryset_order,
             check_ownership,
@@ -31,4 +30,3 @@ class BaseConfig(AppConfig):
         checks.register(check_creation_key_constraints, checks.Tags.models)
         checks.register(check_ownership, checks.Tags.models)
         checks.register(check_rebac_caveats, checks.Tags.models)
-        checks.register(check_authenticated_scopes, checks.Tags.models)

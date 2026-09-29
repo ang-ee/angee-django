@@ -17,5 +17,8 @@ SETTINGS = {
     # Admin reach is expressed in the schema (const-backed `admin` relations
     # -> angee/role:admin), so all actors use grants unless a host opts into the native bypass.
     "REBAC_SUPERUSER_BYPASS": False,
+    # Generic record links (bindings, attachments, needs) reach their targets
+    # through content types, so the permission index tracks their writes.
+    "REBAC_TRACKED_MODELS": ["contenttypes.ContentType"],
 }
 """Django settings contributed when the model foundation is installed."""

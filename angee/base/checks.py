@@ -9,12 +9,9 @@ from django.core import checks
 from django.core.exceptions import FieldDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, router
 from django.db import models as django_models
-from rebac.backends.local import LocalBackend
-from rebac.backends.local_query import LocalQueryScope, UnsupportedScope
 from rebac.models import RebacResource, Relationship, RelationshipRegistry
 from rebac.resources import model_resource_type
-from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef, Schema, permission_sources
-from rebac.types import SubjectRef
+from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef
 
 from angee.base.mixins import CreationKeyMixin, HierarchyQuerySet, ItemOwnershipMixin, OwnerMixin
 from angee.base.permissions import effective_rebac_definition, effective_rebac_schema
@@ -44,86 +41,6 @@ def check_rebac_caveats(
                             id="angee.E024",
                         )
                     )
-    return errors
-
-
-def _uses_authenticated(
-    schema: Schema,
-    resource_type: str,
-    action: str,
-    seen: frozenset[tuple[str, str]] = frozenset(),
-) -> bool:
-    """Follow native dependency facts across arrows and subject sets, including cycles."""
-
-    key = (resource_type, action)
-    definition = schema.get_definition(resource_type)
-    if key in seen or definition is None:
-        return False
-    sources = permission_sources(schema, resource_type, action)
-    if "authenticated" in sources.builtins:
-        return True
-    relations = {relation.name: relation for relation in definition.relations}
-    targets = {
-        (subject.type, target)
-        for via, target in sources.arrows
-        if (relation := relations.get(via)) is not None
-        for subject in relation.allowed_subjects
-    } | {
-        (subject.type, subject.relation)
-        for name in sources.direct_relations
-        for subject in relations[name].allowed_subjects
-        if subject.relation
-    }
-    return any(_uses_authenticated(schema, target, permission, seen | {key}) for target, permission in sorted(targets))
-
-
-def check_authenticated_scopes(
-    app_configs: Sequence[AppConfig] | None = None,
-    **kwargs: object,
-) -> list[checks.CheckMessage]:
-    """Require SQL scopes wherever authenticated membership makes tuple enumeration incomplete."""
-
-    del kwargs
-    configs = {config.name: config for config in apps.get_app_configs()}
-    if app_configs is not None:
-        configs.update((config.name, config) for config in app_configs)
-    schemas = [
-        schema for _, config in sorted(configs.items())
-        if (schema := effective_rebac_schema(config)) is not None
-    ]
-    schema = Schema(
-        definitions=[definition for source in schemas for definition in source.definitions],
-        caveats=[caveat for source in schemas for caveat in source.caveats],
-    )
-    affected = {
-        (definition.resource_type, permission.name)
-        for definition in schema.definitions
-        for permission in definition.permissions
-        if _uses_authenticated(schema, definition.resource_type, permission.name)
-    }
-    if not affected:
-        return []
-    backend = LocalBackend()
-    backend.set_schema(schema)
-    selected = configs.values() if app_configs is None else app_configs
-    errors: list[checks.CheckMessage] = []
-    for config in sorted(selected, key=lambda config: config.name):
-        for model in sorted(config.get_models(), key=lambda model: model._meta.label_lower):
-            resource_type = model_resource_type(model)
-            for target, action in sorted(affected):
-                if target != resource_type:
-                    continue
-                scope = LocalQueryScope(backend, SubjectRef.of("auth/user", "1"), router.db_for_read(model))
-                try:
-                    scope.predicate(model, action, resource_type)
-                except UnsupportedScope:
-                    errors.append(checks.Error(
-                        f"{resource_type}#{action} reaches authenticated but cannot compile to a SQL scope.",
-                        hint="Remove recursive role arms and other unsupported scope constructs; "
-                        "tuple enumeration cannot represent authenticated membership.",
-                        obj=model,
-                        id="angee.E026",
-                    ))
     return errors
 
 
