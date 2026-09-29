@@ -96,6 +96,14 @@ TanStack apply the URL-owned filter object to in-memory rows. Infinite message
 history uses native Query pages with domain-owned
 [window reads and retained-ID revalidation](upstream-reuse.md#history-retention).
 
+### Reserved translation namespace
+
+`ui` is reserved for the shared rendered binding. Addons contribute
+namespace-relative messages under their own namespace; even an empty `ui`
+bundle is rejected by [`composeAddons`](../../packages/app/src/define-addon.ts).
+Use the owning addon's namespace with `createNamespaceT`; do not override
+shared UI copy through an addon bundle.
+
 ## Rules
 
 - Python ships schema and operations. TypeScript ships UX.

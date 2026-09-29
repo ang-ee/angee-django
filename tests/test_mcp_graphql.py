@@ -1,9 +1,10 @@
-"""Tests for the MCP GraphQL tool compiler — nested-projection (depth ≤ 2) support.
+"""MCP GraphQL compilation, nested projection and actor-scoped read contracts.
 
 Builds a tiny Strawberry schema shaped like the knowledge ``read_page`` projection
 (a nullable nested object, a nested list, a list of objects) and drives the compiler
 in :mod:`angee.mcp.graphql` directly, so the assertions cover the document rendering,
 output schema, and row projection without standing up the full discovery schema.
+Native scoped documents also exercise the request-less MCP execution boundary.
 """
 
 from __future__ import annotations
@@ -12,12 +13,21 @@ from typing import Any
 
 import pytest
 import strawberry
+import strawberry_django
+from asgiref.sync import async_to_sync
 from django.core.exceptions import ImproperlyConfigured
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac.backends import LocalBackend, backend, reset_backend
+from rebac.schema import parse_zed
 
+from angee.graphql.data import hasura_model_resource
+from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
 from angee.mcp import graphql as mcp_graphql
-from angee.mcp.graphql import GraphQLTool, _compile
-from tests.conftest import SchemaAddon
+from angee.mcp.graphql import GraphQLTool, _compile, execute_under_actor
+from tests.conftest import SchemaAddon, create_user
+from tests.scopedemo.models import Scope, ScopedDoc
 
 
 @strawberry.type
@@ -107,6 +117,7 @@ def test_flat_spec_still_compiles() -> None:
         "title": "Hi",
         "kind": "note",
     }
+    assert compiled.output_schema is not None
     assert compiled.output_schema["properties"]["sqid"] == {"type": "string"}
 
 
@@ -132,6 +143,7 @@ def test_nested_output_schema_describes_objects_and_arrays() -> None:
     """The advertised output schema mirrors the nested object/array shape."""
 
     schema = _compile(_read_page()).output_schema
+    assert schema is not None
     properties = schema["properties"]
 
     assert properties["markdown"] == {
@@ -241,3 +253,105 @@ def test_module_exposes_project_row_helper() -> None:
     """``project_row`` is the public projection seam downstream stages reuse."""
 
     assert callable(mcp_graphql.project_row)
+
+
+@strawberry_django.type(Scope)
+class McpScopeType(AngeeNode):
+    name: strawberry.auto
+
+
+@strawberry_django.type(ScopedDoc)
+class McpDocType(AngeeNode):
+    title: str | None
+    scope: McpScopeType | None = actor_scoped_to_one("scope")
+
+
+def test_mcp_reads_conceal_gated_fields_rows_totals_and_group_keys(
+    transactional_db: None, monkeypatch: pytest.MonkeyPatch, settings: Any,
+) -> None:
+    """G3/G5 hold through the actual request-less MCP execution and actor binding."""
+
+    settings.REBAC_SUPERUSER_BYPASS = False
+    settings.REBAC_STRICT_MODE = True
+    # Bare test settings omit this base autoconfig default; match composed hosts.
+    settings.REBAC_FIELD_READ_MODE = "redact"
+    viewer = create_user("mcp-reader")
+    owner = create_user("mcp-owner")
+    assert not viewer.is_superuser and not viewer.is_staff
+    reset_backend()
+    active = backend()
+    assert isinstance(active, LocalBackend)
+    active.set_schema(parse_zed("""
+        definition auth/user {}
+        definition scopedemo/scope {
+            relation reader: auth/user
+            permission read = reader
+        }
+        definition scopedemo/doc {
+            relation reader: auth/user
+            relation secret_reader: auth/user
+            permission read = reader + secret_reader
+            permission read__title = secret_reader
+        }
+    """))
+    try:
+        resource = hasura_model_resource(
+            McpDocType, model=ScopedDoc, name="mcp_docs",
+            filterable=["id"], sortable=["id"], aggregatable=["id"], groupable=["scope"],
+            insert=False, update=False, delete=False,
+        )
+        schemas = GraphQLSchemas([
+            SchemaAddon({"public": {"query": (resource.query,), "types": tuple(resource.types)}}),
+        ])
+        monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+        with system_context(reason="MCP hidden-read fixture"):
+            visible_scope = Scope.objects.create(name="Visible scope")
+            hidden_scope = Scope.objects.create(name="Hidden parent")
+            hidden_row_scope = Scope.objects.create(name="Only the hidden row uses this group")
+            visible = ScopedDoc.objects.create(scope=visible_scope, title="Gated visible title")
+            redacted_parent = ScopedDoc.objects.create(scope=hidden_scope, title="Gated nested title")
+            hidden = ScopedDoc.objects.create(scope=hidden_row_scope, title="Hidden row title")
+            write_relationships([
+                *(RelationshipTuple(to_object_ref(row), "reader", to_subject_ref(viewer))
+                  for row in (visible_scope, hidden_row_scope, visible, redacted_parent)),
+                *(RelationshipTuple(to_object_ref(row), "reader", to_subject_ref(owner))
+                  for row in (visible_scope, hidden_scope, hidden_row_scope)),
+                *(RelationshipTuple(to_object_ref(row), "secret_reader", to_subject_ref(owner))
+                  for row in (visible, redacted_parent, hidden)),
+            ])
+        document = """
+            query HiddenReads($id: String!) {
+              detail: mcp_docs_by_pk(id: $id) { id title }
+              rows: mcp_docs { id title scope { id name } }
+              totals: mcp_docs_aggregate { aggregate { count } }
+              groups: mcp_docs_groups(group_by: [{field: SCOPE}]) {
+                key { scope_id }
+                aggregate { count }
+              }
+            }
+        """
+        with actor_context(viewer):
+            data = async_to_sync(execute_under_actor)("public", document, {"id": hidden.sqid})
+        assert data["detail"] is None
+        assert {row["id"]: row for row in data["rows"]} == {
+            visible.sqid: {
+                "id": visible.sqid, "title": None,
+                "scope": {"id": visible_scope.sqid, "name": "Visible scope"},
+            },
+            redacted_parent.sqid: {"id": redacted_parent.sqid, "title": None, "scope": None},
+        }
+        assert data["totals"] == {"aggregate": {"count": 2}}
+        assert {row["key"]["scope_id"]: row["aggregate"]["count"] for row in data["groups"]} == {
+            visible_scope.sqid: 1, None: 1,
+        }
+        # Positive control: the same entry point exposes the data when its actor holds the grants.
+        with actor_context(owner):
+            readable = async_to_sync(execute_under_actor)("public", document, {"id": hidden.sqid})
+        assert readable["detail"] == {"id": hidden.sqid, "title": "Hidden row title"}
+        assert all(row["title"] is not None and row["scope"] is not None for row in readable["rows"])
+        assert readable["totals"] == {"aggregate": {"count": 3}}
+        assert {row["key"]["scope_id"] for row in readable["groups"]} == {
+            visible_scope.sqid, hidden_scope.sqid, hidden_row_scope.sqid,
+        }
+    finally:
+        reset_backend()

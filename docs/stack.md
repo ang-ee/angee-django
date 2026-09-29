@@ -32,6 +32,12 @@ Dependency changes must update this file in the same change.
 
 ## Backend
 
+The **local backend is the only supported REBAC permission backend**.
+[Base autoconfig](../angee/base/autoconfig.py) selects it: field-backed and
+constant-backed relations and SQL read scopes require the local Django rows.
+See the [REBAC rules](backend/guidelines.md#rebac); do not mirror these facts
+into a remote permission store.
+
 | Pick | Owns | Angee adds |
 |---|---|---|
 | Python >= 3.14 | Runtime and typing | Project conventions |

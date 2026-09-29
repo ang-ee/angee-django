@@ -1638,6 +1638,34 @@ Their docstrings own the exact behavior.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
 
+### GraphQL actor and write contracts
+
+- **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
+  carries the target user's public id. [IAM admission](../../addons/angee/iam/models.py)
+  checks the real actor's `view_as` permission and the target's eligibility;
+  [ViewAs](../../addons/angee/graphql/view_as.py) binds both `request.user` and
+  the ambient actor to that target. Mutations and HTTP subscriptions fail with
+  `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
+  [WebSocket consumer](../../addons/angee/graphql/consumers.py) retains its
+  handshake actor and does not support this header. [MCP execution](../../addons/angee/mcp/graphql.py)
+  has no request and continues under its own actor.
+- **Concurrency and replay tokens are GraphQL root arguments.** On models
+  composing `OptimisticLockMixin`, `update_<resource>_by_pk` accepts
+  `expected_revision: Int`; a stale value fails with `STALE_REVISION`. On models
+  composing `CreationKeyMixin`, `insert_<resource>_one` accepts
+  `client_creation_key: String`; replaying the same scoped key and content
+  returns the readable original, and changed content fails with
+  `CREATION_KEY_CONFLICT`. Neither token belongs in `_set` or `object`.
+  The [Hasura adapter](../../addons/angee/graphql/data/hasura.py) declares and
+  consumes both arguments through the [base owners](../../angee/base/mixins.py).
+- **Permission answers reuse the authorization owner.** Declare a type's
+  `permissions` through [`permissions_field(names)`](../../addons/angee/graphql/capabilities.py);
+  it reports only the declared Zed permissions held by the current actor,
+  validates names at schema build and batches list evaluation in SQL.
+  Server predicates compose the same owner's `held_permissions(record, names)`.
+  View-as therefore reports the target's permissions. Clients consume these
+  answers; they never reconstruct authority from roles or identity.
+
 ### Direct record access
 
 Models opt into direct sharing with `rebac_grantable`, mapping each relation to

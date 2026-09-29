@@ -34,3 +34,13 @@ export const RemoveSpaceMembership = graphql(`
     }
   }
 `);
+
+export const SetMembershipNotifications = graphql(`
+  mutation SetMembershipNotifications($id: ID!, $policy: NotificationPolicy!, $subtype_keys: [String!]!) {
+    set_membership_notifications(id: $id, policy: $policy, subtype_keys: $subtype_keys) {
+      id
+      notification_policy
+      subtype_keys
+    }
+  }
+`);

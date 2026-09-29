@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import strawberry
 import strawberry_django
@@ -10,6 +10,7 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data import (
     AngeeHasuraWriteBackend,
     hasura_model_resource,
@@ -23,7 +24,6 @@ from angee.iam.schema import UserType
 from angee.messaging.models import NotificationPolicy
 from angee.messaging.schema import FragmentType
 from angee.parties.schema import PartyType
-from angee.spaces.models import Membership as MembershipModel
 
 Group = apps.get_model("spaces", "Group")
 Membership = apps.get_model("spaces", "Membership")
@@ -31,6 +31,9 @@ Party = apps.get_model("parties", "Party")
 Thread = apps.get_model("messaging", "Thread")
 Channel = apps.get_model("messaging", "Channel")
 Vault = apps.get_model("knowledge", "Vault")
+
+MembershipRole = Membership._meta.get_field("role").choices_enum
+strawberry.enum(cast(Any, MembershipRole))
 
 
 @strawberry_django.type(Group)
@@ -43,15 +46,23 @@ class SpaceGroupType(AngeeNode):
     visibility: auto
     created_at: auto
     updated_at: auto
+    permissions = permissions_field(("write", "manage_roster"))
 
     parent: SpaceGroupType | None = actor_scoped_to_one("parent")
     owner: UserType | None = actor_scoped_to_one("owner")
+
+    @strawberry_django.field
+    def membership_roles(self) -> list[MembershipRole]:  # type: ignore[valid-type]
+        """Project the roster manager's authorized role choices."""
+
+        return Membership.objects.available_roles(group=self)
 
 
 @strawberry_django.type(Membership)
 class SpaceMembershipType(AngeeNode):
     """GraphQL projection of one role-bearing group roster row."""
 
+    permissions = permissions_field(("write", "write__role", "delete", "set_notifications"))
     group: SpaceGroupType | None = actor_scoped_to_one("group")
     role: auto
     confidence: auto
@@ -104,7 +115,7 @@ class SpacesMembershipMutation:
         info: strawberry.Info,
         group_id: strawberry.ID,
         party_id: strawberry.ID,
-        role: MembershipModel.MembershipRole,
+        role: MembershipRole,  # type: ignore[valid-type]
     ) -> SpaceMembershipType:
         """Resolve the selected group and let its roster authorize the selected role."""
 

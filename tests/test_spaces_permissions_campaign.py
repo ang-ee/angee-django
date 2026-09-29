@@ -64,6 +64,38 @@ def test_every_membership_permission_matches_all_roles_and_nine_seats(roster):
                 assert_permission(row, actor, permission, seat in holders)
 
 
+def test_roster_graphql_returns_role_choices_and_row_permissions_for_every_seat(roster, spaces_console):
+    """The UI receives decisions for owners, moderators, holders and public readers."""
+
+    with system_context(reason="public roster capability test"):
+        roster.group.visibility = "public"
+        roster.group.save(update_fields=["visibility"])
+    document = """
+        query RosterCapabilities($group: String!) {
+          space_groups_by_pk(id: $group) { permissions membership_roles }
+          space_memberships { id permissions }
+        }
+    """
+    for seat, actor in roster.actors.items():
+        data = result_data(execute_schema(spaces_console, document, {"group": roster.group.sqid}, user=actor))
+        group = data["space_groups_by_pk"]
+        expected_roles = list(ROLES) if seat in MANAGERS else ["member", "viewer"] if seat == "moderator" else []
+        assert group["membership_roles"] == [role.upper() for role in expected_roles]
+        assert set(group["permissions"]) == (
+            {"manage_roster", "write"} if seat in MANAGERS else {"write"} if seat == "moderator" else set()
+        )
+        rows = {row["id"]: set(row["permissions"]) for row in data["space_memberships"]}
+        for target, membership in roster.rows.items():
+            expected = set()
+            if seat in MANAGERS:
+                expected.update(("write", "write__role", "delete"))
+            elif seat == "moderator" and target in {"member", "viewer"}:
+                expected.update(("write", "delete"))
+            if seat == target and target in ROLES:
+                expected.add("set_notifications")
+            assert rows[membership.sqid] == expected, (seat, target)
+
+
 def test_roster_and_holder_permissions_compile_to_sql(roster, django_assert_num_queries):
     actor = roster.actors["moderator"]
     with actor_context(actor), evaluator_scope():
