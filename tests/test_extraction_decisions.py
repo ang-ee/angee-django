@@ -11,7 +11,7 @@ from rebac import actor_context, system_context
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
-from angee.decisions.testing.models import Decision
+from angee.workflows.testing.models import Decision
 from tests.conftest import create_platform_admin
 from tests.extraction_models import Extraction
 from tests.test_extraction_models import evidence as evidence

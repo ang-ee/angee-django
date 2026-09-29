@@ -1738,7 +1738,7 @@ def test_bare_settings_use_addon_owned_defaults(settings):
     assert steps["map"] == "angee.workflows.maps.Map"
     assert settings.ANGEE_WORKFLOW_MAP_CONCURRENCY == 10
     assert {
-        "prepare_pages", "recognize_page", "collect_carriers", "process_evidence", "infer_evidence",
+        "prepare_pages", "recognize_page", "process_evidence", "infer_evidence",
     } <= steps.keys()
     assert {"none", "retention_notes", "step_text"} <= settings.ANGEE_EXTRACTION_PROFILE_CLASSES.keys()
     assert {"native", "deterministic"} <= settings.ANGEE_EXTRACTION_BACKEND_CLASSES.keys()

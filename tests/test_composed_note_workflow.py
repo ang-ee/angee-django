@@ -20,10 +20,8 @@ def test_composed_note_workflow(tmp_path: Path) -> None:
     postgresql = connection.vendor == "postgresql"
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
-    # L4: extraction's shipped map is the only resource awaiting engine support.
     apps = sorted(
         manifest.name for _, manifest in discover([root / "addons", root / "examples" / "addons"])
-        if manifest.name != "angee.workflows_extraction"
     )
     result = subprocess.run(
         [

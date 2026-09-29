@@ -10,6 +10,7 @@ from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict, Field
 
 from angee.base.impl import resolve_impl_class
+from angee.workflows.maps import MapItem
 from angee.workflows.steps import Done, RetryPolicy, Step
 from angee.workflows_extraction.contracts import (
     ExtractionPartKind,
@@ -155,49 +156,42 @@ class RecognizePageStep(_ProviderStep, Step[RecognizePageInput, RecognitionOutpu
         return ctx.done(RecognitionOutput(page=value.page, part=carrier), outcome="recognized")
 
 
-class CollectCarriersInput(BaseModel):  # L4: replaced by the map's typed output.
-    """Preparation plus the map's ordered success and failure records."""
+class ProcessEvidenceInput(BaseModel):
+    """Prepared sources and typed map results for an immutable evidence revision."""
 
     model_config = ConfigDict(extra="forbid")
     prepared: PreparedDocument
-    recognition: list[dict[str, Any]]
-
-
-class CollectCarriersOutput(BaseModel):  # L4: replaced by the map's typed output.
-    """Validated carriers with explicit reasons a source requires review."""
-
-    model_config = ConfigDict(extra="forbid")
-    prepared: PreparedDocument
-    recognition: list[dict[str, Any]]
-    hold_reasons: list[str]
-
-
-class CollectCarriersStep(Step[CollectCarriersInput, CollectCarriersOutput, None]):  # L4
-    """Validate map completeness without repeating source acquisition."""
-
-    key = "collect_carriers"
-    label = "Collect page carriers"
-    outcomes = {"collected": "Collected", "source_hold": "Source hold"}
-
-    def run(self, ctx: Any) -> Done:
-        """Report complete carriers or an explicit retained source hold."""
-        value = ctx.input
-        _, holds = value.prepared.collect(value.recognition)
-        return ctx.done(
-            CollectCarriersOutput(prepared=value.prepared, recognition=value.recognition, hold_reasons=holds),
-            outcome="source_hold" if holds else "collected",
-        )
-
-
-class ProcessEvidenceInput(CollectCarriersOutput):
-    """Validated carriers and policy for an immutable evidence revision."""
-
+    recognition: list[MapItem[RecognitionOutput]]
     target_model: str
     target_id: str
     model_id: str | None = None
     recognition_model_id: str | None = None
     identity_mapping: dict[str, str] = Field(default_factory=dict)
     retired_identities: dict[str, str] = Field(default_factory=dict)
+
+    def carriers(self) -> tuple[tuple[PartCarrier, ...], list[str]]:
+        """Bind recognized carriers to prepared pages, retaining partial source holds."""
+        requested = self.prepared.recognition_pages
+        if len(self.recognition) > len(requested):
+            raise ValidationError("Map returned unrequested page results.")
+        parts, holds = list(self.prepared.parts), list(self.prepared.hold_reasons)
+        for index, page in enumerate(requested):
+            item = self.recognition[index] if index < len(self.recognition) else None
+            if item is not None and item.index != index:
+                raise ValidationError("Map page results must retain their ordered indices.")
+            if item is None or item.outcome != "recognized":
+                holds.append(f"recognition_unavailable:{page.source_position}:{page.page_position}")
+                continue
+            response = item.output
+            if (
+                response.page != page
+                or response.part.source_position != page.source_position
+                or response.part.source_page != page.page_position
+                or response.part.kind != ExtractionPartKind.RECOGNIZED_TEXT
+            ):
+                raise ValidationError("Recognition returned a different page carrier.")
+            parts.append(response.part)
+        return tuple(parts), holds
 
 
 class ExtractionOutput(BaseModel):
@@ -240,9 +234,7 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
         model = apps.get_model("workflows_extraction.Extraction")
         target = ctx.load(apps.get_model(value.target_model), value.target_id)
         sources = [source.restore(ctx, i) for i, source in enumerate(value.prepared.sources)]
-        carriers, holds = value.prepared.collect(value.recognition)
-        if holds != value.hold_reasons:
-            raise ValidationError("The collected source hold changed.")
+        carriers, holds = value.carriers()
         restored_parts = []
         for carrier in carriers:
             ctx.heartbeat()

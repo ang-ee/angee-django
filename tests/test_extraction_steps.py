@@ -20,6 +20,7 @@ from rebac import actor_context
 
 from angee.base.scoping import system_queryset
 from angee.workflows.definition import Definition
+from angee.workflows.maps import MapItem
 from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, WorkflowRun
 from angee.workflows_extraction.contracts import (
@@ -42,9 +43,9 @@ from angee.workflows_extraction.providers import (
     SourceSnapshot,
 )
 from angee.workflows_extraction.steps import (
-    CollectCarriersStep,
     InferEvidenceStep,
     PreparePagesStep,
+    ProcessEvidenceInput,
     ProcessEvidenceStep,
     RecognizePageStep,
 )
@@ -171,12 +172,11 @@ def prepare_and_process(actor, file, *, profile_config=None, recognized=False):
     }
     prepared = execute(PreparePagesStep, source, actor, config={"backend_config": {"recognized": recognized}})
     assert prepared.status == "succeeded", list(system_queryset(StepAttempt).values_list("error", flat=True))
-    collected = execute(CollectCarriersStep, {"prepared": prepared.output["prepared"], "recognition": []}, actor)
-    assert collected.status == "succeeded"
     return execute(
         ProcessEvidenceStep,
         {
-            **collected.output,
+            "prepared": prepared.output["prepared"],
+            "recognition": [],
             "target_model": source["target_model"],
             "target_id": source["target_id"],
             "model_id": str(system_queryset(InferenceModel).get().sqid),
@@ -212,7 +212,7 @@ def test_workflow_reader_cannot_obtain_document_text_from_step_rows(step_evidenc
         run.with_actor(actor).grant_record_access("reader", reader)
     with actor_context(reader):
         assert WorkflowRun.objects.filter(pk=processed.pk).exists()
-        assert StepRun.objects.count() == 3
+        assert StepRun.objects.count() == 2
         retained = [
             list(StepRun.objects.values("input", "output", "state", "wait_reason")),
             [{"error": attempt.error, "stacktrace": attempt.stacktrace} for attempt in StepAttempt.objects.all()],
@@ -241,26 +241,31 @@ def test_recognition_runs_with_registered_pure_provider(step_evidence):
     assert run.status == "succeeded" and run.outcome == "recognized"
     output = RecognitionOutput.model_validate(run.output)
     prepared = PreparedDocument(sources=[], pages=[page], parts=[])
-    parts, holds = prepared.collect([{"index": 0, "outcome": "recognized", "output": run.output}])
+    value = ProcessEvidenceInput(
+        prepared=prepared,
+        recognition=[MapItem[RecognitionOutput](index=0, outcome="recognized", output=output)],
+        target_model="storage.File", target_id=str(file.sqid),
+    )
+    parts, holds = value.carriers()
     assert output.part == parts[0] and holds == []
     assert "Retained note" not in json.dumps(run.output)
     with actor_context(actor):
         envelope = system_queryset(File).get(sqid=output.part.file_id).read_verified(max_bytes=10000)
         assert json.loads(envelope)["value"] == "Retained note"
     with pytest.raises(ValidationError, match="indices"):
-        prepared.collect([{"index": 1, "outcome": "error", "error": "unavailable"}])
+        value.model_copy(update={"recognition": [
+            MapItem[RecognitionOutput](index=1, outcome="error", error="unavailable"),
+        ]}).carriers()
     wrong = output.part.model_copy(update={"source_position": 1})
     with pytest.raises(ValidationError, match="different page"):
-        prepared.collect(
-            [
-                {
-                    "index": 0,
-                    "outcome": "recognized",
-                    "output": RecognitionOutput(page=page, part=wrong).model_dump(mode="json"),
-                }
-            ]
-        )
-    assert prepared.collect([{"index": 0, "outcome": "error", "error": "unavailable"}])[1]
+        value.model_copy(update={"recognition": [
+            MapItem[RecognitionOutput](
+                index=0, outcome="recognized", output=RecognitionOutput(page=page, part=wrong),
+            ),
+        ]}).carriers()
+    assert value.model_copy(update={"recognition": [
+        MapItem[RecognitionOutput](index=0, outcome="error", error="unavailable"),
+    ]}).carriers()[1] == ["recognition_unavailable:0:0"]
     assert DeterministicProvider.calls == ["recognize"]
     assert system_queryset(StepAttempt).get(step_run__run=run).effect_started_at is not None
 
@@ -433,12 +438,11 @@ def test_unsupported_source_retains_an_explicit_source_hold(step_evidence):
             [file], [], profile=TextProfile(), config=NativeExtractionProvider.parse_config({}), actor=actor,
             heartbeat=lambda: None,
         )
-    collected = execute(CollectCarriersStep, {"prepared": prepared.model_dump(mode="json"), "recognition": []}, actor)
-    assert collected.outcome == "source_hold"
     run = execute(
         ProcessEvidenceStep,
         {
-            **collected.output,
+            "prepared": prepared.model_dump(mode="json"),
+            "recognition": [],
             "target_model": "storage.File",
             "target_id": str(file.sqid),
         },
@@ -477,18 +481,11 @@ def test_partial_recognition_failure_blocks_inference_before_provider_call(step_
             height=20,
         )
     )
-    collected = execute(
-        CollectCarriersStep,
-        {
-            "prepared": prepared.model_dump(mode="json"),
-            "recognition": [{"index": 0, "outcome": "error", "error": "unavailable"}],
-        },
-        actor,
-    )
     processed = execute(
         ProcessEvidenceStep,
         {
-            **collected.output,
+            "prepared": prepared.model_dump(mode="json"),
+            "recognition": [{"index": 0, "outcome": "error", "error": "unavailable"}],
             "target_model": "storage.File",
             "target_id": str(file.sqid),
         },
@@ -543,13 +540,11 @@ def test_native_acquisition_retains_bounded_rasters(step_evidence, media_type):
         assert page.image(retained).image_bytes
 
 
-def test_document_extraction_installation_awaits_l4(execution):
+def test_document_extraction_installs(execution):
     actor, _sent = execution
     path = Path(__file__).parents[1] / "addons/angee/workflows_extraction/resources/install/100_workflows.workflow.yaml"
     fields = yaml.safe_load(path.read_text())["rows"][0]["fields"]
     _definition, issues = Definition.check(fields["draft"])
-    if any(issue.path == ["nodes", "map_pages", "body"] for issue in issues):
-        pytest.skip("L4: Definition does not yet admit the nested map body or its built-in step.")
     assert not issues
     workflow = load_workflow(fields["draft"], key=fields["key"], actor=actor)
     assert workflow.published_id is not None

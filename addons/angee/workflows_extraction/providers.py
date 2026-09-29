@@ -154,32 +154,6 @@ class PreparedDocument(BaseModel):
         """Return the prepared pages whose retained rasters need recognition."""
         return [page for page in self.pages if page.image_file_id]
 
-    def collect(self, results: Sequence[dict[str, Any]]) -> tuple[tuple[PartCarrier, ...], list[str]]:  # L4
-        """Accept exactly one ordered map response for every requested raster."""
-        requested = self.recognition_pages
-        if len(results) > len(requested):
-            raise ValidationError("Map returned unrequested page results.")
-        parts = list(self.parts)
-        holds = list(self.hold_reasons)
-        for index, page in enumerate(requested):
-            item = results[index] if index < len(results) else None
-            if item is not None and item.get("index") != index:
-                raise ValidationError("Map page results must retain their ordered indices.")
-            if item is None or item.get("outcome") != "recognized":
-                holds.append(f"recognition_unavailable:{page.source_position}:{page.page_position}")
-                continue
-            response = RecognitionOutput.model_validate(item["output"])
-            part = response.part
-            if (
-                response.page != page
-                or part.source_position != page.source_position
-                or part.source_page != page.page_position
-                or part.kind != ExtractionPartKind.RECOGNIZED_TEXT
-            ):
-                raise ValidationError("Recognition returned a different page carrier.")
-            parts.append(response.part)
-        return tuple(parts), holds
-
 
 class RecognitionOutput(BaseModel):
     """Recognized text bound to the exact prepared raster identity."""

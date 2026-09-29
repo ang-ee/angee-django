@@ -28,9 +28,10 @@ profile and backend declarations. Run input supplies record references and
 revision correspondence. The shipped definition defaults to the unconfigured
 profile; an author must select a profile before executing it.
 
-The shipped map definition still awaits L4 installation support. Its temporary
-`collect_carriers` adapter is marked `# L4`; the engine's typed map output will
-replace it. Owned-child admission belongs to the engine's later start-run contract.
+The shipped definition runs prepare, a `map` of page recognition, then process.
+Processing consumes the engine's typed `MapItem` results directly; the map's
+`failed` edge also routes to processing, so a failed page becomes a source hold
+while its siblings' evidence is retained.
 
 Register profiles through `ANGEE_EXTRACTION_PROFILE_CLASSES` and providers through
 `ANGEE_EXTRACTION_BACKEND_CLASSES`. The manifest owns installation and native
