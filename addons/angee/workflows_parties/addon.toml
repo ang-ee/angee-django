@@ -1,0 +1,13 @@
+[addon]
+name = "angee.workflows_parties"
+description = "Party identity review and mapped duplicate-pair reviews"
+keywords = ["workflows", "parties", "reviews", "dedupe"]
+category = "Workflows"
+depends_on = ["angee.workflows", "angee.decisions", "angee.parties"]
+
+[resources]
+install = ["resources/install/100_workflows.workflow.yaml"]
+demo = [
+  "resources/demo/010_parties.party.yaml",
+  { path = "resources/demo/020_parties.handle.yaml", depends_on = "resources/demo/010_parties.party.yaml" },
+]

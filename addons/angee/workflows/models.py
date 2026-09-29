@@ -447,6 +447,10 @@ class DecisionWorkflow(models.Model):
     hasura_filterable_fields = (
         "group__step_run", "group__step_run__run", "group__step_run__run__version__workflow",
     )
+    hasura_filter_aliases = {
+        "workflow_name": "group__step_run__run__version__workflow__name",
+        "node_key": "group__step_run__node_key",
+    }
 
     class Meta:
         """Compose declarations onto the decision row without another table."""

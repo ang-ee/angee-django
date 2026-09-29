@@ -133,10 +133,7 @@ class ReviewStep[I, O, C, B](Step[I, O, C]):
             del ctx.pending_artifacts[artifact_count:]
             if round_number >= self.max_rounds:
                 raise
-            if isinstance(error, ValidationError):
-                errors = error.message_dict if hasattr(error, "error_dict") else {"__all__": error.messages}
-            else:
-                errors = {"__all__": [str(error)]}
+            errors = ValidationError(ValidationError(error).update_error_dict({})).message_dict
             return Ask(group_id=group.pk, errors=errors, state={**ctx.state, "review_round": round_number + 1})
         if isinstance(result, (Wait, NextPage)):
             result = replace(result, state={**(result.state or {}), "review_round": round_number})

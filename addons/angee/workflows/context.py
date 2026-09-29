@@ -164,6 +164,10 @@ class StepContext:
             parent_step=self.step_run, relation=relation, version=version,
         )
 
+    def cancel_run(self, run: Any) -> None:
+        """Request cancellation as this run's actor after the body commits."""
+        type(self.run).objects.cancel_on_commit(run, self.actor)
+
     def _require_mode(self, mode: str) -> None:
         """Reject operations outside their declared transaction boundary."""
         if self.step.mode != mode:

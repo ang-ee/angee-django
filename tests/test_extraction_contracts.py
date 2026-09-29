@@ -29,7 +29,6 @@ from angee.workflows_extraction.pointers import (
 from angee.workflows_extraction.profiles import (
     ExtractionProfile,
     UnconfiguredExtractionProfile,
-    authored_profile_config,
 )
 from angee.workflows_extraction.providers import NativeExtractionProvider
 from angee.workflows_extraction.steps import PreparePagesStep, RecognizePageStep
@@ -59,7 +58,6 @@ def test_profile_resolves_through_existing_registry_and_fails_closed():
     assert not profile_class().inference_required({}, [])
     with pytest.raises(ValidationError, match="does not accept configuration"):
         profile_class.parse_config({"retry_of_revision": 3})
-    assert authored_profile_config({"retry_of_revision": 3}) == {"retry_of_revision": 3}
 
 
 def test_claims_use_exact_text_spans_and_escaped_pointers(text_part):

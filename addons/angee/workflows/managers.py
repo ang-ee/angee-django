@@ -238,6 +238,11 @@ class WorkflowManager(AngeeManager):
 class WorkflowRunQuerySet(AngeeQuerySet):
     """Own run locks and the delivery obligation every lock holder acquires."""
 
+    def for_subject(self, record: Any) -> Any:
+        """Select the canonical subject without changing this queryset's read scope."""
+        target = canonical_record_target(record)
+        return self.filter(subject_content_type=target.content_type, subject_object_id=target.object_id)
+
     @contextmanager
     def hold(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
         """Lock one run and dispatch its ready rows after a successful commit.
@@ -495,7 +500,20 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 publish_change(run, action="update", update_fields=None)
         return Cancellation(canceled, steps, reviews, children)
 
-    def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta = timedelta(seconds=5)) -> Cancellation:
+    def cancel_on_commit(self, run: Any, actor: Any) -> None:
+        """Deliver an authorized cancellation after this transaction releases its locks.
+
+        Rollback discards the request. The task calls ``cancel`` with the same
+        actor, rechecking access and terminal state under the existing owner.
+        Robust delivery failures are logged without interrupting other callbacks.
+        """
+        actor = run.require_access("write", actor)
+        if actor is None:
+            raise PermissionDenied("Deferred cancellation requires an actor.")
+        payload = {"run_id": run.pk, "actor": str(to_subject_ref(actor))}
+        transaction.on_commit(lambda: enqueue_task("workflows.cancel", kwargs=payload), robust=True)
+
+    def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta | None = timedelta(seconds=5)) -> Cancellation:
         """Cancel open rows after DATABASE work releases its lock, retaining terminal run facts."""
 
         if not system_queryset(self.model).filter(pk=run.pk).exists():

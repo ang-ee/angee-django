@@ -39,6 +39,7 @@ StepArtifact = apps.get_model("workflows", "StepArtifact")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 DecisionGroup = apps.get_model("decisions", "DecisionGroup")
+Decision = apps.get_model("decisions", "Decision")
 _STEP_POLICY_VERSION = Prefetch(
     "run__version", queryset=system_queryset(WorkflowVersion).only("document"), to_attr="policy_version",
 )
@@ -163,6 +164,14 @@ class DecisionGroupWorkflowExtension:
     """Expose the unique waiting execution through its own read permission."""
 
     step_run: StepRunType | None = actor_scoped_to_one("step_run", reverse=True)
+
+
+@strawberry_django.type(Decision, name="DecisionType", extend=True)
+class DecisionWorkflowExtension:
+    """Project execution display fields through every related owner's read scope."""
+
+    workflow_name: str | None
+    node_key: str | None
 
 
 @strawberry_django.type(StepAttempt)
@@ -372,7 +381,7 @@ schemas = {
     "console": {
         "query": [resource.query for resource in _RESOURCES],
         "mutation": [WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
-        "type_extensions": [DecisionGroupWorkflowExtension],
+        "type_extensions": [DecisionGroupWorkflowExtension, DecisionWorkflowExtension],
         "types": [
             RunOrigin,
             WorkflowType, WorkflowVersionType, WorkflowRunType, StepRunType, StepAttemptType, StepArtifactType,

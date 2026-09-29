@@ -12,6 +12,7 @@ from strawberry.scalars import JSON
 from angee.base.scoping import aggregate_scoped_queryset
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import with_filter_aliases
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.iam.schema import UserType
@@ -33,6 +34,11 @@ class DecisionGroupType(AngeeNode):
 @strawberry_django.type(Decision)
 class DecisionType(AngeeNode):
     """One seat's frozen question and final answer."""
+
+    @classmethod
+    def get_queryset(cls, queryset: models.QuerySet, info: strawberry.Info) -> models.QuerySet:
+        """Compose extension-owned scalar projections through native nested loading."""
+        return with_filter_aliases(queryset)
 
     group: DecisionGroupType
     index: auto

@@ -1,0 +1,36 @@
+_meta:
+  model: workflows.Workflow
+rows:
+  - xref: parties_identity_review
+    fields:
+      key: parties_identity_review
+      name: Party identity review
+      description: Review proposed identity values against the retained party facts.
+      publish: true
+      draft:
+        nodes:
+          identity:
+            step: parties_identity_review
+        results:
+          - {from: identity, when: [applied, unchanged, conflict, rejected, escalated, expired, superseded]}
+  - xref: parties_dedupe
+    fields:
+      key: parties_dedupe
+      name: Duplicate party review
+      description: Find shared-handle candidates and review each pair independently.
+      publish: true
+      draft:
+        nodes:
+          scan:
+            step: parties_dedupe_scan
+            next: {done: review_pairs}
+          review_pairs:
+            step: map
+            input: {items: {from: scan}}
+            body:
+              step: parties_dedupe_review
+              input:
+                pair: {from: item}
+                assignee: {from: input, path: [assignee]}
+        results:
+          - {from: review_pairs, when: [done, failed]}

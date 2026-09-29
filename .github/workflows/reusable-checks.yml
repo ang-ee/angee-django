@@ -103,8 +103,10 @@ jobs:
             tests/test_workflows_testing.py tests/test_testing.py \
             tests/test_workflows_io.py tests/test_workflows_contract.py tests/test_workflows_graphql.py \
             tests/test_workflows_fix_round.py \
+            tests/test_workflows_cancel.py tests/test_workflows_cancel_concurrency.py \
             tests/test_workflows_review.py tests/test_workflows_review_concurrency.py \
             tests/test_workflows_review_graphql.py tests/test_decisions_inbox.py \
+            tests/test_decision_display_nested.py \
             tests/test_workflows_map_definition.py tests/test_workflows_map.py \
             tests/test_workflows_map_concurrency.py tests/test_workflows_map_surface.py \
             tests/test_workflows_await_definition.py tests/test_workflows_children.py \
@@ -112,6 +114,7 @@ jobs:
             tests/test_workflows_retention.py \
             tests/test_workflows_triggers.py tests/test_workflows_triggers_surface.py \
             tests/test_workflows_triggers_concurrency.py tests/test_workflows_messaging.py \
+            tests/test_workflows_parties.py \
             tests/test_composed_note_workflow.py \
             tests/test_extraction_steps.py tests/test_extraction_decisions.py \
             tests/test_composed_extraction_workflow.py \

@@ -158,6 +158,23 @@ def test_run_subject_filters_use_model_labels_and_public_ids(schema, execution):
     )) == visible
 
 
+def test_for_subject_preserves_actor_and_existing_filters(execution):
+    """Shared subjects do not turn a starter's query into another starter's runs."""
+    admin, _sent = execution
+    starter, other = (create_user(name) for name in ("subject-reader", "subject-other-reader"))
+    workflow = load_workflow(document("entry"), actor=admin)
+    for actor in (starter, other):
+        workflow.with_actor(admin).grant_record_access("starter", actor)
+    own = start_run(workflow, actor=starter, subject=workflow)
+    foreign = start_run(workflow, actor=other, subject=workflow)
+    start_run(workflow, actor=starter)
+    rows = WorkflowRun.objects.with_actor(starter).for_subject(workflow)
+    assert list(rows.values_list("pk", flat=True)) == [own.pk]
+    assert not rows.filter(pk=foreign.pk).exists()
+    other_rows = WorkflowRun.objects.with_actor(other).for_subject(workflow)
+    assert list(other_rows.values_list("pk", flat=True)) == [foreign.pk]
+
+
 def test_run_origin_groups_and_filters_follow_generated_lineage_and_read_scope(schema, execution):
     """Origin is one database-derived fact for rows, scoped groups and drill-down."""
     admin, _sent = execution

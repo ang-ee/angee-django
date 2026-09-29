@@ -35,8 +35,7 @@ while its siblings' evidence is retained.
 
 Register profiles through `ANGEE_EXTRACTION_PROFILE_CLASSES` and providers through
 `ANGEE_EXTRACTION_BACKEND_CLASSES`. The manifest owns installation and native
-parser dependencies. `profiles.authored_profile_config` replaces the deleted
-service helper; historical `Document*` contracts remain aliases to the pure
+parser dependencies. Historical `Document*` contracts remain aliases to the pure
 contracts. Decision-backed corrections compose the typed resolution contract in
 `angee.decisions`; [`ExtractionManager`](managers.py) owns revision and reviewed
 authority validation. [`schema.py`](schema.py) exposes read-only evidence through

@@ -621,6 +621,43 @@ def declared_hasura_resource_fields(
     return tuple(fields)
 
 
+def declared_filter_aliases(model: type[models.Model]) -> dict[str, str]:
+    """Collect extension-owned scalar paths, failing on ambiguous or unsafe declarations."""
+    aliases: dict[str, str] = {}
+    for contributor in reversed(model.__mro__):
+        for alias, path in contributor.__dict__.get("hasura_filter_aliases", {}).items():
+            if alias in aliases:
+                raise ImproperlyConfigured(f"Duplicate filter alias {alias!r} on {model._meta.label}.")
+            path = path.replace(".", "__")
+            try:
+                field = require_field_for_path(model, path)
+            except FieldPathError as error:
+                raise ImproperlyConfigured(
+                    f"{model._meta.label} filter alias {alias!r} has invalid path {path!r}: {error}"
+                ) from error
+            if field.is_relation:
+                raise ImproperlyConfigured(f"Filter alias {alias!r} must target a scalar field.")
+            assert_no_gated_read_fields(model, [path], "filter alias", "field-gated reads cannot be query axes")
+            aliases[alias] = path
+    return aliases
+
+
+def with_filter_aliases(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    """Project declared aliases for roots and native type querysets, including nested reads.
+
+    Keep guarded scalars inside correlated subqueries so related-object loading
+    can enforce its own materialization guards on the outer queryset unchanged.
+    """
+    projected = {}
+    for alias, path in declared_filter_aliases(queryset.model).items():
+        expression = actor_scoped_relation_expression(queryset, path)
+        source = aggregate_queryset(queryset).order_by().filter(pk=models.OuterRef("pk"))
+        projected[alias] = models.Subquery(source.annotate(
+            _angee_scalar=expression if expression is not None else models.F(path),
+        ).values("_angee_scalar")[:1])
+    return queryset.annotate(**projected)
+
+
 def _public_pk(model: type[models.Model], value: Any) -> Any:
     """Decode one public id through the identity owner, not row permissions."""
 
@@ -782,8 +819,21 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
 
     Nested relation identity filters require read access at every protected hop,
     sharing the permission-safe scalar expression used by related grouping axes.
+    Model extensions may declare ``hasura_filter_aliases`` mapping public scalar
+    filter names to related field paths. These inherit the same read guards and
+    project onto resource rows for output-type extensions, without importing the
+    extending addon into the resource owner.
     """
 
+    related_aliases = declared_filter_aliases(model)
+    for alias, path in related_aliases.items():
+        if alias in (filter_expressions or {}):
+            raise ImproperlyConfigured(f"Duplicate filter alias {alias!r} on {model._meta.label}.")
+        filter_expressions = {
+            **(filter_expressions or {}),
+            alias: models.ExpressionWrapper(models.F(path), output_field=require_field_for_path(model, path)),
+        }
+    filterable = (*filterable, *(alias for alias in related_aliases if alias not in filterable))
     if record_ref_filters is not None:
         if not issubclass(model, RecordRefMixin):
             raise ImproperlyConfigured("Record-reference filters require RecordRefMixin.")
@@ -835,7 +885,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         for path, scalar_path in relation_filters.items():
             expression = actor_scoped_relation_expression(queryset, scalar_path)
             guarded[filter_aliases[path]] = expression if expression is not None else models.F(scalar_path)
-        return queryset.alias(**expressions, **guarded)
+        return with_filter_aliases(queryset.alias(**(expressions | guarded)))
 
     if expressions or relation_filters:
         for key in expressions:

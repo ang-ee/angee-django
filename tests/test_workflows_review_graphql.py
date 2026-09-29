@@ -119,3 +119,41 @@ def test_decision_execution_paths_filter_by_public_identity(schema, linked_decis
     }
     resource = next(resource for resource in schema.angee_resources if resource.model_label == "decisions.Decision")
     assert resource.query.fields[path.replace("__", ".")].filter is not None
+
+
+def test_decision_display_fields_follow_related_read_permissions(schema, linked_decision):
+    """Inbox columns do not disclose execution labels to a seat-only reader."""
+    workflow, _run, step, decision, owner, operator, stranger, assignee = linked_decision
+    query = "{ decisions { id workflow_name node_key } }"
+    for actor, name, key in ((owner, workflow.name, step.node_key), (operator, None, step.node_key),
+                             (assignee, None, None)):
+        assert result_data(execute_schema(schema, query, user=actor)) == {
+            "decisions": [{"id": decision.sqid, "workflow_name": name, "node_key": key}],
+        }
+    assert result_data(execute_schema(schema, query, user=stranger)) == {"decisions": []}
+    resource = next(item for item in schema.angee_resources if item.model_label == "decisions.Decision")
+    for name in ("workflow_name", "node_key"):
+        assert name in {field.name for field in resource.fields}
+        assert resource.query.fields[name].filter is not None
+
+
+@pytest.mark.parametrize("field,index,attribute", [("workflow_name", 0, "name"), ("node_key", 2, "node_key")])
+def test_decision_display_filters_and_dashboard_counts_do_not_leak(schema, linked_decision, field, index, attribute):
+    """Exact filter aliases share the guarded value across lists, counts and stored filters."""
+    decision, owner, operator, stranger, assignee = linked_decision[3:]
+    value = getattr(linked_decision[index], attribute)
+    where = {field: {"_eq": value}}
+    query = """query($where: decisions_bool_exp) {
+      decisions(where: $where) { id }
+      decisions_aggregate(where: $where) { aggregate { count } }
+    }"""
+    schemas = GraphQLSchemas([SchemaAddon(decision_schema.schemas), SchemaAddon(workflow_schema.schemas)])
+    condition = schemas.resource_filter(Decision, where)
+    for actor, visible in ((owner, True), (operator, field == "node_key"), (stranger, False), (assignee, False)):
+        assert result_data(execute_schema(schema, query, {"where": where}, user=actor)) == {
+            "decisions": [{"id": decision.sqid}] if visible else [],
+            "decisions_aggregate": {"aggregate": {"count": int(visible)}},
+        }
+        assert list(condition(Decision.objects.with_actor(actor)).values_list("pk", flat=True)) == (
+            [decision.pk] if visible else []
+        )

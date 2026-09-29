@@ -76,7 +76,3 @@ class UnconfiguredExtractionProfile(ExtractionProfile):
 
     def normalize_inference_candidate(self, *args: Any, **kwargs: Any) -> Result:
         raise ValueError("Select a document extraction profile.")
-
-
-# Historical import: the obsolete retry-lineage filtering rule has no successor.
-authored_profile_config = dict

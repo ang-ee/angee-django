@@ -1138,11 +1138,12 @@ class PartyHandleManager(AngeeManager.from_queryset(PartyHandleQuerySet)):  # ty
 
 @dataclass(frozen=True, slots=True)
 class DuplicatePartyCandidate:
-    """One deterministic duplicate candidate and the normalized handle it shares."""
+    """One deterministic pair with its normalized identity and readable evidence rows."""
 
     left: Any
     right: Any
     normalized_value: str
+    handles: tuple[Any, ...]
 
 
 class MergeVetoManager(AngeeManager):
@@ -1382,6 +1383,7 @@ class PartyQuerySet(AngeeQuerySet):
         visible_party_ids = self.canonical().scoped_for_aggregate().values("pk")
         handles = (
             handle_model.objects.all()
+            .with_actor(self.actor() or current_actor())
             .scoped_for_aggregate()
             .filter(
                 party_id__in=Subquery(visible_party_ids),
@@ -1402,18 +1404,17 @@ class PartyQuerySet(AngeeQuerySet):
         for platform, normalized_value in shared_handles:
             shared_filter |= Q(platform=platform, normalized_value=normalized_value)
 
-        parties_by_handle: dict[tuple[str, str], list[Any]] = {}
-        for platform, normalized_value, party_id in (
-            handles.filter(shared_filter)
-            .values_list("platform", "normalized_value", "party_id")
-            .distinct()
-            .order_by("normalized_value", "platform", "party_id")
+        parties_by_handle: dict[tuple[str, str], dict[Any, list[Any]]] = {}
+        for handle in handles.filter(shared_filter).only("platform", "normalized_value", "party_id").order_by(
+            "normalized_value", "platform", "party_id", "pk",
         ):
-            parties_by_handle.setdefault((platform, normalized_value), []).append(party_id)
+            parties_by_handle.setdefault((handle.platform, handle.normalized_value), {}).setdefault(
+                handle.party_id, [],
+            ).append(handle)
 
         candidate_party_ids = {party_id for party_ids in parties_by_handle.values() for party_id in party_ids}
         forbidden = merge_veto_model.objects.forbidden_pairs(candidate_party_ids)
-        pairs: list[tuple[str, Any, Any]] = []
+        pairs: list[tuple[str, Any, Any, tuple[Any, ...]]] = []
         seen: set[tuple[Any, Any]] = set()
         for (_platform, normalized_value), party_ids in parties_by_handle.items():
             for party_a_id, party_b_id in combinations(party_ids, 2):
@@ -1421,14 +1422,15 @@ class PartyQuerySet(AngeeQuerySet):
                 if pair in seen or pair in forbidden:
                     continue
                 seen.add(pair)
-                pairs.append((normalized_value, *pair))
+                pairs.append((normalized_value, *pair, (*party_ids[party_a_id], *party_ids[party_b_id])))
                 if len(pairs) >= bounded:
                     break
             if len(pairs) >= bounded:
                 break
 
         paired_party_ids = {
-            party_id for _normalized_value, party_a_id, party_b_id in pairs for party_id in (party_a_id, party_b_id)
+            party_id for _normalized_value, party_a_id, party_b_id, _handles in pairs
+            for party_id in (party_a_id, party_b_id)
         }
         parties = {party.pk: party for party in self.canonical().filter(pk__in=paired_party_ids)}
         return [
@@ -1436,8 +1438,9 @@ class PartyQuerySet(AngeeQuerySet):
                 left=parties[party_a_id],
                 right=parties[party_b_id],
                 normalized_value=normalized_value,
+                handles=evidence,
             )
-            for normalized_value, party_a_id, party_b_id in pairs
+            for normalized_value, party_a_id, party_b_id, evidence in pairs
             if party_a_id in parties and party_b_id in parties
         ]
 
