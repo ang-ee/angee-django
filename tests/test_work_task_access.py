@@ -4,6 +4,8 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.backends import backend
 from rebac.backends.local_query import LocalQueryScope
@@ -137,6 +139,57 @@ class PublicQueueTests(WorkCase):
         self.assertFalse(self.scoped(task, self.outsider))
 
 
+class QueuePermissionsTests(WorkCase):
+    def test_queue_permissions_batch_for_members_and_hide_from_outsiders(self):
+        query = "{ work_queues(order_by: [{key: asc}]) { id permissions } }"
+        query_counts = {}
+        for total in (1, 10):
+            with system_context(reason="tests.work.queue_permissions"):
+                for index in range(self.Queue._base_manager.count(), total):
+                    queue = self.Queue.objects.create(
+                        name=f"Queue {index}", key=f"Q{index}", owner=self.manager, provision_stages=False
+                    )
+                    self.membership(self.member, queue=queue)
+                    self.membership(self.moderator, queue=queue, role="moderator")
+            for user, expected in (
+                (self.member, ("read",)),
+                (self.moderator, ("read", "write")),
+                (self.manager, ("read", "share", "write")),
+            ):
+                # Warm schema and permission caches independently of list size.
+                self.graphql(query, {}, user=user)
+                with CaptureQueriesContext(connection) as captured:
+                    rows = self.graphql(query, {}, user=user)["work_queues"]
+                self.assertEqual(len(rows), total)
+                self.assertEqual({tuple(row["permissions"]) for row in rows}, {expected})
+                query_counts[user.pk, total] = len(captured)
+            self.assertEqual(self.graphql(query, {}, user=self.outsider)["work_queues"], [])
+        for user in (self.member, self.moderator, self.manager):
+            self.assertGreater(query_counts[user.pk, 1], 0)
+            self.assertEqual(query_counts[user.pk, 1], query_counts[user.pk, 10], query_counts)
+
+    def test_public_queue_permissions_batch_for_outsiders(self):
+        query = "{ work_queues { id permissions } }"
+        counts = []
+        with system_context(reason="tests.work.public_queue_permissions"):
+            self.Queue.objects.filter(pk=self.queue.pk).update(visibility="public")
+        for total in (1, 10):
+            with system_context(reason="tests.work.public_queue_permissions"):
+                for index in range(self.Queue._base_manager.count(), total):
+                    self.Queue.objects.create(
+                        name=f"Public queue {index}", key=f"P{index}", owner=self.manager,
+                        visibility="public", provision_stages=False,
+                    )
+            self.graphql(query, {}, user=self.outsider)
+            with CaptureQueriesContext(connection) as captured:
+                rows = self.graphql(query, {}, user=self.outsider)["work_queues"]
+            self.assertEqual(len(rows), total)
+            self.assertEqual({tuple(row["permissions"]) for row in rows}, {("read",)})
+            counts.append(len(captured))
+        self.assertGreater(counts[0], 0)
+        self.assertEqual(*counts)
+
+
 class SchemaImportTests(WorkCase):
     def test_projects_schema_consumes_work_declarations(self):
         from angee.projects import schema
@@ -180,3 +233,7 @@ def test_work_task_access_denormalized(tmp_path: Path):
 def test_public_queue_creation(tmp_path: Path):
     """Expected to pass after the public-visibility change in spaces lands."""
     run_composed_tests(tmp_path, "tests.test_work_task_access.PublicQueueTests", app="angee.work")
+
+
+def test_queue_permissions(tmp_path: Path):
+    run_composed_tests(tmp_path, "tests.test_work_task_access.QueuePermissionsTests", app="angee.work")

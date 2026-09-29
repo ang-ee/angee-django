@@ -1,10 +1,12 @@
 """Shared fixtures for work contracts on the isolated, emitted model graph."""
 
+from types import SimpleNamespace
+
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.test import TransactionTestCase, override_settings
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from django.test import RequestFactory, TransactionTestCase, override_settings
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import backend
 from rebac.backends.local_query import LocalQueryScope
 from rebac.roles import grant
@@ -108,3 +110,21 @@ class WorkCase(TransactionTestCase):
 
     def recipients(self, message):
         return set(self.ThreadNotification._base_manager.filter(message=message).values_list("user_id", flat=True))
+
+    def graphql(self, query, variables, *, user=None, bucket="public"):
+        """Execute one composed-schema document as ``user`` and return its data."""
+
+        # The composed GraphQL surface exists only inside the emitted host.
+        from angee.graphql.schema import GraphQLSchemas
+
+        user = user or self.owner
+        request = RequestFactory().post("/graphql/")
+        request.user = user
+        with actor_context(user):
+            result = (
+                GraphQLSchemas.from_discovery()
+                .build(bucket)
+                .execute_sync(query, variable_values=variables, context_value=SimpleNamespace(request=request))
+            )
+        self.assertIsNone(result.errors, result.errors)
+        return result.data

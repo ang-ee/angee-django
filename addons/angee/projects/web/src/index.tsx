@@ -13,6 +13,8 @@ export {
   PROJECT_MODEL,
   TASK_MODEL,
 } from "./resources";
+/** The manager's phase dropdown for one project, composable onto a consumer's project page. */
+export { ProjectPhaseControl } from "./project-phase";
 export { useTaskFormDeclaration } from "./task-actions";
 export { TaskBoardSurface, type TaskBoardSurfaceProps } from "./task-board-surface";
 

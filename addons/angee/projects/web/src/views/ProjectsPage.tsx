@@ -186,6 +186,7 @@ function ProjectMilestonesTab({ recordId }: RecordPanelContext): React.ReactElem
     id: "mark-reached",
     label: t("milestone.action.reach"),
     icon: "check",
+    variant: "ghost",
     visible: (row) => !row.reached_at,
     pendingPolicy: "active-row",
     onSelect: (row) => markReached(row.id, { expected_revision: row.revision }),
