@@ -40,7 +40,7 @@ from rebac.actors import NoActorResolvedError, to_subject_ref
 from rebac.backends import backend as rebac_backend
 from rebac.backends.local import mark_relationships_changed
 from rebac.models import Relationship, RelationshipRegistry, active_relationship_model
-from rebac.resources import to_object_ref
+from rebac.resources import model_resource_type, to_object_ref
 from referencing.exceptions import Unresolvable
 
 from angee.base.actors import actor_user_id
@@ -2481,12 +2481,29 @@ class TriggerQuerySet(AngeeQuerySet[Any]):
             raise TypeError("Trigger rules do not support QuerySet.update(); save instances instead.")
         return super().update(**kwargs)
 
-    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+    def bulk_create(
+        self,
+        objs: Iterable[Any],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Collection[str] | None = None,
+        unique_fields: Collection[str] | None = None,
+    ) -> list[Any]:
+        if update_conflicts:
+            raise TypeError("Trigger rules do not support bulk upserts; save instances instead.")
         rows = list(objs)
         for row in rows:
             row.enabled = False
             row.full_clean()
-        return super().bulk_create(rows, *args, **kwargs)
+        return super().bulk_create(
+            rows,
+            batch_size=batch_size,
+            ignore_conflicts=ignore_conflicts,
+            update_conflicts=update_conflicts,
+            update_fields=update_fields,
+            unique_fields=unique_fields,
+        )
 
     def bulk_update(self, objs: Iterable[Any], fields: Iterable[str], *args: Any, **kwargs: Any) -> int:
         field_names = set(fields)
@@ -2563,6 +2580,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
         """Change activation under lineage-before-trigger locks."""
 
         caller._require_record_access("write")
+        actor_id = actor_user_id(caller.actor() or current_actor())
         trigger_id = caller.pk
         expected_workflow_id = caller.workflow_id
         discovered = system_queryset(self.model, lock=None).filter(pk=trigger_id).values("workflow_id").first()
@@ -2586,14 +2604,23 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 return trigger
             if workflow_model.objects.current_published_for(head) is None:
                 raise ValidationError({"enabled": "Publish this workflow before enabling its trigger."})
-            trigger.validated_config(require_publisher=True)
+            declaration = trigger.validated_config(require_publisher=True)
             trigger.enabled = True
+            if actor_id is not None:
+                trigger.execution_actor_id = actor_id
+            if isinstance(declaration, EventTriggerConfig):
+                event_model = trigger.event_publisher_model(declaration)
+                run_model = self.model._meta.apps.get_model("workflows", "WorkflowRun")
+                if model_resource_type(event_model) and run_model.objects._owner(None, trigger, head) is None:
+                    raise ValidationError({"enabled": "An execution actor is required for a secured event trigger."})
             if trigger.kind == TriggerKind.SCHEDULE:
                 trigger.next_fire_at = trigger.initial_fire_at(now=timezone.now())
             else:
                 trigger.next_fire_at = None
             trigger.full_clean()
-            trigger._save_validated(update_fields={"enabled", "event_model_label", "next_fire_at", "updated_at"})
+            trigger._save_validated(
+                update_fields={"enabled", "execution_actor", "event_model_label", "next_fire_at", "updated_at"}
+            )
             return trigger
 
     def start_event(
@@ -2632,7 +2659,12 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                 return None
             if not trigger.event_subject_matches(subject, source=source):
                 return None
-            if not trigger.condition_matches(type(subject), subject):
+            condition_actor = run_model.objects._owner(actor, trigger, head)
+            if not trigger.condition_matches(type(subject), subject, actor=condition_actor):
+                logger.info(
+                    "Trigger event skipped.",
+                    extra={"trigger_id": trigger.pk, "reason": "condition_not_matched_or_subject_unreadable"},
+                )
                 return None
             content_type = ContentType.objects.get_for_model(subject, for_concrete_model=False)
             occurrence_max_length = cast(int, run_model._meta.get_field("occurrence_id").max_length)

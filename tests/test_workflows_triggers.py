@@ -136,6 +136,7 @@ def workflow_trigger_tables(
         ]
     )
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+    monkeypatch.setattr(schemas, "model_readable_fields", lambda model: frozenset({"id", "name", "state"}))
     with model_tables((TriggerSubject, UnpublishedTriggerSubject)):
         call_command("rebac", "sync", verbosity=0)
         schemas.connect_change_publishers()
@@ -260,15 +261,19 @@ def test_event_trigger_check_without_databases_does_not_query(databases: list[st
     assert workflow_models.check_event_trigger_publishers(databases=databases) == []
 
 
-def test_event_trigger_subject_refetch_uses_system_context(
+def test_event_trigger_subject_refetch_uses_execution_actor_scope(
     workflow_trigger_tables: None,
     no_workflow_queue: None,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """An event trigger can resolve an AngeeManager subject without caller read scope."""
+    """The trigger actor's read scope applies independently of the event's ambient actor."""
 
     del workflow_trigger_tables, no_workflow_queue
     workflow_triggers = importlib.import_module("angee.workflows.triggers")
-    _event_trigger(condition={"state": "ready"}, model=SecuredTriggerSubject)
+    trigger = _event_trigger(condition={"state": "ready"}, model=SecuredTriggerSubject, enabled=False)
+    admin = _platform_admin("trigger-execution-actor")
+    with actor_context(admin):
+        trigger.enable()
     with system_context(reason="test secured trigger subject seed"):
         no_actor_subject = SecuredTriggerSubject.objects.create(name="no actor", state="ready")
 
@@ -289,6 +294,57 @@ def test_event_trigger_subject_refetch_uses_system_context(
         )
 
     assert len(_runs_for_subject(denied_subject)) == 1
+
+    for actor_id in (stranger.pk, None):
+        with system_context(reason="test unreadable trigger subject"):
+            models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), execution_actor_id=actor_id)
+            hidden = SecuredTriggerSubject.objects.create(name="hidden subject", state="ready")
+        caplog.clear()
+        with caplog.at_level("INFO", logger="angee.workflows.managers"):
+            workflow_triggers._on_change_published(
+                sender=SecuredTriggerSubject,
+                payload=ChangePayload.from_instance(hidden, action="create", update_fields=None),
+            )
+        assert _runs_for_subject(hidden) == []
+        skipped = [record for record in caplog.records if getattr(record, "trigger_id", None) == trigger.pk]
+        assert len(skipped) == 1
+        assert getattr(skipped[0], "reason") == "condition_not_matched_or_subject_unreadable"
+        assert hidden.name not in skipped[0].getMessage()
+
+
+def test_secured_event_trigger_requires_resolvable_actor_to_enable(workflow_trigger_tables: None) -> None:
+    """System activation cannot enable a secured trigger with no admission identity."""
+
+    del workflow_trigger_tables
+    trigger = _event_trigger(condition={}, model=SecuredTriggerSubject, enabled=False)
+    with system_context(reason="test actorless secured activation"):
+        with pytest.raises(ValidationError, match="execution actor"):
+            trigger.enable()
+        trigger.refresh_from_db()
+    assert trigger.enabled is False
+    assert trigger.execution_actor_id is None
+
+
+def test_event_condition_mismatch_logs_one_structured_skip(
+    workflow_trigger_tables: None,
+    no_workflow_queue: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A nonmatching rule emits one diagnostic without subject contents."""
+
+    del workflow_trigger_tables, no_workflow_queue
+    trigger = _event_trigger(condition={"state": "ready"})
+    subject = TriggerSubject.objects.create(name="private subject contents", state="draft")
+    caplog.clear()
+    with caplog.at_level("INFO", logger="angee.workflows.managers"):
+        run = Trigger.objects.start_event(
+            trigger.pk, subject=subject, occurrence_id=None, timestamp=timezone.now()
+        )
+    assert run is None
+    skipped = [record for record in caplog.records if getattr(record, "trigger_id", None) == trigger.pk]
+    assert len(skipped) == 1
+    assert getattr(skipped[0], "reason") == "condition_not_matched_or_subject_unreadable"
+    assert subject.name not in skipped[0].getMessage()
 
 
 def test_disabled_event_trigger_does_not_start_run(
@@ -393,7 +449,10 @@ def test_manual_event_fire_is_idempotent_and_reprocesses_with_lineage(
     trigger = _event_trigger(
         condition={"state": "ready"}, model=SecuredTriggerSubject,
         config={"admission_policy": "each_change"},
+        enabled=False,
     )
+    with actor_context(admin):
+        trigger.enable()
     with system_context(reason="manual event subject fixture"):
         subject = SecuredTriggerSubject.objects.create(name="existing", state="draft")
         SecuredTriggerSubject.objects.filter(pk=subject.pk).update(state="ready")
@@ -590,9 +649,13 @@ def test_event_trigger_bad_condition_is_logged_and_skipped(
     """One invalid event condition never breaks the host model save."""
 
     del workflow_trigger_tables, no_workflow_queue
-    trigger = _event_trigger(condition={"missing_field": "ready"}, enabled=False)
+    trigger = _event_trigger(condition={}, enabled=False)
     with system_context(reason="test historical invalid event trigger"):
-        models.QuerySet.update(Trigger.objects.filter(pk=trigger.pk), enabled=True)
+        models.QuerySet.update(
+            Trigger.objects.filter(pk=trigger.pk),
+            config={**trigger.config, "condition": {"missing_field": "ready"}},
+            enabled=True,
+        )
 
     TriggerSubject.objects.create(name="invalid-condition", state="ready")
 
@@ -874,6 +937,7 @@ def test_console_can_enable_and_disable_triggers(
     trigger.refresh_from_db()
     assert enabled["ok"] is True
     assert trigger.enabled is True
+    assert trigger.execution_actor_id == admin.pk
 
     disabled = result_data(execute_schema(schema, disable, {"id": trigger.sqid}, user=admin))[
         "disable_workflow_trigger"
@@ -881,6 +945,56 @@ def test_console_can_enable_and_disable_triggers(
     trigger.refresh_from_db()
     assert disabled["ok"] is True
     assert trigger.enabled is False
+
+
+@pytest.mark.parametrize("operation", ["insert", "update"])
+def test_console_rejects_client_trigger_execution_actor(
+    workflow_trigger_tables: None,
+    operation: str,
+) -> None:
+    """Neither mutation can impersonate another user; activation stamps its caller."""
+
+    del workflow_trigger_tables
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    schema = GraphQLSchemas(
+        [SchemaAddon({"console": workflows_schema.schemas["console"]})]
+    ).build("console")
+    caller = _platform_admin(f"trigger-actor-{operation}")
+    other = User.objects.create_user(username=f"trigger-other-{operation}")
+    trigger = _event_trigger(condition={}, enabled=False)
+    if operation == "insert":
+        mutation = """
+          mutation Spoof($workflow: ID!, $actor: ID!) {
+            insert_workflow_triggers_one(object: {
+              workflow: $workflow, kind: "manual", execution_actor: $actor
+            }) { id }
+          }
+        """
+        variables = {"workflow": trigger.workflow.sqid, "actor": other.sqid}
+    else:
+        mutation = """
+          mutation Spoof($id: ID!, $actor: ID!) {
+            update_workflow_triggers_by_pk(pk_columns: {id: $id}, _set: {execution_actor: $actor}) { id }
+          }
+        """
+        variables = {"id": trigger.sqid, "actor": other.sqid}
+
+    result = execute_schema(schema, mutation, variables, user=caller)
+    assert result.errors
+    assert any("execution_actor" in error.message and "not defined" in error.message for error in result.errors)
+    with system_context(reason="inspect rejected trigger actor write"):
+        assert Trigger.objects.count() == 1
+        trigger.refresh_from_db()
+    assert trigger.execution_actor_id is None
+
+    result_data(execute_schema(
+        schema,
+        "mutation Enable($id: ID!) { enable_workflow_trigger(trigger: $id) { ok } }",
+        {"id": trigger.sqid},
+        user=caller,
+    ))
+    trigger.refresh_from_db()
+    assert trigger.execution_actor_id == caller.pk
 
 
 def test_schedule_preview_projects_invalid_drafts_as_typed_data(
@@ -1200,6 +1314,76 @@ def test_trigger_activation_preserves_caller_authorization_and_rejects_stale_lin
             trigger.enable()
 
 
+@pytest.mark.parametrize("field", ["config", "kind"])
+@pytest.mark.parametrize("partial", [False, True])
+def test_enabled_rule_edit_requires_disable_and_admin_reactivation(
+    workflow_trigger_tables: None, field: str, partial: bool
+) -> None:
+    """A workflow editor cannot reuse the enabling administrator for a new rule."""
+
+    del workflow_trigger_tables
+    editor = User.objects.create_user(username="rule-editor")
+    admin = _platform_admin("rule-enabler")
+    next_admin = _platform_admin("rule-next-enabler")
+    with actor_context(editor):
+        trigger = _event_trigger(condition={"state": "ready"}, enabled=False)
+    with actor_context(admin):
+        trigger.enable()
+    original_config = trigger.config.copy()
+    changed = {**original_config, "condition": {"state": "draft"}} if field == "config" else "manual"
+    with actor_context(editor):
+        edited = Trigger.objects.get(pk=trigger.pk)
+        assert edited.has_access("write")
+        setattr(edited, field, changed)
+        with pytest.raises(ValidationError, match="Disable the trigger before editing its rule."):
+            edited.save(**({"update_fields": {field}} if partial else {}))
+    trigger.refresh_from_db()
+    assert trigger.config == original_config
+    assert trigger.kind == workflow_models.TriggerKind.EVENT
+    assert trigger.execution_actor_id == admin.pk
+    assert trigger.enabled is True
+
+    with actor_context(admin):
+        trigger.disable()
+    with actor_context(editor):
+        edited = Trigger.objects.get(pk=trigger.pk)
+        setattr(edited, field, changed)
+        edited.save(**({"update_fields": {field}} if partial else {}))
+    with actor_context(next_admin):
+        trigger.enable()
+    trigger.refresh_from_db()
+    assert getattr(trigger, field) == changed
+    assert trigger.execution_actor_id == next_admin.pk
+    assert trigger.enabled is True
+
+
+def test_trigger_reenable_stamps_pinned_owner_instead_of_ambient_actor(
+    workflow_trigger_tables: None,
+) -> None:
+    """Reactivation uses the authorized instance actor; disabling preserves attribution."""
+
+    del workflow_trigger_tables
+    owner = User.objects.create_user(username="trigger-owner")
+    other = User.objects.create_user(username="trigger-previous-actor")
+    with actor_context(owner):
+        trigger = _event_trigger(condition={}, enabled=False)
+    with system_context(reason="seed existing trigger execution actor"):
+        trigger.execution_actor = other
+        trigger.save(update_fields={"execution_actor"})
+        trigger.enable()
+    trigger.with_actor(owner)
+
+    with actor_context(other):
+        trigger.disable()
+        trigger.refresh_from_db()
+        assert trigger.execution_actor_id == other.pk
+        trigger.enable()
+        assert trigger.execution_actor_id == owner.pk
+        trigger.refresh_from_db()
+        assert trigger.execution_actor_id == owner.pk
+        assert trigger.enabled is True
+
+
 def test_workflow_head_shares_reach_publications_and_versions_reject_direct_management(
     workflow_trigger_tables: None,
 ) -> None:
@@ -1245,17 +1429,15 @@ def test_workflow_head_shares_reach_publications_and_versions_reject_direct_mana
         {"id__in": 1},
     ),
 )
-def test_event_trigger_enable_compiles_condition_without_running_it(
+def test_event_trigger_creation_validates_condition_without_running_it(
     workflow_trigger_tables: None,
     condition: dict[str, Any],
 ) -> None:
     """Invalid fields, lookups and values are rejected before event delivery."""
 
     del workflow_trigger_tables
-    trigger = _event_trigger(condition=condition, enabled=False)
-    with system_context(reason="test invalid event condition activation"):
-        with pytest.raises(ValidationError, match="condition is invalid"):
-            trigger.enable()
+    with pytest.raises(ValidationError, match="condition is invalid"):
+        _event_trigger(condition=condition, enabled=False)
 
 
 def test_event_trigger_enable_accepts_empty_in_condition(
@@ -1264,7 +1446,7 @@ def test_event_trigger_enable_accepts_empty_in_condition(
     """A provably empty lookup is valid and enables without querying subjects."""
 
     del workflow_trigger_tables
-    trigger = _event_trigger(condition={"id__in": []}, enabled=False)
+    trigger = _event_trigger(condition={"name__in": []}, enabled=False)
     with system_context(reason="test empty event condition activation"):
         trigger.enable()
     trigger.refresh_from_db()
@@ -1297,7 +1479,7 @@ def test_trigger_save_merges_partial_rule_fields_and_rejects_stale_activation(
         assert current.config == {"legacy": True}
 
 
-def test_rule_saves_preserve_operational_state_and_only_cadence_reschedules(
+def test_rule_saves_require_disabling_and_preserve_operational_state(
     workflow_trigger_tables: None,
 ) -> None:
     """Rule authoring cannot overwrite counters or move a schedule for unrelated config."""
@@ -1315,6 +1497,9 @@ def test_rule_saves_preserve_operational_state_and_only_cadence_reschedules(
             hourly_fire_count=1,
         )
         stale.config = {"interval_seconds": 60, "cooldown_seconds": 10, "opaque": True}
+        with pytest.raises(ValidationError, match="Disable the trigger before editing its rule."):
+            stale.save()
+        stale.disable()
         stale.save()
         stale.refresh_from_db()
         assert stale.last_fire_at == fired_at
@@ -1493,3 +1678,96 @@ def _run_count() -> int:
 
     with system_context(reason="test workflows trigger run count"):
         return WorkflowRun.objects.count()
+
+
+def test_console_editor_cannot_change_enabled_trigger_rule(workflow_trigger_tables: None) -> None:
+    """A workflow editor cannot keep the enabling admin's actor on a changed rule."""
+
+    del workflow_trigger_tables
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    schema = GraphQLSchemas([SchemaAddon({"console": workflows_schema.schemas["console"]})]).build("console")
+    admin = _platform_admin("enabled-rule-admin")
+    editor = User.objects.create_user(username="enabled-rule-editor")
+    trigger = _event_trigger(condition={}, enabled=False)
+    with actor_context(admin):
+        trigger.workflow.grant_record_access("editor", editor)
+        trigger.enable()
+    original = dict(trigger.config)
+
+    result = execute_schema(
+        schema,
+        """mutation Edit($id: String!, $config: JSON!) {
+          update_workflow_triggers_by_pk(pk_columns: {id: $id}, _set: {config: $config}) { id }
+        }""",
+        {"id": trigger.sqid, "config": {**original, "cooldown_seconds": 60}},
+        user=editor,
+    )
+
+    assert result.errors
+    assert any("Disable the trigger before editing its rule." in error.message for error in result.errors)
+    with system_context(reason="inspect rejected enabled trigger mutation"):
+        trigger.refresh_from_db()
+    assert trigger.config == original
+    assert trigger.execution_actor_id == admin.pk
+    assert trigger.enabled is True
+
+
+def test_console_trigger_insert_has_no_conflict_upsert(workflow_trigger_tables: None) -> None:
+    """The generated trigger mutation exposes no conflict-update or upsert path."""
+
+    del workflow_trigger_tables
+    workflows_schema = importlib.import_module("angee.workflows.schema")
+    schema = GraphQLSchemas([SchemaAddon({"console": workflows_schema.schemas["console"]})]).build("console")
+    admin = _platform_admin("trigger-upsert-admin")
+    trigger = _event_trigger(condition={}, enabled=False)
+    result = execute_schema(
+        schema,
+        """mutation Upsert($workflow: ID!) {
+          insert_workflow_triggers_one(
+            object: {workflow: $workflow, kind: "manual"}, on_conflict: {}
+          ) { id }
+        }""",
+        {"workflow": trigger.workflow.sqid},
+        user=admin,
+    )
+
+    assert result.errors
+    assert any("Unknown argument 'on_conflict'" in error.message for error in result.errors)
+    mutation = schema._schema.mutation_type
+    assert mutation is not None
+    assert not any("upsert" in field and "workflow_triggers" in field for field in mutation.fields)
+    with system_context(reason="inspect rejected trigger upsert"):
+        assert Trigger.objects.count() == 1
+
+
+@pytest.mark.parametrize("operation", ["update", "bulk_update", "bulk_upsert", "positional_bulk_upsert"])
+def test_enabled_trigger_collection_writes_cannot_bypass_rule_guard(
+    workflow_trigger_tables: None, operation: str,
+) -> None:
+    """Even elevated collection writes cannot replace an enabled trigger's rule."""
+
+    del workflow_trigger_tables
+    admin = _platform_admin(f"trigger-collection-{operation}")
+    trigger = _event_trigger(condition={}, enabled=False)
+    with actor_context(admin):
+        trigger.enable()
+    original = dict(trigger.config)
+    trigger.config = {**original, "cooldown_seconds": 60}
+
+    with system_context(reason="test trigger bulk rule bypass"):
+        with pytest.raises(TypeError, match="Trigger rules do not support"):
+            if operation == "update":
+                Trigger.objects.filter(pk=trigger.pk).update(config=trigger.config)
+            elif operation == "bulk_update":
+                Trigger.objects.bulk_update([trigger], ["config"])
+            elif operation == "bulk_upsert":
+                Trigger.objects.bulk_create(
+                    [trigger], update_conflicts=True, update_fields=["config"], unique_fields=["id"],
+                )
+            else:
+                Trigger.objects.bulk_create([trigger], None, False, True, ["config"], ["id"])
+        trigger.refresh_from_db()
+
+    assert trigger.config == original
+    assert trigger.execution_actor_id == admin.pk
+    assert trigger.enabled is True

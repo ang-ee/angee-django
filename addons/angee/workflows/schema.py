@@ -1648,8 +1648,8 @@ _TRIGGER_RESOURCE = hasura_model_resource(
     ],
     aggregatable=["id"],
     groupable=["workflow", "workflow__name", "kind", "enabled", "updated_at", *_TRIGGER_EXTENSION_GROUP_FIELDS],
-    insertable=["workflow", "execution_actor", "kind", "config", *_TRIGGER_EXTENSION_INSERT_FIELDS],
-    updatable=["execution_actor", "kind", "config", *_TRIGGER_EXTENSION_UPDATE_FIELDS],
+    insertable=["workflow", "kind", "config", *_TRIGGER_EXTENSION_INSERT_FIELDS],
+    updatable=["kind", "config", *_TRIGGER_EXTENSION_UPDATE_FIELDS],
     field_id_decode={
         "workflow": public_pk_decoder(Workflow),
         "execution_actor": public_pk_decoder(User),
@@ -1661,7 +1661,7 @@ _TRIGGER_RESOURCE = hasura_model_resource(
     get_queryset=_trigger_queryset,
     write_backend=AngeeHasuraWriteBackend(
         Trigger,
-        public_id_fields=("workflow", "execution_actor", *_TRIGGER_EXTENSION_PUBLIC_ID_FIELDS),
+        public_id_fields=("workflow", *_TRIGGER_EXTENSION_PUBLIC_ID_FIELDS),
     ),
 )
 _WORKFLOW_RUN_RESOURCE = hasura_model_resource(

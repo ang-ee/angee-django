@@ -16,6 +16,7 @@ from django.core.exceptions import ValidationError
 from django.test import override_settings
 from rebac import system_context
 
+from angee.base.fields import SqidField
 from angee.workflows import engine
 from angee.workflows import models as workflow_models
 from angee.workflows.steps import StepImpl
@@ -490,6 +491,62 @@ def test_decide_rejects_relation_targets_the_actor_cannot_write(
     run.refresh_from_db()
     assert run.status == workflow_models.RunStatus.SUCCEEDED
     assert set(FixtureArchiveIngest.landed) == {(file.content_hash, str(own_drive.sqid))}
+
+
+@pytest.mark.parametrize("target_access", ("owned", "padded", "foreign", "missing"))
+def test_archive_execute_requires_run_actor_write_access_to_target(
+    workflows_integrate_tables: None,
+    no_workflow_queue: None,
+    tmp_path: Path,
+    target_access: str,
+) -> None:
+    """A direct archive unit cannot bypass target authorization by omitting the gate."""
+
+    del workflows_integrate_tables, no_workflow_queue
+    operator = User.objects.create_user(username="archive-executor")
+    outsider = User.objects.create_user(username="archive-target-owner")
+    file, own_drive = _archive_storage(tmp_path, operator=operator, content=_FIXTURE_ARCHIVE)
+    _, foreign_drive = _archive_storage(tmp_path, operator=outsider, content=b"other archive")
+    canonical_target = str(own_drive.sqid)
+    padded_target = SqidField(prefix=own_drive.sqid_prefix, min_length=24).public_id_from_value(own_drive.pk)
+    assert padded_target != canonical_target
+    sqid_field = Drive._meta.get_field("sqid")
+    assert isinstance(sqid_field, SqidField)
+    assert sqid_field.public_id_to_value(padded_target) == own_drive.pk
+    target = {
+        "owned": canonical_target,
+        "padded": padded_target,
+        "foreign": str(foreign_drive.sqid),
+        "missing": "does-not-exist",
+    }[target_access]
+    workflow = workflow_with_steps(
+        steps=(
+            {
+                "key": "execute",
+                "step_class": "archive_execute",
+                "config": {"mode": "unit"},
+                "input_binding": {
+                    "kind": "constant",
+                    "value": {"extractor": "fixture_archive", "target": target},
+                },
+            },
+        ),
+        edges=(),
+    )
+    run = start_run(workflow, subject=file, actor=operator)
+
+    run_to_terminal(run, allow_failed={run.pk})
+
+    step_run = step_run_for(run, "execute")
+    if target_access in {"owned", "padded"}:
+        assert step_run.status == workflow_models.StepRunStatus.SUCCEEDED
+        assert set(FixtureArchiveIngest.landed) == {(file.content_hash, canonical_target)}
+        assert step_run.output["target"] == canonical_target
+        assert step_run.output["result"]["target"] == canonical_target
+    else:
+        assert FixtureArchiveIngest.landed == {}
+        assert step_run.status == workflow_models.StepRunStatus.FAILED
+        assert "Archive target is unavailable to the execution actor." in step_run.error
 
 
 def test_prepare_rejects_swapped_extractors_and_blank_targets(

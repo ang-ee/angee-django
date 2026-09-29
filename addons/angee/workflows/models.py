@@ -35,6 +35,7 @@ from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 from django.utils import timezone
 from rebac import resolve_subjects, system_context
+from rebac.resources import model_resource_type
 
 from angee.base.fields import StateField
 from angee.base.identity import canonical_subject_ref
@@ -42,7 +43,7 @@ from angee.base.impl import ImplClassField, ImplDefaultsMixin, resolve_all_impl_
 from angee.base.mixins import AuditMixin
 from angee.base.models import AngeeDataModel, AngeeUnscopedManager
 from angee.base.refs import RecordRefMixin
-from angee.base.scoping import system_queryset
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.transitions import (
     StateTransitions,
     TransitionNotAllowed,
@@ -91,6 +92,7 @@ from angee.workflows.managers import (
     WorkflowTestFixtureManager,
     _combined_delete_results,
     _definition_rows,
+    _trigger_extension_protected_fields,
 )
 from angee.workflows.resources import WorkflowDefinitionResource
 from angee.workflows.settlement import subject_settler
@@ -112,6 +114,7 @@ from angee.workflows.steps import (
     StepExecutionMode,
     StepImpl,
 )
+from angee.workflows.trigger_conditions import EventConditionCatalogue
 from angee.workflows.trigger_declarations import (
     EventSource,
     EventTriggerConfig,
@@ -1132,25 +1135,21 @@ class Trigger(AuditMixin, AngeeDataModel):
         }
         if update_fields is not None and set(update_fields) <= operational_fields:
             raise RuntimeError("Trigger operational fields are written only by the owning manager.")
+        rule_fields = {"workflow", "kind", "config", *_trigger_extension_protected_fields(type(self))}
+        state_fields = ("enabled", *sorted({self._meta.get_field(name).attname for name in rule_fields}))
         old_workflow_id = None
-        discovered_state: tuple[Any, Any, Any, Any, Any] | None = None
+        discovered_state: tuple[Any, ...] | None = None
         if not adding:
             discovered = (
                 system_queryset(type(self), lock=None)
                 .filter(pk=self.pk)
-                .values("workflow_id", "kind", "config", "enabled", "execution_actor_id")
+                .values(*state_fields)
                 .first()
             )
             if discovered is None:
                 raise type(self).DoesNotExist
             old_workflow_id = discovered["workflow_id"]
-            discovered_state = (
-                discovered["workflow_id"],
-                discovered["kind"],
-                discovered["config"],
-                discovered["enabled"],
-                discovered["execution_actor_id"],
-            )
+            discovered_state = tuple(discovered[name] for name in state_fields)
         workflow_ids = sorted({value for value in (old_workflow_id, self.workflow_id) if value is not None})
         workflow_model = type(self)._meta.get_field("workflow").remote_field.model
         with (
@@ -1163,29 +1162,25 @@ class Trigger(AuditMixin, AngeeDataModel):
             self.workflow = DefinitionQuerySet.bind_instance(
                 next(row for row in write_session.rows if row.pk == self.workflow_id), self
             )
-            persisted_rule: tuple[Any, Any] | None = None
             if not adding:
                 locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
                 if locked.workflow_id != old_workflow_id:
                     raise ValidationError({"workflow": "The trigger lineage changed during this edit."})
-                locked_state = (
-                    locked.workflow_id,
-                    locked.kind,
-                    locked.config,
-                    locked.enabled,
-                    locked.execution_actor_id,
-                )
+                locked_state = tuple(getattr(locked, name) for name in state_fields)
                 if locked_state != discovered_state:
                     raise ValidationError("The trigger changed during this edit; reload and try again.")
                 fields = None if update_fields is None else set(update_fields)
                 if fields is not None:
-                    for field_name in ("workflow_id", "kind", "config", "enabled", "execution_actor_id"):
+                    for field_name in state_fields:
                         public_name = field_name.removesuffix("_id")
                         if public_name not in fields and field_name not in fields:
                             setattr(self, field_name, getattr(locked, field_name))
                 if self.enabled != locked.enabled:
                     raise ValidationError({"enabled": "Use the trigger enable or disable action."})
-                persisted_rule = (locked.kind, locked.config)
+                if locked.enabled and declaration_changed(
+                    self, locked, fields=rule_fields, update_fields=update_fields
+                ):
+                    raise ValidationError("Disable the trigger before editing its rule.")
                 self.last_fire_at = locked.last_fire_at
                 self.hourly_window_started_at = locked.hourly_window_started_at
                 self.hourly_fire_count = locked.hourly_fire_count
@@ -1195,20 +1190,6 @@ class Trigger(AuditMixin, AngeeDataModel):
                 declaration = self.validated_config()
                 if isinstance(declaration, EventTriggerConfig) and "admission_policy" not in self.config:
                     self.config = {**self.config, "admission_policy": str(declaration.admission_policy)}
-            rule_changed = persisted_rule is not None and persisted_rule != (self.kind, self.config)
-            cadence_changed = False
-            if rule_changed and self.enabled and persisted_rule is not None:
-                persisted_declaration = validate_trigger_config(cast(Any, persisted_rule[0]), persisted_rule[1])
-                declaration = self.validated_config()
-                persisted_cadence = (
-                    persisted_declaration.cadence if isinstance(persisted_declaration, ScheduleTriggerConfig) else None
-                )
-                cadence = declaration.cadence if isinstance(declaration, ScheduleTriggerConfig) else None
-                cadence_changed = persisted_cadence != cadence
-            if rule_changed and self.enabled and cadence_changed:
-                self.next_fire_at = (
-                    self.initial_fire_at(now=timezone.now()) if self.kind == TriggerKind.SCHEDULE else None
-                )
             if update_fields is not None:
                 fields = set(update_fields)
                 if {"kind", "config", "event_model_label"} & fields:
@@ -1227,6 +1208,7 @@ class Trigger(AuditMixin, AngeeDataModel):
 
         enabled = type(self).objects.set_enabled(self, enabled=True)
         self.enabled = enabled.enabled
+        self.execution_actor_id = enabled.execution_actor_id
         self.next_fire_at = enabled.next_fire_at
 
     def disable(self) -> None:
@@ -1262,14 +1244,18 @@ class Trigger(AuditMixin, AngeeDataModel):
         self.hourly_fire_count = trigger.hourly_fire_count
         self.next_fire_at = trigger.next_fire_at
 
-    def condition_matches(self, sender: type[models.Model], instance: models.Model) -> bool:
-        """Return whether this event trigger matches a saved model instance."""
+    def condition_matches(self, sender: type[models.Model], instance: models.Model, *, actor: Any) -> bool:
+        """Match a saved model instance within the admitted actor's read scope."""
 
         condition = self.config_mapping.get("condition", {})
         if not isinstance(condition, Mapping):
             return False
-        with system_context(reason="workflows.event_triggers.condition"):
-            return sender._default_manager.filter(pk=instance.pk, **dict(condition)).exists()
+        queryset = read_scoped_queryset(sender, actor)
+        if queryset is None:
+            if model_resource_type(sender):
+                return False
+            queryset = sender._default_manager.all()
+        return queryset.filter(pk=instance.pk, **dict(condition)).exists()
 
     def initial_fire_at(self, *, now: datetime) -> datetime | None:
         """Return the first persisted due timestamp for this schedule trigger."""
@@ -1294,8 +1280,17 @@ class Trigger(AuditMixin, AngeeDataModel):
             declaration = validate_trigger_config(cast(Any, self.kind), self.config)
         except (ValueError, TypeError) as error:
             raise ValidationError({"config": str(error)}) from error
-        if require_publisher and isinstance(declaration, EventTriggerConfig):
+        if isinstance(declaration, EventTriggerConfig) and (require_publisher or declaration.condition):
             event_model = self.event_publisher_model(declaration)
+            catalogue = EventConditionCatalogue.from_model(
+                event_model,
+                readable_fields=GraphQLSchemas.from_discovery().model_readable_fields(event_model),
+            )
+            decoded = catalogue.decode(declaration.condition or {})
+            if decoded.opaque or decoded.errors:
+                raise ValidationError(
+                    {"condition": "Event trigger condition is invalid or outside the declared catalogue."}
+                )
             try:
                 condition_query = event_model._base_manager.filter(**(declaration.condition or {})).query
                 try:

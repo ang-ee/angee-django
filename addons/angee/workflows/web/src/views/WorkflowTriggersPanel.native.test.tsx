@@ -521,7 +521,7 @@ test("event condition edits stay in the trigger form and preserve opaque lookups
     </Provider>,
   );
 
-  expect(await screen.findByText("Additional unsupported conditions are preserved in Rule JSON.")).toBeTruthy();
+  expect(await screen.findByText("Remove or correct unsupported conditions in Rule JSON before saving.")).toBeTruthy();
   const [value] = await screen.findAllByLabelText("Value");
   if (!(value instanceof HTMLInputElement)) throw new Error("State condition value is missing");
   value.focus();

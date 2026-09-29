@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, create_model
 
 from angee.base.impl import model_config_form_spec
 from angee.data.field_classification import model_field_scalar
+from angee.graphql.access import is_gated_read_axis
 
 ConditionScalar = Literal["boolean", "date", "datetime", "integer", "number", "string"]
 _CONDITION_SCALARS: dict[str, ConditionScalar] = {
@@ -103,7 +104,13 @@ class EventConditionCatalogue:
             except FieldDoesNotExist:
                 continue
             scalar = _condition_scalar(field)
-            if scalar is None or not field.concrete or field.many_to_many:
+            if (
+                scalar is None
+                or not field.concrete
+                or field.primary_key
+                or field.many_to_many
+                or is_gated_read_axis(model, name)
+            ):
                 continue
             fields.append(
                 EventConditionField(

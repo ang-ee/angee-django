@@ -21,7 +21,9 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 from rebac import system_context
 
+from angee.base.identity import instance_from_public_id
 from angee.base.impl import ImplBase, resolve_all_impl_classes, resolve_impl_class
+from angee.base.scoping import read_scoped_queryset
 from angee.workflows import engine
 from angee.workflows.attempts import DecisionGateOutput, validate_json_value
 from angee.workflows.configs import NonBlankString, WorkflowStepConfig
@@ -395,6 +397,13 @@ class ArchiveExecuteStepImpl(DecisionApplyStep):
         extractor_class = archive_extractor_class(extractor_key)
         if extractor_class.subject_resource != subject._meta.label:
             raise ValidationError({"subject": "Archive extractor does not accept this storage container."})
+        target_model = apps.get_model(extractor_class.target_resource)
+        actor = step_run.run.execution_admission_actor()
+        scoped = read_scoped_queryset(target_model, actor, action="write")
+        target = None if scoped is None else instance_from_public_id(target_model, target_pk, queryset=scoped)
+        if target is None:
+            raise ValidationError({"target": "Archive target is unavailable to the execution actor."})
+        target_pk = str(target.sqid)
         reporter = ArchiveExecutionReporter(step=self, step_run=step_run)
         with self.heartbeat_during(step_run):
             result = extractor_class().execute(subject, target_pk, reporter)
