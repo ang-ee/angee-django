@@ -542,9 +542,11 @@ class GraphQLSchemas:
         self,
         types: tuple[object, ...],
     ) -> None:
-        """Put Django choice labels on Strawberry enum definitions before build."""
+        """Label Django choices from model fields and explicitly contributed enums."""
 
         for surface in types:
+            if isinstance(surface, type) and issubclass(surface, models.Choices):
+                self._describe_choice_enum(surface)
             model = self._django_model_or_none(surface)
             if model is None:
                 continue

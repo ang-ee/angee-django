@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from functools import cache
 from types import get_original_bases
-from typing import Annotated, Any, ClassVar, Literal, get_args, get_origin
+from typing import Annotated, Any, ClassVar, Literal, TypeVar, get_args, get_origin
 
 from django.apps import apps
 from django.conf import settings
@@ -57,7 +57,7 @@ class RetryPolicy:
 class Settlement:
     """A body's completed, waiting or failed attempt, checked before persistence."""
 
-    kind: Literal["done", "wait", "next_page", "fail"]
+    kind: Literal["done", "wait", "next_page", "fail", "ask"]
     output: Any = field(default_factory=dict)
     outcome: str = ""
     until: datetime | None = None
@@ -70,6 +70,14 @@ class Settlement:
     def __post_init__(self) -> None:
         if self.kind == "wait" and (self.until is None or timezone.is_naive(self.until)):
             raise ValueError("A time wait requires an aware datetime.")
+
+    def admit(self, ctx: Any) -> Settlement:
+        """Prepare checked settlement resources inside the body's transaction."""
+        return self
+
+    def wait_parameters(self) -> dict[str, Any] | None:
+        """Return owner transition arguments when this settlement parks the row."""
+        return None
 
 
 @dataclass(frozen=True)
@@ -84,6 +92,10 @@ class Wait(Settlement):
     """A time wait preserving the step run's checkpoint and retry count."""
 
     kind: Literal["wait"] = field(default="wait", init=False)
+
+    def wait_parameters(self) -> dict[str, Any]:
+        """Use the shared time-wait transition with the body's checkpoint."""
+        return {"until": self.until, "state": self.state}
 
 
 @dataclass(frozen=True)
@@ -114,6 +126,8 @@ class Step[I, O, C](ImplBase):
     input_model: ClassVar[Any] = None
     output_model: ClassVar[Any] = None
     outcomes: ClassVar[dict[Outcome, str]] = {DONE_OUTCOME: "Done"}
+    empty_outcomes: ClassVar[frozenset[str]] = frozenset({ERROR_OUTCOME})
+    """Outcomes whose persisted output is the empty object, independent of O."""
     subject: ClassVar[str | None] = None
     mode: ClassVar[str] = "DATABASE"
     timeout: ClassVar[timedelta] = timedelta(seconds=30)
@@ -134,8 +148,11 @@ class Step[I, O, C](ImplBase):
             cls.timeout = timedelta(minutes=5) if cls.mode == "IO" else Step.timeout
         cls.outcomes = cls.parse_value(cls.outcomes, dict[Outcome, str], "outcomes")
         for base in get_original_bases(cls):
-            if get_origin(base) is Step:
-                input_model, output_model, config_model = get_args(base)
+            origin = get_origin(base)
+            if isinstance(origin, type) and issubclass(origin, Step) and not any(
+                isinstance(arg, TypeVar) for arg in get_args(base)
+            ):
+                input_model, output_model, config_model = get_args(base)[:3]
                 cls.input_model = None if input_model is type(None) else input_model
                 cls.output_model = None if output_model is type(None) else output_model
                 cls.config_model = None if config_model is type(None) else config_model
@@ -168,6 +185,11 @@ class Step[I, O, C](ImplBase):
         return cls.outcomes
 
     @classmethod
+    def required_outcomes(cls, config: Any) -> set[Outcome]:
+        """Outcomes the graph must route instead of silently ending the branch."""
+        return set()
+
+    @classmethod
     def available_outcomes(cls, config: Any, *, validate: bool = False) -> dict[Outcome, str]:
         """Compose failure routing, validating every hook result at publication."""
         outcomes = cls.outcomes_for(config)
@@ -189,6 +211,11 @@ class Step[I, O, C](ImplBase):
     def done(output: Any = None, *, outcome: str = DONE_OUTCOME) -> Done:
         """Construct a completion without validating or serializing the body's values."""
         return Done(output=output, outcome=outcome)
+
+    @classmethod
+    def serialize_state(cls, state: Any) -> Any:
+        """Serialize a continuation checkpoint once at the body boundary."""
+        return strip_null_bytes(cls._adapter(Any).dump_python({} if state is None else state, mode="json"))
 
     @classmethod
     def check(cls, settlement: Settlement, *, config: Any = None) -> Settlement:
@@ -215,8 +242,7 @@ class Step[I, O, C](ImplBase):
             raise ValidationError("A step must return Done, Wait, NextPage or Fail.")
         checked = cls.parse_value(asdict(settlement), _ContinuationOrFailure, "settlement")
         if isinstance(checked, (Wait, NextPage)):
-            state = {} if checked.state is None else checked.state
-            checked = replace(checked, state=strip_null_bytes(cls._adapter(Any).dump_python(state, mode="json")))
+            checked = replace(checked, state=cls.serialize_state(checked.state))
         return checked
 
     def run(self, ctx: Any) -> Settlement:

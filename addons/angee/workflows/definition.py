@@ -93,6 +93,7 @@ class PlannedNode:
 
     node_key: str
     status: Literal["ready", "skipped"]
+    rank: int
 
 
 class Definition(BaseModel):
@@ -149,6 +150,12 @@ class Definition(BaseModel):
     def graph(self) -> dict[str, set[str]]:
         """Return the dependency graph shared by validation and execution."""
         return {key: set(self.predecessors[key]) for key in sorted(self.nodes)}
+
+    @cached_property
+    def ranks(self) -> dict[str, int]:
+        """Stable execution ranks, with dependency order owned by graphlib."""
+        graph = {key: sorted(sources) for key, sources in self.graph.items()}
+        return {key: rank for rank, key in enumerate(TopologicalSorter(graph).static_order())}
 
     @cached_property
     def entries(self) -> list[str]:
@@ -223,6 +230,12 @@ class Definition(BaseModel):
                 issues.append(Issue(node=key, path=["nodes", key, "step"], code="outcome", message=str(error)))
                 continue
             offered[key] = outcomes
+            for outcome in sorted(step.required_outcomes(config)):
+                if not node.targets(outcome):
+                    issues.append(Issue(
+                        node=key, path=["nodes", key, "next", outcome], code="required_outcome",
+                        message=f"This step requires a route for outcome {outcome!r}.",
+                    ))
             for outcome in node.next:
                 if not node.targets(outcome):
                     issues.append(
@@ -258,7 +271,7 @@ class Definition(BaseModel):
         """Check acyclicity, the single entry, and reachability in stable order."""
         issues: list[Issue] = []
         try:
-            tuple(TopologicalSorter(self.graph).static_order())
+            _ = self.ranks
         except CycleError as error:
             issues.append(Issue(code="cycle", message=str(error)))
         if len(self.entries) != 1:
@@ -307,11 +320,12 @@ class Definition(BaseModel):
             else:
                 for source_key, routed_outcomes in incoming[key].items():
                     try:
-                        source_schema = self.step(source_key).output_schema()
+                        source_step = self.step(source_key)
+                        source_schema = source_step.output_schema()
                     except (ImproperlyConfigured, ValidationError):
                         continue
                     if (
-                        routed_outcomes - {ERROR_OUTCOME}
+                        routed_outcomes - source_step.empty_outcomes
                         and target_schema
                         and not schemas_match(source_schema, target_schema)
                     ):
@@ -323,13 +337,14 @@ class Definition(BaseModel):
                                 message=f"Incompatible default input from {source_key!r}; bind explicitly.",
                             )
                         )
-                    if ERROR_OUTCOME in routed_outcomes and not self._validator(target_schema).is_valid({}):
+                    if routed_outcomes & source_step.empty_outcomes and not self._validator(target_schema).is_valid({}):
                         issues.append(
                             Issue(
                                 node=key,
                                 path=["nodes", key, "input"],
                                 code="input",
-                                message="An error edge supplies {}; required input fields need explicit bindings.",
+                                message=("An empty-output edge, including an error edge, supplies {}; "
+                                         "required input fields need explicit bindings."),
                             )
                         )
         return issues
@@ -346,12 +361,15 @@ class Definition(BaseModel):
                 if result.when is not None and set(result.when) - outcomes.keys():
                     issues.append(Issue(path=path, code="result", message="Result names an unknown producer outcome."))
                 if result.output is not None:
-                    if isinstance(result.output, SourceBinding) and result.eligible(ERROR_OUTCOME):
+                    if isinstance(result.output, SourceBinding) and any(
+                        result.eligible(outcome) for outcome in self.step(result.source).empty_outcomes
+                    ):
                         issues.append(
                             Issue(
                                 path=[*path, "output"],
                                 code="binding",
-                                message="A whole result binding cannot be eligible for the error outcome.",
+                                message=("A whole result binding cannot select empty output, "
+                                         "including the error outcome."),
                             )
                         )
                     allowed = (
@@ -547,12 +565,12 @@ class Definition(BaseModel):
         incoming = self.predecessors
         planned: list[PlannedNode] = []
         skipped: set[str] = set()
-        for key in TopologicalSorter(self.graph).static_order():
+        for key, rank in self.ranks.items():
             if key in existing:
                 continue
             sources = incoming[key]
             if not sources:
-                planned.append(PlannedNode(key, "ready"))
+                planned.append(PlannedNode(key, "ready", rank))
                 continue
             if any(
                 source not in skipped
@@ -566,7 +584,7 @@ class Definition(BaseModel):
             ]
             active = all(live) if self.nodes[key].join == "all" else any(live)
             status: Literal["ready", "skipped"] = "ready" if active else "skipped"
-            planned.append(PlannedNode(key, status))
+            planned.append(PlannedNode(key, status, rank))
             if not active:
                 skipped.add(key)
         return planned
@@ -659,7 +677,13 @@ class Definition(BaseModel):
     def result_schema(self, result: ResultBinding) -> dict[str, Any]:
         """Describe one result's actual projection, retaining local schema refs."""
         if result.output is None:
-            return self.step(result.source).output_schema()
+            step = self.step(result.source)
+            if any(result.eligible(outcome) for outcome in step.empty_outcomes):
+                empty: dict[str, Any] = {"const": {}}
+                return {"anyOf": [step.output_schema(), empty]} if (
+                    result.when is None or set(result.when) - step.empty_outcomes
+                ) else empty
+            return step.output_schema()
         definitions: dict[str, Any] = {}
         properties: dict[str, Any] = {}
         required: list[str] = []

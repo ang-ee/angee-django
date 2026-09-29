@@ -1,5 +1,8 @@
-"""Install this optional test app after angee.decisions for concrete source tables.
+"""Real decision drivers for a composed host or a source-addon test suite.
 
-Use angee.testing.fixtures.composed_tables for native isolation and REBAC sync.
-Use the decision manager's admission and answer verbs directly.
+``angee.decisions.testing.drivers.seed_group(actor=..., assignees=[...],
+reference=...)`` admits a real inbox question from a management shell. Its
+action classes exercise a defaulted note, a read-only reference, and a
+required rejection reason. This helper resolves the host's composed tables.
+Source suites use the combined ``angee.workflows.testing`` composition.
 """

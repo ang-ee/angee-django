@@ -70,6 +70,13 @@ def start_run(workflow: Any, *, actor: Any, **kwargs: Any) -> Any:
     return model.objects.start(workflow, actor=actor, **kwargs)
 
 
+def decide(decision: Any, *, actor: Any, action: str, values: dict[str, Any] | None = None) -> Any:
+    """Submit the caller's observed revision through the real decisions owner."""
+    return type(decision).objects.decide(
+        decision.pk, actor=actor, revision=decision.revision, action=action, values={} if values is None else values,
+    )
+
+
 def run_until(run: Any, *, node: str | None = None, max_steps: int = 100) -> Any:
     """Execute ready rows until terminal or before the requested node executes.
 

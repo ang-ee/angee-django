@@ -18,6 +18,7 @@ from angee.base.impl import (
     check_form_annotations,
     freeze_form_schema,
     materialize_form_schema,
+    resolve_impl_class,
 )
 from angee.base.jsonschema import schema_nodes, validation_issues
 from angee.decisions.states import Verdict
@@ -69,8 +70,11 @@ class Action(BaseModel):
     value: ClassVar[str]
     label: ClassVar[str]
     verdict: ClassVar[Verdict]
+    outcome: ClassVar[str | None] = None
 
-    def __init_subclass__(cls, *, value: str, label: str, verdict: Verdict, **kwargs: Any) -> None:
+    def __init_subclass__(
+        cls, *, value: str, label: str, verdict: Verdict, outcome: str | None = None, **kwargs: Any,
+    ) -> None:
         """Bind action metadata, rejecting class declarations without a terminal verdict."""
         super().__init_subclass__(**kwargs)
         if not isinstance(value, str) or not value or not isinstance(label, str) or not label:
@@ -81,6 +85,15 @@ class Action(BaseModel):
             raise ImproperlyConfigured("An action requires a known terminal verdict.") from error
         if cls.verdict == Verdict.PENDING:
             raise ImproperlyConfigured("An action requires a terminal verdict.")
+        cls.outcome = outcome
+
+
+def resolve_action(value: str) -> type[Action]:
+    """Resolve a trusted action registration, whose key is the authored action value."""
+    action = resolve_impl_class("ANGEE_DECISION_ACTION_CLASSES", value, Action)
+    if action.value != value:
+        raise ImproperlyConfigured(f"Action registration {value!r} disagrees with {action.value!r}.")
+    return action
 
 
 def compile_form(

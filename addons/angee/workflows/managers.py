@@ -25,14 +25,17 @@ from rebac import actor_context, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
 from angee.base.actors import actor_user_id
+from angee.base.identity import instance_from_public_id
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
+from angee.decisions.exceptions import RetryableDecisionError
 from angee.graphql.publishing import publish_change
 from angee.jobs.enqueue import enqueue_task
 from angee.workflows.context import StepContext
 from angee.workflows.definition import Definition, DefinitionInvalid, Issue
+from angee.workflows.reviews import ReviewStep
 from angee.workflows.states import (
     CANCELED_OUTCOME,
     DONE_OUTCOME,
@@ -77,6 +80,24 @@ class DraftSave:
     status: Literal["saved", "conflict", "invalid"]
     revision: int
     issues: list[Issue]
+
+
+@dataclass(frozen=True)
+class Cancellation:
+    """The facts observed and changed under the cancellation lock."""
+
+    canceled: bool
+    steps: int
+
+    @property
+    def message(self) -> str:
+        """Describe the actual transition, including terminal-run cleanup."""
+        if self.canceled:
+            return "Run canceled."
+        if self.steps:
+            noun = "step" if self.steps == 1 else "steps"
+            return f"Run already finished; {self.steps} open {noun} canceled."
+        return "Nothing to cancel."
 
 
 class WorkflowManager(AngeeManager):
@@ -315,7 +336,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                             status, outcome, output = RunStatus.FAILED, ERROR_OUTCOME, {}
                         else:
                             step_runs.bulk_create([
-                                step_runs.model(run=run, node_key=node.node_key, status=node.status)
+                                step_runs.model(run=run, node_key=node.node_key, status=node.status, rank=node.rank)
                                 for node in definition.ready_nodes(rows)
                             ])
                             statuses = set(step_runs.values_list("status", flat=True))
@@ -372,24 +393,26 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
         )
 
-    def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta = timedelta(seconds=5)) -> None:
+    def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta = timedelta(seconds=5)) -> Cancellation:
         """Cancel open rows after DATABASE work releases its lock, retaining terminal run facts."""
 
         if not system_queryset(self.model).filter(pk=run.pk).exists():
-            return
+            return Cancellation(False, 0)
         run.require_access("write", actor)
         try:
             with self.hold(run.pk, timeout=timeout) as locked:
                 if locked is None:
-                    return
+                    return Cancellation(False, 0)
                 with system_context(reason="workflows.cancel"):
+                    canceled = not locked.is_terminal
                     changed = locked.step_runs.cancel_open()
                     if not locked.is_terminal:
                         self._write_state(locked, status=RunStatus.CANCELED, outcome=CANCELED_OUTCOME, output={})
                     elif not changed:
-                        return
+                        return Cancellation(False, 0)
                     locked.refresh_from_db()
                     publish_change(locked, action="update", update_fields=None)
+                    return Cancellation(canceled, changed)
         except OperationalError as error:
             if _sqlstate(error) == "55P03":
                 raise ValidationError("The run is still running; retry cancellation.") from error
@@ -497,8 +520,8 @@ class StepRunQuerySet(AngeeQuerySet):
     def _record_settlement(self, step_run: Any, settlement: Settlement) -> None:
         """Persist one eligible claim and close its attempt through shared policy."""
         attempt_result = AttemptResult.SUCCEEDED
-        if settlement.kind == "wait":
-            changed = self.to_waiting(until=settlement.until, state=settlement.state)
+        if (wait_parameters := settlement.wait_parameters()) is not None:
+            changed = self.to_waiting(**wait_parameters)
         elif settlement.kind == "next_page":
             changed = self.to_ready(state=settlement.state, reset_retries=True, next_page=True)
         else:
@@ -533,6 +556,7 @@ class StepRunQuerySet(AngeeQuerySet):
     def to_waiting(
         self, *, until: Any = None, state: Any = None, retries: int | None = None,
         kind: str = cast(str, WaitingKind.TIME), reason: str = "",
+        decision_group_id: Any = None,
     ) -> int:
         """Park running rows, preserving retries unless a failure consumed one."""
         if kind == WaitingKind.OPERATOR and not reason:
@@ -543,6 +567,7 @@ class StepRunQuerySet(AngeeQuerySet):
             }),
             status=StepRunStatus.WAITING, state=F("state") if state is None else state, outcome="",
             retries=F("retries") if retries is None else retries,
+            decision_group_id=F("decision_group_id") if decision_group_id is None else decision_group_id,
         )
 
     def to_ready(
@@ -562,6 +587,11 @@ class StepRunQuerySet(AngeeQuerySet):
         opened = self.exclude(status__in=StepRunStatus.terminal_values())
         list(opened.order_by("pk").lock_if_supported(no_key=True).values_list("pk", flat=True))
         attempts = self.model._meta.get_field("attempts").related_model
+        decisions = apps.get_model("decisions", "Decision").objects
+        for group_id in opened.exclude(decision_group_id=None).order_by("decision_group_id").values_list(
+            "decision_group_id", flat=True,
+        ):
+            decisions.cancel_group(group_id)
         attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
         return opened.update(
             **self._cleared_wait(), status=StepRunStatus.CANCELED,
@@ -570,6 +600,13 @@ class StepRunQuerySet(AngeeQuerySet):
     def due(self) -> Any:
         """Return time waits whose database deadline has arrived."""
         return self.filter(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.TIME, wake_at__lte=Now())
+
+    def settled_decisions(self) -> Any:
+        """Select decision waiters whose retained group has durably settled."""
+        return self.filter(
+            status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
+            decision_group__settled_at__isnull=False,
+        )
 
     def undispatched(self) -> Any:
         """Return ready rows whose most recent delivery is old enough to retry."""
@@ -677,7 +714,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
     def _failure(failure: Exception) -> Fail:
         return Fail(
             error=str(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
-            retryable=isinstance(failure, Retryable) or (
+            retryable=isinstance(failure, (Retryable, RetryableDecisionError)) or (
                 isinstance(failure, OperationalError)
                 and _sqlstate(failure) in RETRYABLE_SQLSTATES
             ),
@@ -694,6 +731,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                 if is_sudo():
                     raise RuntimeError("The step body must run under its actor, outside system_context.")
                 settlement = ctx.step.check(ctx.step().run(ctx), config=ctx.config)
+                settlement = settlement.admit(ctx)
                 if database and settlement.kind == "fail":
                     transaction.set_rollback(True)
                 return settlement
@@ -780,22 +818,8 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
             with system_context(reason="workflows.retry_step"):
                 current = run.step_runs.filter(pk=step_run.pk).lock_if_supported(no_key=True).get()
                 current.run = run
-                if (
-                    run.status not in {RunStatus.FAILED, RunStatus.WAITING, RunStatus.RUNNING}
-                    or not (
-                        current.status == StepRunStatus.FAILED
-                        or current.status == StepRunStatus.WAITING and current.waiting_kind == WaitingKind.OPERATOR
-                    )
-                    or current.status == StepRunStatus.FAILED
-                    and not run.version.definition.retry_allowed(current.node_key)
-                ):
-                    raise ValidationError("This step cannot be retried in place.")
-                others = [
-                    row.node_key for row in run.step_runs.exclude(pk=current.pk).order_by("node_key")
-                    if run.version.definition.unrouted_failure([row])
-                ]
-                if others:
-                    raise ValidationError(f"Other unrouted failures remain: {', '.join(others)}.")
+                if blocker := current.retry_blocker:
+                    raise ValidationError(blocker)
                 if current.requires_duplicate_acknowledgement and not accept_duplicate:
                     raise ValidationError("Retry requires accepting a possible duplicate effect.")
                 run.step_runs.filter(pk=current.pk).to_ready(
@@ -805,9 +829,35 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                 current.refresh_from_db()
                 return current.with_actor(actor)
 
+    def resolution(self, decision_ref: str, *, run: Any, actor: Any) -> Any:
+        """Resolve the prior review's action contract, then delegate answer locks and authority."""
+        model = apps.get_model("decisions", "Decision")
+        decision = instance_from_public_id(model, decision_ref, queryset=read_scoped_queryset(model, actor))
+        if decision is None:
+            raise PermissionDenied("The decision is absent or inaccessible.")
+        source = next((row for row in system_queryset(self.model).filter(
+            run_id=run.pk, decision_group__isnull=False,
+        ).select_related("decision_group", "run__version")
+            if any(group.pk == decision.group_id for group in row.decision_group.rounds())), None)
+        if source is None or not issubclass(source.step, ReviewStep):
+            raise ValidationError("The decision has no retained review in this run.")
+        step = source.step
+        config = step.parse_config(source.run.version.definition.node(source.node_key).config)
+        return model.objects.resolution(
+            decision.pk, actor=actor, actions=step.actions_for(config), basis_model=step.basis_model,
+        )
+
     def tick(self) -> dict[str, int]:
         """Wake waits, reap expired claims and recover missing deliveries in bounded batches."""
-        return {"woken": self.wake(), "reaped": self.reap(), "redispatched": self.redispatch()}
+        return {"woken": self.wake(), "reaped": self.reap(), "redispatched": self.redispatch(),
+                "decisions": self.wake_decisions()}
+
+    def wake_decisions(self, group_id: Any = None) -> int:
+        """Signal and sweep share the run-lock owner and commit-time dispatch."""
+        candidates = self.settled_decisions()
+        if group_id is not None:
+            candidates = candidates.filter(decision_group_id=group_id)
+        return self._each_candidate(candidates, self._wake)
 
     def _each_candidate(self, candidates: Any, action: Callable[[Any, Any], None]) -> int:
         count = 0

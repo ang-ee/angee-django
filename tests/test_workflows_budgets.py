@@ -6,7 +6,7 @@ from tests.tools import measure_workflows
 from tests.tools.measure_workflows import main
 
 
-def test_workflow_backend_budgets(capsys: pytest.CaptureFixture[str]) -> None:
+def test_workflow_budgets(capsys: pytest.CaptureFixture[str]) -> None:
     """The ordinary test suite enforces the measurement command's fixed limits."""
 
     result = main()
@@ -23,3 +23,28 @@ def test_workflow_budget_rejects_unmapped_files(tmp_path, monkeypatch, name):
     monkeypatch.setattr(measure_workflows, "ROOT", tmp_path)
     with pytest.raises(ValueError, match=f"Unmapped workflow files: {name}"):
         main()
+
+
+@pytest.mark.parametrize("web_lines, expected", [(2200, 0), (2201, 1)])
+def test_workflow_web_budget_is_independent_and_enforced(tmp_path, monkeypatch, capsys, web_lines, expected):
+    """Web sources can fill their own budget without entering backend rows."""
+
+    sources = {
+        "managers.py": "class DraftSave: pass\nclass WorkflowManager: pass\n",
+        "definition.py": "class Definition:\n    def ready_nodes(self): pass\n    def _edge_live(self): pass\n",
+        "bindings.py": "",
+        "tasks.py": "",
+        "web/package.json": "{}\n",
+        "web/src/index.tsx": "// source line\n" * (web_lines - 1),
+    }
+    for name, content in sources.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(measure_workflows, "ROOT", tmp_path)
+
+    assert main() == expected
+    report = capsys.readouterr().out
+    assert "| Execution | 2 | 1500 | 1498 |" in report
+    assert "| Definition, validation, bindings | 3 | 1000 | 997 |" in report
+    assert f"| Workflows web | {web_lines} | 2200 | {2200 - web_lines} |" in report

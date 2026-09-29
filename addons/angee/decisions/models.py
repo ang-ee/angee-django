@@ -1,5 +1,6 @@
 """Abstract decision sources; one decision is one seat's retained question."""
 
+from collections.abc import Iterator
 from typing import Any
 
 from django.apps import apps
@@ -30,6 +31,9 @@ class DecisionGroup(AngeeDataModel):
         base_class=DecisionPolicy, registry_setting="ANGEE_DECISION_POLICY_CLASSES", default="first",
     )
     issuer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    reasked_from = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="reasked_by",
+    )
     settled_at = models.DateTimeField(null=True, blank=True)
     objects = DecisionGroupManager()
 
@@ -39,10 +43,16 @@ class DecisionGroup(AngeeDataModel):
         abstract = True
         rebac_resource_type = "decisions/group"
 
+    def rounds(self) -> Iterator[Any]:
+        """Yield this round and every retained earlier round, newest first."""
+        group: DecisionGroup | None = self
+        while group is not None:
+            yield group
+            group = (system_queryset(type(self)).get(pk=group.reasked_from_id)
+                     if group.reasked_from_id is not None else None)
+
     def is_settled_by(self, decisions: list[Any]) -> bool:
-        """Unanswered closure settles immediately; otherwise apply the chosen policy."""
-        if any(d.closed_reason in ClosedReason.unanswered_values() for d in decisions):
-            return True
+        """Delegate settlement, including unanswered closure, to the selected policy."""
         policy = self._meta.get_field("policy").resolve_for(self)
         return policy.settled(decisions)
 
@@ -75,11 +85,6 @@ class DecisionGroup(AngeeDataModel):
         """Settled, unreferenced groups may go; protected answers remain retained."""
         if self.settled_at is None:
             return False
-        for relation in self._meta.related_objects:
-            if relation.get_accessor_name() != "decisions" and system_queryset(relation.related_model).filter(
-                **{relation.field.name: self.pk},
-            ).exists():
-                return False
         try:
             collector = Collector(using=self._state.db or "default")
             collector.collect([self])
@@ -109,6 +114,7 @@ class Decision(RecordRefMixin, AngeeDataModel):
     form_schema = models.JSONField()
     basis = models.JSONField(default=dict)
     context = models.JSONField(default=dict)
+    errors = models.JSONField(default=dict)
     verdict = StateField(choices_enum=Verdict, default=Verdict.PENDING, db_index=False)
     closed_reason = StateField(choices_enum=ClosedReason, null=True, blank=True, db_index=False)
     superseded_by = models.ForeignKey("decisions.Decision", on_delete=models.SET_NULL, null=True, blank=True,
@@ -150,9 +156,16 @@ class Decision(RecordRefMixin, AngeeDataModel):
         ]
 
     @property
-    def is_open(self) -> bool:
-        """Return whether this snapshot still accepts an answer."""
+    def is_pending(self) -> bool:
+        """Return whether this snapshot still needs an answer or an expiry transition."""
         return self.verdict == Verdict.PENDING and self.closed_reason is None
+
+    @property
+    def is_open(self) -> bool:
+        """Use the queryset's live answerability, including unswept deadlines."""
+        if "_is_open" in self.__dict__:
+            return bool(self.__dict__["_is_open"])
+        return system_queryset(type(self)).open().filter(pk=self.pk).exists()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Admit new rows; retained questions change only through manager verbs."""

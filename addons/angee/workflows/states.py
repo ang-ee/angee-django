@@ -43,6 +43,15 @@ class TerminalStates(models.TextChoices):
         )
 
 
+class RunOrigin(models.TextChoices):
+    """Admission sources exposed by the run's derived origin contract."""
+
+    MANUAL = "manual", "Manual"
+    WORKFLOW = "workflow", "Workflow"
+    REPROCESS = "reprocess", "Reprocess"
+    TEST = "test", "Test"
+
+
 class RunStatus(TerminalStates):
     """Lifecycle of one workflow run."""
 
@@ -74,6 +83,7 @@ class WaitingKind(models.TextChoices):
     """Implemented durable wait kinds."""
 
     TIME = "time", "Time"
+    DECISION = "decision", "Decision"
     OPERATOR = "operator", "Operator"
 
 

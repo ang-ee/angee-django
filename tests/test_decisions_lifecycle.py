@@ -27,9 +27,10 @@ from angee.decisions import managers as decision_managers
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionContext, DecisionFact, DecisionRecordReference, DecisionRequest
 from angee.decisions.forms import Action, Relation
+from angee.decisions.policies import DecisionPolicy
 from angee.decisions.signals import decision_group_settled
 from angee.decisions.states import Verdict
-from angee.decisions.testing.models import Decision, DecisionEvidence, DecisionGroup
+from angee.workflows.testing.models import Decision, DecisionEvidence, DecisionGroup
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
 
 
@@ -37,6 +38,14 @@ class Complete(Action, value="complete", label="Complete", verdict=Verdict.COMPL
     """Record a bounded note as the answer."""
 
     note: str = Field(min_length=2)
+
+
+class RetainClosed(DecisionPolicy):
+    """A registered strategy may retain a group after an unanswered closure."""
+
+    @classmethod
+    def settled(cls, decisions):
+        return False
 
 
 class Decline(Action, value="decline", label="Decline", verdict=Verdict.REJECTED):
@@ -83,6 +92,12 @@ def seat(group, index=0):
     """Read committed state without carrying a principal into another call."""
 
     return system_queryset(Decision).get(group=group, index=index)
+
+
+def elapse_deadline(group, index=0):
+    """Move an admitted deadline into the past using the database clock."""
+    with system_context(reason="test.elapse_decision_deadline"):
+        Decision.objects.filter(group=group, index=index).owner_update(expires_at=Now() - timedelta(seconds=1))
 
 
 def answer(decision, reviewer, **changes):
@@ -133,14 +148,15 @@ def test_non_admin_person_without_seat_cannot_read_or_decide(people):
     assert seat(group).is_open
 
 
-def test_explicit_requester_without_a_seat_gains_no_read_access(people):
+def test_explicit_requester_reads_the_requested_question_without_an_assignment(people):
     issuer, _reviewer, outsider, _subject = people
     group = Decision.objects.admit_group([request_for(people, requester=outsider)], actor=issuer)
     decision = seat(group)
     assert decision.requester_id == outsider.pk
     with actor_context(outsider):
-        assert not Decision.objects.filter(pk=decision.pk).exists()
-        assert not DecisionGroup.objects.filter(pk=group.pk).exists()
+        assert Decision.objects.filter(pk=decision.pk).exists()
+        assert DecisionGroup.objects.filter(pk=group.pk).exists()
+        assert not decision.with_actor(outsider).has_access("act")
 
 
 @pytest.mark.parametrize("model_name", ["group", "decision"])
@@ -159,11 +175,9 @@ def test_ordinary_users_cannot_bypass_admission_with_direct_inserts(people, mode
 
 def test_requester_defaults_to_issuer_and_must_be_explicitly_opted_out(people):
     issuer, _reviewer, _outsider, _subject = people
-    group = Decision.objects.admit_group([request_for(people, assignees=[issuer])], actor=issuer)
-    decision = seat(group)
-    assert decision.requester_id == issuer.pk
-    with pytest.raises(PermissionDenied):
-        answer(decision, issuer)
+    with pytest.raises(ValidationError, match="assignee who can act"):
+        Decision.objects.admit_group([request_for(people, assignees=[issuer])], actor=issuer)
+    assert not system_queryset(DecisionGroup).exists()
     other = Decision.objects.admit_group([request_for(people, assignees=[issuer], requester=None)], actor=issuer)
     assert seat(other).requester_id is None
     assert answer(seat(other), issuer).verdict == "completed"
@@ -215,11 +229,12 @@ def test_each_policy_settles_at_its_defined_boundary(people, policy):
 @pytest.mark.parametrize("reason", ["expired", "invalid_attempts"])
 def test_all_policy_closes_siblings_when_a_seat_has_no_answer(people, reason):
     issuer, reviewer, _outsider, _subject = people
-    changes = {"expires_at": timezone.now() - timedelta(seconds=1)} if reason == "expired" else {"max_attempts": 1}
+    changes = {"expires_at": timezone.now() + timedelta(minutes=5)} if reason == "expired" else {"max_attempts": 1}
     group = Decision.objects.admit_group([
         request_for(people, **changes), request_for(people),
     ], actor=issuer, policy="all")
     if reason == "expired":
+        elapse_deadline(group)
         assert Decision.objects.expire_due() == 1
     else:
         with pytest.raises(ValidationError):
@@ -228,6 +243,23 @@ def test_all_policy_closes_siblings_when_a_seat_has_no_answer(people, reason):
     assert group.settled_at is not None
     assert seat(group).closed_reason == reason
     assert seat(group, 1).closed_reason == "sibling_settled"
+
+
+def test_custom_policy_owns_unanswered_settlement(people, settings):
+    """The model does not preempt a registered policy's closure decision."""
+    issuer, _reviewer, _outsider, _subject = people
+    settings.ANGEE_DECISION_POLICY_CLASSES = {
+        **settings.ANGEE_DECISION_POLICY_CLASSES,
+        "all": "tests.test_decisions_lifecycle.RetainClosed",
+    }
+    group = Decision.objects.admit_group([
+        request_for(people, expires_at=timezone.now() + timedelta(minutes=5)), request_for(people),
+    ], actor=issuer, policy="all")
+    elapse_deadline(group)
+    assert Decision.objects.expire_due() == 1
+    group.refresh_from_db()
+    assert group.settled_at is None
+    assert seat(group).closed_reason == "expired" and seat(group, 1).is_open
 
 
 def test_settlement_signal_waits_for_outer_commit_and_fires_once(people):
@@ -367,8 +399,9 @@ def test_selected_relation_permission_is_rechecked_at_deciding(people):
 def test_expiry_closes_due_seats_and_settles_group(people):
     issuer, reviewer, _outsider, _subject = people
     group = Decision.objects.admit_group([
-        request_for(people, expires_at=timezone.now() - timedelta(seconds=1)),
+        request_for(people, expires_at=timezone.now() + timedelta(minutes=5)),
     ], actor=issuer)
+    elapse_deadline(group)
     assert Decision.objects.expire_due() == 1
     assert Decision.objects.expire_due() == 0
     closed = seat(group)
@@ -570,6 +603,23 @@ def test_singular_resolution_does_not_require_access_to_private_sibling(people):
         Decision.objects.resolutions(group.pk, actor=reviewer, actions=(Complete, Decline))
 
 
+def test_reask_cannot_copy_a_private_sibling_for_a_group_reader(people):
+    """Reading one seat's group does not authorize copying its private siblings."""
+    issuer, reviewer, outsider, _subject = people
+    group = Decision.objects.admit_group([
+        request_for(people, subject=None),
+        request_for(people, subject=None, assignees=(outsider,), basis={"note": "Private basis"}),
+    ], actor=issuer)
+    answer(seat(group), reviewer)
+    with actor_context(reviewer):
+        assert DecisionGroup.objects.filter(pk=group.pk).exists()
+        assert not Decision.objects.filter(group=group, index=1).exists()
+    with pytest.raises(PermissionDenied):
+        Decision.objects.reask(group.pk, actor=reviewer, actions=(Complete, Decline), errors={})
+    assert system_queryset(DecisionGroup).count() == 1
+    assert system_queryset(Decision).count() == 2
+
+
 @pytest.mark.parametrize("target_kind", ["group", "decision", "both"])
 def test_deletion_predicate_includes_generic_evidence_retaining_a_group(people, target_kind):
     issuer, reviewer, _outsider, _subject = people
@@ -671,7 +721,7 @@ def test_deleting_a_superseding_group_keeps_the_original_history(people):
 ])
 def test_group_outcome_and_query_verbs_are_available_to_waiters(people, closure, outcome):
     issuer, reviewer, _outsider, _subject = people
-    changes = {"expires_at": timezone.now() - timedelta(seconds=1)} if closure == "expired" else {}
+    changes = {"expires_at": timezone.now() + timedelta(minutes=5)} if closure == "expired" else {}
     group = Decision.objects.admit_group([request_for(people, max_attempts=1, **changes)], actor=issuer)
     assert group.outcome is None
     assert not system_queryset(DecisionGroup).settled().filter(pk=group.pk).exists()
@@ -679,6 +729,7 @@ def test_group_outcome_and_query_verbs_are_available_to_waiters(people, closure,
     if closure == "resolved":
         answer(seat(group), reviewer)
     elif closure == "expired":
+        elapse_deadline(group)
         Decision.objects.expire_due()
     elif closure == "invalid_attempts":
         with pytest.raises(ValidationError):
@@ -782,3 +833,79 @@ def test_inbox_filters_assignees_separately_from_requesters(people):
         "assigned": [{"id": str(seat(assigned).sqid)}],
         "requested": [{"id": str(seat(requested).sqid)}],
     }
+
+
+def test_reask_retains_every_round_through_protected_group_links(people):
+    """Retention traverses the complete decisions-owned chain after any re-ask."""
+    issuer, reviewer, _outsider, _subject = people
+    original = Decision.objects.admit_group([request_for(people)], actor=issuer)
+    rounds = [original]
+    for _ in range(2):
+        answer(seat(rounds[-1]), reviewer)
+        rounds.append(Decision.objects.reask(
+            rounds[-1].pk, actor=issuer, actions=(Complete, Decline), errors={"note": ["Read again"]},
+        ))
+    answer(seat(rounds[-1]), reviewer)
+    assert [group.pk for group in rounds[-1].rounds()] == [group.pk for group in reversed(rounds)]
+    for current, previous in zip(rounds[1:], rounds):
+        assert current.reasked_from_id == previous.pk
+        previous.refresh_from_db()
+        assert not previous.is_deletable
+        with pytest.raises(ProtectedError), system_context(reason="test.delete_retained_round"):
+            previous.delete()
+    rounds[-1].refresh_from_db()
+    assert rounds[-1].is_deletable
+    assert system_queryset(DecisionGroup).count() == 3
+    assert system_queryset(Decision).filter(closed_reason="resolved").count() == 3
+
+
+def test_reask_renews_original_duration_from_the_database_clock(people):
+    """An elapsed old deadline never immediately expires a freshly admitted round."""
+    issuer, reviewer, _outsider, _subject = people
+    group = Decision.objects.admit_group([
+        request_for(people, expires_at=timezone.now() + timedelta(minutes=1)),
+    ], actor=issuer)
+    answer(seat(group), reviewer)
+    with system_context(reason="test.age_retained_decision"):
+        Decision.objects.filter(group=group).owner_update(
+            created_at=Now() - timedelta(minutes=5), expires_at=Now() - timedelta(minutes=4),
+        )
+    repeated = Decision.objects.reask(group.pk, actor=issuer, actions=(Complete, Decline), errors={})
+    decision = seat(repeated)
+    assert decision.is_open
+    assert abs((decision.expires_at - decision.created_at).total_seconds() - 60) < 1
+    assert repeated.reasked_from_id == group.pk
+
+
+def test_admission_rejects_a_deadline_that_is_already_past_atomically(people):
+    issuer, _reviewer, _outsider, _subject = people
+    with pytest.raises(ValidationError, match="deadline must be in the future"):
+        Decision.objects.admit_group([
+            request_for(people), request_for(people, expires_at=timezone.now() - timedelta(seconds=1)),
+        ], actor=issuer, policy="all")
+    assert not system_queryset(DecisionGroup).exists()
+    assert not system_queryset(Decision).exists()
+
+
+@pytest.mark.parametrize("ineligible", ["inactive", "service"])
+def test_admission_rejects_a_seat_without_an_eligible_assignee(people, ineligible):
+    issuer, reviewer, _outsider, _subject = people
+    with system_context(reason="test.ineligible_assignee"):
+        type(reviewer).objects.filter(pk=reviewer.pk).update(
+            **({"is_active": False} if ineligible == "inactive" else {"kind": "service"}),
+        )
+    with pytest.raises(ValidationError, match="assignee who can act"):
+        Decision.objects.admit_group([request_for(people, subject=None)], actor=issuer)
+    assert not system_queryset(DecisionGroup).exists()
+
+
+def test_admission_preserves_inactive_assignees_when_another_can_act(people):
+    issuer, reviewer, outsider, _subject = people
+    with system_context(reason="test.inactive_coassignee"):
+        type(outsider).objects.filter(pk=outsider.pk).update(is_active=False)
+    group = Decision.objects.admit_group([
+        request_for(people, subject=None, assignees=(reviewer, outsider)),
+    ], actor=issuer)
+    with system_context(reason="test.retained_assignees"):
+        assert set(seat(group).assignees.values_list("pk", flat=True)) == {reviewer.pk, outsider.pk}
+    assert answer(seat(group), reviewer).resolved_by_id == reviewer.pk

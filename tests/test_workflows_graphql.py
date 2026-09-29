@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
-from rebac import system_context
+from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.scoping import system_queryset
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -56,13 +56,14 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
 
     resources = {resource.model_label: resource for resource in schema.angee_resources}
     assert set(resources) == {
+        "workflows.Workflow", "workflows.WorkflowVersion",
         "workflows.WorkflowRun", "workflows.StepRun", "workflows.StepAttempt", "workflows.StepArtifact",
     }
     fields = set(schema._schema.mutation_type.fields)
     assert fields == {
         "cancel_workflow_run", "reprocess_workflow_run", "retry_step", "retry_step_accepting_duplicate",
     }
-    for name in ("workflowrun", "steprun", "stepattempt", "stepartifact"):
+    for name in ("workflow", "workflowversion", "workflowrun", "steprun", "stepattempt", "stepartifact"):
         assert {name, f"{name}_by_pk", f"{name}_aggregate"} <= set(schema._schema.query_type.fields)
     assert "draft" not in schema._schema.get_type("WorkflowType").fields
     assert "layout" not in schema._schema.get_type("WorkflowType").fields
@@ -90,11 +91,14 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
     run = start_run(workflow, actor=owner, input={"value": 7})
     run_until(run)
     assert run.status == RunStatus.SUCCEEDED
+    write_relationships([
+        RelationshipTuple(resource=to_object_ref(owner), relation="directory_reader", subject=to_subject_ref(owner)),
+    ])
     step = system_queryset(StepRun).get(run=run)
     attempt = system_queryset(StepAttempt).get(step_run=step)
     artifact = system_queryset(StepArtifact).get(step_run=step)
     query = """{
-      workflowrun { id origin run_as input output version { workflow { name } } }
+      workflowrun { id origin run_as { id display_name } input output version { workflow { name } } }
       steprun { id node_key run { id } attempts { id } artifacts { label } }
       stepattempt { id number result step_run { id } }
       stepartifact { id label model_label record_id step_run { id } }
@@ -102,8 +106,8 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
     visible = result_data(execute_schema(schema, query, user=owner))
     assert visible["workflowrun"][0]["input"] == {"value": 7}
     assert visible["workflowrun"][0]["output"] == {"value": 7}
-    assert visible["workflowrun"][0]["origin"] == "manual"
-    assert visible["workflowrun"][0]["run_as"] == owner.sqid
+    assert visible["workflowrun"][0]["origin"] == "MANUAL"
+    assert visible["workflowrun"][0]["run_as"] == {"id": owner.sqid, "display_name": str(owner)}
     assert visible["steprun"][0]["attempts"] == [{"id": attempt.sqid}]
     assert visible["stepartifact"][0]["record_id"] == run.sqid
     assert visible["stepartifact"][0]["model_label"] == "workflows.WorkflowRun"
@@ -156,7 +160,7 @@ def test_reprocess_action_returns_replacement_id_and_operator_attribution(schema
         schema, "query($id: String!) { workflowrun_by_pk(id: $id) { origin reprocess_of { id } } }",
         {"id": replacement.sqid}, user=operator,
     ))
-    assert rows["workflowrun_by_pk"] == {"origin": "reprocess", "reprocess_of": {"id": run.sqid}}
+    assert rows["workflowrun_by_pk"] == {"origin": "REPROCESS", "reprocess_of": {"id": run.sqid}}
 
 
 def test_retry_action_uses_run_permission_instead_of_engine_row_write(schema, callers):
@@ -208,6 +212,13 @@ def test_duplicate_retry_action_records_requesting_operator(schema, callers, reg
     assert step.status == StepRunStatus.FAILED
     initial = system_queryset(StepAttempt).get(step_run=step)
     assert initial.result == AttemptResult.TIMED_OUT and initial.effect_started_at is not None
+    facts = result_data(execute_schema(schema, """{
+      workflowrun { version { id } can_reprocess step_runs { can_retry requires_duplicate_acknowledgement } }
+    }""", user=operator))["workflowrun"]
+    assert facts == [{
+        "version": None, "can_reprocess": False,
+        "step_runs": [{"can_retry": True, "requires_duplicate_acknowledgement": True}],
+    }]
     assert not result_data(action(schema, "retry_step", step, operator))["retry_step"]["ok"]
     acknowledged = result_data(action(schema, "retry_step_accepting_duplicate", step, operator))
     assert acknowledged["retry_step_accepting_duplicate"]["ok"]
@@ -233,9 +244,25 @@ def test_narrow_origin_and_actor_projection_does_not_fetch_each_run(schema, exec
             start_run(workflow, actor=actor)
         with CaptureQueriesContext(connection) as queries:
             data: dict[str, Any] = result_data(execute_schema(
-                schema, "{ workflowrun { origin run_as display_name } }", user=actor,
+                schema, "{ workflowrun { origin run_as { id display_name } display_name } }", user=actor,
             ))
         assert len(data["workflowrun"]) == count
+        counts.append(len(queries))
+    assert counts[0] == counts[1]
+
+
+def test_narrow_step_run_relation_projection_does_not_fetch_each_foreign_key(schema, execution):
+    """A selected forward relation includes its FK column in the parent query."""
+
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), actor=actor)
+    counts = []
+    for count in (1, 5):
+        while system_queryset(StepRun).count() < count:
+            run_until(start_run(workflow, actor=actor))
+        with CaptureQueriesContext(connection) as queries:
+            data = result_data(execute_schema(schema, "{ steprun { run { id } } }", user=actor))
+        assert len(data["steprun"]) == count
         counts.append(len(queries))
     assert counts[0] == counts[1]
 
@@ -268,3 +295,109 @@ def test_attempt_error_and_stacktrace_share_the_declared_field_gate(schema, call
             assert "ValueError" in data["stepattempt_by_pk"]["stacktrace"]
         else:
             assert data["stepattempt_by_pk"] is None
+
+
+def test_terminal_cancel_reports_open_step_cleanup_without_claiming_run_cancellation(schema, execution):
+    """Decision 38 leaves terminal facts intact and accurately reports row cleanup."""
+    actor, _sent = execution
+    workflow = load_workflow({"nodes": {
+        "entry": {"step": "echo", "next": {"done": ["failure", "remaining"]}},
+        "failure": {"step": "reject"}, "remaining": {"step": "echo"},
+    }}, actor=actor)
+    run = start_run(workflow, actor=actor)
+    run_until(run)
+    assert run.status == "failed"
+    assert run.can_cancel(actor)
+    retained = (run.status, run.outcome, run.output, run.error, run.finished_at)
+    query = "mutation($id: ID!) { cancel_workflow_run(id: $id) { ok message } }"
+    first = result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))
+    assert first["cancel_workflow_run"] == {
+        "ok": True, "message": "Run already finished; 1 open step canceled.",
+    }
+    second = result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))
+    assert second["cancel_workflow_run"] == {"ok": True, "message": "Nothing to cancel."}
+    run = system_queryset(WorkflowRun).get(pk=run.pk)
+    assert (run.status, run.outcome, run.output, run.error, run.finished_at) == retained
+    assert not run.can_cancel(actor)
+
+
+def test_origin_enum_has_native_choice_labels(schema):
+    """The derived origin uses the same labelled enum projection as stored choices."""
+    origin = schema._schema.get_type("RunOrigin")
+    assert {key: value.description for key, value in origin.values.items()} == {
+        "MANUAL": "Manual", "WORKFLOW": "Workflow", "REPROCESS": "Reprocess", "TEST": "Test",
+    }
+
+
+@pytest.mark.parametrize(("step_key", "settle", "cancel", "reprocess", "retry"), [
+    ("echo", False, True, False, False),
+    ("echo", True, False, True, False),
+    ("reject", True, False, True, True),
+    ("pause", True, True, False, False),
+])
+def test_viewer_facts_share_state_and_permission_owners(schema, callers, step_key, settle, cancel, reprocess, retry):
+    """A reader sees execution but never gains an operator affordance from its state."""
+    admin, owner, reader = callers
+    workflow = load_workflow(document("entry", step=step_key), actor=admin)
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    run = start_run(workflow, actor=owner)
+    run.with_actor(owner).grant_record_access("reader", reader)
+    row = system_queryset(StepRun).get(run=run)
+    if settle:
+        StepRun.objects.execute(row.pk)
+    query = """{
+      workflowrun { can_cancel can_reprocess step_runs { can_retry requires_duplicate_acknowledgement } }
+    }"""
+    for actor, expected in ((owner, (cancel, reprocess, retry)), (reader, (False, False, False))):
+        data = result_data(execute_schema(schema, query, user=actor))["workflowrun"]
+        assert data == [{
+            "can_cancel": expected[0], "can_reprocess": expected[1],
+            "step_runs": [{"can_retry": expected[2], "requires_duplicate_acknowledgement": False}],
+        }]
+
+
+def test_error_routed_failure_does_not_offer_retry(schema, callers):
+    """Routing an error consumes recovery even while its successor remains waiting."""
+    admin, owner, _reader = callers
+    workflow = load_workflow({"nodes": {
+        "entry": {"step": "reject", "next": {"error": "recovery"}}, "recovery": {"step": "pause"},
+    }}, actor=admin)
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    run = start_run(workflow, actor=owner)
+    StepRun.objects.execute(system_queryset(StepRun).get(run=run, node_key="entry").pk)
+    data = result_data(execute_schema(schema, """{
+      steprun(where: {node_key: {_eq: "entry"}}) { status can_retry }
+    }""", user=owner))
+    assert data["steprun"] == [{"status": "FAILED", "can_retry": False}]
+
+
+def test_step_rows_follow_graph_order_even_when_database_order_differs(schema, callers):
+    """Stored ranks survive out-of-order planning and a viewer-redacted version."""
+    admin, owner, operator = callers
+    workflow = load_workflow({"nodes": {
+        "start": {"step": "echo", "next": {"done": ["branch_a", "branch_b"]}},
+        "branch_a": {"step": "echo", "next": {"done": "a_child"}},
+        "branch_b": {"step": "echo", "next": {"done": "b_child"}},
+        "a_child": {"step": "echo", "next": {"done": "finish"}},
+        "b_child": {"step": "echo", "next": {"done": "finish"}},
+        "finish": {"step": "echo", "join": "all", "input": {"from": "a_child"}},
+    }, "results": [{"from": "finish"}]}, actor=admin)
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    run = start_run(workflow, actor=owner)
+    StepRun.objects.execute(system_queryset(StepRun).get(run=run, node_key="start").pk)
+    StepRun.objects.execute(system_queryset(StepRun).get(run=run, node_key="branch_b").pk)
+    run_until(run)
+    assert run.status == "succeeded"
+    run.with_actor(owner).grant_record_access("operator", operator)
+    rows = system_queryset(StepRun).filter(run=run)
+    assert list(rows.order_by("pk").values_list("node_key", flat=True)) == [
+        "start", "branch_a", "branch_b", "b_child", "a_child", "finish",
+    ]
+    expected = ["start", "branch_a", "branch_b", "a_child", "b_child", "finish"]
+    assert list(rows.values_list("node_key", flat=True)) == expected
+    for actor in (owner, operator):
+        data = result_data(execute_schema(schema, """{
+          workflowrun { version { id } step_runs { node_key } }
+        }""", user=actor))["workflowrun"][0]
+        assert [row["node_key"] for row in data["step_runs"]] == expected
+        assert (data["version"] is None) is (actor == operator)

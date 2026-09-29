@@ -6,8 +6,9 @@ owns the rest of definition.py, bindings.py, DraftSave, and WorkflowManager. Ste
 own steps.py and context.py. Models own models.py, states.py, and permissions.zed.
 Blank lines, comments, docstrings, and decorators count; every source file line
 belongs to exactly one row. The README and addon declaration are named non-code
-exceptions. Bytecode caches are generated artifacts. An unknown file or an
-exceeded fixed budget fails this command.
+exceptions. Bytecode caches are generated artifacts. The web subtree has one
+separate budget for all its sources. An unknown backend file or an exceeded
+fixed budget fails this command.
 Decisions reports Python, permission, and manifest sources, excluding its testing app.
 Its budget comparison is informational;
 required public contract docstrings remain included in the reported physical count.
@@ -25,8 +26,8 @@ NON_CODE_FILES = frozenset({"README.md", "addon.toml"})
 """Named declarations and prose outside the physical code budgets."""
 
 WHOLE_FILE_ROWS = (
-    ("Step contract, context, built-in steps", 900, ("steps.py", "context.py")),
-    ("Models, constraints, permissions", 900, ("models.py", "states.py", "permissions.zed")),
+    ("Step contract, context, built-in steps", 900, ("steps.py", "context.py", "reviews.py")),
+    ("Models, constraints, permissions", 900, ("models.py", "states.py", "permissions.zed", "permissions.extends.zed")),
     ("Triggers and sources", 500, ("triggers.py", "sources.py")),
     ("GraphQL schema", 700, ("schema.py",)),
     ("Resources, autoconfig, settings", 300, ("__init__.py", "apps.py", "resources.py", "autoconfig.py")),
@@ -65,9 +66,14 @@ def main() -> int:
         for path in ROOT.rglob("*")
         if path.is_file() and "__pycache__" not in path.relative_to(ROOT).parts
     }
-    if unmapped := inventory - names - NON_CODE_FILES:
+    web_files = {name for name in inventory if name.startswith("web/")}
+    backend_inventory = inventory - web_files
+    if unmapped := backend_inventory - names - NON_CODE_FILES:
         raise ValueError(f"Unmapped workflow files: {', '.join(sorted(unmapped))}.")
-    sources = {name: (ROOT / name).read_text(encoding="utf-8") for name in sorted(names & inventory)}
+    sources = {
+        name: (ROOT / name).read_text(encoding="utf-8")
+        for name in sorted((names & backend_inventory) | web_files)
+    }
     whole = {name: set(range(1, len(source.splitlines()) + 1)) for name, source in sources.items()}
     authoring = (
         symbol_lines(sources["managers.py"], "DraftSave")
@@ -90,6 +96,7 @@ def main() -> int:
         }),
         *((name, budget, {file: whole[file] for file in files if file in whole})
           for name, budget, files in WHOLE_FILE_ROWS),
+        ("Workflows web", 2200, {file: whole[file] for file in sorted(web_files)}),
     )
     for name, expected in whole.items():
         covered: set[int] = set()
@@ -114,7 +121,7 @@ def main() -> int:
         for path in sorted(decision_root.rglob("*"))
         if path.suffix in {".py", ".zed", ".toml"} and "testing" not in path.relative_to(decision_root).parts
     )
-    print(f"| Decisions backend | {decision_count} | 1300 | {1300 - decision_count} |")
+    print(f"| Decisions backend | {decision_count} | 1400 | {1400 - decision_count} |")
     return int(exceeded)
 
 

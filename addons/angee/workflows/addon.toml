@@ -5,4 +5,4 @@ name = "angee.workflows"
 description = "Immutable workflow graphs and actor-scoped execution"
 keywords = ["workflows", "automation", "orchestration"]
 category = "Workflows"
-depends_on = ["angee.iam", "angee.jobs", "angee.resources", "angee.graphql"]
+depends_on = ["angee.iam", "angee.jobs", "angee.resources", "angee.graphql", "angee.decisions"]

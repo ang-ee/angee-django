@@ -1,5 +1,6 @@
-"""Concrete workflow sources for native Django test database setup."""
+"""Concrete workflow and decision sources for native Django test database setup."""
 
+from angee.decisions import models as decision_sources
 from angee.workflows import models as sources
 
 
@@ -77,3 +78,39 @@ class StepArtifact(sources.StepArtifact):
         app_label = "workflows"
         db_table = "test_workflows_artifact"
         rebac_resource_type = "workflows/step_artifact"
+
+
+class DecisionGroup(decision_sources.DecisionGroup):
+    """Concrete group retained by its workflow step and later review rounds."""
+
+    class Meta(decision_sources.DecisionGroup.Meta):
+        """Keep native source options on the isolated group table."""
+
+        abstract = False
+        app_label = "decisions"
+        db_table = "test_decisions_group"
+        rebac_resource_type = "decisions/group"
+
+
+class Decision(sources.DecisionWorkflow, decision_sources.Decision):
+    """Concrete seat with the workflow resource axes composed onto its row."""
+
+    class Meta(decision_sources.Decision.Meta):
+        """Keep native source options on the isolated decision table."""
+
+        abstract = False
+        app_label = "decisions"
+        db_table = "test_decisions_decision"
+        rebac_resource_type = "decisions/decision"
+
+
+class DecisionEvidence(decision_sources.DecisionEvidence):
+    """Concrete evidence projection owned by decisions in the combined composition."""
+
+    class Meta(decision_sources.DecisionEvidence.Meta):
+        """Keep native source options on the isolated evidence table."""
+
+        abstract = False
+        app_label = "decisions"
+        db_table = "test_decisions_evidence"
+        rebac_resource_type = "decisions/evidence"

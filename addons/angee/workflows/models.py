@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -11,16 +11,18 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models.functions import Now
 from django.utils.functional import cached_property
+from rebac import system_context
 
 from angee.base.fields import StateField
 from angee.base.mixins import AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
+from angee.base.scoping import system_queryset
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import Definition
 from angee.workflows.managers import StepAttemptQuerySet, StepRunManager, WorkflowManager, WorkflowRunManager
 from angee.workflows.resources import WorkflowDefinitionResource
-from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunStatus, StepRunStatus, WaitingKind
+from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunOrigin, RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
 
 
@@ -138,15 +140,41 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
 
     objects = WorkflowRunManager()
 
+    @cached_property
+    def policy_version(self) -> Any:
+        """Reuse loaded policy, resolving a viewer-redacted relation by its pinned ID."""
+        if version := self._state.fields_cache.get("version"):
+            return version
+        if "version" not in self._state.fields_cache:
+            with system_context(reason="workflows.execution_policy"):
+                return self.version
+        model = self._meta.get_field("version").related_model
+        return system_queryset(model).get(pk=self.version_id)
+
     @property
-    def origin(self) -> str:
+    def origin(self) -> RunOrigin:
         """Derive the run's admission origin from its retained execution links."""
-        return "reprocess" if self.reprocess_of_id is not None else "manual"
+        return cast(RunOrigin, RunOrigin.REPROCESS if self.reprocess_of_id is not None else RunOrigin.MANUAL)
 
     @property
     def is_terminal(self) -> bool:
         """Whether this run has finished its lifecycle."""
         return self.status in RunStatus.terminal_values()
+
+    def can_cancel(self, actor: Any) -> bool:
+        """A writer may cancel active execution or clean up a terminal run's open rows."""
+        return self.with_actor(actor).has_access("write") and (
+            not self.is_terminal
+            or self.step_runs.with_actor(actor).exclude(status__in=StepRunStatus.terminal_values()).exists()
+        )
+
+    def can_reprocess(self, actor: Any) -> bool:
+        """Reprocessing needs terminal execution, run write and workflow start access."""
+        if not self.is_terminal or not self.with_actor(actor).has_access("write"):
+            return False
+        with system_context(reason="workflows.reprocess_policy"):
+            workflow = self.policy_version.workflow
+        return bool(workflow.with_actor(actor).has_access("start"))
 
     class Meta:
         """Django options for execution identity and terminal timestamps."""
@@ -176,6 +204,9 @@ class StepRun(AngeeDataModel):
     """One graph node's state and input, with its claim counter as the fence."""
 
     runtime = True
+    decision_group = models.OneToOneField(
+        "decisions.DecisionGroup", on_delete=models.PROTECT, null=True, blank=True, related_name="step_run",
+    )
     sqid_prefix = "wsr_"
 
     run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.CASCADE, related_name="step_runs")
@@ -183,6 +214,7 @@ class StepRun(AngeeDataModel):
         max_length=NAME_MAX_LENGTH + len(".body"),
         help_text="A declared node key, with room for a map item's .body suffix.",
     )
+    rank = models.PositiveIntegerField(editable=False, help_text="Execution order assigned once by the graph planner.")
     map_index = models.PositiveIntegerField(default=0)
     status = StateField(choices_enum=StepRunStatus, default=StepRunStatus.READY, db_index=False)
     waiting_kind = StateField(choices_enum=WaitingKind, null=True, blank=True, db_index=False)
@@ -207,22 +239,52 @@ class StepRun(AngeeDataModel):
     objects = StepRunManager()
 
     @property
+    def is_mapped(self) -> bool:
+        """Identify a map body row by its node identity, including item index zero."""
+        return self.node_key.endswith(".body")
+
+    @property
     def step(self) -> type[Step]:
         """Resolve the class once from this run's immutable node declaration."""
-        return self.run.version.definition.step(self.node_key)
+        return self.run.policy_version.definition.step(self.node_key)
 
     @property
     def requires_duplicate_acknowledgement(self) -> bool:
         """Whether any attempt on this page may have made a non-idempotent effect."""
-        return not self.step.effect_idempotent and self.attempts.filter(
-            page_index=self.page_index, effect_started_at__isnull=False,
-        ).exists()
+        with system_context(reason="workflows.effect_policy"):
+            return not self.step.effect_idempotent and self.attempts.filter(
+                page_index=self.page_index, effect_started_at__isnull=False,
+            ).exists()
+
+    @property
+    def retry_blocker(self) -> str | None:
+        """State-only retry eligibility, shared by the locked action and read surface."""
+        run = self.run
+        definition = run.policy_version.definition
+        if (
+            run.status not in {RunStatus.FAILED, RunStatus.WAITING, RunStatus.RUNNING}
+            or not (self.status == StepRunStatus.FAILED
+                    or self.status == StepRunStatus.WAITING and self.waiting_kind == WaitingKind.OPERATOR)
+            or self.status == StepRunStatus.FAILED and not definition.retry_allowed(self.node_key)
+        ):
+            return "This step cannot be retried in place."
+        others = sorted(row.node_key for row in run.step_runs.all()
+                        if row.pk != self.pk and definition.unrouted_failure([row]))
+        return f"Other unrouted failures remain: {', '.join(others)}." if others else None
+
+    def can_retry(self, actor: Any) -> bool:
+        """Expose retry eligibility without granting generic writes to engine rows."""
+        if not self.run.with_actor(actor).has_access("write"):
+            return False
+        with system_context(reason="workflows.retry_policy"):
+            return self.retry_blocker is None
 
     class Meta:
         """Django options for node identity, fences and tick predicates."""
 
         abstract = True
         rebac_resource_type = "workflows/step_run"
+        ordering = ("rank", "map_index", "pk")
         constraints = [
             models.UniqueConstraint(fields=("run", "node_key", "map_index"), name="workflows_step_node_unique"),
             models.CheckConstraint(
@@ -305,3 +367,17 @@ class StepArtifact(RecordRefMixin, AngeeDataModel):
 
         abstract = True
         rebac_resource_type = "workflows/step_artifact"
+
+
+class DecisionWorkflow(models.Model):
+    """Contribute execution query axes without coupling decisions to its waiter."""
+
+    extends: str | None = "decisions.Decision"
+    hasura_filterable_fields = (
+        "group__step_run", "group__step_run__run", "group__step_run__run__version__workflow",
+    )
+
+    class Meta:
+        """Compose declarations onto the decision row without another table."""
+
+        abstract = True

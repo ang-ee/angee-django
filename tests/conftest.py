@@ -821,21 +821,6 @@ def assert_private_hasura_insert_access(
     return created, readable, updated
 
 
-@pytest.fixture(autouse=True)
-def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Scope generated paths and source annotations with other test monkeypatches."""
-
-    from django.apps import apps
-
-    attributes = ("rebac_schema", "_angee_rebac_schema_source", "_angee_rebac_schema_effective")
-    for config in apps.get_app_configs():
-        for key in attributes:
-            existed = key in config.__dict__
-            monkeypatch.setitem(config.__dict__, key, config.__dict__.get(key))
-            if not existed:
-                del config.__dict__[key]
-
-
 def create_platform_admin(username: str, **fields: Any) -> Any:
     """Create a regular user with an explicit platform-admin membership grant."""
 

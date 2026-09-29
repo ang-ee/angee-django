@@ -70,13 +70,14 @@ class DecisionRequest:
     assignees: tuple[Any, ...]
     actions: tuple[type[Action], ...]
     requester: Any = DEFAULT_REQUESTER
-    basis: dict[str, Any] = field(default_factory=dict)
+    basis: Any = field(default_factory=dict)
     context: DecisionContext = field(default_factory=DecisionContext)
     initial: dict[str, dict[str, Any]] = field(default_factory=dict)
     refine: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     supersede: bool = False
     expires_at: datetime | None = None
     max_attempts: int | None = None
+    errors: dict[str, list[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Reject incomplete seats before admission can create any rows."""

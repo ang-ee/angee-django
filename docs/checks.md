@@ -51,6 +51,10 @@ covers workflow definition, publication, execution,
 test-harness and composed-consumer contracts, plus decision
 [lifecycle](../tests/test_decisions_lifecycle.py) and
 [concurrency](../tests/test_decisions_concurrency.py). This named file selection
+also covers [review waiters](../tests/test_workflows_review.py), their
+[locking races](../tests/test_workflows_review_concurrency.py),
+[execution links](../tests/test_workflows_review_graphql.py), and
+[inbox predicates](../tests/test_decisions_inbox.py). The selection
 runs serially with `--nomigrations` and must finish with zero skips. The full
 suite runs on SQLite with migrations enabled and `DATABASE_URL` unset; do not
 apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
@@ -69,8 +73,8 @@ host fixtures must use process-local connections or pytest's worker-local
 
 Share source-addon compositions through their owning test apps:
 [`angee.resources.testing`](../addons/angee/resources/testing/__init__.py),
-[`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py),
-[`angee.decisions.testing`](../addons/angee/decisions/testing/__init__.py), and
+the combined workflows/decisions composition in
+[`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py), and
 [`angee.integrate.testing`](../addons/angee/integrate/testing/__init__.py). Their
 package docstrings own the adoption contract. The framework-generic
 [`composed_tables`](../angee/testing/fixtures.py) fixture uses native transactional
@@ -80,7 +84,7 @@ Verify adopting modules individually as well as in the full suite so collection
 order cannot hide missing models.
 
 Workflow tests reach execution states through the shared `load_workflow`,
-`start_run`, `run_until` and `run_factory(...).at(...)` drivers. These compose
+`start_run`, `run_until`, `decide` and `run_factory(...).at(...)` drivers. These compose
 production admission and transition verbs; do not fabricate step runs or attempts
 to stand in for execution. Name Python test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.

@@ -12,6 +12,9 @@ from django.db import models
 
 from angee.base.identity import instance_from_public_id
 from angee.base.scoping import read_scoped_queryset
+from angee.decisions.contracts import DecisionRequest
+from angee.decisions.managers import ResolvedDecision
+from angee.workflows.reviews import Ask
 from angee.workflows.states import DONE_OUTCOME
 from angee.workflows.steps import Done, Fail, NextPage, Step, Wait
 
@@ -112,6 +115,16 @@ class StepContext:
     def fail(self, message: str) -> Fail:
         """Return a permanent failure; settlement owns its routing outcome."""
         return Fail(error=message)
+
+    def ask(self, *requests: DecisionRequest, policy: str = "first") -> Ask:
+        """Construct review requests; the body boundary owns validation and admission."""
+        self._require_mode("DATABASE")
+        return Ask(requests=requests, policy=policy)
+
+    def resolution(self, decision_ref: str) -> ResolvedDecision:
+        """Lock and revalidate a prior review's public decision reference."""
+        self._require_mode("DATABASE")
+        return type(self.step_run).objects.resolution(decision_ref, run=self.run, actor=self.actor)
 
     def begin_effect(self) -> None:
         """Record possible external effects only while this IO attempt owns its fence."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 
@@ -47,6 +48,9 @@ class Note(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, 
     tags = models.JSONField(blank=True, default=list)
     is_starred = models.BooleanField(default=False, db_index=True)
     reminder_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    reviewer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+    )
 
     class Meta:
         """Django model options."""
@@ -89,6 +93,8 @@ class Note(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, 
             errors["body"] = "Note content is required for publication."
         if self.status != self.Status.IN_REVIEW:
             errors["status"] = "A note must be in review before publication."
+        if self.reviewer_id is not None and self.reviewer_id == self.created_by_id:
+            errors["reviewer"] = "The reviewer must be someone other than the note's author."
         if errors:
             raise ValidationError(errors)
         return {

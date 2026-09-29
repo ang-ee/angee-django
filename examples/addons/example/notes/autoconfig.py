@@ -7,4 +7,5 @@ SETTINGS = {
         "example.notes.steps.ValidateNotePublication"
     ),
     "ANGEE_WORKFLOW_STEP_CLASSES.note_publish": "example.notes.steps.PublishNote",
+    "ANGEE_WORKFLOW_STEP_CLASSES.note_review_publication": "example.notes.steps.ReviewNotePublication",
 }

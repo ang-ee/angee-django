@@ -19,17 +19,17 @@ from angee.graphql.introspection import FieldPathError, fields_for_path
 _UNCACHED = object()
 
 
-def actor_scoped_relation_group_expression(
+def actor_scoped_relation_expression(
     queryset: models.QuerySet[Any],
     field_path: str,
 ) -> Combinable | None:
-    """Return a read-safe scalar expression for one related group axis.
+    """Return a read-safe scalar expression for one related query axis.
 
     Every protected target crossed by the selected to-one path contributes an
     uncorrelated membership guard. The related scalar is projected only when
     all guarded rows are readable by the source queryset's actor; otherwise it
-    becomes SQL ``NULL`` while the parent row and relation identity stay in the
-    group. Paths with no protected target need no override and return ``None``.
+    becomes SQL ``NULL`` while the parent row remains visible. Paths with no
+    protected target need no override and return ``None``.
     """
 
     try:
@@ -93,25 +93,28 @@ def actor_scoped_relation_group_expression(
     )
 
 
-def actor_scoped_to_one(field_name: str) -> Any:
-    """Return a nullable to-one field that redacts targets unreadable by the actor.
+def actor_scoped_to_one(field_name: str, *, reverse: bool = False) -> Any:
+    """Return a nullable forward/reverse to-one field redacting unreadable targets.
 
     The parent may be actor-scoped or sudo-loaded: a cached related object is used
     only when REBAC stamped it for the current actor; otherwise the stored FK value
     is re-gated through the target model's actor-scoped manager. Missing access
-    returns ``None`` rather than raising. Strawberry-Django's native prefetch hint
-    batches a selected relation once per parent list, while ``only`` keeps the
-    parent projection to the FK id this resolver reads.
+    returns ``None`` rather than raising. Strawberry-Django's native relation
+    projection and prefetch hint batch a selected relation once per parent list.
+    ``reverse=True`` selects a reverse one-to-one, which has no local FK column
+    to include in the parent's optimized projection.
     """
 
     def resolve(root: models.Model) -> Any:
         field = root._meta.get_field(field_name)
-        if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
+        if not is_to_one_relation(field):
             raise ImproperlyConfigured(
-                f"{root._meta.label}.{field_name} must be a forward to-one relation"
+                f"{root._meta.label}.{field_name} must be a to-one relation"
             )
 
-        fk_id = field.value_from_object(root)
+        if reverse != isinstance(field, models.OneToOneRel):
+            raise ImproperlyConfigured(f"{root._meta.label}.{field_name} has an incorrect relation direction")
+        fk_id = field.field.target_field.value_from_object(root) if reverse else field.value_from_object(root)
         if fk_id is None:
             return None
 
@@ -133,13 +136,13 @@ def actor_scoped_to_one(field_name: str) -> Any:
                 f"{root._meta.label}.{field_name} targets {related_model._meta.label}, "
                 "whose default manager is not actor-scoped"
             )
-        target_field = field.target_field
+        target_field = field.field if reverse else field.target_field
         return with_actor(actor).filter(**{target_field.attname: fk_id}).first()
 
     return strawberry_django.field(
         resolver=resolve,
         field_name=field_name,
-        only=[f"{field_name}_id"],
+        only=[] if reverse else [f"{field_name}_id"],
         prefetch_related=[field_name],
     )
 
@@ -150,7 +153,7 @@ def actor_scoped_to_many(field_name: str) -> Any:
     The parent may be actor-scoped through one relation while the selected
     to-many relation contains other protected rows. Resolve the relation through
     the target model's actor-scoped queryset instead of exposing the raw related
-    manager.
+    manager. Both cached and queried rows retain their model's native ordering.
     """
 
     def resolve(root: models.Model) -> Any:
@@ -172,17 +175,14 @@ def actor_scoped_to_many(field_name: str) -> Any:
             getattr(row, "_rebac_actor", None) == actor for row in cached
         ):
             return cached
-
         related_queryset = getattr(root, field_name).all()
         with_actor = getattr(related_queryset, "with_actor", None)
-        if callable(with_actor):
-            return with_actor(actor)
-
-        related_model = field.related_model
-        raise ImproperlyConfigured(
-            f"{root._meta.label}.{field_name} targets {related_model._meta.label}, "
-            "whose related manager is not actor-scoped"
-        )
+        if not callable(with_actor):
+            raise ImproperlyConfigured(
+                f"{root._meta.label}.{field_name} targets {field.related_model._meta.label}, "
+                "whose related manager is not actor-scoped"
+            )
+        return with_actor(actor)
 
     return strawberry_django.field(
         resolver=resolve,

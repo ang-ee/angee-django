@@ -204,11 +204,14 @@ edges in a `Definition` document.
 **Attempt** — one try of a step run, recorded by `StepAttempt` from claim to
 settlement. A retry creates another attempt for the same step run.
 
-**Settlement** — what a step returns: `Done`, `Wait`, `NextPage` or `Fail`. It describes the
+**Settlement** — what a step returns: `Done`, `Wait`, `NextPage`, `Ask` or `Fail`. It describes the
 attempt's completion or continuation, and the transition owner persists it.
 
 **Result** — what a workflow run reports, selected and projected from its
 declared producer bindings by `Definition`.
+
+**Review step** — one node that freezes a question, waits for a decision group,
+and applies its answers as the run actor. Each answer retains its resolver.
 
 ## Decisions
 

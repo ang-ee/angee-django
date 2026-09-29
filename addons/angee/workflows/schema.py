@@ -10,6 +10,7 @@ from django.apps import apps
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.decisions.schema import DecisionGroupType
 from angee.graphql.actions import (
     ActionResult,
     action_guard,
@@ -22,6 +23,10 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
+from angee.iam.schema import UserType
+from angee.workflows.states import RunOrigin
+
+strawberry.enum(cast(Any, RunOrigin))
 
 Workflow = apps.get_model("workflows", "Workflow")
 WorkflowVersion = apps.get_model("workflows", "WorkflowVersion")
@@ -29,6 +34,7 @@ WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
 StepArtifact = apps.get_model("workflows", "StepArtifact")
+DecisionGroup = apps.get_model("decisions", "DecisionGroup")
 
 
 @strawberry_django.type(Workflow)
@@ -38,7 +44,9 @@ class WorkflowType(AngeeNode):
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["name"])
     key: auto
     name: auto
+    description: auto
     subject_model: auto
+    published: WorkflowVersionType | None = actor_scoped_to_one("published")
 
 
 @strawberry_django.type(WorkflowVersion)
@@ -48,6 +56,8 @@ class WorkflowVersionType(AngeeNode):
     number: auto
     document: JSON
     content_hash: auto
+    created_at: auto
+    published_by: UserType | None = actor_scoped_to_one("published_by")
     workflow: WorkflowType | None = actor_scoped_to_one("workflow")
 
 
@@ -58,6 +68,7 @@ class WorkflowRunType(AngeeNode):
     version: WorkflowVersionType | None = actor_scoped_to_one("version")
     reprocess_of: WorkflowRunType | None = actor_scoped_to_one("reprocess_of")
     step_runs: list[StepRunType] = actor_scoped_to_many("step_runs")
+    run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
     input: JSON
     output: JSON
@@ -69,14 +80,19 @@ class WorkflowRunType(AngeeNode):
     finished_at: auto
 
     @strawberry_django.field(only=["reprocess_of_id"])
-    def origin(self) -> str:
+    def origin(self) -> RunOrigin:
         """Read the model's derived admission origin."""
         return cast(Any, self).origin
 
-    @strawberry_django.field(only=["run_as_id"])
-    def run_as(self) -> PublicID | None:
-        """Project the execution principal through IAM's public identity owner."""
-        return optional_public_id(user_public_id(cast(Any, self).run_as_id))
+    @strawberry_django.field(only=["status"])
+    def can_cancel(self, info: strawberry.Info) -> bool:
+        """Project the model's viewer-specific cancellation predicate."""
+        return bool(cast(Any, self).can_cancel(request_from_info(info).user))
+
+    @strawberry_django.field(only=["status", "version_id"])
+    def can_reprocess(self, info: strawberry.Info) -> bool:
+        """Project the model's viewer-specific replacement admission predicate."""
+        return bool(cast(Any, self).can_reprocess(request_from_info(info).user))
 
     @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
     def subject_model(self) -> str:
@@ -94,10 +110,13 @@ class StepRunType(AngeeNode):
     """A node's retained execution and wait state; transitions use actions."""
 
     run: WorkflowRunType | None = actor_scoped_to_one("run")
+    decision_group: DecisionGroupType | None = actor_scoped_to_one("decision_group")
     attempts: list[StepAttemptType] = actor_scoped_to_many("attempts")
     artifacts: list[StepArtifactType] = actor_scoped_to_many("artifacts")
     node_key: auto
+    rank: auto
     map_index: auto
+    is_mapped: bool = strawberry_django.field(only=["node_key"])
     status: auto
     waiting_kind: auto
     wait_reason: auto
@@ -113,6 +132,23 @@ class StepRunType(AngeeNode):
     state: JSON
     created_at: auto
     updated_at: auto
+
+    @strawberry_django.field(only=["status", "waiting_kind", "node_key", "run_id"])
+    def can_retry(self, info: strawberry.Info) -> bool:
+        """Project the same model rule checked by the retry action."""
+        return bool(cast(Any, self).can_retry(request_from_info(info).user))
+
+    @strawberry_django.field(only=["node_key", "page_index", "run_id"])
+    def requires_duplicate_acknowledgement(self) -> bool:
+        """Read the step owner's current-page effect marker predicate."""
+        return bool(cast(Any, self).requires_duplicate_acknowledgement)
+
+
+@strawberry_django.type(DecisionGroup, name="DecisionGroupType", extend=True)
+class DecisionGroupWorkflowExtension:
+    """Expose the unique waiting execution through its own read permission."""
+
+    step_run: StepRunType | None = actor_scoped_to_one("step_run", reverse=True)
 
 
 @strawberry_django.type(StepAttempt)
@@ -153,17 +189,29 @@ class StepArtifactType(AngeeNode):
         return PublicID(cast(Any, self).record_public_id)
 
 
+_WORKFLOW_RESOURCE = hasura_model_resource(
+    WorkflowType, model=Workflow, filterable=["id", "key", "subject_model"],
+    sortable=["key", "name", "created_at"], aggregatable=["id"],
+    insert=False, update=False, delete=False,
+)
+_VERSION_RESOURCE = hasura_model_resource(
+    WorkflowVersionType, model=WorkflowVersion, filterable=["id", "workflow", "number"],
+    sortable=["number", "created_at"], aggregatable=["id"],
+    insert=False, update=False, delete=False,
+)
 _RUN_RESOURCE = hasura_model_resource(
     WorkflowRunType, model=WorkflowRun,
-    filterable=["id", "version", "run_as", "status", "outcome", "reprocess_of", "created_at", "finished_at"],
+    filterable=["id", "version", "version__workflow", "run_as", "status", "outcome", "reprocess_of",
+                "created_at", "finished_at"],
+    record_ref_filters=("subject_model", "subject_id"),
     sortable=["created_at", "updated_at", "finished_at", "status"],
-    aggregatable=["id"], groupable=["status", "outcome"],
+    aggregatable=["id"], groupable=["status", "outcome", "version__workflow", "version__workflow__name"],
     insert=False, update=False, delete=False,
 )
 _STEP_RESOURCE = hasura_model_resource(
     StepRunType, model=StepRun,
-    filterable=["id", "run", "node_key", "map_index", "status", "waiting_kind", "outcome"],
-    sortable=["created_at", "node_key", "map_index", "deadline_at", "wake_at"],
+    filterable=["id", "run", "decision_group", "node_key", "map_index", "status", "waiting_kind", "outcome"],
+    sortable=["rank", "created_at", "node_key", "map_index", "deadline_at", "wake_at"],
     aggregatable=["id"], groupable=["status", "waiting_kind"],
     insert=False, update=False, delete=False,
 )
@@ -189,8 +237,8 @@ class WorkflowActionMutation:
     def cancel_workflow_run(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Cancel one writable active run through the execution owner."""
         run = authorized_action_target(info, WorkflowRun, id, "write")
-        WorkflowRun.objects.cancel(run, actor=request_from_info(info).user)
-        return ActionResult(ok=True, message="Run canceled.")
+        result = WorkflowRun.objects.cancel(run, actor=request_from_info(info).user)
+        return ActionResult(ok=True, message=result.message)
 
     @strawberry.mutation
     @action_guard("Reprocess run failed.")
@@ -219,12 +267,16 @@ class WorkflowActionMutation:
         return ActionResult(ok=True, message="Step retried with duplicate risk acknowledged.")
 
 
-_RESOURCES = (_RUN_RESOURCE, _STEP_RESOURCE, _ATTEMPT_RESOURCE, _ARTIFACT_RESOURCE)
+_RESOURCES = (
+    _WORKFLOW_RESOURCE, _VERSION_RESOURCE, _RUN_RESOURCE, _STEP_RESOURCE, _ATTEMPT_RESOURCE, _ARTIFACT_RESOURCE,
+)
 schemas = {
     "console": {
         "query": [resource.query for resource in _RESOURCES],
         "mutation": [WorkflowActionMutation],
+        "type_extensions": [DecisionGroupWorkflowExtension],
         "types": [
+            RunOrigin,
             WorkflowType, WorkflowVersionType, WorkflowRunType, StepRunType, StepAttemptType, StepArtifactType,
             *(type_ for resource in _RESOURCES for type_ in resource.types),
         ],

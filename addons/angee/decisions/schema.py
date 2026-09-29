@@ -5,11 +5,13 @@ from __future__ import annotations
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db import models
 from strawberry import auto
 from strawberry.scalars import JSON
 
+from angee.base.scoping import aggregate_scoped_queryset
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
-from angee.graphql.data import hasura_model_resource, public_pk_decoder
+from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.iam.schema import UserType
@@ -40,6 +42,7 @@ class DecisionType(AngeeNode):
     form_schema: JSON
     basis: JSON
     context: JSON
+    errors: JSON
     verdict: auto
     closed_reason: auto
     superseded_by: DecisionType | None
@@ -55,6 +58,13 @@ class DecisionType(AngeeNode):
     record_model_label: str = strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
     record_public_id: str = strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["kind"])
+    is_open: bool = strawberry_django.field(annotate={"_is_open": Decision.objects.open_expression()})
+    can_act: bool = strawberry_django.field(annotate=lambda info: models.ExpressionWrapper(
+        models.Q(pk__in=aggregate_scoped_queryset(
+            Decision.objects.with_actor(info.context.request.user).with_action("act"),
+        ).values("pk")),
+        output_field=models.BooleanField(),
+    ))
 
 
 @strawberry_django.type(DecisionEvidence)
@@ -72,10 +82,14 @@ _GROUPS = hasura_model_resource(
 )
 _DECISIONS = hasura_model_resource(
     DecisionType, model=Decision, name="decisions",
-    filterable=["id", "group", "kind", "verdict", "closed_reason", "expires_at", "assignees", "requester"],
+    filterable=["id", "group", "kind", "verdict", "closed_reason", "expires_at", "assignees", "requester", "is_open",
+                *declared_hasura_resource_fields(Decision, "hasura_filterable_fields")],
     sortable=["id", "index", "created_at", "expires_at"], aggregatable=["id"],
     groupable=["kind", "verdict", "closed_reason"], insert=False, update=False, delete=False,
     field_id_decode={"assignees": public_pk_decoder(Decision._meta.get_field("assignees").related_model)},
+    get_queryset=lambda info: Decision.objects.with_open_state(),
+    filter_expressions={"is_open": Decision.objects.open_expression()},
+    record_ref_filters=("subject_model", "subject_id"),
 )
 _EVIDENCE = hasura_model_resource(
     DecisionEvidenceType, model=DecisionEvidence, name="decision_evidence", filterable=["id", "decision"],

@@ -91,6 +91,8 @@ jobs:
         if: ${{ !cancelled() }}
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
+        # Review concurrency includes simultaneous all seats, a requester-less
+        # first seat, and recovery after a settlement signal skips a busy run.
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
         run: |
@@ -101,6 +103,8 @@ jobs:
             tests/test_workflows_testing.py tests/test_testing.py \
             tests/test_workflows_io.py tests/test_workflows_contract.py tests/test_workflows_graphql.py \
             tests/test_workflows_fix_round.py \
+            tests/test_workflows_review.py tests/test_workflows_review_concurrency.py \
+            tests/test_workflows_review_graphql.py tests/test_decisions_inbox.py \
             tests/test_composed_note_workflow.py \
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'

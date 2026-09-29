@@ -13,7 +13,11 @@ import strawberry
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.expressions import Combinable
+from django.db.models.functions import Cast, Concat
 from rebac import PermissionDenied, system_context
+from strawberry.extensions.field_extension import FieldExtension
+from strawberry.types import get_object_definition
+from strawberry_django.fields.types import field_type_map
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django_aggregates import (
     default_operators_for,
@@ -32,12 +36,14 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura import (
     hasura_resource as build_hasura_resource,
 )
+from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.identity import (
     instance_from_public_id,
     public_data_id_field,
     public_id_for,
 )
+from angee.base.refs import RecordRefMixin
 from angee.base.scoping import (
     aggregate_scoped_queryset,
     system_queryset,
@@ -81,7 +87,7 @@ from angee.graphql.introspection import (
     FieldPathError,
     require_field_for_path,
 )
-from angee.graphql.relations import actor_scoped_relation_group_expression
+from angee.graphql.relations import actor_scoped_relation_expression
 from angee.graphql.writes import write_queryset
 from graphql import GraphQLError
 
@@ -568,7 +574,7 @@ def _group_by_expression_provider(
     for path, _granularity in spec:
         if "__" not in path or "." in path:
             continue
-        expression = actor_scoped_relation_group_expression(queryset, path)
+        expression = actor_scoped_relation_expression(queryset, path)
         if expression is not None:
             expressions[path] = expression
     return expressions
@@ -600,8 +606,11 @@ def declared_hasura_resource_fields(
         for item in value:
             field = str(item)
             try:
-                model._meta.get_field(field)
-            except FieldDoesNotExist as error:
+                if "__" in field:
+                    require_field_for_path(model, field)
+                else:
+                    model._meta.get_field(field)
+            except (FieldDoesNotExist, FieldPathError) as error:
                 raise ImproperlyConfigured(
                     f"{cls.__module__}.{cls.__name__}.{attribute} declares unknown field {field!r} "
                     f"on {model._meta.label}."
@@ -663,12 +672,49 @@ def _relation_group_key_encoders(
     return encoders
 
 
+class _FilterInputExtension(FieldExtension):
+    """Bridge input donors and safe SQL aliases to Hasura's dataclass visitor.
+
+    Nested relation expressions use flat aliases because Django interprets
+    overlapping ``__`` annotation names as transforms of the shortest prefix.
+    Public inputs retain their native names; only the runtime visitor keys move.
+    """
+
+    def __init__(self, base: type, donor: type | None, aliases: Mapping[str, str]) -> None:
+        self.base = base
+        self.aliases = aliases
+        self.combined = base if donor is None else dataclasses.make_dataclass(
+            f"{base.__name__}WithExpressions", [], bases=(base, donor), kw_only=True,
+        )
+        self.mapped = dataclasses.make_dataclass(
+            f"{base.__name__}Columns",
+            [(aliases.get(field.name, field.name), Any, dataclasses.field(default=strawberry.UNSET))
+             for field in dataclasses.fields(self.combined)],
+            kw_only=True,
+        ) if aliases else self.combined
+
+    def map_arguments(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return {key: self._value(value) for key, value in kwargs.items()}
+
+    def _value(self, value: Any) -> Any:
+        if isinstance(value, self.base):
+            return self.mapped(**{
+                self.aliases.get(field.name, field.name): self._value(getattr(value, field.name, strawberry.UNSET))
+                for field in dataclasses.fields(self.combined)
+            })
+        if isinstance(value, list):
+            return [self._value(item) for item in value]
+        return value
+
+
 def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
     node: type,
     *,
     model: type[models.Model],
     name: str | None = None,
     filterable: Sequence[str],
+    filter_expressions: Mapping[str, models.Expression] | None = None,
+    record_ref_filters: tuple[str, str] | None = None,
     sortable: Sequence[str],
     sortable_aliases: Mapping[str, str | SortAlias] | None = None,
     aggregatable: Sequence[str],
@@ -723,8 +769,40 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     ``record_search_fields`` declares the readable filterable String fields relation
     pickers search together; resources that omit it retain the standard single
     representation-field search.
+
+    ``filter_expressions`` adds queryset-owned computed scalar filters. Django
+    expressions own their types and query behavior; native input extensions add
+    comparisons without replacing Hasura's filter parser.
+
+    ``record_ref_filters=(model_name, id_name)`` exposes exact model-label and
+    public-ID filters for a ``RecordRefMixin`` pointer. The reference owner
+    supplies its columns and model-aware identity decoding; list and aggregate
+    reads retain the resource's ordinary permission scope.
+
+    Nested relation identity filters require read access at every protected hop,
+    sharing the permission-safe scalar expression used by related grouping axes.
     """
 
+    if record_ref_filters is not None:
+        if not issubclass(model, RecordRefMixin):
+            raise ImproperlyConfigured("Record-reference filters require RecordRefMixin.")
+        model_name, id_name = record_ref_filters
+        claimed = set(filter_expressions or {}) | set(field_id_decode or {})
+        if model_name == id_name or set(record_ref_filters) & claimed:
+            raise ImproperlyConfigured("Record-reference filter names must be distinct and unclaimed.")
+        reference = model.record_ref_field()
+        filterable = (*filterable, *(name for name in record_ref_filters if name not in filterable))
+        filter_expressions = {
+            **(filter_expressions or {}),
+            model_name: Concat(
+                f"{reference.ct_field}__app_label", models.Value("."), f"{reference.ct_field}__model",
+                output_field=models.CharField(),
+            ),
+            id_name: Cast(reference.fk_field, output_field=models.CharField()),
+        }
+        field_id_decode = {
+            **(field_id_decode or {}), model_name: str.lower, id_name: model.record_public_id_operand,
+        }
     active_groupable = relation_group_by_fields(node, model, tuple(groupable))
     for axis, fields in (
         ("filterable", filterable),
@@ -741,6 +819,37 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
 
     resource_name = name or model.__name__.lower()
     read_queryset = get_queryset or _model_queryset(model)
+    aggregate_queryset = get_aggregate_queryset or _aggregate_queryset(read_queryset)
+    expressions = dict(filter_expressions or {})
+    if unknown := expressions.keys() - set(filterable):
+        raise ImproperlyConfigured(f"Filter expressions must be declared filterable: {sorted(unknown)}")
+    relation_filters = {
+        path: f"{path}__{getattr(field, 'target_field', field.related_model._meta.pk).name}"
+        for path, field in _relation_axis_fields(model, filterable).items() if "__" in path
+    }
+    filter_aliases = {path: f"_angee_filter_{index}" for index, path in enumerate(sorted(relation_filters))}
+    if expressions or relation_filters:
+        for key in expressions:
+            try:
+                model._meta.get_field(key)
+            except FieldDoesNotExist:
+                continue
+            raise ImproperlyConfigured(f"Filter expression {key!r} shadows a model field.")
+        base_queryset, base_aggregate_queryset = read_queryset, aggregate_queryset
+
+        def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+            guarded = {}
+            for path, scalar_path in relation_filters.items():
+                expression = actor_scoped_relation_expression(queryset, scalar_path)
+                guarded[filter_aliases[path]] = expression if expression is not None else models.F(scalar_path)
+            return queryset.alias(**expressions, **guarded)
+
+        def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+            return prepare_filters(base_queryset(info))
+
+        def aggregate_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+            return prepare_filters(base_aggregate_queryset(info))
+    model_filters = tuple(field for field in filterable if field not in expressions)
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
     active_write_backend = write_backend or AngeeHasuraWriteBackend(model, lines=lines)
@@ -771,13 +880,18 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         filterable=filterable,
         declared=field_id_decode,
     )
+    if field_id_decode:
+        field_id_decode = {
+            **field_id_decode,
+            **{filter_aliases[path]: decoder for path, decoder in field_id_decode.items() if path in filter_aliases},
+        }
     active_json_paths = dict(json_paths or {})
-    filter_lookups = resource_filter_lookups(model, tuple(filterable))
+    filter_lookups = resource_filter_lookups(model, model_filters)
     resource = build_hasura_resource(
         node,
         model=model,
         name=name,
-        filterable=list(filterable),
+        filterable=list(model_filters),
         sortable=list(sortable),
         sortable_aliases=sortable_aliases,
         aggregatable=list(aggregatable),
@@ -795,11 +909,31 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         delete=delete,
         field_id_decode=field_id_decode,
         get_queryset=read_queryset,
-        get_aggregate_queryset=get_aggregate_queryset or _aggregate_queryset(read_queryset),
+        get_aggregate_queryset=aggregate_queryset,
         write_backend=active_write_backend,
         id_decode=id_decode,
         id_column=id_column,
     )
+    donor = None
+    if expressions:
+        assert resource.filter_type is not None
+        filter_name = get_object_definition(resource.filter_type, strict=True).name
+        donor = type(f"{filter_name}Expressions", (), {
+            "__annotations__": {
+                key: comparison_for_python_type(
+                    field_type_map[type(expression.output_field)], public_id=key in (field_id_decode or {}),
+                ) | None
+                for key, expression in expressions.items()
+            },
+            **{key: strawberry.field(name=key, default=strawberry.UNSET) for key in expressions},
+        })
+        donor = strawberry.input(donor, name=filter_name, extend=True)
+        resource.types.append(donor)
+    if expressions or filter_aliases:
+        assert resource.filter_type is not None
+        adapter = _FilterInputExtension(resource.filter_type, donor, filter_aliases)
+        for field in get_object_definition(resource.query, strict=True).fields:
+            field.extensions.append(adapter)
     if lines is not None:
         resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
     return attach_hasura_resource_metadata(

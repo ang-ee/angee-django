@@ -5,16 +5,20 @@ rows:
     fields:
       key: note-publish
       name: Note publication
-      description: Validate and publish a ready note.
+      description: Validate, review when assigned, and publish a ready note.
       subject_model: notes.note
       publish: true
       draft:
         nodes:
           validate:
             step: note_validate_publication
-            # Human review belongs between these nodes once the decisions layer lands.
-            next: {needs_review: publish}
+            next: {needs_review: review, ok: publish}
+          review:
+            step: note_review_publication
+            next: {approved: publish}
           publish:
             step: note_publish
+            input: {from: [review, validate]}
         results:
           - {from: publish}
+          - {from: review, when: [rejected, expired, superseded]}

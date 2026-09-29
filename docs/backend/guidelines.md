@@ -1378,6 +1378,17 @@ validated at the driver boundary.
   Reprocessing records its predecessor and uses the requesting actor on the
   current publication. Artifacts reference actor-readable records without
   granting access to them. Paging carries the checkpoint into a fresh claim.
+- **Reviews compose the independent decisions lifecycle.**
+  [`ReviewStep`](../../addons/angee/workflows/reviews.py) freezes typed basis,
+  asks seats, and applies settled answers as the run actor. Decisions owns
+  admission, evidence readability, answer parsing and resolver authority.
+  A rejected application rolls back and re-asks the retained questions with
+  field errors; retry after another failure retains the settled group. The
+  decision signal wakes through the run-lock owner after commit, with a tick
+  sweep as recovery. The configured review requires a `disputed` route when
+  its `all` policy can receive differing actions. Workflow-owned permission
+  and resource extensions expose the waiter's execution path without coupling
+  decisions back to workflows.
 - **Conditional queryset updates send no model signals.** Workflow owners
   explicitly call `publish_change` after their writes. Dispatch locks ready
   rows with `skip_locked` and uses `enqueue_task` to send after commit; callers

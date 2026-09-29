@@ -17,6 +17,14 @@ values, the execution actor, record access, identity and checkpoint state. Domai
 code executes under the actor's permissions. It must keep external effects out
 of database steps.
 
+[`ReviewStep`](reviews.py) asks through the independent decisions addon and
+applies settled answers in a worker as the run actor. Each answer carries its
+resolver and frozen basis. Rejected application starts another review round;
+other failures retain the answers for operator recovery. Decision admission
+requires standing evidence access and creates no grants. The built-in `review`
+uses this same contract for configured seats. Under `all`, differing actions
+take an explicitly routed `disputed` branch.
+
 The [`permission schema`](permissions.zed) lets starters discover and read the
 workflows they may start, without editing them. Run actors can cancel and
 reprocess their own runs. Monitoring other runs and reading unpublished drafts

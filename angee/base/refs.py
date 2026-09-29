@@ -25,11 +25,12 @@ from typing import Any, NamedTuple
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac import ObjectRef, to_object_ref
 from rebac.resources import model_resource_type
 
-from angee.base.identity import public_id_for
+from angee.base.identity import public_data_id_field, public_id_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +175,7 @@ class RecordRefMixin(models.Model):
     def record_ref(self) -> RecordRef:
         """Return this row's referenced record identity without loading the target."""
 
-        reference = next(field for field in self._meta.private_fields if isinstance(field, GenericForeignKey))
+        reference = self.record_ref_field()
         content_type_id = getattr(self, reference.ct_field_attname)
         object_id = getattr(self, reference.fk_field)
         if content_type_id in (None, "") or object_id in (None, ""):
@@ -183,6 +184,44 @@ class RecordRefMixin(models.Model):
         if model is None:
             return _empty_record_ref(object_id)
         return _record_ref_from_model(model, object_id)
+
+    @classmethod
+    def record_ref_field(cls) -> GenericForeignKey:
+        """Return the generic pointer that owns this model's record reference."""
+
+        references = [field for field in cls._meta.private_fields if isinstance(field, GenericForeignKey)]
+        if len(references) != 1:
+            raise ImproperlyConfigured(f"{cls._meta.label} must declare exactly one GenericForeignKey.")
+        return references[0]
+
+    @classmethod
+    def record_public_id_operand(cls, value: str) -> models.Case:
+        """Decode a public ID to a SQL operand bound to the pointer's model.
+
+        Generic references carry both a content type and an object ID. Decode
+        through each target's existing identity field, retaining its content type
+        in a native CASE expression so equal numeric keys on different models
+        cannot alias. No target rows or content types are fetched to filter rows.
+        """
+
+        reference = cls.record_ref_field()
+        candidates = []
+        for model in sorted(cls._meta.apps.get_models(), key=lambda item: item._meta.label_lower):
+            field = public_data_id_field(model)
+            try:
+                pk = field.public_id_to_value(value) if field else model._meta.pk.to_python(value)
+                if pk is None or public_id_for(model, pk) != value:
+                    continue
+            except (TypeError, ValueError, ValidationError):
+                continue
+            candidates.append(models.When(
+                **{
+                    f"{reference.ct_field}__app_label": model._meta.app_label,
+                    f"{reference.ct_field}__model": model._meta.model_name,
+                },
+                then=models.Value(str(pk)),
+            ))
+        return models.Case(*candidates, default=models.Value(""), output_field=models.CharField())
 
     @property
     def record_model_label(self) -> str:

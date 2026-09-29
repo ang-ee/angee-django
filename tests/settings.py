@@ -91,7 +91,6 @@ INSTALLED_APPS = [
     "angee.resources.testing",
     "angee.integrate.testing",
     "angee.workflows.testing",
-    "angee.decisions.testing",
     "tests.linesdemo",
     "tests.chatterdemo",
     "tests.scopedemo",
