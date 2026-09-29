@@ -674,8 +674,10 @@ class NeedAccessTests(IntakeAccessCase):
             self.assertEqual(ordered(self.writer, direction), before[direction])
         assert_ordering(self.admin, [hidden.sqid, al.sqid, bea.sqid], [unnamed.sqid, blank.sqid])
 
-    def test_filer_name_places_missing_names_last_in_both_directions(self):
-        """The required placement contract also covers empty display names."""
+    def test_filer_name_places_missing_names_by_hasura_order_semantics(self):
+        """Missing and empty names sort as NULL: last for ``asc``, first for
+        ``desc`` (Hasura's contract, the same on every database), and an
+        explicit ``*_nulls_last`` keeps them last when descending."""
 
         named_party = self.party(self.reader)
         blank_party = self.party(self.writer)
@@ -685,13 +687,18 @@ class NeedAccessTests(IntakeAccessCase):
         unnamed = self.need()
         named = self.need(party=named_party)
         blank = self.need(party=blank_party)
-        for direction in ("asc", "desc"):
+        expected = {
+            "asc": [named.sqid, unnamed.sqid, blank.sqid],
+            "desc": [unnamed.sqid, blank.sqid, named.sqid],
+            "desc_nulls_last": [named.sqid, unnamed.sqid, blank.sqid],
+        }
+        for direction, ids in expected.items():
             with self.subTest(direction=direction):
                 document = "{ intake_needs(order_by: [{filer_name: DIRECTION}]) { id } }".replace(
                     "DIRECTION", direction,
                 )
                 rows = self.graphql(document, {}, user=self.writer)["intake_needs"]
-                self.assertEqual([row["id"] for row in rows], [named.sqid, unnamed.sqid, blank.sqid])
+                self.assertEqual([row["id"] for row in rows], ids)
 
     def test_duplicate_refusal_returns_code_and_rolls_back_all_movers(self):
         source = self.need(party=self.party(self.reader))
