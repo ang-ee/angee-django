@@ -126,13 +126,13 @@ describe("composable standard project and task declarations", () => {
     expect(propsOf<ListProps>(list.current).rowActions).toEqual([]);
 
     const { result: form } = renderHook(() => useTaskFormDeclaration({
-      groups: [], verbs: [], statusField: "stage_name", returning: ["created_at"],
+      groups: [], verbs: [], statusField: { name: "stage", widget: "work.stage" }, returning: ["created_at"],
       extraFields: <Group label="Details"><Field name="due_date" /></Group>,
     }));
     const props = propsOf<FormProps>(form.current);
     expect(props.returning).toEqual(["created_at"]);
-    expect(parsePageFields(props.children).find(({ name }) => name === "stage_name")).toMatchObject({
-      status: true, readOnly: true,
+    expect(parsePageFields(props.children).find(({ name }) => name === "stage")).toMatchObject({
+      status: true, readOnly: true, widget: "work.stage",
     });
     expect(parsePageGroups(props.children).map(({ label }) => label)).toEqual(["Details"]);
   });

@@ -44,6 +44,7 @@ export const enWorkMessages: Record<string, string> = {
   "board.empty.description": "Create a task in a stage lane to start this queue.",
   "task.action.start": "Start",
   "task.group.work": "Queue work",
+  "task.stage.label": "Stage",
   "task.card.unnumbered": "Unnumbered",
   "estimate.points_one": "{count} point",
   "estimate.points_other": "{count} points",

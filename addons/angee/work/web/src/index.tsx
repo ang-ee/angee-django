@@ -26,6 +26,7 @@ import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
 
 import { enWorkMessages } from "./i18n";
 import { QUEUE_MODEL } from "./resources";
+import { StageStatusbar } from "./stage-statusbar";
 import { taskWorkFormSection } from "./task-work";
 import { TriageRecordActions } from "./triage-actions";
 
@@ -146,6 +147,7 @@ const work = defineBaseAddon({
   routes: workRoutes,
   menus: workMenu,
   i18n: { work: enWorkMessages },
+  widgets: { "work.stage": { read: StageStatusbar, edit: StageStatusbar } },
   slots: [
     {
       ...formViewSectionsSlot(PROJECT_MODEL),

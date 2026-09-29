@@ -73,7 +73,11 @@ export interface TaskFormSelection {
   verbLabels?: Partial<Record<"complete" | "drop" | "reopen" | "promote", string>>;
   contextLine?: FormProps["contextLine"];
   returning?: FormProps["returning"];
-  statusField?: "status" | "stage_name";
+  /**
+   * The statusbar: the task's own `status` (default), or another owner's field
+   * rendered by that owner's widget (e.g. a queue stage contributed by work).
+   */
+  statusField?: "status" | { name: string; widget: string };
   titleLabel?: string;
   bodyLabel?: string;
   extraFields?: React.ReactNode;
@@ -130,8 +134,8 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
       <Field name="visibility" widget="visibility" placement="title" options={visibilityOptions}
         visibilityAction={{ document: SetTaskVisibilityDocument, resultField: "set_task_visibility",
           idArgument: "id", revisionArgument: "expected_revision" }} />
-      {selection.statusField === "stage_name"
-        ? <Field name="stage_name" widget="statusbar" status readOnly />
+      {selection.statusField && selection.statusField !== "status"
+        ? <Field name={selection.statusField.name} widget={selection.statusField.widget} status readOnly />
         : <Field name="status" widget="statusbar" status options={statusOptions} createOnly />}
       {(selection.groups ?? ["placement", "assignment", "details"]).includes("placement") ? <Group label={t("task.group.placement")} columns={2}>
         <Field name="project" />
