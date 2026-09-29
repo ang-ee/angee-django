@@ -242,6 +242,10 @@ def main() -> None:
         assert settings.DATABASES["default"]["NAME"] == ":memory:"
         settings.ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
         settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
+        # Without migrations the permission library's schema-revision witness (a
+        # row and its triggers, created by its own migration) does not exist; the
+        # library then loads the schema uncached, which is its documented mode.
+        settings.SILENCED_SYSTEM_CHECKS = [*settings.SILENCED_SYSTEM_CHECKS, "rebac.E012"]
         failures = ComposedTestRunner(verbosity=1, interactive=False).run_tests(args.test_label)
         args.output.write_text(json.dumps({"failures": failures}) + "\n")
         raise SystemExit(bool(failures))
