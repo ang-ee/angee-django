@@ -1,12 +1,15 @@
 // @vitest-environment happy-dom
 
 import { cleanup, render, screen, within } from "@testing-library/react";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { testQueryField } from "@angee/metadata/testing";
 import { afterEach, describe, expect, test } from "vitest";
 import * as v from "valibot";
 
 import { DashboardSnapshotSchema, parseDashboardSnapshot, type DashboardWidgetData, type WidgetSpec } from "./headless";
 import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "./kinds";
+import { AppRuntimeProvider } from "../runtime/runtime";
+import { createRouteHref } from "../runtime/route-href";
 
 const TableWidget = BUILTIN_DASHBOARD_WIDGET_KINDS.find(({ id }) => id === "table")!.Component;
 const nestedFields = {
@@ -53,6 +56,13 @@ const data: DashboardWidgetData = {
 afterEach(() => cleanup());
 
 describe("dashboard table columns", () => {
+  test("an explicit record route makes the first cell a native record link", () => {
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<RouterContextProvider router={router}><AppRuntimeProvider runtime={{ routeHref: createRouteHref([{ name: "review.record", path: "/review/$id" }]) }}>
+      <TableWidget spec={{ ...spec, options: { recordRoute: "review.record" } }} data={{ ...data, rows: [{ public_key: "review-1", step_run: { step: { name: "Review" } } }] }} />
+    </AppRuntimeProvider></RouterContextProvider>);
+    expect(screen.getByRole("link").getAttribute("href")).toBe("/review/review-1");
+  });
   test("renders declared nested paths in order, with labels and nullable relations", () => {
     render(<TableWidget
       spec={{

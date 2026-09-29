@@ -35,6 +35,7 @@ const statusField = {
   name: "status",
   label: "Status",
   widget: "statusbar",
+  status: true,
   options: statusOptions,
 } satisfies FormField;
 const ownerField = {

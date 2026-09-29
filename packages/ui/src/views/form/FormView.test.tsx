@@ -48,6 +48,7 @@ import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
 import { deserializeFormSpec } from "./form-spec";
 import { Form } from "./Form";
+import { ResourceList } from "../resource/ResourceList";
 import {
   FormView,
   FORM_VIEW_RECORD_CHROME_SLOT,
@@ -93,6 +94,7 @@ const fields = [
     name: "status",
     label: "Status",
     widget: "statusbar",
+    status: true,
     options: statusOptions,
   },
   {
@@ -1983,6 +1985,125 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { title: "Slot Title", slotCode: "slot-1" },
     });
+  });
+
+  test("admits section and verb ids before selecting fields or evaluating tabs", async () => {
+    const excludedVisibility = vi.fn(() => true);
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" admitContributions={["notes.kept", "notes.verb"]}>
+        <Field name="title" label="Title" title />
+      </FormView>, { types: { NoteType: {
+        ...defaultModel("NoteType", "notes.Note"),
+        fields: {
+          title: { name: "title", kind: "scalar", scalar: "String" },
+          wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
+          reminderAt: { name: "reminderAt", kind: "scalar", scalar: "DateTime" },
+          createdAt: { name: "createdAt", kind: "scalar", scalar: "DateTime" },
+        },
+      } } }, undefined, {
+        slots: [
+          { ...formViewSectionsSlot("notes.Note"), id: "notes.kept", content: <><Group label="Kept"><Field name="wordCount" label="Words" /></Group><Action id="kept-action" label="Kept action" placement="toolbar" run={vi.fn()} /></> },
+          { ...formViewSectionsSlot("notes.Note"), id: "notes.excluded", content: <>
+            <Group label="Excluded"><Field name="reminderAt" label="Reminder" required /></Group>
+            <Tab id="excluded-tab" label="Excluded tab" requiredFields={["createdAt"]} visibleWhen={excludedVisibility}>Excluded panel</Tab>
+            <Action id="excluded-action" label="Excluded action" run={vi.fn()} />
+          </> },
+          { ...formViewRecordActionsSlot("notes.Note"), id: "notes.verb", content: <button>Kept verb</button> },
+          { ...formViewRecordActionsSlot("notes.Note"), id: "notes.excluded-verb", content: <button>Excluded verb</button> },
+        ],
+      },
+    );
+    await screen.findByDisplayValue("First");
+    expect(screen.getByText("Kept")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Kept action" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Excluded action" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Kept verb" })).toBeTruthy();
+    expect(screen.queryByText("Excluded")).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Excluded tab" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Excluded verb" })).toBeNull();
+    expect(sdkMocks.recordSelection).toContain("wordCount");
+    expect(sdkMocks.recordSelection).not.toContain("reminderAt");
+    expect(sdkMocks.recordSelection).not.toContain("createdAt");
+    expect(excludedVisibility).not.toHaveBeenCalled();
+  });
+
+  test("an empty admit list excludes contributed required fields from create validation and submission", async () => {
+    sdkMocks.record = null;
+    renderWithProviders(
+      <FormView resource="notes.Note" admitContributions={[]}><Field name="title" label="Title" title /></FormView>,
+      undefined, undefined, { slots: [{ ...formViewSectionsSlot("notes.Note"), id: "notes.required", content:
+        <Group label="Extra"><Field name="slotCode" required label="Required extra" /></Group>,
+      }] },
+    );
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Only the title" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { title: "Only the title" } }));
+    expect(screen.queryByLabelText("Required extra")).toBeNull();
+  });
+
+  test("validates admitted implementation verbs before the saved implementation has loaded", async () => {
+    sdkMocks.record = { ...sdkMocks.record, kind: "WHATSAPP" };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" admitContributions={["backend.connect"]}><Field name="title" title /></FormView>,
+      implMetadata(), undefined, { slots: [
+        { ...formViewRecordActionsSlot("parties.Party"), id: "lifecycle.pause", content: <button>Pause</button> },
+        { ...formViewRecordActionsSlot("notes.Note", "whatsapp"), id: "backend.connect", content: <button>Connect selected backend</button> },
+      ] },
+    );
+    expect(await screen.findByRole("button", { name: "Connect selected backend" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+  });
+
+  test("an excluded inherited tab never reads its canonical-only dependencies", async () => {
+    const metadata = mtiMetadata();
+    const parent = metadata.types.PartyType!;
+    const withParentField = { ...metadata, types: { ...metadata.types, PartyType: {
+      ...parent, fields: { ...parent.fields, extra: { name: "extra", kind: "scalar" as const, scalar: "String" } },
+    } } };
+    const visibility = vi.fn(() => true);
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" admitContributions={[]}><Field name="title" title /></FormView>,
+      withParentField, undefined, { slots: [{ ...formViewSectionsSlot("parties.Party"), id: "party.extra", content:
+        <Tab id="extra" label="Extra" requiredFields={["extra"]} visibleWhen={visibility}>Extra panel</Tab>,
+      }] });
+    await screen.findByDisplayValue("First");
+    expect(sdkMocks.getOne.mock.calls.some(([params]) => params.resource === parent.resource.roots.list)).toBe(false);
+    expect(sdkMocks.recordSelection).not.toContain("extra");
+    expect(visibility).not.toHaveBeenCalled();
+  });
+
+  test("rejects unknown contribution ids before reading a record", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} admitContributions={["notes.typo"]} />))
+        .toThrow('unknown contribution id "notes.typo"');
+      expect(sdkMocks.getOne).not.toHaveBeenCalled();
+    } finally { consoleError.mockRestore(); }
+  });
+
+  test.each([false, true])("ResourceList forwards admission declared on the Form=%s", async (onForm) => {
+    renderWithProviders(<ResourceList resource="notes.Note" placement="inline" scope="local" recordId="note-1"
+      columns={[{ field: "title" }]} admitContributions={onForm ? undefined : []}>
+      <Form admitContributions={onForm ? [] : undefined}><Field name="title" label="Title" title /></Form>
+    </ResourceList>, undefined, undefined, { slots: [{
+      ...formViewSectionsSlot("notes.Note"), id: "notes.extra", content: <Group label="Extra"><Field name="reminderAt" label="Reminder" /></Group>,
+    }] });
+    await screen.findByDisplayValue("First");
+    expect(screen.queryByText("Extra")).toBeNull();
+    expect(sdkMocks.recordSelection).not.toContain("reminderAt");
+  });
+
+  test("places the declared status field before the hero and the lead body before secondary fields", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Field name="status" label="Status" widget="statusbar" status options={statusOptions} />
+      <Group label="Details"><Field name="wordCount" label="Words" /></Group>
+      <Field name="body" label="Lead body" body />
+    </FormView>);
+    const title = await screen.findByDisplayValue("First");
+    const status = screen.getByRole("list");
+    expect(status.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByLabelText("Status")).toBeNull();
+    expect(screen.getByText("Lead body").compareDocumentPosition(screen.getByText("Details")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   test.each([

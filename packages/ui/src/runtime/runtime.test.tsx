@@ -85,6 +85,27 @@ describe("useWidget", () => {
 });
 
 describe("useResourceRecordHref", () => {
+  test("selects a same-model destination from row facts and falls back to the canonical record", () => {
+    const wrapper = wrapperFor({
+      routesByResource: {
+        "messaging.Thread": {
+          collection: "messaging.threads",
+          record: { name: "messaging.thread", param: "threadId" },
+          recordFallback: { name: "messaging.thread", param: "threadId" },
+          recordDestinations: [{ record: { name: "desk.thread", param: "id" }, match: { field: "queue.id", equals: "queue-a" } }],
+        },
+      },
+      routeHref: createRouteHref([
+        { name: "messaging.thread", path: "/messaging/threads/$threadId" },
+        { name: "desk.thread", path: "/desk/threads/$id" },
+      ]),
+    });
+    const { result } = renderHook(() => ({ href: useResourceRecordHref("messaging.Thread"), lookup: useResourceRecordHrefLookup() }), { wrapper });
+    expect(result.current.href?.("thr 1", { queue: { id: "queue-a" } })).toBe("/desk/threads/thr%201");
+    expect(result.current.lookup("messaging.Thread", "thr 1", { queue: { id: "queue-a" } })).toBe("/desk/threads/thr%201");
+    expect(result.current.href?.("thr 1", { queue: { id: "other" } })).toBe("/messaging/threads/thr%201");
+  });
+
   test("builds an encoded record href from the resource's composed route", () => {
     const wrapper = wrapperFor({
       routesByResource: {

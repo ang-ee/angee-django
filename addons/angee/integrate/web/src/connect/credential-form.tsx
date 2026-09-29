@@ -116,7 +116,7 @@ export function CredentialForm({
       ) : (
         <>
           <Field name="display_name" title readOnly />
-          <Field name="status" widget="statusbar" />
+          <Field name="status" widget="statusbar" status />
           <Group label={t("credentials.group.health")} columns={2}>
             <Field name="kind" readOnly />
             <Field name="expires_at" readOnly />

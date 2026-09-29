@@ -5,6 +5,8 @@
 // build manifests against them.
 
 import type { ReactElement, ReactNode } from "react";
+import type { I18nResources } from "@angee/refine";
+import type { ResourceVocabulary } from "@angee/metadata";
 
 import type { RouteHrefParams } from "./route-href";
 
@@ -27,6 +29,22 @@ export interface RuntimeBrand {
   mark: string;
 }
 
+/** Scoped presentation only; unknown message, resource, field and menu keys fail at boot. */
+export interface AppVocabulary {
+  /** Menu root owning this vocabulary. */
+  app: string;
+  /** Optional collection/page route; record children inherit it. */
+  route?: string;
+  messages?: I18nResources;
+  resources?: Readonly<Record<string, ResourceVocabulary>>;
+  menus?: Readonly<Record<string, string>>;
+}
+
+export interface RuntimeVocabulary {
+  resources: Readonly<Record<string, ResourceVocabulary>>;
+  menus: Readonly<Record<string, string>>;
+}
+
 /** A navigation entry; many menu items may target one route. */
 export interface MenuItem {
   /** Stable menu id. Defaults to `route` when omitted. */
@@ -41,6 +59,8 @@ export interface MenuItem {
   route?: string;
   /** Route parameters for a parameterized `route`. */
   params?: RouteHrefParams;
+  /** Named shipped view selected when following this menu entry. */
+  defaultResourceView?: string;
   /** External URL. Internal app destinations use `route` and optional `params`. */
   to?: string;
   icon?: string;
@@ -86,6 +106,7 @@ export interface ChatterRoute {
   modelLabel?: string;
   canonicalLabel?: string;
   recordParam?: string;
+  chatter?: "hidden" | { tabs?: readonly string[] };
 }
 
 /** Runtime context for rendering a chatter tab on the active page. */

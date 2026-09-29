@@ -21,7 +21,12 @@ export interface GanttViewProps extends GanttRowLayout {
   nowIndicator?: boolean;
   /** Replaces the default sidebar title, including on rows without schedules. */
   renderRowContent?: (resource: GanttResource) => ReactNode;
+  /** Sidebar heading from the declared lane resource. */
+  laneHeader?: string;
   onEventClick?: (event: GanttEvent) => void;
+  onResourceClick?: (resource: GanttResource) => void;
+  selectedRows?: readonly string[];
+  onSelectedRowsChange?: (ids: string[]) => void;
   className?: string;
 }
 

@@ -160,6 +160,8 @@ export interface ResourceListProps<TRow extends Row = Row> {
   /** Tabs rendered for a saved record beside the form's "Overview" tab (not on
    * create) — e.g. provisioning and chat panels. See `FormView.recordTabs`. */
   recordTabs?: FormViewProps["recordTabs"];
+  /** Limit contributed sections and record verbs by contribution id. Omit for all. */
+  admitContributions?: FormViewProps["admitContributions"];
   /** Saved-record presentation forwarded to `FormView`. */
   recordPresentation?: FormViewProps["recordPresentation"];
   /** Initial saved-record tab forwarded to `FormView`. */
@@ -256,6 +258,7 @@ export function ResourceList<TRow extends Row = Row>({
   return withResourceViewScope({
     ambient: resourceView,
     resource: props.resource,
+    baseFilter: declarations.list?.props.baseFilter ?? props.baseFilter,
     // A routed collection owns the route query even if its visual presentation
     // is embedded. Callers can still explicitly request local state.
     scope: scope ?? (props.routed ? "inherit" : undefined),

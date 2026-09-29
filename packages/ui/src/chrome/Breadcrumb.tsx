@@ -118,6 +118,7 @@ function BreadcrumbTrail({
             {item.to && !current ? (
               <Link
                 to={item.to}
+                href={item.to}
                 className="min-w-0 truncate rounded-4 outline-none hover:text-on-rail-hi focus-visible:focus-ring"
               >
                 {item.label}

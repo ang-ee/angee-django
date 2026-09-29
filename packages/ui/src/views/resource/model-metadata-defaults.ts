@@ -225,7 +225,7 @@ const ENUM_OPTION_WIDGETS = new Set([
   "colorDot",
 ]);
 
-/** Apply metadata-derived column labels and enum options without overriding props. */
+/** Apply metadata defaults and scoped vocabulary, retaining authored column identity. */
 export function columnsWithMetadataDefaults<TRow extends object>(
   columns: readonly ColumnDescriptor<TRow>[],
   metadata: ModelMetadata | null,
@@ -250,7 +250,7 @@ export function columnsWithMetadataDefaults<TRow extends object>(
       : relationRepresentation?.displayPath ?? null;
     return {
       ...column,
-      ...(relationLabelField ? { field: relationLabelField } : {}),
+      ...(relationLabelField ? { id: column.id ?? column.field, field: relationLabelField } : {}),
       ...(relationRepresentation
         ? { selectionPaths: relationRepresentation.selectionPaths }
         : {}),
@@ -309,13 +309,13 @@ export function fieldsWithMetadataDefaults(
   });
 }
 
-/** Resolve a field label from explicit props, resource metadata, then title-case. */
+/** Scoped vocabulary wins over authored labels; otherwise use the title-case default. */
 export function fieldLabel(
   name: string,
   metadata: ModelFieldMetadata | undefined,
   explicit?: ReactNode,
 ): ReactNode {
-  return explicit ?? titleCase(name);
+  return metadata?.label ?? explicit ?? titleCase(name);
 }
 
 /** Resolve a grouping-field label from resource metadata, then field text. */
@@ -323,7 +323,7 @@ export function resourceFieldGroupLabel(
   name: string,
   metadata: ModelFieldMetadata | undefined,
 ): string {
-  return groupFieldLabel(name);
+  return metadata?.label ?? groupFieldLabel(name);
 }
 
 /** Return enum widget options for a metadata field, or an empty list. */

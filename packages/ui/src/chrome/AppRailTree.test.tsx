@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -15,6 +15,24 @@ import { AppRailTree } from "./AppRailTree";
 import { MenuTree } from "./menu-tree";
 
 describe("AppRailTree", () => {
+  test("follows a menu's preset through Router's full-href navigation", async () => {
+    const tree = MenuTree.from([{ id: "desk", to: "/desk", children: [
+      { id: "desk.notes", label: "Open notes", to: "/desk/notes?preset=desk.open" },
+    ] }]);
+    const root = createRootRoute({ component: () => <>
+      <AppRailTree scope="apps" roots={tree.roots} activeRootId="desk" />
+      <Outlet />
+    </> });
+    const home = createRoute({ getParentRoute: () => root, path: "/desk" });
+    const notes = createRoute({ getParentRoute: () => root, path: "/desk/notes", validateSearch: (search) => search });
+    const router = createRouter({ routeTree: root.addChildren([home, notes]),
+      history: createMemoryHistory({ initialEntries: ["/desk"] }) });
+    const view = within(render(<RouterProvider router={router} />).container);
+    fireEvent.click(await view.findByRole("link", { name: "Open notes" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/desk/notes"));
+    expect(router.state.location.search).toEqual({ preset: "desk.open" });
+    expect(view.getByRole("link", { name: "Open notes" }).getAttribute("data-active")).toBe("true");
+  });
   test("controls its accordion panel and includes badge metadata in its name", async () => {
     const tree = MenuTree.from([
       {
@@ -58,7 +76,7 @@ describe("AppRailTree", () => {
     }).getAttribute("aria-expanded")).toBe("false");
   });
 
-  test("clicking the active root again fires the rail collapse toggle", async () => {
+  test("only the most specific link is active and toggles the rail", async () => {
     const tree = MenuTree.from([
       {
         id: "projects",
@@ -90,13 +108,16 @@ describe("AppRailTree", () => {
     });
     const view = within(render(<RouterProvider router={router} />).container);
 
-    // The active root's link toggles the rail instead of re-navigating…
-    const activeLink = (await view.findByText("Projects")).closest("a")!;
+    const parentLink = (await view.findByText("Projects")).closest("a")!;
+    expect(parentLink.getAttribute("data-active")).toBe("false");
+    expect(parentLink.getAttribute("aria-current")).toBeNull();
+    const activeLink = (await view.findByText("All projects")).closest("a")!;
     expect(activeLink.getAttribute("data-active")).toBe("true");
+    expect(activeLink.getAttribute("aria-current")).toBe("page");
     expect(fireEvent.click(activeLink)).toBe(false);
     expect(onActiveRootToggle).toHaveBeenCalledTimes(1);
 
-    // …while an inactive root's link keeps its client-side navigation
+    // An inactive root's link keeps its client-side navigation
     // (the router prevents default itself, so assert only the toggle).
     const inactiveLink = view.getByText("Notes").closest("a")!;
     fireEvent.click(inactiveLink);
@@ -138,7 +159,7 @@ describe("AppRailTree", () => {
     render(<RouterProvider router={router} />);
 
     expect((await screen.findByText("Projects")).closest("a")?.getAttribute("data-active"))
-      .toBe("true");
+      .toBe("false");
     expect(screen.getByText("Notes").closest("a")?.getAttribute("data-active"))
       .toBe("false");
     expect(screen.getByRole("button", { name: "Collapse Notes" }))

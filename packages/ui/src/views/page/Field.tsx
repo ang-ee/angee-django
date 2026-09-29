@@ -64,6 +64,8 @@ export interface FieldDescriptor extends FieldPresentation {
   /** Source field a `widget="slug"` field derives from on create (see `FieldProps.slugFrom`). */
   slugFrom?: string;
   title?: boolean;
+  /** Place this field above the record heading. */
+  status?: boolean;
   body?: boolean;
   kind?: PageFieldKind;
   description?: ReactNode;

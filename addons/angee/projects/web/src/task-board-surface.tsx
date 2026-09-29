@@ -1,4 +1,4 @@
-import { ResourceList, useRouteHref } from "@angee/ui";
+import { ResourceList, useResourceRecordHref } from "@angee/ui";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
@@ -19,13 +19,9 @@ export function TaskBoardSurface<TRow extends TaskActionRow>({
   createDefaults,
 }: TaskBoardSurfaceProps<TRow>): React.ReactElement {
   const navigate = useNavigate();
-  const routeHref = useRouteHref();
+  const taskHref = useResourceRecordHref(TASK_MODEL);
   const [creating, setCreating] = React.useState(false);
   const form = useTaskFormDeclaration();
-  const taskHref = React.useCallback(
-    (id: string) => routeHref("projects.tasks.record", { id }),
-    [routeHref],
-  );
   const select = React.useCallback(
     (id: string | null) => {
       if (id === null) {
@@ -33,7 +29,8 @@ export function TaskBoardSurface<TRow extends TaskActionRow>({
         return;
       }
       setCreating(false);
-      void navigate({ to: taskHref(id) });
+      const to = taskHref?.(id);
+      if (to) void navigate({ to });
     },
     [navigate, taskHref],
   );
@@ -46,7 +43,7 @@ export function TaskBoardSurface<TRow extends TaskActionRow>({
       onSelect={select}
       onClose={() => setCreating(false)}
       createDefaults={createDefaults}
-      rowHref={(row) => taskHref(row.id)}
+      rowHref={taskHref ? (row) => taskHref(row.id, row) ?? "" : undefined}
     >
       {children}
       {form}

@@ -86,6 +86,20 @@ describe("resolveMenuRouteTargets", () => {
     ).toThrow(/declares internal target.*use route and params/);
   });
 
+  test("menu view defaults are URL intent and never change path specificity", () => {
+    const tree = MenuTree.from(resolveMenuRouteTargets([{
+      id: "desk", route: "desk.home", defaultResourceView: "desk.a-long-preset-name", children: [
+        { id: "desk.notes", route: "desk.notes" },
+      ],
+    }], createRouteHref([
+      { name: "desk.home", path: "/desk" },
+      { name: "desk.notes", path: "/desk/notes" },
+    ])));
+    expect(tree.roots[0]?.target).toBe("/desk?preset=desk.a-long-preset-name");
+    expect(tree.activeItem("/desk/notes/r1")?.id).toBe("desk.notes");
+    expect(tree.activeItem("/desk")?.id).toBe("desk");
+  });
+
   test("rejects params without their route owner", () => {
     expect(() =>
       resolveMenuRouteTargets(

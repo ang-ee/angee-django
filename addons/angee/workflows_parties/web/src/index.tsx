@@ -65,7 +65,7 @@ const workflowsParties = defineBaseAddon({
       id: "workflows-parties.activity",
       sequence: 90,
       content: (
-        <Tab id="workflow-activity" label={<WorkflowActivityLabel />}>
+        <Tab id="workflow-activity" label={{ namespace: "workflows-parties", key: "activity.label", fallback: enWorkflowsPartiesMessages["activity.label"] }}>
           <PartyWorkflowActivity />
         </Tab>
       ),
@@ -73,10 +73,6 @@ const workflowsParties = defineBaseAddon({
   ],
 });
 
-function WorkflowActivityLabel(): ReactElement {
-  const t = useWorkflowsPartiesT();
-  return <>{t("activity.label")}</>;
-}
 
 function PartyWorkflowActivity(): ReactElement {
   const record = useRecordChromeContext();

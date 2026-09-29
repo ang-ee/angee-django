@@ -6,6 +6,7 @@ import { Briefcase, ClipboardCheck, Kanban, ListChecks } from "lucide-react";
 
 import { enProjectsMessages } from "./i18n";
 import { PROJECT_MODEL, TASK_MODEL } from "./resources";
+import { ProjectPhaseControl } from "./project-phase";
 
 export {
   MILESTONE_MODEL,
@@ -15,7 +16,9 @@ export {
 } from "./resources";
 /** The manager's phase dropdown for one project, composable onto a consumer's project page. */
 export { ProjectPhaseControl } from "./project-phase";
-export { useTaskFormDeclaration } from "./task-actions";
+export { projectListDeclaration, projectGanttSpec, projectRecordTabs, projectRecordTabsFor, projectTimelineSpec, projectTimelineTab, useProjectFormDeclaration, type ProjectFormSelection, type ProjectTabSelection } from "./project-declarations";
+export { taskRecordTabs, taskRecordTabsFor, useTaskListDeclaration } from "./task-declarations";
+export { useTaskFormDeclaration, type TaskFormSelection } from "./task-actions";
 export { TaskBoardSurface, type TaskBoardSurfaceProps } from "./task-board-surface";
 
 const projectsRoutes: readonly BaseAddonRoute[] = [
@@ -88,6 +91,7 @@ const projects = defineBaseAddon({
   routes: projectsRoutes,
   menus: projectsMenu,
   i18n: { projects: enProjectsMessages },
+  widgets: { "projects.phase": { read: ProjectPhaseControl, edit: ProjectPhaseControl } },
   icons: {
     projects: Briefcase,
     "project-task": ListChecks,

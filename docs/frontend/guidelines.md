@@ -58,6 +58,13 @@ depend on addons or a composed project's generated schema.
   The shared `createAngeeI18nInstance` initializer in `@angee/ui/runtime`
   configures that instance and the provider-less binding's English defaults;
   i18next owns plural selection and interpolation in both cases.
+- App copy belongs to manifest `vocabulary` scopes: a menu root, optionally a
+  route whose descendants inherit the override. The app validates existing
+  message, model, field and menu keys; metadata projects presentation labels
+  without changing query or model identity. Use host `createApp.i18n` for global
+  copy, and scoped vocabulary for another addon's copy within an app. Native
+  i18next scopes retain one locale across navigation. See the
+  [manifest example](../../packages/app/README.md#app-vocabulary-and-shipped-views).
 - Record display representation is a backend-emitted metadata fact in the
   `angee.resources` artifact. Frontend code reads that field and keeps only the
   `id` floor; it does not probe candidate display fields.
@@ -241,8 +248,10 @@ shared UI copy through an addon bundle.
   `useRecordPeek` Records tab can open evidence without discarding draft input
   in another panel; unmounting the temporary peek must leave other publishers'
   tabs and composer intact. Chatter stays in the shell's right pane. Consumers
-  do not mount their own chatter or filter its contributed tabs to change
-  placement.
+  do not mount their own chatter. The inherited route `chatter` declaration
+  owns visibility and tab admission; the shell applies it before mounting tabs.
+  See the [route projection](../../packages/app/src/chatter-routes.ts) and
+  [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
   paging, record selection, and URL state. The workflows Decision inbox keeps
   `ApprovalTask` as the sole form and mutation owner and specializes only its
@@ -391,6 +400,13 @@ shared UI copy through an addon bundle.
   and child paging. Do not register a fictional model, infer available choices
   from one server page, or filter/group that page in the browser. Bounded
   in-memory fixtures still use `RowsListView`.
+- Named addon `resourceViews` compose the existing favorites and ResourceView
+  query state. A route or menu `defaultResourceView` selects a shipped preset;
+  URL edits override its editable defaults. Fixed filters remain on the preset
+  and survive query reset. The switcher includes shipped views even without
+  writable preferences. Columns use native TanStack visibility keyed by the
+  authored field; relation display-path projection preserves that identity.
+  See the [manifest contract](../../packages/app/README.md#app-vocabulary-and-shipped-views).
 - **Card presentation does not change the query boundary.** An ordinary grouped
   board over a server resource uses the same server groups, exact counts and
   per-group record pages as the grouped list. Deriving its lanes from a flat
@@ -403,6 +419,13 @@ shared UI copy through an addon bundle.
   included, through the board's relation-options owner and loads their bars
   through the list's resource query and batch transport. See
   [`GanttCollectionSurface`](../../packages/ui/src/views/gantt/gantt-collection-surface.tsx).
+  `GanttViewSpec.current` names the lane field holding its current bar identity;
+  the collection selects it and emphasizes that bar independently of selection.
+  Optional `markers` declares a second resource's date and lane relation. Both
+  sources load every record on the current lane page through their own query
+  contracts; marker filters are independent of bar filters. Due dates render as
+  the vendored grid's zero-duration diamonds, with no inferred task duration or
+  write gestures. See the [spec](../../packages/ui/src/views/resource/resource-view-types.ts).
 - **Resolve resource queries before adapting them to a library.** Use the
   resource's `ResourceQuery` for allowed comparisons, group identities, drill
   predicates and required selections. Hand-building a resource view's Hasura
@@ -445,6 +468,14 @@ shared UI copy through an addon bundle.
   ungrouped fields stay above the tab strip. It is per-form — existing stacked forms
   are untouched — and reuses the same `<Group>` declarations, so no field metadata is
   duplicated. Group your fields for the stacked layout and tabbing is one prop away.
+- **The form hero precedes secondary facts.** `FormView` places its status control
+  above the title and its lead body before the overview's groups. A domain-owned
+  status control declares `<Field status widget="…" />` and registers its widget
+  with the addon. Do not repeat that state as another strip.
+  Keep the one metadata-owned subtitle line and place operational fields in a
+  collapsed Details group when their create-default behavior must remain available.
+  Projects exports its [standard declarations](../../addons/angee/projects/README.md)
+  so consumer routes compose the same forms, lists and record tabs.
 - **Contribute a saved-record tab from the data view** through
   `formViewSectionsSlot(resource)` with a direct `<Tab>` declaration. Canonical
   parent sections are inherited by concrete child forms; contribute once at the
@@ -455,14 +486,33 @@ shared UI copy through an addon bundle.
   Hasura resource owns filter/order/group/facet capabilities; the list owns
   controls, paging and `rowActions`, including confirmations for generated action
   callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
+  A `FormView`, `Form`, or enclosing `ResourceList` can declare
+  `admitContributions` using slot contribution ids, covering both sections and
+  record verbs. Omission admits all; `[]` admits none. Admission precedes group,
+  tab, action and required-field collection, including inherited canonical reads;
+  unknown ids fail before record reads. Implementation-specific verbs are validated
+  against the model's full contribution inventory before its saved key loads.
+  Declare admission once, on either the collection or its Form child; the usual
+  duplicate-declaration check applies. Explicitly authored fields/actions/record
+  tabs and passive record chrome remain host-owned.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
-  "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
+  "integrate.OAuthClient" }` (one canonical claim per resource) — and the
   relation widget resolves it through `useResourceRoute(resource)` to show a
   "follow" arrow to the selected record's detail page. Refine owns the route
   trail, while the routed record surface replaces the generic action leaf with
   the model's `recordRepresentation`. A resource with no routed page simply shows
   no arrow.
+- Explicit app roots, including the host's `confineTo`, may project an existing
+  resource through `resourcePageRoutes` with `resource` or `recordModel`.
+  The resource href hooks select an owner-declared same-model destination from
+  row facts, then the canonical record route. See the
+  [runtime lookup](../../packages/ui/src/runtime/runtime.ts) and
+  [app projection](../../packages/app/src/resource-projection.ts).
+  The same app projection owns confinement and navigation: descendant platform
+  menus appear in Settings and admit their named owner records through parent
+  routes, without admitting unrelated records. Only the most specific rail
+  destination is highlighted.
 - Register a resource's create form once via `defineAddon`'s
   `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
   wherever that resource is created, including the relation-picker inline create. Use

@@ -25,6 +25,7 @@ import {
   type FieldDescriptor,
   type GroupDescriptor,
   type TabDescriptor,
+  type TabLabel,
 } from "../page";
 import {
   fieldsWithMetadataDefaults,
@@ -32,7 +33,7 @@ import {
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import type { RecordDeleteAction } from "./RecordActionBar";
-import { formViewSectionsSlot } from "./form-view-slots";
+import { FORM_VIEW_RECORD_ACTIONS_SLOT, FORM_VIEW_SECTIONS_SLOT, formViewSectionsSlot } from "./form-view-slots";
 import {
   addFieldSelection,
   fieldErrorMessages,
@@ -98,7 +99,7 @@ export interface RecordToolbarContext {
 
 export interface RecordTabDescriptor {
   id: string;
-  label: React.ReactNode;
+  label: TabLabel;
   icon?: React.ReactNode;
   /** Rendered as a `Tabs.Count` beside the label (a count, a status dot). */
   badge?: React.ReactNode;
@@ -114,6 +115,8 @@ export interface RecordTabDescriptor {
 
 export interface UseFormViewSurfaceProps {
   resource: string;
+  /** Slot contribution ids admitted from sections and record verbs. Omit for all; [] admits none. */
+  admitContributions?: readonly string[];
   id?: string | null;
   /** Render the complete declared form as a non-mutating record surface. */
   readOnly?: boolean;
@@ -178,6 +181,7 @@ const EMPTY_RECORD_TABS: readonly RecordTabDescriptor[] = [];
 /** Compose declarations, metadata, save state, and record chrome into one surface. */
 export function useFormViewSurface({
   resource,
+  admitContributions,
   id,
   readOnly = false,
   fields,
@@ -232,7 +236,11 @@ export function useFormViewSurface({
     () => [...new Set([canonicalResource, modelLabel])].map(formViewSectionsSlot),
     [canonicalResource, modelLabel],
   );
-  const sectionEntries = useModelSlot(sectionTargets);
+  const sectionEntries = useModelSlot(sectionTargets, {
+    admit: admitContributions,
+    inventorySlots: [FORM_VIEW_SECTIONS_SLOT, FORM_VIEW_RECORD_ACTIONS_SLOT],
+    owner: `FormView "${resource}"`,
+  });
   React.useEffect(() => {
     if (!developmentMode()) return;
     for (const entry of sectionEntries) {
@@ -473,6 +481,7 @@ export function useFormViewSurface({
     ...save.displayRecord,
   }, [canonicalRead.result, canonicalTabFields, save.displayRecord]);
   const chrome = useFormViewRecordChrome({
+    admitContributions,
     dataResource,
     modelLabel,
     canonicalResource,

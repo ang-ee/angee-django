@@ -160,7 +160,7 @@ export function RunsPage(): React.ReactElement {
         <Field name="origin" label={t("runs.origin")} readOnly />
         <Field name="occurrence_id" label={t("runs.occurrence")} readOnly />
         <Group label={t("runs.timeline")} columns={2}>
-          <Field name="status" readOnly widget="statusbar" />
+          <Field name="status" readOnly widget="statusbar" status />
           <Field name="waiting_kind" readOnly options={waitOptions} />
           <Field name="next_wake_at" readOnly />
           <Field name="steps_taken" readOnly />

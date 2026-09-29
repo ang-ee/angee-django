@@ -11,6 +11,34 @@
     {
       "name": "useTaskFormDeclaration",
       "ownerFile": "src/task-actions.tsx"
+    },
+    {
+      "name": "projectListDeclaration",
+      "ownerFile": "src/project-declarations.tsx"
+    },
+    {
+      "name": "useProjectFormDeclaration",
+      "ownerFile": "src/project-declarations.tsx"
+    },
+    {
+      "name": "projectRecordTabs",
+      "ownerFile": "src/project-declarations.tsx"
+    },
+    {
+      "name": "projectTimelineTab",
+      "ownerFile": "src/project-declarations.tsx"
+    },
+    {
+      "name": "projectTimelineSpec",
+      "ownerFile": "src/project-declarations.tsx"
+    },
+    {
+      "name": "useTaskListDeclaration",
+      "ownerFile": "src/task-declarations.tsx"
+    },
+    {
+      "name": "taskRecordTabs",
+      "ownerFile": "src/task-declarations.tsx"
     }
   ]
 }

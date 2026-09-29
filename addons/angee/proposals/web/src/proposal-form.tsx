@@ -23,7 +23,7 @@ export function useProposalFormDeclaration(): React.ReactElement {
       <Field name="display_name" title readOnly />
       <Field name="permissions" hidden readOnly />
       <Field name="revision" hidden readOnly />
-      <Field name="state" widget="statusbar" readOnly />
+      <Field name="state" widget="statusbar" status readOnly />
       <Group label={t("proposal.group.identity")} columns={2}>
         <Field name="round" createOnly />
         <Field name="responder" createOnly />

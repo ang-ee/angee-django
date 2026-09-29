@@ -109,7 +109,7 @@ export function formViewFieldLayout(
 ): FormViewFieldLayout {
   const titleField = titleFieldFor(formFields, metadata);
   const statusField = formFields.find(
-    (field) => fieldWidgetId(field) === "statusbar" && !field.showWhen,
+    (field) => field.status && !field.showWhen,
   );
   const bodyField = bodyFieldFor(formFields, titleField, statusField);
   const excluded = new Set(

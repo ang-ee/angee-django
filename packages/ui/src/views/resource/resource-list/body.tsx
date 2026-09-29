@@ -59,6 +59,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   createDefaults,
   recordExtras,
   recordTabs,
+  admitContributions,
   recordPresentation,
   defaultRecordTab,
   overviewTab,
@@ -151,7 +152,7 @@ export function ResourceListBody<TRow extends Row = Row>({
     ...(handleSelectRecord ? { onSelect: handleSelectRecord } : {}),
     onSetPage: resourceView.setPage,
     selectFirstRecord,
-    firstSelectionKey: stableSerialize(baseFilter ?? null),
+    firstSelectionKey: stableSerialize(resourceView.baseFilter),
     onClearSelection: clearSelection,
   });
   React.useEffect(() => {
@@ -282,6 +283,7 @@ export function ResourceListBody<TRow extends Row = Row>({
       groups={resolvedFormGroups}
       actions={resolvedFormActions}
       {...formRenderProps}
+      admitContributions={admitContributions ?? formRenderProps.admitContributions}
       defaultValues={
         resolvedCreating ? resolvedCreateDefaults : undefined
       }

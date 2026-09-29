@@ -13,11 +13,14 @@
 //
 // The ordered lists sort by sequence and contribution key, never by addon order.
 
+import type { ResourceViewPreset } from "@angee/ui/views/resource-view-model";
+export type { ResourceViewPreset } from "@angee/ui/views/resource-view-model";
 import type { I18nResources } from "@angee/refine";
 // The contribution contracts moved down into the binding (`@angee/ui` owns the
 // runtime registry that consumes them); composition here builds manifests
 // against them. Re-exported here so addon manifests import one composition seam.
 import type {
+  AppVocabulary,
   ChatterContribution,
   ComposedMenuItem,
   DrawerContribution,
@@ -50,6 +53,7 @@ import {
 } from "@angee/ui/theme";
 
 export type {
+  AppVocabulary,
   ChatterContribution,
   ComposedMenuItem,
   DrawerContribution,
@@ -79,9 +83,17 @@ export interface AddonRoute {
    * Set it on
    * a routed collection action (not its `$id` child) to make the resource
    * followable: a relation field targeting it resolves this route as the detail
-   * destination. One route per resource — a second claim is a build-time error.
+   * destination. Canonical claims are unique; explicit app roots may project it.
    */
   resource?: string;
+  /** Model displayed by a projection of an existing resource. */
+  recordModel?: string;
+  /** Named shipped view selected by this collection route. */
+  defaultResourceView?: string;
+  /** This collection's record route owns records with the declared field value. */
+  recordMatch?: { field: string; equals: string };
+  /** Inherited aside policy; tabs selects default, contributed and published ids. */
+  chatter?: "hidden" | { tabs?: readonly string[] };
 }
 
 /** A provider mounted once around one layout's chrome and routed content. */
@@ -104,6 +116,8 @@ export interface AddonManifest {
   /** Product status vocabulary; normalized keys cannot claim framework defaults or another addon's value. */
   statusTones?: StatusToneMap;
   i18n?: I18nResources;
+  vocabulary?: readonly AppVocabulary[];
+  resourceViews?: readonly ResourceViewPreset[];
   icons?: Readonly<Record<string, unknown>>;
   forms?: FormOverrideMap;
   chatter?: readonly ChatterContribution[];
@@ -147,6 +161,8 @@ export interface ComposedAddons {
   widgets: WidgetMap;
   statusTones: StatusToneMap;
   i18n: I18nResources;
+  vocabulary: readonly AppVocabulary[];
+  resourceViews: Readonly<Record<string, ResourceViewPreset>>;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
   chatter: readonly ChatterContribution[];
@@ -274,6 +290,7 @@ export function composeAddons(
   const dataProviders: Record<string, unknown> = {};
   const previews: PreviewContribution[] = [];
   const routeNames: Record<string, true> = {};
+  const resourceViews: Record<string, ResourceViewPreset> = {};
   const menuIds: Record<string, true> = {};
   const previewIds: Record<string, true> = {};
   const recordSearchKeys: Record<string, true> = {};
@@ -304,14 +321,21 @@ export function composeAddons(
       assertUnclaimed(recordSearchKeys, key, addon.id, "record search key");
       recordSearchKeys[key] = true;
     }
+    for (const preset of addon.resourceViews ?? []) {
+      if (!preset.id.startsWith(`${addon.id}.`)) throw new Error(`Resource view "${preset.id}" must use addon namespace "${addon.id}".`);
+      assertUnclaimed(resourceViews, preset.id, addon.id, "resource view");
+      resourceViews[preset.id] = { ...preset, resource: canonicalizeModel(preset.resource), preset: preset.id };
+    }
     if (addon.routes) {
       for (const route of addon.routes) {
         assertUnclaimed(routeNames, route.name, addon.id, "route name");
         routeNames[route.name] = true;
         routes.push(
-          route.resource
-            ? { ...route, resource: canonicalizeModel(route.resource) }
-            : route,
+          {
+            ...route,
+            ...(route.resource ? { resource: canonicalizeModel(route.resource) } : {}),
+            ...(route.recordModel ? { recordModel: canonicalizeModel(route.recordModel) } : {}),
+          },
         );
       }
     }
@@ -402,6 +426,8 @@ export function composeAddons(
     widgets,
     statusTones,
     i18n,
+    vocabulary: addons.flatMap((addon) => addon.vocabulary ?? []),
+    resourceViews,
     icons,
     forms,
     dataProviders,
