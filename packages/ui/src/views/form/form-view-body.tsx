@@ -80,11 +80,13 @@ export function FormViewRecordHeader({
   compact = false,
   title,
   extra,
+  statusbar,
 }: {
   surface: FormViewSurface;
   compact?: boolean;
   title?: React.ReactNode;
   extra?: React.ReactNode;
+  statusbar?: React.ReactNode;
 }): React.ReactElement {
   const statusTone = useStatusTone();
   const {
@@ -125,120 +127,118 @@ export function FormViewRecordHeader({
     : undefined;
   return (
     <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
-      <div className="flex items-start gap-4 max-[900px]:flex-col max-[900px]:items-stretch">
-        <div className="min-w-0 flex-1 self-start">
-          {title !== undefined ? (
-            <h1 className={compact ? "truncate text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>{title}</h1>
-          ) : currentTitleField ? (
-            <Controller
-              control={form.control}
-              name={currentTitleField.name}
-              render={({ field: controller }) =>
-                fieldReadOnly(currentTitleField) ? (
-                  <h1 className={compact ? "truncate text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
-                    {titleText(
-                      titleRelation
-                        ? titleSelectedOption?.label ?? relationValueId(controller.value)
-                        : controller.value,
-                      t("form.untitled"),
-                    )}
-                  </h1>
-                ) : titleRelation ? (
-                  <div className={compact ? "min-w-0 text-base font-semibold" : TITLE_TEXT_CLASS}>
-                    <RelationFieldWidget
-                      controlRef={controller.ref}
-                      value={relationValueId(controller.value) || null}
-                      onChange={(next) => {
-                        startFieldInteraction(currentTitleField.name);
-                        clearServerFieldError(currentTitleField.name);
-                        controller.onChange(next);
-                        afterFieldChange(currentTitleField, next);
-                      }}
-                      onCommit={() => commitFieldInteraction(currentTitleField.name)}
-                      relation={titleRelation}
-                      filters={currentTitleField.filters}
-                      selectedOption={titleSelectedOption}
-                      placeholder={currentTitleField.placeholder ?? t("form.untitled")}
-                      aria-label={fieldAriaLabel(currentTitleField)}
-                    />
-                  </div>
-                ) : (
-                  <Input
-                    ref={controller.ref}
-                    value={String(controller.value ?? "")}
-                    placeholder={currentTitleField.placeholder ?? t("form.untitled")}
-                    aria-label={fieldAriaLabel(currentTitleField)}
-                    className={cn(
-                      compact ? "h-8 border-0 bg-transparent px-0 text-base font-semibold shadow-none" : cn(TITLE_TEXT_CLASS, TITLE_INPUT_CLASS),
-                    )}
-                    onChange={(event) => {
-                      startFieldInteraction(currentTitleField.name);
-                      clearServerFieldError(currentTitleField.name);
-                      controller.onChange(event.currentTarget.value);
-                      afterFieldChange(currentTitleField, event.currentTarget.value);
-                    }}
-                    onBlur={() => commitFieldInteraction(currentTitleField.name)}
-                  />
-                )
-              }
-            />
-          ) : (
-            <h1 className={compact ? "truncate text-base font-semibold text-fg" : "truncate text-28 font-semibold leading-9 text-fg"}>
-              {titleText(
-                recordRepresentationValue(displayRecord, modelMetadata),
-                t("form.record"),
-              )}
-            </h1>
-          )}
-          {titleField && titleFieldMessages.length > 0 ? (
-            <p className="mt-1 text-xs leading-5 text-danger-text">
-              {titleFieldMessages.join(", ")}
-            </p>
-          ) : null}
-          {!compact ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
-        </div>
-        {currentStatusField && compact ? (
+      {statusbar !== undefined ? statusbar : currentStatusField && compact ? (
+        <Controller
+          control={form.control}
+          name={currentStatusField.name}
+          render={({ field: controller }) => {
+            const value = typeof controller.value === "string"
+              ? controller.value
+              : "";
+            return value ? (
+              <Badge
+                tone={statusTone(value)}
+                density="compact"
+                shape="pill"
+                className="self-start"
+              >
+                {optionLabel(currentStatusField.options, value)}
+              </Badge>
+            ) : <span aria-hidden />;
+          }}
+        />
+      ) : currentStatusField ? (
+        <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-3 max-[900px]:w-full">
           <Controller
             control={form.control}
             name={currentStatusField.name}
-            render={({ field: controller }) => {
-              const value = typeof controller.value === "string"
-                ? controller.value
-                : "";
-              return value ? (
-                <Badge
-                  tone={statusTone(value)}
-                  density="compact"
-                  shape="pill"
-                  className="self-start"
-                >
-                  {optionLabel(currentStatusField.options, value)}
-                </Badge>
-              ) : <span aria-hidden />;
-            }}
+            render={({ field: controller }) => (
+              <FieldDescriptorControl
+                controlRef={controller.ref}
+                field={currentStatusField}
+                value={controller.value}
+                readOnly={fieldReadOnly(currentStatusField)}
+                onChange={(next) => {
+                  startFieldInteraction(currentStatusField.name);
+                  controller.onChange(next);
+                  afterFieldChange(currentStatusField, next);
+                }}
+                onCommit={() => commitFieldInteraction(currentStatusField.name)}
+              />
+            )}
           />
-        ) : currentStatusField ? (
-          <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-3 max-[900px]:w-full">
-            <Controller
-              control={form.control}
-              name={currentStatusField.name}
-              render={({ field: controller }) => (
-                <FieldDescriptorControl
-                  controlRef={controller.ref}
-                  field={currentStatusField}
-                  value={controller.value}
-                  readOnly={fieldReadOnly(currentStatusField)}
-                  onChange={(next) => {
-                    startFieldInteraction(currentStatusField.name);
-                    controller.onChange(next);
-                    afterFieldChange(currentStatusField, next);
+        </div>
+      ) : null}
+      <div className="min-w-0 flex-1 self-start">
+        {title !== undefined ? (
+          <h1 className={compact ? "truncate text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>{title}</h1>
+        ) : currentTitleField ? (
+          <Controller
+            control={form.control}
+            name={currentTitleField.name}
+            render={({ field: controller }) =>
+              fieldReadOnly(currentTitleField) ? (
+                <h1 className={compact ? "truncate text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
+                  {titleText(
+                    titleRelation
+                      ? titleSelectedOption?.label ?? relationValueId(controller.value)
+                      : controller.value,
+                    t("form.untitled"),
+                  )}
+                </h1>
+              ) : titleRelation ? (
+                <div className={compact ? "min-w-0 text-base font-semibold" : TITLE_TEXT_CLASS}>
+                  <RelationFieldWidget
+                    controlRef={controller.ref}
+                    value={relationValueId(controller.value) || null}
+                    onChange={(next) => {
+                      startFieldInteraction(currentTitleField.name);
+                      clearServerFieldError(currentTitleField.name);
+                      controller.onChange(next);
+                      afterFieldChange(currentTitleField, next);
+                    }}
+                    onCommit={() => commitFieldInteraction(currentTitleField.name)}
+                    relation={titleRelation}
+                    filters={currentTitleField.filters}
+                    selectedOption={titleSelectedOption}
+                    placeholder={currentTitleField.placeholder ?? t("form.untitled")}
+                    aria-label={fieldAriaLabel(currentTitleField)}
+                  />
+                </div>
+              ) : (
+                <Input
+                  ref={controller.ref}
+                  value={String(controller.value ?? "")}
+                  placeholder={currentTitleField.placeholder ?? t("form.untitled")}
+                  aria-label={fieldAriaLabel(currentTitleField)}
+                  className={cn(
+                    compact ? "h-8 border-0 bg-transparent px-0 text-base font-semibold shadow-none" : cn(TITLE_TEXT_CLASS, TITLE_INPUT_CLASS),
+                  )}
+                  onChange={(event) => {
+                    startFieldInteraction(currentTitleField.name);
+                    clearServerFieldError(currentTitleField.name);
+                    controller.onChange(event.currentTarget.value);
+                    afterFieldChange(currentTitleField, event.currentTarget.value);
                   }}
-                  onCommit={() => commitFieldInteraction(currentStatusField.name)}
+                  onBlur={() => commitFieldInteraction(currentTitleField.name)}
                 />
-              )}
-            />
-          </div>
+              )
+            }
+          />
+        ) : (
+          <h1 className={compact ? "truncate text-base font-semibold text-fg" : "truncate text-28 font-semibold leading-9 text-fg"}>
+            {titleText(
+              recordRepresentationValue(displayRecord, modelMetadata),
+              t("form.record"),
+            )}
+          </h1>
+        )}
+        {titleField && titleFieldMessages.length > 0 ? (
+          <p className="mt-1 text-xs leading-5 text-danger-text">
+            {titleFieldMessages.join(", ")}
+          </p>
         ) : null}
+        {!compact ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
       </div>
       {extra ? <div className={compact ? "pt-1" : undefined}>{extra}</div> : null}
     </header>
@@ -369,31 +369,6 @@ export function FormViewOverview({
 
   return (
     <>
-      <div className="grid gap-6">
-        {hasConditionalFields ? (
-          <ConditionalSections
-            control={form.control}
-            sections={sections}
-            renderSections={renderSections}
-          />
-        ) : (
-          renderSections(sections)
-        )}
-      </div>
-      {layout !== "tabs" && editableLines ? (
-        <section className="grid gap-3">
-          <SectionEyebrow
-            as="h3"
-            spacing="field"
-            tracking="wide"
-            weight="semibold"
-            className="border-b border-border-subtle pb-1"
-          >
-            {t("lines.section")}
-          </SectionEyebrow>
-          {editableLines}
-        </section>
-      ) : null}
       {currentBodyField ? (
         <section className="grid gap-2">
           {currentBodyField.label ? (
@@ -419,6 +394,31 @@ export function FormViewOverview({
               />
             )}
           />
+        </section>
+      ) : null}
+      <div className="grid gap-6">
+        {hasConditionalFields ? (
+          <ConditionalSections
+            control={form.control}
+            sections={sections}
+            renderSections={renderSections}
+          />
+        ) : (
+          renderSections(sections)
+        )}
+      </div>
+      {layout !== "tabs" && editableLines ? (
+        <section className="grid gap-3">
+          <SectionEyebrow
+            as="h3"
+            spacing="field"
+            tracking="wide"
+            weight="semibold"
+            className="border-b border-border-subtle pb-1"
+          >
+            {t("lines.section")}
+          </SectionEyebrow>
+          {editableLines}
         </section>
       ) : null}
     </>

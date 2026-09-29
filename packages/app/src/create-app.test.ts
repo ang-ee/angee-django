@@ -6,6 +6,7 @@ import { cleanup, waitFor } from "@testing-library/react";
 import { createAngeeHasuraDataProvider } from "@angee/refine";
 import { useAuthoredQuery } from "@angee/refine";
 import {
+  useAppRuntime,
   useChatterRoutes,
   useResourceRecordHrefLookup,
   useResourceRoute,
@@ -1197,11 +1198,12 @@ describe("createApp resource route index", () => {
     history.replaceState(null, "", "/notes/abc");
 
     function ChatterRouteProbe(): ReactNode {
+      const admission = useAppRuntime().chatterAdmitContributions;
       const route = useChatterRoutes().find((item) => item.name === "notes.record");
       return createElement(
         "span",
         null,
-        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"}`,
+        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"} ${route?.admitContributions?.join(",") ?? "all"} ${admission?.join(",") ?? "all"}`,
       );
     }
 
@@ -1215,6 +1217,7 @@ describe("createApp resource route index", () => {
             layout: "console",
             component: ChatterRouteProbe,
             resource: "Note",
+            chatterAdmitContributions: ["comments"],
           },
           {
             name: "notes.record",
@@ -1225,6 +1228,7 @@ describe("createApp resource route index", () => {
         ],
       },
     ]);
+    input.chatterAdmitContributions = ["activity"];
     input.schemas = testSchemasWithConsoleResources([
       { ...testDataResource("notes.Note"), canonicalLabel: "parties.Party" },
     ]);
@@ -1233,7 +1237,7 @@ describe("createApp resource route index", () => {
 
     try {
       await waitFor(() => {
-        expect(host.textContent).toContain("notes.Note parties.Party id");
+        expect(host.textContent).toContain("notes.Note parties.Party id comments activity");
       });
     } finally {
       root.unmount();

@@ -15,6 +15,8 @@ export {
 } from "./resources";
 /** The manager's phase dropdown for one project, composable onto a consumer's project page. */
 export { ProjectPhaseControl } from "./project-phase";
+export { projectListDeclaration, projectRecordTabs, projectTimelineSpec, projectTimelineTab, useProjectFormDeclaration } from "./project-declarations";
+export { taskRecordTabs, useTaskListDeclaration } from "./task-declarations";
 export { useTaskFormDeclaration } from "./task-actions";
 export { TaskBoardSurface, type TaskBoardSurfaceProps } from "./task-board-surface";
 

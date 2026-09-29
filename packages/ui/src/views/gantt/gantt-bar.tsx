@@ -292,6 +292,8 @@ function GanttBar<TData = unknown>({
     "data-all-day": occurrence.allDay || undefined,
     "data-recurring": occurrence.isRecurring || undefined,
     "data-selected": isSelected || undefined,
+    "data-current": event.current || undefined,
+    "aria-current": event.current ? "step" as const : undefined,
     "data-dragging": isDragging || undefined,
     "data-drag-kind": dragKind ?? undefined,
     "data-past": occurrence.end.getTime() < Date.now() || undefined,
@@ -339,6 +341,7 @@ function GanttBar<TData = unknown>({
       // placeholder behind the dashed preview - no dramatic restyle
       "data-[drag-kind=resize-start]:opacity-40 data-[drag-kind=resize-end]:opacity-40",
       "data-selected:bg-(--gantt-event-color)/30",
+      "data-current:ring-2 data-current:ring-inset data-current:ring-(--gantt-event-color) data-current:bg-(--gantt-event-color)/40",
       /* the diamond is the milestone's body, so the shell sheds its own
          tinted fill and centers the glyph on the instant */
       milestone &&

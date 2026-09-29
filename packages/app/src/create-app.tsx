@@ -162,6 +162,8 @@ export interface CreateAppInput {
   loginPath?: string;
   /** Host-level UI slot contributions, merged with the addons'. */
   slots?: readonly SlotContribution[];
+  /** Default chatter contribution ids for this app. Omit for all. */
+  chatterAdmitContributions?: readonly string[];
   /** Build-owned defaults used until an authenticated user overrides them. */
   appearance?: HostAppearanceDefaults;
 }
@@ -318,6 +320,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     icons: composed.icons,
     forms: composed.forms,
     chatter: composed.chatter,
+    chatterAdmitContributions: input.chatterAdmitContributions,
     chatterRoutes: chatterRouteIndex(routes, modelLabelInventory),
     slots: composed.slots,
     recordSearchKeys: composed.recordSearchKeys,

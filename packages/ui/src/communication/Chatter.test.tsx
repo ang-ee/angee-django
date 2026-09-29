@@ -27,6 +27,61 @@ import { registerForm, type RegisteredFormProps } from "../views/form/registered
 afterEach(() => cleanup());
 
 describe("Chatter", () => {
+  test("app admission filters default and contributed tabs before rendering or counting", async () => {
+    const excludedRender = vi.fn(() => <span>Excluded content</span>);
+    const excludedCount = vi.fn(() => 9);
+    renderChatter({ chatterAdmitContributions: ["comments"], chatter: [
+      { id: "agents", label: "Agents", useCount: excludedCount, render: excludedRender },
+    ] });
+    expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
+    expect(excludedRender).not.toHaveBeenCalled();
+    expect(excludedCount).not.toHaveBeenCalled();
+  });
+
+  test("a route overrides app admission while conditional known ids remain valid", async () => {
+    const hiddenRender = vi.fn(() => <span>Not yet visible</span>);
+    renderChatter({
+      chatterAdmitContributions: ["comments"],
+      chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/record", recordParam: "id", admitContributions: ["activity", "conditional"] }],
+      chatter: [{ id: "conditional", when: () => false, render: hiddenRender }],
+    });
+    expect(await screen.findByRole("tab", { name: "Activity" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
+    expect(hiddenRender).not.toHaveBeenCalled();
+  });
+
+  test("an empty admit list removes the aside, including published tabs", () => {
+    render(chatterContentView(<PublishedContent content={{ tabs: [{ id: "local", label: "Local", children: <span>Local content</span> }] }} />,
+      "local", { chatterAdmitContributions: [] }));
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(screen.queryByRole("tab")).toBeNull();
+  });
+
+  test("a shell's explicit admission overrides route and app defaults", async () => {
+    renderChatter({
+      chatterAdmitContributions: ["comments"],
+      chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/record", admitContributions: ["activity"] }],
+      chatter: [{ id: "agents", label: "Agents", render: () => <span>Agent panel</span> }],
+    }, ["agents"]);
+    expect(await screen.findByRole("tab", { name: "Agents" })).toBeTruthy();
+    expect(screen.queryAllByRole("tab")).toHaveLength(1);
+  });
+
+  test("unknown admitted ids fail before a contribution's render or count hook", () => {
+    const excludedRender = vi.fn(() => null);
+    const excludedCount = vi.fn(() => 0);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => render(chatterContentView(null, "comments", {
+        chatterAdmitContributions: ["typo"], chatter: [{ id: "known", render: excludedRender, useCount: excludedCount }],
+      }))).toThrow('unknown contribution id "typo"');
+      expect(excludedRender).not.toHaveBeenCalled();
+      expect(excludedCount).not.toHaveBeenCalled();
+    } finally { consoleError.mockRestore(); }
+  });
+
   test("only renders the agents tab when an addon contributes it", async () => {
     renderChatter({});
 
@@ -307,7 +362,7 @@ function useCommentsCount(
   return context.view.sqid === "rec_1" ? 7 : undefined;
 }
 
-function renderChatter(runtime: Partial<AppRuntime>): void {
+function renderChatter(runtime: Partial<AppRuntime>, admitContributions?: readonly string[]): void {
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const recordRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -315,7 +370,7 @@ function renderChatter(runtime: Partial<AppRuntime>): void {
     component: () => (
       <AppRuntimeProvider runtime={{ icons: baseIcons, ...runtime }}>
         <ChatterProvider defaultTab="agents">
-          <Chatter />
+          <Chatter admitContributions={admitContributions} />
         </ChatterProvider>
       </AppRuntimeProvider>
     ),

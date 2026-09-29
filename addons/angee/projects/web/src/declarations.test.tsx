@@ -1,0 +1,138 @@
+// @vitest-environment happy-dom
+
+import * as React from "react";
+import { cleanup, render, renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import {
+  Form, List, parsePageActions, parsePageColumns, parsePageFacets, parsePageFields, parsePageGroups,
+  type FormProps, type ListProps, type ListViewProps, type RecordPanelContext, type RecordToolbarContext, type ResourceListProps,
+} from "@angee/ui";
+
+import {
+  MILESTONE_MODEL, PROJECT_MODEL, TASK_MODEL, projectListDeclaration, projectRecordTabs,
+  projectTimelineSpec, projectTimelineTab, taskRecordTabs, useProjectFormDeclaration,
+  useTaskFormDeclaration, useTaskListDeclaration,
+} from "./index";
+import { ProjectPhaseControl } from "./project-phase";
+import { ProjectsPage } from "./views/ProjectsPage";
+import { TasksPage } from "./views/TasksPage";
+
+// Keep the real declarations/parsers; only transport hooks and the page mount are replaced.
+const mounted = vi.hoisted(() => ({ props: null as ResourceListProps | null, list: null as ListViewProps | null }));
+vi.mock("@angee/ui", async () => {
+  const actual = await vi.importActual<typeof import("@angee/ui")>("@angee/ui");
+  return {
+    ...actual,
+    ResourceList: (props: ResourceListProps) => { mounted.props = props; return null; },
+    ListView: (props: ListViewProps) => { mounted.list = props; return null; },
+    useEnumOptions: () => [],
+    useActionResultMutation: () => [vi.fn(), {}],
+    useActionOutcomeMutation: () => [vi.fn(), {}],
+    useRecordActionMutation: () => [vi.fn(), {}],
+    useAuthoredResourceMutation: () => [vi.fn(), {}],
+    useActionResultRun: () => vi.fn(),
+    useRecordAction: (run: unknown) => run,
+  };
+});
+
+afterEach(() => { cleanup(); mounted.props = null; mounted.list = null; });
+
+function propsOf<T>(element: React.ReactNode): T {
+  if (!React.isValidElement<T>(element)) throw new Error("Expected a declaration element");
+  return element.props;
+}
+
+function mountedDeclaration<T>(type: typeof Form | typeof List): T {
+  const element = React.Children.toArray(mounted.props?.children).find((child) => React.isValidElement(child) && child.type === type);
+  return propsOf<T>(element);
+}
+
+describe("composable standard project and task declarations", () => {
+  test("exports the project list's resource, columns, facets and group", () => {
+    expect(projectListDeclaration.type).toBe(List);
+    const props = propsOf<ListProps>(projectListDeclaration);
+    expect(props.resource).toBe(PROJECT_MODEL);
+    expect(props.defaultGroup).toEqual({ field: "status" });
+    expect(parsePageColumns(props.children).map(({ field }) => field)).toEqual(["title", "current_milestone", "status", "lead", "target_date", "updated_at"]);
+    expect(parsePageFacets(props.children).map(({ field }) => field)).toEqual(["lead"]);
+  });
+
+  test("the project form owns one phase statusbar, the hero, and lifecycle actions", () => {
+    const { result } = renderHook(useProjectFormDeclaration);
+    expect(result.current.type).toBe(Form);
+    const props = propsOf<FormProps>(result.current);
+    const fields = [...parsePageFields(props.children), ...parsePageGroups(props.children).flatMap((group) => group.fields)];
+    expect(fields.find(({ name }) => name === "title")?.title).toBe(true);
+    expect(fields.find(({ name }) => name === "body")?.body).toBe(true);
+    expect(fields.find(({ name }) => name === "status")).toMatchObject({ hidden: true, readOnly: true });
+    expect(fields.some(({ name }) => ["current_milestone", "sort_order", "health"].includes(name))).toBe(false);
+    const details = parsePageGroups(props.children).find(({ label }) => label === "Details");
+    expect(details).toMatchObject({ collapsible: true, defaultOpen: false });
+    expect(details?.fields.map(({ name }) => name)).toEqual(["owns_items", "folder", "converted_from"]);
+    expect(parsePageActions(props.children).map(({ id }) => id)).toEqual(["pause", "resume", "complete", "drop"]);
+    // The status owner is the existing phase control; declarations do not mirror its state.
+    const context: RecordToolbarContext = {
+      recordId: "project-a", record: null, patchRecord: vi.fn(), reload: vi.fn(),
+      form: { formReadOnly: true } as RecordToolbarContext["form"],
+    };
+    const phase = props.statusbar?.(context);
+    expect(React.isValidElement(phase) && phase.type).toBe(ProjectPhaseControl);
+    expect(propsOf<{ recordId: string; readOnly: boolean }>(phase)).toEqual({ recordId: "project-a", readOnly: true });
+    expect(props.statusbar?.({ ...context, recordId: null })).toBeNull();
+    const actions = parsePageActions(props.children);
+    expect(actions.find(({ id }) => id === "pause")?.visibleWhen?.({ status: "OPEN" })).toBe(true);
+    expect(actions.find(({ id }) => id === "resume")?.visibleWhen?.({ status: "DROPPED" })).toBe(true);
+  });
+
+  test("exports task list intent and keeps operational ordering out of the default form", () => {
+    const { result: list } = renderHook(useTaskListDeclaration);
+    const listProps = propsOf<ListProps>(list.current);
+    expect(listProps.resource).toBe(TASK_MODEL);
+    expect(listProps.defaultGroup).toEqual({ field: "project" });
+    expect(parsePageFacets(listProps.children).map(({ field }) => field)).toEqual(["project", "visibility", "assignee"]);
+    expect(listProps.rowActions).toHaveLength(2);
+    const { result: form } = renderHook(useTaskFormDeclaration);
+    const groups = parsePageGroups(propsOf<FormProps>(form.current).children);
+    expect(groups.filter(({ label }) => label !== "Details").flatMap(({ fields }) => fields)
+      .some(({ name }) => ["sort_order", "sub_sort_order"].includes(name))).toBe(false);
+    expect(groups.find(({ label }) => label === "Details")?.fields.slice(0, 2).map(({ name, createOnly }) => ({ name, createOnly })))
+      .toEqual([{ name: "sort_order", createOnly: true }, { name: "sub_sort_order", createOnly: true }]);
+    expect(groups.find(({ label }) => label === "Details")).toMatchObject({ collapsible: true, defaultOpen: false });
+  });
+
+  test("exports the standard record tabs and a timeline scoped to one project's lane", () => {
+    expect(projectRecordTabs.map(({ id }) => id)).toEqual(["timeline", "tasks", "milestones", "participants"]);
+    expect(taskRecordTabs.map(({ id }) => id)).toEqual(["subtasks"]);
+    expect(projectRecordTabs[0]).toBe(projectTimelineTab);
+    // This panel needs only the saved id, as a native RecordPanelContext supplies.
+    render(projectTimelineTab.render({ recordId: "project-a" } as RecordPanelContext));
+    expect(mounted.list).toMatchObject({
+      resource: MILESTONE_MODEL, scope: "local", defaultView: "gantt",
+      baseFilter: { project: { exact: "project-a" } },
+      laneSource: { field: "project", filters: [{ field: "id", operator: "eq", value: "project-a" }] },
+      gantt: projectTimelineSpec,
+    });
+    expect(projectTimelineSpec).toMatchObject({ current: "current_milestone", start: "start_date", end: "target_date",
+      markers: { resource: TASK_MODEL, lane: "project", date: "due_date" },
+    });
+  });
+
+  test("ProjectsPage mounts the exported list, form and tabs", () => {
+    render(<ProjectsPage />);
+    expect(mounted.props?.resource).toBe(PROJECT_MODEL);
+    expect(mounted.props?.recordTabs).toBe(projectRecordTabs);
+    expect(mountedDeclaration<ListProps>(List)).toBe(projectListDeclaration.props);
+    const props = mountedDeclaration<FormProps>(Form);
+    expect(props.statusbar).toBeTypeOf("function");
+    expect(parsePageActions(props.children).map(({ id }) => id)).toEqual(["pause", "resume", "complete", "drop"]);
+  });
+
+  test("TasksPage mounts the exported task declarations and its default filter", () => {
+    render(<TasksPage />);
+    expect(mounted.props?.resource).toBe(TASK_MODEL);
+    expect(mounted.props?.recordTabs).toBe(taskRecordTabs);
+    expect(mounted.props?.defaultFilter).toEqual({ NOT: { status: { exact: "DROPPED" } } });
+    expect(mountedDeclaration<ListProps>(List).defaultGroup).toEqual({ field: "project" });
+    expect(parsePageFields(mountedDeclaration<FormProps>(Form).children).find(({ name }) => name === "title")?.title).toBe(true);
+  });
+});

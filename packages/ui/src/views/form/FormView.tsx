@@ -83,6 +83,8 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
   formExtras?: (context: RecordToolbarContext) => React.ReactNode;
   /** Compact read-only content rendered with the record heading. */
   headerExtras?: (context: RecordToolbarContext) => React.ReactNode;
+  /** Domain status control above the hero. Replaces the declared status field's control. */
+  statusbar?: (context: RecordToolbarContext) => React.ReactNode;
   /** Group presentation; ungrouped/title/body/status placement is unchanged. */
   layout?: "stacked" | "tabs";
   /** Place the first two unlabeled groups side by side within one form overview. */
@@ -127,6 +129,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const {
     resource,
+    admitContributions,
     id,
     readOnly = false,
     fields,
@@ -155,6 +158,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     recordExtras,
     formExtras,
     headerExtras,
+    statusbar,
     layout = "stacked",
     groupLayout = "stacked",
     bodyTabs,
@@ -170,6 +174,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   } = props;
   const surface = useFormViewSurface({
     resource,
+    admitContributions,
     id,
     readOnly,
     fields,
@@ -380,7 +385,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             : "pb-12",
         )}
       >
-        <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} />
+        <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} statusbar={statusbar?.(recordToolbarContext)} />
         {saveErrorBanner}
         {tabbed ? (
           <>
@@ -425,7 +430,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 py-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
+            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} statusbar={statusbar?.(recordToolbarContext)} />
             {saveErrorBanner}
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
@@ -456,7 +461,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
         >
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
-            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
+            <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} statusbar={statusbar?.(recordToolbarContext)} />
             {saveErrorBanner}
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (

@@ -6,10 +6,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { DataResourceMetadata, Row } from "@angee/metadata";
-import { testQueryAxis } from "@angee/metadata/testing";
+import { testQueryAxis, testQueryField } from "@angee/metadata/testing";
 
 import { createUiTestProviders } from "../../testing";
-import { ganttResources, ganttLane, ganttLanes, ganttRecord, scheduledRecord } from "../../../tests/gantt-fixtures";
+import { ganttResources, ganttLane, ganttLanes, ganttRecord, ganttMarker, scheduledRecord } from "../../../tests/gantt-fixtures";
+import type { GanttViewSpec } from "../resource/resource-view-types";
 import { ListView } from "../resource/ListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "../resource/resource-view-context";
 import type { GanttViewProps } from "./GanttView";
@@ -37,6 +38,7 @@ function renderCollection(options: {
   resources?: readonly DataResourceMetadata[];
   getList?: (params: Partial<GetListParams>) => Promise<{ data: Row[]; total: number }>;
   onRowClick?: (row: Row) => void;
+  gantt?: Partial<GanttViewSpec>;
 } = {}) {
   const getList = vi.fn(options.getList ?? (async ({ resource }: Partial<GetListParams>) => resource === "lanes"
     ? { data: ganttLanes, total: 21 }
@@ -48,7 +50,7 @@ function renderCollection(options: {
     return <ListView resource={ganttRecord.modelLabel}
       columns={[{ field: "name", header: "Name" }]}
       baseFilter={{ status: { exact: "active" } }}
-      gantt={{ start: "start", end: "end", tone: "status", rowFields: ["code"], renderRowContent: (row) => <span>Code {String(row.code)}</span> }}
+      gantt={{ start: "start", end: "end", tone: "status", rowFields: ["code"], renderRowContent: (row) => <span>Code {String(row.code)}</span>, ...options.gantt }}
       laneSource={{ field: "lane" }} onRowClick={options.onRowClick} />;
   }
   const view = render(<RouterContextProvider router={router}><Provider resources={options.resources ?? ganttResources} dataProvider={{ getList }}>
@@ -60,6 +62,108 @@ function renderCollection(options: {
 }
 
 describe("Gantt collection over native list data", () => {
+  test.each([false, true])("emphasizes only each lane's declared current bar (relation=%s)", async (relation) => {
+    const currentLane = { ...ganttLane,
+      fields: [...ganttLane.fields, { ...ganttLane.fields[0]!, name: "current", kind: relation ? "relation" as const : "scalar" as const,
+        ...(relation ? { relationModelLabel: ganttRecord.modelLabel, relationObject: true } : {}) }],
+      query: { ...ganttLane.query, fields: { ...ganttLane.query.fields, current: testQueryField("current", {
+        scalar: "ID", kind: relation ? "relation" : "scalar",
+        row: { path: relation ? "current.id" : "current", paths: [relation ? "current.id" : "current"] },
+      }) } },
+    };
+    const f = renderCollection({ resources: [ganttRecord, currentLane], gantt: { current: "current" },
+      getList: async ({ resource }) => resource === "lanes" ? {
+        data: [{ ...ganttLanes[0], current: relation ? { id: "schedule-a" } : "schedule-a" }, { ...ganttLanes[1], current: null }], total: 2,
+      } : { data: [scheduledRecord, { ...scheduledRecord, id: "schedule-b" }], total: 2 },
+    });
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(2));
+    expect(drawing.props?.events.map(({ id, current }) => ({ id, current }))).toEqual([
+      { id: "schedule-a", current: true }, { id: "schedule-b", current: false },
+    ]);
+    expect(JSON.stringify(f.getList.mock.calls.find(([params]) => params.resource === "lanes")?.[0].meta?.fields)).toContain("current");
+  });
+
+  test("loads every marker page on the same lanes, using its own filter and point dates", async () => {
+    const onRowClick = vi.fn();
+    const f = renderCollection({ resources: [...ganttResources, ganttMarker], onRowClick,
+      gantt: { markers: { resource: ganttMarker.modelLabel, lane: "lane", date: "due", filter: { status: { exact: "waiting" } } } },
+      getList: async ({ resource, pagination }) => {
+        if (resource === "lanes") return { data: ganttLanes, total: 2 };
+        if (resource === "schedules") return { data: [scheduledRecord], total: 1 };
+        return { data: pagination?.currentPage === 1
+          ? Array.from({ length: MAX_PAGE_SIZE }, (_, index) => ({ id: index === 0 ? scheduledRecord.id : `checkpoint-${index}`, name: `Checkpoint ${index}`, due: "2026-09-04", lane: { id: "lane-b", name: "Beta" } }))
+          : [{ id: "last", name: "Final checkpoint", due: "2026-09-05", lane: { id: "lane-a", name: "Alpha" } }], total: MAX_PAGE_SIZE + 1 };
+      },
+    });
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(MAX_PAGE_SIZE + 2));
+    const marker = drawing.props!.events.find((event) => event.title === "Checkpoint 0")!;
+    expect(marker.id).not.toBe(scheduledRecord.id);
+    expect(marker.resourceId).toBe("lane-b");
+    expect(marker.start).toEqual(marker.end);
+    expect(marker.start.getHours()).toBe(0);
+    expect(marker.allDay).toBe(true);
+    expect(marker.readOnly).toBe(true);
+    const requests = f.getList.mock.calls.filter(([params]) => params.resource === "checkpoints");
+    expect(requests.map(([params]) => params.pagination?.currentPage)).toEqual([1, 2]);
+    const where = JSON.stringify(requests[0]?.[0].meta?.gqlVariables);
+    expect(where).toContain("lane-a");
+    expect(where).toContain("lane-b");
+    expect(where).toContain("waiting");
+    expect(where).not.toContain("active");
+    act(() => drawing.props?.onEventClick?.(marker));
+    expect(onRowClick).not.toHaveBeenCalled();
+    expect(dataProvider.update).not.toHaveBeenCalled();
+  });
+
+  test("omits unscheduled markers, reports invalid ones, and keeps a DateTime marker's instant", async () => {
+    renderCollection({ resources: [...ganttResources, { ...ganttMarker, fields: ganttMarker.fields.map((field) => field.name === "due" ? { ...field, scalar: "DateTime" } : field) }],
+      gantt: { markers: { resource: ganttMarker.modelLabel, lane: "lane", date: "due" } },
+      getList: async ({ resource }) => resource === "lanes" ? { data: ganttLanes, total: 2 }
+        : resource === "schedules" ? { data: [], total: 0 }
+        : { data: [
+          { id: "scheduled", name: "Precise checkpoint", due: "2026-09-04T14:00:00Z", lane: { id: "lane-a" } },
+          { id: "absent", due: null, lane: { id: "lane-a" } },
+          { id: "invalid", due: "invalid", lane: { id: "lane-a" } },
+        ], total: 3 },
+    });
+    await screen.findByText("1 record omitted because its identity or date range is invalid.");
+    expect(drawing.props?.events).toHaveLength(1);
+    expect(drawing.props?.events[0]).toMatchObject({ start: new Date("2026-09-04T14:00:00Z"), end: new Date("2026-09-04T14:00:00Z"), allDay: false });
+    expect(drawing.props?.resources).toHaveLength(2);
+  });
+
+  test("does not query either source for an empty lane page", async () => {
+    const f = renderCollection({ resources: [...ganttResources, ganttMarker],
+      gantt: { markers: { resource: ganttMarker.modelLabel, lane: "lane", date: "due" } },
+      getList: async () => ({ data: [], total: 0 }),
+    });
+    await waitFor(() => expect(drawing.props?.loading).toBe(false));
+    expect(f.getList.mock.calls.map(([params]) => params.resource)).toEqual(["lanes"]);
+  });
+
+  test("an invalid marker lane fails without an unscoped marker read", async () => {
+    const f = renderCollection({ resources: [...ganttResources, ganttMarker],
+      gantt: { markers: { resource: ganttMarker.modelLabel, lane: "name", date: "due" } },
+    });
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(f.getList.mock.calls.some(([params]) => params.resource === "checkpoints")).toBe(false);
+  });
+
+  test("reports and retries marker read failures through the collection error owner", async () => {
+    let failed = true;
+    renderCollection({ resources: [...ganttResources, ganttMarker],
+      gantt: { markers: { resource: ganttMarker.modelLabel, lane: "lane", date: "due" } },
+      getList: async ({ resource }) => {
+        if (resource === "checkpoints" && failed) throw new Error("Marker read refused");
+        return { data: resource === "lanes" ? ganttLanes : resource === "schedules" ? [scheduledRecord] : [], total: resource === "lanes" ? 2 : resource === "schedules" ? 1 : 0 };
+      },
+    });
+    await screen.findByText("Marker read refused");
+    failed = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByLabelText("Schedule chart");
+    expect(screen.queryByText("Marker read refused")).toBeNull();
+  });
   test("fits today's initial collection window while honoring an explicit historical anchor", async () => {
     const f = renderCollection({ anchor: calendarDateToAnchor(new Date()) });
     await waitFor(() => expect(drawing.props?.events).toHaveLength(1));

@@ -37,7 +37,9 @@ uses the registered `repeat` glyph (Lucide `Repeat`); the collection switcher us
 
 Local (non-upstream) files in this directory: `GanttView.tsx` (public lazy
 boundary), `gantt-surface.tsx` (read-only presentation wrapper) and
-`gantt-collection-surface.tsx` (resource-view collection adapter).
+`gantt-collection-surface.tsx` (resource-view collection adapter), with
+`gantt-collection-query.ts` sharing lane scoping and complete paging for bars and
+markers.
 `gantt-recurrence.tsx` replaces the unary `+y` coercion with `Number(y)`.
 `warnOnce` drops upstream's `process.env.NODE_ENV` guard: the composed host
 typechecks without Node types, and a once-per-key warning is harmless in production.
@@ -52,3 +54,7 @@ The headless state accepts a controlled `range`, used by the read-only surface's
 initial week-aligned fit-to-events window; navigation returns to native periods.
 The collection adapter uses metadata Date fields as inclusive calendar days,
 translated to the existing exclusive-end/all-day event contract.
+The event contract adds `current` for a lane's declared current bar. The bar
+exposes it through `aria-current="step"`, `data-current`, and token-based emphasis,
+independently of user selection. Collection markers reuse the unmodified
+zero-duration milestone/diamond renderer and packing; no marker layer was added.

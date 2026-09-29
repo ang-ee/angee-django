@@ -7,6 +7,7 @@ import {
   useAuthoredResourceMutation,
   useConfirm,
   useRelationOptions,
+  useRuntimeViewAs,
 } from "@angee/ui";
 import * as React from "react";
 
@@ -17,8 +18,9 @@ import { MILESTONE_MODEL, PROJECT_MODEL, TASK_MODEL } from "./resources";
 const milestoneRelation = { resource: MILESTONE_MODEL, labelField: "name", canCreate: false };
 
 /** Select one server-eligible phase, confirming the previous and next names. */
-export function ProjectPhaseControl({ recordId }: { recordId: string }): React.ReactElement {
+export function ProjectPhaseControl({ recordId, readOnly = false }: { recordId: string; readOnly?: boolean }): React.ReactElement {
   const t = useProjectsT();
+  const preview = useRuntimeViewAs();
   const confirm = useConfirm();
   const settle = useActionResultRun();
   const query = useAuthoredQuery(ProjectPhaseDocument, { id: recordId }, {
@@ -26,7 +28,7 @@ export function ProjectPhaseControl({ recordId }: { recordId: string }): React.R
     records: [{ model: PROJECT_MODEL, id: recordId }],
   });
   const project = query.data?.projects_by_pk;
-  const canWrite = project?.permissions.includes("write") ?? false;
+  const canWrite = !readOnly && !preview.viewAs && !preview.pending && (project?.permissions.includes("write") ?? false);
   const eligibleIds = canWrite ? project?.selectable_milestones.map((row) => row.id) ?? [] : [];
   const { options, list } = useRelationOptions(milestoneRelation, {
     enabled: eligibleIds.length > 0,
@@ -47,6 +49,7 @@ export function ProjectPhaseControl({ recordId }: { recordId: string }): React.R
     readOnly={!canWrite || state.fetching || query.isFetching || eligibleIds.length === 0}
     searchState={{ pending: list.fetching, error: list.error, retry: list.refetch }}
     onChange={async (id) => {
+      if (!canWrite) return;
       const selected = options.find((option) => option.value === id);
       if (!selected) return;
       if (!await confirm({

@@ -10,7 +10,8 @@ import {
 import { refineFieldsFromPaths } from "@angee/refine";
 import { useOne } from "@refinedev/core";
 
-import { useFormOverride, useModelSlot } from "../../runtime";
+import { useAppRuntime, useFormOverride, useModelSlot } from "../../runtime";
+import { admittedContributions, assertContributionIds } from "../../runtime/contribution-selection";
 import { useUiT, type UiTranslate } from "../../i18n";
 import {
   hasDirectPageElement,
@@ -32,7 +33,7 @@ import {
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import type { RecordDeleteAction } from "./RecordActionBar";
-import { formViewSectionsSlot } from "./form-view-slots";
+import { FORM_VIEW_RECORD_ACTIONS_SLOT, FORM_VIEW_SECTIONS_SLOT, formViewSectionsSlot } from "./form-view-slots";
 import {
   addFieldSelection,
   fieldErrorMessages,
@@ -114,6 +115,8 @@ export interface RecordTabDescriptor {
 
 export interface UseFormViewSurfaceProps {
   resource: string;
+  /** Slot contribution ids admitted from sections and record verbs. Omit for all; [] admits none. */
+  admitContributions?: readonly string[];
   id?: string | null;
   /** Render the complete declared form as a non-mutating record surface. */
   readOnly?: boolean;
@@ -178,6 +181,7 @@ const EMPTY_RECORD_TABS: readonly RecordTabDescriptor[] = [];
 /** Compose declarations, metadata, save state, and record chrome into one surface. */
 export function useFormViewSurface({
   resource,
+  admitContributions,
   id,
   readOnly = false,
   fields,
@@ -232,7 +236,19 @@ export function useFormViewSurface({
     () => [...new Set([canonicalResource, modelLabel])].map(formViewSectionsSlot),
     [canonicalResource, modelLabel],
   );
-  const sectionEntries = useModelSlot(sectionTargets);
+  const { slots } = useAppRuntime();
+  // Validate against every implementation of this model, including verbs whose
+  // implementation key has not loaded yet. Visibility never makes an id unknown.
+  const contributionInventory = slots.filter((entry) =>
+    (entry.model === canonicalResource || entry.model === modelLabel)
+      && (entry.slot === FORM_VIEW_SECTIONS_SLOT || entry.slot === FORM_VIEW_RECORD_ACTIONS_SLOT),
+  );
+  assertContributionIds(admitContributions, contributionInventory, `FormView "${resource}"`);
+  const allSectionEntries = useModelSlot(sectionTargets);
+  const sectionEntries = React.useMemo(
+    () => admittedContributions(allSectionEntries, admitContributions),
+    [allSectionEntries, admitContributions],
+  );
   React.useEffect(() => {
     if (!developmentMode()) return;
     for (const entry of sectionEntries) {
@@ -473,6 +489,7 @@ export function useFormViewSurface({
     ...save.displayRecord,
   }, [canonicalRead.result, canonicalTabFields, save.displayRecord]);
   const chrome = useFormViewRecordChrome({
+    admitContributions,
     dataResource,
     modelLabel,
     canonicalResource,
