@@ -8,6 +8,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db.models import F
 from strawberry import auto
 
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
@@ -130,6 +131,12 @@ class TaskWorkExtension:
     stage: WorkStageType | None = actor_scoped_to_one("stage")
     cycle: WorkCycleType | None = actor_scoped_to_one("cycle")
 
+    @strawberry_django.field(annotate={"_stage_name": F("stage__name")})
+    def stage_name(self) -> str | None:
+        """Expose a readable task's status label without granting its queue."""
+
+        return cast(Any, self)._stage_name
+
     @strawberry_django.field(only=["snoozed_by_id"])
     def snoozed_by(self) -> strawberry.ID | None:
         """Return the snoozing user's public id without exposing auth/user."""
@@ -156,6 +163,8 @@ class ConsoleTaskWorkExtension:
     queue: WorkQueueType | None = actor_scoped_to_one("queue")
     stage: WorkStageType | None = actor_scoped_to_one("stage")
     cycle: WorkCycleType | None = actor_scoped_to_one("cycle")
+
+    stage_name = TaskWorkExtension.__dict__["stage_name"]
 
     @strawberry_django.field(only=["snoozed_by_id"])
     def snoozed_by(self) -> strawberry.ID | None:

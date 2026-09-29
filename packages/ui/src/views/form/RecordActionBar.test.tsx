@@ -25,6 +25,20 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 
 describe("RecordActionBar", () => {
+  test("toolbar actions use the same confirmation and form blocking as menu actions", async () => {
+    const run = vi.fn();
+    const action = { id: "archive", label: "Archive", placement: "toolbar" as const, run,
+      confirm: { title: "Archive record?" } };
+    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
+      actions={[action]} blocked />);
+    expect((screen.getByRole("button", { name: "Archive" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    cleanup();
+    renderActionBar(<RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()} actions={[action]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    await screen.findByText("Archive record?");
+    expect(run).not.toHaveBeenCalled();
+  });
   test("preview keeps allowed verbs and delete visible but blocks click and keyboard activation", async () => {
     const run = vi.fn();
     const onDelete = vi.fn();

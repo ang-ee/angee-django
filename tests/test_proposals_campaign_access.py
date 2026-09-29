@@ -126,6 +126,11 @@ def test_roster_discloses_only_names_and_optional_status_without_peer_rows(
     own = c.admit(round, "responder", track=True)
     peer = c.admit(round, "peer", track=True)
     reader = c.person("responder")
+    manager = c.person("facilitator")
+    with actor_context(manager):
+        entries = as_actor(round, manager).roster()
+        assert {entry.user_id for entry in entries} == {reader.pk, c.person("peer").pk}
+        assert all(entry.track_status == peer.track.status for entry in entries)
     with actor_context(reader):
         entries = as_actor(round, reader).roster()
         assert {entry.user_id for entry in entries} == (

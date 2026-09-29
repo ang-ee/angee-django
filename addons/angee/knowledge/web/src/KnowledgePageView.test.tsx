@@ -52,7 +52,7 @@ function detail(overrides: Partial<KnowledgePageDetail> = {}): KnowledgePageDeta
     id: "pg_guide",
     title: "Guide",
     kind: "note",
-    can_write: true,
+    permissions: ["write"],
     icon: "",
     vault: "vlt_reference",
     parent: null,
@@ -90,11 +90,12 @@ describe("KnowledgePageView", () => {
     expect(sdk.query).toHaveBeenCalledWith(KnowledgePage, { id: "pg_guide" }, { models: PAGE_READ_MODELS });
     expect(screen.getByRole("heading", { name: "Guide" })).toBeTruthy();
     expect(screen.getByText("Published instructions")).toBeTruthy();
+    expect(screen.getByText(/Updated Jan 1, 2026/)).toBeTruthy();
     expect(screen.queryByRole("navigation")).toBeNull();
   });
 
   test("a readable page without write permission has no edit control", () => {
-    sdk.query.mockReturnValue(queryResult(detail({ can_write: false })));
+    sdk.query.mockReturnValue(queryResult(detail({ permissions: [] })));
     render(<KnowledgePageView pageId="pg_guide" />);
     expect(screen.getByRole("heading", { name: "Guide" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
@@ -110,7 +111,7 @@ describe("KnowledgePageView", () => {
   test("shows a loading surface while the first read is pending", () => {
     sdk.query.mockReturnValue({ data: undefined, error: null, isPending: true });
     render(<KnowledgePageView pageId="pg_guide" />);
-    expect(screen.getByText("Loading page")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("Loading page");
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   });
 
@@ -158,7 +159,7 @@ describe("KnowledgePageView", () => {
   test("write revocation exits editing and does not reopen when write returns", () => {
     const view = render(<KnowledgePageView pageId="pg_guide" />);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    sdk.query.mockReturnValue(queryResult(detail({ can_write: false })));
+    sdk.query.mockReturnValue(queryResult(detail({ permissions: [] })));
     view.rerender(<KnowledgePageView pageId="pg_guide" />);
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();

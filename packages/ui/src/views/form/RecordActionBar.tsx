@@ -150,6 +150,11 @@ export function RecordActionBar({
     (action) =>
       !action.visibleWhen || (record != null && action.visibleWhen(record)),
   );
+  const toolbarActions = visibleActions.filter((action) => action.placement === "toolbar");
+  const menuActions = visibleActions.filter((action) => action.placement !== "toolbar");
+  const disabled = (action: ActionDescriptor) =>
+    blocked || Boolean(action.disabled) || pendingId !== null ||
+    (recordId === null && !action.run && !action.submit);
   if (
     visibleActions.length === 0 &&
     deleteAction === undefined &&
@@ -158,7 +163,14 @@ export function RecordActionBar({
 
   return (
     <>
-      <DropdownMenu.Root>
+      {toolbarActions.map((action) => (
+        <Button key={action.id} type="button" size="sm" variant={action.danger ? "danger" : "secondary"}
+          disabled={disabled(action)} loading={pendingId === action.id} onClick={() => void runAction(action)}>
+          {action.icon ? <Glyph name={action.icon} /> : null}
+          {action.label}
+        </Button>
+      ))}
+      {menuActions.length > 0 || deleteAction !== undefined || contributedActions != null ? <DropdownMenu.Root>
         <DropdownMenu.Trigger
           render={
             // A DropdownMenu.Item closes the menu on click, so the item's
@@ -191,18 +203,14 @@ export function RecordActionBar({
                   Delete
                 </DropdownMenu.Item>
               ) : null}
-              {deleteAction !== undefined && visibleActions.length > 0 ? (
+              {deleteAction !== undefined && menuActions.length > 0 ? (
                 <DropdownMenu.Separator />
               ) : null}
-              {visibleActions.map((action) => (
+              {menuActions.map((action) => (
                 <DropdownMenu.Item
                   key={action.id}
                   variant={action.danger ? "danger" : "default"}
-                  disabled={
-                    blocked || Boolean(action.disabled) ||
-                    pendingId === action.id ||
-                    (recordId === null && !action.run && !action.submit)
-                  }
+                  disabled={disabled(action)}
                   onClick={() => void runAction(action)}
                 >
                   {action.icon ? <Glyph name={action.icon} /> : null}
@@ -220,7 +228,7 @@ export function RecordActionBar({
             </DropdownMenu.Content>
           </DropdownMenu.Positioner>
         </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+      </DropdownMenu.Root> : null}
       {formAction ? (
         <ActionFormDialog
           key={formAction.id}

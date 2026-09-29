@@ -56,7 +56,6 @@ from angee.integrate.models import IntegrationLifecycle, IntegrationManager
 from angee.messaging.events import message_ingested
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.tracking import TrackingChange
-from angee.parties.mixins import LinkSource
 from angee.storage.uploads import attachment_extension, fallback_attachment_name
 
 if TYPE_CHECKING:
@@ -2077,32 +2076,6 @@ def _humanize_key(value: str) -> str:
     return value.replace("_", " ").replace("-", " ").strip().capitalize() or "Message"
 
 
-def _reaction_handle_for_user(user: Any) -> Any:
-    """Return the stable parties handle used to attribute a user's reaction."""
-
-    if user is None or getattr(user, "pk", None) is None:
-        raise ValueError("Reaction author is required.")
-    handle_model = apps.get_model("parties", "Handle")
-    email = strip_null_bytes(getattr(user, "email", "") or "").strip()
-    username = strip_null_bytes(user.get_username() if hasattr(user, "get_username") else getattr(user, "username", ""))
-    value = email or username or str(user.pk)
-    display_name = (
-        strip_null_bytes(
-            user.get_full_name() if hasattr(user, "get_full_name") else "",
-        ).strip()
-        or username
-        or value
-    )
-    return handle_model.objects.claim_own(
-        user,
-        platform=handle_model.Platform.for_value(value),
-        value=value,
-        display_name=display_name,
-        source=LinkSource.MANUAL,
-        metadata={"user_id": str(user.pk)},
-    )
-
-
 def _tracking_preview(tracking_values: tuple[TrackingChange | dict[str, Any], ...]) -> str:
     """Return a compact preview for a tracking-only message."""
 
@@ -2690,8 +2663,15 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
             )
 
             def insert() -> Any:
+                sender = None
+                if created_by_id is not None:
+                    user_model = self.model._meta.get_field("created_by").remote_field.model
+                    sender = apps.get_model("parties", "Handle").objects.for_user(
+                        user_model._base_manager.get(pk=created_by_id)
+                    )
                 return self.create(
                     thread_id=thread.pk,
+                    sender=sender,
                     platform=thread.platform,
                     direction=self.model.Direction.INTERNAL,
                     status=self.model.MessageStatus.SENT,
@@ -2773,7 +2753,7 @@ class MessageManager(AngeeManager.from_queryset(MessageQuerySet)):  # type: igno
         action = strip_null_bytes(action or "toggle").strip().lower()
         if action not in {"add", "remove", "toggle"}:
             raise ValueError("Reaction action must be add, remove, or toggle.")
-        handle = _reaction_handle_for_user(user)
+        handle = apps.get_model("parties", "Handle").objects.for_user(user)
         with transaction.atomic():
             message = type(message)._base_manager.select_for_update().get(pk=message.pk)
             queryset = reaction_model._base_manager.select_for_update().filter(

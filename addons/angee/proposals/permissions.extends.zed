@@ -1,6 +1,6 @@
 // Proposal access through live planning and identity relations.
 // @rebac_package: proposals
-// @rebac_schema_revision: 2
+// @rebac_schema_revision: 3
 
 definition projects/project {
     relation proposal_viewer: auth/user | auth/group#member
@@ -16,6 +16,7 @@ definition projects/task {
     relation track_proposal: proposals/proposal // rebac:field={"path":"project__source_proposal"}
     relation round_responder: auth/user // rebac:field={"path":"proposal_rounds__proposals__responder","filters":{"proposal_rounds__proposals__retired_at__isnull":true}}
     relation clarification_round: proposals/round // rebac:field=clarification_round
+    relation clarification_recipient: auth/user // rebac:field={"path":"assignee","filters":{"clarification_round__isnull":false}}
     relation shared_clarification_round: proposals/round // rebac:field={"path":"clarification_round","filters":{"visibility":"inherited"}}
     relation named_round: proposals/round // rebac:field={"path":"clarification_round","filters":{"clarification_round__clarification_askers":"named"}}
     relation manager_asked_round: proposals/round // rebac:field={"path":"clarification_round","filters":{"clarification_by_manager":true}}
@@ -23,6 +24,7 @@ definition projects/task {
     relation responder_shared_round: proposals/round // rebac:field={"path":"project__source_proposal__round","filters":{"shared_with_responders":true}}
     permission read_granted = round_responder + shared_clarification_round->respond + clarification_asker + responder_shared_round->respond
     permission withheld = clarification_round->retired
+    permission write_withheld = clarification_recipient
     permission read = track_proposal->manage + clarification_round->manage
     permission write = track_proposal->manage + clarification_round->manage
     permission share = track_proposal->manage + clarification_round->manage

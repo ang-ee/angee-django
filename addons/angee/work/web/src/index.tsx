@@ -7,6 +7,7 @@ import {
   formViewRecordActionsSlot,
   formViewSectionsSlot,
   Field,
+  Group,
   type BaseMenuItem,
 } from "@angee/ui";
 import { lazyRouteComponent } from "@tanstack/react-router";
@@ -150,7 +151,7 @@ const work = defineBaseAddon({
       ...formViewSectionsSlot(PROJECT_MODEL),
       id: "work.project-team",
       sequence: 40,
-      content: <Field name="team" />,
+      content: <Group><Field name="team" /></Group>,
     },
     {
       ...formViewSectionsSlot(TASK_MODEL),

@@ -208,6 +208,7 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
     ...(props.icon !== undefined ? { icon: props.icon } : {}),
     ...(props.disabled !== undefined ? { disabled: props.disabled } : {}),
     ...(props.danger !== undefined ? { danger: props.danger } : {}),
+    ...(props.placement !== undefined ? { placement: props.placement } : {}),
     ...(props.confirm !== undefined ? { confirm: props.confirm } : {}),
     ...(props.set !== undefined ? { set: props.set } : {}),
     ...(props.prompt !== undefined ? { prompt: props.prompt } : {}),

@@ -1,7 +1,7 @@
 // Authorization schema for proposal rounds.
 // @rebac_package: proposals
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 6
+// @rebac_schema_revision: 7
 
 definition proposals/role {
     relation member: auth/user | auth/group#member | angee/role:admin#member
@@ -20,7 +20,7 @@ definition proposals/round {
     relation recipient: auth/user // rebac:field={"path":"proposals__responder","filters":{"proposals__disclosed_at__isnull":false,"proposals__retired_at__isnull":true}}
     relation track_recipient: auth/user // rebac:field={"path":"proposals__responder","filters":{"proposals__submitted_at__isnull":false,"proposals__retired_at__isnull":true}}
     relation roster_names: auth/user // rebac:field={"path":"proposals__responder","filters":{"roster_visibility":"named","proposals__retired_at__isnull":true}}
-    relation roster_status: auth/user // rebac:field={"path":"proposals__responder","filters":{"roster_visibility":"status","proposals__retired_at__isnull":true}}
+    relation status_roster_responder: auth/user // rebac:field={"path":"proposals__responder","filters":{"roster_visibility":"status","proposals__retired_at__isnull":true}}
     relation requester: auth/user // rebac:field={"path":"requester_party__person__user"}
     relation reader: auth/user | auth/group#member
     relation evaluator: auth/user | auth/group#member
@@ -33,7 +33,8 @@ definition proposals/round {
     permission respond = responder
     permission ask = manage + respond
     permission discuss_clarification = authenticated
-    permission see_roster = roster_names + roster_status
+    permission roster_status = manage + status_roster_responder
+    permission see_roster = manage + roster_names + roster_status
     permission receive_track = recipient + track_recipient
     permission view_proposals = proposal_viewer + project->proposal_viewer + task->proposal_viewer + task_project->proposal_viewer + global_viewer->effective_member + admin->member
     permission create = task->write + project->write + admin->member

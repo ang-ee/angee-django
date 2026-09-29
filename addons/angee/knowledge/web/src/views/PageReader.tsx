@@ -1,4 +1,4 @@
-import { Button, EmptyState, Glyph, useResolvedWidget } from "@angee/ui";
+import { Button, EmptyState, Glyph, formatDateTime, useResolvedWidget } from "@angee/ui";
 import type { ReactElement, Ref } from "react";
 
 import type { KnowledgePageDetail } from "../data/documents";
@@ -34,7 +34,7 @@ export function PageReader({
             {detail.title || t("editor.titlePlaceholder")}
           </h1>
           <p className="mt-1 text-12 text-fg-muted">
-            {t("page.lastUpdated", { value: detail.updated_at })}
+            {t("page.lastUpdated", { value: formatDateTime(detail.updated_at) })}
           </p>
         </div>
         {onEdit ? (

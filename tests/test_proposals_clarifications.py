@@ -106,9 +106,10 @@ class ClarificationCase(TransactionTestCase):
         self.assertEqual(passed.assignee_id, self.recipient.pk)
         self.assertIsNotNone(passed.clarification_passed_at)
         self.assert_queue_free(passed)
-        completed = self.task_action("complete_task", passed, self.recipient)
+        self.assert_recipient_discusses_only(passed)
+        completed = self.task_action("complete_task", passed, self.manager)
         self.assertEqual(completed.status, "done")
-        reopened = self.task_action("reopen_task", completed, self.recipient)
+        reopened = self.task_action("reopen_task", completed, self.manager)
         self.assertEqual(reopened.status, "open")
         self.assert_queue_free(reopened)
 
@@ -118,6 +119,48 @@ class ClarificationCase(TransactionTestCase):
         self.assertIsNotNone(task.clarification_passed_at)
         self.assertEqual(task.assignee_id, self.recipient.pk)
         self.assert_queue_free(task)
+
+    def assert_recipient_discusses_only(self, task):
+        recipient_task = self.as_user(task, self.recipient)
+        for permission in ("read", "comment"):
+            self.assertTrue(recipient_task.has_access(permission), permission)
+        for permission in ("write", "narrow", "widen", "share"):
+            self.assertFalse(recipient_task.has_access(permission), permission)
+        for permission in ("read", "comment", "write", "narrow", "widen", "share"):
+            self.assertTrue(self.as_user(task, self.manager).has_access(permission), permission)
+
+    def test_manager_question_recipient_cannot_write_or_narrow(self):
+        with actor_context(self.manager):
+            task = self.as_user(self.round, self.manager).ask("Manager question", "Details", recipient=self.recipient)
+        self.assert_recipient_discusses_only(task)
+
+    def test_published_question_recipient_cannot_write_or_narrow(self):
+        task = self.ask()
+        with actor_context(self.manager):
+            task = self.as_user(self.round, self.manager).pass_clarification(task, self.recipient)
+            self.as_user(task, self.manager).set_visibility("inherited")
+        self.assert_recipient_discusses_only(task)
+
+    def test_task_audience_traverses_reverse_source_proposal(self):
+        with system_context(reason="tests.proposals_clarifications.track_task"):
+            track = self.Project.objects.create(title="Response track", owner=None)
+            proposal = self.Proposal.objects.get(round=self.round, responder=self.recipient)
+            self.Proposal.objects.filter(pk=proposal.pk).update(track=track)
+            task = self.Task.objects.create(project=track, title="Track work")
+        question = self.ask()
+        document = """query Audience($id: String!) {
+          project_tasks_by_pk(id: $id) {
+            id permissions shared_with_responders project { source_proposal { id } }
+          }
+        }"""
+        for actor, row, expected in (
+            (self.manager, task, {"id": str(proposal.sqid)}),
+            (self.recipient, task, {"id": str(proposal.sqid)}),
+            (self.asker, question, None),
+        ):
+            result = self.execute(document, {"id": str(row.sqid)}, actor)
+            self.assertIsNone(result.errors, result.errors)
+            self.assertEqual(result.data["project_tasks_by_pk"]["project"]["source_proposal"], expected)
 
 
 class ClarificationProfileTests(ClarificationCase):

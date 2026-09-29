@@ -161,10 +161,14 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
 
     def resolve(root: models.Model) -> Any:
         field = root._meta.get_field(field_name)
-        if not isinstance(field, (models.ForeignKey, models.OneToOneField)):
-            raise ImproperlyConfigured(f"{root._meta.label}.{field_name} must be a forward to-one relation")
-
-        fk_id = field.value_from_object(root)
+        if isinstance(field, models.OneToOneRel):
+            fk_id = field.field.target_field.value_from_object(root)
+            lookup = field.field.attname
+        elif isinstance(field, models.ForeignKey):
+            fk_id = field.value_from_object(root)
+            lookup = field.target_field.attname
+        else:
+            raise ImproperlyConfigured(f"{root._meta.label}.{field_name} must be a to-one relation")
         if fk_id is None:
             return None
 
@@ -178,7 +182,7 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
         if cached is not _UNCACHED and getattr(cached, "_rebac_actor", None) == actor:
             return cached
 
-        related_model = field.remote_field.model
+        related_model = field.related_model
         queryset = related_model._default_manager.all()
         with_actor = getattr(queryset, "with_actor", None)
         if not callable(with_actor):
@@ -186,8 +190,7 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
                 f"{root._meta.label}.{field_name} targets {related_model._meta.label}, "
                 "whose default manager is not actor-scoped"
             )
-        target_field = field.target_field
-        return with_actor(actor).filter(**{target_field.attname: fk_id}).first()
+        return with_actor(actor).filter(**{lookup: fk_id}).first()
 
     return resolve
 
@@ -198,7 +201,7 @@ def _guarded_to_one_field(field_name: str, resolver: Callable[[models.Model], An
     return strawberry_django.field(
         resolver=resolver,
         field_name=field_name,
-        only=[f"{field_name}_id"],
+        only=[field_name],
         prefetch_related=[_guarded_relation_prefetch(field_name)],
     )
 

@@ -9,7 +9,7 @@ from angee.messaging.backends import ParsedThread
 from tests.chatterdemo.models import ChatterDoc
 from tests.messaging_campaign import comment_record as comment_record
 from tests.messaging_campaign import make_user
-from tests.messaging_models import Message, Part, ThreadAttachment, ThreadNotification, TrackingValue
+from tests.messaging_models import Handle, Message, Part, ThreadAttachment, ThreadNotification, TrackingValue
 from tests.test_messaging import _AT, _ingest, _parsed
 from tests.test_messaging import channel as channel
 
@@ -21,7 +21,8 @@ def test_only_untracked_comments_can_be_deleted_through_projection_and_locked_ow
     with system_context(reason="test.comments.kind"):
         attachment = ThreadAttachment.objects.ensure_for_record(case.record)
         message = Message.objects.create(thread=attachment.thread, message_type=kind,
-                                         direction="internal", created_by=case.author)
+                                         direction="internal", created_by=case.author,
+                                         sender=Handle.objects.for_user(case.author))
         if tracked:
             TrackingValue.objects.create(message=message, field_name="status")
     allowed = kind == Message.MessageKind.COMMENT and not tracked
@@ -77,6 +78,26 @@ def test_author_who_loses_post_access_cannot_edit_or_delete_their_comment(commen
         with pytest.raises(PermissionDenied):
             case.record.message_unlink(message)
     assert Message._base_manager.get(pk=message.pk).preview == "Before permission change"
+
+
+@pytest.mark.parametrize("seat", ["author", "peer", "writer", "outsider"])
+def test_senderless_comment_grants_nobody_edit_or_delete(comment_record, seat):
+    case = comment_record
+    with actor_context(case.author):
+        message = case.record.message_post("Unattributed comment")
+        assert message.sender_id is not None
+    with system_context(reason="test.comments.missing_sender"):
+        Message._base_manager.filter(pk=message.pk).update(sender_id=None)
+    message.refresh_from_db()
+    actor = getattr(case, seat)
+    with actor_context(actor):
+        access = dict(post_access=case.record.can_post(), moderate_access=case.record.can_moderate(), actor_id=actor.pk)
+        assert not message.can_edit(**access)
+        assert not message.can_delete(**access)
+        with pytest.raises(PermissionDenied):
+            case.record.message_update_content(message, body="Unauthorized edit")
+        with pytest.raises(PermissionDenied):
+            case.record.message_unlink(message)
 
 
 def test_record_membership_is_required_even_for_a_writer(comment_record):

@@ -500,14 +500,17 @@ class MessageType(AngeeNode):
         return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
 
     @strawberry_django.field(
-        only=["thread_id", "created_by_id", "message_type", "direction"], prefetch_related=["tracking_values"]
+        only=["thread_id", "sender_id", "created_by_id", "message_type", "direction"],
+        prefetch_related=["tracking_values"],
     )
     def can_edit(self, info: strawberry.Info) -> bool:
         """Return the message-owned edit rule using cached record permissions."""
 
         return cast(Any, self).can_edit(**_message_access(self, info))
 
-    @strawberry_django.field(only=["thread_id", "created_by_id", "message_type"], prefetch_related=["tracking_values"])
+    @strawberry_django.field(
+        only=["thread_id", "sender_id", "created_by_id", "message_type"], prefetch_related=["tracking_values"]
+    )
     def can_delete(self, info: strawberry.Info) -> bool:
         """Return the message-owned deletion rule using cached record permissions."""
 
@@ -572,14 +575,17 @@ class RecordMessageType(AngeeNode):
         return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
 
     @strawberry_django.field(
-        only=["thread_id", "created_by_id", "message_type", "direction"], prefetch_related=["tracking_values"]
+        only=["thread_id", "sender_id", "created_by_id", "message_type", "direction"],
+        prefetch_related=["tracking_values"],
     )
     def can_edit(self, info: strawberry.Info) -> bool:
         """Return the model-owned edit capability for this record message."""
 
         return cast(Any, self).can_edit(**_message_access(self, info))
 
-    @strawberry_django.field(only=["thread_id", "created_by_id", "message_type"], prefetch_related=["tracking_values"])
+    @strawberry_django.field(
+        only=["thread_id", "sender_id", "created_by_id", "message_type"], prefetch_related=["tracking_values"]
+    )
     def can_delete(self, info: strawberry.Info) -> bool:
         """Return the model-owned delete capability for this record message."""
 

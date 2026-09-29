@@ -1972,7 +1972,9 @@ class Message(CreationKeyMixin, SqidMixin, AuditMixin, AngeeModel):
     def can_change_comment(self, *, post_access: bool, moderate_access: bool, actor_id: Any) -> bool:
         """Combine record moderation with the author's continuing post access."""
 
-        return moderate_access or (post_access and actor_id is not None and self.created_by_id == actor_id)
+        return self.sender_id is not None and (
+            moderate_access or (post_access and actor_id is not None and self.created_by_id == actor_id)
+        )
 
     def can_edit(self, *, post_access: bool, moderate_access: bool, actor_id: Any) -> bool:
         """Return whether this actor may change this comment's content."""

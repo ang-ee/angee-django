@@ -161,6 +161,8 @@ export interface ActionProps extends ActionBinding {
   icon?: string;
   disabled?: boolean;
   danger?: boolean;
+  /** Promote a frequent record verb out of the default Actions menu. */
+  placement?: "menu" | "toolbar";
   /** Static confirmation copy, or copy derived from the loaded record. */
   confirm?: ActionConfirm | ((record: Row) => ActionConfirm);
   /**
