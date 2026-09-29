@@ -59,10 +59,13 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
     assert set(resources) == {
         "workflows.Workflow", "workflows.WorkflowVersion",
         "workflows.WorkflowRun", "workflows.StepRun", "workflows.StepAttempt", "workflows.StepArtifact",
+        "workflows.Trigger", "workflows.TriggerEvent",
     }
     fields = set(schema._schema.mutation_type.fields)
     assert fields == {
         "cancel_workflow_run", "reprocess_workflow_run", "retry_step", "retry_step_accepting_duplicate",
+        "enable_workflow_trigger", "disable_workflow_trigger",
+        "insert_trigger_one", "update_trigger_by_pk", "delete_trigger_by_pk",
     }
     for name in ("workflow", "workflowversion", "workflowrun", "steprun", "stepattempt", "stepartifact"):
         assert {name, f"{name}_by_pk", f"{name}_aggregate"} <= set(schema._schema.query_type.fields)
@@ -373,7 +376,7 @@ def test_origin_enum_has_native_choice_labels(schema):
     """The derived origin uses the same labelled enum projection as stored choices."""
     origin = schema._schema.get_type("RunOrigin")
     assert {key: value.description for key, value in origin.values.items()} == {
-        "MANUAL": "Manual", "WORKFLOW": "Workflow", "REPROCESS": "Reprocess", "TEST": "Test",
+        "MANUAL": "Manual", "WORKFLOW": "Workflow", "REPROCESS": "Reprocess", "TEST": "Test", "TRIGGER": "Trigger",
     }
 
 

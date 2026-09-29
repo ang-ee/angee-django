@@ -2,6 +2,19 @@
 // the active translations; these are the defaults used when a key is missing.
 
 export const enUiMessages: Record<string, string> = {
+  "condition.selectResource": "Select a record model to edit its condition.",
+  "condition.invalid": "This condition cannot be edited.",
+  "condition.clear": "Clear condition",
+  "condition.matchAll": "Matches every record.",
+  "condition.all": "All of these conditions",
+  "condition.any": "Any of these conditions",
+  "condition.not": "Not this condition",
+  "condition.removeGroup": "Remove group",
+  "condition.removeBranch": "Remove branch",
+  "condition.removeRule": "Remove rule",
+  "condition.addBranch": "Add branch",
+  "condition.addAny": "Add any-of group",
+  "condition.addNot": "Add negated group",
   "schemaPath.label": "Field path",
   "schemaPath.root": "Whole value",
   "schemaPath.opaque": "Unresolved reference",

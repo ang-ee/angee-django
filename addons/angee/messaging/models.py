@@ -904,6 +904,15 @@ class Channel(Bridge):
 
         return self.backend.test_connection()
 
+    def purge_blockers(self) -> list[models.Model]:
+        """Let model extensions contribute rows protecting this channel from purge.
+
+        The purge owner counts its large ingested subtree separately; extensions
+        return only retaining rows, whose names the preview scopes to its viewer.
+        Native FK protection remains the authoritative delete check.
+        """
+        return []
+
     def start_live(self) -> None:
         """Mark this channel live-desired, then dispatch the backend's live ingest.
 

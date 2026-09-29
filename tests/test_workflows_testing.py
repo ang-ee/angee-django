@@ -1,6 +1,7 @@
 """The public harness composes registration, admission and node execution."""
 
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import yaml
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from django.test import override_settings
 from rebac import actor_context, system_context
 from rebac.models import active_relationship_model
 
@@ -85,6 +87,38 @@ def test_registration_restores_nested_settings_and_local_classes(settings):
     assert settings.ANGEE_WORKFLOW_STEP_CLASSES is registry
     assert not hasattr(module, "TemporaryStep")
     assert not hasattr(module, "ReplacementStep")
+
+
+@pytest.mark.parametrize("registration_first", [True, False])
+def test_registration_does_not_restore_unrelated_settings(settings, registration_first):
+    """Independent fixture stacks may close without nesting their settings changes."""
+
+    class TemporaryStep(Step[None, None, None]):
+        """A registration must not capture unrelated worker configuration."""
+
+        key = "temporary_independent_fixture"
+
+    with override_settings(CELERY_TASK_SOFT_TIME_LIMIT=840, CELERY_TASK_TIME_LIMIT=900):
+        registry = settings.ANGEE_WORKFLOW_STEP_CLASSES
+        with ExitStack() as cleanup:
+            worker_settings, registrations = ExitStack(), ExitStack()
+            cleanup.callback(worker_settings.close)
+            cleanup.callback(registrations.close)
+            worker_settings.enter_context(override_settings(
+                CELERY_TASK_SOFT_TIME_LIMIT=120, CELERY_TASK_TIME_LIMIT=180,
+            ))
+            registrations.enter_context(drivers.register_steps(TemporaryStep))
+            assert resolve_step(TemporaryStep.key) is TemporaryStep
+
+            first, last = (registrations, worker_settings) if registration_first else (worker_settings, registrations)
+            first.close()
+            last.close()
+
+            assert settings.CELERY_TASK_SOFT_TIME_LIMIT == 840
+            assert settings.CELERY_TASK_TIME_LIMIT == 900
+            assert settings.ANGEE_WORKFLOW_STEP_CLASSES is registry
+            assert TemporaryStep.key not in registry
+            assert not hasattr(sys.modules[__name__], "TemporaryStep")
 
 
 def test_registered_local_step_runs_through_the_production_driver(execution, register_step):

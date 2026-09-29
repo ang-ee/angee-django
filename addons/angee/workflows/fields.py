@@ -17,6 +17,7 @@ class RunOriginField(models.GeneratedField):
         kwargs.setdefault("expression", models.Case(
             models.When(parent_step__isnull=False, then=models.Value(RunOrigin.WORKFLOW)),
             models.When(reprocess_of__isnull=False, then=models.Value(RunOrigin.REPROCESS)),
+            models.When(trigger_event__isnull=False, then=models.Value(RunOrigin.TRIGGER)),
             default=models.Value(RunOrigin.MANUAL),
         ))
         kwargs.setdefault("output_field", models.CharField(max_length=max(map(len, RunOrigin.values))))

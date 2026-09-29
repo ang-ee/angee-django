@@ -1,6 +1,9 @@
 """Registry and periodic recovery settings contributed by workflows."""
 
 SETTINGS = {
+    "ANGEE_WORKFLOW_TRIGGER_SOURCES": {
+        "record_changed": "angee.workflows.triggers.RecordChanged",
+    },
     "CELERY_BEAT_SCHEDULE:append": {
         "workflows.tick": {
             "task": "workflows.tick",

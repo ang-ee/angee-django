@@ -30,8 +30,8 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     """Return choice metadata for ``model.field`` when it is an ``ImplClassField``.
 
     The reusable resolver behind the impl-picker query. The framework stays
-    auth-agnostic, so an addon wraps this in its own admin-gated query field (e.g.
-    integrate's ``ConsoleImplChoicesQuery``) rather than exposing it ungated.
+    auth-agnostic; the query owner authorizes administrators or the model's
+    explicit ``can_read_impl_choices`` policy before calling it.
     """
 
     django_model = _model_for_label(model)
@@ -47,6 +47,12 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
             message = f"{django_model._meta.label} has no field {field!r}."
         raise ImproperlyConfigured(message) from error
     return [_project_choice(choice) for choice in model_field.impl_choices()]
+
+
+def can_read_impl_choices(model: str, field: str, actor: Any) -> bool:
+    """Delegate additional implementation metadata visibility to its model owner."""
+    owner = _model_for_label(model)
+    return issubclass(owner, AngeeModel) and owner.can_read_impl_choices(_field_name(field), actor)
 
 
 def _project_choice(choice: BaseImplChoice) -> ImplChoice:

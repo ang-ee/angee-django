@@ -7,24 +7,27 @@ from typing import Any, cast
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
-from django.db import models
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import models, transaction
 from django.db.models.functions import Coalesce, Now
 from django.utils.functional import cached_property
 from rebac import system_context
 
 from angee.base.fields import StateField
+from angee.base.impl import ImplClassField
 from angee.base.mixins import AppendOnlyQuerySet, AuditMixin
 from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
-from angee.base.scoping import system_queryset
+from angee.base.scoping import read_scoped_queryset, system_queryset
+from angee.graphql.schema import GraphQLSchemas
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import Definition
 from angee.workflows.fields import RunOriginField
 from angee.workflows.managers import StepAttemptQuerySet, StepRunManager, WorkflowManager, WorkflowRunManager
-from angee.workflows.resources import WorkflowDefinitionResource
+from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunRelation, RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
+from angee.workflows.triggers import TriggerEventManager, TriggerManager, TriggerSource
 
 
 class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
@@ -144,6 +147,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     relation = StateField(choices_enum=RunRelation, null=True, blank=True)
     reprocess_of = models.ForeignKey(
         "workflows.WorkflowRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="reprocesses",
+    )
+    trigger_event = models.ForeignKey(
+        "workflows.TriggerEvent", on_delete=models.SET_NULL, null=True, blank=True, related_name="started_runs",
     )
     origin = RunOriginField()
     finished_at = models.DateTimeField(null=True, blank=True)
@@ -446,3 +452,127 @@ class DecisionWorkflow(models.Model):
         """Compose declarations onto the decision row without another table."""
 
         abstract = True
+
+
+class Trigger(ResourceLoadMixin, AngeeDataModel):
+    """Disabled-by-default admission policy; extensions own domain input and guards."""
+
+    runtime = True
+    resource_class = TriggerResource
+    sqid_prefix = "wft_"
+    workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
+    source = ImplClassField(base_class=TriggerSource, registry_setting="ANGEE_WORKFLOW_TRIGGER_SOURCES")
+    model_label = models.CharField(max_length=200, blank=True, default="")
+    condition = models.JSONField(default=dict, blank=True)
+    enabled = models.BooleanField(default=False, editable=False)
+    run_as = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, editable=False,
+    )
+    disabled_reason = models.TextField(blank=True, default="", editable=False)
+    objects = TriggerManager()
+
+    @classmethod
+    def can_read_impl_choices(cls, field_name: str, actor: Any) -> bool:
+        """Workflow authors can configure sources without platform administration."""
+        workflows = read_scoped_queryset(cls._meta.get_field("workflow").related_model, actor, action="write")
+        return field_name == "source" and workflows is not None and workflows.exists()
+
+    @property
+    def source_class(self) -> type[TriggerSource]:
+        """Resolve source behavior through its declared implementation field."""
+        try:
+            return cast(type[TriggerSource], self._meta.get_field("source").resolve_for(self))
+        except ImportError as error:
+            raise ImproperlyConfigured(f"Trigger source {self.source!r} cannot be loaded: {error}") from error
+
+    @property
+    def source_model(self) -> str:
+        """Expose the declared model even when disabled configuration needs repair."""
+        try:
+            return (self.source_class.model_label or self.model_label).lower()
+        except ImproperlyConfigured:
+            return self.model_label
+
+    def validate_configuration(self) -> tuple[Any, Any]:
+        """Use the model's final resource input and native filter compiler."""
+        model = self.source_class.model(self)
+        if self.workflow.subject_model and self.workflow.subject_model != model._meta.label_lower:
+            raise ValidationError("The trigger source does not match the workflow subject model.")
+        return model, GraphQLSchemas.from_discovery().resource_filter(model, self.condition)
+
+    def trigger_input(self, record: Any) -> dict[str, Any]:
+        """Domain extensions build admitted input; source adapters never do."""
+        return {}
+
+    def check_admission(self, record: Any, *, actor: Any) -> None:
+        """Domain extensions may reject this record without disabling the trigger."""
+
+    def clean(self) -> None:
+        """Reject invalid authoring at save and preserve the server-owned actor."""
+        super().clean()
+        self.model_label = "" if self.source_class.model_label else self.model_label.lower()
+        self.validate_configuration()
+        previous = system_queryset(type(self)).filter(pk=self.pk).first() if self.pk else None
+        if previous is not None and self.workflow_id != previous.workflow_id:
+            raise ValidationError("A trigger's workflow cannot be changed.")
+        if previous is not None and self.source_model != previous.source_model:
+            raise ValidationError("A trigger's source model cannot change; create a new trigger.")
+        if self.enabled and (previous is None or not previous.enabled or self.run_as_id != previous.run_as_id):
+            raise ValidationError("Enable triggers through the manager action.")
+        if not self.enabled:
+            self.run_as = None
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Validate native saves as well as resource writes."""
+        with transaction.atomic():
+            if not self._state.adding:
+                system_queryset(type(self)).filter(pk=self.pk).lock_if_supported(no_key=True).get()
+            self.clean()
+            self.workflow.require_access("write", self.actor())
+            super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        """Identify configuration without loading permission-sensitive relations."""
+        return str(self.sqid)
+
+    class Meta:
+        """Compose admission configuration and its permission identity."""
+
+        abstract = True
+        rebac_resource_type = "workflows/trigger"
+        constraints = [models.CheckConstraint(
+            condition=(models.Q(enabled=True, run_as__isnull=False) | models.Q(enabled=False, run_as__isnull=True)),
+            name="workflows_trigger_enabled_actor",
+        )]
+
+
+class TriggerEvent(RecordRefMixin, AngeeDataModel):
+    """One retained admission fact per trigger and concrete record reference."""
+
+    runtime = True
+    sqid_prefix = "wfe_"
+    trigger = models.ForeignKey("workflows.Trigger", on_delete=models.CASCADE, related_name="events")
+    record_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
+    record_object_id = models.PositiveBigIntegerField()
+    record = GenericForeignKey("record_content_type", "record_object_id")
+    changed_at = models.DateTimeField(db_default=Now())
+    evaluated_at = models.DateTimeField(null=True, blank=True)
+    admitted_at = models.DateTimeField(null=True, blank=True)
+    rejection = models.TextField(blank=True, default="")
+    run = models.ForeignKey(
+        "workflows.WorkflowRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="trigger_events",
+    )
+    objects = TriggerEventManager()
+
+    def __str__(self) -> str:
+        """Use the public ledger identity without resolving its protected record."""
+        return str(self.sqid)
+
+    class Meta:
+        """Enforce concrete ledger identity independently of retained runs."""
+
+        abstract = True
+        rebac_resource_type = "workflows/trigger_event"
+        constraints = [models.UniqueConstraint(
+            fields=("trigger", "record_content_type", "record_object_id"), name="workflows_trigger_record_unique",
+        )]

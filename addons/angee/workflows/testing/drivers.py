@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 from django.apps import apps
 from django.conf import settings
-from django.test import override_settings
 from rebac import system_context
 
 from angee.workflows.states import StepRunStatus
@@ -20,19 +19,19 @@ from angee.workflows.steps import Step
 
 @contextmanager
 def register_steps(*steps: type[Step[Any, Any, Any]]) -> Iterator[None]:
-    """Register temporary classes, restoring settings and module names on exit.
+    """Register temporary classes, restoring registry entries and module names on exit.
 
     Function-local classes use the same import-path registry as production
-    classes. Native Django settings overrides and mock patches isolate each
-    test, including nested registrations in pytest and TransactionTestCase.
+    classes. Native mock patches isolate nested registrations without restoring
+    unrelated settings changed by an independently managed fixture.
     """
 
     with ExitStack() as stack:
-        registry = dict(settings.ANGEE_WORKFLOW_STEP_CLASSES)
+        registry = {}
         for step in steps:
             stack.enter_context(patch.object(sys.modules[step.__module__], step.__name__, step, create=True))
             registry[step.key] = f"{step.__module__}.{step.__name__}"
-        stack.enter_context(override_settings(ANGEE_WORKFLOW_STEP_CLASSES=registry))
+        stack.enter_context(patch.dict(settings.ANGEE_WORKFLOW_STEP_CLASSES, registry))
         yield
 
 

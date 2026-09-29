@@ -45,7 +45,7 @@ from angee.graphql.data import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
-from angee.graphql.impl import ImplChoice
+from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
@@ -53,6 +53,7 @@ from angee.graphql.writes import instance_for_write, write_queryset
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.permissions import is_platform_admin
 from angee.iam.permissions import request_from_info as _request
 from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
@@ -83,12 +84,14 @@ User = get_user_model()
 
 @strawberry.type
 class ConsoleImplChoicesQuery:
-    """Admin-gated impl-choice metadata for console forms."""
+    """Administrator metadata with explicit model-owned author access."""
 
-    @strawberry.field(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def impl_choices(self, model: str, field: str) -> list[ImplChoice]:
-        """Return registry choices for an ``ImplClassField``."""
-
+    @strawberry.field
+    def impl_choices(self, info: strawberry.Info, model: str, field: str) -> list[ImplChoice]:
+        """Return registry choices under the administrator or owning model's policy."""
+        actor = _session_user(info)
+        if not is_platform_admin(actor) and not can_read_impl_choices(model, field, actor):
+            raise PermissionDenied("Implementation choices are not readable by this actor.")
         return resolve_impl_choices(model, field)
 
 

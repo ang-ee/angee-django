@@ -518,6 +518,16 @@ class AngeeModel(TimestampMixin, RebacMixin):
             raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {target}.")
         return actor
 
+    @classmethod
+    def can_read_impl_choices(cls, field_name: str, actor: Any) -> bool:
+        """Opt a field's implementation metadata into a model-owned actor policy.
+
+        Console implementation metadata is administrator-only by default. A model
+        may additionally authorize its own authors through their existing policy;
+        this does not authorize reading or writing model records.
+        """
+        return False
+
     # Remove after downstream callers have migrated to the public owner.
     _require_record_access = require_access
 

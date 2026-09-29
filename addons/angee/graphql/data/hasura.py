@@ -36,6 +36,7 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura import (
     hasura_resource as build_hasura_resource,
 )
+from strawberry_django_hasura.filtering import where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.identity import (
@@ -828,6 +829,14 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         for path, field in _relation_axis_fields(model, filterable).items() if "__" in path
     }
     filter_aliases = {path: f"_angee_filter_{index}" for index, path in enumerate(sorted(relation_filters))}
+
+    def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+        guarded = {}
+        for path, scalar_path in relation_filters.items():
+            expression = actor_scoped_relation_expression(queryset, scalar_path)
+            guarded[filter_aliases[path]] = expression if expression is not None else models.F(scalar_path)
+        return queryset.alias(**expressions, **guarded)
+
     if expressions or relation_filters:
         for key in expressions:
             try:
@@ -836,13 +845,6 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                 continue
             raise ImproperlyConfigured(f"Filter expression {key!r} shadows a model field.")
         base_queryset, base_aggregate_queryset = read_queryset, aggregate_queryset
-
-        def prepare_filters(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
-            guarded = {}
-            for path, scalar_path in relation_filters.items():
-                expression = actor_scoped_relation_expression(queryset, scalar_path)
-                guarded[filter_aliases[path]] = expression if expression is not None else models.F(scalar_path)
-            return queryset.alias(**expressions, **guarded)
 
         def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
             return prepare_filters(base_queryset(info))
@@ -929,6 +931,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         })
         donor = strawberry.input(donor, name=filter_name, extend=True)
         resource.types.append(donor)
+    adapter = None
     if expressions or filter_aliases:
         assert resource.filter_type is not None
         adapter = _FilterInputExtension(resource.filter_type, donor, filter_aliases)
@@ -936,6 +939,17 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             field.extensions.append(adapter)
     if lines is not None:
         resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
+
+    def compile_filter(where: Any) -> Callable[[Any], Any]:
+        """Share this resource's native filter wiring with non-request consumers."""
+        if adapter is not None:
+            where = adapter.map_arguments({"where": where})["where"]
+        predicate = where_to_q(
+            where, id_column=id_column, id_decode=id_decode,
+            field_decoders=field_id_decode, lookups=filter_lookups,
+        )
+        return lambda queryset: prepare_filters(queryset).filter(predicate)
+
     return attach_hasura_resource_metadata(
         resource,
         node=node,
@@ -956,6 +970,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         record_search_fields=(
             tuple(record_search_fields) if record_search_fields is not None else None
         ),
+        compile_filter=compile_filter,
     )
 
 
@@ -1117,6 +1132,7 @@ def attach_hasura_resource_metadata(
     subtitle: DataResourceSubtitleMetadata | None = None,
     record_representation: str | None = None,
     record_search_fields: tuple[str, ...] | None = None,
+    compile_filter: Callable[[Any], Callable[[Any], Any]] | None = None,
 ) -> HasuraResource:
     """Attach the native bundle and Angee-only policy for final projection."""
 
@@ -1127,6 +1143,7 @@ def attach_hasura_resource_metadata(
         model=model,
         model_label=model_label or model._meta.label,
         native_resource=resource,
+        compile_filter=compile_filter,
         roots=DataResourceRoots(
             save_name=(
                 resource_wire_field_name(resource.mutation, f"{resource.name}_save") if lines is not None else None

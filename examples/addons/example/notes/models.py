@@ -27,6 +27,7 @@ class Note(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, 
     """
 
     runtime = True
+    workflow_trigger = True
 
     revisioned_fields = ("body",)
     rebac_grantable = {"reader": "share", "editor": "share"}

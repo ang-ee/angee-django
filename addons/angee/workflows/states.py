@@ -49,6 +49,7 @@ class RunOrigin(models.TextChoices):
     MANUAL = "manual", "Manual"
     WORKFLOW = "workflow", "Workflow"
     REPROCESS = "reprocess", "Reprocess"
+    TRIGGER = "trigger", "Trigger"
     TEST = "test", "Test"
 
 

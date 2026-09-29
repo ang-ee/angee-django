@@ -49,6 +49,17 @@ test("record activity scopes the shared run collection to canonical model and pu
   ] });
 });
 
+test("the workflow trigger tab uses its canonical scope and routes retained policies", async () => {
+  const onRequest = vi.fn();
+  render(<CatalogueStory onRequest={onRequest} />);
+  fireEvent.click(await screen.findByRole("tab", { name: "Triggers" }));
+  const trigger = await screen.findByRole("link", { name: "Open Review admission" });
+  expect(trigger.getAttribute("href")).toBe("/workflows/triggers/wft_review");
+  const request = onRequest.mock.calls.find(([entry]) => entry.query.includes("trigger("))?.[0];
+  expect(request?.variables.where).toEqual({ _and: [{ workflow: { _eq: "wfl_review" } }] });
+  expect(screen.getByRole("button", { name: /New/ })).toBeTruthy();
+});
+
 test("unreadable workflows show an empty state without a retry action", async () => {
   render(Unavailable.render());
   expect(await screen.findByRole("heading", { name: "Record not found" })).toBeTruthy();

@@ -20,6 +20,8 @@ from example.notes.steps import NotePublicationOutput, PublishNote, ReviewNotePu
 Note = apps.get_model("notes", "Note")
 StepRun = apps.get_model("workflows", "StepRun")
 WorkflowRun = apps.get_model("workflows", "WorkflowRun")
+Trigger = apps.get_model("workflows", "Trigger")
+TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 Resource = apps.get_model("resources", "Resource")
 Decision = apps.get_model("decisions", "Decision")
 User = get_user_model()
@@ -61,6 +63,58 @@ class NoteWorkflowStepTests(TransactionTestCase):
         values.update(kwargs)
         with system_context(reason="note workflow subject fixture"):
             return Note.objects.create(created_by=self.owner, **values)
+
+    def load_trigger(self):
+        """Install the example's disabled policy through its declared resource."""
+        return Resource.objects.load_xref(
+            "example.notes.note_review_trigger", model=Trigger, actor=self.admin, allow_non_dev=True,
+        )
+
+    def test_trigger_installs_disabled_and_writes_no_events_until_enabled(self) -> None:
+        """Demo resources cannot establish an acting identity by themselves."""
+        trigger = self.load_trigger()
+        self.note()
+        with system_context(reason="disabled note trigger assertions"):
+            self.assertFalse(trigger.enabled)
+            self.assertIsNone(trigger.run_as_id)
+            self.assertFalse(TriggerEvent.objects.filter(trigger=trigger).exists())
+        Trigger.objects.enable(trigger, actor=self.admin)
+        trigger = self.load_trigger()
+        self.assertTrue(trigger.enabled)
+        self.assertEqual(trigger.run_as_id, self.admin.pk)
+
+    def test_entering_review_admits_the_shipped_workflow_as_the_enabling_actor(self) -> None:
+        """The note signal, retained ledger and publication use their actual owners."""
+        trigger = Trigger.objects.enable(self.load_trigger(), actor=self.admin)
+        note = self.note(status=Note.Status.DRAFT, reviewer=None)
+        self.assertEqual(Trigger.objects.drain(), 0)
+        with system_context(reason="rejected note trigger assertion"):
+            event = TriggerEvent.objects.get(trigger=trigger)
+            self.assertTrue(event.rejection)
+            self.assertIsNone(event.admitted_at)
+        note.status = Note.Status.IN_REVIEW
+        note.with_actor(self.owner).save()
+        self.assertEqual(Trigger.objects.drain(), 1)
+        with system_context(reason="admitted note trigger assertions"):
+            event.refresh_from_db()
+            run = event.run
+            self.assertEqual(run.run_as_id, self.admin.pk)
+            self.assertEqual(run.origin, "trigger")
+            self.assertEqual(run.trigger_event_id, event.pk)
+            self.assertEqual(run.record_ref.public_id, note.sqid)
+            self.assertIsNotNone(event.admitted_at)
+            self.assertEqual(event.rejection, "")
+        run_until(run)
+        with system_context(reason="triggered note publication assertions"):
+            note.refresh_from_db()
+            self.assertEqual(run.status, RunStatus.SUCCEEDED)
+            self.assertEqual(note.status, Note.Status.ACTIVE)
+            self.assertEqual(note.updated_by_id, self.admin.pk)
+        note.status = Note.Status.IN_REVIEW
+        note.with_actor(self.owner).save()
+        self.assertEqual(Trigger.objects.drain(), 0)
+        with system_context(reason="note trigger admission identity assertion"):
+            self.assertEqual(WorkflowRun.objects.filter(trigger_event=event).count(), 1)
 
     def answer_review(self, run, *, action="approve", values=None):
         """Answer a real waiting decision through its revision-checked owner."""

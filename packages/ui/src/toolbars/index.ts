@@ -8,6 +8,7 @@ export {
   type ResourceToolbarViewControls,
   type ResourceViewSwitcherProps,
 } from "./ResourceToolbar";
+export { ResourceConditionEditor, type ResourceConditionEditorProps } from "./ResourceConditionEditor";
 export {
   FilterClauseRow,
   FilterClauseEditor,

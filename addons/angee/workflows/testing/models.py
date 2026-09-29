@@ -114,3 +114,27 @@ class DecisionEvidence(decision_sources.DecisionEvidence):
         app_label = "decisions"
         db_table = "test_decisions_evidence"
         rebac_resource_type = "decisions/evidence"
+
+
+class Trigger(sources.Trigger):
+    """Concrete trigger using only the base workflow addon contract."""
+
+    class Meta(sources.Trigger.Meta):
+        """Keep native source options on the isolated trigger table."""
+
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_trigger"
+        rebac_resource_type = "workflows/trigger"
+
+
+class TriggerEvent(sources.TriggerEvent):
+    """Concrete durable ledger used by native source tests."""
+
+    class Meta(sources.TriggerEvent.Meta):
+        """Keep native source options on the isolated event table."""
+
+        abstract = False
+        app_label = "workflows"
+        db_table = "test_workflows_trigger_event"
+        rebac_resource_type = "workflows/trigger_event"

@@ -55,6 +55,12 @@ test("a run waiter shows its target as a normal record reference", async () => {
   expect((await within(step).findByRole("link", { name: "wfr_child" })).getAttribute("href")).toBe("/workflows/runs/wfr_child");
 });
 
+test("trigger origin links to its retained admission event", async () => {
+  render(<RunStory run={runFixture({ origin: "TRIGGER", trigger_event: { id: "wte_review" } })} />);
+  expect(await screen.findByText("Trigger")).toBeTruthy();
+  expect((await screen.findByRole("link", { name: "wte_review" })).getAttribute("href")).toBe("/workflows/trigger-events/wte_review");
+});
+
 test("reprocess confirms then navigates to the returned replacement through the route owner", async () => {
   const requests: RunRequest[] = [];
   render(<RunStory onRequest={(request) => requests.push(request)} />);

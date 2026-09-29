@@ -11,6 +11,7 @@ const runStates = [
 const origins = [
   { value: "MANUAL", description: "Manual" }, { value: "WORKFLOW", description: "Workflow" },
   { value: "REPROCESS", description: "Reprocess" }, { value: "TEST", description: "Test" },
+  { value: "TRIGGER", description: "Trigger" },
 ];
 const statusValues = runStates.map(({ value }) => ({ from: value, to: value.toLowerCase() }));
 
@@ -41,7 +42,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
     name, kind: "scalar" as const, scalar: name.startsWith("can_") ? "Boolean" : name === "input" || name === "output" ? "JSON" : "String",
     readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
   })),
-  ...[["run_as", "iam.User"], ["reprocess_of", "workflows.WorkflowRun"], ["parent_step", "workflows.StepRun"]].map(([name, relationModelLabel]) => ({
+  ...[["run_as", "iam.User"], ["reprocess_of", "workflows.WorkflowRun"], ["parent_step", "workflows.StepRun"], ["trigger_event", "workflows.TriggerEvent"]].map(([name, relationModelLabel]) => ({
     name: name!, relationModelLabel: relationModelLabel!, kind: "relation" as const, relationObject: true,
     readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
   }))],
@@ -50,7 +51,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
       "id", "origin", "outcome", "subject_model", "subject_id", "error", "input", "output", "can_cancel", "can_reprocess",
       "run_as.id", "run_as.display_name", "reprocess_of.id",
       "version.id", "version.number", "version.workflow.id", "version.workflow.name",
-      "version.workflow.key", "parent_step.id", "parent_step.run.id",
+      "version.workflow.key", "parent_step.id", "parent_step.run.id", "trigger_event.id",
     ].map((name) => [name, testQueryField(name)])),
     status: testQueryField("status", { kind: "enum", values: runStates,
       filter: { field: "status", scalar: "String", values: runStates, valueMap: statusValues, operators: ["exact", "inList"] } }),
@@ -160,7 +161,7 @@ export function runFixture(overrides: Partial<Run> = {}): Run {
     id: "wfr_review", status: "FAILED", origin: "MANUAL", subject_model: "notes.Note", subject_id: "nte_7",
     can_cancel: false, can_reprocess: true,
     run_as: { id: "usr_operator", display_name: "Operator" }, input: { reference: "R-7" }, output: {}, outcome: "", error: "",
-    created_at: "2026-09-29T09:00:00Z", finished_at: "2026-09-29T09:01:00Z", reprocess_of: null, parent_step: null,
+    created_at: "2026-09-29T09:00:00Z", finished_at: "2026-09-29T09:01:00Z", reprocess_of: null, parent_step: null, trigger_event: null,
     version: { id: "wfv_review", number: 2,
       workflow: { id: "wfl_review", key: "record_review", name: "Record review", subject_model: "notes.Note" } },
     ...overrides,

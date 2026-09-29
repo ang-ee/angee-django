@@ -110,6 +110,8 @@ jobs:
             tests/test_workflows_await_definition.py tests/test_workflows_children.py \
             tests/test_workflows_children_concurrency.py tests/test_workflows_children_surface.py \
             tests/test_workflows_retention.py \
+            tests/test_workflows_triggers.py tests/test_workflows_triggers_surface.py \
+            tests/test_workflows_triggers_concurrency.py tests/test_workflows_messaging.py \
             tests/test_composed_note_workflow.py \
             tests/test_extraction_steps.py tests/test_extraction_decisions.py \
             tests/test_composed_extraction_workflow.py \

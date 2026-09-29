@@ -8,6 +8,7 @@ import { RunsPage } from "./RunsPage";
 import type { Run, StepRun } from "./testing/documents.console";
 import { runFixture, runResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture } from "./testing";
 import { workflowVersionFixture } from "./catalogue/testing";
+import { triggerEventResourceFixture } from "./trigger-testing";
 
 export default { title: "Workflows/Run page", parameters: { layout: "fullscreen" }, excludeStories: ["RunStory"] };
 export const Recovery = { render: () => <RunStory /> };
@@ -36,11 +37,13 @@ const runtime = {
     { name: "workflows.catalogue.record", path: "/workflows/$id" },
     { name: "notes", path: "/notes" },
     { name: "notes.record", path: "/notes/$id" },
+    { name: "workflows.trigger-events.record", path: "/workflows/trigger-events/$id" },
   ]),
   routesByResource: {
     "workflows.WorkflowRun": { collection: "workflows.runs", record: { name: "workflows.runs.record", param: "id" } },
     "workflows.Workflow": { collection: "workflows.catalogue", record: { name: "workflows.catalogue.record", param: "id" } },
     "notes.Note": { collection: "notes", record: { name: "notes.record", param: "id" } },
+    "workflows.TriggerEvent": { collection: "workflows.trigger-events", record: { name: "workflows.trigger-events.record", param: "id" } },
   },
   auth: { user: { id: "usr_operator", name: "Operator" }, status: "authenticated" as const, hasRole: () => false },
 };
@@ -89,6 +92,7 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
         : jsonResponse({ data: { workflowrun_by_pk: unavailable ? null : { ...current, id: variables.id } } });
       if (query.includes("workflow_by_pk")) return jsonResponse({ data: { workflow_by_pk: current.version?.workflow } });
       if (query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: current.run_as } });
+      if (query.includes("triggerevent_by_pk")) return jsonResponse({ data: { triggerevent_by_pk: { id: "wte_review", display_name: "Review event" } } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
       if (query.includes("steprun_by_pk")) return jsonResponse({ data: { steprun_by_pk: currentSteps.find((step) => step.id === variables.id) ?? null } });
       if (query.includes("stepattempt_by_pk")) return jsonResponse({ data: { stepattempt_by_pk: currentSteps.flatMap((step) => step.attempts).find((attempt) => attempt.id === variables.id) } });
@@ -113,6 +117,7 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
+      triggerEventResourceFixture,
     ] } } } };
   }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"

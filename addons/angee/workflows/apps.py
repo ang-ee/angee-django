@@ -21,3 +21,6 @@ class WorkflowsConfig(AppConfig):
     def ready(self) -> None:
         """Subscribe the waiter owner to the decisions lifecycle."""
         decision_group_settled.connect(wake_review, dispatch_uid="workflows.review_settled")
+        field = apps.get_model("workflows", "Trigger")._meta.get_field("source")
+        for key in field.registered_keys():
+            field.resolve_class(key).connect()

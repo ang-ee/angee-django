@@ -247,8 +247,10 @@ class MessagingChannelMutation:
 
         with transaction.atomic():
             channel = require_instance_for_id(Channel, str(id), queryset=write_queryset(Channel))
-            preview = DeletePreview.from_counts(channel, Channel.objects.inventory(channel))
-            if confirm:
+            preview = DeletePreview.from_counts(
+                channel, Channel.objects.inventory(channel), blockers=channel.purge_blockers(),
+            )
+            if confirm and not preview.has_blockers:
                 try:
                     Channel.objects.purge(channel)
                 except (ProtectedError, RestrictedError) as error:

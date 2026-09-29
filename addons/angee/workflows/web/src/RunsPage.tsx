@@ -58,6 +58,7 @@ export function RunsList({ baseFilter, embedded = false }: {
         <Field name="outcome" label={t("run.outcome")} />
         <Field name="reprocess_of" label={t("run.reprocessOf")} />
         <Field name="parent_step.run" label={t("run.parent")} />
+        <Field name="trigger_event" label={t("trigger.event")} />
       </Group>
       <Field name="error" label={t("run.retainedError")} widget="textarea" showWhen={(row) => Boolean(row.error)} />
       <Field name="input" label={t("run.input")} widget="json" />

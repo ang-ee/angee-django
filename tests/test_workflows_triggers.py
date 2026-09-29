@@ -1,0 +1,310 @@
+"""Level-triggered admission through native source, filter and permission owners."""
+
+from datetime import timedelta
+
+import pytest
+import strawberry_django
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import IntegrityError, models, transaction
+from django.db.models.functions import Now, Upper
+from django.db.models.signals import post_save
+from rebac import actor_context, system_context, to_subject_ref
+
+from angee.base.scoping import system_queryset
+from angee.graphql.data import hasura_model_resource
+from angee.graphql.node import AngeeNode
+from angee.graphql.schema import GraphQLSchemas
+from angee.knowledge import schema as knowledge_schema
+from angee.workflows import schema as workflow_schema
+from angee.workflows import triggers
+from angee.workflows.testing.drivers import load_workflow, run_until
+from angee.workflows.testing.models import StepAttempt, Trigger, TriggerEvent, WorkflowRun
+from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
+from tests.workflow_steps import document
+
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
+
+
+@pytest.fixture
+def trigger_resource_schema(monkeypatch):
+    """Bare tests install just their real, composed resource owner, restoring it afterward."""
+    owner = GraphQLSchemas([make_addon(schemas=knowledge_schema.schemas)])
+    monkeypatch.setattr(GraphQLSchemas, "_discovered", owner)
+    monkeypatch.setattr(Vault, "workflow_trigger", True, raising=False)
+    return owner
+
+
+@pytest.fixture
+def trigger_setup(execution, trigger_resource_schema):
+    """Use one public workflow and a real actor-owned record for admission."""
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="record-trigger", actor=actor, subject_model="knowledge.vault")
+    record = vault_for(actor, name="Ready")
+    with actor_context(actor):
+        trigger = Trigger.objects.create(
+            workflow=workflow, source="record_changed", model_label="knowledge.vault",
+            condition={"name": {"_eq": "Ready"}},
+        )
+    return actor, workflow, record, trigger
+
+
+def capture(record):
+    """Bulk and signal writers share the same durable owner."""
+    TriggerEvent.objects.record_change(type(record), record)
+
+
+def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    capture(record)
+    assert not system_queryset(TriggerEvent).exists()
+    Trigger.objects.enable(trigger, actor=actor)
+    triggers.RecordChanged.connect()
+    try:
+        post_save.send(sender=Vault, instance=record, raw=True, created=False)
+        assert not system_queryset(TriggerEvent).exists()
+        with actor_context(actor):
+            record.save()
+        assert system_queryset(TriggerEvent).count() == 1
+    finally:
+        post_save.disconnect(sender=Vault, dispatch_uid="workflows.record_changed.knowledge.vault")
+
+
+def test_enable_cannot_persist_an_actorless_system_trigger(trigger_setup):
+    _, _, _, trigger = trigger_setup
+    with system_context(reason="test.workflow actorless trigger"), pytest.raises(PermissionDenied, match="acting user"):
+        Trigger.objects.enable(trigger, actor=None)
+    trigger.refresh_from_db()
+    assert not trigger.enabled and trigger.run_as_id is None
+
+
+def test_enable_projects_native_subject_refs_to_the_user_foreign_key(trigger_setup):
+    actor, _, _, trigger = trigger_setup
+    enabled = Trigger.objects.enable(trigger, actor=to_subject_ref(actor))
+    assert enabled.enabled and enabled.run_as_id == actor.pk
+
+
+def test_current_state_rejection_rearms_and_admission_survives_prune(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    with actor_context(actor):
+        record.name = "Later"
+        record.save()
+    assert Trigger.objects.drain() == 0
+    event = system_queryset(TriggerEvent).get()
+    assert event.evaluated_at and not event.admitted_at and "no longer matches" in event.rejection
+    with actor_context(actor):
+        record.name = "Ready"
+        record.save()
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    event.refresh_from_db()
+    assert event.admitted_at and not event.rejection
+    run = system_queryset(WorkflowRun).get(pk=event.run_id)
+    assert run.request_key == f"trigger:{trigger.pk}:{record.pk}"
+    assert run.trigger_event_id == event.pk
+    run_until(run)
+    system_queryset(WorkflowRun).filter(pk=run.pk).update(finished_at=Now() - timedelta(days=91))
+    assert WorkflowRun.objects.prune() == 1
+    event.refresh_from_db()
+    assert event.run_id is None and event.admitted_at
+    capture(record)
+    assert Trigger.objects.drain() == 0
+    assert not system_queryset(WorkflowRun).exists()
+
+
+def test_actor_losing_record_read_rejects_under_system_drain(trigger_setup):
+    admin, workflow, _, trigger = trigger_setup
+    editor = create_user("trigger-actor")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    record = vault_for(editor, name="Ready")
+    Trigger.objects.enable(trigger, actor=editor)
+    capture(record)
+    system_queryset(Vault).filter(pk=record.pk).update(owner=create_user("replacement-owner"))
+    with system_context(reason="test.workflow trigger actor pin"):
+        assert Trigger.objects.drain() == 0
+    event = system_queryset(TriggerEvent).get(record_object_id=record.pk)
+    assert "inaccessible" in event.rejection
+    assert not system_queryset(WorkflowRun).exists()
+
+
+def test_deleted_record_is_rejected_instead_of_remaining_pending(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    with actor_context(actor):
+        record.delete()
+    assert Trigger.objects.drain() == 0
+    event = system_queryset(TriggerEvent).get()
+    assert event.evaluated_at and event.rejection and event.admitted_at is None
+
+
+def test_drain_bound_counts_candidates_including_rejections(trigger_setup, monkeypatch):
+    actor, _, _, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    monkeypatch.setattr(triggers, "TRIGGER_DRAIN_LIMIT", 3)
+    for index in range(5):
+        capture(vault_for(actor, name=f"Pending {index}"))
+    assert Trigger.objects.drain() == 0
+    assert system_queryset(TriggerEvent).filter(evaluated_at__isnull=False).count() == 3
+    assert Trigger.objects.drain() == 0
+    assert system_queryset(TriggerEvent).filter(evaluated_at__isnull=False).count() == 5
+
+
+@pytest.mark.parametrize("condition", [
+    {"not_a_field": {"_eq": "value"}}, {"name": {"_unknown": "value"}}, {"id": {"_eq": "bad-public-id"}},
+])
+def test_conditions_use_actual_resource_fields_and_operators(trigger_setup, condition):
+    actor, _, _, trigger = trigger_setup
+    trigger.condition = condition
+    with actor_context(actor), pytest.raises(ValidationError):
+        trigger.save()
+
+
+def test_condition_depth_is_bounded_and_stale_configuration_disables(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    trigger.condition = {}
+    for _ in range(13):
+        trigger.condition = {"_not": trigger.condition}
+    with actor_context(actor), pytest.raises(ValidationError, match="nesting depth"):
+        trigger.save()
+    trigger.refresh_from_db()
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    system_queryset(Trigger).filter(pk=trigger.pk).update(condition={"removed_field": {"_eq": "x"}})
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    assert not trigger.enabled and trigger.run_as_id is None and "removed_field" in trigger.disabled_reason
+
+
+def test_invalid_persisted_public_id_is_configuration_failure(trigger_setup):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    system_queryset(Trigger).filter(pk=trigger.pk).update(condition={"id": {"_eq": "bad-public-id"}})
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    event = system_queryset(TriggerEvent).get()
+    assert not trigger.enabled and trigger.run_as_id is None and trigger.disabled_reason
+    assert event.rejection == trigger.disabled_reason and event.evaluated_at and not event.admitted_at
+
+
+@pytest.mark.parametrize("source_path", [
+    "tests.missing_trigger_source.RecordChanged", "tests.workflow_steps.MissingTriggerSource",
+])
+def test_unimportable_source_disables_and_keeps_the_row_readable(trigger_setup, settings, source_path):
+    """Runtime source disappearance is configuration failure, preserving repair diagnostics."""
+    actor, _, record, trigger = trigger_setup
+    schema = addon_schema(workflow_schema.schemas, "console")
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCES, "record_changed": source_path,
+    }
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    event = system_queryset(TriggerEvent).get()
+    assert not trigger.enabled and trigger.run_as_id is None and "cannot be loaded" in trigger.disabled_reason
+    assert event.rejection == trigger.disabled_reason and event.evaluated_at and not event.admitted_at
+    data = result_data(execute_schema(schema, """query($id: String!) {
+      trigger(where: {id: {_eq: $id}}) { id source source_model enabled disabled_reason run_as { id } }
+    }""", {"id": trigger.sqid}, user=actor))["trigger"]
+    assert len(data) == 1 and data[0]["source_model"] == "knowledge.vault"
+    assert data[0]["enabled"] is False and data[0]["run_as"] is None
+    assert data[0]["disabled_reason"] == trigger.disabled_reason
+
+
+def test_capture_failure_preserves_the_enclosing_write(trigger_setup, monkeypatch, caplog):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+
+    def fail(*args, **kwargs):
+        raise IntegrityError("capture failed")
+
+    monkeypatch.setattr(triggers.TriggerEventQuerySet, "update_or_create", fail)
+    with transaction.atomic(), actor_context(actor):
+        record.name = "Retained"
+        record.save()
+        capture(record)
+        assert Vault.objects.filter(pk=record.pk, name="Retained").exists()
+    assert "Workflow trigger capture failed" in caplog.text
+
+
+@pytest.mark.parametrize("model_label", ["workflows.workflow", "decisions.decision", "auth.user"])
+def test_recursive_and_non_opted_models_are_refused(trigger_setup, model_label):
+    actor, _, _, trigger = trigger_setup
+    trigger.model_label = model_label
+    with actor_context(actor), pytest.raises(ValidationError):
+        trigger.save()
+
+
+def test_resource_condition_rejects_field_gated_reads(execution):
+    """The compiler uses the resource catalogue, which excludes read__error fields."""
+    owner = GraphQLSchemas([make_addon(schemas=workflow_schema.schemas)])
+    with pytest.raises(ValidationError, match="error.*not defined"):
+        owner.resource_filter(StepAttempt, {"error": {"_eq": "hidden"}})
+
+
+def test_resource_condition_reuses_expression_extensions_and_public_id_decoders(trigger_setup):
+    """Stored filters follow the same final input extension and SQL alias as requests."""
+    actor, _, record, _ = trigger_setup
+
+    @strawberry_django.type(Vault)
+    class FilterVault(AngeeNode):
+        name: str
+
+    resource = hasura_model_resource(
+        FilterVault, model=Vault, name="filter_vault", filterable=("id", "name", "upper_name"),
+        filter_expressions={"upper_name": Upper("name", output_field=models.CharField())},
+        sortable=("id",), aggregatable=(),
+        insert=False, update=False, delete=False,
+    )
+    owner = GraphQLSchemas([make_addon(schemas={"console": {
+        "query": [resource.query], "types": resource.types,
+    }})])
+    condition = owner.resource_filter(Vault, {"_and": [
+        {"id": {"_eq": str(record.sqid)}}, {"upper_name": {"_eq": "READY"}},
+    ]})
+    assert list(condition(Vault.objects.with_actor(actor)).values_list("pk", flat=True)) == [record.pk]
+
+
+@pytest.mark.parametrize("captured", [False, True])
+def test_source_model_is_stable_from_creation(execution, trigger_resource_schema, monkeypatch, captured):
+    """The mandated request key omits model identity, so every trigger keeps its model."""
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="source-stability", actor=actor)
+    monkeypatch.setattr(Page, "workflow_trigger", True, raising=False)
+    with actor_context(actor):
+        trigger = Trigger.objects.create(workflow=workflow, source="record_changed", model_label="knowledge.vault")
+    if captured:
+        Trigger.objects.enable(trigger, actor=actor)
+        capture(vault_for(actor))
+    trigger.model_label = "knowledge.page"
+    with actor_context(actor), pytest.raises(ValidationError, match="source model cannot change"):
+        trigger.save()
+
+
+def test_domain_hooks_own_input_and_rejections_without_disabling(trigger_setup, monkeypatch):
+    """Domain policy runs as run_as and is rolled back when admission rejects."""
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    seen = []
+
+    def reject(self, record, *, actor):
+        seen.append(actor.pk)
+        record.name = "Rolled back"
+        record.save()
+        raise ValidationError("Domain admission declined.")
+
+    monkeypatch.setattr(Trigger, "check_admission", reject)
+    assert Trigger.objects.drain() == 0
+    record.refresh_from_db()
+    assert record.name == "Ready" and seen == [actor.pk]
+    assert system_queryset(Trigger).get(pk=trigger.pk).enabled
+    assert "Domain admission declined" in system_queryset(TriggerEvent).get().rejection
+    monkeypatch.setattr(Trigger, "check_admission", lambda self, record, *, actor: None)
+    monkeypatch.setattr(Trigger, "trigger_input", lambda self, record: {"value": record.pk})
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    assert system_queryset(WorkflowRun).get().input == {"value": record.pk}

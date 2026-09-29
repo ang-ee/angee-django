@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
@@ -95,6 +96,7 @@ class DataResourceContribution:
     type_names: data_contract.DataResourceTypeNames = field(default_factory=data_contract.DataResourceTypeNames)
     capabilities: tuple[str, ...] = ()
     policy: DataResourcePolicy = field(default_factory=DataResourcePolicy)
+    compile_filter: Callable[[Any], Callable[[Any], Any]] | None = None
 
 
 def data_resource_contributions(surface: object) -> tuple[DataResourceContribution, ...]:

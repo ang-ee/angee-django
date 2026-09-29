@@ -1003,7 +1003,9 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
     def tick(self) -> dict[str, int]:
         """Wake waits, reap expired claims and recover missing deliveries in bounded batches."""
         return {"woken": self.wake(), "reaped": self.reap(), "redispatched": self.redispatch(),
-                "decisions": self.wake_decisions(), "runs": self.wake_runs(), "pruned": self.run_model.objects.prune()}
+                "decisions": self.wake_decisions(), "runs": self.wake_runs(),
+                "drained": apps.get_model("workflows", "Trigger").objects.drain(),
+                "pruned": self.run_model.objects.prune()}
 
     def wake_runs(self, run_id: Any = None) -> int:
         """After-commit delivery and tick recovery share the existing wake transition."""

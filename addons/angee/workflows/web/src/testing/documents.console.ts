@@ -6,6 +6,7 @@ const RunFields = graphql(`
     can_cancel can_reprocess run_as { id display_name }
     subject_model subject_id reprocess_of { id }
     parent_step { id run { id } }
+    trigger_event { id }
     version { id number workflow { id key name subject_model } }
   }
 `);

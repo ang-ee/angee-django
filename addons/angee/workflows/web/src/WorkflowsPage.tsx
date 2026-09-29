@@ -3,6 +3,7 @@ import { Column, Field, Form, Group, List, ResourceList } from "@angee/ui";
 import { WORKFLOW_MODEL, WORKFLOW_VERSION_MODEL } from "./catalogue/resources";
 import { useWorkflowsT } from "./i18n";
 import { RunsList } from "./RunsPage";
+import { TriggersList } from "./TriggersPage";
 
 /** Readable workflow identities; publication and authoring remain backend-owned. */
 export function WorkflowsPage() {
@@ -18,6 +19,7 @@ export function WorkflowsPage() {
       </List> },
     { id: "runs", label: t("catalogue.recentRuns"), render: ({ recordId }) =>
       <RunsList embedded baseFilter={{ "version.workflow": { exact: recordId } }} /> },
+    { id: "triggers", label: t("trigger.plural"), render: ({ recordId }) => <TriggersList workflowId={recordId} /> },
   ]}>
     <List order={{ name: "ASC" }} emptyContent={t("catalogue.empty")}>
       <Column field="key" header={t("catalogue.key")} />

@@ -8,6 +8,7 @@ import { WorkflowsPage } from "./WorkflowsPage";
 import { workflowsChatter } from "./contributions";
 import { workflowFixture, workflowVersionFixture } from "./catalogue/testing";
 import { runFixture, runResourceFixture, runSubjectFixture, workflowResourceFixture, stepRunResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture } from "./testing";
+import { triggerFixture, triggerResourceFixture } from "./trigger-testing";
 
 export default { title: "Workflows/Catalogue", parameters: { layout: "fullscreen" }, excludeStories: ["CatalogueStory"] };
 export const Catalogue = { render: () => <CatalogueStory list /> };
@@ -26,6 +27,7 @@ const runtime = {
     { name: "workflows.runs.record", path: "/workflows/runs/$id" },
     { name: "notes", path: "/notes" },
     { name: "notes.record", path: "/notes/$id" },
+    { name: "workflows.triggers.record", path: "/workflows/triggers/$id" },
   ]),
   routesByResource: {
     "workflows.Workflow": { collection: "workflows.catalogue", record: { name: "workflows.catalogue.record", param: "id" } },
@@ -54,12 +56,14 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
         { key: { status: "FAILED", workflow_id: "wfl_review", workflow__name: "Record review" }, aggregate: { count: 1 } },
       ], totalCount: 1 } });
       if (query.includes("workflowrun")) return jsonResponse({ data: { workflowrun: [runFixture()], workflowrun_aggregate: { aggregate: { count: 1 } } } });
+      if (query.includes("trigger")) return jsonResponse({ data: { trigger: [triggerFixture], trigger_aggregate: { aggregate: { count: 1 } } } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
       return jsonResponse({ data: { workflow: [workflowFixture], workflow_aggregate: { aggregate: { count: 1 } } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       workflowResourceFixture, workflowVersionFixture, runResourceFixture, runSubjectFixture,
       stepRunResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
+      triggerResourceFixture,
     ] } } } };
   }, [unavailable, queryError, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows"

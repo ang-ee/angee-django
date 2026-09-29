@@ -19,7 +19,7 @@ from angee.graphql.actions import (
     authorized_action_target,
     authorized_permission_target,
 )
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
@@ -36,6 +36,8 @@ WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
 StepArtifact = apps.get_model("workflows", "StepArtifact")
+Trigger = apps.get_model("workflows", "Trigger")
+TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 DecisionGroup = apps.get_model("decisions", "DecisionGroup")
 _STEP_POLICY_VERSION = Prefetch(
     "run__version", queryset=system_queryset(WorkflowVersion).only("document"), to_attr="policy_version",
@@ -74,6 +76,7 @@ class WorkflowRunType(AngeeNode):
     version: WorkflowVersionType | None = actor_scoped_to_one("version")
     parent_step: StepRunType | None = actor_scoped_to_one("parent_step")
     reprocess_of: WorkflowRunType | None = actor_scoped_to_one("reprocess_of")
+    trigger_event: TriggerEventType | None = actor_scoped_to_one("trigger_event")
     step_runs: list[StepRunType] = actor_scoped_to_many("step_runs")
     run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
@@ -202,6 +205,47 @@ class StepArtifactType(AngeeNode):
         return PublicID(cast(Any, self).record_public_id)
 
 
+@strawberry_django.type(Trigger)
+class TriggerType(AngeeNode):
+    """A workflow's editable event admission policy and server-owned activation."""
+
+    workflow: WorkflowType | None = actor_scoped_to_one("workflow")
+    source: auto
+    model_label: auto
+    source_model: str = strawberry_django.field(only=["source", "model_label"])
+    condition: JSON
+    enabled: auto
+    run_as: UserType | None = actor_scoped_to_one("run_as")
+    disabled_reason: auto
+
+    @strawberry_django.field
+    def can_edit(self, info: strawberry.Info) -> bool:
+        """Expose the permission owner's current write decision to authoring forms."""
+        return bool(cast(Any, self).with_actor(request_from_info(info).user).has_access("write"))
+
+
+@strawberry_django.type(TriggerEvent)
+class TriggerEventType(AngeeNode):
+    """Durable admission evidence independent of the lifetime of its run."""
+
+    trigger: TriggerType | None = actor_scoped_to_one("trigger")
+    run: WorkflowRunType | None = actor_scoped_to_one("run")
+    changed_at: auto
+    evaluated_at: auto
+    admitted_at: auto
+    rejection: auto
+
+    @strawberry_django.field(only=["record_content_type_id", "record_object_id"])
+    def record_model(self) -> str:
+        """Expose the recorded model through the reference owner."""
+        return cast(Any, self).record_model_label
+
+    @strawberry_django.field(only=["record_content_type_id", "record_object_id"])
+    def record_id(self) -> PublicID | None:
+        """Expose its public identity; navigation rechecks record permissions."""
+        return optional_public_id(cast(Any, self).record_public_id or None)
+
+
 _WORKFLOW_RESOURCE = hasura_model_resource(
     WorkflowType, model=Workflow, filterable=["id", "key", "subject_model"],
     sortable=["key", "name", "created_at"], aggregatable=["id"],
@@ -215,7 +259,7 @@ _VERSION_RESOURCE = hasura_model_resource(
 _RUN_RESOURCE = hasura_model_resource(
     WorkflowRunType, model=WorkflowRun,
     filterable=["id", "version", "version__workflow", "parent_step", "parent_step__run",
-                "run_as", "status", "origin", "outcome", "reprocess_of",
+                "run_as", "status", "origin", "outcome", "reprocess_of", "trigger_event",
                 "created_at", "finished_at"],
     record_ref_filters=("subject_model", "subject_id"),
     sortable=["created_at", "updated_at", "finished_at", "status"],
@@ -241,11 +285,48 @@ _ARTIFACT_RESOURCE = hasura_model_resource(
     filterable=["id", "step_run", "label"], sortable=["created_at", "label"], aggregatable=["id"],
     insert=False, update=False, delete=False,
 )
+_TRIGGER_INSERT = ("workflow", "source", "model_label", "condition",
+                   *declared_hasura_resource_fields(Trigger, "hasura_insertable_fields"))
+_TRIGGER_UPDATE = ("source", "model_label", "condition",
+                   *declared_hasura_resource_fields(Trigger, "hasura_updatable_fields"))
+_TRIGGER_RESOURCE = hasura_model_resource(
+    TriggerType, model=Trigger,
+    filterable=["id", "workflow", "source", "model_label", "enabled",
+                *declared_hasura_resource_fields(Trigger, "hasura_filterable_fields")],
+    sortable=["created_at", "updated_at"], aggregatable=["id"],
+    insertable=_TRIGGER_INSERT, updatable=_TRIGGER_UPDATE,
+    write_backend=AngeeHasuraWriteBackend(Trigger, public_id_fields=tuple(
+        name for name in dict.fromkeys((*_TRIGGER_INSERT, *_TRIGGER_UPDATE))
+        if Trigger._meta.get_field(name).is_relation
+    )),
+)
+_TRIGGER_EVENT_RESOURCE = hasura_model_resource(
+    TriggerEventType, model=TriggerEvent, filterable=["id", "trigger", "run", "admitted_at"],
+    record_ref_filters=("record_model", "record_id"),
+    sortable=["changed_at", "evaluated_at", "admitted_at"], aggregatable=["id"],
+    insert=False, update=False, delete=False,
+)
 
 
 @strawberry.type
 class WorkflowActionMutation:
     """Operator requests whose authorization and transitions belong to managers."""
+
+    @strawberry.mutation
+    @action_guard("Enable trigger failed.")
+    def enable_workflow_trigger(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Enable through its policy owner as the requesting workflow author."""
+        trigger = authorized_action_target(info, Trigger, id, "write")
+        Trigger.objects.enable(trigger, actor=request_from_info(info).user)
+        return ActionResult(ok=True, message="Trigger enabled.", id=trigger.sqid)
+
+    @strawberry.mutation
+    @action_guard("Disable trigger failed.")
+    def disable_workflow_trigger(self, info: strawberry.Info, id: PublicID) -> ActionResult:
+        """Stop capturing future changes through the trigger lifecycle owner."""
+        trigger = authorized_action_target(info, Trigger, id, "write")
+        Trigger.objects.disable(trigger, actor=request_from_info(info).user)
+        return ActionResult(ok=True, message="Trigger disabled.", id=trigger.sqid)
 
     @strawberry.mutation
     @action_guard("Cancel run failed.")
@@ -284,15 +365,17 @@ class WorkflowActionMutation:
 
 _RESOURCES = (
     _WORKFLOW_RESOURCE, _VERSION_RESOURCE, _RUN_RESOURCE, _STEP_RESOURCE, _ATTEMPT_RESOURCE, _ARTIFACT_RESOURCE,
+    _TRIGGER_RESOURCE, _TRIGGER_EVENT_RESOURCE,
 )
 schemas = {
     "console": {
         "query": [resource.query for resource in _RESOURCES],
-        "mutation": [WorkflowActionMutation],
+        "mutation": [WorkflowActionMutation, _TRIGGER_RESOURCE.mutation],
         "type_extensions": [DecisionGroupWorkflowExtension],
         "types": [
             RunOrigin,
             WorkflowType, WorkflowVersionType, WorkflowRunType, StepRunType, StepAttemptType, StepArtifactType,
+            TriggerType, TriggerEventType,
             *(type_ for resource in _RESOURCES for type_ in resource.types),
         ],
     },

@@ -21,6 +21,7 @@ from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.managers import RebacManager
 from strawberry.tools import merge_types
+from strawberry.types.arguments import convert_argument
 from strawberry.types.base import get_object_definition
 from strawberry.types.execution import ExecutionContext
 from strawberry.types.field import StrawberryField
@@ -39,7 +40,7 @@ from angee.graphql.introspection import (
     surface_field_names,
     surface_name,
 )
-from graphql import GraphQLError, GraphQLSchema
+from graphql import GraphQLError, GraphQLSchema, assert_input_type, coerce_input_value
 
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
@@ -318,12 +319,45 @@ class GraphQLSchemas:
 
         return cast(AngeeSchema, self.build(name)).angee_resources
 
+    def resource_filter(self, model: type[models.Model], value: Any, *, max_depth: int = 12) -> Any:
+        """Coerce a stored resource condition and return its native queryset filter.
+
+        The console resource is the authoring contract when present. Final input
+        extensions, scalar coercion, public IDs and expression aliases are the
+        same ones used by its GraphQL list field; callers supply their own scope.
+        """
+        pending = [(value, 0)]
+        while pending:
+            node, depth = pending.pop()
+            if depth > max_depth:
+                raise ValidationError(f"Resource conditions exceed nesting depth {max_depth}.")
+            if isinstance(node, dict):
+                pending.extend((child, depth + 1) for child in node.values())
+            elif isinstance(node, list):
+                pending.extend((child, depth + 1) for child in node)
+        for name in sorted(self.names(), key=lambda name: (name != "console", name)):
+            for surface in self.parts[name].query:
+                for contribution in data_resource_contributions(surface):
+                    resource = contribution.native_resource
+                    if contribution.model is not model or resource is None or contribution.compile_filter is None:
+                        continue
+                    schema = self.build(name)
+                    definition = get_object_definition(resource.filter_type, strict=True)
+                    graphql_type = assert_input_type(self.graphql_schema(name).get_type(definition.name))
+                    try:
+                        coerced = coerce_input_value(value, graphql_type)
+                        where = convert_argument(
+                            coerced, definition.origin, schema.schema_converter.scalar_registry, schema.config,
+                        )
+                        return contribution.compile_filter(where)
+                    except (GraphQLError, TypeError, ValueError) as error:
+                        raise ValidationError(str(error)) from error
+        raise ValidationError(f"{model._meta.label} has no filterable resource.")
+
     def change_publisher_models(self) -> tuple[type[models.Model], ...]:
         """Return every model declared into the GraphQL change feed.
 
-        Memoized per instance: the published set is fixed for a process, and
-        both ``Trigger.clean()`` and the workflows system check consume it on
-        every trigger save.
+        Memoized per instance: the published set is fixed for a process.
         """
 
         cached: tuple[type[models.Model], ...] | None = getattr(self, "_change_publisher_models", None)
