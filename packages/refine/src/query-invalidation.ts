@@ -70,6 +70,7 @@ const LIVE_MAX_WAIT_MS = 2000;
 
 export interface AuthoredLiveInvalidation {
   push: (change: AuthoredLiveChange) => void;
+  clear: () => void;
 }
 
 /**
@@ -100,6 +101,12 @@ export function createAuthoredLiveInvalidation(
   }
 
   return {
+    clear() {
+      if (timer !== undefined) clearTimeout(timer);
+      changes = [];
+      timer = undefined;
+      firstAt = undefined;
+    },
     push(change) {
       void queryClient.cancelQueries({
         predicate: (query) => query.state.fetchStatus !== "idle"

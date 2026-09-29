@@ -35,6 +35,7 @@ import {
 } from "./form-view-body";
 import type { EditableLineSupplementalColumn, EditableLinesProps } from "./EditableLines";
 import { recordRepresentationValue, titleText } from "./form-view-model";
+import { useRuntimeViewAs } from "../../runtime";
 
 export {
   acknowledgeFormSubmit,
@@ -122,6 +123,8 @@ export function FormView(props: FormViewProps): React.ReactElement {
 }
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
+  const preview = useRuntimeViewAs();
+  const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const {
     resource,
     id,
@@ -313,7 +316,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
               variant="primary"
               size="sm"
               loading={pending}
-              disabled={formReadOnly}
+              disabled={formReadOnly || previewBlocked}
               onClick={() => {
                 void submitForm();
               }}

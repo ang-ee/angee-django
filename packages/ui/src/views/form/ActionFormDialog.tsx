@@ -21,6 +21,7 @@ import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { useActionForm } from "./use-action-form";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from "../page";
+import { useRuntimeViewAs } from "../../runtime";
 
 export interface ActionFormDialogProps {
   /** The action being collected — must declare `args` and `submit`. */
@@ -158,6 +159,7 @@ function ActionSubmitButton({
   label: React.ReactNode;
 }): React.ReactElement {
   const values = useWatch({ control }) as ArgValues;
+  const preview = useRuntimeViewAs();
   const ready = args.every(
     (arg) => arg.optional || !emptyDialogValue(values[arg.name]),
   );
@@ -166,7 +168,7 @@ function ActionSubmitButton({
       type="submit"
       variant="primary"
       size="sm"
-      disabled={!ready || submitting}
+      disabled={!ready || submitting || Boolean(preview.viewAs || preview.pending)}
     >
       {label}
     </Button>

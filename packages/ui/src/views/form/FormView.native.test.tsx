@@ -8,7 +8,7 @@ import { schemaFieldMetadataFromDataResources, type DataResourceMetadata, type M
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
-import { AppRuntimeProvider } from "../../runtime";
+import { AppRuntimeProvider, type RuntimeViewAs } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import type { MetaQuery } from "@refinedev/core";
@@ -59,6 +59,35 @@ const resource = testDataResource("notes.Note", {
 const model: ModelMetadata = schemaFieldMetadataFromDataResources([resource]).labels["notes.Note"]!;
 const { Provider, createClient, clearClients } = createUiTestProviders({ resources: [resource], apiUrl: "test://notes" });
 afterEach(() => { cleanup(); clearClients(); });
+
+const preview: RuntimeViewAs = {
+  viewAs: { userId: "person" }, currentUser: { id: "person", name: "Person" }, realUser: null,
+  viewablePeople: [], enter: () => undefined, exit: () => undefined,
+};
+
+test("preview keeps form submit visible and disabled, including Enter and native submit", async () => {
+  const submit = vi.fn(async () => ({ id: "created" }));
+  const f = await fixture({ preview, publicView: true, id: null, submit });
+  f.rerender({ viewFields: [{ name: "title", label: "Title" }] });
+  const button = await screen.findByRole("button", { name: "Create" });
+  expect(button.hasAttribute("disabled")).toBe(true);
+  const input = screen.getByRole("textbox", { name: "Title" });
+  fireEvent.keyDown(input, { key: "Enter" });
+  fireEvent.click(button);
+  const form = input.closest("form");
+  if (!form) throw new Error("Missing form");
+  await act(async () => { fireEvent.submit(form); });
+  expect(submit).not.toHaveBeenCalled();
+});
+
+test("preview blocks imperative form saves and patches without changing write capabilities", async () => {
+  const submit = vi.fn(async () => ({ id: "note-1", title: "Changed" }));
+  const f = await fixture({ preview, submit });
+  expect(f.surface().formReadOnly).toBe(false);
+  act(() => f.surface().form.setValue("title", "Changed", { shouldDirty: true }));
+  await act(async () => { await f.surface().submitForm(); await f.surface().applyPatch({ title: "Patched" }); });
+  expect(submit).not.toHaveBeenCalled();
+});
 
 test("a domain controlled value uses FormView interaction ownership and remounts by full name", () => {
   const start = vi.fn(); const commit = vi.fn();
@@ -114,6 +143,7 @@ test("a bound parent value follows native dotted child updates", async () => {
 });
 
 async function fixture(options: {
+  preview?: RuntimeViewAs;
   rootArguments?: boolean;
   resourceMetadata?: DataResourceMetadata;
   readOnlyWhen?: (record: Row) => boolean;
@@ -184,7 +214,9 @@ async function fixture(options: {
   }
   function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: MutationDialogField; scope?: string; readOnly?: boolean }[] }) {
     return <Provider dataProvider={provider} queryClient={client}>
-      <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets,
+        ...(options.preview ? { auth: { user: options.preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: options.preview } } : {}),
+      }}>
         {options.publicView ? (
           <FormView
             resource="notes.Note"

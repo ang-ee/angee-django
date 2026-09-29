@@ -14,6 +14,7 @@ import {
   createAngeeHasuraDataProviders,
   createAngeeHasuraLiveProvider,
   tanStackRouterProvider,
+  viewAsAuth,
   type AngeeHasuraSchemaConfig,
   type SchemaOperationDocuments,
   type ResourceMutationOperations,
@@ -69,6 +70,9 @@ import {
 import { railDefaultTarget } from "@angee/ui/chrome/app-rail-model";
 import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
+import { ViewAsBanner, ViewAsPicker } from "@angee/ui/chrome/ViewAs";
+import { USER_MENU_ITEMS_SLOT } from "@angee/ui/chrome/UserMenu";
+import { CONSOLE_NOTICE_SLOT } from "@angee/ui/layouts/ConsoleLayout";
 import { LoadingPanel } from "@angee/ui/fragments/index";
 import {
   MenuTree,
@@ -97,11 +101,13 @@ import {
   AuthStateProvider,
   UserPreferencesProvider,
   createAngeeAuthProvider,
+  identityQueryOptions,
   useLogoutAction,
   useRuntimeAuthState,
   useUserPreferences,
   type AuthState,
 } from "./providers/auth";
+import { createViewAsProvider, useViewAsState, type ViewAsProvider } from "./providers/view-as";
 import {
   parseFlatSearch,
   stringifyFlatSearch,
@@ -217,13 +223,37 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
  * `createApp({...}).mount(...)`.
  */
 export function createApp(input: CreateAppInput): AngeeApp {
-  const schemas = normalizeSchemaConfigs(input.schemas);
+  const queryClient = new QueryClient(APP_QUERY_CLIENT_CONFIG);
+  const viewAs: ViewAsProvider = createViewAsProvider({
+    changed: async (userId) => {
+      // Stop live delivery before resetting/refetching any actor-bound data.
+      refineLiveProvider?.setEnabled(false);
+      resetSessionQueries(queryClient);
+      if (userId === null) refineLiveProvider?.setEnabled(true);
+      const identity = await queryClient.fetchQuery(identityQueryOptions(refineAuthProvider));
+      if (userId !== null && (identity?.id !== userId || !identity.realUser)) {
+        throw new Error("Preview identity was not returned.");
+      }
+    },
+  });
+  const schemas = normalizeSchemaConfigs(Object.fromEntries(
+    Object.entries(input.schemas).map(([name, schema]) => [name, {
+      ...schema,
+      fetch: viewAsAuth(viewAs.getUserId)(schema.fetch ?? globalThis.fetch),
+    }]),
+  ));
   const modelLabelInventory = mergeModelLabelInventory(
     Object.values(schemas).map((schema) => schema.fieldMetadata),
   );
   const composed = composeAddons(
     [
-      { id: "base", icons: baseIcons },
+      { id: "base", icons: baseIcons, slots: [
+        { slot: CONSOLE_NOTICE_SLOT, id: "view-as", content: <ViewAsBanner /> },
+        { slot: USER_MENU_ITEMS_SLOT, id: "view-as", content: <ViewAsPicker /> },
+      ], layoutProviders: layoutNamesForRoutes(input.layouts)
+        .filter((layout) => layout !== "console")
+        .map((layout) => ({ id: "view-as", layout, component: ViewAsLayoutNotice })),
+      },
       ...input.addons,
       ...(input.slots ? [{ id: "host", slots: input.slots }] : []),
     ],
@@ -321,18 +351,21 @@ export function createApp(input: CreateAppInput): AngeeApp {
   );
   // The one QueryClient instance createApp owns (per `@angee/app` `index.ts`):
   // shared by `<Refine>` and the route gate so identity is fetched once.
-  const queryClient = new QueryClient(APP_QUERY_CLIENT_CONFIG);
   const refineLiveProvider = createLiveProviderForSchema(
     schemas,
     subscriptionSchema,
     queryClient,
   );
   const authSchema = authSchemaNameForSchemas(schemas, defaultSchema);
-  const refineAuthProvider = createAuthProviderForSchema(
+  const refineAuthProvider: RefineAuthProvider = createAuthProviderForSchema(
     schemas,
     authSchema,
     loginPath,
     queryClient,
+    () => {
+      viewAs.reset();
+      refineLiveProvider?.setEnabled(true);
+    },
   );
   const refineI18nProvider = i18n.provider;
   const refineAccessControlProvider = createAngeeAccessControlProvider(
@@ -386,6 +419,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         }}
       >
         <AppFrame
+          viewAs={viewAs}
           authSchema={authSchema}
           loginPath={loginPath}
           appearance={input.appearance}
@@ -552,6 +586,7 @@ function createAuthProviderForSchema(
   authSchema: string,
   loginPath: string,
   queryClient: QueryClient,
+  onAuthChange: () => void,
 ): RefineAuthProvider {
   const schema = schemas[authSchema];
   if (!schema) {
@@ -561,14 +596,21 @@ function createAuthProviderForSchema(
     ...schema,
     loginPath,
     queryClient,
+    identityClient: schemas.console,
     // Reset observed queries so identity and mounted views see the transition;
     // clearing their entries would strand observers with the previous data.
     onAuthChange: () => {
-      queryClient.removeQueries({ predicate: (query) => query.getObserversCount() === 0 });
-      queryClient.getMutationCache().clear();
-      void queryClient.resetQueries();
+      onAuthChange();
+      resetSessionQueries(queryClient);
     },
   });
+}
+
+/** Preserve native observers while discarding data from the previous actor. */
+function resetSessionQueries(queryClient: QueryClient): void {
+  queryClient.removeQueries({ predicate: (query) => query.getObserversCount() === 0 });
+  queryClient.getMutationCache().clear();
+  void queryClient.resetQueries();
 }
 
 /**
@@ -577,17 +619,31 @@ function createAuthProviderForSchema(
  * runtime and auth state to every route.
  */
 function AppFrame({
+  viewAs,
   authSchema,
   loginPath,
   appearance,
   children,
 }: {
+  viewAs: ViewAsProvider;
   authSchema: string;
   loginPath: string;
   appearance?: HostAppearanceDefaults;
   children: ReactNode;
 }): ReactNode {
-  const { auth } = useRuntimeAuthState();
+  const { auth: identityAuth, identity } = useRuntimeAuthState();
+  const preview = useViewAsState(viewAs);
+  const auth = useMemo<AuthState>(() => ({
+    ...identityAuth,
+    viewAs: {
+      ...preview,
+      currentUser: preview.pending ? null : identity,
+      realUser: identity?.realUser ?? null,
+      viewablePeople: identity?.viewablePeople ?? [],
+      enter: (userId) => { void viewAs.enter(userId); },
+      exit: () => { void viewAs.exit(); },
+    },
+  }), [identityAuth, identity, preview, viewAs]);
   const invalidateAuthStore = useInvalidateAuthStore();
   const sourceLogoutAction = useLogoutAction();
   const actorId = auth.status === "resolving" ? null : auth.user?.id ?? "anonymous";
@@ -604,10 +660,12 @@ function AppFrame({
     return () => window.removeEventListener("storage", onStorage);
   }, [actorId, invalidateAuthStore]);
   const logout = useCallback(async () => {
+    if (viewAs.getSnapshot().pending) return false;
+    await viewAs.exit();
     const success = await sourceLogoutAction.logout();
     if (success) clearAppearanceCache();
     return success;
-  }, [sourceLogoutAction.logout]);
+  }, [sourceLogoutAction.logout, viewAs]);
   const logoutAction = useMemo(() => ({ ...sourceLogoutAction, logout }), [logout, sourceLogoutAction]);
   return (
     <AuthStateProvider auth={auth}>
@@ -648,6 +706,11 @@ function RuntimeSessionProvider({
       <AppearanceProvider host={appearance}>{children}</AppearanceProvider>
     </AppRuntimeProvider>
   );
+}
+
+/** Public and other layouts retain an exit path when leaving console chrome. */
+function ViewAsLayoutNotice({ children }: { children: ReactNode }): ReactNode {
+  return <><ViewAsBanner />{children}</>;
 }
 
 function HomeRedirect({ fallback, confined }: { fallback: string; confined: boolean }): ReactNode {

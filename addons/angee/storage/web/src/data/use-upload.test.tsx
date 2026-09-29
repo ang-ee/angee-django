@@ -2,6 +2,8 @@
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { AppRuntimeProvider } from "@angee/ui/runtime";
+import type { ReactNode } from "react";
 
 const uploadMocks = vi.hoisted(() => ({
   begin: vi.fn(),
@@ -35,6 +37,17 @@ import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
 import { useStorageUpload } from "./use-upload";
 
 describe("useStorageUpload", () => {
+  test("preview blocks programmatic uploads and retries before starting transport", () => {
+    const { result } = renderHook(() => useStorageUpload(), { wrapper: ({ children }: { children: ReactNode }) =>
+      <AppRuntimeProvider runtime={{ auth: { user: null, status: "authenticated", hasRole: () => false,
+        viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+      } }}>{children}</AppRuntimeProvider>,
+    });
+    act(() => { result.current.upload([new File(["hello"], "hello.txt")]); result.current.retry("old-upload"); });
+    expect(result.current.tasks).toEqual([]);
+    expect(uploadMocks.begin).not.toHaveBeenCalled();
+    expect(uploadMocks.finalize).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     uploadMocks.begin.mockReset();
     uploadMocks.finalize.mockReset();

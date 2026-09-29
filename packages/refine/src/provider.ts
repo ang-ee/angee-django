@@ -232,7 +232,7 @@ export function createAngeeHasuraDataProviders(
 
 export function createAngeeHasuraLiveProvider(
   options: AngeeHasuraLiveProviderOptions,
-): LiveProvider {
+): AngeeChangeLiveProvider {
   const wsClient = graphqlWS.createClient({
     ...options.clientOptions,
     url: options.clientOptions?.url
@@ -250,7 +250,13 @@ type ChangeConsumer = (data: unknown) => void;
 
 interface ChangeSubscription {
   dispose: () => void;
+  start: () => void;
   consumers: Set<ChangeConsumer>;
+}
+
+export interface AngeeChangeLiveProvider extends LiveProvider {
+  /** Retain mounted consumers while closing all upstream change subscriptions. */
+  setEnabled: (enabled: boolean) => void;
 }
 
 type AuthoredQueryInvalidationClient = Pick<QueryClient, "cancelQueries" | "invalidateQueries">;
@@ -259,7 +265,7 @@ export function createAngeeChangeLiveProvider(
   client: GraphQLWsClient,
   resources: readonly AngeeLiveResource[],
   options: { queryClient?: AuthoredQueryInvalidationClient } = {},
-): LiveProvider {
+): AngeeChangeLiveProvider {
   const resourcesByList = resourcesByListRoot(resources);
   const resourcesByModel = resourcesByModelLabel(resources);
   // graphql-ws does not dedup identical documents, so fan one upstream
@@ -268,6 +274,7 @@ export function createAngeeChangeLiveProvider(
   // label) alike — and tear the socket subscription down only when the last
   // consumer leaves.
   const subscriptions = new Map<string, ChangeSubscription>();
+  let enabled = true;
   let stopConnectionListener: () => void = noopSubscription;
   const liveInvalidation = options.queryClient
     ? createAuthoredLiveInvalidation(options.queryClient)
@@ -295,6 +302,7 @@ export function createAngeeChangeLiveProvider(
     };
     const entry = subscriptions.get(changesRoot) ?? {
       dispose: noopSubscription,
+      start: noopSubscription,
       consumers: new Set<ChangeConsumer>(),
     };
     entry.consumers.add(consumer);
@@ -303,6 +311,7 @@ export function createAngeeChangeLiveProvider(
         // Changes have no replay cursor. Every new socket connection must catch
         // up native authored reads, including rows retained outside the head.
         stopConnectionListener = client.on("connected", () => {
+          if (!enabled) return;
           const models = resources
             .filter((resource) => subscriptions.has(resource.roots.changes ?? ""))
             .map((resource) => resource.modelLabel);
@@ -310,29 +319,37 @@ export function createAngeeChangeLiveProvider(
         });
       }
       subscriptions.set(changesRoot, entry);
-      entry.dispose = client.subscribe(
-        { query: changeSubscriptionDocument(changesRoot) },
-        {
-          next: (result) => {
-            // One upstream result is one change, however many consumers share it.
-            liveInvalidation?.push(liveChangeFromResult(result.data, changesRoot, resource));
-            entry.consumers.forEach((c) => c(result.data));
+      entry.start = () => {
+        // Ignore late deliveries from a disposed subscription, even after resume.
+        let active = true;
+        const dispose = client.subscribe(
+          { query: changeSubscriptionDocument(changesRoot) },
+          {
+            next: (result) => {
+              if (!active || !enabled) return;
+              // One upstream result is one change, however many consumers share it.
+              liveInvalidation?.push(liveChangeFromResult(result.data, changesRoot, resource));
+              entry.consumers.forEach((c) => c(result.data));
+            },
+            error: (error) => {
+              if (!active) return;
+              console.error(
+                "Angee live subscription failed; the next subscriber will reconnect.",
+                { changesRoot, model: resource.modelLabel },
+                error,
+              );
+              if (subscriptions.get(changesRoot) === entry) {
+                entry.dispose();
+                subscriptions.delete(changesRoot);
+                stopUnusedConnectionListener();
+              }
+            },
+            complete: () => undefined,
           },
-          error: (error) => {
-            console.error(
-              "Angee live subscription failed; the next subscriber will reconnect.",
-              { changesRoot, model: resource.modelLabel },
-              error,
-            );
-            if (subscriptions.get(changesRoot) === entry) {
-              entry.dispose();
-              subscriptions.delete(changesRoot);
-              stopUnusedConnectionListener();
-            }
-          },
-          complete: () => undefined,
-        },
-      );
+        );
+        entry.dispose = () => { if (active) { active = false; dispose(); } };
+      };
+      if (enabled) entry.start();
     }
     return () => {
       entry.consumers.delete(consumer);
@@ -345,6 +362,15 @@ export function createAngeeChangeLiveProvider(
   }
 
   return {
+    setEnabled(next) {
+      if (next === enabled) return;
+      enabled = next;
+      if (!enabled) liveInvalidation?.clear();
+      subscriptions.forEach((entry) => {
+        if (enabled) entry.start();
+        else entry.dispose();
+      });
+    },
     subscribe({ channel, callback, params }) {
       const targets = changeTargetsFromSubscribeParams(
         params,

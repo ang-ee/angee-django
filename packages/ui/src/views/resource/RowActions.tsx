@@ -10,6 +10,8 @@ import { errorMessage, useConfirm, useToast } from "../../feedback";
 import { Glyph } from "../../chrome/Glyph";
 import { Button, type ButtonVariant } from "../../ui/button";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
+import { useRuntimeViewAs } from "../../runtime";
+import { useLatestRef } from "../../lib/use-latest-ref";
 
 export interface RowActionConfirmCopy<TRow extends Row> {
   title: (row: TRow) => React.ReactNode;
@@ -308,6 +310,7 @@ function AuthoredRowActionButton<TRow extends Row>({
   row,
 }: AuthoredRowActionButtonProps<TRow>): React.ReactElement {
   const confirmAction = useRowActionConfirmation(action, row);
+  const preview = useLatestRef(useRuntimeViewAs());
   const toast = useToast();
   const mutationOptions = React.useMemo(
     () => ({
@@ -325,6 +328,7 @@ function AuthoredRowActionButton<TRow extends Row>({
   const runArmed = React.useCallback(async (): Promise<void> => {
     try {
       if (action.confirm && !await confirmAction()) return;
+      if (preview.current.viewAs || preview.current.pending) return;
       controller.commit(action.id, row);
       // The unexported declaration brand proves this document and projector
       // were paired by defineRowAction before the heterogeneous array erased TDocument.
@@ -340,7 +344,7 @@ function AuthoredRowActionButton<TRow extends Row>({
     } finally {
       controller.release(action.id, row);
     }
-  }, [action, confirmAction, controller, mutate, row, toast]);
+  }, [action, confirmAction, controller, mutate, preview, row, toast]);
 
   return (
     <RowActionButton
@@ -368,6 +372,7 @@ function PageRowActionButton<TRow extends Row>({
   row,
 }: PageRowActionButtonProps<TRow>): React.ReactElement {
   const confirmAction = useRowActionConfirmation(action, row);
+  const preview = useLatestRef(useRuntimeViewAs());
   const active =
     controller.pending?.actionId === action.id
     && controller.pending.row === row
@@ -376,12 +381,13 @@ function PageRowActionButton<TRow extends Row>({
   const runArmed = React.useCallback(async (): Promise<void> => {
     try {
       if (action.confirm && !await confirmAction()) return;
+      if (preview.current.viewAs || preview.current.pending) return;
       controller.commit(action.id, row);
       await action.onSelect(row);
     } finally {
       controller.release(action.id, row);
     }
-  }, [action, confirmAction, controller, row]);
+  }, [action, confirmAction, controller, preview, row]);
   return (
     <RowActionButton
       action={action}
@@ -411,6 +417,8 @@ function RowActionButton<TRow extends Row>({
   row,
   onSelect,
 }: RowActionButtonProps<TRow>): React.ReactElement {
+  const preview = useRuntimeViewAs();
+  const blocked = Boolean(preview.viewAs || preview.pending);
   return (
     <Button
       type="button"
@@ -418,11 +426,11 @@ function RowActionButton<TRow extends Row>({
       size={action.icon ? "iconSm" : "sm"}
       aria-label={action.label}
       title={action.icon ? action.label : undefined}
-      disabled={busy || action.disabled(row)}
+      disabled={blocked || busy || action.disabled(row)}
       pending={active && action.pendingPolicy === "active-row"}
       onClick={(event) => {
         event.stopPropagation();
-        if (action.disabled(row)) return;
+        if (blocked || busy || action.disabled(row)) return;
         onSelect();
       }}
     >

@@ -51,6 +51,8 @@ import {
 import { useSaveOperation } from "../resource/resource-operations";
 import { validationErrorsFromError, serverErrorsFromForm } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
+import { useRuntimeViewAs } from "../../runtime";
+import { useLatestRef } from "../../lib/use-latest-ref";
 
 type RowRecord = BaseRecord & Row;
 
@@ -187,6 +189,9 @@ export function useFormViewSave({
   onDiscarded,
   t,
 }: UseFormViewSaveProps): FormViewSaveSurface {
+  const preview = useRuntimeViewAs();
+  const previewBlocked = Boolean(preview.viewAs || preview.pending);
+  const previewBlockedRef = useLatestRef(previewBlocked);
   const toast = useToast();
   const refineResource = refineResourceName(dataResource);
   const updateRevision = Boolean(dataResource?.updateArguments?.some(({ name }) => name === "expected_revision"));
@@ -584,7 +589,7 @@ export function useFormViewSave({
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
-      if (submittingRef.current) return;
+      if (submittingRef.current || previewBlockedRef.current) return;
       clearErrors();
       if (formReadOnly) {
         throw new Error(`Resource mutation for "${resource}" is disabled.`);
@@ -676,6 +681,7 @@ export function useFormViewSave({
       formFields,
       formReadOnly,
       isCreate,
+      previewBlockedRef,
       commitSavedRecord,
       createSeedNames,
       linesActive,
@@ -698,6 +704,7 @@ export function useFormViewSave({
   const submitForm = form.handleSubmit(submitValues);
   const applyPatch = React.useCallback(
     async (patch: Record<string, unknown>): Promise<Row | null> => {
+      if (previewBlockedRef.current) return null;
       if (id == null) throw new Error("No open record to update.");
       if (formReadOnly) {
         throw new Error(`Resource mutation for "${resource}" is disabled.`);
@@ -713,7 +720,7 @@ export function useFormViewSave({
       }
       return saved;
     },
-    [clearErrors, commitSavedRecord, formReadOnly, id, resource, runSubmit],
+    [clearErrors, commitSavedRecord, formReadOnly, id, previewBlockedRef, resource, runSubmit],
   );
   const patchRecord = React.useCallback((patch: Record<string, unknown>): void => {
     if (record) { commitSavedRecord(patch, { refetchPartial: false }); clearErrors(); }
@@ -764,8 +771,8 @@ export function useFormViewSave({
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>
-      formReadOnly || Boolean(field.readOnly),
-    [formReadOnly],
+      formReadOnly || previewBlocked || Boolean(field.readOnly),
+    [formReadOnly, previewBlocked],
   );
   const discardChanges = React.useCallback(() => {
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });

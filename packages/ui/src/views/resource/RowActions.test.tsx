@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
+import { AppRuntimeProvider } from "../../runtime";
 import type { TypedDocumentNode } from "@angee/refine";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -60,6 +61,18 @@ const ROWS: readonly TestRow[] = [
 ];
 
 describe("declared row actions", () => {
+  test("preview leaves row verbs visible but disables pointer and keyboard activation", () => {
+    render(<AppRuntimeProvider runtime={{ auth: { user: { id: "person", name: "Person" }, status: "authenticated", hasRole: () => false,
+      viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+    } }}><ActionsHarness action={defaultAction()} /></AppRuntimeProvider>);
+    const button = withinRow("row-a");
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    fireEvent.keyDown(button, { key: "Enter" });
+    fireEvent.keyDown(button, { key: " " });
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     mocks.confirm.mockReset();
     mocks.confirm.mockResolvedValue(true);

@@ -526,6 +526,13 @@ history uses native Query pages with domain-owned
 
 ## Form save contracts
 
+View-as is a memory-only, read-only preview: IAM supplies the viewed identity,
+real identity and permitted people. Compose `useRuntimeViewAs` at shared write
+owners so permitted actions remain visible but disabled, including keyboard,
+submit and upload paths. The app resets actor-bound queries on enter and exit;
+change subscriptions stay closed during preview because WebSockets retain their
+handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
+
 `FormView` treats an existing record as read-only when its resource has no update
 root and the caller supplies no custom submit handler. A create-only resource can
 still open a creation form. Fixtures must declare the write operations they intend
