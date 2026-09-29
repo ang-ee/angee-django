@@ -15,7 +15,7 @@ from angee.base.scoping import read_scoped_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.managers import ResolvedDecision
 from angee.workflows.reviews import Ask
-from angee.workflows.states import DONE_OUTCOME
+from angee.workflows.states import DONE_OUTCOME, RunRelation
 from angee.workflows.steps import Done, Fail, NextPage, Step, Wait
 
 
@@ -155,6 +155,14 @@ class StepContext:
         artifact = type(self.step_run).objects.artifact(self.step_run, record, label=label, actor=self.actor)
         self.pending_artifacts.append(artifact)
         return artifact
+
+    def start_run(self, workflow: Any, *, subject: Any = None, input: Any = None,
+                  request_key: str | None = None, relation: str = str(RunRelation.OWNED), version: Any = None) -> Any:
+        """Start one child through admission, deriving a retry-stable key when omitted."""
+        return type(self.run).objects.start(
+            workflow, actor=self.actor, subject=subject, input=input, request_key=request_key,
+            parent_step=self.step_run, relation=relation, version=version,
+        )
 
     def _require_mode(self, mode: str) -> None:
         """Reject operations outside their declared transaction boundary."""

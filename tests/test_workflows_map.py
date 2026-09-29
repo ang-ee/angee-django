@@ -68,14 +68,16 @@ def test_map_item_is_the_typed_exclusive_result_contract():
     success = MapItem[int].model_validate({"index": 0, "outcome": "done", "output": 7})
     failure = MapItem[int].model_validate({"index": 1, "outcome": "error", "error": "Unavailable."})
     empty = MapItem[int | None].model_validate({"index": 2, "outcome": "done", "output": None})
+    observed = MapItem[int].model_validate({"index": 3, "outcome": "error", "output": 7})
     assert success.output == 7
     assert success.model_dump(mode="json") == {"index": 0, "outcome": "done", "output": 7}
     assert failure.model_dump(mode="json") == {"index": 1, "outcome": "error", "error": "Unavailable."}
     assert empty.model_dump(mode="json") == {"index": 2, "outcome": "done", "output": None}
+    assert observed.model_dump(mode="json") == {"index": 3, "outcome": "error", "output": 7}
     for invalid in (
         {"index": 0, "outcome": "done"},
         {"index": 0, "outcome": "done", "output": 7, "error": "Unavailable."},
-        {"index": 0, "outcome": "error", "output": 7},
+        {"index": 0, "outcome": "done", "error": "Unavailable."},
         {"index": -1, "outcome": "done", "output": 7},
         {"index": 0, "outcome": "done", "output": "not a number"},
     ):

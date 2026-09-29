@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from angee.decisions.contracts import DecisionContext, DecisionRecordReference, DecisionRequest
 from angee.decisions.forms import Action
 from angee.decisions.states import Verdict
+from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.maps import MapItem
 from angee.workflows.reviews import ReviewStep
 from angee.workflows.steps import Done, EmptyOutput, Step
@@ -116,3 +117,32 @@ class PublishNote(Step[NotePublicationOutput, NotePublicationOutput, None]):
 
         note = ctx.subject_for_update()
         return ctx.done(note.publish(), outcome="published")
+
+
+class StartNotePublication(Step[None, AwaitRunInput, None]):
+    """Start one owned publication through the workflow context's admission owner."""
+
+    key = "note_start_publication"
+    label = "Start note publication"
+    category = "Activity"
+    subject = "notes.note"
+
+    def run(self, ctx: Any) -> Done:
+        """Keep the note and actor, using the step's derived child request key."""
+
+        workflow = apps.get_model("workflows", "Workflow").objects.with_actor(ctx.actor).get(key="note-publish")
+        child = ctx.start_run(workflow, subject=ctx.subject, relation="owned")
+        return ctx.done({"run_id": child.sqid})
+
+
+class NotePublicationResult(Step[None, NotePublicationOutput | EmptyOutput, None]):
+    """Finish the parent with the child's safe result, including empty terminal output."""
+
+    key = "note_publication_result"
+    label = "Note publication result"
+    category = "Activity"
+
+    def run(self, ctx: Any) -> Done:
+        """Preserve the child output; its exact outcome remains on the await step."""
+
+        return ctx.done(ctx.input)

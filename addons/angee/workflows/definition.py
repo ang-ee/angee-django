@@ -18,6 +18,7 @@ from angee.base.jsonschema import (
     embed_schema,
     schema_at,
     schemas_match,
+    union_schema,
     unmatched_properties,
     validate,
     validator,
@@ -72,6 +73,16 @@ class Body(BaseModel):
     step: str
     config: dict[str, Any] = Field(default_factory=dict)
     input: InputBinding | None = None
+
+    @cached_property
+    def implementation(self) -> type[Step[Any, Any, Any]]:
+        """Resolve this declaration's implementation once for all its contracts."""
+        return resolve_step(self.step)
+
+    @cached_property
+    def parsed_config(self) -> Any:
+        """Parse once for all declaration contracts, preserving validator semantics."""
+        return self.implementation.parse_config(self.config)
 
 
 class Node(Body):
@@ -164,21 +175,16 @@ class Definition(BaseModel):
             if node.body is not None:
                 yield f"{key}.body", node.body, ["nodes", key, "body"]
 
-    @cached_property
-    def _steps(self) -> dict[str, type[Step[Any, Any, Any]]]:
-        """Retain only implementation classes already requested from this graph."""
-        return {}
-
     def step(self, key: str) -> type[Step[Any, Any, Any]]:
         """Resolve one node's class once, without resolving unrelated draft nodes."""
-        if key not in self._steps:
-            self._steps[key] = resolve_step(self.node(key).step)
-        return self._steps[key]
+        return self.node(key).implementation
 
-    def output_schema(self, key: str) -> dict[str, Any]:
+    def output_schema(self, key: str, outcomes: set[str] | None = None) -> dict[str, Any]:
         """Resolve node output, including the map body's typed item contract."""
         step = self.step(key)
-        return Map.output_schema_for(self.step(f"{key}.body")) if step is Map else step.output_schema()
+        return Map.output_schema_for(self.step(f"{key}.body")) if step is Map else step.output_schema(
+            config=self.node(key).parsed_config, outcomes=outcomes,
+        )
 
     def node_input_schema(self, key: str) -> dict[str, Any]:
         """Give map admission the authored list contract instead of list[Any]."""
@@ -302,7 +308,7 @@ class Definition(BaseModel):
                         Issue(node=key, path=[*path, "step"], code="schema", message=f"{name}: {error}")
                     )
             try:
-                config = step.parse_config(node.config)
+                config = node.parsed_config
             except ValidationError as error:
                 issues.append(Issue(node=key, path=[*path, "config"], code="config", message=str(error)))
                 continue
@@ -423,7 +429,7 @@ class Definition(BaseModel):
                 for source_key, routed_outcomes in incoming[key].items():
                     try:
                         source_step = self.step(source_key)
-                        source_schema = self.output_schema(source_key)
+                        source_schema = self.output_schema(source_key, routed_outcomes - source_step.empty_outcomes)
                     except (ImproperlyConfigured, ValidationError):
                         continue
                     if (
@@ -464,7 +470,8 @@ class Definition(BaseModel):
                     issues.append(Issue(path=path, code="result", message="Result names an unknown producer outcome."))
                 if result.output is not None:
                     if isinstance(result.output, SourceBinding) and any(
-                        result.eligible(outcome) for outcome in self.step(result.source).empty_outcomes
+                        result.eligible(outcome)
+                        for outcome in self.step(result.source).empty_outcomes | {ERROR_OUTCOME}
                     ):
                         issues.append(
                             Issue(
@@ -486,6 +493,7 @@ class Definition(BaseModel):
                             None,
                             [*path, "output"],
                             allowed=allowed,
+                            outcomes={result.source: set(result.when)} if result.when else {},
                         )
                     )
         return issues
@@ -499,7 +507,7 @@ class Definition(BaseModel):
                 self.result_schema(result)
                 if isinstance(result.output, SourceBinding):
                     for source in result.output.sources:
-                        source_schema = self._source_schema(source)
+                        source_schema = self._source_schema(source, set(result.when) if result.when else None)
                         if schema_at(source_schema, result.output.path, required=True) is None:
                             issues.append(
                                 Issue(
@@ -520,6 +528,7 @@ class Definition(BaseModel):
         path: list[str | int],
         *,
         allowed: set[str],
+        outcomes: Mapping[str, set[str]] | None = None,
     ) -> list[Issue]:
         issues: list[Issue] = []
         target = schema_at(target, []) or {}
@@ -552,7 +561,10 @@ class Definition(BaseModel):
                 try:
                     schema = (schema_at(self.map_items_schema(node.partition(".")[0]), [0]) or {}) if (
                         source == ITEM_SOURCE and node is not None
-                    ) else self.output_schema(source)
+                    ) else self.output_schema(
+                        source,
+                        self.predecessors[node.partition(".")[0]].get(source) if node else (outcomes or {}).get(source),
+                    )
                 except (KeyError, ImproperlyConfigured):
                     messages.append(f"Unknown source {source!r}.")
                     continue
@@ -582,8 +594,8 @@ class Definition(BaseModel):
             self._validators[key] = validator(schema)
         return self._validators[key]
 
-    def _source_schema(self, source: str) -> dict[str, Any]:
-        return self.input_schema if source == INPUT_SOURCE else self.output_schema(source)
+    def _source_schema(self, source: str, outcomes: set[str] | None = None) -> dict[str, Any]:
+        return self.input_schema if source == INPUT_SOURCE else self.output_schema(source, outcomes)
 
     @staticmethod
     def _field_schema(target: dict[str, Any], field: str | None) -> dict[str, Any] | None:
@@ -760,12 +772,13 @@ class Definition(BaseModel):
         """Describe one result's actual projection, retaining local schema refs."""
         if result.output is None:
             step = self.step(result.source)
+            outcomes = set(result.when) if result.when else None
             if any(result.eligible(outcome) for outcome in step.empty_outcomes):
                 empty = Step._schema(EmptyOutput, "serialization")
-                return {"anyOf": [self.output_schema(result.source), empty]} if (
+                return union_schema(self.output_schema(result.source, outcomes), empty) if (
                     result.when is None or set(result.when) - step.empty_outcomes
                 ) else empty
-            return self.output_schema(result.source)
+            return self.output_schema(result.source, outcomes)
         definitions: dict[str, Any] = {}
         properties: dict[str, Any] = {}
         required: list[str] = []
@@ -777,7 +790,9 @@ class Definition(BaseModel):
             else:
                 choices = []
                 for source in binding.sources:
-                    source_schema = self._source_schema(source)
+                    source_schema = self._source_schema(
+                        source, set(result.when) if source == result.source and result.when else None,
+                    )
                     source_value = schema_at(source_schema, binding.path)
                     if source_value is None:
                         raise ValidationError("Unknown result output path.")
@@ -793,6 +808,19 @@ class Definition(BaseModel):
             "additionalProperties": False,
             "$defs": definitions,
         }
+
+    @cached_property
+    def output_schemas(self) -> dict[str, dict[str, Any]]:
+        """Combine result contracts with native terminal fallbacks by outcome."""
+        empty = Step._schema(EmptyOutput, "serialization")
+        alternatives = {outcome: [empty] for outcome in ("done", ERROR_OUTCOME, "canceled")}
+        for result in self.results:
+            step = self.step(result.source)
+            for outcome in step.available_outcomes(self.node(result.source).parsed_config):
+                if result.eligible(outcome):
+                    schema = self.result_schema(result.model_copy(update={"when": [outcome]}))
+                    alternatives.setdefault(result.outcome or outcome, []).append(schema)
+        return {outcome: union_schema(*choices) for outcome, choices in alternatives.items()}
 
     def result_for(self, rows: Iterable[Any], run_input: Any) -> tuple[str, Any] | None:
         """Select the first eligible result in authored document order."""

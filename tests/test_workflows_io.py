@@ -577,9 +577,13 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
 
     terminal = system_queryset(WorkflowRun).get(pk=run.pk)
     assert terminal.status == RunStatus.FAILED
-    assert len(sent) == deliveries_before_failure
+    assert sent[deliveries_before_failure:] == [
+        ("workflows.wake_run", {"kwargs": {"run_id": run.pk}, "queue": None, "expires": None}),
+    ]
     assert StepRun.objects.execute(sibling.pk) is False
-    assert StepRun.objects.tick() == {"woken": 0, "reaped": 0, "redispatched": 0, "decisions": 0}
+    assert StepRun.objects.tick() == {
+        "woken": 0, "reaped": 0, "redispatched": 0, "decisions": 0, "runs": 0, "pruned": 0,
+    }
     sibling.refresh_from_db()
     assert (sibling.status, sibling.state, sibling.wake_at, sibling.attempt, sibling.retries) == preserved
     assert not system_queryset(StepRun).filter(run=run, node_key="join").exists()

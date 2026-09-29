@@ -57,6 +57,7 @@ export function StepRuns({ runId }: { runId: string }) {
         <Field name="outcome" label={t("run.outcome")} />
         <Field name="attempt" label={t("step.attempts")} />
         <Field name="waiting_kind" label={t("step.waitKind")} showWhen={(row) => optionToken(row.status) === "waiting"} />
+        <Field name="awaited_run" label={t("step.awaitedRun")} showWhen={(row) => optionToken(row.waiting_kind) === "run"} />
         <Field name="wait_reason" label={t("step.waitReason")} showWhen={(row) => optionToken(row.status) === "waiting"} />
       </Group>
       <Field name="input" label={t("run.input")} widget="json" />

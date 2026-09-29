@@ -12,6 +12,12 @@ def execute(step_run_id: int) -> bool:
     return apps.get_model("workflows", "StepRun").objects.execute(step_run_id)
 
 
+@shared_task(name="workflows.wake_run")
+def wake_run(run_id: int) -> int:
+    """Wake target waiters after terminal settlement releases the child's lock."""
+    return apps.get_model("workflows", "StepRun").objects.wake_runs(run_id)
+
+
 @shared_task(name="workflows.tick")
 def tick() -> dict[str, int]:
     """Recover due rows on the shared worker, using the database clock."""

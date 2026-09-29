@@ -33,7 +33,7 @@ test("versions and recent runs are filtered by the open workflow using native li
     const request = onRequest.mock.calls.find(([entry]) => entry.query.includes(`${name}(`))?.[0];
     expect(request?.variables.where).toEqual({ _and: [
       ...(name === "workflowrun" ? [{ status: { _eq: "failed" } }] : []),
-      { workflow: { _eq: "wfl_review" } },
+      { [name === "workflowrun" ? "version__workflow" : "workflow"]: { _eq: "wfl_review" } },
     ] });
   }
 });

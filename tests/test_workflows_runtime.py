@@ -671,8 +671,8 @@ def test_failed_attempt_retains_bound_input_and_database_start_time(execution, r
     assert system_queryset(StepAttempt).get(step_run=last).error == "Keep my input."
 
 
-def test_publish_precedes_failing_commit_send(execution, monkeypatch):
-    """One explicit run publication survives a later non-robust enqueue failure."""
+def test_publish_precedes_failing_commit_send(execution, monkeypatch, caplog):
+    """One explicit run publication survives a logged commit-time enqueue failure."""
     actor, _ = execution
     workflow = load_workflow(document("entry", "last"), key="publish_before_send", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
@@ -688,11 +688,11 @@ def test_publish_precedes_failing_commit_send(execution, monkeypatch):
     change_published.connect(observe, sender=WorkflowRun, weak=False)
     monkeypatch.setattr(celery_app, "send_task", fail_send)
     try:
-        with pytest.raises(RuntimeError, match="Broker unavailable"):
-            StepRun.objects.execute(step_run.pk)
+        assert StepRun.objects.execute(step_run.pk)
     finally:
         change_published.disconnect(observe, sender=WorkflowRun)
     assert len(published) == 1
+    assert "Broker unavailable" in caplog.text
     assert system_queryset(StepRun).get(pk=step_run.pk).status == StepRunStatus.SUCCEEDED
     assert system_queryset(StepRun).get(run=run, node_key="last").status == StepRunStatus.READY
 

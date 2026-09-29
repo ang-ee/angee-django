@@ -57,7 +57,7 @@ class RetryPolicy:
 class Settlement:
     """A body's completed, waiting or failed attempt, checked before persistence."""
 
-    kind: Literal["done", "wait", "next_page", "fail", "ask", "map"]
+    kind: Literal["done", "wait", "next_page", "fail", "ask", "map", "run"]
     output: Any = field(default_factory=dict)
     outcome: str = ""
     until: datetime | None = None
@@ -181,7 +181,7 @@ class Step[I, O, C](ImplBase):
         return cls._schema(cls.input_model, "validation")
 
     @classmethod
-    def output_schema(cls) -> dict[str, Any]:
+    def output_schema(cls, *, config: Any = None, outcomes: set[str] | None = None) -> dict[str, Any]:
         """Return the output model's cached persisted-value schema."""
         return cls._schema(cls.output_model, "serialization")
 

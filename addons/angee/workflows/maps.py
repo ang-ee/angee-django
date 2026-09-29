@@ -36,11 +36,10 @@ class MapItem[O](BaseModel):
     @model_validator(mode="after")
     def check_result(self) -> Self:
         """Keep the two result alternatives exclusive and outcome-consistent."""
-        if self.outcome == ERROR_OUTCOME:
-            if self.error is MISSING or self.output is not MISSING:
-                raise ValueError("A failed map item requires error and no output.")
-        elif self.output is MISSING or self.error is not MISSING:
-            raise ValueError("A succeeded map item requires output and no error.")
+        if (self.output is MISSING) == (self.error is MISSING):
+            raise ValueError("A map item requires exactly one of output and error.")
+        if self.error is not MISSING and self.outcome != ERROR_OUTCOME:
+            raise ValueError("A failed map item requires the error outcome.")
         return self
 
 

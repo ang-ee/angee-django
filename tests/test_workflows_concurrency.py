@@ -21,6 +21,7 @@ from rebac import actor_context, system_context
 
 from angee.base.scoping import system_queryset
 from angee.jobs.enqueue import celery_app
+from angee.workflows import tasks as workflow_tasks
 from angee.workflows.definition import Definition
 from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunQuerySet
 from angee.workflows.states import RunStatus, StepRunStatus
@@ -135,13 +136,14 @@ def test_t2_serialized_branch_settlements_plan_one_join(execution, register_step
         assert first.result(timeout=10)
     # No table scan drives recovery: only messages sent by committed advances.
     delivered = 0
+    handlers = {task.name: task for task in (workflow_tasks.execute, workflow_tasks.wake_run)}
     while delivered < len(sent):
         assert delivered < 20, "Unexpected redispatch loop."
         name, envelope = sent[delivered]
-        assert name == "workflows.execute"
-        StepRun.objects.execute(envelope["kwargs"]["step_run_id"])
+        handlers[name](**envelope["kwargs"])
         delivered += 1
-    assert row(run, "join").pk in [envelope["kwargs"]["step_run_id"] for _, envelope in sent]
+    assert row(run, "join").pk in [envelope["kwargs"]["step_run_id"] for name, envelope in sent
+                                   if name == "workflows.execute"]
     assert row(run, "join").status == StepRunStatus.SUCCEEDED
     assert system_queryset(StepRun).filter(run=run, node_key="join").count() == 1
     assert system_queryset(StepAttempt).filter(step_run__run=run, step_run__node_key="join").count() == 1
@@ -640,7 +642,7 @@ def test_t4_marked_transient_failure_requires_acknowledged_redelivery(execution,
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
-def test_t5_broker_failure_keeps_a_durable_ready_row(execution, monkeypatch):
+def test_t5_broker_failure_keeps_a_durable_ready_row(execution, monkeypatch, caplog):
     """An enqueue failure commits admission and tick delivers its retained outbox row."""
     actor, sent = execution
     workflow = load_workflow(document("entry"), key="broker_recovery", actor=actor)
@@ -650,8 +652,8 @@ def test_t5_broker_failure_keeps_a_durable_ready_row(execution, monkeypatch):
 
     with monkeypatch.context() as patch:
         patch.setattr(celery_app, "send_task", unavailable)
-        with pytest.raises(RuntimeError, match="Broker unavailable"):
-            WorkflowRun.objects.start(workflow, actor=actor)
+        WorkflowRun.objects.start(workflow, actor=actor)
+    assert "Broker unavailable" in caplog.text
     run = system_queryset(WorkflowRun).get(version__workflow=workflow)
     step_run = row(run)
     assert step_run.status == StepRunStatus.READY and step_run.attempt == 0

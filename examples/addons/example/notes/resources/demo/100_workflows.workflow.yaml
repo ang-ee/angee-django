@@ -38,3 +38,30 @@ rows:
             step: note_collect_reviews
         results:
           - {from: summarize}
+  - xref: note_publication_parent
+    fields:
+      key: note-publication-parent
+      name: Note publication parent
+      description: Start an owned publication for this note and await its result.
+      subject_model: notes.note
+      publish: true
+      draft:
+        nodes:
+          start:
+            step: note_start_publication
+            next: {done: await}
+          await:
+            step: await_run
+            config: {expects: note-publish}
+            next:
+              published: result
+              rejected: result
+              expired: result
+              superseded: result
+              done: result
+              error: result
+              canceled: result
+          result:
+            step: note_publication_result
+        results:
+          - {from: result}

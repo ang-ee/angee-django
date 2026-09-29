@@ -403,6 +403,21 @@ def embed_schema(
     return constraint
 
 
+def union_schema(*schemas: dict[str, Any]) -> dict[str, Any]:
+    """Combine alternatives, preserving local references and removing equal branches."""
+    choices: list[dict[str, Any]] = []
+    for schema in schemas:
+        check_schema(schema)
+        if not any(schemas_match(schema, existing) for existing in choices):
+            choices.append(schema)
+    if not choices:
+        return {"not": {}}
+    if len(choices) == 1:
+        return copy.deepcopy(choices[0])
+    definitions: dict[str, Any] = {}
+    return {"anyOf": [embed_schema(schema, definitions) for schema in choices], "$defs": definitions}
+
+
 def compose_schema(
     schema: dict[str, Any],
     constraints: Iterable[tuple[Sequence[str | int], dict[str, Any], bool, bool]],

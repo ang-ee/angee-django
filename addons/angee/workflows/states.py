@@ -62,6 +62,13 @@ class RunStatus(TerminalStates):
     CANCELED = "canceled"
 
 
+class RunRelation(models.TextChoices):
+    """Whether a child belongs to its parent's lifecycle or continues independently."""
+
+    OWNED = "owned", "Owned"
+    CONTINUATION = "continuation", "Continuation"
+
+
 class StepRunStatus(TerminalStates):
     """Lifecycle of one graph node's execution."""
 
@@ -85,6 +92,7 @@ class WaitingKind(models.TextChoices):
     TIME = "time", "Time"
     DECISION = "decision", "Decision"
     MAP = "map", "Map"
+    RUN = "run", "Run"
     OPERATOR = "operator", "Operator"
 
 

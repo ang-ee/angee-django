@@ -15,6 +15,7 @@ class RunOriginField(models.GeneratedField):
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("expression", models.Case(
+            models.When(parent_step__isnull=False, then=models.Value(RunOrigin.WORKFLOW)),
             models.When(reprocess_of__isnull=False, then=models.Value(RunOrigin.REPROCESS)),
             default=models.Value(RunOrigin.MANUAL),
         ))

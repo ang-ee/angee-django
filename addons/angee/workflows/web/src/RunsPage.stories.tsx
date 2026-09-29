@@ -47,9 +47,9 @@ const runtime = {
 
 /** Real router, query transport and generated mutation documents over retained fixture rows. */
 export function RunStory({ list = false, waiting = false, redacted = false, unavailable = false, queryError = false, rejectAction = false,
-  run, steps, onRequest }: {
+  run, steps, children, onRequest }: {
   list?: boolean; waiting?: boolean; redacted?: boolean; unavailable?: boolean; queryError?: boolean; rejectAction?: boolean;
-  run?: Run; steps?: readonly StepRun[]; onRequest?: (request: RunRequest) => void;
+  run?: Run; steps?: readonly StepRun[]; children?: readonly Run[]; onRequest?: (request: RunRequest) => void;
 }) {
   const schemas = useMemo(() => {
     let current = run ?? runFixture();
@@ -102,17 +102,19 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       }
       if (query.includes("steprun_aggregate")) return jsonResponse({ data: { steprun_aggregate: { aggregate: { count: currentSteps.length } } } });
       if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: [{
-        key: { status: current.status, origin: current.origin, workflow_id: current.version?.workflow?.id, workflow__name: current.version?.workflow?.name },
+        key: { status: current.status, origin: current.origin, version__workflow_id: current.version?.workflow?.id,
+          version__workflow__name: current.version?.workflow?.name },
         aggregate: { count: 1 },
       }], totalCount: 1 } });
       if (/\bworkflow\s*\(/.test(query)) return jsonResponse({ data: { workflow: [current.version?.workflow], workflow_aggregate: { aggregate: { count: 1 } } } });
-      return jsonResponse({ data: { workflowrun: [current], workflowrun_aggregate: { aggregate: { count: 1 } } } });
+      const rows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];
+      return jsonResponse({ data: { workflowrun: rows, workflowrun_aggregate: { aggregate: { count: rows.length } } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
     ] } } } };
-  }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, onRequest]);
+  }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"
     initialEntry={list ? "/workflows/runs" : "/workflows/runs/wfr_review"} runtime={runtime}
     resourceName="workflows.WorkflowRun" resourceLabel="Runs" operationDocuments={documents}>

@@ -13,6 +13,7 @@ from angee.base.jsonschema import (
     materialize_schema,
     schema_at,
     schemas_match,
+    union_schema,
     unmatched_properties,
     validate,
     validation_issues,
@@ -410,3 +411,34 @@ def test_field_validation_uses_native_additional_property_rules():
     schema = {"patternProperties": {"^allowed_": {"type": "string"}}, "additionalProperties": False}
     issues = validation_issues(schema, {"allowed_name": "value", "extra": 1})
     assert set(issues) == {"extra"}
+
+
+def test_union_preserves_distinct_local_reference_roots_without_mutation():
+    """The same definition name can mean different things in separate alternatives."""
+    number = {"$ref": "#/$defs/Value", "$defs": {"Value": {"type": "integer"}}}
+    text = {"$ref": "#/$defs/Value", "$defs": {"Value": {"type": "string"}}}
+    before = copy.deepcopy((number, text))
+    combined = validator(union_schema(number, text))
+    assert combined.is_valid(3) and combined.is_valid("three")
+    assert not combined.is_valid({})
+    assert (number, text) == before
+
+
+def test_union_retains_recursive_references_and_distinct_assertions():
+    """Native recursive values stay usable; a stricter branch is not dropped."""
+    tree = {"type": "object", "properties": {"children": {"type": "array", "items": {"$ref": "#"}}}}
+    combined = validator(union_schema(tree, {"type": "integer", "minimum": 2}))
+    assert combined.is_valid({"children": [{"children": []}]})
+    assert combined.is_valid(2)
+    assert not combined.is_valid(1)
+    assert not combined.is_valid({"children": [1]})
+
+
+def test_union_reuses_equal_contracts_and_checks_single_or_empty_alternatives():
+    """Annotations do not create duplicate branches; no alternatives admits nothing."""
+    original = {"type": "integer", "title": "First"}
+    merged = union_schema(original, {"type": "integer", "title": "Second"})
+    assert merged == original and merged is not original
+    assert not validator(union_schema()).is_valid(None)
+    with pytest.raises(ValidationError, match="reference"):
+        union_schema({"$ref": "#/$defs/missing"})

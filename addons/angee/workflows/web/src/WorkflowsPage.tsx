@@ -17,7 +17,7 @@ export function WorkflowsPage() {
         <Column field="content_hash" header={t("catalogue.contentHash")} />
       </List> },
     { id: "runs", label: t("catalogue.recentRuns"), render: ({ recordId }) =>
-      <RunsList embedded baseFilter={{ workflow: { exact: recordId } }} /> },
+      <RunsList embedded baseFilter={{ "version.workflow": { exact: recordId } }} /> },
   ]}>
     <List order={{ name: "ASC" }} emptyContent={t("catalogue.empty")}>
       <Column field="key" header={t("catalogue.key")} />

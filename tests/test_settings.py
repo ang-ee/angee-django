@@ -1736,7 +1736,9 @@ def test_bare_settings_use_addon_owned_defaults(settings):
     steps = settings.ANGEE_WORKFLOW_STEP_CLASSES
     assert steps["review"] == "angee.workflows.reviews.Review"
     assert steps["map"] == "angee.workflows.maps.Map"
+    assert steps["await_run"] == "angee.workflows.awaits.AwaitRun"
     assert settings.ANGEE_WORKFLOW_MAP_CONCURRENCY == 10
+    assert settings.ANGEE_WORKFLOW_RETENTION_DAYS == 90
     assert {
         "prepare_pages", "recognize_page", "process_evidence", "infer_evidence",
     } <= steps.keys()

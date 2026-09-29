@@ -3,7 +3,8 @@
 Execution owns managers.py except DraftSave and WorkflowManager, tasks.py, and
 Definition.ready_nodes plus Definition._edge_live. Definition/validation/bindings
 owns the rest of definition.py, bindings.py, DraftSave, and WorkflowManager. Step contracts
-own steps.py, context.py, reviews.py, and maps.py. Models own models.py, fields.py, states.py, and permissions.zed.
+own steps.py, context.py, reviews.py, maps.py, and awaits.py. Models own models.py,
+fields.py, states.py, and permissions.zed.
 Blank lines, comments, docstrings, and decorators count; every source file line
 belongs to exactly one row. The README and addon declaration are named non-code
 exceptions. Bytecode caches and node_modules are generated artifacts. The web subtree has one
@@ -26,7 +27,7 @@ NON_CODE_FILES = frozenset({"README.md", "addon.toml"})
 """Named declarations and prose outside the physical code budgets."""
 
 WHOLE_FILE_ROWS = (
-    ("Step contract, context, built-in steps", 900, ("steps.py", "context.py", "reviews.py", "maps.py")),
+    ("Step contract, context, built-in steps", 900, ("steps.py", "context.py", "reviews.py", "maps.py", "awaits.py")),
     ("Models, constraints, permissions", 900, (
         "models.py", "fields.py", "states.py", "permissions.zed", "permissions.extends.zed",
     )),

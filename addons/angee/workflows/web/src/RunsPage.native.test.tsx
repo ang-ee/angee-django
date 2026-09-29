@@ -35,6 +35,26 @@ test("routed record uses the framework action menu, facts and retained JSON", as
   await waitFor(() => expect(document.body.textContent).toContain("R-7"));
 });
 
+test("parent references and the child tab compose the existing scoped runs list", async () => {
+  const requests: RunRequest[] = [];
+  render(<RunStory run={runFixture({ parent_step: { id: "wsr_parent", run: { id: "wfr_parent" } } })}
+    children={[runFixture({ id: "wfr_child", origin: "WORKFLOW" })]}
+    onRequest={(request) => requests.push(request)} />);
+  expect((await screen.findByRole("link", { name: "wfr_parent" })).getAttribute("href")).toBe("/workflows/runs/wfr_parent");
+  fireEvent.click(await screen.findByRole("tab", { name: "Child runs" }));
+  await waitFor(() => expect(requests.some(({ variables }) =>
+    (JSON.stringify(variables.where) ?? "").includes('"parent_step__run":{"_eq":"wfr_review"}'))).toBe(true));
+  await waitFor(() => expect(document.querySelector('a[href="/workflows/runs/wfr_child"]')).not.toBeNull());
+});
+
+test("a run waiter shows its target as a normal record reference", async () => {
+  render(<RunStory steps={[stepRunFixture({ status: "WAITING", waiting_kind: "RUN",
+    awaited_run: { id: "wfr_child" }, can_retry: false })]} />);
+  const step = await openStep();
+  expect(await within(step).findByText("Awaited run")).toBeTruthy();
+  expect((await within(step).findByRole("link", { name: "wfr_child" })).getAttribute("href")).toBe("/workflows/runs/wfr_child");
+});
+
 test("reprocess confirms then navigates to the returned replacement through the route owner", async () => {
   const requests: RunRequest[] = [];
   render(<RunStory onRequest={(request) => requests.push(request)} />);
@@ -137,7 +157,7 @@ test("run list groups and filters status, workflow and origin through shared met
     return where.includes('"status":{"_eq":"failed"}') && where.includes('"origin":{"_eq":"manual"}');
   })).toBe(true));
   fireEvent.click(await screen.findByRole("button", { name: "Record review" }));
-  await waitFor(() => expect(requests.some(({ variables }) => (JSON.stringify(variables.where) ?? "").includes('"workflow":{"_eq":"wfl_review"}'))).toBe(true));
+  await waitFor(() => expect(requests.some(({ variables }) => (JSON.stringify(variables.where) ?? "").includes('"version__workflow":{"_eq":"wfl_review"}'))).toBe(true));
   const beforeWorkflowGroup = requests.length;
   fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
   fireEvent.click(screen.getByRole("combobox", { name: "Group field" }));
@@ -146,7 +166,7 @@ test("run list groups and filters status, workflow and origin through shared met
   fireEvent.click(workflow);
   await waitFor(() => expect(screen.getByRole("combobox", { name: "Group field" }).textContent).toContain("Workflow"));
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  await waitFor(() => expect(requests.slice(beforeWorkflowGroup).some(({ variables }) => (JSON.stringify(variables.group_by) ?? "").includes("WORKFLOW"))).toBe(true));
+  await waitFor(() => expect(requests.slice(beforeWorkflowGroup).some(({ variables }) => (JSON.stringify(variables.group_by) ?? "").includes("VERSION__WORKFLOW"))).toBe(true));
   const beforeOriginGroup = requests.length;
   fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
   fireEvent.click(screen.getByRole("combobox", { name: "Group field" }));
@@ -162,7 +182,7 @@ test("run list groups and filters status, workflow and origin through shared met
   await waitFor(() => expect(requests.some(({ variables }) => {
     const where = JSON.stringify(variables.where) ?? "";
     return where.includes('"status":{"_eq":"failed"}')
-      && where.includes('"workflow":{"_eq":"wfl_review"}')
+      && where.includes('"version__workflow":{"_eq":"wfl_review"}')
       && where.includes('"origin":{"_eq":"manual"}');
   })).toBe(true));
 });

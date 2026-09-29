@@ -23,7 +23,7 @@ from angee.workflows.definition import Definition
 from angee.workflows.fields import RunOriginField
 from angee.workflows.managers import StepAttemptQuerySet, StepRunManager, WorkflowManager, WorkflowRunManager
 from angee.workflows.resources import WorkflowDefinitionResource
-from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunStatus, StepRunStatus, WaitingKind
+from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunRelation, RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
 
 
@@ -138,11 +138,17 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     outcome = models.CharField(max_length=NAME_MAX_LENGTH, blank=True, default="")
     error = models.TextField(max_length=8192, blank=True, default="")
     request_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
+    parent_step = models.ForeignKey(
+        "workflows.StepRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="child_runs",
+    )
+    relation = StateField(choices_enum=RunRelation, null=True, blank=True)
     reprocess_of = models.ForeignKey(
         "workflows.WorkflowRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="reprocesses",
     )
     origin = RunOriginField()
     finished_at = models.DateTimeField(null=True, blank=True)
+    prune_after = models.DateTimeField(null=True, blank=True, editable=False)
+    prune_reason = models.CharField(max_length=255, blank=True, default="", editable=False)
 
     objects = WorkflowRunManager()
 
@@ -168,9 +174,18 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
 
     def can_cancel(self, actor: Any) -> bool:
         """A writer may cancel active execution or clean up a terminal run's open rows."""
-        return self.with_actor(actor).has_access("write") and (
+        return self.with_actor(actor).has_access("write") and self._has_open_owned_work
+
+    @property
+    def _has_open_owned_work(self) -> bool:
+        """Cancellation owns open rows throughout the tree, even below final descendants."""
+        return (
             not self.is_terminal
-            or self.step_runs.with_actor(actor).exclude(status__in=StepRunStatus.terminal_values()).exists()
+            or system_queryset(self.step_runs.model).filter(run=self)
+            .exclude(status__in=StepRunStatus.terminal_values()).exists()
+            or any(child._has_open_owned_work for child in system_queryset(type(self)).filter(
+                parent_step__run=self, relation=RunRelation.OWNED,
+            ))
         )
 
     def can_reprocess(self, actor: Any) -> bool:
@@ -211,6 +226,9 @@ class StepRun(AngeeDataModel):
     runtime = True
     decision_group = models.OneToOneField(
         "decisions.DecisionGroup", on_delete=models.PROTECT, null=True, blank=True, related_name="step_run",
+    )
+    awaited_run = models.ForeignKey(
+        "workflows.WorkflowRun", on_delete=models.PROTECT, null=True, blank=True, related_name="waiters",
     )
     sqid_prefix = "wsr_"
 

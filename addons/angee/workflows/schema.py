@@ -72,6 +72,7 @@ class WorkflowRunType(AngeeNode):
     """Execution state, admission and result visible through the run's policy."""
 
     version: WorkflowVersionType | None = actor_scoped_to_one("version")
+    parent_step: StepRunType | None = actor_scoped_to_one("parent_step")
     reprocess_of: WorkflowRunType | None = actor_scoped_to_one("reprocess_of")
     step_runs: list[StepRunType] = actor_scoped_to_many("step_runs")
     run_as: UserType | None = actor_scoped_to_one("run_as")
@@ -113,6 +114,8 @@ class StepRunType(AngeeNode):
 
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["node_key", "map_index"])
     run: WorkflowRunType | None = actor_scoped_to_one("run")
+    child_runs: list[WorkflowRunType] = actor_scoped_to_many("child_runs")
+    awaited_run: WorkflowRunType | None = actor_scoped_to_one("awaited_run")
     decision_group: DecisionGroupType | None = actor_scoped_to_one("decision_group")
     attempts: list[StepAttemptType] = actor_scoped_to_many("attempts")
     artifacts: list[StepArtifactType] = actor_scoped_to_many("artifacts")
@@ -211,7 +214,8 @@ _VERSION_RESOURCE = hasura_model_resource(
 )
 _RUN_RESOURCE = hasura_model_resource(
     WorkflowRunType, model=WorkflowRun,
-    filterable=["id", "version", "version__workflow", "run_as", "status", "origin", "outcome", "reprocess_of",
+    filterable=["id", "version", "version__workflow", "parent_step", "parent_step__run",
+                "run_as", "status", "origin", "outcome", "reprocess_of",
                 "created_at", "finished_at"],
     record_ref_filters=("subject_model", "subject_id"),
     sortable=["created_at", "updated_at", "finished_at", "status"],
@@ -220,7 +224,8 @@ _RUN_RESOURCE = hasura_model_resource(
 )
 _STEP_RESOURCE = hasura_model_resource(
     StepRunType, model=StepRun,
-    filterable=["id", "run", "decision_group", "node_key", "map_index", "status", "waiting_kind", "outcome"],
+    filterable=["id", "run", "decision_group", "awaited_run", "node_key", "map_index",
+                "status", "waiting_kind", "outcome"],
     sortable=["rank", "created_at", "node_key", "map_index", "deadline_at", "wake_at"],
     aggregatable=["id"], groupable=["status", "waiting_kind"],
     insert=False, update=False, delete=False,

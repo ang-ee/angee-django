@@ -19,6 +19,7 @@ from example.notes.steps import NotePublicationOutput, PublishNote, ReviewNotePu
 
 Note = apps.get_model("notes", "Note")
 StepRun = apps.get_model("workflows", "StepRun")
+WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 Resource = apps.get_model("resources", "Resource")
 Decision = apps.get_model("decisions", "Decision")
 User = get_user_model()
@@ -77,6 +78,100 @@ class NoteWorkflowStepTests(TransactionTestCase):
             decision.pk, actor=self.reviewer, revision=decision.revision,
             action=action, values=values or {},
         )
+
+    def start_parent(self, note):
+        """Load the shipped parent and reach a real wait on its owned child."""
+
+        workflow = load_workflow("example.notes.note_publication_parent", actor=self.admin, allow_non_dev=True)
+        workflow.with_actor(self.admin).grant_record_access("starter", self.owner)
+        parent = start_run(workflow, actor=self.owner, subject=note)
+        run_until(parent)
+        with system_context(reason="note parent child assertion"):
+            child = WorkflowRun.objects.get(parent_step__run=parent)
+            await_step = StepRun.objects.get(run=parent, node_key="await")
+            self.assertEqual(await_step.status, StepRunStatus.WAITING)
+            self.assertEqual(await_step.waiting_kind, WaitingKind.RUN)
+            self.assertEqual(await_step.input, {"run_id": child.sqid})
+        return parent, child
+
+    def test_parent_awaits_owned_publication_and_preserves_its_result(self) -> None:
+        """The example gives each note a linked child under the same execution actor."""
+
+        note = self.note()
+        parent, child = self.start_parent(note)
+        with system_context(reason="note child identity assertions"):
+            self.assertEqual(child.parent_step.node_key, "start")
+            self.assertEqual(child.parent_step.run_id, parent.pk)
+            self.assertEqual(child.relation, "owned")
+            self.assertEqual(child.origin, "workflow")
+            self.assertEqual(child.run_as_id, self.owner.pk)
+            self.assertEqual(child.record_ref.public_id, note.sqid)
+            self.assertEqual(StepRun.objects.get(run=parent, node_key="start").output, {"run_id": child.sqid})
+        self.answer_review(child)
+        run_until(child)
+        StepRun.objects.tick()
+        run_until(parent)
+        with system_context(reason="note parent publication result assertions"):
+            note.refresh_from_db()
+            await_step = StepRun.objects.get(run=parent, node_key="await")
+            self.assertEqual(child.status, RunStatus.SUCCEEDED)
+            self.assertEqual(await_step.outcome, "published")
+            self.assertEqual(parent.status, RunStatus.SUCCEEDED)
+            self.assertEqual(parent.output, child.output)
+            self.assertEqual(parent.output["id"], note.sqid)
+            self.assertEqual(note.status, Note.Status.ACTIVE)
+            self.assertEqual(note.updated_by_id, self.owner.pk)
+
+    def test_parent_retains_a_rejected_child_result_without_publishing(self) -> None:
+        """The awaited rejection stays visible on the child and the parent's await row."""
+
+        note = self.note()
+        parent, child = self.start_parent(note)
+        self.answer_review(child, action="reject", values={"reason": "Needs another revision"})
+        run_until(child)
+        StepRun.objects.tick()
+        run_until(parent)
+        with system_context(reason="note parent rejection assertions"):
+            note.refresh_from_db()
+            self.assertEqual(child.outcome, "rejected")
+            self.assertEqual(StepRun.objects.get(run=parent, node_key="await").outcome, "rejected")
+            self.assertEqual(parent.status, RunStatus.SUCCEEDED)
+            self.assertEqual(parent.output, child.output)
+            self.assertEqual(note.status, Note.Status.IN_REVIEW)
+
+    def test_canceling_parent_cancels_owned_publication_and_open_review(self) -> None:
+        """Parent cancellation reaches the live child and its decision lifecycle owner."""
+
+        note = self.note()
+        parent, child = self.start_parent(note)
+        run_until(child)
+        with system_context(reason="note child open review assertion"):
+            review = StepRun.objects.get(run=child, node_key="review")
+            decision = Decision.objects.get(group=review.decision_group)
+            self.assertTrue(decision.is_open)
+        cancellation = WorkflowRun.objects.cancel(parent, actor=self.owner)
+        with system_context(reason="note parent cancellation assertions"):
+            parent.refresh_from_db()
+            child.refresh_from_db()
+            decision.refresh_from_db()
+            note.refresh_from_db()
+            self.assertEqual(parent.status, RunStatus.CANCELED)
+            self.assertEqual(child.status, RunStatus.CANCELED)
+            self.assertFalse(decision.is_open)
+            self.assertIn("child", cancellation.message)
+            self.assertEqual(note.status, Note.Status.IN_REVIEW)
+
+    def test_parent_routes_a_canceled_child_with_empty_output(self) -> None:
+        """Canceling just the child settles the parent through its declared canceled edge."""
+
+        parent, child = self.start_parent(self.note())
+        WorkflowRun.objects.cancel(child, actor=self.owner)
+        StepRun.objects.tick()
+        run_until(parent)
+        with system_context(reason="note parent canceled-child assertions"):
+            self.assertEqual(parent.status, RunStatus.SUCCEEDED)
+            self.assertEqual(parent.output, {})
+            self.assertEqual(StepRun.objects.get(run=parent, node_key="await").outcome, "canceled")
 
     def test_shipped_graph_validates_and_publishes_with_actor_audit(self) -> None:
         """A separate reviewer answers; publication audit still records the run actor."""

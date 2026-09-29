@@ -107,6 +107,9 @@ jobs:
             tests/test_workflows_review_graphql.py tests/test_decisions_inbox.py \
             tests/test_workflows_map_definition.py tests/test_workflows_map.py \
             tests/test_workflows_map_concurrency.py tests/test_workflows_map_surface.py \
+            tests/test_workflows_await_definition.py tests/test_workflows_children.py \
+            tests/test_workflows_children_concurrency.py tests/test_workflows_children_surface.py \
+            tests/test_workflows_retention.py \
             tests/test_composed_note_workflow.py \
             tests/test_extraction_steps.py tests/test_extraction_decisions.py \
             tests/test_composed_extraction_workflow.py \

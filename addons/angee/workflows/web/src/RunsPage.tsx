@@ -26,12 +26,14 @@ export function RunsList({ baseFilter, embedded = false }: {
   return <ResourceList<StringIdRow> resource={RUN_MODEL} hideCreate baseFilter={baseFilter}
     placement="inline" routed={!embedded} presentation={embedded ? "embedded" : undefined}
     rowHref={embedded ? (row) => href("workflows.runs.record", { id: row.id }) : undefined}
-    fields={["subject_model"]} recordTabs={[{
-      id: "steps", label: t("run.steps"), render: ({ recordId }) => <StepRuns runId={recordId} />,
-    }]}>
+    fields={["subject_model"]} recordTabs={[
+      { id: "steps", label: t("run.steps"), render: ({ recordId }) => <StepRuns runId={recordId} /> },
+      { id: "children", label: t("run.children"), render: ({ recordId }) =>
+        <RunsList embedded baseFilter={{ "parent_step.run": { exact: recordId } }} /> },
+    ]}>
     <List order={{ created_at: "DESC" }} defaultGroups={{ list: { field: "status" }, board: { field: "status" } }}
       emptyContent={t("runs.empty")}>
-      <Facet field="workflow" label={t("run.workflow")} />
+      <Facet field="version.workflow" label={t("run.workflow")} />
       <Column field="status" header={t("run.status")} widget="statusBadge" />
       <Column field="version.workflow.name" header={t("run.workflow")} />
       <Column field="subject_id" header={t("run.subject")} render={(row) => typeof row.subject_id === "string" && typeof row.subject_model === "string"
@@ -55,6 +57,7 @@ export function RunsList({ baseFilter, embedded = false }: {
         <Field name="finished_at" label={t("run.finished")} />
         <Field name="outcome" label={t("run.outcome")} />
         <Field name="reprocess_of" label={t("run.reprocessOf")} />
+        <Field name="parent_step.run" label={t("run.parent")} />
       </Group>
       <Field name="error" label={t("run.retainedError")} widget="textarea" showWhen={(row) => Boolean(row.error)} />
       <Field name="input" label={t("run.input")} widget="json" />

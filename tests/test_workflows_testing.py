@@ -107,7 +107,7 @@ def test_registered_local_step_runs_through_the_production_driver(execution, reg
     drivers.run_until(run)
 
     assert run.output == {"value": 5}
-    assert len(sent) == 1
+    assert [name for name, _payload in sent] == ["workflows.execute", "workflows.wake_run"]
 
 
 @pytest.mark.parametrize("status", [StepRunStatus.READY, StepRunStatus.SUCCEEDED])
