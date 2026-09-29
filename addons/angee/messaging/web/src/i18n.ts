@@ -87,14 +87,6 @@ export const enMessagingMessages: Record<string, string> = {
   "composer.log": "Log",
   "composer.dropFiles": "Drop files to attach",
   "composer.removeAttachment": "Remove {name}",
-  "composer.clearUploads": "Clear finished uploads",
-
-  // Upload task states.
-  "upload.preparing": "Preparing",
-  "upload.uploading": "Uploading",
-  "upload.finalizing": "Finalizing",
-  "upload.failed": "Failed",
-  "upload.attached": "Attached",
 
   // Follow subtypes.
   "subtype.legend": "Notification types",

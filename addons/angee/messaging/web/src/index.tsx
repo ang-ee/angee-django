@@ -14,6 +14,7 @@ import { messageForm } from "./MessagesPage";
 import { MessagingOverviewContribution } from "./MessagingOverviewContribution";
 import { RecordActivityPane } from "./RecordActivityPane";
 import { RecordChatterPane } from "./RecordChatterPane";
+import type { RecordThreadConversationProps } from "./RecordThreadConversation";
 import { RecordSourceThreadsPane } from "./RecordSourceThreadsPane";
 import {
   RECORD_UNREAD_COUNT_MODELS,
@@ -76,7 +77,13 @@ const messagingMenu: readonly BaseMenuItem[] = [
   },
 ];
 
-const messaging = defineBaseAddon({
+export interface MessagingAddonOptions {
+  /** Composer shortcut for this app's built-in Comments tab. */
+  submitKey?: NonNullable<RecordThreadConversationProps["submitKey"]>;
+}
+
+/** Configure messaging's app contribution through the existing addon manifest. */
+export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOptions = {}) => defineBaseAddon({
   id: "messaging",
   routes: [
     {
@@ -106,7 +113,7 @@ const messaging = defineBaseAddon({
       label: "Comments",
       icon: "comments",
       useCount: useRecordCommentsUnread,
-      render: (context) => <RecordChatterPane context={context} />,
+      render: (context) => <RecordChatterPane context={context} submitKey={submitKey} />,
     },
     {
       id: "activity",
@@ -132,6 +139,8 @@ const messaging = defineBaseAddon({
     },
   ],
 });
+
+const messaging = defineMessagingAddon();
 
 function useRecordCommentsUnread(
   context: ChatterViewContext,

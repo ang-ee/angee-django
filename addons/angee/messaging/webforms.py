@@ -5,6 +5,10 @@ object schema with named ``properties`` and a root ``required`` list.  Public
 ingress deliberately accepts only scalar fields; relation, object, array, and
 ``any`` descriptors are rejected so a form answer can never become a record
 target or another executable instruction.
+
+Messaging also accepts optional root ``success.title`` and ``success.body`` copy.
+The published description exposes those validated strings separately from the
+generic field descriptors.
 """
 
 from __future__ import annotations
@@ -88,6 +92,8 @@ class WebformSpec:
 
     version: int
     fields: tuple[WebformField, ...]
+    success_title: str | None
+    success_body: str | None
 
     @classmethod
     def deserialize(cls, value: Any, *, version: int) -> WebformSpec:
@@ -120,7 +126,14 @@ class WebformSpec:
         email_fields = [field.name for field in fields if field.email]
         if len(email_fields) > 1:
             raise ValidationError({"form_schema": "A public form may declare at most one email field."})
-        return cls(version=version, fields=fields)
+        success = value.get("success", {})
+        if not isinstance(success, dict):
+            raise ValidationError({"form_schema": "Form success copy must be an object."})
+        for key in ("title", "body"):
+            text = success.get(key)
+            if text is not None and (not isinstance(text, str) or not text.strip()):
+                raise ValidationError({"form_schema": f"Form success {key} must be non-empty text."})
+        return cls(version=version, fields=fields, success_title=success.get("title"), success_body=success.get("body"))
 
     @property
     def email_field(self) -> WebformField | None:

@@ -73,6 +73,7 @@ export { useStorageUpload } from "./data/use-upload";
 export { FileRecordPreview, filePreviewReference } from "./views/FilePreview";
 export type { StorageUpload, UploadedFile, UploadTarget, UploadTask } from "./data/use-upload";
 export { StorageUploadTasks } from "./views/StorageUploadTasks";
+export { useStorageT } from "./i18n";
 
 export default storage;
 

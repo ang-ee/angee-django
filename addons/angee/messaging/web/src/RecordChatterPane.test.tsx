@@ -51,6 +51,8 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 }));
 
 vi.mock("@angee/storage", () => ({
+  useStorageT: () => (key: string) => key,
+  StorageUploadTasks: () => null,
   useStorageUpload: () => ({ tasks: [], upload: vi.fn(), clearFinished: vi.fn() }),
 }));
 
@@ -146,6 +148,20 @@ describe("RecordChatterPane", () => {
     // The composer send affordance.
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Follow" })).toBeTruthy();
+  });
+
+  test("passes the host's submit key to its record conversation", () => {
+    mocks.threadData = threadPayload([message()]);
+    render(<RecordChatterPane context={context} submitKey="mod-enter" />);
+    const input = screen.getByLabelText("Message");
+    fireEvent.change(input, { target: { value: "Next step" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mocks.mutateCalls).toHaveLength(0);
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(mocks.mutateCalls).toEqual([expect.objectContaining({
+      op: "MessagingPostRecordMessage",
+      vars: expect.objectContaining({ body: "Next step" }),
+    })]);
   });
 
   test("gates edit/delete on the server can_edit/can_delete flags", () => {

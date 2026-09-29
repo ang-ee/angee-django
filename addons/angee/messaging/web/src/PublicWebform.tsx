@@ -21,6 +21,7 @@ interface PublicWebformDescription {
   schema_version: number;
   fields: readonly FormSpecFieldDescriptor[];
   honeypot_field: string | null;
+  success: { title: string | null; body: string | null };
 }
 
 interface PublicWebformError {
@@ -162,8 +163,8 @@ function LoadedPublicWebform({
 
   if (receiptId) {
     return (
-      <Alert ref={successRef} tabIndex={-1} tone="success" title={<Heading>{t("webform.successTitle")}</Heading>}>
-        <p>{t(showReceipt ? "webform.successBody" : "webform.successBodyNoReceipt")}</p>
+      <Alert ref={successRef} tabIndex={-1} tone="success" title={<Heading>{description.success.title ?? t("webform.successTitle")}</Heading>}>
+        <p>{description.success.body ?? t(showReceipt ? "webform.successBody" : "webform.successBodyNoReceipt")}</p>
         {showReceipt ? (
           <div className="mt-3 rounded-6 bg-inset px-3 py-2 font-mono text-xs text-fg" data-testid="webform-receipt">
             {receiptId}
@@ -254,6 +255,14 @@ async function loadWebform(
   ) {
     throw new Error(t("webform.invalidDescription"));
   }
+  const success = value.success;
+  if (success != null && (
+    !isRecord(success) ||
+    !(success.title == null || typeof success.title === "string") ||
+    !(success.body == null || typeof success.body === "string")
+  )) {
+    throw new Error(t("webform.invalidDescription"));
+  }
   let fields: readonly FormSpecFieldDescriptor[];
   try {
     fields = deserializeFormSpec(value.form_schema, widgets);
@@ -266,6 +275,10 @@ async function loadWebform(
     schema_version: value.schema_version,
     fields,
     honeypot_field: value.honeypot_field,
+    success: {
+      title: isRecord(success) && typeof success.title === "string" ? success.title : null,
+      body: isRecord(success) && typeof success.body === "string" ? success.body : null,
+    },
   };
 }
 
