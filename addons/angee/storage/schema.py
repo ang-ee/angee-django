@@ -17,6 +17,8 @@ from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
 
+from angee.base.identity import instance_from_public_id
+from angee.base.refs import canonical_record_target
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.data import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
@@ -39,6 +41,7 @@ Drive = apps.get_model("storage", "Drive")
 Folder = apps.get_model("storage", "Folder")
 MimeType = apps.get_model("storage", "MimeType")
 File = apps.get_model("storage", "File")
+FileAttachment = apps.get_model("storage", "FileAttachment")
 
 _STORAGE_ADMIN_ROLE = ObjectRef("storage/role", "storage_admin")
 """Role whose effective members may manage backends and drives."""
@@ -140,6 +143,55 @@ class FileType(AuthoredRefMixin, AngeeNode):
         if row.upload_state != UploadState.READY:
             return ""
         return str(row.download_url())
+
+
+@strawberry.type
+class RecordFileAttachmentType:
+    """An actor-readable attachment and its independently authorized file."""
+
+    id: strawberry.ID
+    label: str
+    file: FileType
+
+
+@strawberry.type
+class RecordFilesType:
+    """The attachment capability and visible edges of one readable record."""
+
+    available: bool
+    can_upload: bool
+    attachments: list[RecordFileAttachmentType]
+
+
+@strawberry.type
+class StorageQuery:
+    """Record-scoped attachment reads shared by public and console schemas."""
+
+    @strawberry.field(name="record_files")
+    def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
+        """List file-readable edges without granting access through the target."""
+
+        try:
+            model = apps.get_model(model_label.strip())
+        except (LookupError, ValueError):
+            return RecordFilesType(available=False, can_upload=False, attachments=[])
+        if model_resource_type(model) is None:
+            return RecordFilesType(available=False, can_upload=False, attachments=[])
+        record = instance_from_public_id(model, str(record_id))
+        if record is None:
+            return RecordFilesType(available=False, can_upload=False, attachments=[])
+        manager = FileAttachment._default_manager
+        available = manager.has_record_arm(canonical_record_target(record))
+        if not available:
+            return RecordFilesType(available=False, can_upload=False, attachments=[])
+        return RecordFilesType(
+            available=True,
+            can_upload=record.has_access("write"),
+            attachments=[
+                RecordFileAttachmentType(id=strawberry.ID(str(edge.sqid)), label=edge.label, file=edge.file)
+                for edge in manager.for_record(record)
+            ],
+        )
 
 
 @strawberry.input
@@ -468,6 +520,8 @@ _SHARED_TYPES = [
     DriveType,
     FolderType,
     FileType,
+    RecordFileAttachmentType,
+    RecordFilesType,
     FileUploadBeginPayload,
     FileUploadFinalizePayload,
     *_MIME_TYPE_RESOURCE.types,
@@ -479,6 +533,7 @@ _SHARED_TYPES = [
 schemas = {
     "public": {
         "query": [
+            StorageQuery,
             _MIME_TYPE_RESOURCE.query,
             _DRIVE_RESOURCE.query,
             _FOLDER_RESOURCE.query,
@@ -493,6 +548,7 @@ schemas = {
     },
     "console": {
         "query": [
+            StorageQuery,
             _MIME_TYPE_RESOURCE.query,
             _DRIVE_RESOURCE.query,
             _FOLDER_RESOURCE.query,

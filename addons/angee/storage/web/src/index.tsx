@@ -8,6 +8,7 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { ArchiveRestore, Download, HardDrive, Image, Pencil } from "lucide-react";
 
 import { enStorageMessages } from "./i18n";
+import { RecordFilesPane, useRecordFilesCount } from "./RecordFilesPane";
 import { FileRecordPreview } from "./views/FilePreview";
 import { storagePreviews } from "./previews";
 import { folderForm } from "./views/folder-form";
@@ -58,6 +59,15 @@ const storage = defineBaseAddon({
     content: <Tab id="preview" label={{ namespace: "storage", key: "preview.label", fallback: enStorageMessages["preview.label"] }}><FilePreviewSection /></Tab>,
   }],
   i18n: { storage: enStorageMessages },
+  chatter: [{
+    id: "files",
+    sequence: 35,
+    label: "Files",
+    icon: "file",
+    when: (context) => context.view.kind === "record" && Boolean(context.route?.modelLabel && context.view.sqid),
+    useCount: useRecordFilesCount,
+    render: (context) => <RecordFilesPane context={context} />,
+  }],
   icons: {
     drive: HardDrive,
     image: Image,

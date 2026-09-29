@@ -662,6 +662,7 @@ class RecordBindingManager(AngeeManager):
         queryset = self.get_queryset().filter(
             content_type=canonical.content_type, object_id=canonical.object_id
         )
+        queryset = queryset.select_related("page", "vault")
         return queryset if role is None else queryset.filter(role=self._role(role))
 
     def pages_for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:

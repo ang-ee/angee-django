@@ -9,6 +9,7 @@ import {
   KnowledgePage as KnowledgePageQuery,
   KnowledgePages,
   KnowledgeVaults,
+  KNOWLEDGE_LIST_LIMIT,
   PAGE_MODEL,
   PAGE_READ_MODELS,
   type Backlink,
@@ -32,7 +33,6 @@ import { useKnowledgeT } from "../i18n";
 
 // One safety-capped read each of vaults/pages; the browser scopes the set
 // client-side so the navigator and reader share one fetch.
-const KNOWLEDGE_LIST_LIMIT = 500;
 const EMPTY_BACKLINKS: readonly Backlink[] = [];
 
 type KnowledgeExplorerController = ScopedExplorerController<
