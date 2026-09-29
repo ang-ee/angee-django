@@ -9,7 +9,7 @@ from angee.decisions.states import Verdict
 from angee.workflows import schema as workflow_schema
 from angee.workflows.reviews import ReviewStep
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
-from angee.workflows.testing.models import StepRun, Workflow
+from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.workflow_steps import document
 
@@ -156,6 +156,44 @@ def test_run_subject_filters_use_model_labels_and_public_ids(schema, execution):
     assert result_data(execute_schema(
         schema, query, {"where": {"subject_id": {"_eq": subjects[0].sqid}}}, user=starter,
     )) == visible
+
+
+def test_run_origin_groups_and_filters_follow_generated_lineage_and_read_scope(schema, execution):
+    """Origin is one database-derived fact for rows, scoped groups and drill-down."""
+    admin, _sent = execution
+    starter, other = (create_user(name) for name in ("origin-starter", "origin-other"))
+    workflow = load_workflow(document("entry"), actor=admin)
+    replacements = []
+    for actor in (starter, other):
+        workflow.with_actor(admin).grant_record_access("starter", actor)
+        original = start_run(workflow, actor=actor)
+        run_until(original)
+        replacements.append(WorkflowRun.objects.reprocess(original, actor=actor))
+    query = """query($origin: String!) {
+      workflowrun(where: {origin: {_eq: $origin}}) { id origin }
+      workflowrun_aggregate(where: {origin: {_eq: $origin}}) { aggregate { count } }
+      workflowrun_groups(group_by: [{field: ORIGIN}]) { key { origin } aggregate { count } }
+    }"""
+    for actor, replacement in zip((starter, other), replacements, strict=True):
+        visible = result_data(execute_schema(schema, query, {"origin": "reprocess"}, user=actor))
+        assert visible["workflowrun"] == [{"id": replacement.sqid, "origin": "REPROCESS"}]
+        assert visible["workflowrun_aggregate"] == {"aggregate": {"count": 1}}
+        assert {row["key"]["origin"]: row["aggregate"]["count"] for row in visible["workflowrun_groups"]} == {
+            "MANUAL": 1, "REPROCESS": 1,
+        }
+    resource = next(item for item in schema.angee_resources if item.model_label == "workflows.WorkflowRun")
+    axis = resource.query.axes["origin"]
+    assert axis.server.input == "ORIGIN" and axis.server.key == "origin"
+    assert axis.drill.field == "origin"
+    assert resource.query.fields["origin"].filter is not None
+    assert {item.from_value: item.to_value for item in axis.drill.value_map}["REPROCESS"] == "reprocess"
+
+    # A native bulk lineage update also changes the generated value, with no save hook.
+    replacement = replacements[0]
+    system_queryset(WorkflowRun).filter(pk=replacement.pk).update(reprocess_of=None)
+    replacement.refresh_from_db()
+    assert replacement.origin == "manual"
+    assert result_data(execute_schema(schema, query, {"origin": "reprocess"}, user=starter))["workflowrun"] == []
 
 
 class Accept(Action, value="accept", label="Accept", verdict=Verdict.COMPLETED, outcome="accepted"):

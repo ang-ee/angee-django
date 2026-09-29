@@ -20,9 +20,10 @@ from angee.base.refs import RecordRefMixin
 from angee.base.scoping import system_queryset
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import Definition
+from angee.workflows.fields import RunOriginField
 from angee.workflows.managers import StepAttemptQuerySet, StepRunManager, WorkflowManager, WorkflowRunManager
 from angee.workflows.resources import WorkflowDefinitionResource
-from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunOrigin, RunStatus, StepRunStatus, WaitingKind
+from angee.workflows.states import NAME_MAX_LENGTH, AttemptResult, RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Step
 
 
@@ -136,6 +137,7 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     reprocess_of = models.ForeignKey(
         "workflows.WorkflowRun", on_delete=models.SET_NULL, null=True, blank=True, related_name="reprocesses",
     )
+    origin = RunOriginField()
     finished_at = models.DateTimeField(null=True, blank=True)
 
     objects = WorkflowRunManager()
@@ -150,11 +152,6 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
                 return self.version
         model = self._meta.get_field("version").related_model
         return system_queryset(model).get(pk=self.version_id)
-
-    @property
-    def origin(self) -> RunOrigin:
-        """Derive the run's admission origin from its retained execution links."""
-        return cast(RunOrigin, RunOrigin.REPROCESS if self.reprocess_of_id is not None else RunOrigin.MANUAL)
 
     @property
     def is_terminal(self) -> bool:

@@ -119,7 +119,7 @@ export function FormViewRecordHeader({
     : undefined;
   const titleSelectedOption = currentTitleField && titleRelation
     ? relationSelectedOption(
-        displayRecord?.[currentTitleField.name],
+        get(displayRecord ?? {}, currentTitleField.name),
         titleRelation.labelField,
       )
     : undefined;
@@ -438,7 +438,7 @@ function BoundFormField({
   const readOnly = surface.fieldReadOnly(field);
   const currentRelationId = relationValueId(value);
   const savedOption = relation
-    ? relationSelectedOption(surface.displayRecord?.[field.name], relation.labelField)
+    ? relationSelectedOption(get(surface.displayRecord ?? {}, field.name), relation.labelField)
     : undefined;
   const selectedOption = relation && currentRelationId
     ? relationSelectedOption(value, relation.labelField)

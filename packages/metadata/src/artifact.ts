@@ -159,38 +159,21 @@ export function relationModelLabelForField(
 }
 
 /**
- * Resolve a dotted field path when its terminal field is an object relation.
- * Explicit continuation through an unindexed GraphQL object stays structural;
- * final query relation paths own all inferred object selections.
+ * Resolve a dotted field through declared object relations to its owning model.
+ * Unindexed structural objects and scalar identities cannot supply child fields.
  */
-export function relationRepresentationForPath(
+export function modelFieldForPath(
   path: string,
   model: ModelMetadata,
   metadata: SchemaFieldMetadata,
-): RelationRepresentationSelection | null {
+): { field: ModelFieldMetadata; model: ModelMetadata } | null {
   const segments = path.split(".");
   let current = model;
   for (const [index, segment] of segments.entries()) {
     const field = current.fields[segment];
     if (!field) return null;
     const terminal = index === segments.length - 1;
-    if (terminal) {
-      if (!hasRelationObjectSelection(field, current)) return null;
-      const relation = current.resource.query.fields[segment]?.relation;
-      const displayPath = relation?.labelPath ?? relation?.identityPath;
-      if (!relation || !displayPath) {
-        throw new RelationRepresentationError(`Relation field "${path}" has no finalized selectable representation.`);
-      }
-      const prefix = segments.slice(0, index).join(".");
-      const qualify = (value: string) => prefix ? `${prefix}.${value}` : value;
-      return {
-        selectionPaths: [...new Set([
-          ...(relation.identityPath ? [qualify(relation.identityPath)] : []),
-          qualify(displayPath),
-        ])],
-        displayPath: qualify(displayPath),
-      };
-    }
+    if (terminal) return { field, model: current };
     if (!hasRelationObjectSelection(field, current)) return null;
     const targetLabel = relationModelLabelForField(field, current);
     if (!targetLabel) return null;
@@ -199,6 +182,29 @@ export function relationRepresentationForPath(
     current = related;
   }
   return null;
+}
+
+/** Resolve an object relation's finalized scalar selection and display paths. */
+export function relationRepresentationForPath(
+  path: string,
+  model: ModelMetadata,
+  metadata: SchemaFieldMetadata,
+): RelationRepresentationSelection | null {
+  const resolved = modelFieldForPath(path, model, metadata);
+  if (!resolved || !hasRelationObjectSelection(resolved.field, resolved.model)) return null;
+  const relation = resolved.model.resource.query.fields[resolved.field.name]?.relation;
+  const displayPath = relation?.labelPath ?? relation?.identityPath;
+  if (!relation || !displayPath) {
+    throw new RelationRepresentationError(`Relation field "${path}" has no finalized selectable representation.`);
+  }
+  const prefix = path.split(".").slice(0, -1).join(".");
+  const qualify = (value: string) => prefix ? `${prefix}.${value}` : value;
+  return {
+    selectionPaths: [...new Set([
+      ...(relation.identityPath ? [qualify(relation.identityPath)] : []), qualify(displayPath),
+    ])],
+    displayPath: qualify(displayPath),
+  };
 }
 
 /** Select all readable resource fields, excluding a separately nested field when requested. */

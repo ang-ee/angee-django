@@ -3,10 +3,10 @@
 Execution owns managers.py except DraftSave and WorkflowManager, tasks.py, and
 Definition.ready_nodes plus Definition._edge_live. Definition/validation/bindings
 owns the rest of definition.py, bindings.py, DraftSave, and WorkflowManager. Step contracts
-own steps.py, context.py, reviews.py, and maps.py. Models own models.py, states.py, and permissions.zed.
+own steps.py, context.py, reviews.py, and maps.py. Models own models.py, fields.py, states.py, and permissions.zed.
 Blank lines, comments, docstrings, and decorators count; every source file line
 belongs to exactly one row. The README and addon declaration are named non-code
-exceptions. Bytecode caches are generated artifacts. The web subtree has one
+exceptions. Bytecode caches and node_modules are generated artifacts. The web subtree has one
 separate budget for all its sources. An unknown backend file or an exceeded
 fixed budget fails this command.
 Decisions reports Python, permission, and manifest sources, excluding its testing app.
@@ -27,7 +27,9 @@ NON_CODE_FILES = frozenset({"README.md", "addon.toml"})
 
 WHOLE_FILE_ROWS = (
     ("Step contract, context, built-in steps", 900, ("steps.py", "context.py", "reviews.py", "maps.py")),
-    ("Models, constraints, permissions", 900, ("models.py", "states.py", "permissions.zed", "permissions.extends.zed")),
+    ("Models, constraints, permissions", 900, (
+        "models.py", "fields.py", "states.py", "permissions.zed", "permissions.extends.zed",
+    )),
     ("Triggers and sources", 500, ("triggers.py", "sources.py")),
     ("GraphQL schema", 700, ("schema.py",)),
     ("Resources, autoconfig, settings", 300, ("__init__.py", "apps.py", "resources.py", "autoconfig.py")),
@@ -64,7 +66,7 @@ def main() -> int:
     inventory = {
         path.relative_to(ROOT).as_posix()
         for path in ROOT.rglob("*")
-        if path.is_file() and "__pycache__" not in path.relative_to(ROOT).parts
+        if path.is_file() and {"__pycache__", "node_modules"}.isdisjoint(path.relative_to(ROOT).parts)
     }
     web_files = {name for name in inventory if name.startswith("web/")}
     backend_inventory = inventory - web_files

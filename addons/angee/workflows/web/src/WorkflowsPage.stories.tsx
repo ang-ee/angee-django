@@ -2,13 +2,12 @@ import { useMemo } from "react";
 import * as v from "valibot";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { RoutedRuntimeFixture, jsonResponse, storySchema } from "@angee/storybook/testing";
-import { createRouteHref, JsonValueSchema, useRouteParam } from "@angee/ui";
+import { createRouteHref, JsonValueSchema } from "@angee/ui";
 
-import { WorkflowPage } from "./WorkflowPage";
 import { WorkflowsPage } from "./WorkflowsPage";
 import { workflowsChatter } from "./contributions";
 import { workflowFixture, workflowVersionFixture } from "./catalogue/testing";
-import { runFixture, runResourceFixture, runSubjectFixture, workflowResourceFixture } from "./testing";
+import { runFixture, runResourceFixture, runSubjectFixture, workflowResourceFixture, stepRunResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture } from "./testing";
 
 export default { title: "Workflows/Catalogue", parameters: { layout: "fullscreen" }, excludeStories: ["CatalogueStory"] };
 export const Catalogue = { render: () => <CatalogueStory list /> };
@@ -35,8 +34,6 @@ const runtime = {
   },
 };
 
-function CatalogueRoute() { return useRouteParam("id") ? <WorkflowPage /> : <WorkflowsPage />; }
-
 export function CatalogueStory({ list = false, unavailable = false, queryError = false, record = false, onRequest }: {
   list?: boolean; unavailable?: boolean; queryError?: boolean; record?: boolean;
   onRequest?: (request: v.InferOutput<typeof RequestSchema>) => void;
@@ -46,7 +43,7 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
       const request = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       onRequest?.(request);
       const { query } = request;
-      if (query.includes("WorkflowDetail")) return queryError
+      if (query.includes("workflow_by_pk")) return queryError
         ? jsonResponse({ errors: [{ message: "Could not read this workflow." }] })
         : jsonResponse({ data: { workflow_by_pk: unavailable ? null : workflowFixture } });
       if (query.includes("workflowversion")) return jsonResponse({ data: {
@@ -62,6 +59,7 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       workflowResourceFixture, workflowVersionFixture, runResourceFixture, runSubjectFixture,
+      stepRunResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
     ] } } } };
   }, [unavailable, queryError, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows"
@@ -69,6 +67,6 @@ export function CatalogueStory({ list = false, unavailable = false, queryError =
     {record ? workflowsChatter.render?.({ pathname: "/notes/nte_7", params: { id: "nte_7" },
       route: { name: "notes.record", path: "/notes/$id", viewType: "notes/note", canonicalLabel: "notes.Note" },
       view: { kind: "record", type: "notes/note", sqid: "nte_7" },
-    }) : <CatalogueRoute />}
+    }) : <WorkflowsPage />}
   </RoutedRuntimeFixture>;
 }

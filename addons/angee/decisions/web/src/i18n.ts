@@ -16,23 +16,18 @@ export const enDecisionsMessages = {
   "decision.title": "Decision",
   "decision.action": "Action",
   "decision.submit": "Decide",
-  "decision.reload": "Reload",
-  "decision.conflict": "This decision has changed. Reload before submitting again.",
-  "decision.failed": "Could not record the decision.",
-  "decision.recorded": "Decision recorded.",
+  "decision.conflict": "This decision has changed. Close and reopen Decide to review the current question.",
   "decision.unavailable": "This decision is unavailable.",
-  "decision.invalidForm": "This decision’s form is unavailable.",
   "decision.requester": "Requester",
   "decision.subject": "Subject",
+  "decision.subjectModel": "Subject model",
+  "decision.answer": "Answer",
   "decision.expiry": "Expires",
-  "decision.verdict": "Verdict",
   "decision.resolver": "Resolved by",
   "decision.resolvedAt": "Resolved at",
   "decision.closedReason": "Closed reason",
   "decision.seats": "Other seats",
-  "decision.seatsDescription": "Seats you have permission to read.",
   "decision.noSeats": "No other visible seats.",
-  "decision.seat": "Seat {number}",
   "context.title": "Context",
   "context.facts": "Facts",
   "context.references": "References",
@@ -45,4 +40,3 @@ export const enDecisionsMessages = {
 };
 
 export const useDecisionsT = createNamespaceT("decisions", enDecisionsMessages);
-export type DecisionsT = ReturnType<typeof useDecisionsT>;

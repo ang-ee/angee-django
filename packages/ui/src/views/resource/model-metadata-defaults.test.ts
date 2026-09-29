@@ -749,6 +749,16 @@ describe("relation column read expansion", () => {
     ]);
   });
 
+  test("nested form fields inherit target metadata without editing a related record", () => {
+    const fields = fieldsWithMetadataDefaults([
+      { name: "project.product" }, { name: "project.product.display_name" },
+    ], metadata, schema);
+    expect(fields[0]).toMatchObject({ name: "project.product", widget: "many2one", readOnly: true });
+    expect(fields[1]).toMatchObject({ name: "project.product.display_name", readOnly: true });
+    expect(relationFieldInfoForDescriptor(fields[0]!, metadata, schema))
+      .toMatchObject({ resource: "catalog.ProductVariant", labelField: "display_name" });
+  });
+
   test("keeps an explicit scalar path structural when an intermediate relation target has no metadata", () => {
     const message = canonicalModel({
         thread: {

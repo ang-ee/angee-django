@@ -439,7 +439,7 @@ test("an explicitly empty external source never falls back to the native detail 
   expect(f.getOne).not.toHaveBeenCalled();
   expect(f.surface().displayRecord).toBeNull();
   expect(f.surface().formReadOnly).toBe(true);
-  act(() => f.surface().reload());
+  await act(async () => { await f.surface().reload(); });
   expect(f.getOne).not.toHaveBeenCalled();
 });
 

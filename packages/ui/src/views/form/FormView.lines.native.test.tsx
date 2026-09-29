@@ -144,7 +144,7 @@ async function fixture(options: {
     move: (from: number, to: number) => act(() => move(from, to)),
     refresh: async (lines: readonly Row[]) => {
       record = { id: "doc-1", title: "Remote title", lines };
-      act(() => surface.reload());
+      await act(async () => { await surface.reload(); });
       await waitFor(() => expect(surface.form.getValues("title")).toBe("Remote title"));
     },
   };
@@ -376,7 +376,7 @@ test("clean line arrays adopt server insertions while dirty scalar values surviv
   edit("title", "Local title");
   const remote = [{ id: "x", label: "Xray", quantity: 40, position: 0 }, ...initialLines.map((row, index) => ({ ...row, position: index + 1 }))];
   f.setRecord({ id: "doc-1", title: "Remote title", lines: remote });
-  act(() => f.surface().reload());
+  await act(async () => { await f.surface().reload(); });
   await waitFor(() => expect(f.surface().form.getValues("lines")).toEqual(remote));
   expect(f.surface().form.getValues("title")).toBe("Local title");
 });

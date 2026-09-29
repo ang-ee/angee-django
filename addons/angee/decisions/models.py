@@ -10,6 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models.deletion import Collector, ProtectedError, RestrictedError
+from django.utils.text import capfirst
 from rebac import system_context
 
 from angee.base.fields import StateField
@@ -174,8 +175,13 @@ class Decision(RecordRefMixin, AngeeDataModel):
         super().save(*args, **kwargs)
 
     def __str__(self) -> str:
-        """Identify a seat by its authored kind."""
-        return self.kind
+        """Identify a seat by the same kind label shown in its inbox."""
+        return self.kind_label
+
+    @property
+    def kind_label(self) -> str:
+        """Present the authored kind without exposing identifier separators."""
+        return capfirst(self.kind.replace("_", " ").replace("-", " "))
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Retain individual seats until their owning group can be deleted."""

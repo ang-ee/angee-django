@@ -37,6 +37,7 @@ class DecisionType(AngeeNode):
     group: DecisionGroupType
     index: auto
     kind: auto
+    kind_label: str = strawberry_django.field(only=["kind"])
     requester: UserType | None
     assignees: list[UserType]
     form_schema: JSON

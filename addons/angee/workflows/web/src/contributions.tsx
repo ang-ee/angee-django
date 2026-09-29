@@ -1,10 +1,12 @@
 import { DECISION_ORIGIN_SLOT, useDecisionContent } from "@angee/decisions";
 import { useAuthoredQuery } from "@angee/refine";
-import { ErrorBanner, MetaSection, TextLink, useRouteHref, type ChatterContribution, type SlotContribution } from "@angee/ui";
+import { lazy } from "react";
+import { ErrorBanner, LazyBoundary, LoadingPanel, MetaSection, TextLink, useRouteHref, type ChatterContribution, type SlotContribution } from "@angee/ui";
 
 import { DecisionWaitingRunsDocument, RUN_MODEL } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
-import { RunsList } from "./RunsPage";
+
+const RunsList = lazy(() => import("./RunsPage").then(({ RunsList }) => ({ default: RunsList })));
 
 export function DecisionRunOrigin() {
   const { decision } = useDecisionContent();
@@ -29,9 +31,9 @@ function WorkflowsTabLabel() { return useWorkflowsT()("catalogue.title"); }
 export const workflowsChatter: ChatterContribution = {
   id: "workflows", sequence: 40, icon: "versions", label: <WorkflowsTabLabel />,
   when: ({ view, route }) => view.kind === "record" && Boolean(view.sqid && route?.canonicalLabel) && route?.canonicalLabel !== RUN_MODEL,
-  render: ({ view, route }) => view.sqid && route?.canonicalLabel ? <RunsList embedded baseFilter={{
+  render: ({ view, route }) => view.sqid && route?.canonicalLabel ? <LazyBoundary pending={<LoadingPanel />}><RunsList embedded baseFilter={{
     subject_model: { exact: route.canonicalLabel }, subject_id: { exact: view.sqid },
-  }} /> : null,
+  }} /></LazyBoundary> : null,
 };
 
 export const decisionRunOrigin: SlotContribution = {

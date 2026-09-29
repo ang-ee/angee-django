@@ -27,7 +27,7 @@ def test_workflow_budget_rejects_unmapped_files(tmp_path, monkeypatch, name):
 
 @pytest.mark.parametrize("web_lines, expected", [(2200, 0), (2201, 1)])
 def test_workflow_web_budget_is_independent_and_enforced(tmp_path, monkeypatch, capsys, web_lines, expected):
-    """Web sources can fill their own budget without entering backend rows."""
+    """Authored web sources fill their budget independently of dependency artifacts."""
 
     sources = {
         "managers.py": "class DraftSave: pass\nclass WorkflowManager: pass\n",
@@ -36,6 +36,8 @@ def test_workflow_web_budget_is_independent_and_enforced(tmp_path, monkeypatch, 
         "tasks.py": "",
         "web/package.json": "{}\n",
         "web/src/index.tsx": "// source line\n" * (web_lines - 1),
+        "web/node_modules/.bin/vitest": "# generated shim\n" * 2201,
+        "web/node_modules/.vite/vitest/results.json": "{}\n",
     }
     for name, content in sources.items():
         path = tmp_path / name

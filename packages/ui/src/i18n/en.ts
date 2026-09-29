@@ -342,6 +342,8 @@ export const enUiMessages: Record<string, string> = {
   "form.genericSaveError": "Could not save record.",
   "form.leave": "Leave",
   "form.loading": "Loading…",
+  "form.loadFailed": "Could not load this record.",
+  "form.recordNotFound": "Record not found",
   "form.value.notSet": "Not set",
   "form.value.leftEmpty": "Left empty",
   "form.value.useDefault": "Use default",

@@ -5,14 +5,15 @@ import decisions, { DECISION_CONTENT_SLOT, DECISION_ORIGIN_SLOT, decisionContent
 
 describe("decisions fragment", () => {
   test("satisfies the shared manifest contracts", () => expect(() => expectValidBaseAddon(decisions)).not.toThrow());
-  test("registers the inbox rail destination, distinct record page and app-label namespace", () => {
+  test("registers one routed inbox and an inherited record route", () => {
     expect(decisions.menus).toEqual([{ id: "decisions", label: "Decisions", icon: "check", route: "decisions.inbox" }]);
     expect(decisions.routes?.map(({ name, path }) => ({ name, path }))).toEqual([
       { name: "decisions.inbox", path: "/decisions" },
       { name: "decisions.inbox.record", path: "/decisions/$id" },
     ]);
-    expect(decisions.routes?.[0]?.indexComponent).toBeTypeOf("function");
-    expect(decisions.routes?.[1]?.component).toBeTypeOf("function");
+    expect(decisions.routes?.[0]?.component).toBeTypeOf("function");
+    expect(decisions.routes?.[0]?.indexComponent).toBeUndefined();
+    expect(decisions.routes?.[1]?.component).toBeUndefined();
     expect(Object.keys(decisions.i18n ?? {})).toEqual(["decisions"]);
   });
   test("exports consumer and waiting-owner contracts without registering mandatory content", () => {

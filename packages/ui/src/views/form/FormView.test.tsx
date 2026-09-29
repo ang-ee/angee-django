@@ -934,6 +934,31 @@ describe("FormView", () => {
     expect(screen.queryByText("[object Object]")).toBeNull();
   });
 
+  test("selects dotted scalar and relation fields from their owning model metadata", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "run-1", version: {
+      id: "version-1", number: 2, workflow: { id: "workflow-1", name: "Daily briefing" },
+    } };
+    const metadata = workflowRelationMetadata();
+    const run = metadata.types.RunType!;
+    renderWithProviders(<FormView resource="workflows.Run" id="run-1" fields={[
+      { name: "version.workflow", title: true }, { name: "version.number", label: "Version" },
+    ]} />, { types: { ...metadata.types,
+      RunType: { ...run, fields: { version: { name: "version", kind: "relation",
+        relationObject: true, relationModelLabel: "workflows.Version" } } },
+      VersionType: { ...defaultModel("VersionType", "workflows.Version"), fields: {
+        number: { name: "number", kind: "scalar", scalar: "Int" },
+        workflow: { ...run.fields.workflow!, relationObject: true },
+      } },
+    } });
+    expect(await screen.findByRole("heading", { name: "Daily briefing" })).toBeTruthy();
+    expect(screen.getByText("2")).toBeTruthy();
+    expect(sdkMocks.recordSelection).toEqual(expect.arrayContaining([
+      "version.workflow.id", "version.workflow.name", "version.number",
+    ]));
+    expect(screen.queryByRole("textbox", { name: "Version" })).toBeNull();
+  });
+
   test("falls back from a missing relation label to identity, then Untitled", async () => {
     sdkMocks.record = { id: "run-1", workflow: { id: "workflow-1" } };
     const metadata = workflowRelationMetadata();
@@ -2493,6 +2518,24 @@ describe("FormView", () => {
     expect(document.querySelector("form")?.className).toContain("min-h-0");
     expect(heading.closest("form")?.querySelector(".overflow-auto")).toBeTruthy();
     expect(screen.queryByRole("tab")).toBeNull();
+  });
+
+  test("read-only records retain declared lifecycle actions while generated edits stay hidden", async () => {
+    const run = vi.fn(async () => undefined);
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly>
+      <Field name="title" label="Title" title />
+      <Action id="review" label="Review" run={run} />
+      <Action id="rename" label="Rename" set={{ title: "Changed" }} />
+    </FormView>);
+    expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Review" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Review" }));
+    await waitFor(() => expect(run).toHaveBeenCalledOnce());
   });
 
   test("document records honor overview tab placement without changing presentation", async () => {

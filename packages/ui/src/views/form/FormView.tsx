@@ -9,7 +9,9 @@ import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
+import { EmptyState } from "../../fragments/EmptyState";
 import { LoadingPanel } from "../../fragments/LoadingPanel";
+import { errorMessage } from "../../feedback";
 import {
   RecordChrome,
   RecordChromeProvider,
@@ -159,6 +161,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     formReadOnly,
     formIsDirty,
     displayRecord,
+    loadError,
     saveError,
     saveConflict,
     declaredActions,
@@ -184,6 +187,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     () => recordActions.filter((entry) => entry.recordActionPlacement === "menu"),
     [recordActions],
   );
+  const availableDeclaredActions = readOnly
+    ? declaredActions.filter((action) => action.run || action.submit)
+    : declaredActions;
   useBreadcrumbLeafLabel(
     titleText(
       recordRepresentationValue(displayRecord, surface.modelMetadata),
@@ -191,14 +197,27 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     ) || null,
     publishBreadcrumbLabel && !isCreate,
   );
+  const loadErrorBanner = <ErrorBanner
+    title={t("form.loadFailed")}
+    description={loadError ? errorMessage(loadError, t("form.loadFailed")) : null}
+    actions={<Button type="button" size="sm" disabled={loading} onClick={() => void reload()}>{t("collection.retry")}</Button>}
+  />;
+  if (!isCreate && displayRecord == null) {
+    return <div className={cn("min-h-full bg-sheet", className)}>
+      {toolbar ? <ControlBand>
+        <div className="flex flex-1 items-center justify-end gap-2">{toolbar}</div>
+      </ControlBand> : null}
+      <div className={cn(FORM_VIEW_COLUMN_CLASS, "py-6")}>
+        {loading ? <LoadingPanel message={t("form.loading")} /> : loadError ? loadErrorBanner
+          : <EmptyState title={t("form.recordNotFound")} />}
+      </div>
+    </div>;
+  }
   const toolbarStartNode =
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
-  const awaitingRecord = !isCreate && displayRecord == null && loading;
-  const overview = awaitingRecord ? (
-    <LoadingPanel message={t("form.loading")} />
-  ) : (
+  const overview = (
     <FormViewOverview
       surface={surface} layout={layout} groupLayout={groupLayout} bodyTabs={bodyTabs}
       linesTabLabel={linesTabLabel} linePrimaryFields={linePrimaryFields}
@@ -216,7 +235,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     </RecordChromeProvider>
   ) : overview;
   const recordExtrasPanel =
-    !awaitingRecord && recordPanelContext && recordExtras ? (
+    recordPanelContext && recordExtras ? (
       <div className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}>
         {recordExtras(recordPanelContext)}
       </div>
@@ -224,13 +243,11 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const overviewWithFormExtras = (
     <>
       {overviewBody}
-      {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
+      {formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
     </>
   );
-  const formTitle = awaitingRecord
-    ? t("form.loading")
-    : typeof title === "function" ? title(recordToolbarContext) : title;
-  const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
+  const formTitle = typeof title === "function" ? title(recordToolbarContext) : title;
+  const headerExtra = headerExtras?.(recordToolbarContext);
 
   const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
     if (
@@ -277,19 +294,19 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             </Button>
           </div>
         ) : null}
-        {!readOnly && (
-          declaredActions.length > 0 ||
+        {(
+          availableDeclaredActions.length > 0 ||
           visibleDeleteAction !== undefined ||
-          menuRecordActions.length > 0
+          (!readOnly && menuRecordActions.length > 0)
         ) ? (
           <RecordActionBar
             record={displayRecord ?? null}
-            actions={declaredActions}
+            actions={availableDeclaredActions}
             applyPatch={applyPatch}
             reload={reload}
             deleteAction={visibleDeleteAction}
             contributedActions={
-              recordChromeContext && menuRecordActions.length > 0 ? (
+              !readOnly && recordChromeContext && menuRecordActions.length > 0 ? (
                 <RecordChromeProvider value={recordChromeContext}>
                   <SlotOutlet entries={menuRecordActions} />
                 </RecordChromeProvider>
@@ -314,7 +331,8 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     </ControlBand>
   );
 
-  const saveErrorBanner = (
+  const errorBanners = <>
+    {loadErrorBanner}
     <ErrorBanner
       description={saveError}
       title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
@@ -324,7 +342,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
         </Button>
       ) : undefined}
     />
-  );
+  </>;
 
   const formElement = (
     <form
@@ -345,7 +363,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
         )}
       >
         <FormViewRecordHeader surface={surface} title={formTitle} extra={headerExtra} />
-        {saveErrorBanner}
+        {errorBanners}
         {tabbed ? (
           <>
             <Tabs.List>
@@ -390,7 +408,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 py-3">
             <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
-            {saveErrorBanner}
+            {errorBanners}
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             <div className={cn(FORM_VIEW_COLUMN_CLASS, "grid gap-6 py-6")}>
@@ -421,7 +439,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
           {controlBand}
           <div className="flex-none border-b border-border-subtle px-4 pt-3">
             <FormViewRecordHeader surface={surface} compact title={formTitle} extra={headerExtra} />
-            {saveErrorBanner}
+            {errorBanners}
             <Tabs.List className="mt-2">
               {orderedTabs.map((tab) => (
                 <Tabs.Tab

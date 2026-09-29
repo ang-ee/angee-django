@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   RelationRepresentationError,
   lineReadSelectionPaths,
+  modelFieldForPath,
   relationRepresentationForPath,
   resourceReadSelectionPaths,
   schemaFieldMetadataFromDataResources,
@@ -132,6 +133,18 @@ describe("relationRepresentationForPath", () => {
     product,
   ]);
   const model = schema.labels["projects.Initiative"]!;
+
+  test("resolves nested fields to the model that declares their metadata", () => {
+    expect(modelFieldForPath("project.product", model, schema)).toEqual({
+      field: schema.labels["projects.Project"]!.fields.product,
+      model: schema.labels["projects.Project"],
+    });
+    expect(modelFieldForPath("project.product.name", model, schema)).toEqual({
+      field: schema.labels["catalog.Product"]!.fields.name,
+      model: schema.labels["catalog.Product"],
+    });
+    expect(modelFieldForPath("project.product.name.text", model, schema)).toBeNull();
+  });
 
   test("expands a nested relation-terminal path using canonical model labels", () => {
     expect(relationRepresentationForPath("project.product", model, schema)).toEqual({

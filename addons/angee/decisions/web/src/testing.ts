@@ -1,16 +1,32 @@
-import type { Decision, DecisionSeat } from "./documents.console";
+import type { Decision } from "./documents.console";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
+
+const verdicts = [
+  { value: "PENDING", description: "Pending" }, { value: "COMPLETED", description: "Completed" },
+  { value: "REJECTED", description: "Rejected" },
+];
+
+export const decisionGroupFixture = testDataResource("decisions.DecisionGroup", {
+  capabilities: ["list", "detail"], roots: { list: "decision_groups", detail: "decision_groups_by_pk" },
+});
 
 /** Executable resource metadata for inbox tests and interactive decision stories. */
 export const decisionResourceFixture = testDataResource("decisions.Decision", {
   capabilities: ["list", "detail"],
+  recordRepresentation: "kind_label",
+  fields: [{ name: "verdict", kind: "enum", scalar: "String", values: verdicts, readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
+  }],
   roots: { list: "decisions", detail: "decisions_by_pk", aggregate: "decisions_aggregate" },
   typeNames: { filter: "decisions_bool_exp", order: "decisions_order_by" },
   query: testResourceQuery({ fields: {
     ...Object.fromEntries([
-      "id", "kind", "record_model_label", "record_public_id", "requester.display_name",
-      "assignees", "requester", "verdict", "closed_reason", "expires_at",
+      "id", "kind", "kind_label", "record_model_label", "record_public_id", "requester.display_name",
+      "assignees", "requester", "closed_reason", "expires_at", "group", "group.id",
+      "resolved_by", "resolved_at", "resolved_by.display_name", "revision", "can_act", "form_schema", "basis", "context", "resolution",
     ].map((name) => [name, testQueryField(name)])),
+    verdict: testQueryField("verdict", { values: verdicts }),
+    index: testQueryField("index", { scalar: "Int", sort: { field: "index" } }),
     created_at: testQueryField("created_at", { sort: { field: "created_at" } }),
     is_open: testQueryField("is_open", { scalar: "Boolean", nullable: false,
       filter: { field: "is_open", scalar: "Boolean", values: [], operators: ["exact"] },
@@ -48,11 +64,6 @@ export function decisionFixture(overrides: Partial<Decision> = {}): Decision {
     group: { id: "dcg_review" },
     ...overrides,
   };
-}
-
-export function decisionSeatFixture(overrides: Partial<DecisionSeat> = {}): DecisionSeat {
-  return { id: "dcn_review", index: 0, verdict: "PENDING", closed_reason: null,
-    assignees: [{ display_name: "Reviewer" }], ...overrides };
 }
 
 export const decisionSubjectFixture = testDataResource("notes.Note", {

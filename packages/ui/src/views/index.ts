@@ -405,15 +405,18 @@ export {
 } from "./page";
 export type {
   ActionArg,
+  ActionArgs,
   ActionConfirm,
   ActionContext,
   ActionDescriptor,
   ActionFormContext,
+  ActionFormDefinition,
   ActionProps,
   ActionRelationArg,
   ActionRelationListArg,
   ActionResult,
   ActionScalarArg,
+  ActionSubmitResult,
   ColumnAggregate,
   ColumnDescriptor,
   ColumnProps,

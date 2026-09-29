@@ -34,6 +34,8 @@ export interface DescriptorFieldRelation {
 }
 
 export interface DescriptorField extends FieldDescriptor {
+  /** Reset a variant's local editor draft while retaining the form-owned value. */
+  controlKey?: React.Key;
   /** Disable editing for this field against the current form values. */
   readOnlyWhen?: (values: Record<string, unknown>) => boolean;
   /**
@@ -101,6 +103,7 @@ export function DescriptorFieldList({ fields, resolvedFields, readOnly = false }
     <Controller key={field.name} name={field.name} control={form.control} exact={false}
       render={({ field: control, fieldState }) => (
         <LabeledDescriptorField
+          key={field.controlKey}
           field={field}
           value={control.value}
           dialogValues={values}

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Controller, get, useWatch } from "react-hook-form";
-import { useModelMetadata } from "@angee/metadata";
+import { useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
 
 import type { DescriptorField } from "./DescriptorFieldList";
 import { LabeledDescriptorField } from "./DescriptorFieldList";
@@ -75,9 +75,10 @@ export function BoundDescriptorField({
   readOnly = false,
 }: BoundDescriptorFieldProps): React.ReactElement {
   const modelMetadata = useModelMetadata(resource);
+  const schemaMetadata = useSchemaFieldMetadata();
   const declared = React.useMemo(
-    () => fieldsWithMetadataDefaults([field], modelMetadata)[0] ?? field,
-    [field, modelMetadata],
+    () => fieldsWithMetadataDefaults([field], modelMetadata, schemaMetadata)[0] ?? field,
+    [field, modelMetadata, schemaMetadata],
   ) as DescriptorField;
   const needsSiblingValues = declared.resolve !== undefined
     || declared.showWhen !== undefined

@@ -1,9 +1,10 @@
 import * as React from "react";
-import { rowPublicId, type Row } from "@angee/metadata";
+import { modelLabelSegment, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
 import { stableSerialize } from "@angee/refine";
 import { ControlBandProvider } from "../../../layouts/ControlBand";
 import { Workbench } from "../../../layouts/Workbench";
 import { cn } from "../../../lib/cn";
+import { titleCase } from "../../../lib/titleCase";
 import { Dialog, DialogBackdrop, DialogPortal, DialogRoot } from "../../../ui/dialog";
 import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { ListView } from "../ListView";
@@ -68,6 +69,7 @@ export function ResourceListBody<TRow extends Row = Row>({
   draggableRow,
   className,
 }: ResourceListBodyProps<TRow>): React.ReactElement {
+  const metadata = useModelMetadata(resource);
   const resolvedRecordId = recordController.recordId;
   const resolvedCreating =
     Boolean(recordController.creating) || resolvedRecordId === REFINE_CREATE_ID;
@@ -334,6 +336,7 @@ export function ResourceListBody<TRow extends Row = Row>({
           <DialogPortal>
             <DialogBackdrop />
             <Dialog.Content size="md">
+              <Dialog.Title className="sr-only">{titleCase(modelLabelSegment(metadata?.resource.modelLabel ?? resource))}</Dialog.Title>
               <Dialog.Header className="flex justify-end px-3 pt-3">
                 <Dialog.Close />
               </Dialog.Header>

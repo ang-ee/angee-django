@@ -7,6 +7,7 @@ import {
   defaultWidgetForModelField,
   isToOneRelationField,
   modelMetadataForLabel,
+  modelFieldForPath,
   relationModelLabelForField,
   relationRepresentationForPath,
 } from "@angee/metadata";
@@ -72,9 +73,9 @@ export function relationFieldInfo(
   modelMetadata: ModelMetadata | null,
   schemaMetadata: SchemaFieldMetadata,
 ): RelationFieldInfo | null {
-  const field = modelMetadata?.fields[fieldName];
-  if (!field || !isToOneRelationField(field, modelMetadata)) return null;
-  return resolveRelationTarget(field, modelMetadata, schemaMetadata);
+  const resolved = modelMetadata ? modelFieldForPath(fieldName, modelMetadata, schemaMetadata) : null;
+  if (!resolved || !isToOneRelationField(resolved.field, resolved.model)) return null;
+  return resolveRelationTarget(resolved.field, resolved.model, schemaMetadata);
 }
 
 /** Resolve a relation declared directly by an authored ResourceQuery. */
@@ -281,9 +282,11 @@ export function columnsWithMetadataDefaults<TRow extends object>(
 export function fieldsWithMetadataDefaults(
   fields: readonly FieldDescriptor[],
   metadata: ModelMetadata | null,
+  schemaMetadata: SchemaFieldMetadata = EMPTY_SCHEMA_FIELD_METADATA,
 ): readonly FieldDescriptor[] {
   return fields.map((field) => {
-    const fieldMetadata = metadata?.fields[field.name];
+    const resolved = metadata ? modelFieldForPath(field.name, metadata, schemaMetadata) : null;
+    const fieldMetadata = resolved?.field;
     // A declared field with no explicit widget inherits the metadata-derived default
     // for its kind/scalar: enum→select, relation→many2one (selecting `<field>.id`
     // for the picker), Boolean→switch, list→tagInput, etc. Without this every
@@ -295,6 +298,8 @@ export function fieldsWithMetadataDefaults(
     const options = enumOptions(fieldMetadata);
     return {
       ...field,
+      // A parent record's generated update cannot write another model's fields.
+      ...(resolved && field.name.includes(".") ? { readOnly: true } : {}),
       ...(widget !== field.widget ? { widget } : {}),
       label: fieldLabel(field.name, fieldMetadata, field.label),
       ...(field.currencyField === undefined && fieldMetadata?.currencyField

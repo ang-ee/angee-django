@@ -50,6 +50,15 @@ def test_requester_can_read_own_requested_question_and_group_without_being_issue
     assert query(outsider, document) == {"decisions": []}
 
 
+def test_kind_label_and_record_representation_share_the_model_owner(inbox):
+    _issuer, _requester, reviewer, _outsider, _subject, _group, decision = inbox
+    assert query(reviewer, "query { decisions { kind kind_label display_name } }") == {"decisions": [{
+        "kind": decision.kind, "kind_label": decision.kind_label, "display_name": decision.kind_label,
+    }]}
+    decision.kind = "note_publication"
+    assert decision.kind_label == str(decision) == "Note publication"
+
+
 def test_can_act_is_the_permission_owners_current_active_person_rule(inbox):
     issuer, requester, reviewer, _outsider, _subject, _group, decision = inbox
     document = "query { decisions { can_act } }"

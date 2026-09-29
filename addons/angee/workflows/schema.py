@@ -72,6 +72,7 @@ class WorkflowRunType(AngeeNode):
     step_runs: list[StepRunType] = actor_scoped_to_many("step_runs")
     run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
+    origin: RunOrigin
     input: JSON
     output: JSON
     outcome: auto
@@ -80,11 +81,6 @@ class WorkflowRunType(AngeeNode):
     created_at: auto
     updated_at: auto
     finished_at: auto
-
-    @strawberry_django.field(only=["reprocess_of_id"])
-    def origin(self) -> RunOrigin:
-        """Read the model's derived admission origin."""
-        return cast(Any, self).origin
 
     @strawberry_django.field(only=["status"])
     def can_cancel(self, info: strawberry.Info) -> bool:
@@ -207,11 +203,11 @@ _VERSION_RESOURCE = hasura_model_resource(
 )
 _RUN_RESOURCE = hasura_model_resource(
     WorkflowRunType, model=WorkflowRun,
-    filterable=["id", "version", "version__workflow", "run_as", "status", "outcome", "reprocess_of",
+    filterable=["id", "version", "version__workflow", "run_as", "status", "origin", "outcome", "reprocess_of",
                 "created_at", "finished_at"],
     record_ref_filters=("subject_model", "subject_id"),
     sortable=["created_at", "updated_at", "finished_at", "status"],
-    aggregatable=["id"], groupable=["status", "outcome", "version__workflow", "version__workflow__name"],
+    aggregatable=["id"], groupable=["status", "origin", "outcome", "version__workflow", "version__workflow__name"],
     insert=False, update=False, delete=False,
 )
 _STEP_RESOURCE = hasura_model_resource(

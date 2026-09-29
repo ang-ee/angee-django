@@ -16,14 +16,4 @@ export const DecisionDocument = graphql(`
   }
 `);
 
-export const DecisionSeatsDocument = graphql(`
-  query DecisionSeats($group: String!) {
-    decisions(where: {group: {_eq: $group}}, order_by: [{index: asc}]) {
-      id index verdict closed_reason
-      assignees { display_name }
-    }
-  }
-`);
-
 export type Decision = NonNullable<DocumentType<typeof DecisionDocument>["decisions_by_pk"]>;
-export type DecisionSeat = DocumentType<typeof DecisionSeatsDocument>["decisions"][number];

@@ -159,10 +159,3 @@ def test_context_acknowledgement_belongs_to_its_claimed_attempt():
     assert not ctx.retry_acknowledged
     ctx.attempt.acknowledged_by_id = 5
     assert ctx.retry_acknowledged
-
-
-def test_run_origin_is_derived_without_loading_its_replacement():
-    """Current run origins need no mutable label or query for the predecessor."""
-
-    assert WorkflowRun().origin == "manual"
-    assert WorkflowRun(reprocess_of_id=5).origin == "reprocess"

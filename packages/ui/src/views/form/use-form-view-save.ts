@@ -101,7 +101,7 @@ export interface FormViewAcknowledgedSource {
   /** Complete acknowledged form baseline. Local dirty values survive later snapshots. */
   values: FormValues | null;
   loading?: boolean;
-  reload?: () => void;
+  reload?: () => void | Row | null | Promise<void | Row | null>;
 }
 
 export type FormViewForm = FieldValidationForm<FormValues>;
@@ -135,6 +135,8 @@ export interface FormViewSaveSurface {
   history: FormHistory;
   displayRecord: Row | null;
   loading: boolean;
+  /** Native detail-query failure; cached record data remains available during refresh failures. */
+  loadError: HttpError | null;
   formReadOnly: boolean;
   formIsDirty: boolean;
   pending: boolean;
@@ -150,7 +152,7 @@ export interface FormViewSaveSurface {
   discardChanges: () => void;
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   patchRecord: (patch: Record<string, unknown>) => void;
-  reload: () => void;
+  reload: () => Promise<Row | null>;
   afterFieldChange: (field: FieldDescriptor, value: unknown, scope?: string) => void;
   fieldReadOnly: (field: FieldDescriptor) => boolean;
   startFieldInteraction: (path: string) => void;
@@ -245,12 +247,13 @@ export function useFormViewSave({
   const displayRecord = record;
   const editBasisRecordRef = React.useRef<Row | null>(displayRecord);
   const loading = acknowledgedSource?.loading ?? read.query.isFetching;
-  const reload = React.useCallback(() => {
+  const loadError = acknowledgedSource === undefined ? read.query.error : null;
+  const reload = React.useCallback(async (): Promise<Row | null> => {
     if (acknowledgedSource !== undefined) {
-      acknowledgedSource.reload?.();
-      return;
+      return await acknowledgedSource.reload?.() ?? null;
     }
-    void read.query.refetch();
+    const result = await read.query.refetch();
+    return result.error ? null : result.data?.data ?? null;
   }, [acknowledgedSource, read.query.refetch]);
   const create = useCreate<RowRecord, HttpError, FormValues>({
     resource: refineResource,
@@ -754,6 +757,7 @@ export function useFormViewSave({
     history,
     displayRecord,
     loading,
+    loadError,
     formReadOnly,
     formIsDirty,
     pending,

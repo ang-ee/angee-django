@@ -44,6 +44,18 @@ const { Provider, clearClients } = createUiTestProviders({
 
 afterEach(() => { cleanup(); clearClients(); });
 
+test("a drawer record exposes its resource name as the accessible dialog title", async () => {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const getOne = vi.fn(async () => ({ data: { id: "trigger-1", kind: "Schedule" } }));
+  render(<RouterContextProvider router={router}><Provider resources={resources} dataProvider={{ getOne }}>
+    <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ModalsHost><ToastProvider>
+      <ResourceList resource={trigger.modelLabel} scope="local" placement="drawer" recordId="trigger-1" hideCreate
+        columns={[{ field: "kind" }]} formFields={[{ name: "kind", readOnly: true }]} />
+    </ToastProvider></ModalsHost></AppRuntimeProvider>
+  </Provider></RouterContextProvider>);
+  expect(await screen.findByRole("dialog", { name: "Trigger" })).toBeTruthy();
+});
+
 test("a native controlled child list isolates queries and record UI from its parent collection", async () => {
   const getList = vi.fn(async (params: GetListParams) => ({
     data: [{ id: "trigger-1", kind: "Schedule", enabled: true, workflow: "workflow-1" }],

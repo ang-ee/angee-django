@@ -461,7 +461,9 @@ history uses native Query pages with domain-owned
   owns controls and requires a native RHF `FormProvider`. Decode raw controls with
   `parseValues` and `mutationDialogValueCodecs`; required/verbatim codecs express
   authored field contracts. Record actions declare `args` + `submit` on `<Action>`;
-  `RecordActionBar` composes `ActionFormDialog` for their inputs.
+  `RecordActionBar` composes `ActionFormDialog` for their inputs. Record-specific
+  schemas compose `jsonSchemaActionArgs` in the action's `args` callback; the
+  shared form owns branching, validation and draft retention across record refreshes.
 - Submit owners return [FormSubmitResult](../../packages/ui/src/views/form/validation-errors.ts):
   `ok` acknowledges saved data; `invalid` carries `ValidationErrors`; `conflict`
   preserves edits and offers reload. Adapt wire responses with

@@ -2,13 +2,60 @@ import { describe, expect, test } from "vitest";
 import type { ResolverOptions } from "react-hook-form";
 
 import { createAngeeI18nInstance } from "../../runtime/i18n";
-import { ajvValidationErrors, createJsonSchemaAjv, createJsonSchemaResolver } from "./json-schema";
+import { defaultWidgets } from "../../widgets";
+import { ajvValidationErrors, createJsonSchemaAjv, createJsonSchemaResolver, jsonSchemaActionArgs } from "./json-schema";
 
 const resolverOptions: ResolverOptions<Record<string, unknown>> = {
   fields: {}, shouldUseNativeValidation: false,
 };
 
 describe("JSON Schema forms", () => {
+  test("projects a selected action branch, resets its fields and validates typed acknowledgement", async () => {
+    const args = jsonSchemaActionArgs({
+      type: "object", discriminator: { propertyName: "kind" }, required: ["kind"],
+      $defs: { count: { type: "integer", minimum: 1, default: 2 } },
+      properties: { kind: { type: "string", enum: ["count", "approve"] } },
+      oneOf: [
+        { properties: { kind: { const: "count" }, count: { $ref: "#/$defs/count" } }, required: ["count"] },
+        { properties: { kind: { const: "approve" }, acknowledge: { type: "boolean", const: true } }, required: ["acknowledge"] },
+      ],
+    }, defaultWidgets);
+    expect(args.defaultValues).toEqual({ kind: "count", count: 2 });
+    expect(args.fieldNames).toEqual(["kind", "count", "acknowledge"]);
+    if (typeof args.fields !== "function") throw new Error("Expected dynamic fields");
+    const fields = args.fields({ kind: "approve" });
+    expect(fields.map((field) => field.name)).toEqual(["kind", "acknowledge"]);
+    expect(fields[0]?.branchReset?.("approve")).toEqual({ fields: ["acknowledge"], values: { acknowledge: false } });
+    expect((await args.resolver!({ kind: "approve", acknowledge: false }, undefined, resolverOptions)).errors)
+      .toMatchObject({ acknowledge: { message: "Keep the supplied value." } });
+    expect(await args.resolver!({ kind: "approve", acknowledge: true, count: 7 }, undefined, resolverOptions))
+      .toEqual({ values: { kind: "approve", acknowledge: true }, errors: {} });
+  });
+
+  test("retains schema defaults, nested values and readonly controls in action args", () => {
+    const args = jsonSchemaActionArgs({ type: "object", properties: {
+      reference: { type: "string", default: "fixed", readOnly: true },
+      profile: { type: "object", properties: { count: { type: "integer" } } },
+    } }, defaultWidgets, { initialValues: { profile: { count: 4 }, undeclared: true } });
+    expect(args.defaultValues).toEqual({ reference: "fixed", profile: { count: 4 } });
+    if (typeof args.fields !== "function") throw new Error("Expected dynamic fields");
+    expect(args.fields({})[0]).toMatchObject({ name: "reference", readOnly: true });
+  });
+
+  test("validates retained readonly row constants through native prefixItems", async () => {
+    const item = { type: "object", additionalProperties: false, required: ["source"], properties: {
+      source: { type: "string", readOnly: true },
+    } };
+    const args = jsonSchemaActionArgs({ type: "object", properties: {
+      rows: { type: "array", default: [{ source: "Retained" }], items: item,
+        prefixItems: [{ ...item, properties: { source: { ...item.properties.source, default: "Retained", const: "Retained" } } }],
+      },
+    } }, defaultWidgets);
+    expect((await args.resolver!(args.defaultValues!, undefined, resolverOptions)).errors).toEqual({});
+    expect((await args.resolver!({ rows: [{ source: "Changed" }] }, undefined, resolverOptions)).errors)
+      .toMatchObject({ rows: [{ source: { message: "Keep the supplied value." } }] });
+  });
+
   test("accepts FormSpec annotations and returns validated values", async () => {
     const resolver = createJsonSchemaResolver({
       type: "object", required: ["title"], additionalProperties: false,

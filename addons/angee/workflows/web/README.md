@@ -6,22 +6,23 @@ and their recent runs. The studio is a separate, later surface.
 
 Runs retain the backend's origin, outcomes, attempt evidence, wait reasons, and
 record references. The backend supplies execution rank and mapped-step identity;
-the shared resource list pages the ordered transcript. Metadata owns record names,
-labels and navigation, and the JSON viewer displays retained inputs and outputs.
+the shared resource list pages the ordered steps and opens one selected step in
+the framework drawer. Attempts and artifacts are child collections. Metadata owns
+record names, labels and navigation; the JSON widget displays inputs and outputs.
 
-Operator dialogs send cancel, reprocess, retry, and explicitly acknowledged
-duplicate-risk retry requests through generated actions and `useActionForm`.
-The backend's capability facts decide which controls appear. One selected action
-mounts one dialog, with acknowledgement validated by the form resolver. Successful
-cancel/retry messages use the shared toast; a successful reprocess links to the
-replacement run. Retained errors are evidence, and readable attempts display only
+Declared `Action`s send cancel, reprocess, retry, and explicitly acknowledged
+duplicate-risk retry requests through generated mutations. The backend's capability
+facts decide which actions appear. The shared action owner handles confirmation,
+typed acknowledgement, errors and pending state. Reprocess navigates to the
+replacement through the resource route owner. Retained errors are evidence, and readable attempts display only
 the stack traces returned by the backend's field policy.
 
 Workflows contributes the waiting run to the decisions origin slot. Records gain
 a separate Workflows chatter tab scoped by model label and public ID. The existing
 activity feed has no contribution slot, so these runs are not merged into that feed.
-Collection state, paging, dialogs, errors, and record chrome stay with their
-framework owners.
+Routed `ResourceList` declarations own collection state, filters, grouping, paging
+and the `Form` record frame. Catalogue versions and the shared runs list render in
+record tabs; contextual run collections reuse that same runs declaration.
 
 Documents use the console schema. Generate the composed host's documents before
 typechecking or running the native provider tests. Stories and provider tests exercise recovery,

@@ -11,7 +11,6 @@ export default defineBaseAddon({
     "decisions.inbox", "/decisions",
     lazyRouteComponent(() => import("./InboxPage"), "InboxPage"),
     "decisions.Decision",
-    { detailComponent: lazyRouteComponent(() => import("./DecisionPage"), "DecisionPage") },
   ),
   menus: [{ id: "decisions", label: "Decisions", icon: "check", route: "decisions.inbox" }],
   i18n: { decisions: enDecisionsMessages },

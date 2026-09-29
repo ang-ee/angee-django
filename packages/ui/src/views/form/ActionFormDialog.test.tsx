@@ -26,6 +26,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { useState, type ReactElement } from "react";
+import { useFormContext } from "react-hook-form";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -33,6 +34,7 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import { ActionFormDialog, serializeActionArgValues } from "./ActionFormDialog";
+import { jsonSchemaActionArgs } from "./json-schema";
 import type { ActionArg, ActionDescriptor, ActionFormContext } from "../page";
 
 // cmdk scrolls the active option into view; happy-dom has no layout engine.
@@ -191,6 +193,7 @@ function renderDialog(
   action: ActionDescriptor,
   onSucceeded?: (outcome: { ok: boolean; message: string; id?: string }) => void,
   onParentSubmit?: () => void,
+  dialog: ReactElement = <Harness action={action} onSucceeded={onSucceeded} />,
 ): void {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
@@ -202,7 +205,6 @@ function renderDialog(
     routeTree: rootRoute.addChildren([indexRoute]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
-  const dialog = <Harness action={action} onSucceeded={onSucceeded} />;
   render(
     <RouterContextProvider router={router}>
       <ModalsHost>
@@ -267,6 +269,101 @@ describe("serializeActionArgValues", () => {
 });
 
 describe("ActionFormDialog", () => {
+  test("resolves controlled dialog arguments on each opening and retains drafts during live refresh", async () => {
+    const args = vi.fn(({ record }: ActionFormContext) => [{
+      name: "reason", label: "Reason", widget: "text", defaultValue: record?.id,
+    }]);
+    const action: ActionDescriptor = { id: "review", label: "Review", args, submit: vi.fn() };
+    let refreshRecord = () => {};
+    function Controlled(): ReactElement {
+      const [open, setOpen] = useState(false);
+      const [id, setId] = useState("first");
+      refreshRecord = () => setId("second");
+      return <>
+        <button onClick={() => setOpen(true)}>Open action</button>
+        <ActionFormDialog action={action} context={{ record: { id }, selectedIds: [] }} open={open} onOpenChange={setOpen} />
+      </>;
+    }
+    renderDialog(action, undefined, undefined, <Controlled />);
+    expect(args).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open action" }));
+    const reason = await screen.findByRole<HTMLInputElement>("textbox", { name: "Reason" });
+    expect(reason.value).toBe("first");
+    fireEvent.change(reason, { target: { value: "Keep my draft" } });
+    act(() => refreshRecord());
+    expect(reason.value).toBe("Keep my draft");
+    expect(args).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Open action" }));
+    expect((await screen.findByRole<HTMLInputElement>("textbox", { name: "Reason" })).value).toBe("second");
+    expect(args).toHaveBeenCalledTimes(2);
+  });
+
+  test("changing schema branches resets local invalid editors and preserves consumer values", async () => {
+    function ConsumerField(): ReactElement {
+      const form = useFormContext();
+      return <input aria-label="Consumer note" {...form.register("note")} />;
+    }
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Accepted." });
+    const payload = { type: "object", label: "Payload", widget: "json", default: { text: "Retained" } };
+    renderDialog({ id: "collect", label: "Collect", submit, args: {
+      ...jsonSchemaActionArgs({
+        type: "object", discriminator: { propertyName: "mode" }, required: ["mode"],
+        properties: { mode: { type: "string", enum: ["first", "second"], widget: "text", label: "Mode" }, note: { type: "string", hidden: true } },
+        oneOf: ["first", "second"].map((mode) => ({ properties: { mode: { const: mode }, payload } })),
+      }, defaultWidgets),
+      content: <ConsumerField />,
+    } });
+    fireEvent.change(await screen.findByRole("textbox", { name: "Consumer note" }), { target: { value: "Consumer draft" } });
+    const input = await screen.findByRole("textbox", { name: "Payload" });
+    const editor = EditorView.findFromDOM(input)!;
+    act(() => editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: "{" } }));
+    fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+    await screen.findByText("Enter a valid value.");
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>("button", { name: "Collect" }).disabled).toBe(false));
+    expect(submit).not.toHaveBeenCalled();
+    expect(editor.state.doc.toString()).toBe("{");
+    fireEvent.change(screen.getByRole("textbox", { name: "Mode" }), { target: { value: "second" } });
+    const nextEditor = EditorView.findFromDOM(await screen.findByRole("textbox", { name: "Payload" }))!;
+    expect(nextEditor).not.toBe(editor);
+    expect(JSON.parse(nextEditor.state.doc.toString())).toEqual({ text: "Retained" });
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Consumer note" }).value).toBe("Consumer draft");
+    fireEvent.click(screen.getByRole("button", { name: "Collect" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith({ mode: "second", note: "Consumer draft", payload: { text: "Retained" } }, context));
+  });
+
+  test("collects record-specific schema args and keeps a conflict draft locked", async () => {
+    const submit = vi.fn().mockResolvedValue({ status: "conflict", message: "This record changed. Reopen to reload." });
+    const args = vi.fn(({ record }: ActionFormContext) => jsonSchemaActionArgs({
+      type: "object", required: ["reason"], properties: {
+        reason: { type: "string", minLength: 3, label: "Reason", default: record?.id },
+      },
+    }, defaultWidgets));
+    renderDialog({ id: "review", label: "Review", args, submit });
+    const reason = await screen.findByRole<HTMLInputElement>("textbox", { name: "Reason" });
+    expect(reason.value).toBe("doc-1");
+    fireEvent.change(reason, { target: { value: "no" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(await screen.findByText("Enter at least 3 characters.")).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review" }).disabled).toBe(false));
+    fireEvent.change(screen.getByRole("textbox", { name: "Reason" }), { target: { value: "Retain my draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(await screen.findByText("This record changed. Reopen to reload.")).toBeTruthy();
+    expect(screen.getByText("Retain my draft")).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Review" }).disabled).toBe(true);
+    expect(args).toHaveBeenCalledTimes(1);
+  });
+
+  test("reports a malformed record schema inside the action dialog", async () => {
+    renderDialog({ id: "review", label: "Review", args: () => {
+      throw new Error("The saved schema is invalid.");
+    }, submit: vi.fn() });
+    expect(await screen.findByText("The saved schema is invalid.")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Review" })).toBeTruthy();
+  });
+
   test("retains invalid JSON and blocks submission until the editor is corrected", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Saved." });
     renderDialog({

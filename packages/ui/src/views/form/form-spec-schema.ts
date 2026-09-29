@@ -62,6 +62,7 @@ const FieldKeywordSchema = v.object({
   format: v.optional(NonEmptyString),
   pattern: v.optional(v.string()),
   enum: v.optional(v.array(JsonValueSchema)),
+  discriminator: v.optional(v.object({ propertyName: NonEmptyString })),
 });
 const FieldAnnotationSchema = v.object({
   propertyOrder: v.optional(v.array(NonEmptyString)),

@@ -43,7 +43,7 @@ export function RecordActionBar({
   record: Row | null;
   actions: readonly ActionDescriptor[];
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
-  reload: () => void;
+  reload: () => void | Promise<Row | null>;
   deleteAction?: RecordDeleteAction;
   /** Addon-contributed verbs rendered inside this same Actions menu. */
   contributedActions?: React.ReactNode;
@@ -147,7 +147,8 @@ export function RecordActionBar({
   if (
     visibleActions.length === 0 &&
     deleteAction === undefined &&
-    contributedActions == null
+    contributedActions == null &&
+    formAction === null
   ) return null;
 
   return (
@@ -222,6 +223,7 @@ export function RecordActionBar({
           context={{
             record,
             selectedIds: recordId !== null ? [recordId] : [],
+            refresh: async () => await reload() ?? null,
           }}
           open
           onOpenChange={(open) => {
