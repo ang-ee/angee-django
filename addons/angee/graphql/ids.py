@@ -75,7 +75,10 @@ def require_instance_for_id(
     """Resolve within the supplied queryset or raise a typed validation refusal.
 
     ``not_found`` preserves a domain surface's established error wording. This
-    helper never elevates; hidden and unknown rows have the same refusal.
+    helper never elevates; hidden and unknown rows have the same refusal when
+    the caller supplies its authorized queryset. It is for required action and
+    write targets. Nullable read roots use optional identity resolution and
+    return null without errors for hidden, absent, or malformed identities.
     Action-specific authorization belongs to the action.
     """
 

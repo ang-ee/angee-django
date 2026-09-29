@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.core.exceptions import PermissionDenied
-from django.db import transaction
+from django.db import connections, transaction
 from django.http import HttpRequest, HttpResponse
 from rebac import actor_context
 from rebac.actors import is_sudo
@@ -69,11 +70,15 @@ class ViewAs:
         request.view_as = self
         request.user = self.target
         try:
-            with actor_context(self.target), transaction.atomic():
+            with actor_context(self.target), ExitStack() as transactions:
+                aliases = sorted(connections)
+                for alias in aliases:
+                    transactions.enter_context(transaction.atomic(using=alias))
                 try:
                     return view(request)
                 finally:
-                    transaction.set_rollback(True)
+                    for alias in aliases:
+                        transaction.set_rollback(True, using=alias)
         finally:
             request.user = self.real_user
             del request.view_as
@@ -93,7 +98,11 @@ class ViewAsReadOnlyExtension(SchemaExtension):
         preview = getattr(request, "view_as", None)
         if preview is None or self.execution_context.graphql_document is None:
             return
-        operation = self.execution_context.operation_type
+        try:
+            operation = self.execution_context.operation_type
+        except RuntimeError:
+            # Strawberry owns missing/ambiguous operation selection and its 400.
+            return
         preview.operations.append(self.execution_context.operation_name or operation.value)
         if operation is not OperationType.QUERY:
             raise ViewAsReadOnly()
