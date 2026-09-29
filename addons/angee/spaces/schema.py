@@ -30,6 +30,7 @@ Membership = apps.get_model("spaces", "Membership")
 Party = apps.get_model("parties", "Party")
 Thread = apps.get_model("messaging", "Thread")
 Channel = apps.get_model("messaging", "Channel")
+Vault = apps.get_model("knowledge", "Vault")
 
 
 @strawberry_django.type(Group)
@@ -68,6 +69,13 @@ class SpaceMembershipType(AngeeNode):
 @strawberry_django.type(Channel, name="ChannelType", extend=True)
 class ChannelSpaceExtension:
     """Project the channel's team with the shared relation read guard."""
+
+    team: SpaceGroupType | None = actor_scoped_to_one("team")
+
+
+@strawberry_django.type(Vault, name="VaultType", extend=True)
+class VaultSpaceExtension:
+    """Project the vault's team with the shared relation read guard."""
 
     team: SpaceGroupType | None = actor_scoped_to_one("team")
 
@@ -231,7 +239,7 @@ _RESOURCE_TYPES = [
 ]
 
 _SPACES_SCHEMA_BUCKET = {
-    "type_extensions": [ChannelSpaceExtension],
+    "type_extensions": [ChannelSpaceExtension, VaultSpaceExtension],
     "query": [
         _GROUP_RESOURCE.query,
         _MEMBERSHIP_RESOURCE.query,

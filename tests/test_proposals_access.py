@@ -24,9 +24,10 @@ from rebac import (
     write_relationships,
 )
 
+from angee.base.errors import RecordAccessSubjectRefused
 from angee.base.mixins import CreationKeyConflict, StaleRevisionError
 from tests.conftest import Backend, Drive, create_platform_admin
-from tests.messaging_models import Person  # noqa: F401 -- resolve requester and roster person backings
+from tests.messaging_models import Person
 from tests.projects_models import Project, Task
 from tests.proposals_models import Answer, Proposal, Round, Topic
 from tests.test_project_access import project_access_schema as project_access_schema
@@ -268,7 +269,7 @@ def test_task_proposal_donor_preserves_deferred_save() -> None:
         assert stored.clarification_creation_key == "retained"
 
 
-def _review_round(admin, *, policy="drafts_and_tracks"):
+def _review_round(admin, *, policy="drafts_and_tracks", **fields):
     with actor_context(admin):
         project = Project.objects.create(title="Round target")
         now = timezone.now()
@@ -279,6 +280,7 @@ def _review_round(admin, *, policy="drafts_and_tracks"):
             opening_policy=policy,
             last_call_at=now + timedelta(days=1),
             submission_deadline=now + timedelta(days=2),
+            **fields,
         )
         round.sudo(reason="tests.proposals.review_round").save()
     return round
@@ -392,6 +394,46 @@ def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
         row.clarification_creation_key = "replacement"
         with pytest.raises(ValidationError, match="immutable"):
             row.save(update_fields=("clarification_creation_key",))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_task_holder_ceiling_asks_the_round_only_for_track_items(proposal_schema, settings, monkeypatch):
+    """A track task keeps the requester out through its round; a question on the
+    round's target project never consults that project's own holder policy."""
+
+    admin = create_platform_admin("ceiling-manager")
+    user_model = apps.get_model("iam", "User")
+    requester = user_model.objects.create_user(username="ceiling-requester")
+    asker = user_model.objects.create_user(username="ceiling-asker")
+    responder = user_model.objects.create_user(username="ceiling-responder")
+    with system_context(reason="tests.proposals.ceiling.requester"):
+        party = Person.objects.for_user(requester)
+    round = _review_round(admin, requester_party=party)
+    with actor_context(admin), system_context(reason="tests.proposals.ceiling.drive"):
+        backend = Backend.objects.create(slug="ceiling-backend", backend_class="local")
+        Drive.objects.create(slug="ceiling-default", name="Default", prefix="default", backend=backend)
+        settings.ANGEE_STORAGE_DEFAULT_DRIVE = "ceiling-default"
+    with actor_context(admin):
+        proposal = round.with_actor(admin).admit(responder, track=True)
+        round.admit(asker)
+    with system_context(reason="tests.proposals.ceiling.track_task"):
+        track_task = Task.objects.create(project=proposal.track, title="Build detail")
+    with actor_context(asker):
+        question = round.with_actor(asker).ask("Question", "Body")
+    assert question.project_id == round.project_id
+
+    def forbidden(self, relation, subject):
+        pytest.fail("A task outside a track must not consult its project's holder policy.")
+
+    monkeypatch.setattr(Project, "validate_record_access_subject", forbidden)
+    with actor_context(admin):
+        with pytest.raises(RecordAccessSubjectRefused):
+            track_task.with_actor(admin).grant_record_access("reader", requester)
+        assert not track_task.with_actor(requester).has_access("read")
+        passed = round.with_actor(admin).pass_clarification(question, responder)
+        question.with_actor(admin).grant_record_access("reader", requester)
+    assert passed.assignee_id == responder.pk
+    assert question.with_actor(requester).has_access("read")
 
 
 @pytest.mark.django_db(transaction=True)

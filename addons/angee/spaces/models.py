@@ -3,8 +3,9 @@
 ``Group`` composes transferable ownership and messaging's audience contract.
 ``Membership`` owns each party's role, confirmation and notification preference;
 only confirmed, non-dismissed rows grant roster access. ``ThreadSpace`` binds
-threads to groups and ``ChannelSpace`` binds channels to a team on their own rows.
-REBAC reads these facts live, including public visibility from the group column.
+threads to groups; ``ChannelSpace`` and ``VaultSpace`` bind channels and
+knowledge vaults to a team on their own rows. REBAC reads these facts live,
+including public visibility from the group column.
 """
 
 from __future__ import annotations
@@ -238,5 +239,34 @@ class ChannelSpace(models.Model):
 
     class Meta:
         """Same-row contribution owned by the addon that knows channels and teams."""
+
+        abstract = True
+
+
+class VaultSpace(models.Model):
+    """Bind a knowledge vault's access to the roster of an optional team.
+
+    The column is the one record of the binding: the roster reads the vault
+    through the group's ``post`` and writes it through ``write``; rebinding the
+    team is gated by the vault's ``share``, because it hands the vault to another
+    roster. Group viewers and public readers gain nothing through it.
+    """
+
+    extends = "knowledge.Vault"
+    hasura_readable_fields = ("team",)
+    hasura_filterable_fields = hasura_readable_fields
+    hasura_insertable_fields = hasura_readable_fields
+    hasura_updatable_fields = hasura_readable_fields
+
+    team = models.ForeignKey(
+        "spaces.Group",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="vaults",
+    )
+
+    class Meta:
+        """Same-row contribution owned by the addon that knows vaults and teams."""
 
         abstract = True
