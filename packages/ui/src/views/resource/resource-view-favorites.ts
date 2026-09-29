@@ -93,7 +93,7 @@ export function useResourceViewFavorites(
     readResourceViewFavoritesSlice,
     writeResourceViewFavoritesSlice,
   );
-  const userFavorites = canonicalModel
+  const userFavorites = available && canonicalModel
     ? favoritesSlice.document.models[canonicalModel] ?? EMPTY_FAVORITES
     : EMPTY_FAVORITES;
   const savedFavorites = useMemo(() => [

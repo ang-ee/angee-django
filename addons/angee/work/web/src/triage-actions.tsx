@@ -1,15 +1,15 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
+import type { TaskDroppedReason } from "@angee/gql/console/graphql";
 import { extractActionOutcome, type DocumentVariables } from "@angee/refine";
 import {
-  ActionFormDialog,
-  RecordActionTrigger,
+  RecordActionBar,
   canonicalOptionValue,
-  defineRowAction,
   relationValueId,
   useActionOutcomeMutation,
   useAuthoredResourceMutation,
   useRecordChromeContext,
   useRecordChromeActionMutation,
+  useDescriptorRowActions,
   type ActionDescriptor,
   type RowActionDeclaration,
   type WidgetOption,
@@ -17,7 +17,7 @@ import {
 import * as React from "react";
 import { TASK_MODEL } from "@angee/projects";
 
-import { AcceptTaskDocument } from "./documents";
+import { AcceptTaskDocument, DeclineTaskDocument } from "./documents";
 import { useQueueContext, useTaskContext } from "./context";
 import { useWorkT } from "./i18n";
 import { STAGE_MODEL } from "./resources";
@@ -40,9 +40,9 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
     invalidateModels: [TASK_MODEL],
     shouldInvalidate: (data) => data?.accept_task.ok === true,
   });
-  const [decline] = useActionOutcomeMutation<ActionFieldName>("decline_task", {
-    idArgument: "task",
+  const [decline] = useAuthoredResourceMutation(DeclineTaskDocument, {
     invalidateModels: [TASK_MODEL],
+    shouldInvalidate: (data) => data?.decline_task.ok === true,
   });
   const [snooze] = useActionOutcomeMutation<ActionFieldName>("snooze_task", {
     idArgument: "task",
@@ -95,9 +95,9 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
         ],
         submit: async (values, context) => {
           const task = recordId(context.record, t("triage.action.failed"));
-          return (await decline(task, {
+          return extractActionOutcome(await decline({ task,
             reason: declineReason(declineReasonOptions, values.reason),
-          })) ?? { ok: false, message: t("triage.action.failed") };
+          }), "decline_task") ?? { ok: false, message: t("triage.action.failed") };
         },
       },
       {
@@ -150,40 +150,7 @@ export function useTriageRowActions<TRow extends WorkTaskRow>(queueId: string): 
   dialog: React.ReactNode;
 } {
   const actions = useTriageActions(queueId);
-  const [active, setActive] = React.useState<{
-    action: ActionDescriptor;
-    row: TRow;
-  } | null>(null);
-  const rowActions = React.useMemo(
-    () =>
-      actions.map((action) =>
-        defineRowAction<TRow>({
-          kind: "page",
-          id: action.id,
-          label: String(action.label),
-          icon: action.icon,
-          variant: action.danger ? "danger" : "ghost",
-          visible: isTaskInTriage,
-          pendingPolicy: "disable-actions",
-          onSelect: (row) => setActive({ action, row }),
-        }),
-      ),
-    [actions],
-  );
-  return {
-    rowActions,
-    dialog: active ? (
-      <ActionFormDialog
-        key={`${active.action.id}:${active.row.id}`}
-        action={active.action}
-        context={{ record: active.row, selectedIds: [active.row.id] }}
-        open
-        onOpenChange={(open) => {
-          if (!open) setActive(null);
-        }}
-      />
-    ) : null,
-  };
+  return useDescriptorRowActions<TRow>(actions, { visible: (_action, row) => isTaskInTriage(row) });
 }
 
 /** Projects' routed task FormView record-toolbar contribution. */
@@ -198,60 +165,23 @@ export function TriageRecordActions(): React.ReactElement | null {
   const stage = taskContext.data?.project_tasks_by_pk?.stage ?? record?.stage;
   const [start, startState] = useRecordChromeActionMutation<ActionFieldName>("start_task");
   const [returnToTriage, returnState] = useRecordChromeActionMutation<ActionFieldName>("return_task_to_triage");
-  const [active, setActive] = React.useState<ActionDescriptor | null>(null);
   if (!record || !queueId || context.formReadOnly) return null;
   if (!isTaskInTriage(record)) {
     if (stage?.rule_owned) return null;
-    return (
-      <>
-        {["BACKLOG", "UNSTARTED"].includes(String(stage?.category).toUpperCase()) ? (
-          <RecordActionTrigger
-            glyph="work-start"
-            loading={startState.fetching}
-            disabled={returnState.fetching}
-            onClick={() => void start(context.recordId)}
-          >
-            {t("task.action.start")}
-          </RecordActionTrigger>
-        ) : null}
-        {data?.work_queues_by_pk?.triage_enabled ? (
-          <RecordActionTrigger
-            glyph="work-triage"
-            loading={returnState.fetching}
-            disabled={startState.fetching}
-            onClick={() => void returnToTriage(context.recordId)}
-          >
-            {t("triage.action.return")}
-          </RecordActionTrigger>
-        ) : null}
-      </>
-    );
+    const verbs: ActionDescriptor[] = [];
+    if (["BACKLOG", "UNSTARTED"].includes(String(stage?.category).toUpperCase())) verbs.push({
+      id: "work-start-task", label: t("task.action.start"), icon: "work-start",
+      disabled: startState.fetching || returnState.fetching,
+      run: () => start(context.recordId),
+    });
+    if (data?.work_queues_by_pk?.triage_enabled) verbs.push({
+      id: "work-return-to-triage", label: t("triage.action.return"), icon: "work-triage",
+      disabled: startState.fetching || returnState.fetching,
+      run: () => returnToTriage(context.recordId),
+    });
+    return <RecordActionBar record={record} actions={verbs} />;
   }
-  return (
-    <>
-      {actions.map((action) => (
-        <RecordActionTrigger
-          key={action.id}
-          glyph={action.icon}
-          variant={action.danger ? "danger" : "ghost"}
-          onClick={() => setActive(action)}
-        >
-          {action.label}
-        </RecordActionTrigger>
-      ))}
-      {active ? (
-        <ActionFormDialog
-          key={active.id}
-          action={active}
-          context={{ record, selectedIds: [context.recordId] }}
-          open
-          onOpenChange={(open) => {
-            if (!open) setActive(null);
-          }}
-        />
-      ) : null}
-    </>
-  );
+  return <RecordActionBar record={record} actions={actions} />;
 }
 
 function canonicalTaskFilters(queueId: string) {
@@ -273,8 +203,8 @@ function requiredString(value: unknown, name: string): string {
   throw new TypeError(`${name} is required.`);
 }
 
-export function declineReason(options: readonly WidgetOption[], value: unknown): string {
+export function declineReason(options: readonly WidgetOption[], value: unknown): TaskDroppedReason {
   const reason = canonicalOptionValue(options, value);
-  if (reason !== undefined) return reason;
+  if (reason !== undefined) return reason as TaskDroppedReason;
   throw new TypeError("A decline reason is required.");
 }

@@ -144,6 +144,7 @@ export function Chatter({
             <Tabs.Tab
               key={tab.id}
               value={tab.id}
+              onClick={() => setActiveTab(tab.id)}
               icon={tab.icon ? <Glyph name={tab.icon} /> : undefined}
               className="h-8 min-w-0 px-1 text-13 font-medium"
             >

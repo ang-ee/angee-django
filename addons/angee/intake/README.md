@@ -1,17 +1,6 @@
 # Intake
 
-[`Need.objects.file_task`](models.py), exposed as `file_task_with_need`, creates
-a task and its request evidence in one transaction. The creation key fingerprints
-the entire request, including its party; changing the payload conflicts. Queue
-and party read, task creation and request-sharing gates remain with their
-existing owners.
-
-The project setup contributor links unassigned needs to the selected `party`
-through normal need saves. Existing party assignments are retained. It delegates
-to the remaining setup contributors only after the need's share checks succeed.
-
-`reset_need_access` dispatches `Need.reset_access`: confirmation, the observed
-Need revision, Need write and target share are required. The verb supersedes the
-access decision with a pending seat while retaining Need.party and decision
-history. The requester ReBAC relation follows completed access decisions; reset
-revokes that path. Credentials stay with IAM. Independent grants remain effective.
+- [`Need.objects.file_task`](models.py) owns atomic task filing and fingerprints the full request, including its party; queue, party and task permissions stay with their owners.
+- The [setup contributor](models.py) links only unassigned needs after share checks, then delegates to the other project setup owners.
+- [`Need.reset_access`](models.py) requires confirmation, revision and share authority; it creates a pending successor while retaining the party and decision history. Requester access follows the completed decision through ReBAC; IAM owns credentials.
+- The [Task record contribution](web/src/index.tsx) shows each Need's current access decision and offers Approve, Deny and Reset through the Need verbs. [Decisions](../decisions/README.md) owns frozen answers and audit history.

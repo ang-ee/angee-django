@@ -276,6 +276,7 @@ describe("Chatter", () => {
     renderRecordPeekIntent();
 
     fireEvent.click(screen.getByRole("tab", { name: "Workflow" }));
+    expect(screen.getByRole("tab", { name: "Workflow" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Load initial evidence" }));
     await screen.findByRole("tab", { name: "Records" });
     expect(screen.getByRole("tab", { name: "Workflow" }).getAttribute("aria-selected")).toBe("true");

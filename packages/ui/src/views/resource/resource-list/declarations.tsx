@@ -151,7 +151,7 @@ function validateNestedDeclaration<TRow extends Row>({
   }
   for (const key of Object.keys(elementProps)) {
     if (key === "children" || key === "resource" || ownedKeys.has(key)) continue;
-    if (hasOwnDefined(resourceListProps, key)) {
+    if (hasOwnDefined(elementProps, key) && hasOwnDefined(resourceListProps, key)) {
       throw new Error(
         `ResourceList and its ${owner} child both declare "${key}".`,
       );

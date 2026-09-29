@@ -1,7 +1,7 @@
 import type { I18nProvider } from "@refinedev/core";
-import type { TOptions } from "i18next";
+import type { TOptions, i18n } from "i18next";
 import { recordValue, type I18nResources, type MessageVars } from "@angee/refine";
-import { createAngeeI18nInstance, type RuntimeI18n } from "@angee/ui/runtime";
+import { createAngeeI18nInstance } from "@angee/ui/runtime";
 import type { AppVocabulary, RuntimeVocabulary } from "@angee/ui/runtime";
 import { canonicalModelLabel, type DataResourceMetadata, type ResourceVocabulary } from "@angee/metadata";
 import type { MenuTree } from "@angee/ui/chrome/menu-tree";
@@ -12,7 +12,7 @@ export interface AngeeI18nProviderOptions {
 }
 
 export interface AngeeI18nRuntime {
-  instance: RuntimeI18n;
+  instance: i18n;
   provider: I18nProvider;
 }
 
@@ -24,7 +24,7 @@ export function createAngeeI18nRuntime(
   return runtimeForInstance(instance);
 }
 
-function runtimeForInstance(instance: RuntimeI18n, languageOwner = instance): AngeeI18nRuntime {
+function runtimeForInstance(instance: i18n, languageOwner = instance): AngeeI18nRuntime {
   return {
     instance,
     provider: {

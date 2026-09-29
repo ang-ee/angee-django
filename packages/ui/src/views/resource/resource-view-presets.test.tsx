@@ -72,7 +72,7 @@ test("route presets seed native state; editable clears preserve the fixed query"
   expect(f.table.effectiveColumnVisibility.owner).toBe(false);
   expect(f.view.saveFavorite).toBeUndefined();
   expect(f.view.savedFavorites.map((favorite) => favorite.id)).toContain(open.id);
-  expect(f.view.savedFavorites.map((favorite) => favorite.id)).toContain("favorite:recent");
+  expect(f.view.savedFavorites.map((favorite) => favorite.id)).not.toContain("favorite:recent");
 
   act(() => f.view.resetQuery());
   await waitFor(() => expect(f.view.state.filter).toEqual({}));
@@ -87,8 +87,10 @@ test("route presets seed native state; editable clears preserve the fixed query"
 test("switcher applies shipped views without writable preferences and URLs restore them", async () => {
   const f = fixture();
   fireEvent.click(await screen.findByRole("combobox", { name: "Favorites" }));
-  expect(await screen.findByRole("option", { name: "Recent notes" })).toBeTruthy();
-  fireEvent.click(await screen.findByRole("option", { name: archived.label }));
+  expect(screen.queryByRole("option", { name: "Recent notes" })).toBeNull();
+  const archivedOption = await screen.findByRole("option", { name: archived.label });
+  fireEvent.pointerDown(archivedOption, { pointerType: "mouse" });
+  fireEvent.click(archivedOption);
   await waitFor(() => expect(f.view.state.preset).toBe(archived.id));
   expect(f.view.state).toMatchObject({ view: "list", pagination: { pageSize: 10 }, groupStack: [], filter: {}, columnVisibility: {} });
   expect(f.facts.mergedFilter).toEqual(archived.fixedFilter);

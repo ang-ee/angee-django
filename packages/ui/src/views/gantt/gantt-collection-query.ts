@@ -31,7 +31,7 @@ export function useGanttRecords<TRow extends Row = Row>({
   const query = React.useMemo(() => resource ? ResourceQuery.from(resource) : null, [resource]);
   const first = useResourceListQuery({
     resource, fields, enabled,
-    scope: { filter, order, page: 1, pageSize: MAX_PAGE_SIZE },
+    scope: { filter: filter === undefined ? undefined : Filter.from(filter).value, order, page: 1, pageSize: MAX_PAGE_SIZE },
   });
   const requests = React.useMemo(() => {
     if (!enabled || !query || first.result.total === undefined || first.query.error) return [];

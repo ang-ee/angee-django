@@ -492,15 +492,24 @@ shared UI copy through an addon bundle.
   Hasura resource owns filter/order/group/facet capabilities; the list owns
   controls, paging and `rowActions`, including confirmations for generated action
   callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
-  A `FormView`, `Form`, or enclosing `ResourceList` can declare
-  `admitContributions` using slot contribution ids, covering both sections and
-  record verbs. Omission admits all; `[]` admits none. Admission precedes group,
-  tab, action and required-field collection, including inherited canonical reads;
-  unknown ids fail before record reads. Implementation-specific verbs are validated
-  against the model's full contribution inventory before its saved key loads.
-  Declare admission once, on either the collection or its Form child; the usual
-  duplicate-declaration check applies. Explicitly authored fields/actions/record
-  tabs and passive record chrome remain host-owned.
+  Declare `admitContributions` once on `ResourceList`, `FormView` or `Form` to
+  select section and verb ids; omission admits all, `[]` admits none, and unknown
+  ids fail before record reads. [FormView](../../packages/ui/src/views/form/form-view-surface.ts)
+  owns admission and required-field selection; authored fields and passive
+  chrome remain host-owned.
+- **Record verbs compose the shared action owner.** A slot contribution may render
+  [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
+  with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)
+  carries the form's dirty/pending gate to toolbar and menu verbs.
+- **Inline visibility controls bind a server verb.** Declare a
+  `<Field name="visibility" widget="visibility" placement="title" visibilityAction={...} />`.
+  The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record
+  chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
+  and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
+- **Human decision subjects opt into the generic tab.** Compose
+  [`decisionRecordTab(model)`](../../addons/angee/decisions/web/src/index.tsx);
+  [Decisions](../../addons/angee/decisions/README.md) owns frozen answers and
+  subject identity, while each subject addon owns successor admission.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
   "integrate.OAuthClient" }` (one canonical claim per resource) — and the

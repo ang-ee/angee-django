@@ -82,7 +82,7 @@ export function TaskManagementTab({ recordId, relation, projectIds }: TaskManage
 /** Standard saved-task panels, reusable on any task route. */
 export function taskRecordTabsFor(tabs: readonly "subtasks"[] = ["subtasks"]): readonly RecordTabDescriptor[] {
   return [
-  { id: "subtasks", label: { namespace: "projects", key: "task.tabs.subtasks", fallback: enProjectsMessages["task.tabs.subtasks"] }, render: (context) => <TaskManagementTab {...context} relation="parent" /> },
+  { id: "subtasks", label: { namespace: "projects", key: "task.tabs.subtasks", fallback: enProjectsMessages["task.tabs.subtasks"] }, render: (context: RecordPanelContext) => <TaskManagementTab {...context} relation="parent" /> },
   ].filter(({ id }) => tabs.includes(id as "subtasks"));
 }
 

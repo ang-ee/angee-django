@@ -1,7 +1,7 @@
-import { EmptyState, ErrorBanner, LoadingPanel, Page, PageBody, PageHeader, TextLink, useRouteHref, useRouteParam } from "@angee/ui";
+import { Page, PageBody, PageHeader, TextLink, useRouteHref, useRouteParam } from "@angee/ui";
 import * as React from "react";
 import { useRoundComparisonData } from "../comparison-data";
-import { RoundComparisonGrid } from "../comparison-grid";
+import { RoundComparisonBody } from "../comparison-body";
 import { useProposalsT } from "../i18n";
 import { RoundCloseControls } from "../round-actions";
 
@@ -30,32 +30,8 @@ export function RoundComparisonPage(): React.ReactElement {
         }
       />
       <PageBody gutter="none">
-        {data.error ? (
-          <div className="p-5">
-            <ErrorBanner
-              title={t("comparison.error")}
-              description={data.error.message}
-            />
-          </div>
-        ) : data.fetching && !data.round ? (
-          <LoadingPanel message={t("comparison.loading")} />
-        ) : !data.fetching && data.proposals.length === 0 ? (
-          <EmptyState
-            fill
-            icon="proposals-round"
-            title={t("comparison.empty.title")}
-            description={t("comparison.empty.description")}
-          />
-        ) : (
-          <RoundComparisonGrid
-            topics={data.topics}
-            proposals={data.proposals}
-            answers={data.answers}
-            proposalHref={(proposalId) =>
-              routeHref("proposals.proposals.record", { id: proposalId })
-            }
-          />
-        )}
+        <RoundComparisonBody data={data} proposalHref={(proposalId) =>
+          routeHref("proposals.proposals.record", { id: proposalId })} />
       </PageBody>
     </Page>
   );

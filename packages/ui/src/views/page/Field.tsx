@@ -63,6 +63,8 @@ export interface FieldDescriptor extends FieldPresentation {
   prefillReplace?: readonly string[];
   /** Source field a `widget="slug"` field derives from on create (see `FieldProps.slugFrom`). */
   slugFrom?: string;
+  /** Render a saved field beside the title; on create it remains in the form. */
+  placement?: "title";
   title?: boolean;
   /** Place this field above the record heading. */
   status?: boolean;

@@ -202,6 +202,7 @@ function RootMenuItem({
           items={children}
           pathname={pathname}
           styles={styles}
+          onActiveToggle={onActiveToggle}
         />
       </Accordion.Panel>
     </Accordion.Item>
@@ -213,11 +214,13 @@ function MenuChildren({
   items,
   pathname,
   styles,
+  onActiveToggle,
 }: {
   idPrefix: string;
   items: readonly ChromeMenuNode[];
   pathname: string;
   styles: AppRailTreeStyles;
+  onActiveToggle?: (() => void) | undefined;
 }): ReactElement {
   return (
     <div className={styles.children()}>
@@ -228,6 +231,7 @@ function MenuChildren({
           item={item}
           pathname={pathname}
           styles={styles}
+          onActiveToggle={onActiveToggle}
         />
       ))}
     </div>
@@ -316,15 +320,16 @@ function MenuLink({
   onActiveToggle?: (() => void) | undefined;
 }): ReactElement | null {
   const current = useContext(ActiveMenuItemContext) === item.id;
+  const toggleProps = railLinkToggleProps(item.target, pathname, onActiveToggle, true);
   const linkProps = useLinkProps({
     to: item.target,
     href: item.target,
-    ...railLinkToggleProps(item.target, pathname, onActiveToggle, true),
   });
   if (!item.target) return null;
   return (
     <a
       {...linkProps}
+      {...toggleProps}
       aria-current={current ? "page" : undefined}
       data-active={current}
       data-status={current ? "active" : undefined}

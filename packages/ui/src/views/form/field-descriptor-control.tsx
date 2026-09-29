@@ -84,6 +84,7 @@ export function FieldDescriptorControl({
   const Component = readOnly ? widget.read : (widget.edit ?? widget.read);
   const widgetField: DescriptorWidgetField = {
     name: field.name,
+    visibilityAction: field.visibilityAction,
     label: field.label,
     options: field.options,
     placeholder: field.placeholder,

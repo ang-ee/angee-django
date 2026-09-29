@@ -103,7 +103,7 @@ test("cold Files navigation preserves the real shell, tree, pager and active Det
     forms.get("file-a")!.resolve({ data: records[0]! });
   });
   await screen.findByDisplayValue("Alpha");
-  const header = screen.getByRole("heading", { level: 2, name: "Alpha" });
+  const header = screen.getAllByRole("heading", { level: 2, name: "Alpha" })[0]!;
   const frame = header.closest("header")?.parentElement ?? header.parentElement!.parentElement!;
   const tree = screen.getByRole("tree");
   const pager = screen.getByRole("navigation", { name: "Record navigation" });

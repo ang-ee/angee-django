@@ -1,7 +1,9 @@
 import * as React from "react";
 import {
+  extractActionOutcome,
   runActionResult,
   useActionMutation,
+  type AuthoredDocument,
   type ActionArguments,
   type ActionMutate,
   type UseActionMutationState,
@@ -16,6 +18,7 @@ import {
   type ActionResultRunOptions,
 } from "./action-result-run";
 import { useRecordChromeContext } from "./record-chrome-context";
+import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import type { ActionContext, ActionResult } from "../page";
 
 export type RecordActionRunner = (
@@ -213,6 +216,8 @@ export function useActionOutcomeMutation<TField extends string = string>(
 }
 
 export interface UseRecordChromeActionMutationOptions {
+  /** Argument carrying the targeted id when a slot acts on a related record. */
+  idArgument?: string;
   /**
    * Further Angee model labels this verb writes. The record's own model and its
    * canonical MTI parent are always invalidated, so only name a *third* model.
@@ -247,14 +252,43 @@ export function useRecordChromeActionMutation<TField extends string = string>(
  * it — for a contributed verb that collects arguments in an `ActionFormDialog`,
  * which owns binding the outcome's `validationErrors` and the success toast.
  */
+export interface AuthoredRecordChromeAction {
+  document: AuthoredDocument;
+  resultField: string;
+  idArgument: string;
+}
+
 export function useRecordChromeActionOutcome<TField extends string = string>(
   field: TField,
+  options?: UseRecordChromeActionMutationOptions,
+): [ActionMutate, UseActionMutationState];
+export function useRecordChromeActionOutcome(
+  action: AuthoredRecordChromeAction,
+  options?: UseRecordChromeActionMutationOptions,
+): [ActionMutate, UseActionMutationState];
+export function useRecordChromeActionOutcome(
+  action: string | AuthoredRecordChromeAction,
   options: UseRecordChromeActionMutationOptions = {},
 ): [ActionMutate, UseActionMutationState] {
-  return useActionOutcomeMutation<TField>(
-    field,
-    useRecordChromeActionOptions(options),
-  );
+  const resolved = useRecordChromeActionOptions(options);
+  // The declaration is fixed for a mounted contribution. Both transports
+  // project the same ActionOutcome; their native hooks keep their own lifecycle.
+  if (typeof action === "string") return useActionOutcomeMutation(action, resolved);
+  return useAuthoredChromeActionOutcome(action, resolved);
+}
+
+function useAuthoredChromeActionOutcome(
+  action: AuthoredRecordChromeAction,
+  options: ReturnType<typeof useRecordChromeActionOptions>,
+): [ActionMutate, UseActionMutationState] {
+  const [mutate, state] = useAuthoredResourceMutation(action.document, {
+    ...options,
+    shouldInvalidate: (data) => extractActionOutcome(data, action.resultField)?.ok === true,
+  });
+  const run = React.useCallback<ActionMutate>(async (id, args = {}) =>
+    extractActionOutcome(await mutate({ ...args, [action.idArgument]: id } as never), action.resultField) ?? undefined,
+  [action.idArgument, action.resultField, mutate]);
+  return [run, state];
 }
 
 /** Read the record-chrome context into the action options a chrome verb fires with. */
@@ -270,6 +304,7 @@ function useRecordChromeActionOptions(
   ];
   return {
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
+    ...(options.idArgument !== undefined ? { idArgument: options.idArgument } : {}),
     invalidateModels,
   };
 }

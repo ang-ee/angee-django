@@ -1,8 +1,9 @@
-import { FieldDescriptorControl, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TextLink, type FieldDescriptor } from "@angee/ui";
+import { FieldDescriptorControl, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TextLink, canonicalOptionValue, optionLabel, useEnumOptions, type FieldDescriptor } from "@angee/ui";
 import * as React from "react";
 import type { ComparisonAnswer, ComparisonProposal, ComparisonTopic } from "./comparison-data";
 import { comparisonCellValue, comparisonRows, isEmptyComparisonValue, proposalColumnLabel, type ComparisonFactField, type ComparisonRow } from "./comparison-model";
 import { useProposalsT, type ProposalsT } from "./i18n";
+import { ANSWER_MODEL } from "./resources";
 
 const FACT_DESCRIPTORS: Readonly<Record<ComparisonFactField, FieldDescriptor>> = {
   statement: { name: "statement", widget: "markdown.preview" },
@@ -57,6 +58,7 @@ export function RoundComparisonGrid({
                 proposal={proposal}
                 href={proposalHref?.(proposal.id)}
                 content={renderColumnHeader?.(proposal)}
+                answers={answers.filter((answer) => answer.proposal?.id === proposal.id)}
               />
             ))}
           </TableRow>
@@ -89,12 +91,20 @@ export function RoundComparisonGrid({
 
 function ProposalHeader({
   proposal,
-  href, content,
+  href, content, answers,
 }: {
   proposal: ComparisonProposal;
   href?: string;
   content?: React.ReactNode;
+  answers: readonly ComparisonAnswer[];
 }): React.ReactElement {
+  const t = useProposalsT();
+  const visibilityOptions = useEnumOptions(ANSWER_MODEL, "visibility", { casing: "upper" });
+  const visibility = [...new Set(answers.flatMap((answer) => {
+    const selected = canonicalOptionValue(visibilityOptions, answer.visibility);
+    const label = selected ? optionLabel(visibilityOptions, selected) : answer.visibility;
+    return [...(label ? [label] : []), ...(answer.shared_with_responders === true ? [t("comparison.visibility.shared")] : [])];
+  }))].map(String).join(" · ");
   const label = proposalColumnLabel(proposal);
   const header = content !== undefined ? content : (href ? <TextLink href={href}>{label}</TextLink> : label);
   return (
@@ -114,6 +124,7 @@ function ProposalHeader({
           readOnly
         />
       </div>
+      {visibility ? <div className="text-xs font-normal text-fg-muted">{t("comparison.visibility", { visibility })}</div> : null}
     </TableHead>
   );
 }

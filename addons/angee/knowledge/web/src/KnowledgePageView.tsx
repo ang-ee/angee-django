@@ -1,4 +1,5 @@
 import { useAuthoredQuery } from "@angee/refine";
+import { holdsPermission } from "@angee/metadata";
 import { ErrorBanner, LoadingPanel } from "@angee/ui";
 import { useCallback, useRef, useState, type ReactElement } from "react";
 
@@ -36,7 +37,7 @@ function KnowledgePageContent({
     models: PAGE_READ_MODELS,
   });
   const detail = query.data?.pages_by_pk;
-  const canWrite = detail?.permissions.includes("write") ?? false;
+  const canWrite = holdsPermission(detail, "write");
   if (editing && detail && !canWrite) {
     restoreEditFocus.current = false;
     setEditing(false);

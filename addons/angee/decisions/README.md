@@ -28,3 +28,11 @@ The mutation dispatches through `Decision.decide`; a model donor can compose a
 domain transaction there and delegate the final transition to the manager.
 Intake uses this seam so inbox answers obey the same account-linking checks as
 `Need.decide_access`. All answer writes remain conditional under the group lock.
+
+
+The `@angee/decisions` web addon renders each frozen action through the shared
+[FormSpec and record action owners](../../../packages/ui/src/views/form/), while
+`decisionRecordTab(model)` and `DecisionsList(baseFilter)` compose the decisions
+resource for a subject. The resource's own read scope and filter axes own those
+reads. Revisit dispatches through `Decision.revisit` with the expected revision;
+the subject donor owns eligibility and successor admission.

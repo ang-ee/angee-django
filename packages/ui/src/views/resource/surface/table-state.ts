@@ -134,6 +134,7 @@ export interface UseResourceViewQueryFactsProps<TRow extends Row> {
 export function useResourceViewQueryFacts<TRow extends Row>({
   columns,
   fields,
+  filter,
   order,
   resourceView,
   modelMetadata,
@@ -152,9 +153,9 @@ export function useResourceViewQueryFacts<TRow extends Row>({
   const mergedFilter = React.useMemo(
     () => filterForResourceTextSearch(
       modelMetadata,
-      Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter),
+      Filter.combineOptional(filter, Filter.combineOptional(resourceView.baseFilter, resourceView.state.filter)),
     ),
-    [resourceView.state.filter, resourceView.baseFilter, modelMetadata],
+    [filter, resourceView.state.filter, resourceView.baseFilter, modelMetadata],
   );
   const sortOrder = React.useMemo(
     () => {

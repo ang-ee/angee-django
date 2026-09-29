@@ -5,6 +5,7 @@ import { RouterContextProvider, createMemoryHistory, createRootRoute, createRout
 import { testQueryField } from "@angee/metadata/testing";
 import { afterEach, describe, expect, test } from "vitest";
 import * as v from "valibot";
+import type { ReactElement } from "react";
 
 import { DashboardSnapshotSchema, parseDashboardSnapshot, type DashboardWidgetData, type WidgetSpec } from "./headless";
 import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "./kinds";
@@ -55,6 +56,10 @@ const data: DashboardWidgetData = {
 
 afterEach(() => cleanup());
 
+const renderWidget = (node: ReactElement) => render(node, {
+  wrapper: ({ children }) => <AppRuntimeProvider runtime={{}}>{children}</AppRuntimeProvider>,
+});
+
 describe("dashboard table columns", () => {
   test("an explicit record route makes the first cell a native record link", () => {
     const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
@@ -64,7 +69,7 @@ describe("dashboard table columns", () => {
     expect(screen.getByRole("link").getAttribute("href")).toBe("/review/review-1");
   });
   test("renders declared nested paths in order, with labels and nullable relations", () => {
-    render(<TableWidget
+    renderWidget(<TableWidget
       spec={{
         ...spec,
         options: {
@@ -109,7 +114,7 @@ describe("dashboard table columns", () => {
       title: testQueryField("title"),
       status: testQueryField("wire_status", { kind: "enum", values: [{ value: "PENDING", description: "Needs review" }] }),
     };
-    render(<TableWidget
+    renderWidget(<TableWidget
       spec={{ ...spec, data: { shape: "rows", source: { resource: "workflows.Decision", fields: ["public_key", "status", "title"] } } }}
       data={{ ...data, queryFields, rows: [{ public_key: "decision-1", title: "Review", wire_status: "PENDING", extra: "Not selected" }] }}
     />);
@@ -136,7 +141,7 @@ describe("dashboard table columns", () => {
         },
       }),
     };
-    render(<TableWidget
+    renderWidget(<TableWidget
       spec={{
         ...spec,
         data: { shape: "rows", source: { resource: "messaging.Message", fields: Object.keys(queryFields) } },
@@ -191,7 +196,7 @@ describe("dashboard table columns", () => {
   });
 
   test("renders malformed columns as a widget error without throwing", () => {
-    render(<TableWidget spec={{ ...spec, options: { columns: false } }} data={data} />);
+    renderWidget(<TableWidget spec={{ ...spec, options: { columns: false } }} data={data} />);
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
   });
@@ -201,7 +206,7 @@ describe("dashboard table columns", () => {
     const queryFields = { title: testQueryField("title") };
     const first = { public_key: "decision-1", title: "First" };
     const second = { public_key: "decision-2", title: "Second" };
-    const { rerender } = render(<>
+    const { rerender } = renderWidget(<>
       <h3 id="reviews-title">Pending reviews</h3>
       <TableWidget spec={widget} data={{ ...data, queryFields, rows: [first, second] }} titleId="reviews-title" />
     </>);

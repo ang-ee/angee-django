@@ -7,7 +7,9 @@ function scalar(name: string, type = "String"): DataResourceFieldMetadata {
 }
 
 export const ganttLane = testDataResource("example.Lane", {
-  capabilities: ["list"], recordRepresentation: "name",
+  capabilities: ["list"], rowModel: "server", recordRepresentation: "name",
+  roots: { aggregate: "lanes_aggregate" },
+  typeNames: { filter: "LaneBoolExp", order: "LaneOrderBy" },
   fields: [scalar("id", "ID"), scalar("name"), scalar("code")],
   query: testResourceQuery({ fields: {
     id: testQueryField("id", { scalar: "ID", sort: { field: "id" } }),

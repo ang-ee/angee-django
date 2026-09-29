@@ -100,7 +100,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
       const current = rows.some((row) => rowPublicId(row, laneResource) === laneId && gantt.current && relationValueId(readPath(row, gantt.current)) === id);
       const event = ganttBarEvent(bar, { id, resourceId: laneId, start: gantt.start, end: gantt.end,
         label: barLabel, color: toneColorVar(tone), dateOnly: allDay, current });
-      if (!event && (readPath(bar, gantt.start) != null || readPath(bar, gantt.end) != null)) skipped += 1;
+      if (!event && readPath(bar, gantt.start) != null && readPath(bar, gantt.end) != null) skipped += 1;
       return event ? [event] : [];
     });
     return { resources, events, skipped };
@@ -132,7 +132,7 @@ export function LinkedGanttCollectionSurface<TRow extends Row>({
         return row ? gantt.renderRowContent?.(row) : null;
       } : undefined}
       onResourceClick={onRowClick || rowHref ? (resource) => openLane(resource.id) : undefined}
-      onEventClick={onRowClick || rowHref ? (event) => openLane(event.resourceId) : undefined}
+      onEventClick={onRowClick || rowHref ? (event) => { if (event.resourceId) openLane(event.resourceId); } : undefined}
       selectedRows={selectedIds}
       onSelectedRowsChange={selectable === false ? undefined : (ids) => resourceView.setRowSelection(Object.fromEntries(ids.map((id) => [id, true])))}
     />

@@ -4,6 +4,7 @@ import { Glyph } from "../../chrome/Glyph";
 import { Button, type ButtonVariant } from "../../ui/button";
 import { DropdownMenu } from "../../ui/dropdown-menu";
 import { RecordActionMenuContext } from "../../ui/record-action-context";
+import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useRuntimeViewAs } from "../../runtime";
 
 /** Bind contributed record verbs to the existing record Actions menu. */
@@ -56,7 +57,8 @@ export const RecordActionTrigger = React.forwardRef<
   ...nativeProps
 }, ref): React.ReactElement {
   const preview = useRuntimeViewAs();
-  const disabled = declaredDisabled || Boolean(preview.viewAs || preview.pending);
+  const chrome = useRecordChromeContextMaybe();
+  const disabled = declaredDisabled || Boolean(chrome?.actionsBlocked || preview.viewAs || preview.pending);
   const menu = React.useContext(RecordActionMenuContext);
   const { tabIndex, ...restNativeProps } = nativeProps;
   if (menu) {

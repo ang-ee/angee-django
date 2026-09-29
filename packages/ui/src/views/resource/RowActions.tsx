@@ -12,6 +12,9 @@ import { Button, type ButtonVariant } from "../../ui/button";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
+import { ActionFormDialog } from "../form/ActionFormDialog";
+import type { ActionDescriptor, ActionConfirm } from "../page/Action";
+import { useActionResultRun } from "./action-result-run";
 
 export interface RowActionConfirmCopy<TRow extends Row> {
   title: (row: TRow) => React.ReactNode;
@@ -150,6 +153,60 @@ export function defineRowAction<
       ? (result) => succeeded(result as DocumentData<TDocument> | undefined)
       : singleRootSucceeded,
   };
+}
+
+export interface DescriptorRowActionsOptions<TRow extends Row> {
+  visible?: (action: ActionDescriptor, row: TRow) => boolean;
+  contextRecord?: (row: TRow) => Row;
+  /** Values already known from a row run immediately after confirmation. */
+  valuesFromRow?: (action: ActionDescriptor, row: TRow) => Record<string, unknown>;
+  pendingPolicy?: RowActionPendingPolicy;
+}
+
+/** Adapt typed record descriptors to the existing RowActions and dialog lifecycle. */
+export function useDescriptorRowActions<TRow extends Row>(
+  actions: readonly ActionDescriptor[],
+  options: DescriptorRowActionsOptions<TRow> = {},
+): { rowActions: readonly RowActionDeclaration<TRow>[]; dialog: React.ReactNode } {
+  const [active, setActive] = React.useState<{ action: ActionDescriptor; row: TRow } | null>(null);
+  const settle = useActionResultRun();
+  const rowActions = actions.map((action) => defineRowAction<TRow>({
+    kind: "page",
+    id: action.id,
+    label: typeof action.label === "string" ? action.label : action.id,
+    ...(action.icon ? { icon: action.icon } : {}),
+    variant: action.danger ? "danger" : "ghost",
+    visible: (row) => (options.visible?.(action, row) ?? true)
+      && (!action.visibleWhen || action.visibleWhen(options.contextRecord?.(row) ?? row)),
+    disabled: () => Boolean(action.disabled),
+    pendingPolicy: options.pendingPolicy ?? "disable-actions",
+    ...(action.confirm ? { confirm: {
+      title: (row: TRow) => descriptorConfirmation(action.confirm!, row).title,
+      body: (row: TRow) => descriptorConfirmation(action.confirm!, row).body,
+      confirm: () => action.label,
+    } } : {}),
+    onSelect: async (row) => {
+      const record = options.contextRecord?.(row) ?? row;
+      if (options.valuesFromRow) {
+        if (action.submit) await settle(() => Promise.resolve(action.submit!(options.valuesFromRow!(action, row), {
+          record, selectedIds: [String(row.id)],
+        })));
+        return;
+      }
+      setActive({ action, row });
+    },
+  }));
+  return {
+    rowActions,
+    dialog: active ? <ActionFormDialog key={`${active.action.id}:${String(active.row.id)}`}
+      action={active.action}
+      context={{ record: options.contextRecord?.(active.row) ?? active.row, selectedIds: [String(active.row.id)] }}
+      open onOpenChange={(open) => { if (!open) setActive(null); }} /> : null,
+  };
+}
+
+function descriptorConfirmation(confirm: ActionConfirm | ((record: Row) => ActionConfirm), row: Row): ActionConfirm {
+  return typeof confirm === "function" ? confirm(row) : confirm;
 }
 
 function singleRootSucceeded(result: unknown): boolean {

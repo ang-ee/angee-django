@@ -409,12 +409,20 @@ class ProjectProposalsExtension(ProjectAttentionFields):
 
     source_proposal: ProposalType | None = actor_scoped_to_one("source_proposal")
 
+    @strawberry_django.field
+    def active_proposal_round(self) -> ProposalRoundType | None:
+        return Round.objects.active_for_project(self)
+
 
 @strawberry_django.type(Project, name="ConsoleProjectType", extend=True)
 class ConsoleProjectProposalsExtension(ProjectAttentionFields):
     """Contribute the track relation to the console project node."""
 
     source_proposal: ConsoleProposalType | None = actor_scoped_to_one("source_proposal")
+
+    @strawberry_django.field
+    def active_proposal_round(self) -> ProposalRoundType | None:
+        return Round.objects.active_for_project(self)
 
 
 @strawberry_django.type(Answer)
@@ -424,6 +432,19 @@ class ProposalAnswerType(AuthoredRefMixin, AngeeNode):
     revision: auto
     visibility: auto
     shared_with_responders: auto
+
+    @strawberry_django.field(only=["visibility"], annotate={
+        "_angee_permission_actor": lambda info: permission_annotations(Answer, ())["_angee_permission_actor"],
+        **{f"_angee_permission_{name}": partial(_permission_annotation, Answer, name)
+           for name in ("narrow", "manage")},
+    })
+    def allowed_visibility(self) -> list[AnswerVisibility]:
+        """Project the answer verb's permission-dependent choices."""
+        held = held_permissions(cast(Any, self), ("narrow", "manage"))
+        return [AnswerVisibility(value) for value in cast(Any, self).allowed_visibility(
+            narrow="narrow" in held, manage="manage" in held,
+        )]
+
     permissions = permissions_field(("write", "narrow", "manage"))
 
     body: auto

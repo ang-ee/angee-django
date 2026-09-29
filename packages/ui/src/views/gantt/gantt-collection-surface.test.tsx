@@ -87,7 +87,7 @@ describe("Gantt collection over native list data", () => {
   });
   test.each([false, true])("emphasizes only each lane's declared current bar (relation=%s)", async (relation) => {
     const currentLane = { ...ganttLane,
-      fields: [...ganttLane.fields, { ...ganttLane.fields[0]!, name: "current", kind: relation ? "relation" as const : "scalar" as const,
+      fields: [...(ganttLane.fields ?? []), { ...ganttLane.fields?.[0]!, name: "current", kind: relation ? "relation" as const : "scalar" as const,
         ...(relation ? { relationModelLabel: ganttRecord.modelLabel, relationObject: true } : {}) }],
       query: { ...ganttLane.query, fields: { ...ganttLane.query.fields, current: testQueryField("current", {
         scalar: "ID", kind: relation ? "relation" : "scalar",
@@ -139,7 +139,7 @@ describe("Gantt collection over native list data", () => {
   });
 
   test("omits unscheduled markers, reports invalid ones, and keeps a DateTime marker's instant", async () => {
-    renderCollection({ resources: [...ganttResources, { ...ganttMarker, fields: ganttMarker.fields.map((field) => field.name === "due" ? { ...field, scalar: "DateTime" } : field) }],
+    renderCollection({ resources: [...ganttResources, { ...ganttMarker, fields: ganttMarker.fields?.map((field) => field.name === "due" ? { ...field, scalar: "DateTime" } : field) }],
       gantt: { markers: { resource: ganttMarker.modelLabel, lane: "lane", date: "due" } },
       getList: async ({ resource }) => resource === "lanes" ? { data: ganttLanes, total: 2 }
         : resource === "schedules" ? { data: [], total: 0 }
@@ -213,7 +213,7 @@ describe("Gantt collection over native list data", () => {
     const start = "2026-09-24T14:00:00Z";
     const end = "2026-09-24T16:00:00Z";
     renderCollection({ rows: [{ ...scheduledRecord, start, end }], resources: [{ ...ganttRecord,
-      fields: ganttRecord.fields.map((field) => ["start", "end"].includes(field.name) ? { ...field, scalar: "DateTime" } : field),
+      fields: ganttRecord.fields?.map((field) => ["start", "end"].includes(field.name) ? { ...field, scalar: "DateTime" } : field),
     }, ganttLane] });
     await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
     const event = drawing.props!.events[0]!;

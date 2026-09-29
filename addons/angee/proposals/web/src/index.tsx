@@ -95,6 +95,7 @@ export {
   ROUND_MODEL,
   TOPIC_MODEL,
 } from "./resources";
+export { useRoundCeremonyActions } from "./round-actions";
 export { RoundComparisonGrid } from "./comparison-grid";
 export type { RoundComparisonGridProps } from "./comparison-grid";
 export { useRoundComparisonData } from "./comparison-data";

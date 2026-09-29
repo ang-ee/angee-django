@@ -113,7 +113,8 @@ export type ResourceViewProviderScope = "route" | "local";
 export interface ResourceViewScopeMountOptions {
   ambient: ResourceViewContextValue | null;
   resource?: string;
-  baseFilter?: ResourceViewFilter;
+  /** Typed resource filters are validated at this shared view boundary. */
+  baseFilter?: unknown;
   scope?: "inherit" | "local";
   /** Embedded collections own local state unless the caller explicitly opts in
    * to an ambient or route-owned view. */
@@ -177,13 +178,20 @@ export function withResourceViewScope({
   children,
 }: ResourceViewScopeMountOptions): ReactElement {
   const resolvedScope = scope ?? (presentation === "embedded" ? "local" : "inherit");
-  if (!isolated && resolvedScope !== "local" && ambient) return children(ambient);
+  if (!isolated && resolvedScope !== "local" && ambient) {
+    if (baseFilter === undefined) return children(ambient);
+    const scoped = {
+      ...ambient,
+      baseFilter: Filter.combineOptional(ambient.baseFilter, baseFilter),
+    };
+    return <ResourceViewContext.Provider value={scoped}>{children(scoped)}</ResourceViewContext.Provider>;
+  }
   return (
     <ResourceViewProvider
       key={providerKey}
       initialState={initialState}
       resource={resource}
-      baseFilter={baseFilter}
+      baseFilter={baseFilter === undefined ? undefined : Filter.from(baseFilter).value}
       scope={isolated || resolvedScope === "local" ? "local" : "route"}
     >
       <ResourceViewScopeBound>{children}</ResourceViewScopeBound>

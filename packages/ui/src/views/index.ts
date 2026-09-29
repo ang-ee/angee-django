@@ -41,6 +41,7 @@ export {
 } from "./resource/collection-source";
 export {
   defineRowAction,
+  useDescriptorRowActions,
   rowIdVariables,
   type AuthoredRowActionDeclaration,
   type PageRowActionDeclaration,
@@ -77,10 +78,12 @@ export {
 export { RowsField, type RowsValue } from "./form/RowsField";
 export {
   deserializeFormSpec,
+  formSpecBranches,
   formSpecInitialValues,
   normalizeFormSpecValues,
   useFormSpecFields,
   type FormSpecFieldDescriptor,
+  type FormSpecBranch,
   type FormSpecFieldType,
   type FormSpecRelationCreate,
 } from "./form/form-spec";
@@ -96,6 +99,7 @@ export {
   ActionFormDialog,
   type ActionFormDialogProps,
 } from "./form/ActionFormDialog";
+export { RecordActionBar } from "./form/RecordActionBar";
 export { RecordActionTrigger } from "./form/RecordActionMenu";
 export {
   formLevelMessage,
@@ -232,6 +236,7 @@ export {
   RecordChrome,
   RecordChromeProvider,
   useRecordChromeContext,
+  useRecordChromeContextMaybe,
   type RecordChromeContext,
 } from "./resource/record-chrome-context";
 export {

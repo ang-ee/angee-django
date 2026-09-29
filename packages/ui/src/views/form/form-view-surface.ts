@@ -33,7 +33,7 @@ import {
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
 import type { RecordDeleteAction } from "./RecordActionBar";
-import { FORM_VIEW_RECORD_ACTIONS_SLOT, FORM_VIEW_SECTIONS_SLOT, formViewSectionsSlot } from "./form-view-slots";
+import { FORM_VIEW_RECORD_ACTIONS_SLOT, FORM_VIEW_SECTIONS_SLOT, formViewRecordActionsSlot, formViewSectionsSlot } from "./form-view-slots";
 import {
   addFieldSelection,
   fieldErrorMessages,
@@ -162,6 +162,7 @@ export interface FormViewSurface
   hasConditionalFields: boolean;
   requiredMessage: string;
   titleField: FieldDescriptor | undefined;
+  titlePlacementField: FieldDescriptor | undefined;
   titleFieldMessages: readonly string[];
   statusField: FieldDescriptor | undefined;
   bodyField: FieldDescriptor | undefined;
@@ -169,6 +170,7 @@ export interface FormViewSurface
   subtitleParts: readonly React.ReactNode[];
   lineRowErrors: readonly (ValidationErrors | undefined)[] | undefined;
   declaredActions: readonly ActionDescriptor[];
+  actionsBlocked: boolean;
   recordPanelContext: RecordPanelContext | null;
   recordToolbarContext: RecordToolbarContext;
   recordTabList: readonly RecordTabDescriptor[];
@@ -241,6 +243,15 @@ export function useFormViewSurface({
     inventorySlots: [FORM_VIEW_SECTIONS_SLOT, FORM_VIEW_RECORD_ACTIONS_SLOT],
     owner: `FormView "${resource}"`,
   });
+  const recordActionTargets = React.useMemo(
+    () => [...new Set([canonicalResource, modelLabel])].map((label) => formViewRecordActionsSlot(label)),
+    [canonicalResource, modelLabel],
+  );
+  const recordActionFieldEntries = useModelSlot(recordActionTargets, {
+    admit: admitContributions,
+    inventorySlots: [FORM_VIEW_SECTIONS_SLOT, FORM_VIEW_RECORD_ACTIONS_SLOT],
+    owner: `FormView "${resource}"`,
+  });
   React.useEffect(() => {
     if (!developmentMode()) return;
     for (const entry of sectionEntries) {
@@ -308,17 +319,20 @@ export function useFormViewSurface({
   // A canonical section may depend on a parent field omitted by a child's
   // projection. Read that field from its declared owner, never select invalid
   // child fields or require every consumer to duplicate the parent projection.
+  const contributionFields = React.useMemo(() => [
+    ...slotDeclarations.flatMap((declaration) => declaration.kind === "tab"
+      ? declaration.tab.requiredFields ?? [] : []),
+    ...recordActionFieldEntries.flatMap((entry) => entry.requiredFields ?? []),
+  ], [recordActionFieldEntries, slotDeclarations]);
   const canonicalTabFields = React.useMemo(() => [...new Set(
-    slotDeclarations.flatMap((declaration) => declaration.kind === "tab"
-      ? (declaration.tab.requiredFields ?? []).filter((path) => {
+    contributionFields.filter((path) => {
           const head = path.split(".")[0]!;
           return canonicalResource !== modelLabel
             && !modelMetadata?.fields[head]
             && canonicalMetadata?.fields[head]?.readable !== false
             && Boolean(canonicalMetadata?.fields[head]);
-        })
-      : []),
-  )], [canonicalMetadata, canonicalResource, modelLabel, modelMetadata, slotDeclarations]);
+        }),
+  )], [canonicalMetadata, canonicalResource, contributionFields, modelLabel, modelMetadata]);
   const isCreate = id == null;
   const overrideNode =
     isCreate && React.isValidElement(formOverride) ? formOverride : null;
@@ -420,11 +434,8 @@ export function useFormViewSurface({
       }
     }
     for (const extra of returning ?? []) paths.add(extra);
-    for (const declaration of slotDeclarations) {
-      if (declaration.kind !== "tab") continue;
-      for (const path of declaration.tab.requiredFields ?? []) {
+    for (const path of contributionFields) {
         if (!canonicalTabFields.includes(path)) paths.add(path);
-      }
     }
     const representation = modelMetadata?.resource.recordRepresentation;
     if (representation && modelMetadata.fields[representation]) paths.add(representation);
@@ -435,7 +446,7 @@ export function useFormViewSurface({
       if (path) paths.add(path);
     }
     return [...paths];
-  }, [canonicalTabFields, formFields, modelMetadata, relationByField, returning, schemaMetadata, slotDeclarations]);
+  }, [canonicalTabFields, contributionFields, formFields, modelMetadata, relationByField, returning, schemaMetadata]);
   const refineFields = React.useMemo(
     () => refineFieldsFromPaths(selection),
     [selection],
@@ -480,6 +491,7 @@ export function useFormViewSurface({
     ...(canonicalTabFields.length > 0 ? canonicalRead.result : undefined),
     ...save.displayRecord,
   }, [canonicalRead.result, canonicalTabFields, save.displayRecord]);
+  const actionsBlocked = save.formIsDirty || save.pending;
   const chrome = useFormViewRecordChrome({
     admitContributions,
     dataResource,
@@ -489,6 +501,7 @@ export function useFormViewSurface({
     isCreate,
     record: tabRecord,
     formReadOnly: save.formReadOnly,
+    actionsBlocked,
   });
 
   React.useEffect(() => {
@@ -501,10 +514,11 @@ export function useFormViewSurface({
         resolvedFields,
         resolvedGroups,
         modelMetadata,
+        isCreate,
       ),
-    [formFields, modelMetadata, resolvedFields, resolvedGroups],
+    [formFields, isCreate, modelMetadata, resolvedFields, resolvedGroups],
   );
-  const { titleField, statusField, bodyField, gridFields, gridGroups } =
+  const { titleField, titlePlacementField, statusField, bodyField, gridFields, gridGroups } =
     fieldLayout;
   const titleFieldMessages = titleField
     ? [
@@ -521,6 +535,7 @@ export function useFormViewSurface({
         gridFields,
         gridGroups,
         declaredGroupSequences,
+        isCreate,
       );
       const stacked = groupSections.filter((section) => section.label == null);
       const tabbedSections = groupSections
@@ -528,7 +543,7 @@ export function useFormViewSurface({
         .sort(compareFormSections);
       return [...stacked, ...tabbedSections];
     },
-    [declaredGroupSequences, gridFields, gridGroups],
+    [declaredGroupSequences, gridFields, gridGroups, isCreate],
   );
   const subtitleParts = React.useMemo(
     () =>
@@ -626,6 +641,7 @@ export function useFormViewSurface({
     hasConditionalFields,
     requiredMessage: t("form.required"),
     titleField,
+    titlePlacementField,
     titleFieldMessages,
     statusField,
     bodyField,
@@ -633,6 +649,7 @@ export function useFormViewSurface({
     subtitleParts,
     lineRowErrors,
     declaredActions,
+    actionsBlocked,
     recordPanelContext,
     recordToolbarContext,
     recordTabList,

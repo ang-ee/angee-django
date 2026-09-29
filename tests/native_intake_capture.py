@@ -1,5 +1,7 @@
 """Intake contracts executed only by the isolated composed Django host."""
 
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ from django.db import connection, models
 from django.db.migrations.state import ProjectState
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
+from graphql import parse, validate
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import is_sudo, to_subject_ref
 from rebac.backends import backend
@@ -800,3 +803,58 @@ class NeedResetAccessTests(IntakeAccessCase):
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized")
 class DenormalizedNeedResetAccessTests(NeedResetAccessTests):
     pass
+class DecisionRecordTests(IntakeAccessCase):
+    def test_revisit_keeps_the_answer_and_admits_one_current_successor(self):
+        need = self.as_user(self.need())
+        need.decide_access("deny", reason="More evidence needed")
+        old = need.access_decision
+        original = (old.verdict, old.resolution, old.resolved_at)
+        query = "query($id: String!) { decisions_by_pk(id: $id) { is_open can_revisit } }"
+        self.assertEqual(self.graphql(query, {"id": old.sqid}, bucket="console")["decisions_by_pk"],
+                         {"is_open": False, "can_revisit": True})
+        mutation = """mutation($id: ID!, $revision: Int!) {
+          revisit_human_decision(id: $id, revision: $revision) { ok id validation_errors }
+        }"""
+        stale = self.graphql(mutation, {"id": old.sqid, "revision": old.revision - 1}, bucket="console")
+        self.assertFalse(stale["revisit_human_decision"]["ok"])
+        denied = self.graphql(mutation, {"id": old.sqid, "revision": old.revision}, user=self.writer, bucket="console")
+        self.assertFalse(denied["revisit_human_decision"]["ok"])
+        result = self.graphql(mutation, {"id": old.sqid, "revision": old.revision}, bucket="console")
+        self.assertTrue(result["revisit_human_decision"]["ok"], result)
+        need.refresh_from_db()
+        self.assertNotEqual(need.access_decision_id, old.pk)
+        self.assertTrue(need.access_decision.is_open)
+        old.refresh_from_db()
+        self.assertEqual((old.verdict, old.resolution, old.resolved_at), original)
+        self.assertEqual(old.superseded_by_id, need.access_decision_id)
+        repeated = self.graphql(mutation, {"id": old.sqid, "revision": old.revision}, bucket="console")
+        self.assertFalse(repeated["revisit_human_decision"]["ok"])
+        subject = self.graphql("""query($model: String!, $id: String!) {
+          decisions(where: {subject_content_type: {_eq: $model}, subject_object_id: {_eq: $id}}) { id }
+        }""", {"model": "intake.Need", "id": need.sqid}, bucket="console")
+        self.assertEqual({row["id"] for row in subject["decisions"]},
+                         {old.sqid, need.access_decision.sqid})
+        related = self.graphql("""query($task: String!) {
+          decisions(where: {intake_need__task: {_eq: $task}}) { id }
+        }""", {"task": need.task.sqid}, bucket="console")
+        self.assertEqual({row["id"] for row in related["decisions"]},
+                         {old.sqid, need.access_decision.sqid})
+
+    def test_approved_access_stays_final(self):
+        need = self.as_user(self.need())
+        need.decide_access("approve")
+        seat = need.access_decision
+        with actor_context(self.owner):
+            self.assertFalse(seat.with_actor(self.owner).can_revisit)
+            with self.assertRaises(ValidationError):
+                seat.revisit(actor=self.owner, revision=seat.revision)
+
+
+
+    def test_intake_and_iam_authored_documents_match_console(self):
+        schema = GraphQLSchemas.from_discovery().build("console")._schema
+        root = Path(__file__).resolve().parents[1]
+        for addon in ("intake", "iam"):
+            path = root / "addons" / "angee" / addon / "web" / "src" / "documents.ts"
+            document = parse("\n".join(re.findall(r"graphql\(`(.*?)`\)", path.read_text(), flags=re.S)))
+            self.assertEqual(validate(schema, document), [], addon)

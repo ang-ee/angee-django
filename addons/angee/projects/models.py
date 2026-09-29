@@ -1104,6 +1104,26 @@ class Task(
         project_model = apps.get_model("projects", "Project")
         return project_model.objects.from_task(self, expected_revision=expected_revision)
 
+    @classmethod
+    def visibility_permission(cls, value: str) -> str:
+        """The visibility verb's permission for one declared audience."""
+        return "narrow" if value == cls.TaskVisibility.RESTRICTED else "widen"
+
+    @classmethod
+    def visibility_blockers(cls, value: str) -> tuple[tuple[models.Q, type[ValidationError]], ...]:
+        """Domain constraints shared by the locked verb and choice projections."""
+        return ()
+
+    @classmethod
+    def visibility_allowed_expression(cls, actor: Any, value: str) -> models.Expression:
+        """Batch permission and domain eligibility without exposing hidden facts."""
+        if actor is None:
+            return models.Value(False)
+        rows = cls.objects.with_actor(actor).with_action(cls.visibility_permission(value)).scoped_for_aggregate()
+        for condition, _error in cls.visibility_blockers(value):
+            rows = rows.exclude(condition & ~models.Q(visibility=value))
+        return models.Exists(rows.filter(pk=models.OuterRef("pk")))
+
     def set_visibility(self, value: str, *, expected_revision: int | None = None) -> Task:
         """Narrow or widen the task through its dedicated permission."""
 
@@ -1112,7 +1132,7 @@ class Task(
         except ValueError as error:
             raise ValidationError({"visibility": "Choose inherited or restricted."}) from error
         actor, bypass = self.effective_actor(strict=True)
-        permission = "narrow" if visibility == self.TaskVisibility.RESTRICTED else "widen"
+        permission = self.visibility_permission(visibility)
         with transaction.atomic():
             locked = system_queryset(type(self), lock=("self",)).get(pk=self.pk)
             if not bypass and (
@@ -1133,12 +1153,15 @@ class Task(
         return self
 
     def validate_visibility(self, value: str) -> None:
-        """Validate on the locked row under system context with no actor bound.
+        """Check declared domain constraints on the locked row under system context.
 
-        Task-kind contributors call super first. The row still holds the old
-        visibility. The lock covers only the task, so implementations must also
-        re-check their message invariants on post to cover concurrent messages.
+        Contributors extend ``visibility_blockers`` so reads and writes agree.
+        The task lock does not cover messages; message writers must also preserve
+        their audience invariants under the same task lock.
         """
+        for condition, error in self.visibility_blockers(value):
+            if system_queryset(type(self)).filter(condition, pk=self.pk).exists():
+                raise error()
 
     def thread_audience_members(self) -> Iterable[AudienceMember]:
         """Notify the current assignee's existing party without creating a follower."""

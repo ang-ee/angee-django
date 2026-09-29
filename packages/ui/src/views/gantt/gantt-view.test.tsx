@@ -59,12 +59,12 @@ describe("Gantt row and control geometry", () => {
     expect([...view.container.querySelectorAll<HTMLElement>("[data-lane]")].map((segment) => segment.dataset.lane)).toEqual(["0", "0"]);
   });
 
-  test("reserves space for zoom outside the scrolling panes and keeps buttons functional", () => {
+  test("places zoom in the toolbar outside the scrolling panes and keeps buttons functional", () => {
     const view = render(<GanttSurface resources={resources} events={events} date={new Date(2026, 9, 1)} defaultScale="quarter" />);
-    const zoom = view.container.querySelector<HTMLElement>('[data-slot="gantt-zoom"]')!;
+    const zoom = screen.getByRole("button", { name: "Zoom in" });
     const row = view.container.querySelector<HTMLElement>("[data-gantt-resource]")!;
     expect(zoom.closest('[data-slot="gantt-timeline-pane"]')).toBeNull();
-    expect(zoom.parentElement?.dataset.slot).toBe("gantt-view");
+    expect(zoom.closest('[data-slot="gantt-nav"]')).not.toBeNull();
     expect(zoom.classList.contains("absolute")).toBe(false);
     const width = row.style.minWidth;
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));

@@ -7,6 +7,7 @@ import {
   FORM_SPEC_ANNOTATIONS,
   JsonValueSchema,
   deserializeFormSpec,
+  formSpecBranches,
   isJsonObject,
   normalizeFormSpecValues,
   parseFormSpec,
@@ -137,22 +138,8 @@ export function compileDecisionActionFormSpec(
   }
   const contextFields = fields.filter((field) => contextNames.has(field.name));
   const inputFields = fields.filter((field) => field.name !== "action" && !contextNames.has(field.name));
-  const { oneOf: _branches, ...rootWithoutBranches } = presented;
-  const fieldsByBranch = new Map<string, readonly FormSpecFieldDescriptor[]>();
-  for (const branch of branches) {
-    const selected = branch.properties?.action?.const;
-    if (typeof selected !== "string") {
-      throw new Error(t("inbox.validation.invalidSchema"));
-    }
-    const names = byBranch.get(selected)!;
-    const branchFields = deserializeFormSpec({
-      ...rootWithoutBranches,
-      propertyOrder: presented.propertyOrder?.filter((name) => names.has(name)),
-      required: branch.required,
-      properties: branch.properties,
-    }, widgets);
-    fieldsByBranch.set(selected, branchFields.filter((field) => field.name !== "action"));
-  }
+  const fieldsByBranch = new Map(formSpecBranches(presented, widgets)
+    .map((branch) => [branch.value, branch.fields] as const));
   const contextValidators = Object.fromEntries([...contextNames].map((name) => {
     const properties = schema.properties;
     const fieldSchema = isJsonObject(properties) ? properties[name] : undefined;

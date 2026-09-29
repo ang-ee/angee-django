@@ -91,7 +91,7 @@ def test_cached_target_cannot_hide_new_rule_ownership(work_case):
     with system_context(reason="test.work.target_reserved"):
         Stage._base_manager.filter(pk=cached.pk).update(rule_owned=True)
     before = persisted_state(task)
-    with actor_context(actor), pytest.raises(ValidationError, match="into a rule-owned stage"):
+    with actor_context(actor), pytest.raises(ValidationError, match="rule-owned or concealing stage"):
         task.accept(cached)
     assert persisted_state(task) == before
 

@@ -837,7 +837,7 @@ def declared_hasura_resource_fields(
                     f"{cls.__module__}.{cls.__name__}.{attribute} declares invalid field {field!r} "
                     f"on {model._meta.label}."
                 ) from error
-            if attribute == "hasura_sortable_fields":
+            if attribute in ("hasura_sortable_fields", "hasura_filterable_fields"):
                 field = field.replace(".", "__")
             if field not in fields:
                 fields.append(field)

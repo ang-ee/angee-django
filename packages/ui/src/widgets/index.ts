@@ -21,6 +21,7 @@ import { booleanToggleWidget, switchWidget } from "./switch";
 import { tagInputWidget } from "./tagInput";
 import { textareaWidget } from "./textarea";
 import { textWidget } from "./text";
+import { visibilityWidget } from "./visibility";
 import { userRefWidget } from "./userRef";
 import type { WidgetDefinition } from "./types";
 
@@ -33,6 +34,8 @@ export {
 
 export type {
   FieldPresentation,
+  VisibilityBinding,
+  VisibilityAction,
   WidgetDefinition,
   WidgetControlProps,
   WidgetField,
@@ -40,7 +43,9 @@ export type {
   WidgetRenderProps,
   WidgetFocusTarget,
 } from "./types";
-export { canonicalOptionValue, optionToken, relationValueId } from "./types";
+export { canonicalOptionValue, optionLabel, optionToken, relationValueId } from "./types";
+export { VisibilityControl } from "./visibility";
+export type { VisibilityControlProps } from "./visibility";
 export { JsonValueSchema } from "./json-value";
 export { widgetLabel } from "./label";
 export { slugify } from "./slug";
@@ -115,6 +120,7 @@ const listWidget = lazyWidget(
 );
 
 export const defaultWidgets = {
+  visibility: visibilityWidget,
   text: textWidget,
   textarea: textareaWidget,
   integer: integerWidget,

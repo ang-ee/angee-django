@@ -20,7 +20,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@angee/projects", () => ({ TASK_MODEL: "projects.Task" }));
 vi.mock("@angee/refine", () => ({ extractActionOutcome: vi.fn() }));
-vi.mock("./documents", () => ({ AcceptTaskDocument: {} }));
+vi.mock("./documents", () => ({ AcceptTaskDocument: {}, DeclineTaskDocument: {} }));
 vi.mock("./context", () => ({
   useQueueContext: () => ({ data: { work_queues_by_pk: state.queue } }),
   useTaskContext: () => ({ data: state.task ? { project_tasks_by_pk: state.task } : null }),
@@ -29,6 +29,11 @@ vi.mock("./i18n", () => ({ useWorkT: () => (key: string) => key }));
 vi.mock("@angee/ui", () => ({
   // The shared trigger/hook have their own dirty/error lifecycle tests. Here
   // their public props are the seam for the addon's branch and pending tests.
+  RecordActionBar: ({ actions }: { actions: readonly { id: string; label: string; disabled?: boolean; run?: () => unknown }[] }) => (
+    <>{actions.map((action) => <button key={action.id} disabled={action.disabled}
+      aria-busy={action.id === "work-start-task" ? state.startPending : action.id === "work-return-to-triage" ? state.returnPending : false}
+      onClick={() => { void action.run?.(); }}>{action.label}</button>)}</>
+  ),
   RecordActionTrigger: ({ loading, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => (
     <button {...props} disabled={props.disabled || loading} aria-busy={loading} />
   ),

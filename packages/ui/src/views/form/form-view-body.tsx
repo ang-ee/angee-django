@@ -20,13 +20,13 @@ import { textRoleVariants } from "../../ui/text";
 import { cn } from "../../lib/cn";
 import { optionLabel, relationValueId } from "../../widgets/types";
 import { useStatusTone } from "../../widgets/use-status-tone";
+import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { RelationOption } from "../../widgets/RelationField";
 import {
   EditableLines,
   type EditableLineSupplementalColumn,
   type EditableLinesProps,
 } from "./EditableLines";
-import { FieldDescriptorControl } from "./field-descriptor-control";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
@@ -93,6 +93,7 @@ export function FormViewRecordHeader({
     t,
     form,
     titleField,
+    titlePlacementField,
     titleFieldMessages,
     displayRecord,
     modelMetadata,
@@ -171,6 +172,8 @@ export function FormViewRecordHeader({
         </div>
       ) : null}
       <div className="min-w-0 flex-1 self-start">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="min-w-0 flex-1">
         {title !== undefined ? (
           <h1 className={compact ? "truncate text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>{title}</h1>
         ) : currentTitleField ? (
@@ -234,6 +237,14 @@ export function FormViewRecordHeader({
             )}
           </h1>
         )}
+          </div>
+          {titlePlacementField && displayRecord ? <FieldDescriptorControl
+            field={titlePlacementField}
+            value={displayRecord[titlePlacementField.name]}
+            row={displayRecord}
+            readOnly={fieldReadOnly(titlePlacementField)}
+          /> : null}
+        </div>
         {titleField && titleFieldMessages.length > 0 ? (
           <p className="mt-1 text-xs leading-5 text-danger-text">
             {titleFieldMessages.join(", ")}

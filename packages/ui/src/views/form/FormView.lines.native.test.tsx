@@ -167,8 +167,8 @@ test("new documents render Add line and create their draft lines in one native n
   expect(f.provider.update).not.toHaveBeenCalled();
   expect(f.custom).not.toHaveBeenCalled();
   expect(f.getOne).not.toHaveBeenCalled();
-  await waitFor(() => expect(f.surface().formIsDirty).toBe(false));
-  expect(f.surface().form.getValues("lines")).toEqual(saved.lines);
+  await waitFor(() => expect(f.surface().form.getValues("lines")).toEqual(saved.lines));
+  expect(f.surface().formIsDirty).toBe(false);
 });
 
 test("seeds rendered document lines without a reseed loop", async () => {

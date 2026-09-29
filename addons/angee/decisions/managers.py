@@ -82,6 +82,11 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
                 raise ValidationError("The decision no longer exists.")
             yield group, decision
 
+    def for_subject(self, subject: Any) -> Any:
+        """Scope readable seats to the canonical subject identity."""
+        content_type, object_id = canonical_record_target(subject)
+        return self.filter(subject_content_type=content_type, subject_object_id=object_id)
+
     def open(self) -> Any:
         """Select seats still accepting answers."""
         return self.filter(OPEN_DECISION)

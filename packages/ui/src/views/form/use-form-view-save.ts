@@ -202,6 +202,8 @@ export function useFormViewSave({
     ? [...refineFields, "revision"] : refineFields, [refineFields, selectRevision]);
   const creationKey = React.useRef<string | null>(null);
   React.useEffect(() => { creationKey.current = null; }, [resource, id, isCreate]);
+  const createdRecordRef = React.useRef(false);
+  React.useEffect(() => { createdRecordRef.current = false; }, [resource, id, isCreate]);
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],
@@ -211,6 +213,8 @@ export function useFormViewSave({
     [defaultValues],
   );
   const manualSlugFieldsRef = React.useRef<Set<string>>(new Set());
+  const prefillSeedsRef = React.useRef<Map<string, unknown>>(new Map());
+  const userEditedFieldsRef = React.useRef<Set<string>>(new Set());
   const localAcknowledgementRef = React.useRef<{
     previous: FormValues | null;
     accepted: FormValues;
@@ -361,7 +365,7 @@ export function useFormViewSave({
         : { values: formValues, errors: {} };
     },
   });
-  const { reset, resetDefaultValues, resetField, clearErrors, getFieldState, setError, setValue } = form;
+  const { reset, resetDefaultValues, clearErrors, getFieldState, setError, setValue } = form;
   const { dirtyFields } = form.formState;
   const syncRecordValues = React.useCallback((next: FormValues, lineBaseline?: unknown) => {
     // RHF merges dirty paths by index. A full-list line mutation is atomic, so
@@ -388,7 +392,9 @@ export function useFormViewSave({
   }, [form, linesActive, linesField, reset, resetDefaultValues, setValue]);
   const lineDraftDirty = Boolean(!isCreate && linesActive && linesField && dirtyFields[linesField]);
   // Replay a held remote array when the user undoes the last local line edit.
-  React.useEffect(() => { syncRecordValues(values); }, [lineDraftDirty, syncRecordValues, values]);
+  React.useEffect(() => {
+    if (!createdRecordRef.current) syncRecordValues(values);
+  }, [lineDraftDirty, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
   const saveError = form.formState.errors.root?.server?.message ?? null;
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
@@ -528,6 +534,7 @@ export function useFormViewSave({
       if (!mounted.current) return;
       const savedValues = options.acceptedValues
         ?? recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
+      if (isCreate) createdRecordRef.current = true;
       const currentValues = form.getValues();
       const savedLines = linesField ? savedValues[linesField] : undefined;
       const submittedLines = linesField ? options.submitted?.[linesField] : undefined;
@@ -729,6 +736,7 @@ export function useFormViewSave({
   const afterFieldChange = React.useCallback(
     (field: FieldDescriptor, value: unknown, scope = ""): void => {
       const scoped = (name: string) => scope ? `${scope}.${name}` : name;
+      userEditedFieldsRef.current.add(scoped(field.name));
       clearErrors(scoped(field.name));
       if (isCreate || !field.createOnly) {
         const seeds = field.prefill?.(value);
@@ -739,10 +747,14 @@ export function useFormViewSave({
             if (
               field.prefillPreserveDirty &&
               !replacements.has(name) &&
-              getFieldState(target).isDirty
+              (userEditedFieldsRef.current.has(target) || (
+                getFieldState(target).isDirty &&
+                replaceEqualDeep(prefillSeedsRef.current.get(target), form.getValues(target)) !== prefillSeedsRef.current.get(target)
+              ))
             ) continue;
             if (field.prefillPreserveDirty && !replacements.has(name)) {
-              resetField(target, { defaultValue: seed });
+              setValue(target, seed, { shouldDirty: false, shouldTouch: true });
+              prefillSeedsRef.current.set(target, seed);
               continue;
             }
             setValue(target, seed, {
@@ -767,7 +779,7 @@ export function useFormViewSave({
         });
       }
     },
-    [clearErrors, defaultSlugSource, formFields, getFieldState, isCreate, resetField, setValue],
+    [clearErrors, defaultSlugSource, formFields, getFieldState, isCreate, setValue],
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean =>
@@ -775,6 +787,9 @@ export function useFormViewSave({
     [formReadOnly, previewBlocked],
   );
   const discardChanges = React.useCallback(() => {
+    createdRecordRef.current = false;
+    prefillSeedsRef.current.clear();
+    userEditedFieldsRef.current.clear();
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     formIsDirtyRef.current = false;
     editBasisRecordRef.current = displayRecord;

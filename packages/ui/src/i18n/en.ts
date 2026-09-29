@@ -2,6 +2,8 @@
 // the active translations; these are the defaults used when a key is missing.
 
 export const enUiMessages: Record<string, string> = {
+  "visibility.label": "Visibility",
+  "visibility.change": "Change visibility to {visibility}",
   "form.staleRevision": "This record changed since you started editing. Reload it before saving again.",
   "form.reloadStaleRevision": "Reload and discard edits",
   "form.revisionUnavailable": "Reload this record to load its revision before saving.",

@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
+from django.core.exceptions import EmptyResultSet
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
@@ -116,7 +117,12 @@ class TaskAccessTests(WorkCase):
                         permission.name,
                         definition.resource_type,
                     )
-                    self.assertIn("SELECT", model._base_manager.filter(predicate).query.sql_with_params()[0])
+                    try:
+                        sql = model._base_manager.filter(predicate).query.sql_with_params()[0]
+                    except EmptyResultSet:
+                        # A declared nil permission compiles to an empty predicate.
+                        continue
+                    self.assertIn("SELECT", sql)
         self.assertLessEqual(deepest, app_settings.REBAC_DEPTH_LIMIT)
         print(f"Work SQL compilation ({self.storage}): maximum {deepest}/{app_settings.REBAC_DEPTH_LIMIT} frames")
 

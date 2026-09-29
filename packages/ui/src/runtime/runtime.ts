@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useMatches } from "@tanstack/react-router";
+import { useMatches, useRouterState } from "@tanstack/react-router";
 import type {
   MessageResources,
   MessageVars,
@@ -378,7 +378,9 @@ export function useRouteHref(): RouteHref {
 
 /** Resolve the active declaration by the router's matched path. */
 export function useActiveRoute<T extends { path: string }>(routes: readonly T[]): T | undefined {
-  const fullPath = useMatches({ select: (matches) => matches.at(-1)?.fullPath });
+  const matches = useMatches();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const fullPath = matches.at(-1)?.fullPath ?? pathname;
   return useMemo(
     () => routes.find((route) => route.path.replace(/\/$/, "") === fullPath?.replace(/\/$/, "")),
     [routes, fullPath],

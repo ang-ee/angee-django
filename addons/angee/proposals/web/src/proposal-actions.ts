@@ -1,6 +1,7 @@
 import { extractActionOutcome } from "@angee/refine";
 import { SUBMIT_PROPOSAL, WITHDRAW_PROPOSAL, PUBLISH_TRACK } from "./documents";
-import { holdsPermission, recordRevision } from "./round-actions";
+import { holdsPermission } from "@angee/metadata";
+import { recordRevision } from "./round-actions";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
   useRecordActionMutation,

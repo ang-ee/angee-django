@@ -1,9 +1,7 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import {
-  ActionFormDialog,
-  Button,
-  Glyph,
-  defineRowAction,
+  RecordActionBar,
+  useDescriptorRowActions,
   useActionOutcomeMutation,
   type ActionDescriptor,
   type RowActionDeclaration,
@@ -52,36 +50,7 @@ export function useCycleRowActions<TRow extends WorkCycleRow>(): {
   dialog: React.ReactNode;
 } {
   const action = useCloseCycleAction();
-  const [active, setActive] = React.useState<TRow | null>(null);
-  const rowActions = React.useMemo(
-    () => [
-      defineRowAction<TRow>({
-        kind: "page",
-        id: action.id,
-        label: String(action.label),
-        icon: action.icon,
-        variant: "ghost",
-        visible: canCloseCycle,
-        pendingPolicy: "disable-actions",
-        onSelect: setActive,
-      }),
-    ],
-    [action],
-  );
-  return {
-    rowActions,
-    dialog: active ? (
-      <ActionFormDialog
-        key={active.id}
-        action={action}
-        context={{ record: active, selectedIds: [active.id] }}
-        open
-        onOpenChange={(open) => {
-          if (!open) setActive(null);
-        }}
-      />
-    ) : null,
-  };
+  return useDescriptorRowActions<TRow>([action], { visible: (_action, row) => canCloseCycle(row) });
 }
 
 export function CycleCloseControl({
@@ -90,24 +59,8 @@ export function CycleCloseControl({
   cycle: WorkCycleRow;
 }): React.ReactElement | null {
   const action = useCloseCycleAction();
-  const [open, setOpen] = React.useState(false);
   if (!canCloseCycle(cycle)) return null;
-  return (
-    <>
-      <Button type="button" size="sm" variant="secondary" onClick={() => setOpen(true)}>
-        <Glyph decorative name="work-cycle-close" />
-        {action.label}
-      </Button>
-      {open ? (
-        <ActionFormDialog
-          action={action}
-          context={{ record: cycle, selectedIds: [cycle.id] }}
-          open
-          onOpenChange={setOpen}
-        />
-      ) : null}
-    </>
-  );
+  return <RecordActionBar record={cycle} actions={[{ ...action, placement: "toolbar" }]} />;
 }
 
 export function canCloseCycle(row: WorkCycleRow): boolean {

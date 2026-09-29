@@ -57,3 +57,12 @@ export const AcceptTaskDocument = graphql(`
     }
   }
 `);
+
+/** Required decline reason keeps this verb authored rather than generated. */
+export const DeclineTaskDocument = graphql(`
+  mutation WorkDeclineTask($task: ID!, $reason: TaskDroppedReason!, $expected_revision: Int) {
+    decline_task(task: $task, reason: $reason, expected_revision: $expected_revision) {
+      ok message id validation_errors
+    }
+  }
+`);

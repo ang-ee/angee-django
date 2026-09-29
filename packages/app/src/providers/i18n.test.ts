@@ -56,14 +56,15 @@ describe("scoped vocabulary validation", () => {
   const routes = [{ name: "desk.all", path: "/desk" }, { name: "desk.record", path: "/desk/$id", parent: "desk.all" }];
   const compose = (vocabulary: readonly AppVocabulary[]) => composeAppVocabulary(resources, vocabulary, models, menu, routes);
 
-  test.each([
+  const invalidVocabulary: AppVocabulary[] = [
     { app: "missing" },
     { app: "desk", route: "missing" },
     { app: "desk", messages: { notes: { missing: "Unknown" } } },
     { app: "desk", menus: { missing: "Unknown" } },
     { app: "desk", resources: { "missing.Model": { label: "Unknown" } } },
     { app: "desk", resources: { "notes.Note": { fields: { missing: "Unknown" } } } },
-  ] satisfies AppVocabulary[])("rejects unknown vocabulary references: %j", (declaration) => {
+  ];
+  test.each(invalidVocabulary)("rejects unknown vocabulary references: %j", (declaration) => {
     expect(() => compose([declaration])).toThrow(/unknown/i);
   });
 

@@ -1,4 +1,5 @@
 import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
 import { Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, LoadingPanel, MessageActions, MessageAttachmentChip, MessageComposer, MessageComposerHint, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, SearchInput, SegmentedControl, Select, Tag, Textarea, UploadDropTarget, avatarInitials, cn, createClientKey, dateFromValue, errorMessage, formatDate, formatDateStorage, messageComposerInputClassName, reactionsFromGroups, textRoleVariants, useRuntimeViewAs, useUiT } from "@angee/ui";
 import {
@@ -120,7 +121,7 @@ export function RecordThreadConversation({
   const canPost = Boolean(
     enabled && !threadQuery.error && !threadPayload?.error_code &&
     threadPayload?.thread_post_access &&
-    threadPayload.permissions.includes(threadPayload.thread_post_access),
+    holdsPermission(threadPayload, threadPayload.thread_post_access),
   );
   const recipientVariables = React.useMemo(() => ({ limit: 100 }), []);
   const recipientUsersQuery = useAuthoredQuery(

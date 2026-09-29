@@ -154,7 +154,7 @@ export function GanttCollectionSurface<TRow extends Row>({
         const allDay = metadata?.fields[startField]?.scalar === "Date" && metadata?.fields[endField]?.scalar === "Date";
         const event = ganttBarEvent(row, { id, resourceId: group.key, start: startField, end: endField,
           label, color: toneColorVar(tone), dateOnly: allDay, current: currentByLane.get(group.key) === id });
-        if (!event && (readPath(row, startField) != null || readPath(row, endField) != null)) skipped += 1;
+        if (!event && readPath(row, startField) != null && readPath(row, endField) != null) skipped += 1;
         return event ? [event] : [];
       }));
       if (markerSpec && markerMetadata) {

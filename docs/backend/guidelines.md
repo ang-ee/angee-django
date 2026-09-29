@@ -1799,3 +1799,18 @@ and schema composition in GraphQL tests. Preserve the focused proof obligations
 in the relevant pitfalls: isolated test-module runs, non-admin authorization
 coverage, narrow GraphQL selections at multiple row counts, and populated-state
 data-migration checks.
+
+### Verb eligibility projections
+
+Record controls consume eligibility from the verb owner. Task audience domains
+extend [`Task.visibility_blockers`](../../addons/angee/projects/models.py): each
+SQL condition names its validation exception. The locked visibility verb and
+optimized `allowed_visibility` projection share those conditions and native
+permission scopes. Hidden domain facts stay inside the projection query.
+Message writers must still preserve publication invariants under the task lock.
+
+A human decision is final unless its subject addon contributes
+`Decision.can_revisit_expression(actor)` and `Decision.revisit(actor, revision)`.
+The projection uses native permission scopes; the verb rechecks under the domain
+lock and admits a successor through `DecisionRequest.replaces`, retaining the
+old answer. See [intake's donor](../../addons/angee/intake/models.py).

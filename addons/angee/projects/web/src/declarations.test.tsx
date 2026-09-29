@@ -101,7 +101,10 @@ describe("composable standard project and task declarations", () => {
     expect(projectProps.contextLine).toBe(line);
     expect(parsePageGroups(projectProps.children).map(({ label }) => label)).toEqual(["Planning"]);
     expect(parsePageActions(projectProps.children).map(({ id }) => id)).toEqual(["complete"]);
-    expect(parsePageFields(projectProps.children).map(({ name }) => name)).toEqual(["title", "revision", "status", "current_milestone", "body"]);
+    expect(parsePageFields(projectProps.children).map(({ name }) => name)).toEqual([
+      "title", "revision", "status", "current_milestone", "owner", "lead", "start_date",
+      "start_date_resolution", "target_date", "target_date_resolution", "body",
+    ]);
 
     const { result: task } = renderHook(() => useTaskFormDeclaration({ groups: ["assignment"], verbs: ["complete"], contextLine: line }));
     const taskProps = propsOf<FormProps>(task.current);

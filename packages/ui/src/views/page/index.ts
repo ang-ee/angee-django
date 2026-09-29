@@ -228,6 +228,8 @@ function groupDescriptor(props: GroupProps): GroupDescriptor {
     ...(props.columns !== undefined ? { columns: props.columns } : {}),
     ...(props.collapsible !== undefined ? { collapsible: props.collapsible } : {}),
     ...(props.defaultOpen !== undefined ? { defaultOpen: props.defaultOpen } : {}),
+    ...(props.content !== undefined ? { content: props.content } : {}),
+    ...(props.savedOnly !== undefined ? { savedOnly: props.savedOnly } : {}),
     fields: parseDirectPageFields(props.children),
     actions: parsePageActions(props.children),
   }));

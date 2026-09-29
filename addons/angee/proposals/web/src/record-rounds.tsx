@@ -13,8 +13,13 @@ import {
 import * as React from "react";
 
 import { enProposalsMessages, useProposalsT } from "./i18n";
+import { ProjectRoundRecord, RoundRecordSection } from "./round-record";
 import { ROUND_MODEL } from "./resources";
 import { TaskResponderShareAction } from "./task-responder-share";
+
+const ROUND_RECORD_FIELDS = ["id", "name", "status", "opening_policy", "permissions", "revision", "can_open", "can_admit",
+  "roster.user", "roster.name", "roster.track_status"] as const;
+const PROJECT_ROUND_FIELDS = ROUND_RECORD_FIELDS.map((field) => `active_proposal_round.${field}`);
 
 interface RoundPaneRow extends StringIdRow {
   name?: unknown;
@@ -75,11 +80,49 @@ function RecordRoundsPane({
   );
 }
 
+function RoundTabLabel({ name }: { name: "roster" | "comparison" }): React.ReactElement {
+  const t = useProposalsT();
+  return <>{t(name === "roster" ? "round.tabs.roster" : "round.tabs.comparison")}</>;
+}
+
 export const roundRecordSlots = [
+  {
+    ...formViewRecordActionsSlot(ROUND_MODEL), id: "proposals.round-open", sequence: 30,
+    requiredFields: ROUND_RECORD_FIELDS,
+    content: <RoundRecordSection surface="primary" />,
+  },
+  {
+    ...formViewRecordActionsSlot(PROJECT_MODEL), id: "proposals.project-round-open", sequence: 30,
+    requiredFields: PROJECT_ROUND_FIELDS,
+    content: <ProjectRoundRecord surface="primary" />,
+  },
+  {
+    ...formViewRecordActionsSlot(ROUND_MODEL), id: "proposals.round-verbs", sequence: 35,
+    requiredFields: ROUND_RECORD_FIELDS,
+    recordActionPlacement: "menu", content: <RoundRecordSection surface="actions" />,
+  },
+  {
+    ...formViewRecordActionsSlot(PROJECT_MODEL), id: "proposals.project-round-verbs", sequence: 35,
+    requiredFields: PROJECT_ROUND_FIELDS,
+    recordActionPlacement: "menu", content: <ProjectRoundRecord surface="actions" />,
+  },
+  {
+    ...formViewSectionsSlot(ROUND_MODEL), id: "proposals.round-people", sequence: 40,
+    content: <Tab id="round-roster" label={<RoundTabLabel name="roster" />} requiredFields={ROUND_RECORD_FIELDS}><RoundRecordSection surface="people" /></Tab>,
+  },
+  {
+    ...formViewSectionsSlot(PROJECT_MODEL), id: "proposals.project-people", sequence: 40,
+    content: <Tab id="round-roster" label={<RoundTabLabel name="roster" />} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="people" /></Tab>,
+  },
+  {
+    ...formViewSectionsSlot(PROJECT_MODEL), id: "proposals.project-approach", sequence: 35,
+    content: <Tab id="comparison" label={<RoundTabLabel name="comparison" />} requiredFields={PROJECT_ROUND_FIELDS}><ProjectRoundRecord surface="approach" /></Tab>,
+  },
   {
     ...formViewRecordActionsSlot(TASK_MODEL),
     id: "proposals.task-responder-share",
     sequence: 45,
+    requiredFields: ["revision", "permissions", "shared_with_responders", "project.source_proposal.id"],
     content: <TaskResponderShareAction />,
   },
   {

@@ -82,6 +82,7 @@ export {
   type PageResult,
   type Row,
 } from "./rows";
+export { holdsPermission } from "./permissions";
 export type {
   ResourceFilter,
   ResourceOrder,

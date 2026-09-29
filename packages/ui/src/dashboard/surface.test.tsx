@@ -6,6 +6,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { DashboardDefinition, DashboardRegistry, DashboardWidgetData, WidgetSpec } from "./headless";
 import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "./kinds";
 import { DashboardSurface } from "./surface";
+import { AppRuntimeProvider } from "../runtime/runtime";
+import type { ReactElement } from "react";
 
 const state = vi.hoisted(() => ({
   allowed: [false], loading: false, error: null as Error | null,
@@ -63,8 +65,12 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
+const renderDashboard = (node: ReactElement) => render(node, {
+  wrapper: ({ children }) => <AppRuntimeProvider runtime={{}}>{children}</AppRuntimeProvider>,
+});
+
 test("hides a denied widget before mounting its query and compacts the remaining layout", () => {
-  render(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
+  renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
   expect(screen.queryByRole("heading", { name: "Incoming requests" })).toBeNull();
   expect(state.reads).not.toHaveBeenCalledWith("private");
   const article = screen.getByRole("heading", { name: "Shared work" }).closest("article")!;
@@ -73,16 +79,16 @@ test("hides a denied widget before mounting its query and compacts the remaining
 
 test("an authorized empty widget stays visible and actor changes remove it", () => {
   state.allowed = [true];
-  const { rerender } = render(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
+  const { rerender } = renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
   expect(screen.getByRole("heading", { name: "Incoming requests" })).toBeTruthy();
   state.allowed = [false];
-  rerender(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
+  rerender(<AppRuntimeProvider runtime={{}}><DashboardSurface target={{ scope: "addon", key: "overview" }} /></AppRuntimeProvider>);
   expect(screen.queryByRole("heading", { name: "Incoming requests" })).toBeNull();
 });
 
 test("pending visibility never starts a protected data query", () => {
   state.loading = true;
-  render(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
+  renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} />);
   expect(state.reads).not.toHaveBeenCalled();
 });
 
@@ -95,7 +101,7 @@ test("authored widgets omit the disconnected footer while data widgets refresh t
     }, definition.widgets[1]!],
     authored: { authored: () => <p>Authored results</p> },
   };
-  render(<DashboardSurface target={{ scope: "addon", key: "overview" }} definition={authored} />);
+  renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} definition={authored} />);
   const authoredCell = screen.getByRole("heading", { name: "Summary" }).closest("article")!;
   expect(within(authoredCell).queryByRole("button", { name: "Refresh" })).toBeNull();
   const dataCell = screen.getByRole("heading", { name: "Shared work" }).closest("article")!;

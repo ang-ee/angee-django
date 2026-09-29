@@ -154,6 +154,8 @@ export interface SlotContribution {
   sequence?: number;
   /** Toolbar placement for content in the form-view record-actions slot. */
   recordActionPlacement?: "primary" | "menu";
+  /** Readable fields a saved-record contribution consumes from RecordChromeContext.record. */
+  requiredFields?: readonly string[];
   content?: unknown;
 }
 

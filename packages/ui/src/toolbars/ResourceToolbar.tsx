@@ -1280,7 +1280,7 @@ export function ResourceViewSwitcher<TView extends string = ResourceViewKind>({
       {favorites.length > 0 ? (
         <Select
           size="sm"
-          value={null}
+          value={undefined}
           placeholder={t("resourceToolbar.favorites")}
           aria-label={t("resourceToolbar.favorites")}
           options={favorites.map((favorite) => ({ value: favorite.id, label: favorite.label }))}

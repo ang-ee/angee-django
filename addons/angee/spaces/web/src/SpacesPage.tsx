@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { DocumentType } from "@angee/gql/console";
+import { holdsPermission } from "@angee/metadata";
 import {
   Action,
   Button,
@@ -177,7 +178,7 @@ function GroupRosterTab({ recordId, form }: RecordPanelContext): React.ReactElem
         label: t("group.roster.changeRole"),
         icon: "pencil",
         variant: "ghost",
-        visible: (row: MembershipRow) => row.permissions?.includes("write__role") === true,
+        visible: (row: MembershipRow) => holdsPermission(row, "write__role"),
         disabled: () => busy,
         pendingPolicy: "disable-actions",
         onSelect: (row: MembershipRow) => setRoleRow(row),
@@ -200,7 +201,7 @@ function GroupRosterTab({ recordId, form }: RecordPanelContext): React.ReactElem
         },
         icon: "trash",
         variant: "ghost",
-        visible: (row: MembershipRow) => row.permissions?.includes("delete") === true,
+        visible: (row: MembershipRow) => holdsPermission(row, "delete"),
         disabled: () => busy,
         pendingPolicy: "disable-actions",
       }),
@@ -210,7 +211,7 @@ function GroupRosterTab({ recordId, form }: RecordPanelContext): React.ReactElem
         label: t("group.roster.notifications"),
         icon: "bell",
         variant: "ghost",
-        visible: (row: MembershipRow) => row.permissions?.includes("set_notifications") === true,
+        visible: (row: MembershipRow) => holdsPermission(row, "set_notifications"),
         disabled: () => busy,
         pendingPolicy: "disable-actions",
         onSelect: (row: MembershipRow) => setNotificationRow(row),

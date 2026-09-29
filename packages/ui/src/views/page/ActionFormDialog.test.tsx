@@ -453,7 +453,7 @@ describe("ActionFormDialog", () => {
       const CompleteForm = (props: RegisteredFormProps) => {
         renderForm(props);
         return <button type="button" onClick={() => {
-          listRows.collections.push({ id: "created-1", name: "Created collection" });
+          listRows.collections = [...listRows.collections, { id: "created-1", name: "Created collection" }];
           props.onSaved?.({ id: "created-1" });
         }}>
           Save related record

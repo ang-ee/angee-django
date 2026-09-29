@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   Outlet,
   RouterProvider,
@@ -9,10 +9,12 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AppRailTree } from "./AppRailTree";
 import { MenuTree } from "./menu-tree";
+
+afterEach(cleanup);
 
 describe("AppRailTree", () => {
   test("follows a menu's preset through Router's full-href navigation", async () => {

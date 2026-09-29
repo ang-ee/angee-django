@@ -287,8 +287,8 @@ describe("RecordThreadConversation", () => {
 
   test("merges exchanges without reordering equal instants from the server", () => {
     mocks.threadData = threadPayload([
-      message({ id: "first", preview: "First from server", parts: [], sent_at: "2026-07-06T12:00:00+02:00" }),
-      message({ id: "second", preview: "Second from server", parts: [], sent_at: "2026-07-06T10:00:00Z" }),
+      message({ id: "first", preview: "First from server", parts: [{ role: "user", fragment: { text: "First from server" }, file: null }], sent_at: "2026-07-06T12:00:00+02:00" }),
+      message({ id: "second", preview: "Second from server", parts: [{ role: "user", fragment: { text: "Second from server" }, file: null }], sent_at: "2026-07-06T10:00:00Z" }),
     ], [activity({ due_date: "2026-07-05" })]);
     render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
     const text = screen.getByRole("list", { name: "Comments" }).textContent ?? "";

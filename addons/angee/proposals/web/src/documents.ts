@@ -1,14 +1,5 @@
 import { graphql } from "@angee/gql/console";
 
-export const TASK_RESPONDER_AUDIENCE = graphql(`
-  query ProposalTaskResponderAudience($id: String!) {
-    project_tasks_by_pk(id: $id) {
-      id revision permissions shared_with_responders
-      project { source_proposal { id } }
-    }
-  }
-`);
-
 export const TASK_RESPONDER_SHARE = graphql(`
   mutation SetProposalTaskResponderShare($task: ID!, $revision: Int, $shared: Boolean!) {
     set_task_responder_share(task: $task, expected_revision: $revision, shared: $shared) {
