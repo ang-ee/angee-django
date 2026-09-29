@@ -70,6 +70,7 @@ export const enStorageMessages: Record<string, string> = {
   "upload.error.transfer": "Upload failed ({status}).",
   "upload.error.cannotFinalize": "Could not finalize upload.",
   "upload.error.generic": "Upload failed.",
+  "upload.error.viewAs": "Uploads are disabled while viewing as another person.",
 
   // File detail toolbar.
   "file.rename": "Rename",

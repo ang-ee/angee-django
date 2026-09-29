@@ -33,6 +33,8 @@ import { directDottedPathMessages } from "./validation-errors";
 import { fieldErrorMessages, isCompositeFieldDescriptor, isFieldVisible, resolveField } from "./form-view-model";
 import { emptyValueForField, isStructuredPresenceField, structuredFieldErrorPaths } from "./field-values";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
+import { useRuntimeViewAs } from "../../runtime";
+import { useLatestRef } from "../../lib/use-latest-ref";
 
 export { emptyValueForField } from "./field-values";
 
@@ -269,6 +271,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
   const t = useUiT();
+  const preview = useRuntimeViewAs();
+  const previewBlocked = Boolean(preview.viewAs || preview.pending);
+  const previewBlockedRef = useLatestRef(previewBlocked);
   const form = useForm<Record<string, unknown>>({
     defaultValues: initialDialogValues(fields, initialValues),
     mode: "onChange",
@@ -326,7 +331,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
         type="submit"
         variant="primary"
         size="sm"
-        disabled={!ready || submitting}
+        disabled={!ready || submitting || previewBlocked}
         loading={submitting}
         loadingText={submittingLabel ?? submitLabel}
       >
@@ -336,13 +341,14 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   );
 
   const submitReady = form.handleSubmit(async (collected) => {
-    if (submittingRef.current) return;
+    if (submittingRef.current || previewBlockedRef.current) return;
     submittingRef.current = true;
     const submittedSession = session.current;
     form.clearErrors();
     try {
       const submittedValues = parseValues(collected);
       const validation = await validate?.(submittedValues);
+      if (previewBlockedRef.current) return;
       if (validation && applyDialogValidation(form, validation)) return;
       const result = await onSubmit(submittedValues);
       if (!mounted.current || session.current !== submittedSession) return;

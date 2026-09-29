@@ -3,7 +3,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { useCallback, useRef, useState } from "react";
 
-import { errorMessage } from "@angee/ui";
+import { errorMessage, useRuntimeViewAs } from "@angee/ui";
 
 import { useStorageT } from "../i18n";
 import { StorageFileUploadBegin, StorageFileUploadFinalize } from "./documents";
@@ -71,6 +71,9 @@ export interface UploadedFile {
 export function useStorageUpload(
   options: { onUploaded?: (files: readonly UploadedFile[], completionContext?: unknown) => void } = {},
 ): StorageUpload {
+  const preview = useRuntimeViewAs();
+  const previewRef = useRef(preview);
+  previewRef.current = preview;
   const { onUploaded } = options;
   const t = useStorageT();
   const [beginUpload] = useAuthoredMutation(StorageFileUploadBegin);
@@ -87,8 +90,13 @@ export function useStorageUpload(
 
   const runOne = useCallback(
     async (taskId: string, file: File, target: UploadTarget): Promise<UploadedFile | null> => {
+      const checkPreview = () => {
+        if (previewRef.current.viewAs || previewRef.current.pending) throw new Error(t("upload.error.viewAs"));
+      };
       try {
+        checkPreview();
         const contentHash = await sha256Hex(file);
+        checkPreview();
         const begun = await beginUpload({
           input: {
             filename: file.name,
@@ -103,6 +111,7 @@ export function useStorageUpload(
           },
         });
         const payload = begun?.file_upload_begin;
+        checkPreview();
         if (!payload || payload.error) {
           patch(taskId, {
             status: "failed",
@@ -128,6 +137,7 @@ export function useStorageUpload(
           });
           return null;
         }
+        checkPreview();
         patch(taskId, { status: "finalizing" });
         const finalized = await finalizeUpload({
           input: {
@@ -137,6 +147,7 @@ export function useStorageUpload(
           },
         });
         const result = finalized?.file_upload_finalize;
+        checkPreview();
         if (!result || result.error) {
           patch(taskId, {
             status: "failed",
@@ -160,6 +171,7 @@ export function useStorageUpload(
 
   const upload = useCallback(
     (files: readonly File[], target: UploadTarget = {}, completionContext?: unknown): void => {
+      if (previewRef.current.viewAs || previewRef.current.pending) return;
       const started = files.map((file) => ({
         file,
         task: {
@@ -186,6 +198,7 @@ export function useStorageUpload(
   );
 
   const retry = useCallback((taskId: string): void => {
+    if (previewRef.current.viewAs || previewRef.current.pending) return;
     const source = sources.current.get(taskId);
     if (!source) return;
     patch(taskId, { status: "hashing", error: undefined, fileId: undefined });

@@ -479,6 +479,33 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).toHaveBeenCalledTimes(2);
   });
 
+  test("pauses existing and newly mounted consumers, drops late events, then reopens once", () => {
+    const { subscribe, sinks } = recordingClient();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
+      [resource({ changes: "noteChanged" })],
+    );
+    const callback = vi.fn();
+    const params = { channel: "resources/notes", types: ["*"], callback, params: { resource: "notes" } };
+    const first = provider.subscribe(params);
+    provider.setEnabled(false);
+    const second = provider.subscribe(params);
+    expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    const event = { data: { noteChanged: { model: "notes.Note", id: "note_1", action: "update" } } };
+    nthSink(sinks, 0).next(event);
+    expect(callback).not.toHaveBeenCalled();
+    provider.setEnabled(true);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    nthSink(sinks, 0).next(event);
+    expect(callback).not.toHaveBeenCalled();
+    nthSink(sinks, 1).next(event);
+    expect(callback).toHaveBeenCalledTimes(2);
+    provider.unsubscribe(first);
+    provider.unsubscribe(second);
+    expect(nthSink(sinks, 1).dispose).toHaveBeenCalledTimes(1);
+  });
+
   test("logs and drops errored subscriptions so the next subscriber reconnects", () => {
     const { subscribe, sinks } = recordingClient();
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);

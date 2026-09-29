@@ -50,21 +50,18 @@ function authDocument<TResult, TVariables extends object>(
   return parse(source) as TypedDocumentNode<TResult, TVariables>;
 }
 
+export const currentUserSelection = `
+  id username firstName: first_name lastName: last_name email
+  isStaff: is_staff isActive: is_active preferences roleRefs: role_refs
+`;
+
 export const AngeeCurrentUserDocument = authDocument<
   AngeeCurrentUserResult,
   Record<string, never>
 >(`
   query AngeeCurrentUser {
     current_user {
-      id
-      username
-      firstName: first_name
-      lastName: last_name
-      email
-      isStaff: is_staff
-      isActive: is_active
-      preferences
-      roleRefs: role_refs
+      ${currentUserSelection}
     }
   }
 `);
@@ -105,15 +102,7 @@ export const AngeeUpdatePreferencesDocument = authDocument<
 >(`
   mutation AngeeUpdatePreferences($preferences: JSON!) {
     update_preferences(preferences: $preferences) {
-      id
-      username
-      firstName: first_name
-      lastName: last_name
-      email
-      isStaff: is_staff
-      isActive: is_active
-      preferences
-      roleRefs: role_refs
+      ${currentUserSelection}
     }
   }
 `);

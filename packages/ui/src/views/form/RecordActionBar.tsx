@@ -9,6 +9,8 @@ import { errorMessage, useConfirm, usePrompt, useToast } from "../../feedback";
 import { ActionFormDialog } from "./ActionFormDialog";
 import { RecordActionMenuItems } from "./RecordActionMenu";
 import type { ActionDescriptor, ActionResult } from "../page";
+import { useRuntimeViewAs } from "../../runtime";
+import { useLatestRef } from "../../lib/use-latest-ref";
 
 export interface RecordDeleteAction {
   canDelete: boolean;
@@ -38,7 +40,7 @@ export function RecordActionBar({
   reload,
   deleteAction,
   contributedActions,
-  blocked = false,
+  blocked: blockedByForm = false,
 }: {
   record: Row | null;
   actions: readonly ActionDescriptor[];
@@ -50,6 +52,9 @@ export function RecordActionBar({
   /** A dirty or pending form must be saved before acting on its persisted record. */
   blocked?: boolean;
 }): React.ReactElement | null {
+  const preview = useRuntimeViewAs();
+  const blocked = blockedByForm || Boolean(preview.viewAs || preview.pending);
+  const blockedRef = useLatestRef(blocked);
   const confirm = useConfirm();
   const prompt = usePrompt();
   const toast = useToast();
@@ -65,6 +70,7 @@ export function RecordActionBar({
     ActionMutationVariables
   >({
     mutationFn: async ({ action, values }) => {
+      if (blockedRef.current || action.disabled) return;
       if (action.run) {
         return action.run({
           record,
@@ -97,7 +103,7 @@ export function RecordActionBar({
 
   const runAction = React.useCallback(
     async (action: ActionDescriptor): Promise<void> => {
-      if (blocked) return;
+      if (blockedRef.current || action.disabled) return;
       if (action.confirm) {
         const confirmation =
           typeof action.confirm === "function" && record !== null
@@ -116,7 +122,7 @@ export function RecordActionBar({
             : {}),
           confirm: action.label,
         });
-        if (!confirmed) return;
+        if (!confirmed || blockedRef.current) return;
       }
       // A typed-args action collects its args (and merges the record/selection
       // context) in the dialog, which fires `submit` — not the string-only prompt.
@@ -135,7 +141,7 @@ export function RecordActionBar({
         .mutateAsync({ action, values })
         .catch(() => undefined);
     },
-    [actionMutation, blocked, confirm, prompt, record],
+    [actionMutation, blockedRef, confirm, prompt, record],
   );
 
   // An action with a `visibleWhen` predicate shows only when the open record
@@ -179,7 +185,7 @@ export function RecordActionBar({
                 <DropdownMenu.Item
                   variant="danger"
                   disabled={blocked || !deleteAction.canDelete || deleteAction.isPending}
-                  onClick={deleteAction.onDelete}
+                  onClick={() => { if (!blockedRef.current) deleteAction.onDelete(); }}
                 >
                   <Glyph name="trash" />
                   Delete

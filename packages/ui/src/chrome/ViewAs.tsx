@@ -31,26 +31,29 @@ export function ViewAsBanner() {
   </>;
 }
 
-/** Options come from the identity owner's authorized viewable_people read. */
-export function ViewAsPicker() {
+/** Optional record scope intersects the identity owner's authorized people. */
+export function ViewAsPicker({ userIds, label }: { userIds?: readonly string[]; label?: string } = {}) {
   const preview = useRuntimeViewAs();
   const t = useUiT();
+  const pickLabel = label ?? t("viewAs.pick");
   const triggerRef = useRef<HTMLButtonElement>(null);
   const userId = preview.viewAs?.userId;
   const previousUserId = useRef(userId);
+  const people = userIds === undefined ? preview.viewablePeople
+    : preview.viewablePeople.filter((person) => userIds.includes(person.id));
   useEffect(() => {
     if (preview.pending) return;
     if (previousUserId.current && !userId) triggerRef.current?.focus();
     previousUserId.current = userId;
   }, [userId, preview.pending]);
-  if (preview.viewablePeople.length === 0 && !preview.pending && !preview.error) return null;
+  if (people.length === 0 && (userIds !== undefined || (!preview.pending && !preview.error))) return null;
   return <>
     <RelationField
       triggerRef={triggerRef}
-      aria-label={t("viewAs.pick")}
-      placeholder={t("viewAs.pick")}
+      aria-label={pickLabel}
+      placeholder={pickLabel}
       value={preview.viewAs?.userId}
-      options={preview.viewablePeople.map((person) => ({ value: person.id, label: person.name }))}
+      options={people.map((person) => ({ value: person.id, label: person.name }))}
       readOnly={preview.pending}
       onChange={preview.enter}
     />

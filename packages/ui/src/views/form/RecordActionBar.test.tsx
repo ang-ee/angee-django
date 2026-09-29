@@ -16,6 +16,7 @@ import { DialogForm } from "../../fragments/DialogForm";
 import { RecordActionBar } from "./RecordActionBar";
 import { RecordActionTrigger } from "./RecordActionMenu";
 import { createUiTestProviders } from "../../testing";
+import { AppRuntimeProvider } from "../../runtime";
 
 const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: {
@@ -24,6 +25,30 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 
 describe("RecordActionBar", () => {
+  test("preview keeps allowed verbs and delete visible but blocks click and keyboard activation", async () => {
+    const run = vi.fn();
+    const onDelete = vi.fn();
+    renderActionBar(<AppRuntimeProvider runtime={{ auth: {
+      user: { id: "person", name: "Person" }, status: "authenticated", hasRole: () => false,
+      viewAs: { viewAs: { userId: "person" }, currentUser: { id: "person", name: "Person" }, realUser: null,
+        viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+    } }}>
+      <RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
+        actions={[{ id: "allowed", label: "Allowed verb", run }, { id: "forbidden", label: "Forbidden verb", run, visibleWhen: () => false }]}
+        deleteAction={{ canDelete: true, isPending: false, onDelete }} />
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    for (const name of ["Allowed verb", "Delete"]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(item);
+      fireEvent.keyDown(item, { key: "Enter" });
+      fireEvent.keyDown(item, { key: " " });
+    }
+    expect(screen.queryByRole("menuitem", { name: "Forbidden verb" })).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
   afterEach(() => {
     cleanup();
     clearClients();

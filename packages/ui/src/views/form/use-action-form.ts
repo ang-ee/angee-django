@@ -5,6 +5,8 @@ import type { ActionOutcome } from "@angee/refine";
 
 import { errorMessage, useToast } from "../../feedback";
 import { useUiT } from "../../i18n";
+import { useRuntimeViewAs } from "../../runtime";
+import { useLatestRef } from "../../lib/use-latest-ref";
 
 /**
  * Options for {@link useActionForm}. The consumer owns how values are collected
@@ -69,6 +71,7 @@ export interface UseActionFormResult<TValues extends FieldValues> {
 export function useActionForm<TValues extends FieldValues>(
   options: UseActionFormOptions<TValues>,
 ): UseActionFormResult<TValues> {
+  const preview = useLatestRef(useRuntimeViewAs());
   const t = useUiT();
   const toast = useToast();
   const form = useForm<TValues>({ defaultValues: options.defaultValues });
@@ -79,12 +82,13 @@ export function useActionForm<TValues extends FieldValues>(
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const run = React.useCallback(async (values: TValues): Promise<boolean> => {
-    if (submittingRef.current) return false;
+    if (submittingRef.current || preview.current.viewAs || preview.current.pending) return false;
     submittingRef.current = true;
     reset(values, { keepDefaultValues: true });
     let succeeded = false;
     try {
       await handleSubmit(async (collected) => {
+        if (preview.current.viewAs || preview.current.pending) return;
         const { submit, onSuccess, toastSuccess = true, fieldNames, genericErrorMessage } = optionsRef.current;
         const fallback = genericErrorMessage ?? t("error.generic");
         try {
@@ -106,7 +110,7 @@ export function useActionForm<TValues extends FieldValues>(
       })();
     } finally { submittingRef.current = false; }
     return succeeded;
-  }, [handleSubmit, reset, setError, t, toast]);
+  }, [handleSubmit, preview, reset, setError, t, toast]);
   const clearFieldError = React.useCallback((name: string) => clearErrors(name as Path<TValues>), [clearErrors]);
   return {
     form, run,

@@ -10,6 +10,7 @@ import {
   UploadDropTarget,
   formatSize,
   useStatusTone,
+  useRuntimeViewAs,
   type ListProps,
   type ResourceListSnapshot,
 } from "@angee/ui";
@@ -60,12 +61,14 @@ export function FileBrowserContent({
   uploadTarget,
   canUpload,
 }: FileBrowserContentProps): ReactElement {
+  const preview = useRuntimeViewAs();
+  const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const t = useStorageT();
   const statusTone = useStatusTone();
   const inputRef = useRef<HTMLInputElement>(null);
 
   function startUpload(files: FileList | readonly File[] | null): void {
-    if (!canUpload || !files || files.length === 0) return;
+    if (previewBlocked || !canUpload || !files || files.length === 0) return;
     uploads.upload(Array.from(files), uploadTarget);
   }
 
@@ -87,6 +90,7 @@ export function FileBrowserContent({
             type="button"
             size="sm"
             variant="secondary"
+            disabled={previewBlocked}
             onClick={() => inputRef.current?.click()}
           >
             <Glyph name="attachment" />
@@ -181,6 +185,7 @@ export function FileBrowserContent({
       <input
         ref={inputRef}
         type="file"
+        disabled={previewBlocked}
         multiple
         className="hidden"
         onChange={(event) => {
