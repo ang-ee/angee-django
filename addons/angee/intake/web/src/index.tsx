@@ -47,7 +47,7 @@ const intake = defineBaseAddon({
       ...formViewSectionsSlot(TASK_MODEL), id: "intake.task-access-decisions", sequence: 50,
       // Access decisions are the request's writers' business; a requester reading their own request never sees them.
       permission: "write", requiredFields: ["permissions"],
-      content: <Group label={<AccessLabel />} hint={<AccessHint />} savedOnly content={<TaskAccessGroup />} />,
+      content: <Group label={<AccessLabel />} hint={<AccessHint />} savedOnly collapsible defaultOpen content={<TaskAccessGroup />} />,
     },
     {
       ...formViewRecordActionsSlot(TASK_MODEL), id: "intake.task-access-actions", sequence: 50,

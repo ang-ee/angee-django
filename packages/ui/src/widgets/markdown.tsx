@@ -199,7 +199,7 @@ function MarkdownEditable({
         className={mode === "preview" ? "hidden" : undefined}
       />
       {mode === "preview" ? (
-        <div tabIndex={0} className="min-h-48 px-3 py-2 outline-none focus-visible:focus-ring">
+        <div tabIndex={0} className="min-h-24 px-3 py-2 outline-none focus-visible:focus-ring">
           <div className="flex justify-end">
             <ModeButton mode="source" current={mode} onSelect={() => {
               setMode("source");
