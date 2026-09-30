@@ -16,6 +16,7 @@ from rebac import actor_context, system_context
 from rebac.models import active_relationship_model
 
 from angee.base.scoping import system_queryset
+from angee.graphql.events import ChangePayload
 from angee.graphql.publishing import change_published
 from angee.jobs.enqueue import celery_app
 from angee.resources.exceptions import ResourceLoadError
@@ -43,11 +44,14 @@ def test_capture_tasks_fixture_and_scoped_failure(capture_tasks):
 
 def test_observe_scopes_model_and_disconnects_after_exit():
     """Observation only records the chosen sender while the context is active."""
-    payload = object()
+    def change(model: type[Any], row_id: str) -> ChangePayload:
+        return ChangePayload(model=model._meta.label, id=row_id, action="update")
+
+    payload = change(Workflow, "wfl_observed")
     with drivers.observe(Workflow) as published:
-        change_published.send(sender=WorkflowVersion, payload=object())
+        change_published.send(sender=WorkflowVersion, payload=change(WorkflowVersion, "wfv_other"))
         change_published.send(sender=Workflow, payload=payload)
-    change_published.send(sender=Workflow, payload=object())
+    change_published.send(sender=Workflow, payload=change(Workflow, "wfl_after"))
     assert published == [payload]
 
 
