@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from django.db.models import TextChoices
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from angee.base.evidence import FactAuthority as FactAuthorityKind
 from angee.extraction.enums import ExtractionRole, ExtractionSourceKind
@@ -59,9 +60,40 @@ class DocumentRef:
 class ExtractionRef:
     """One retained revision in its immutable lineage."""
 
-    lineage_key: str
+    lineage_id: int
     public_id: str
     revision: int
+
+
+class _Outcome(BaseModel):
+    """Facts shared by the two exclusive retained revision outcomes."""
+
+    model_config = ConfigDict(extra="forbid")
+    claims: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    used_model_roles: list[ExtractionRole] = Field(default_factory=list)
+    unresolved_reasons: list[str] = Field(default_factory=list)
+    document: dict[str, Any] = Field(default_factory=dict)
+    corrections: list[dict[str, Any]] = Field(default_factory=list)
+    request_digest: str
+    identity_correspondence: dict[str, Any] | None = None
+
+
+class SucceededOutcome(_Outcome):
+    """A schema-valid retained candidate."""
+
+    kind: Literal["succeeded"] = "succeeded"
+
+
+class FailedOutcome(_Outcome):
+    """A retained candidate with an explicit failure code and stage."""
+
+    kind: Literal["failed"] = "failed"
+    code: str = Field(min_length=1)
+    stage: str | None = None
+
+
+ExtractionOutcome = Annotated[SucceededOutcome | FailedOutcome, Field(discriminator="kind")]
+outcome_adapter: TypeAdapter[SucceededOutcome | FailedOutcome] = TypeAdapter(ExtractionOutcome)
 
 
 @dataclass(frozen=True, slots=True)

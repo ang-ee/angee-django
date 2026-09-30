@@ -5,18 +5,20 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
-from io import StringIO
 from threading import Barrier
 from traceback import format_exception
+from types import SimpleNamespace
 
 import pytest
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied, ValidationError
-from django.core.management import call_command
+from django.core.exceptions import FieldDoesNotExist, PermissionDenied, ValidationError
 from django.db import close_old_connections, connection, connections
+from django.db.models import CharField
+from django.db.models.deletion import PROTECT
 from django.test import override_settings
-from rebac import actor_context, delete_relationship, system_context
+from rebac import actor_context, system_context
 
+from angee.base.fields import StateField
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import (
     DocumentPart,
@@ -27,9 +29,22 @@ from angee.extraction.contracts import (
 from angee.extraction.managers import StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
 from angee.storage.models import File as AbstractFile
+from angee.workflows_extraction.steps import InferEvidenceInput, InferEvidenceStep
 from tests.conftest import Drive, File, create_platform_admin
 from tests.extraction_models import Extraction, ExtractionLineage, ExtractionPage, ExtractionPart, ExtractionSource
 from tests.test_storage import drive as drive
+
+
+def test_extraction_storage_shape_has_one_target_and_outcome():
+    """The model owns the FK target, revision link and exclusive outcome storage."""
+    assert not isinstance(ExtractionLineage._meta.pk, CharField)
+    for name in ("lineage", "file", "message"):
+        assert Extraction._meta.get_field(name).remote_field.on_delete is PROTECT
+    assert "extraction_one_target" in {constraint.name for constraint in Extraction._meta.constraints}
+    assert isinstance(ExtractionPart._meta.get_field("kind"), StateField)
+    for old in ("lineage_key", "status", "error_code", "provenance", "content_type", "object_id"):
+        with pytest.raises(FieldDoesNotExist):
+            Extraction._meta.get_field(old)
 
 
 class NotesProfile(ExtractionProfile):
@@ -137,7 +152,38 @@ def test_retention_preserves_sources_parts_pages_and_typed_missing_values(eviden
         row.fact("/documents/0/absent")
     with pytest.raises(KeyError):
         row.selected_line(reference.identity, "unknown")
-    assert ExtractionLineage.objects.get(pk=row.lineage_key).head_id == row.pk
+    assert ExtractionLineage.objects.get(pk=row.lineage_id).head_id == row.pk
+
+
+def test_revision_reuses_one_protected_part_carrier(evidence):
+    retain, values = evidence
+    first = retain()
+    second = retain(base=first, request_key="next")
+    assert isinstance(first.lineage_id, int) and second.lineage_id == first.lineage_id
+    assert first.parts.get().carrier_file_id == second.parts.get().carrier_file_id
+    assert second.document_parts()[0].value == values["result"].parts[0].value
+    with pytest.raises(FieldDoesNotExist):
+        ExtractionPart._meta.get_field("value")
+
+
+def test_inference_retry_returns_its_revision_before_head_comparison(evidence):
+    retain, values = evidence
+    base = retain()
+    attempt = retain(base=base, request_key="retry-attempt")
+    later = retain(base=attempt, request_key="later-attempt")
+    assert later.pk != attempt.pk
+    ctx = SimpleNamespace(
+        actor=values["actor"],
+        input=InferEvidenceInput(
+            base_extraction_id=str(base.sqid), base_revision=base.revision,
+            target_model="storage.File", target_id=str(values["target"].sqid),
+        ),
+        idempotency_key="retry-attempt",
+        load=lambda model, public_id: base if model is Extraction else values["target"],
+        done=lambda output, *, outcome: (output, outcome),
+    )
+    output, outcome = InferEvidenceStep().run(ctx)
+    assert outcome == "inferred" and output.extraction_id == str(attempt.sqid)
 
 
 def test_exact_retry_reuses_revision_and_conflicting_request_is_rejected(evidence):
@@ -159,7 +205,7 @@ def test_lineage_compare_and_swap_rejects_a_stale_parent(evidence):
     assert second.document_refs == first.document_refs
     with pytest.raises(ValidationError):
         retain(base=first, request_key="stale")
-    assert ExtractionLineage.objects.get(pk=first.lineage_key).head_id == second.pk
+    assert ExtractionLineage.objects.get(pk=first.lineage_id).head_id == second.pk
     assert Extraction.objects.count() == 2
 
 
@@ -172,7 +218,7 @@ def test_source_order_does_not_fork_the_target_lineage(evidence):
     reordered = (replace(additional, source_position=0), replace(original, source_position=1))
     result = replace(values["result"], parts=(replace(values["result"].parts[0], source_position=1),))
     second = retain(sources=reordered, result=result, request_key="reordered")
-    assert second.lineage_key == first.lineage_key
+    assert second.lineage_id == first.lineage_id
     assert second.revision == first.revision + 1
     assert list(second.sources.values_list("file_id", flat=True)) == [other.pk, original.file.pk]
 
@@ -247,7 +293,7 @@ def test_competing_revision_requests_allocate_exactly_one_successor(evidence):
         results = list(pool.map(revise, ("left", "right")))
     assert results.count(None) == 1
     winner = next(value for value in results if value is not None)
-    assert ExtractionLineage.objects.get(pk=base.lineage_key).head_id == winner
+    assert ExtractionLineage.objects.get(pk=base.lineage_id).head_id == winner
     assert list(Extraction.objects.order_by("revision").values_list("revision", flat=True)) == [1, 2]
 
 
@@ -307,7 +353,7 @@ def test_retained_rows_reject_instance_and_collection_mutation(evidence):
     with system_context(reason="tests.extraction immutable evidence"):
         rows = (
             extraction,
-            ExtractionLineage.objects.get(pk=extraction.lineage_key),
+            ExtractionLineage.objects.get(pk=extraction.lineage_id),
             extraction.sources.get(),
             extraction.pages.get(),
             extraction.parts.get(),
@@ -387,18 +433,11 @@ def test_target_reader_needs_source_access_for_parts_and_cannot_share(evidence):
     assert not part.with_actor(reader).has_access("read")
 
 
-def test_target_access_resync_restores_derived_relations_after_reset(evidence):
+def test_target_access_uses_protected_field_relation(evidence):
     retain, values = evidence
-    author = create_platform_admin("resync-author")
+    author = create_platform_admin("field-author")
     row = retain(actor=author)
-    relationship = row.target_relationship()
-    with system_context(reason="tests extraction target relationship reset"):
-        delete_relationship(relationship)
-    assert not row.with_actor(values["actor"]).has_access("read")
-    output = StringIO()
-    call_command("resync_extraction_access", stdout=output)
-    assert "Restored 1 extraction target relationship" in output.getvalue()
-    assert Extraction.objects.resync_target_access() == 1
+    assert row.file_id == values["target"].pk and row.message_id is None
     assert row.with_actor(values["actor"]).has_access("read")
 
 
@@ -425,7 +464,7 @@ def test_read_only_target_access_cannot_retain_or_advance_lineage(evidence, exis
         retain(actor=reader, base=base, request_key="read-only-revision")
     assert Extraction.objects.count() == int(existing)
     if base is not None:
-        assert ExtractionLineage.objects.get(pk=base.lineage_key).head_id == base.pk
+        assert ExtractionLineage.objects.get(pk=base.lineage_id).head_id == base.pk
 
 
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")

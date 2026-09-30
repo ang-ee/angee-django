@@ -11,7 +11,7 @@ rows:
         nodes:
           prepare_pages:
             step: prepare_pages
-            config: {profile: none}
+            config: {profile: plain_text}
             input:
               files: {from: input, path: [files]}
               message_parts: {from: input, path: [message_parts]}
@@ -29,7 +29,13 @@ rows:
             next: {done: process_evidence, failed: process_evidence}
           process_evidence:
             step: process_evidence
-            config: {profile: none, schema: {}}
+            config:
+              profile: plain_text
+              schema:
+                $id: urn:angee:extraction:plain_text:v1
+                type: object
+                required: [text]
+                properties: {text: {type: string}}
             input:
               prepared: {from: prepare_pages, path: [prepared]}
               recognition: {from: map_pages}

@@ -1,7 +1,10 @@
 # Extraction evidence
 
 Extraction retains immutable source, page and carrier rows together with a
-schema candidate. Profiles supply interpretation through `ExtractionProfile`;
+schema candidate. A lineage foreign key groups revisions, and a tagged `outcome`
+records success or an explicit failure code with grounding facts. Exactly one
+protected `file` or `message` target grants inherited read access through its
+field relation. Profiles supply interpretation through `ExtractionProfile`;
 `ExtractionManager.prepare_pages` acquires bytes, and recognition and mapping
 use `agents.InferenceModel.infer`. Consumers hold a protected reference to
 `Extraction` and read documents, lines and facts through
@@ -15,7 +18,8 @@ snapshot, using a pinned revision and explicit identity correspondence when
 structure changes. Retention
 serializes revision allocation on the lineage head and checks exact request reuse.
 Inference preserves source-grounded facts, correction authority and retained
-carriers. It rechecks source access before model work; explicit correspondence
+carriers. Revisions reference the same digest-bound part files instead of copying
+the full carrier value into each part row. It rechecks source access before model work; explicit correspondence
 finalizes the held candidate without another inference call.
 
 Acquisition and inference run as IO steps with fenced heartbeats, declared retry
@@ -26,9 +30,10 @@ checked again when a later step reads them.
 
 Profiles, schemas, acquisition bounds and model request settings belong to
 author-controlled node config. `ExtractionProfile.parse_config` and frozen
-Pydantic config models validate declarations. Run input supplies record
-references and revision correspondence. The shipped definition defaults to the unconfigured
-profile; an author must select a profile before executing it.
+Pydantic config models validate declarations at publication, including the
+registered profile, its settings and the versioned object schema. Run input supplies record
+references and revision correspondence. The shipped definition declares the
+built-in plain text profile and schema.
 
 The shipped definition runs prepare, a `map` of page recognition, then process.
 Processing consumes the engine's typed `MapItem` results directly; the map's

@@ -32,7 +32,7 @@ EXPECTED_VERBS = {
     "extraction.Extraction.manager": (
         "authorized_document_sources identity_preserving_pipeline_successor inference_authority_base "
         "inference_candidate_selectors inference_current_head latest_succeeded_identity_authority "
-        "prepare_correction_binding prepare_pages resync_target_access retain_result "
+        "prepare_correction_binding prepare_pages retain_result reused_inference "
         "reviewed_correction_authority revise_from_decision"
     ),
     "extraction.Extraction.queryset": "validate_insert",

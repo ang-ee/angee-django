@@ -88,6 +88,17 @@ class TextProfile(ExtractionProfile):
         return Result(value, tuple(parts), claims, ("mapping",), provider_metadata=metadata)
 
 
+@pytest.mark.parametrize("config", [
+    {"profile": "none", "schema": SCHEMA},
+    {"profile": "missing_profile", "schema": SCHEMA},
+    {"profile": "step_text", "schema": {}},
+    {"profile": "step_text", "schema": SCHEMA, "profile_config": {"unknown": True}},
+])
+def test_publication_rejects_invalid_extraction_declarations(config):
+    with pytest.raises(ValidationError):
+        ProcessEvidenceStep.parse_config(config)
+
+
 class DeterministicExtraction:
     """Retained test text without network calls."""
 
@@ -465,7 +476,7 @@ def test_unsupported_source_retains_an_explicit_source_hold(step_evidence):
     )
     assert run.status == "succeeded" and run.outcome == "source_hold"
     row = system_queryset(Extraction).get(sqid=run.output["extraction_id"])
-    assert row.status == "failed" and row.unresolved_reasons == ("unsupported_media_type:0",)
+    assert row.outcome["kind"] == "failed" and row.unresolved_reasons == ("unsupported_media_type:0",)
     inferred = execute(
         InferEvidenceStep,
         {
@@ -509,7 +520,7 @@ def test_partial_recognition_failure_blocks_inference_before_provider_call(step_
     assert processed.status == "succeeded" and processed.outcome == "source_hold"
     base = system_queryset(Extraction).get(sqid=processed.output["extraction_id"])
     with actor_context(actor):
-        assert base.document_parts() and base.error_code == "source_hold"
+        assert base.document_parts() and base.outcome["code"] == "source_hold"
     inferred = execute(
         InferEvidenceStep,
         {

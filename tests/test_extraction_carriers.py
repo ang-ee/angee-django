@@ -50,7 +50,7 @@ def test_reordered_sources_keep_physical_authority_and_remap_claim_positions(evi
     )
     candidate = replace(values["result"], value=reversed_candidate(values), parts=reordered_parts, claims={})
     held = retain(request_key="reordered-hold", sources=reordered_sources, result=candidate)
-    assert held.awaiting_correspondence and held.lineage_key == first.lineage_key
+    assert held.awaiting_correspondence and held.lineage_id == first.lineage_id
     assert first.authority_carrier_positions(held) == {0: 1, 1: 0}
     resolved = retain(
         base=held,
@@ -91,7 +91,7 @@ def test_identical_text_from_another_source_cannot_inherit_authority(evidence):
         parts=(replace(values["result"].parts[0], source_position=1),),
     )
     held = retain(request_key="replacement-hold", sources=(original, replacement_source), result=candidate)
-    assert held.awaiting_correspondence and held.lineage_key == first.lineage_key
+    assert held.awaiting_correspondence and held.lineage_id == first.lineage_id
     assert first.authority_carrier_positions(held) == {}
     with pytest.raises(ValidationError, match="lacks a retained carrier"):
         retain(

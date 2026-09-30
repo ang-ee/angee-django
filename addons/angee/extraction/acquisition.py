@@ -87,11 +87,15 @@ class PartCarrier(BaseModel):
     def restore(self, ctx: Any) -> DocumentPart:
         """Read the envelope only after rechecking its file authority and digest."""
         file = ctx.load(apps.get_model("storage.File"), self.file_id)
-        content = file.read_verified(max_bytes=settings.ANGEE_EXTRACTION_MAX_BYTES, expected_digest=self.content_hash)
-        part = ImplBase.parse_value(json.loads(content), DocumentPart, "part")
+        part = self.read(file)
         if (part.source_position, part.source_page, part.kind) != (self.source_position, self.source_page, self.kind):
             raise ValidationError("The retained part identity changed.")
         return part
+
+    def read(self, file: Any) -> DocumentPart:
+        """Read one protected part envelope from its immutable storage carrier."""
+        content = file.read_verified(max_bytes=settings.ANGEE_EXTRACTION_MAX_BYTES, expected_digest=self.content_hash)
+        return ImplBase.parse_value(json.loads(content), DocumentPart, "part")
 
 
 class SourceSnapshot(BaseModel):

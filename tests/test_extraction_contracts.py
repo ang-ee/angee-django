@@ -31,6 +31,7 @@ from angee.extraction.pointers import (
 from angee.extraction.profiles import (
     EvidenceLayout,
     ExtractionProfile,
+    PlainTextExtractionProfile,
     UnconfiguredExtractionProfile,
 )
 from angee.workflows_extraction.steps import PreparePagesStep, RecognizePageStep
@@ -60,6 +61,16 @@ def test_profile_resolves_through_existing_registry_and_fails_closed():
     assert not profile_class().inference_required({}, [])
     with pytest.raises(ValidationError, match="does not accept configuration"):
         profile_class.parse_config({"retry_of_revision": 3})
+
+
+def test_shipped_plain_text_profile_grounds_each_retained_part(text_part):
+    parts = (text_part, replace(text_part, value="Second page"))
+    result = PlainTextExtractionProfile().process_parts([], parts, {}, config={})
+    assert result.value == {"text": "Alpha 12,50 7.00\nSecond page"}
+    assert result.claims == {"/text": [
+        {"part_position": 0, "start": 0, "end": len(parts[0].value)},
+        {"part_position": 1, "start": 0, "end": len(parts[1].value)},
+    ]}
 
 
 def test_claims_use_exact_text_spans_and_escaped_pointers(text_part):

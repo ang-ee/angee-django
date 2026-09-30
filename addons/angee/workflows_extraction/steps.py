@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, cast
+from typing import Annotated, Any, Literal, cast
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
-from pydantic import BaseModel, ConfigDict, Field
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from angee.base.impl import resolve_impl_class
 from angee.extraction.acquisition import (
     ExtractionConfig,
     ExtractionRequestConfig,
@@ -26,6 +27,7 @@ from angee.extraction.contracts import (
 from angee.extraction.enums import ExtractionRole, ExtractionStatus
 from angee.extraction.inference import RETAINED_CARRIER_UNAVAILABLE, TransientInferenceError, map_parts, recognize_page
 from angee.extraction.managers import StaleExtraction
+from angee.extraction.profiles import ExtractionProfile, UnconfiguredExtractionProfile
 from angee.workflows.maps import MapItem
 from angee.workflows.steps import Done, Retryable, RetryPolicy, Step, StepMode
 
@@ -34,8 +36,20 @@ class ProfileConfig(BaseModel):
     """Author-controlled deterministic profile settings."""
 
     model_config = ConfigDict(extra="forbid")
-    profile: str = Field(default="none", min_length=1)
+    profile: str = Field(min_length=1)
     profile_config: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def published_profile(self) -> ProfileConfig:
+        """Resolve the declared profile and its native typed settings at publish."""
+        try:
+            selected = resolve_impl_class(ExtractionProfile, self.profile)
+            if selected is UnconfiguredExtractionProfile:
+                raise ValueError("Select a configured extraction profile.")
+            selected.parse_config(self.profile_config)
+        except (ValidationError, ImproperlyConfigured) as error:
+            raise ValueError(str(error)) from error
+        return self
 
 
 class ExtractionSourceInput(BaseModel):
@@ -52,6 +66,16 @@ class ProcessEvidenceConfig(ProfileConfig):
     """Published schema and profile used to interpret retained carriers."""
 
     schema_: dict[str, Any] = Field(alias="schema")
+
+    @field_validator("schema_")
+    @classmethod
+    def published_schema(cls, schema: dict[str, Any]) -> dict[str, Any]:
+        """Check schema syntax and version before any recognition can run."""
+        try:
+            ExtractionProfile.check_schema(schema)
+        except ValidationError as error:
+            raise ValueError(str(error)) from error
+        return schema
 
 
 class PreparePagesOutput(BaseModel):
@@ -195,22 +219,49 @@ class ExtractionOutput(BaseModel):
     revision: int = Field(ge=1)
 
 
-class ProcessEvidenceOutput(ExtractionOutput):
-    """Reference and bounded status facts exposed to calling workflows."""
+class SucceededEvidenceOutcome(BaseModel):
+    """Bounded workflow view of a successful retained outcome."""
 
-    status: str
-    error_code: str
+    kind: Literal["succeeded"]
     unresolved_reasons: list[str]
+
+
+class FailedEvidenceOutcome(BaseModel):
+    """Bounded workflow view of a failed retained outcome."""
+
+    kind: Literal["failed"]
+    code: str
+    stage: str | None = None
+    unresolved_reasons: list[str]
+
+
+EvidenceOutcomeSummary = Annotated[
+    SucceededEvidenceOutcome | FailedEvidenceOutcome, Field(discriminator="kind")
+]
+
+
+class ProcessEvidenceOutput(ExtractionOutput):
+    """Reference and bounded outcome facts exposed to calling workflows."""
+
+    outcome: EvidenceOutcomeSummary
 
     @classmethod
     def from_extraction(cls, extraction: Any) -> ProcessEvidenceOutput:
         """Project only the retained row's public identity and processing outcome."""
+        retained = extraction.outcome
+        if retained["kind"] == ExtractionStatus.FAILED:
+            summary: SucceededEvidenceOutcome | FailedEvidenceOutcome = FailedEvidenceOutcome(
+                kind="failed", code=retained["code"], stage=retained.get("stage"),
+                unresolved_reasons=retained.get("unresolved_reasons", []),
+            )
+        else:
+            summary = SucceededEvidenceOutcome(
+                kind="succeeded", unresolved_reasons=retained.get("unresolved_reasons", []),
+            )
         return cls(
             extraction_id=str(extraction.sqid),
             revision=extraction.revision,
-            status=extraction.status,
-            error_code=extraction.error_code,
-            unresolved_reasons=extraction.unresolved_reasons,
+            outcome=summary,
         )
 
 
@@ -250,7 +301,9 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
             )
         except PipelineError as error:
             failure = error
-            result = Result({}, tuple(error.parts) or parts, {}, provider_metadata={"unresolved_reasons": [error.code]})
+            result = Result({}, parts, {}, provider_metadata={"unresolved_reasons": [error.code]})
+        if result.parts != parts:
+            raise ValidationError("The selected profile changed the prepared evidence carriers.")
         if holds:
             result = replace(
                 result, provider_metadata={**(result.provider_metadata or {}), "unresolved_reasons": holds}
@@ -258,6 +311,7 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
         evidence = model.objects.retain_result(
             sources=sources,
             pages=value.prepared.pages,
+            part_carriers=carriers,
             result=result,
             target=target,
             actor=ctx.actor,
@@ -268,14 +322,14 @@ class ProcessEvidenceStep(_IOStep, Step[ProcessEvidenceInput, ProcessEvidenceOut
             recognition_model=_model(ctx, value.recognition_model_id, ExtractionRole.RECOGNITION),
             request_key=ctx.idempotency_key,
             failure=failure,
-            error_code="source_hold" if holds else "",
+            error_code="source_hold" if holds else None,
             identity_mapping=value.identity_mapping,
             retired_identities=value.retired_identities,
         )
         ctx.artifact(evidence, "Document extraction evidence")
         return ctx.done(
             ProcessEvidenceOutput.from_extraction(evidence),
-            outcome="processed" if evidence.status == ExtractionStatus.SUCCEEDED else "source_hold",
+            outcome="processed" if evidence.outcome["kind"] == ExtractionStatus.SUCCEEDED else "source_hold",
         )
 
 
@@ -323,6 +377,19 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
             raise ValidationError("The inference base revision changed.")
         target = ctx.load(apps.get_model(value.target_model), value.target_id)
         base.require_target(target)
+        reused = model.objects.reused_inference(base, ctx.idempotency_key, actor=ctx.actor)
+        if reused is not None:
+            outcome = "correspondence_required" if reused.awaiting_correspondence else (
+                "inference_failed" if reused.outcome["kind"] == ExtractionStatus.FAILED else "inferred"
+            )
+            return ctx.done(
+                InferEvidenceOutput(
+                    **ProcessEvidenceOutput.from_extraction(reused).model_dump(),
+                    inference_failure={"stage": reused.outcome["stage"], "code": reused.outcome["code"]}
+                    if reused.outcome.get("stage") else None,
+                ),
+                outcome=outcome,
+            )
         current = model.objects.inference_current_head(base, actor=ctx.actor)
         if current.pk != base.pk:
             return ctx.done(
@@ -341,7 +408,7 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
             return ctx.done(InferEvidenceOutput(**output), outcome="unchanged")
         sources = type(base).objects.authorized_document_sources(base, actor=ctx.actor)
         parts = base.document_parts()
-        if base.error_code == "source_hold" or not parts:
+        if base.outcome.get("code") == "source_hold" or not parts:
             return ctx.done(
                 InferEvidenceOutput(
                     **output, inference_failure={"stage": "acquisition", "code": RETAINED_CARRIER_UNAVAILABLE}
@@ -418,7 +485,7 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
             )
         ctx.artifact(evidence, "Inferred extraction evidence")
         outcome = "correspondence_required" if evidence.awaiting_correspondence else "inferred"
-        if evidence.status != ExtractionStatus.SUCCEEDED and not evidence.awaiting_correspondence:
+        if evidence.outcome["kind"] != ExtractionStatus.SUCCEEDED and not evidence.awaiting_correspondence:
             outcome = "inference_failed"
         return ctx.done(
             InferEvidenceOutput(

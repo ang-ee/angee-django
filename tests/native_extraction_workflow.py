@@ -29,7 +29,7 @@ from angee.workflows_extraction.steps import ProcessEvidenceInput
 class DeterministicProfile(ExtractionProfile):
     """Interpret only the text retained by the real recognition step."""
 
-    key = "none"
+    key = "plain_text"
 
     def process_parts(self, sources, parts, schema, *, config, recognition_used=False):
         """Preserve successful page text and its claims, including empty input."""
@@ -51,7 +51,7 @@ class ExtractionWorkflowTests(TransactionTestCase):
         self.enterContext(patch("angee.workflows_extraction.steps.recognize_page", side_effect=self.recognize))
         call_command("rebac", "sync", verbosity=0)
         self.enterContext(override_settings(
-            ANGEE_EXTRACTION_PROFILE_CLASSES={"none": f"{__name__}.DeterministicProfile"},
+            ANGEE_EXTRACTION_PROFILE_CLASSES={"plain_text": f"{__name__}.DeterministicProfile"},
         ))
         storage = self.enterContext(TemporaryDirectory(prefix="extraction-composed-", dir="/private/tmp"))
         with system_context(reason="composed extraction fixtures"):
@@ -169,7 +169,7 @@ class ExtractionWorkflowTests(TransactionTestCase):
             self.assertEqual(evidence.sources.count(), 1)
             self.assertEqual(evidence.pages.count(), pages or 1)
             self.assertEqual(evidence.parts.count(), len(successful) if pages else 1)
-            self.assertEqual(evidence.error_code, "source_hold" if fail_page is not None else "")
+            self.assertEqual(evidence.outcome.get("code"), "source_hold" if fail_page is not None else None)
             self.assertEqual(evidence.unresolved_reasons, (
                 (f"recognition_unavailable:0:{fail_page}",) if fail_page is not None else ()
             ))
