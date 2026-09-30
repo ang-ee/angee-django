@@ -15,7 +15,6 @@ from uuid import uuid4
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
 from django.conf import settings
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import Exists, F, Max, OuterRef, Q, Subquery, Value
@@ -331,11 +330,11 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                 readable = read_scoped_queryset(type(subject), actor)
                 if readable is None or not readable.filter(pk=subject.pk).exists():
                     raise PermissionDenied("Read access to the workflow subject is required.")
-            subject_type = ContentType.objects.get_for_model(subject) if subject is not None else None
+            target = canonical_record_target(subject) if subject is not None else None
             identity = dict(
                 run_as_id=actor_user_id(to_subject_ref(actor)),
-                subject_content_type_id=subject_type.pk if subject_type is not None else None,
-                subject_object_id=subject.pk if subject is not None else None,
+                subject_content_type_id=target.content_type.pk if target is not None else None,
+                subject_object_id=target.object_id if target is not None else None,
                 parent_step_id=parent_step.pk if parent_step is not None else None,
                 relation=relation,
             )
@@ -536,7 +535,9 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             with system_context(reason="workflows.reprocess"):
                 if not retained.is_terminal:
                     raise ValidationError("Only terminal runs can be reprocessed.")
-                workflow, subject = retained.version.workflow, retained.subject
+                workflow = retained.version.workflow
+                model = retained.subject_model_class
+                subject = system_queryset(model).get(pk=retained.subject_object_id) if model is not None else None
             return self.start(workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained)
 
     def reopen(self, run: Any) -> None:

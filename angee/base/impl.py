@@ -189,6 +189,8 @@ def freeze_form_schema(schema: Any, initial: Any = _FORM_MISSING) -> None:
         for child in schema.get(key, []):
             freeze_form_schema(child, value)
     if isinstance(value, list) and "items" in schema:
+        if not value:
+            return
         # Per-row immutable values require per-row schemas, not one mutable shared item schema.
         schema["prefixItems"] = [copy.deepcopy(schema["items"]) for _ in value]
         for child, item in zip(schema["prefixItems"], value, strict=True):

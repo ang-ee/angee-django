@@ -119,7 +119,9 @@ def test_share_declarations() -> None:
     assert AbstractAgent.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Task.get_rebac_grantable() == {"reader": "share", "editor": "share"}
     assert Drive.get_rebac_grantable() == {"editor": "write", "viewer": "write"}
-    assert Workflow.get_rebac_grantable() == {"editor": "write", "viewer": "write", "starter": "write"}
+    assert Workflow.get_rebac_grantable() == {
+        "editor": "write", "viewer": "write", "starter": "write", "operator": "write",
+    }
 
 
 @pytest.mark.parametrize("relation,selectable", [("member", True), ("owner", False)])

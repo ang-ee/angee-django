@@ -54,6 +54,28 @@ def test_frozen_form_metadata_and_per_row_defaults_compose_shared_schema_validat
     assert set(validation_issues(schema, values)) == {"1.key"}
 
 
+@pytest.mark.parametrize("declared_default", [False, True])
+def test_empty_array_form_defaults_preserve_valid_item_schemas(declared_default):
+    """No initialized rows means no positional schemas or fabricated readonly values."""
+    item = {"type": "object", "properties": {
+        "key": {"type": "string", "readOnly": True}, "text": {"type": "string"},
+    }}
+    schema = materialize_form_schema({"type": "object", "properties": {
+        "rows": {"type": "array", "items": item},
+    }})
+    if declared_default:
+        schema["properties"]["rows"]["default"] = []
+        freeze_form_schema(schema)
+    else:
+        freeze_form_schema(schema, {"rows": []})
+    values = {}
+    assert validation_issues(schema, values, defaults=True) == {}
+    assert values == {"rows": []}
+    assert schema["properties"]["rows"]["items"] == item
+    assert validation_issues(schema, {"rows": [{"key": "new", "text": "added"}]}) == {}
+    assert set(validation_issues(schema, {"rows": [{"text": 1}]})) == {"rows.0.text"}
+
+
 class _BaseImpl(ImplBase):
     key = "base"
     label = "Base"

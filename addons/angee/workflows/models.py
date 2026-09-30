@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -41,7 +42,7 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
 
     runtime = True
     resource_class = WorkflowDefinitionResource
-    rebac_grantable = {"editor": "write", "viewer": "write", "starter": "write"}
+    rebac_grantable = {"editor": "write", "viewer": "write", "starter": "write", "operator": "write"}
     sqid_prefix = "wfl_"
 
     key = models.SlugField(max_length=100, unique=True)
@@ -178,6 +179,15 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
                 return self.version
         model = self._meta.get_field("version").related_model
         return system_queryset(model).get(pk=self.version_id)
+
+    @property
+    def subject_model_class(self) -> type[models.Model] | None:
+        """Resolve the declared execution type, falling back to the canonical record."""
+        if self.subject_object_id is None:
+            return None
+        with system_context(reason="workflows.subject_policy"):
+            label = self.policy_version.workflow.subject_model or self.record_model_label
+        return apps.get_model(label)
 
     @property
     def is_terminal(self) -> bool:

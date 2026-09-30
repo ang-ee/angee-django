@@ -10,7 +10,7 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
 
-from angee.base.identity import instance_from_public_id
+from angee.base.identity import instance_from_public_id, public_id_for
 from angee.base.scoping import read_scoped_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.managers import ResolvedDecision
@@ -77,12 +77,10 @@ class StepContext:
         return subject
 
     def _subject(self, *, lock: bool) -> models.Model | None:
-        reference = self.run.record_ref
-        if reference.object_id is None:
+        model = self.run.subject_model_class
+        if model is None:
             return None
-        if not reference.model_label:
-            raise ValidationError("The run subject was deleted.")
-        return self.load(apps.get_model(reference.model_label), reference.public_id, lock=lock)
+        return self.load(model, public_id_for(model, self.run.subject_object_id), lock=lock)
 
     def load[M: models.Model](
         self,
