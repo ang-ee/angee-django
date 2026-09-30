@@ -377,7 +377,7 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
             if required is not None:
                 required.require_grant_access(actor)
                 reason = (
-                    f"The workflow principal's {relation} grant on {resource_type}:{resource_id} "
+                    f"The workflow principal's {relation} grant "
                     "was revoked; enable this trigger again."
                 )
                 self._disable(current, reason)

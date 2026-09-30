@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import strawberry_django
 from django.contrib.contenttypes.models import ContentType
@@ -21,7 +21,9 @@ from strawberry_django.utils.typing import get_django_definition, unwrap_type
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import aggregate_scoped_queryset, read_scoped_queryset
 from angee.data.field_classification import is_to_one_relation
+from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path
+from angee.graphql.node import AngeeNode
 
 _UNCACHED = object()
 
@@ -59,6 +61,22 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
     return queryset.annotate(_angee_record_readable=models.ExpressionWrapper(
         readable, output_field=models.BooleanField(),
     ))
+
+
+class RecordReferenceNode(AngeeNode):
+    """Project a generic record reference only while its current target is readable."""
+
+    @classmethod
+    def get_queryset(cls, queryset: models.QuerySet[Any], info: Info) -> models.QuerySet[Any]:
+        return with_record_reference_access(queryset)
+
+    def reference_model(self) -> str | None:
+        row = cast(Any, self)
+        return (row.record_model_label or None) if row._angee_record_readable else None
+
+    def reference_id(self) -> PublicID | None:
+        row = cast(Any, self)
+        return optional_public_id(row.record_public_id or None) if row._angee_record_readable else None
 
 
 def actor_scoped_relation_expression(

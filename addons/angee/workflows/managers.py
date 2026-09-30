@@ -16,7 +16,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import Exists, F, Max, OuterRef, Q, Subquery, Value
+from django.db.models import Exists, F, Max, OuterRef, Q, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
 from pydantic import ValidationError as PydanticValidationError
@@ -654,16 +654,17 @@ class StepRunQuerySet(AngeeQuerySet):
 
     def collect_map(self, expected_count: int) -> list[dict[str, Any]] | None:
         """Collect ordered terminal evidence, or None while body rows remain unsettled."""
-        attempt_model = self.model._meta.get_field("attempts").related_model
-        attempts = attempt_model.objects.filter(step_run_id=OuterRef("pk"), number=OuterRef("attempt"))
-        rows = list(self.order_by("map_index").annotate(item_error=Subquery(attempts.values("error")[:1])))
+        rows = list(self.order_by("map_index"))
         if len(rows) != expected_count or any(row.status not in StepRunStatus.terminal_values() for row in rows):
             return None
         if any(row.status not in (StepRunStatus.SUCCEEDED, StepRunStatus.FAILED) for row in rows):
             raise ValidationError("A canceled or skipped map body cannot produce a result.")
         return [{
             "index": row.map_index, "outcome": row.outcome,
-            **({"error": row.item_error or ""} if row.status == StepRunStatus.FAILED else {"output": row.output}),
+            **(
+                {"error": row.output.get("error", "")}
+                if row.status == StepRunStatus.FAILED else {"output": row.output}
+            ),
         } for row in rows]
 
     @staticmethod
@@ -754,7 +755,7 @@ class StepRunQuerySet(AngeeQuerySet):
         if not attempt.settlement.keeps_watches:
             step_run.watches.all().delete()
         if step_run.attempts.filter(number=step_run.attempt).close(
-            attempt.result, attempt.error, attempt.stacktrace,
+            attempt.result, attempt.diagnostic_error or attempt.error, attempt.stacktrace,
         ) != 1:
             raise Superseded
 

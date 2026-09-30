@@ -50,6 +50,7 @@ class _AttemptRecord:
     settlement: _Settlement
     result: AttemptResult = cast(AttemptResult, AttemptResult.SUCCEEDED)
     error: str = ""
+    diagnostic_error: str | None = None
     stacktrace: str = ""
     retryable: bool = False
     timed_out: bool = False
@@ -62,13 +63,15 @@ class _AttemptRecord:
 
     @classmethod
     def failure(
-        cls, error: str, *, stacktrace: str = "", retryable: bool = False, timed_out: bool = False,
+        cls, error: str, *, diagnostic_error: str | None = None, stacktrace: str = "",
+        retryable: bool = False, timed_out: bool = False,
     ) -> _AttemptRecord:
         return cls(
             Fail(error=error), result=cast(
                 AttemptResult, AttemptResult.TIMED_OUT if timed_out else AttemptResult.FAILED,
             ),
-            error=error, stacktrace=stacktrace, retryable=retryable, timed_out=timed_out,
+            error=error, diagnostic_error=diagnostic_error, stacktrace=stacktrace,
+            retryable=retryable, timed_out=timed_out,
         )
 
 
@@ -162,7 +165,8 @@ class Runner:
                         # cannot replace it. A failed settlement still owns its fence.
                         if step_runs.filter(pk=step_run.pk, status=StepRunStatus.RUNNING).exists():
                             step_runs.settle(step_run, _AttemptRecord.failure(
-                                attempt_error, stacktrace=traceback.format_exc(), timed_out=timed_out,
+                                run_error, diagnostic_error=attempt_error,
+                                stacktrace=traceback.format_exc(), timed_out=timed_out,
                             ))
                             recorded_on_attempt = True
                 with _record_failure("attempt close"):

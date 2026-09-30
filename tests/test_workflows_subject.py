@@ -16,12 +16,13 @@ from rebac import (
 )
 
 from angee.base.scoping import system_queryset
+from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import run_until
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun, WorkflowRunEvidence
-from tests.conftest import create_user, vault_for
+from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.workflow_steps import Echo, document
 
@@ -237,6 +238,16 @@ def test_entry_record_input_is_checked_deduplicated_and_retained(execution, regi
         workflow, actor=actor, subject=source, input=payload, request_key="input-evidence",
     ).pk == run.pk
     assert system_queryset(WorkflowRunEvidence).filter(run=run).count() == 2
+    viewer = create_user("record-input-viewer")
+    run.with_actor(actor).grant_record_access("reader", viewer)
+    schema = addon_schema(workflow_schema.schemas, "console")
+    hidden_input = result_data(execute_schema(
+        schema, "query($id: String!) { workflowrun_by_pk(id: $id) { input } }",
+        {"id": run.sqid}, user=viewer,
+    ))["workflowrun_by_pk"]["input"]
+    assert hidden_input == {
+        "source": None, "nested": {"record": None}, "records": [None], "plain": private.sqid,
+    }
 
     payload["nested"]["record"] = private.sqid
     with pytest.raises(PermissionDenied, match="referenced record"):

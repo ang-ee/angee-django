@@ -19,7 +19,7 @@ from angee.workflows.states import AttemptResult, RunStatus, StepRunStatus
 from angee.workflows.steps import Step, StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepArtifact, StepAttempt, StepRun, WorkflowRun
-from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
+from tests.conftest import SchemaAddon, create_user, execute_schema, result_data, vault_for
 from tests.workflow_steps import Value, document
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
@@ -164,6 +164,30 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
     assert len(many) == len(one)
     artifact.label = ""
     assert str(artifact) == artifact.sqid
+
+
+def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schema, callers, register_step):
+    admin, owner, reader = callers
+    source = vault_for(owner, name="Private artifact")
+
+    class ArtifactStep(Step[Value, Value, None]):
+        key = "private_artifact"
+
+        def run(self, ctx):
+            ctx.artifact(source, label="Private source")
+            return ctx.done(ctx.input)
+
+    register_step(ArtifactStep)
+    workflow = load_workflow(document("entry", step=ArtifactStep.key), actor=admin)
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    run = start_run(workflow, actor=owner, input={"value": 1})
+    run_until(run)
+    run.with_actor(owner).grant_record_access("reader", reader)
+    query = "{ stepartifact { record_model record_id } steprun { artifacts { record_model record_id } } }"
+    hidden = {"record_model": None, "record_id": None}
+    assert result_data(execute_schema(schema, query, user=reader)) == {
+        "stepartifact": [hidden], "steprun": [{"artifacts": [hidden]}],
+    }
 
 
 def test_cancel_action_checks_requester_before_calling_owner(schema, callers):

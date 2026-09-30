@@ -405,19 +405,17 @@ def test_explicit_correspondence_finalizes_the_held_candidate_without_inference(
     assert DeterministicExtraction.calls == []
 
 
-def test_unreadable_original_source_blocks_inference_before_provider_call(step_evidence):
+def test_cross_target_original_source_is_rejected_before_inference(step_evidence):
     admin, source = step_evidence
     processed = prepare_and_process(admin, source)
     original = system_queryset(Extraction).get(sqid=processed.output["extraction_id"])
-    model = system_queryset(InferenceModel).get()
-    with actor_context(admin):
-        reader = model.provider.owner
+    reader = get_user_model().objects.create_user(username="separate-target-owner")
     with actor_context(reader):
         target = File.objects.ingest_bytes(
             b"Separate target", filename="target.txt", owner_id=reader.pk, drive_id=str(source.drive.sqid)
         )
-    with actor_context(admin):
-        base = Extraction.objects.retain_result(
+    with actor_context(admin), pytest.raises(ValidationError, match="belongs to the extraction target"):
+        Extraction.objects.retain_result(
             sources=original.document_sources(),
             result=Result(
                 original.result,
@@ -429,30 +427,9 @@ def test_unreadable_original_source_blocks_inference_before_provider_call(step_e
             actor=admin,
             profile=TextProfile.key,
             schema=SCHEMA,
-            model=model,
             request_key="separate_target",
         )
-    assert base.with_actor(reader).has_access("read") and model.with_actor(reader).has_access("read")
-    assert not source.with_actor(reader).has_access("read")
-    workflow = load_workflow(
-        {"nodes": {"entry": {"step": InferEvidenceStep.key, "config": {}}}},
-        key="protected_source",
-        actor=admin,
-    )
-    workflow.with_actor(admin).grant_record_access("starter", reader)
-    run = WorkflowRun.objects.start(
-        workflow,
-        actor=reader,
-        input={
-            "base_extraction_id": str(base.sqid),
-            "base_revision": base.revision,
-            "target_model": "storage.File",
-            "target_id": str(target.sqid),
-        },
-    )
-    run_until(run)
-    assert system_queryset(WorkflowRun).get(pk=run.pk).status == "failed"
-    assert "declared permission" in system_queryset(StepAttempt).get(step_run__run=run).error
+    assert "infer" not in DeterministicExtraction.calls
     assert DeterministicExtraction.calls == ["prepare"]
 
 

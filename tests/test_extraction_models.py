@@ -216,18 +216,13 @@ def test_lineage_compare_and_swap_rejects_a_stale_parent(evidence):
     assert Extraction.objects.count() == 2
 
 
-def test_source_order_does_not_fork_the_target_lineage(evidence):
+def test_file_extraction_rejects_sources_outside_its_target(evidence):
     retain, values = evidence
     other = File.objects.ingest_bytes(b"Another note", filename="other.txt", drive_id=str(values["target"].drive.sqid))
     original = values["sources"][0]
     additional = DocumentSource(1, other.content_hash, "text/plain", b"Another note", file=other)
-    first = retain(sources=(original, additional))
-    reordered = (replace(additional, source_position=0), replace(original, source_position=1))
-    result = replace(values["result"], parts=(replace(values["result"].parts[0], source_position=1),))
-    second = retain(sources=reordered, result=result, request_key="reordered")
-    assert second.lineage_id == first.lineage_id
-    assert second.revision == first.revision + 1
-    assert list(second.sources.values_list("file_id", flat=True)) == [other.pk, original.file.pk]
+    with pytest.raises(ValidationError, match="belongs to the extraction target"):
+        retain(sources=(original, additional))
 
 
 @pytest.mark.parametrize(
@@ -401,7 +396,8 @@ def test_retention_requires_independent_source_and_target_read_access(evidence, 
         changes = {"sources": (replace(values["sources"][0], file=other),)}
     else:
         changes = {"target": other}
-    with pytest.raises(PermissionDenied):
+    expected = ValidationError if protected == "source" else PermissionDenied
+    with pytest.raises(expected):
         retain(**changes)
     assert Extraction.objects.count() == 0
 
@@ -418,25 +414,23 @@ def test_target_reader_inherits_evidence_access_without_receiving_ownership(evid
         assert not evidence_row.with_actor(outsider).has_access("read")
 
 
-def test_target_reader_needs_source_access_for_parts_and_cannot_share(evidence):
+def test_target_reader_can_read_bound_parts_but_cannot_share(evidence):
     retain, values = evidence
     owner = values["actor"]
     reader = get_user_model().objects.create_user(username="target-only-reader")
     onward = get_user_model().objects.create_user(username="onward-reader")
-    target = File.objects.ingest_bytes(b"Target", filename="target.txt", drive_id=str(values["target"].drive.sqid))
-    row = retain(target=target)
+    target = values["target"]
+    row = retain()
     part = row.parts.get()
     target.with_actor(owner).grant_record_access("viewer", reader)
     assert row.with_actor(reader).has_access("read")
-    assert not part.with_actor(reader).has_access("read")
+    assert part.with_actor(reader).has_access("read")
     with actor_context(reader), pytest.raises(PermissionDenied):
         row.with_actor(reader).grant_record_access("viewer", onward)
     row.with_actor(owner).grant_record_access("viewer", onward)
     assert row.with_actor(onward).has_access("read")
     assert not part.with_actor(onward).has_access("read")
-    values["target"].with_actor(owner).grant_record_access("viewer", reader)
-    assert part.with_actor(reader).has_access("read")
-    values["target"].with_actor(owner).revoke_record_access("viewer", reader)
+    target.with_actor(owner).revoke_record_access("viewer", reader)
     assert not part.with_actor(reader).has_access("read")
 
 

@@ -306,7 +306,7 @@ def test_expired_attempt_rejects_every_context_fence_before_reaping(execution, r
     attempt = system_queryset(StepAttempt).get(step_run=step)
     assert attempt.effect_started_at is None and attempt.finished_at is None
     assert runner.reap() == 1
-    assert retained_step(run).output == {}
+    assert retained_step(run).output == {"error": "The attempt deadline expired."}
 
 
 def test_retry_names_other_unrouted_failures_without_reopening_the_run(execution, register_step):
