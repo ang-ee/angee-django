@@ -16,6 +16,8 @@ export const decisionResourceFixture = testDataResource("decisions.Decision", {
   recordRepresentation: "kind_label",
   fields: [{ name: "verdict", kind: "enum", scalar: "String", values: verdicts, readable: true,
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
+  }, { name: "assignees", kind: "list", scalar: null, relationModelLabel: "iam.User", readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
   }],
   roots: { list: "decisions", detail: "decisions_by_pk", aggregate: "decisions_aggregate" },
   typeNames: { filter: "decisions_bool_exp", order: "decisions_order_by" },
@@ -25,6 +27,8 @@ export const decisionResourceFixture = testDataResource("decisions.Decision", {
       "assignees", "requester", "closed_reason", "expires_at", "group", "group.id",
       "resolved_by", "resolved_at", "resolved_by.display_name", "revision", "can_act", "form_schema", "basis", "context", "resolution",
     ].map((name) => [name, testQueryField(name)])),
+    id: testQueryField("id", { filter: { field: "id", scalar: "String", values: [], operators: ["exact", "ne", "inList"] } }),
+    assignees: testQueryField("assignees", { kind: "list", scalar: null, row: null }),
     verdict: testQueryField("verdict", { values: verdicts }),
     index: testQueryField("index", { scalar: "Int", sort: { field: "index" } }),
     created_at: testQueryField("created_at", { sort: { field: "created_at" } }),
@@ -32,6 +36,13 @@ export const decisionResourceFixture = testDataResource("decisions.Decision", {
       filter: { field: "is_open", scalar: "Boolean", values: [], operators: ["exact"] },
     }),
   } }),
+});
+
+export const decisionUserFixture = testDataResource("iam.User", {
+  recordRepresentation: "display_name",
+  capabilities: ["detail"], roots: { detail: "user_by_pk" },
+  fields: [{ name: "display_name", kind: "scalar", scalar: "String", readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false }],
 });
 
 /** Frozen neutral question shared by decision page, slot, and story fixtures. */

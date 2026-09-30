@@ -198,6 +198,24 @@ describe("relationRepresentationForPath", () => {
     expect(() => relationRepresentationForPath("project", broken.labels["projects.Initiative"]!, broken)).toThrow(/no finalized selectable representation/);
   });
 
+  test("selects a to-many relation's record identities and labels", () => {
+    const seat = testDataResource("decisions.Seat", {
+      fields: [field("assignees", "list", { scalar: null, relationModelLabel: "iam.User" })],
+    });
+    const user = testDataResource("iam.User", {
+      recordRepresentation: "display_name",
+      fields: [field("display_name", "scalar", { scalar: "String" })],
+    });
+    const resources = schemaFieldMetadataFromDataResources([seat, user]);
+    const model = resources.labels["decisions.Seat"]!;
+    expect(relationRepresentationForPath("assignees", model, resources)).toEqual({
+      selectionPaths: ["assignees.id", "assignees.display_name"],
+      displayPath: "assignees.display_name",
+      relationList: { model: "iam.User", identityPath: "id", labelPath: "display_name" },
+    });
+    expect(resourceReadSelectionPaths(model, resources)).toEqual(["id"]);
+  });
+
 });
 
 describe("resourceReadSelectionPaths", () => {

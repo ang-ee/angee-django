@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
 
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { schemaFieldMetadataFromDataResources, type ModelMetadata } from "@angee/metadata";
 import { testDataResource, testQueryField } from "@angee/metadata/testing";
 import { getCoreRowModel, useReactTable, flexRender } from "@tanstack/react-table";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { AppRuntimeProvider, createRouteHref } from "../../runtime";
+import { createUiTestProviders } from "../../testing";
 
 import {
   buildColumns,
@@ -18,6 +20,8 @@ import {
 vi.mock("../../i18n", () => ({
   useUiT: () => (key: string) => key,
 }));
+
+afterEach(cleanup);
 
 test.each([undefined, "text", "statusBadge"])("conditional cells hide ordinary values and %s widgets", (widget) => {
   const column = { field: "status", widget, showWhen: (row: { visible: boolean }) => row.visible };
@@ -160,6 +164,35 @@ test("renders metadata enum labels in the normal list-cell path", () => {
   const metadata = schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!;
   render(<ListCellContent column={{ field: "status" }} row={{ status: "PENDING" }} metadata={metadata} />);
   expect(screen.getByText("Needs approval")).toBeTruthy();
+});
+
+test("to-many relation cells link each retained record label without another read", () => {
+  const user = testDataResource("iam.User", { recordRepresentation: "display_name" });
+  const { Provider, clearClients } = createUiTestProviders({ resources: [user] });
+  const getOne = vi.fn();
+  const runtime = {
+    routeHref: createRouteHref([{ name: "iam.users", path: "/iam/users" }, { name: "iam.users.record", path: "/iam/users/$id" }]),
+    routesByResource: { "iam.User": { collection: "iam.users", record: { name: "iam.users.record", param: "id" } } },
+  };
+  try {
+    render(<Provider dataProvider={{ getOne }}><AppRuntimeProvider runtime={runtime}>
+      <ListCellContent
+        column={{ field: "assignees", relationList: {
+          model: "iam.User", identityPath: "id", labelPath: "display_name",
+        } }}
+        row={{ assignees: [
+          { id: "usr_1", display_name: "Ada" },
+          { id: "usr_2", display_name: "Lin" },
+        ] }}
+      />
+    </AppRuntimeProvider></Provider>);
+    expect(screen.getByRole("link", { name: "Ada" }).getAttribute("href")).toBe("/iam/users/usr_1");
+    expect(screen.getByRole("link", { name: "Lin" }).getAttribute("href")).toBe("/iam/users/usr_2");
+    expect(getOne).not.toHaveBeenCalled();
+  } finally {
+    cleanup();
+    clearClients();
+  }
 });
 
 test("renders query enum labels from wire values and preserves declared row aliases", () => {

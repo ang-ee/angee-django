@@ -18,7 +18,7 @@ import type { ModelFieldMetadata } from "@angee/metadata";
 import type { WidgetOption } from "../../widgets";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
 import { titleCase } from "../../lib/titleCase";
-import { enumValueLabel, groupFieldLabel } from "./resource-view-list-body";
+import { enumValueLabel, groupFieldLabel } from "../../lib/labels";
 
 /** A form field's resolved relation target — which model the picker lists, its
  * display field, and whether the related model can be created inline. */
@@ -235,10 +235,9 @@ export function columnsWithMetadataDefaults<TRow extends object>(
   return columns.map((column) => {
     const field = metadata?.fields[column.field];
     const options = enumOptions(field);
-    // A relation-terminal column (`product` or `project.product`) names a GraphQL
-    // object, which cannot be selected as a leaf. The metadata owner resolves its
-    // id + record-representation leaves and the scalar display path, so the query
-    // selects `{ product { id name } }` and the cell reads `product.name`.
+    // A relation-terminal column names a GraphQL object or object list, neither
+    // selectable as a leaf. The metadata owner supplies identity and display
+    // paths; a to-one cell reads the label path and a to-many cell renders records.
     const relationRepresentation = metadata
       ? relationRepresentationForPath(
           column.field,
@@ -246,7 +245,7 @@ export function columnsWithMetadataDefaults<TRow extends object>(
           schemaMetadata ?? EMPTY_SCHEMA_FIELD_METADATA,
         )
       : null;
-    const relationLabelField = column.render
+    const relationLabelField = column.render || relationRepresentation?.relationList
       ? null
       : relationRepresentation?.displayPath ?? null;
     return {
@@ -254,6 +253,9 @@ export function columnsWithMetadataDefaults<TRow extends object>(
       ...(relationLabelField ? { field: relationLabelField } : {}),
       ...(relationRepresentation
         ? { selectionPaths: relationRepresentation.selectionPaths }
+        : {}),
+      ...(relationRepresentation?.relationList
+        ? { relationList: relationRepresentation.relationList, interactive: column.interactive ?? true }
         : {}),
       header: fieldLabel(column.field, field, column.header),
       // A bare column inherits the backend's explicit widget (e.g. `"money"` over a

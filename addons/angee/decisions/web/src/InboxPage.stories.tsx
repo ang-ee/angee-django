@@ -6,7 +6,7 @@ import { createRouteHref, isJsonObject, JsonValueSchema } from "@angee/ui";
 
 import { InboxPage } from "./InboxPage";
 import { DECISION_MODEL } from "./documents.console";
-import { decisionFixture, decisionGroupFixture, decisionResourceFixture, decisionSubjectFixture } from "./testing";
+import { decisionFixture, decisionGroupFixture, decisionResourceFixture, decisionSubjectFixture, decisionUserFixture } from "./testing";
 
 export default { title: "Decisions/Inbox", parameters: { layout: "fullscreen" } };
 export const Open = { render: () => <DecisionStory /> };
@@ -20,10 +20,11 @@ export const ReadOnly = { render: () => <DecisionStory readOnly /> };
 const RequestSchema = v.object({ query: v.string(), variables: v.optional(v.record(v.string(), JsonValueSchema), {}) });
 const documents = { console: operationDocuments };
 const runtime = {
-  routeHref: createRouteHref([{ name: "decisions.inbox", path: "/decisions" }, { name: "decisions.inbox.record", path: "/decisions/$id" }, { name: "notes", path: "/notes" }, { name: "notes.record", path: "/notes/$id" }]),
+  routeHref: createRouteHref([{ name: "decisions.inbox", path: "/decisions" }, { name: "decisions.inbox.record", path: "/decisions/$id" }, { name: "notes", path: "/notes" }, { name: "notes.record", path: "/notes/$id" }, { name: "iam.users", path: "/iam/users" }, { name: "iam.users.record", path: "/iam/users/$id" }]),
   routesByResource: {
     [DECISION_MODEL]: { collection: "decisions.inbox", record: { name: "decisions.inbox.record", param: "id" } },
     "notes.Note": { collection: "notes", record: { name: "notes.record", param: "id" } },
+    "iam.User": { collection: "iam.users", record: { name: "iam.users.record", param: "id" } },
   },
   auth: { user: { id: "usr_reviewer", name: "Reviewer" }, status: "authenticated" as const, hasRole: () => false },
 };
@@ -58,12 +59,13 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
       }
       if (query.includes("decisions_by_pk")) return jsonResponse({ data: { decisions_by_pk: { ...current, kind_label: "Review" } } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
-      return jsonResponse({ data: { decisions: [{ ...current, kind_label: "Review" }], decisions_aggregate: { aggregate: { count: 1 } } } });
+      return jsonResponse({ data: { decisions: [{ ...current, kind_label: "Review", assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }] }], decisions_aggregate: { aggregate: { count: 1 } } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       decisionResourceFixture,
       decisionGroupFixture,
       decisionSubjectFixture,
+      decisionUserFixture,
     ] } } } };
   }, [settled, conflict, invalidAttempt, readOnly, emptyFacts]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/decisions" initialEntry={inbox ? "/decisions" : "/decisions/dcn_review"}

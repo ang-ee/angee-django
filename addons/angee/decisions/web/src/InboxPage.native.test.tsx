@@ -26,6 +26,13 @@ describe("decision stories with native router, queries, and generated mutations"
     }
   });
 
+  test("context loads seats and links their assignees", async () => {
+    render(Open.render());
+    fireEvent.click(await screen.findByRole("tab", { name: "Context" }));
+    expect((await screen.findByRole("link", { name: "Reviewer" })).getAttribute("href"))
+      .toBe("/iam/users/usr_reviewer");
+  });
+
   test("settled records omit empty facts and retain populated settlement facts", async () => {
     const { unmount } = render(SettledWithoutFacts.render());
     await screen.findByText(/Already reviewed/);

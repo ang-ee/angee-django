@@ -6,7 +6,7 @@ import type { FilterClauseField, ResourceToolbarFilterOption } from "../../../to
 import { DEFAULT_TEXT_FILTER_FIELD } from "../resource-view-model";
 import { readPath } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
-import { fieldLabel } from "../model-metadata-defaults";
+import { enumOptions, fieldLabel } from "../model-metadata-defaults";
 export function buildFilterOptions<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   rows: readonly TRow[],
@@ -64,7 +64,12 @@ export function buildFilterFields<TRow extends Row>(
     if (!filterType) return;
     seen.add(fieldName);
     if (filterType === "selection") {
-      const options = capability.values.map(({ value, description }) => ({ value, label: description ?? statusLabel(value) }));
+      const enumLabels = new Map((field?.kind === "enum" ? enumOptions(field) : [])
+        .map(({ value, label }) => [value, label]));
+      const options = capability.values.map(({ value, description }) => ({
+        value,
+        label: enumLabels.get(value) ?? description ?? statusLabel(value),
+      }));
       fields.push({
         id: fieldName,
         field: fieldName,

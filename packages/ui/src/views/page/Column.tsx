@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { QueryField } from "@angee/metadata";
+import type { QueryField, RelationRepresentationSelection } from "@angee/metadata";
 import type { Tone } from "../../lib/tones";
 import type { WidgetOption } from "../../widgets/types";
 
@@ -41,8 +41,10 @@ export interface ColumnDescriptor<
   field: string;
   /** Native query metadata for a resolved column's projected values. */
   queryField?: QueryField;
-  /** Concrete GraphQL leaf paths selected when `field` names an object relation. */
+  /** Concrete GraphQL leaf paths selected when `field` names an object relation or list. */
   selectionPaths?: readonly string[];
+  /** Related record presentation resolved from resource metadata for an object list. */
+  relationList?: NonNullable<RelationRepresentationSelection["relationList"]>;
   header?: ReactNode;
   /** Keep an accessible table header while visually hiding its label. */
   headerVisuallyHidden?: boolean;
