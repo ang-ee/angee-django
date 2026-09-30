@@ -22,6 +22,14 @@ chatter: [recordPagesContribution({
 The configured role is passed to the same binding query and write controls.
 The record owner continues to own the permission arm and any route tab policy.
 
+For dated, role-scoped notes, use `RecordNotesStream({ target, role, vault,
+heading, composer })` in a record section or `recordNotesContribution({ id,
+label, role, vault, heading, composer, when })` in chatter. `vault` is the public
+vault id. The stream reads page content through the binding query and offers its
+inline composer only when the record can be bound and that vault projects `write`.
+It creates a note page, writes its markdown body, then binds it under `role`.
+The existing Pages tab keeps its binding and inline reader behavior.
+
 Page access follows the current schema. The former one-shot author-attribution
 transition and its management command were removed before any deployment used
 them; schema sync is the only policy transition for this addon.

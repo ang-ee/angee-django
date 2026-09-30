@@ -2,11 +2,11 @@ import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import { Button, EmptyState, ErrorBanner, Select, Skeleton, SkeletonStatus, errorMessage, useRuntimeViewAs, type ChatterContribution, type ChatterViewContext } from "@angee/ui";
 import { useMemo, useState, type ReactElement } from "react";
 
-import { KNOWLEDGE_LIST_LIMIT, KnowledgeBindRecord, KnowledgePages, KnowledgeRecordPages, KnowledgeUnbindRecord } from "./data/documents";
+import { KNOWLEDGE_LIST_LIMIT, KnowledgeBindRecord, KnowledgePages, KnowledgeRecordPages, KnowledgeUnbindRecord, RECORD_BINDING_MODEL } from "./data/documents";
 import { useKnowledgeT } from "./i18n";
 import { KnowledgePageView } from "./KnowledgePageView";
 
-const BINDING_MODELS = ["knowledge.RecordBinding"] as const;
+const BINDING_MODELS = [RECORD_BINDING_MODEL] as const;
 
 /** The chatter tab's record, as the pane expects it. */
 export function recordPagesTarget(context: ChatterViewContext): RecordPagesTarget {

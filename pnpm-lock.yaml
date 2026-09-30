@@ -383,6 +383,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
       '@angee/metadata':
         specifier: workspace:*
         version: link:../../../../packages/metadata
