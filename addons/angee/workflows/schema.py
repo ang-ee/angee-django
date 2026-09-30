@@ -7,7 +7,6 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db import models
 from django.db.models import Prefetch
 from rebac.resources import model_for_resource_type
 from strawberry import auto
@@ -24,7 +23,12 @@ from angee.graphql.actions import (
 from angee.graphql.data import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one, with_record_reference_access
+from angee.graphql.relations import (
+    RecordReferenceNode,
+    actor_scoped_to_many,
+    actor_scoped_to_one,
+    with_record_reference_access,
+)
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
@@ -76,7 +80,7 @@ class WorkflowVersionType(AngeeNode):
 
 
 @strawberry_django.type(WorkflowRun)
-class WorkflowRunType(AngeeNode):
+class WorkflowRunType(RecordReferenceNode):
     """Execution state, admission and result visible through the run's policy."""
 
     version: WorkflowVersionType | None = actor_scoped_to_one("version")
@@ -88,7 +92,17 @@ class WorkflowRunType(AngeeNode):
     run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
     origin: RunOrigin
-    input: JSON
+    @strawberry_django.field(only=["input", "version_id"])
+    def input(self, info: strawberry.Info) -> JSON:
+        """Keep non-reference input while checking marked sources at read time."""
+        run = cast(Any, self)
+        evidence = read_scoped_queryset(WorkflowRunEvidence, request_from_info(info).user)
+        readable: set[tuple[str, str]] = set()
+        if evidence is not None:
+            for row in with_record_reference_access(evidence.filter(run_id=run.pk)):
+                if row._angee_record_readable:
+                    readable.add((row.record_model_label.lower(), row.record_public_id))
+        return run.policy_version.definition.redacted_input(run.input, readable)
     output: JSON
     outcome: auto
     error: str | None
@@ -107,40 +121,25 @@ class WorkflowRunType(AngeeNode):
         """Project the model's viewer-specific replacement admission predicate."""
         return bool(cast(Any, self).can_reprocess(request_from_info(info).user))
 
-    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
-    def subject_model(self) -> str:
-        """Return the referenced model without loading the subject record."""
-        return cast(Any, self).record_model_label
-
-    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
-    def subject_id(self) -> PublicID | None:
-        """Return the subject's public identity; navigation rechecks its policy."""
-        return optional_public_id(cast(Any, self).record_public_id or None)
+    subject_model: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["subject_content_type_id", "subject_object_id"],
+    )
+    subject_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["subject_content_type_id", "subject_object_id"],
+    )
 
 
 @strawberry_django.type(WorkflowRunEvidence)
-class WorkflowRunEvidenceType(AngeeNode):
+class WorkflowRunEvidenceType(RecordReferenceNode):
     """A retained run input reference, redacted when its source is unreadable."""
 
-    @classmethod
-    def get_queryset(cls, queryset: models.QuerySet, info: strawberry.Info) -> models.QuerySet:
-        """Compose the canonical record-read annotation for source projection."""
-        return with_record_reference_access(queryset)
-
     run: WorkflowRunType | None = actor_scoped_to_one("run")
-
-    @strawberry_django.field(only=["content_type_id", "object_id"])
-    def record_model(self) -> str | None:
-        """Expose a target label only while the viewer can read that record."""
-        return cast(Any, self).record_model_label if cast(Any, self)._angee_record_readable else None
-
-    @strawberry_django.field(only=["content_type_id", "object_id"])
-    def record_id(self) -> PublicID | None:
-        """Expose a public ID only while the viewer can read that record."""
-        return (
-            optional_public_id(cast(Any, self).record_public_id or None)
-            if cast(Any, self)._angee_record_readable else None
-        )
+    record_model: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+    )
+    record_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+    )
 
 
 @strawberry_django.type(StepRun)
@@ -227,24 +226,21 @@ class StepAttemptType(AngeeNode):
 
 
 @strawberry_django.type(StepWatch)
-class StepWatchType(AngeeNode):
+class StepWatchType(RecordReferenceNode):
     """A waiting step's reference, visible through its execution read policy."""
 
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
 
-    @strawberry_django.field(only=["content_type_id", "object_id"])
-    def record_model(self) -> str:
-        """Project the watched target through the shared reference owner."""
-        return cast(Any, self).record_model_label
-
-    @strawberry_django.field(only=["content_type_id", "object_id"])
-    def record_id(self) -> PublicID:
-        """Project the watched target's public identity."""
-        return PublicID(cast(Any, self).record_public_id)
+    record_model: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+    )
+    record_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+    )
 
 
 @strawberry_django.type(StepArtifact)
-class StepArtifactType(AngeeNode):
+class StepArtifactType(RecordReferenceNode):
     """A step's labeled reference to a record, governed by its execution policy."""
 
     display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["label"])
@@ -252,15 +248,12 @@ class StepArtifactType(AngeeNode):
     label: auto
     created_at: auto
 
-    @strawberry_django.field(only=["content_type_id", "object_id"])
-    def record_model(self) -> str:
-        """Project target identity through the shared record-reference owner."""
-        return cast(Any, self).record_model_label
-
-    @strawberry_django.field(only=["content_type_id", "object_id"])
-    def record_id(self) -> PublicID:
-        """Return the artifact target's public id; navigation rechecks its policy."""
-        return PublicID(cast(Any, self).record_public_id)
+    record_model: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+    )
+    record_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+    )
 
 
 @strawberry.type
@@ -318,13 +311,8 @@ class TriggerType(AngeeNode):
 
 
 @strawberry_django.type(TriggerEvent)
-class TriggerEventType(AngeeNode):
+class TriggerEventType(RecordReferenceNode):
     """Durable admission evidence with a started run until that run is pruned."""
-
-    @classmethod
-    def get_queryset(cls, queryset: models.QuerySet, info: strawberry.Info) -> models.QuerySet:
-        """Keep record identity private even when the editor can inspect admission."""
-        return with_record_reference_access(queryset)
 
     trigger: TriggerType | None = actor_scoped_to_one("trigger")
     started_run: WorkflowRunType | None = actor_scoped_to_one("started_run", reverse=True)
@@ -333,18 +321,12 @@ class TriggerEventType(AngeeNode):
     admitted_at: auto
     rejection: auto
 
-    @strawberry_django.field(only=["record_content_type_id", "record_object_id"])
-    def record_model(self) -> str | None:
-        """Expose the reference model only while its record is readable."""
-        return cast(Any, self).record_model_label if cast(Any, self)._angee_record_readable else None
-
-    @strawberry_django.field(only=["record_content_type_id", "record_object_id"])
-    def record_id(self) -> PublicID | None:
-        """Expose the public identity only while its record is readable."""
-        return (
-            optional_public_id(cast(Any, self).record_public_id or None)
-            if cast(Any, self)._angee_record_readable else None
-        )
+    record_model: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["record_content_type_id", "record_object_id"],
+    )
+    record_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["record_content_type_id", "record_object_id"],
+    )
 
 
 _WORKFLOW_RESOURCE = hasura_model_resource(
@@ -362,7 +344,7 @@ _RUN_RESOURCE = hasura_model_resource(
     filterable=["id", "version", "version__workflow", "version__workflow__key", "parent_step", "parent_step__run",
                 "run_as", "status", "origin", "outcome", "reprocess_of", "trigger_event",
                 "created_at", "finished_at"],
-    record_ref_filters=("subject_model", "subject_id"),
+    record_ref_filters=("subject_model", "subject_id"), record_ref_requires_read=True,
     sortable=["created_at", "updated_at", "finished_at", "status"],
     aggregatable=["id"], groupable=["status", "origin", "outcome", "version__workflow", "version__workflow__name"],
     insert=False, update=False, delete=False,

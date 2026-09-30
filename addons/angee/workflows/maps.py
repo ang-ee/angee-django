@@ -18,7 +18,7 @@ class MapInput(BaseModel):
 
 
 class MapItem[O](BaseModel):
-    """One ordered result: success carries output; failure carries its attempt error.
+    """One ordered result: success carries output; failure carries a reader-facing error.
 
     Consumers declare ``list[MapItem[TheirOutput]]`` as their input or a field of
     it. Exactly one of output/error is present, and failed items use ``error``
@@ -74,7 +74,7 @@ class Map(Step[MapInput, list[MapItem[Any]], None]):
         return cls._schema(list[MapItem[model]], "serialization")  # type: ignore[valid-type]
 
     def run(self, ctx: Any) -> _Settlement:
-        """Wait for bodies or return ordered typed evidence with one error query."""
+        """Wait for bodies or return ordered typed evidence."""
         items = ctx.step_run.map_rows().collect_map(len(ctx.input.items))
         return _MapWait() if items is None else self.done(
             items, outcome="failed" if any("error" in item for item in items) else "done",

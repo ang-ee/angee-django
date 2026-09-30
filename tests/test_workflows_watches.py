@@ -231,10 +231,14 @@ def test_watch_resources_follow_run_reads_and_record_reference_owner(
       steprun(where: {id: {_eq: $step}}) { watches { record_model record_id } }
     }"""
     reference = {"record_model": record._meta.label, "record_id": record.sqid}
-    for viewer in (actor, reader):
+    for viewer in (actor,):
         assert result_data(execute_schema(schema, query, {"step": step.sqid}, user=viewer)) == {
             "stepwatch": [reference], "steprun": [{"watches": [reference]}],
         }
+    redacted = {"record_model": None, "record_id": None}
+    assert result_data(execute_schema(schema, query, {"step": step.sqid}, user=reader)) == {
+        "stepwatch": [redacted], "steprun": [{"watches": [redacted]}],
+    }
     assert result_data(execute_schema(schema, query, {"step": step.sqid}, user=stranger)) == {
         "stepwatch": [], "steprun": [],
     }

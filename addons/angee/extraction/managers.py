@@ -133,6 +133,12 @@ class ExtractionManager(EvidenceManager):
         for source in sources:
             if (source.file is None) == (source.message_part is None):
                 raise ValidationError("A source requires exactly one file or message part.")
+            if not (
+                source.file is not None and target._meta.label == "storage.File" and source.file.pk == target.pk
+                or source.message_part is not None and target._meta.label == "messaging.Message"
+                and source.message_part.message_id == target.pk
+            ):
+                raise ValidationError("Every source must be the extraction target or belongs to the extraction target.")
         readable_records(tuple(source.evidence_reference for source in sources), (actor,))
         for source in sources:
             row = source.record

@@ -169,14 +169,22 @@ def test_run_evidence_redacts_references_after_source_read_is_revoked(schema, ex
     run = start_run(workflow, actor=starter, subject=source)
     run.with_actor(starter).grant_record_access("reader", viewer)
     query = """query($id: String!) {
-      workflowrun_by_pk(id: $id) { id evidence { id record_model record_id } }
+      workflowrun_by_pk(id: $id) { id subject_model subject_id evidence { id record_model record_id } }
     }"""
     own = result_data(execute_schema(schema, query, {"id": run.sqid}, user=starter))["workflowrun_by_pk"]
     assert len(own["evidence"]) == 1
     assert own["evidence"][0]["record_model"] == "knowledge.Vault"
     assert own["evidence"][0]["record_id"] == source.sqid
+    assert own["subject_id"] == source.sqid
     hidden = result_data(execute_schema(schema, query, {"id": run.sqid}, user=viewer))["workflowrun_by_pk"]
     assert hidden["evidence"] == [{"id": own["evidence"][0]["id"], "record_model": None, "record_id": None}]
+    assert hidden["subject_model"] is hidden["subject_id"] is None
+    assert result_data(execute_schema(schema, """query($id: String!) {
+      workflowrun(where: {subject_id: {_eq: $id}}) { id }
+      workflowrun_aggregate(where: {subject_id: {_eq: $id}}) { aggregate { count } }
+    }""", {"id": source.sqid}, user=viewer)) == {
+        "workflowrun": [], "workflowrun_aggregate": {"aggregate": {"count": 0}},
+    }
 
 
 def test_for_subject_preserves_actor_and_existing_filters(execution):

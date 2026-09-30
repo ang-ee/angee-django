@@ -13,7 +13,7 @@ from angee.base.identity import public_id_for
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
 from angee.storage.schema import FileType
 
 Extraction = apps.get_model("extraction.Extraction")
@@ -32,10 +32,10 @@ class ExtractionType(AngeeNode):
     profile: auto
     profile_config: JSON
     schema: JSON
-    result: JSON
-    outcome: JSON
-    document_map: JSON
-    retired_identities: JSON
+    result: JSON | None
+    outcome: JSON | None
+    document_map: JSON | None
+    retired_identities: JSON | None
     created_at: auto
     sources: list[ExtractionSourceType] = actor_scoped_to_many("sources")
     pages: list[ExtractionPageType] = actor_scoped_to_many("pages")
@@ -57,7 +57,7 @@ class ExtractionType(AngeeNode):
 
 
 @strawberry_django.type(ExtractionSource)
-class ExtractionSourceType(AngeeNode):
+class ExtractionSourceType(RecordReferenceNode):
     """The retained source identity; linked bytes retain storage authorization."""
 
     extraction: ExtractionType | None = actor_scoped_to_one("extraction")
@@ -68,8 +68,8 @@ class ExtractionSourceType(AngeeNode):
 
     @strawberry_django.field(only=["message_part_id"])
     def message_part_id(self) -> PublicID | None:
-        """Project retained message-part identity; its owner authorizes navigation."""
-        return optional_public_id(public_id_for(apps.get_model("messaging.Part"), cast(Any, self).message_part_id))
+        """Project the retained part only while its current record remains readable."""
+        return RecordReferenceNode.reference_id(self) if cast(Any, self).message_part_id else None
 
 
 @strawberry_django.type(ExtractionPage)

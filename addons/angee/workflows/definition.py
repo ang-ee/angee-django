@@ -770,37 +770,56 @@ class Definition(BaseModel):
         validate(self._validator(self.input_schema), value)
         return value
 
-    def input_evidence(self, value: Any) -> tuple[EvidenceReference, ...]:
-        """Project record references declared by the entry step's frozen input schema."""
+    def _input_references(self, value: Any) -> tuple[tuple[tuple[str | int, ...], EvidenceReference], ...]:
+        """Locate the declared record references in the admitted run input."""
         schema = materialize_schema(
-            self.node_input_schema(self.entry), annotations=FORM_SCHEMA_ANNOTATIONS | {"default"},
+            self.input_schema, annotations=FORM_SCHEMA_ANNOTATIONS | {"default"},
         )
-        entry_value = self.input_for(self.entry, value, [])
-        references: set[tuple[str, str]] = set()
+        references: list[tuple[tuple[str | int, ...], EvidenceReference]] = []
 
-        def visit(node: Any, item: Any) -> None:
+        def visit(node: Any, item: Any, path: tuple[str | int, ...]) -> None:
             if not isinstance(node, dict) or item is None:
                 return
             if relation := node.get("relation"):
                 if isinstance(item, str):
-                    references.add((relation["resource"], item))
+                    references.append((path, EvidenceReference(model=relation["resource"], id=item)))
             if isinstance(item, dict):
                 for name, child in node.get("properties", {}).items():
                     if name in item:
-                        visit(child, item[name])
+                        visit(child, item[name], (*path, name))
             elif isinstance(item, list):
                 prefix = node.get("prefixItems", ())
                 for index, element in enumerate(item):
-                    visit(prefix[index] if index < len(prefix) else node.get("items"), element)
+                    visit(prefix[index] if index < len(prefix) else node.get("items"), element, (*path, index))
             for child in node.get("allOf", ()):
-                visit(child, item)
+                visit(child, item, path)
             for choice in ("anyOf", "oneOf"):
                 for child in node.get(choice, ()):
                     if validator(child).is_valid(item):
-                        visit(child, item)
+                        visit(child, item, path)
 
-        visit(schema, entry_value)
+        visit(schema, value, ())
+        return tuple(references)
+
+    def input_evidence(self, value: Any) -> tuple[EvidenceReference, ...]:
+        """Project the declared source identities needed at admission."""
+        references = {(ref.model, ref.id) for _, ref in self._input_references(value)}
         return tuple(EvidenceReference(model=model, id=public_id) for model, public_id in sorted(references))
+
+    def redacted_input(self, value: Any, readable: set[tuple[str, str]]) -> Any:
+        """Null only reference-marked values whose current source read is absent."""
+        hidden = [path for path, ref in self._input_references(value) if (ref.model.lower(), ref.id) not in readable]
+        if not hidden:
+            return value
+        projected = copy.deepcopy(value)
+        for path in hidden:
+            if not path:
+                return None
+            parent = projected
+            for part in path[:-1]:
+                parent = parent[part]
+            parent[path[-1]] = None
+        return projected
 
     def _entry_input(self, value: Any, step: type[Step[Any, Any, Any]]) -> Any:
         if not isinstance(value, dict) or step.input_model is None:

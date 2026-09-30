@@ -996,5 +996,6 @@ def test_io_settlement_stops_at_deadline_when_step_row_stays_locked(execution, r
         holder.result(timeout=5)
         assert pool.submit(in_connection, runner.reap).result(timeout=5) == 1
     assert bodies == [1]
-    assert row(run).output == {} and row(run).status == StepRunStatus.FAILED
+    assert row(run).output == {"error": "The attempt deadline expired."}
+    assert row(run).status == StepRunStatus.FAILED
     assert system_queryset(StepAttempt).get(step_run=step_run).result == "timed_out"

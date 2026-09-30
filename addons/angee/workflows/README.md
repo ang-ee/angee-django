@@ -46,10 +46,12 @@ queue, including parallel branches whose earlier message encountered a busy run.
 Run admission stores its origin and exactly one protected cause in the same
 insert: a parent step, a prior run, or a trigger event. Manual runs have no cause.
 It also checks the actor's standing read access to the subject and each
-record-reference field in the entry step's frozen input schema. The run retains
+record-reference field in the frozen admitted input schema. The run retains
 one canonical `WorkflowRunEvidence` edge per source; ordinary input fields do
 not create edges. Readers can inspect these references through the run resource,
-with identities redacted when their current record access is gone. Evidence
+with identities and relation-marked input values redacted when their current
+record access is gone. Failed steps retain a reader-facing message in their
+output; attempt errors keep diagnostic detail behind writer access. Evidence
 edges are pruned with their run and do not protect source records from deletion.
 Retention prunes a cited run only after its continuations and reprocesses are
 pruned; retained events protect their trigger and survive pruning of their run.

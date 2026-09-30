@@ -706,7 +706,8 @@ def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step
 
     sibling.refresh_from_db()
     assert settlements == ["done", "fail"]
-    assert sibling.status == StepRunStatus.FAILED and sibling.outcome == "error" and sibling.output == {}
+    assert sibling.status == StepRunStatus.FAILED and sibling.outcome == "error"
+    assert sibling.output == {"error": "Result contains an invalid JSON value"}
     attempt = system_queryset(StepAttempt).get(step_run=sibling)
     assert attempt.result == "failed" and attempt.finished_at is not None
     assert attempt.error == "DataError: Result contains an invalid JSON value"

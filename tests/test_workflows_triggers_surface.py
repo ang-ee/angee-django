@@ -121,6 +121,7 @@ def test_trigger_grants_are_visible_and_revocable_through_the_authoring_surface(
     assert result["ok"] and "workflow principal" in result["message"]
     current = result_data(execute_schema(schema, query, variables, user=viewer))["trigger_by_pk"]
     assert not current["enabled"] and "workflow principal" in current["disabled_reason"]
+    assert "knowledge/role:vault_viewer" not in current["disabled_reason"]
     assert current["grants"] == []
 
 
@@ -276,12 +277,13 @@ def test_trigger_ledger_redacts_unreadable_source_identity_and_filter_oracles(tr
     Trigger.objects.drain()
     event.refresh_from_db()
     assert event.admitted_at is not None, event.rejection
-    nested = "{ workflowrun { trigger_event { id record_model record_id } } }"
+    nested = "{ workflowrun { subject_model subject_id trigger_event { id record_model record_id } } }"
     assert result_data(execute_schema(schema, nested, user=editor)) == {"workflowrun": [{"trigger_event": {
         "id": event.sqid, "record_model": record._meta.label, "record_id": record.sqid,
-    }}]}
+    }, "subject_model": record._meta.label, "subject_id": record.sqid}]}
     delete_relationship(grant)
-    assert result_data(execute_schema(schema, nested, user=editor)) == {"workflowrun": [{"trigger_event": {
+    assert result_data(execute_schema(schema, nested, user=editor)) == {"workflowrun": [{"subject_model": None,
+        "subject_id": None, "trigger_event": {
         "id": event.sqid, "record_model": None, "record_id": None,
     }}]}
 

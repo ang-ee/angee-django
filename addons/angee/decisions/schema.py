@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import strawberry
 import strawberry_django
 from django.apps import apps
@@ -17,7 +15,7 @@ from angee.graphql.data import declared_hasura_resource_fields, hasura_model_res
 from angee.graphql.data.hasura import with_filter_aliases
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
+from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
 
@@ -36,13 +34,13 @@ class DecisionGroupType(AngeeNode):
 
 
 @strawberry_django.type(Decision)
-class DecisionType(AngeeNode):
+class DecisionType(RecordReferenceNode):
     """One seat's frozen question and final answer."""
 
     @classmethod
     def get_queryset(cls, queryset: models.QuerySet, info: strawberry.Info) -> models.QuerySet:
         """Compose extension-owned scalar projections through native nested loading."""
-        return with_filter_aliases(queryset)
+        return with_filter_aliases(super().get_queryset(queryset, info))
 
     group: DecisionGroupType
     index: auto
@@ -75,32 +73,26 @@ class DecisionType(AngeeNode):
         output_field=models.BooleanField(),
     ))
 
-    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
-    def subject_model(self) -> str:
-        """Project the decision subject through the shared reference owner."""
-        return cast(Any, self).record_model_label
-
-    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"])
-    def subject_id(self) -> PublicID:
-        """Project the subject's public identity."""
-        return PublicID(cast(Any, self).record_public_id)
+    subject_model: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["subject_content_type_id", "subject_object_id"],
+    )
+    subject_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["subject_content_type_id", "subject_object_id"],
+    )
 
 
 @strawberry_django.type(DecisionEvidence)
-class DecisionEvidenceType(AngeeNode):
+class DecisionEvidenceType(RecordReferenceNode):
     """A protected public record reference derived at admission."""
 
     decision: DecisionType
 
-    @strawberry_django.field(only=["content_type_id", "object_id"])
-    def record_model(self) -> str:
-        """Project the evidence target through the shared reference owner."""
-        return cast(Any, self).record_model_label
-
-    @strawberry_django.field(only=["content_type_id", "object_id"])
-    def record_id(self) -> PublicID:
-        """Project the evidence target's public identity."""
-        return PublicID(cast(Any, self).record_public_id)
+    record_model: str | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+    )
+    record_id: PublicID | None = strawberry_django.field(
+        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+    )
 
 
 _GROUPS = hasura_model_resource(
@@ -116,7 +108,7 @@ _DECISIONS = hasura_model_resource(
     field_id_decode={"assignees": public_pk_decoder(Decision._meta.get_field("assignees").related_model)},
     get_queryset=lambda info: Decision.objects.with_open_state(),
     filter_expressions={"is_open": Decision.objects.open_expression()},
-    record_ref_filters=("subject_model", "subject_id"),
+    record_ref_filters=("subject_model", "subject_id"), record_ref_requires_read=True,
 )
 _EVIDENCE = hasura_model_resource(
     DecisionEvidenceType, model=DecisionEvidence, name="decision_evidence", filterable=["id", "decision"],

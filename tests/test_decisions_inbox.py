@@ -101,6 +101,24 @@ def test_group_and_evidence_display_names_use_public_identity(inbox):
         assert not {"record_model_label", "record_public_id"} & fields
 
 
+def test_inbox_reader_loses_subject_and_evidence_references_when_source_is_revoked(inbox):
+    _issuer, _requester, reviewer, _outsider, subject, _group, _decision = inbox
+    from rebac import delete_relationship
+
+    delete_relationship(RelationshipTuple(
+        resource=to_object_ref(subject), relation="viewer", subject=to_subject_ref(reviewer),
+    ))
+    assert query(reviewer, """query($id: String!) {
+      decisions { subject_model subject_id }
+      decision_evidence { record_model record_id }
+      by_subject: decisions(where: {subject_id: {_eq: $id}}) { id }
+    }""", {"id": subject.sqid}) == {
+        "decisions": [{"subject_model": None, "subject_id": None}],
+        "decision_evidence": [{"record_model": None, "record_id": None}],
+        "by_subject": [],
+    }
+
+
 def test_can_act_is_the_permission_owners_current_active_person_rule(inbox):
     issuer, requester, reviewer, _outsider, _subject, _group, decision = inbox
     document = "query { decisions { can_act } }"

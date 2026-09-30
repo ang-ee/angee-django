@@ -164,6 +164,28 @@ def test_routed_body_failure_keeps_typed_partial_results(execution, map_steps, r
     assert "output" not in run.output[1]
 
 
+def test_map_collection_keeps_attempt_diagnostics_out_of_reader_output(execution, map_steps, register_step):
+    actor, _sent = execution
+
+    class Partial(MapEcho):
+        key = "map_private_failure"
+
+        def run(self, ctx):
+            return ctx.fail("Item unavailable.")
+
+    register_step(Partial)
+    run, _mapped = start_map(actor, [{"value": 1}], body=Partial.key, routed=True)
+    run_until(run)
+    body = body_rows(run).get()
+    with system_context(reason="test.map_diagnostic"):
+        StepAttempt.objects.filter(step_run=body).update(
+            error="ValueError: Item unavailable.; caused by ProviderError: private body",
+        )
+    assert body_rows(run).collect_map(1) == [{
+        "index": 0, "outcome": "error", "error": "Item unavailable.",
+    }]
+
+
 def test_unrouted_body_failure_preserves_siblings_and_retries_only_that_item(
     execution, map_steps, register_step, settings,
 ):

@@ -88,7 +88,7 @@ from angee.graphql.introspection import (
     FieldPathError,
     require_field_for_path,
 )
-from angee.graphql.relations import actor_scoped_relation_expression, with_record_reference_access
+from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
 from graphql import GraphQLError
 
@@ -857,6 +857,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     reads retain the resource's ordinary permission scope.
     ``record_ref_requires_read`` additionally nulls both reference query axes
     unless the viewer can read the target, using the shared reference annotation.
+    ``RecordReferenceNode`` types apply that annotation to resource roots as well
+    as nested relations, so their reference fields use one current-read projection.
 
     Nested relation identity and scalar filters require read access at every protected hop,
     sharing the permission-safe scalar expression used by related grouping axes.
@@ -913,6 +915,12 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
 
     resource_name = name or model.__name__.lower()
     read_queryset = get_queryset or _model_queryset(model)
+    if issubclass(node, RecordReferenceNode):
+        source_queryset = read_queryset
+
+        def read_queryset(info: strawberry.Info) -> models.QuerySet[Any]:
+            return node.get_queryset(source_queryset(info), info)
+
     aggregate_queryset = get_aggregate_queryset or _aggregate_queryset(read_queryset)
     expressions = dict(filter_expressions or {})
     if unknown := expressions.keys() - set(filterable):

@@ -188,7 +188,7 @@ class Fail(_Settlement):
             )
         return rows.update(
             **rows._cleared_wait(), status=StepRunStatus.FAILED,
-            outcome=ERROR_OUTCOME, output={}, retries=retries,
+            outcome=ERROR_OUTCOME, output={"error": self.error}, retries=retries,
         )
 
 
