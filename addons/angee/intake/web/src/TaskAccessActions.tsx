@@ -1,25 +1,18 @@
 import { holdsPermission } from "@angee/metadata";
-import { useAuthoredQuery } from "@angee/refine";
 import {
-  ErrorBanner, RecordActionBar, useActionResultRun,
-  useRecordChromeActionOutcome, useRecordChromeContext,
+  RecordActionBar, useActionResultRun, useRecordChromeActionOutcome,
   type ActionDescriptor,
 } from "@angee/ui";
 import type { ReactElement } from "react";
 
-import {
-  DecideNeedAccessDocument, TaskAccessNeedsDocument,
-} from "./documents";
+import { DecideNeedAccessDocument } from "./documents";
 import { useIntakeT } from "./i18n";
 import { NEED_MODEL } from "./resources";
+import type { CurrentAccessRow } from "./TaskAccessDecisions";
 
-/** Task header actions target each request's own current Need revision. */
-export function TaskAccessActions(): ReactElement | null {
-  const { record, recordId } = useRecordChromeContext();
+/** The card uses the same Need decision verbs and revision as the former record menu. */
+export function TaskAccessActions({ need }: { need: CurrentAccessRow }): ReactElement | null {
   const t = useIntakeT();
-  const query = useAuthoredQuery(TaskAccessNeedsDocument, { task: recordId }, {
-    models: [NEED_MODEL, "decisions.Decision"],
-  });
   const [decide] = useRecordChromeActionOutcome({
     document: DecideNeedAccessDocument, resultField: "decide_need_access", idArgument: "need",
   }, { invalidateModels: [NEED_MODEL, "decisions.Decision"] });
@@ -27,31 +20,23 @@ export function TaskAccessActions(): ReactElement | null {
     idArgument: "need", invalidateModels: [NEED_MODEL, "decisions.Decision"],
   });
   const settle = useActionResultRun();
-  if (!record || !holdsPermission(record, "write") || !holdsPermission(record, "share")) return null;
-  if (query.error) return <ErrorBanner description={t("access.error")} />;
-  const needs = query.data?.intake_needs ?? [];
-  const actions: ActionDescriptor[] = needs.filter((need) => holdsPermission(need, "write")).flatMap((need) => {
-    const name = need.claimed_name || need.id;
-    const current = need.access_decision;
-    const open = current?.is_open === true;
-    const nameAction = (label: string) => `${label} · ${name}`;
-    return [
-      ...(open ? (["APPROVE", "DENY"] as const).map((action) => ({
-        id: `access-${action}-${need.id}`,
-        label: nameAction(t(action === "APPROVE" ? "access.approve" : "access.deny")),
-        run: async () => {
-          await settle(() => decide(need.id, { action, expected_revision: need.revision }));
-        },
-      })) : []),
-      ...(!open && current ? [{
-        id: `access-reset-${need.id}`,
-        label: nameAction(t("access.reset")),
-        confirm: { title: t("access.resetTitle"), body: t("access.resetBody") },
-        run: async () => {
-          await settle(() => reset(need.id, { confirmed: true, expected_revision: need.revision }));
-        },
-      }] : []),
-    ];
-  });
-  return <RecordActionBar record={record} actions={actions} />;
+  if (!holdsPermission(need, "write")) return null;
+  const current = need.access_decision;
+  const actions: ActionDescriptor[] = current?.is_open ? (["APPROVE", "DENY"] as const).map((action) => ({
+    id: `access-${action}-${need.id}`,
+    label: t(action === "APPROVE" ? "access.approve" : "access.deny"),
+    permission: "write", placement: "toolbar", primary: action === "APPROVE", danger: action === "DENY",
+    run: async () => {
+      await settle(() => decide(need.id, { action, expected_revision: need.revision }));
+    },
+  })) : current ? [{
+    id: `access-reset-${need.id}`,
+    label: t("access.reset"),
+    permission: "write", placement: "toolbar",
+    confirm: { title: t("access.resetTitle"), body: t("access.resetBody") },
+    run: async () => {
+      await settle(() => reset(need.id, { confirmed: true, expected_revision: need.revision }));
+    },
+  }] : [];
+  return <RecordActionBar record={need} actions={actions} />;
 }

@@ -1,5 +1,6 @@
 import { decisionRecordTab } from "@angee/decisions";
 import { defineBaseAddon } from "@angee/app";
+import { holdsPermission } from "@angee/metadata";
 import { PROJECT_MODEL, TASK_MODEL } from "@angee/projects";
 import { ShareAccessRailGroup } from "@angee/iam";
 import { useAuthoredQuery } from "@angee/refine";
@@ -8,10 +9,8 @@ import {
   FormView,
   Glyph,
   Group,
-  Skeleton,
   SkeletonStatus,
   Tab,
-  formViewRecordActionsSlot,
   formViewSectionsSlot,
   useRecordChromeContext,
   type ChatterViewContext,
@@ -20,8 +19,7 @@ import { MessageSquareQuote } from "lucide-react";
 import type { ReactElement } from "react";
 
 import { enIntakeMessages, useIntakeT } from "./i18n";
-import { TaskAccessDecisions } from "./TaskAccessDecisions";
-import { TaskAccessActions } from "./TaskAccessActions";
+import { TaskAccessCardSkeleton, TaskAccessDecisions } from "./TaskAccessDecisions";
 import { TaskAccessNeedsDocument } from "./documents";
 import { NEED_MODEL } from "./resources";
 import { RecordNeedsPane } from "./RecordNeedsPane";
@@ -48,11 +46,6 @@ const intake = defineBaseAddon({
       // Access decisions are the request's writers' business; a requester reading their own request never sees them.
       permission: "write", requiredFields: ["permissions"],
       content: <Group label={<AccessLabel />} hint={<AccessHint />} savedOnly collapsible defaultOpen content={<TaskAccessGroup />} />,
-    },
-    {
-      ...formViewRecordActionsSlot(TASK_MODEL), id: "intake.task-access-actions", sequence: 50,
-      recordActionPlacement: "menu", permission: "write", requiredFields: ["permissions"],
-      content: <TaskAccessActions />,
     },
     {
       ...formViewSectionsSlot(PROJECT_MODEL),
@@ -102,16 +95,17 @@ function RecordNeedsSection({
 
 
 function TaskAccessGroup(): ReactElement {
-  const { recordId } = useRecordChromeContext();
+  const { record, recordId } = useRecordChromeContext();
   const t = useIntakeT();
   const query = useAuthoredQuery(TaskAccessNeedsDocument, { task: recordId }, {
     models: [NEED_MODEL, "decisions.Decision"],
   });
   if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
-    <Skeleton className="h-16 w-full" />
+    <TaskAccessCardSkeleton />
   </SkeletonStatus>;
   if (query.error) return <ErrorBanner description={t("access.error")} />;
-  return <TaskAccessDecisions needs={query.data?.intake_needs ?? []} />;
+  return <TaskAccessDecisions needs={query.data?.intake_needs ?? []}
+    canManage={Boolean(record && holdsPermission(record, "write") && holdsPermission(record, "share"))} />;
 }
 
 function TaskAccessChatter({ context }: { context: ChatterViewContext }): ReactElement {
@@ -121,7 +115,7 @@ function TaskAccessChatter({ context }: { context: ChatterViewContext }): ReactE
     enabled: Boolean(task), models: [NEED_MODEL, "decisions.Decision"],
   });
   if (query.isFetching && !query.data) return <SkeletonStatus label={t("access.label")}>
-    <Skeleton className="h-16 w-full" />
+    <TaskAccessCardSkeleton />
   </SkeletonStatus>;
   if (query.error) return <ErrorBanner description={t("access.error")} />;
   return <TaskAccessDecisions needs={query.data?.intake_needs ?? []} />;
