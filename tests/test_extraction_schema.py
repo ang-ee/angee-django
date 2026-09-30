@@ -38,7 +38,7 @@ def test_evidence_reader_cannot_expand_access_to_source_files(schema, evidence):
     row = retain(pages=(PageCarrier(source_position=0, page_position=0),))
     reader = get_user_model().objects.create_user(username="evidence-shared-reader")
     query = """{
-      extraction { id result outcome document_map record_model_label record_public_id
+      extraction { id display_name inference_configured result outcome document_map record_model_label record_public_id
         sources { id file { id } }
         pages { source_page provider_metadata source { id } carrier_file { id } }
         parts { value source { id } }
@@ -54,6 +54,8 @@ def test_evidence_reader_cannot_expand_access_to_source_files(schema, evidence):
     visible = result_data(execute_schema(schema, query, user=reader))
     result = visible["extraction"][0]
     assert result["id"] == row.sqid
+    assert result["display_name"] == "extraction"
+    assert result["inference_configured"] is False
     assert result["result"] is None and result["outcome"] is None and result["document_map"] is None
     assert result["record_model_label"] == "storage.File"
     assert result["record_public_id"] == values["target"].sqid
@@ -65,6 +67,7 @@ def test_evidence_reader_cannot_expand_access_to_source_files(schema, evidence):
     assert result["pages"] == []
     values["target"].with_actor(values["actor"]).grant_record_access("viewer", reader)
     readable = result_data(execute_schema(schema, query, user=reader))
+    assert readable["extraction"][0]["display_name"] == str(values["target"])
     assert readable["extraction"][0]["result"] == values["result"].value
     assert readable["extraction"][0]["outcome"]["claims"] == values["result"].claims
     assert readable["extraction"][0]["pages"][0]["provider_metadata"] == {}

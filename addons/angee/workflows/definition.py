@@ -82,6 +82,8 @@ class Body(BaseModel):
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     step: str
+    label: str = ""
+    outcome_labels: dict[str, str] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
     input: InputBinding | None = None
 
@@ -151,6 +153,45 @@ class Definition(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     nodes: dict[NodeKey, Node] = Field(default_factory=dict)
     results: list[ResultBinding] = Field(default_factory=list)
+    outcome_labels: dict[str, str] = Field(default_factory=dict)
+
+    def node_label(self, key: str) -> str:
+        """Use the frozen label, an explicit step label, or the authored node key."""
+        node = self.node(key)
+        return node.label or node.implementation.__dict__.get("label") or key.replace("_", " ").capitalize()
+
+    def node_outcome_label(self, key: str, outcome: str) -> str:
+        """Name a node result from its frozen declaration, including old documents."""
+        node = self.node(key)
+        return (node.outcome_labels.get(outcome)
+                or node.implementation.available_outcomes(node.parsed_config).get(outcome)
+                or outcome.replace("_", " ").capitalize())
+
+    def run_outcome_label(self, outcome: str) -> str:
+        """Name a terminal result using its published result vocabulary."""
+        return self.outcome_labels.get(outcome) or outcome.replace("_", " ").capitalize()
+
+    def published_document(self) -> dict[str, Any]:
+        """Freeze reader labels with the validated graph and step outcome contracts."""
+        document = self.model_dump(mode="json", by_alias=True)
+        for key, node, _ in sorted(self.declarations(), key=lambda item: item[0]):
+            stored = document["nodes"][key.partition(".")[0]]
+            if key.endswith(MAP_BODY_SUFFIX):
+                stored = stored["body"]
+            stored["label"] = self.node_label(key)
+            stored["outcome_labels"] = dict(sorted(
+                node.implementation.available_outcomes(node.parsed_config).items()
+            ))
+        labels: dict[str, str] = {}
+        for result in self.results:
+            node = self.node(result.source)
+            for outcome in sorted(node.implementation.available_outcomes(node.parsed_config)):
+                if result.eligible(outcome):
+                    label = (result.outcome.replace("_", " ").capitalize() if result.outcome
+                             else self.node_outcome_label(result.source, outcome))
+                    labels.setdefault(result.outcome or outcome, label)
+        document["outcome_labels"] = dict(sorted(labels.items()))
+        return document
 
     @classmethod
     def check(cls, document: Any, *, subject_model: str | None = None) -> tuple[Definition | None, list[Issue]]:

@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, cast
 
+import strawberry
 import strawberry_django
 from django.apps import apps
+from django.db.models import Prefetch
 from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.base.identity import public_id_for
+from angee.base.scoping import read_scoped_queryset
 from angee.graphql.data import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
+from angee.iam.permissions import request_from_info
 from angee.storage.schema import FileType
 
 Extraction = apps.get_model("extraction.Extraction")
@@ -22,10 +27,32 @@ ExtractionPage = apps.get_model("extraction.ExtractionPage")
 ExtractionPart = apps.get_model("extraction.ExtractionPart")
 
 
+def _readable_target(field: str) -> Callable[[strawberry.Info], Prefetch]:
+    """Batch only the viewer-readable target behind one extraction label."""
+
+    def prefetch(info: strawberry.Info) -> Prefetch:
+        model = apps.get_model("storage.File" if field == "file" else "messaging.Message")
+        readable = read_scoped_queryset(model, request_from_info(info).user)
+        return Prefetch(field, queryset=readable if readable is not None else model.objects.none(),
+                        to_attr=f"_readable_{field}")
+
+    return prefetch
+
+
 @strawberry_django.type(Extraction)
 class ExtractionType(AngeeNode):
     """One exact retained revision and its separately authorized source records."""
 
+    @strawberry_django.field(
+        only=["file_id", "message_id"], prefetch_related=[_readable_target("file"), _readable_target("message")],
+    )
+    def display_name(self) -> str:
+        """Use the target's label only while the viewer can read that record."""
+        row = cast(Any, self)
+        target = getattr(row, "_readable_file" if row.file_id is not None else "_readable_message", None)
+        return str(target) if target is not None else str(row._meta.verbose_name)
+
+    inference_configured: bool = strawberry_django.field(only=["model_id"])
     revision: auto
     schema_id: auto
     schema_digest: auto

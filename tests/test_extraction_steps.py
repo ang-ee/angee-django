@@ -191,7 +191,7 @@ def execute(step, value, actor, *, config=None):
     return system_queryset(WorkflowRun).get(pk=run.pk)
 
 
-def prepare_and_process(actor, file, *, profile_config=None, recognized=False):
+def prepare_and_process(actor, file, *, profile_config=None, recognized=False, with_model=True):
     source = {
         "files": [str(file.sqid)],
         "target_model": "storage.File",
@@ -206,7 +206,7 @@ def prepare_and_process(actor, file, *, profile_config=None, recognized=False):
             "recognition": [],
             "target_model": source["target_model"],
             "target_id": source["target_id"],
-            "model_id": str(system_queryset(InferenceModel).get().sqid),
+            "model_id": str(system_queryset(InferenceModel).get().sqid) if with_model else None,
             "recognition_model_id": str(system_queryset(InferenceModel).get().sqid)
             if recognized
             else None,
@@ -330,6 +330,71 @@ def test_inference_retains_a_successor_including_provider_failure(step_evidence,
     )
     assert stale.outcome == "superseded" and stale.output["superseded_by"] == run.output["extraction_id"]
     assert DeterministicExtraction.calls == ["prepare", "infer"]
+
+
+def test_unconfigured_inference_routes_to_review_with_reason(step_evidence):
+    actor, file = step_evidence
+    processed = prepare_and_process(
+        actor, file, profile_config={"unresolved_reasons": ["needs_mapping"]}, with_model=False,
+    )
+    base = system_queryset(Extraction).get(sqid=processed.output["extraction_id"])
+    assert not base.inference_configured
+
+    run = execute(InferEvidenceStep, {
+        "base_extraction_id": str(base.sqid), "base_revision": 1,
+        "target_model": "storage.File", "target_id": str(file.sqid),
+    }, actor)
+    assert run.status == "succeeded" and run.outcome == "inference_failed"
+    assert run.output["inference_failure"]["reason"] == "Select an inference model."
+    assert system_queryset(Extraction).count() == 1
+
+
+def test_unusable_inference_model_routes_to_review_with_reason(step_evidence):
+    actor, file = step_evidence
+    processed = prepare_and_process(actor, file, profile_config={"unresolved_reasons": ["needs_mapping"]})
+    system_queryset(InferenceModel).update(status="retired")
+    run = execute(InferEvidenceStep, {
+        "base_extraction_id": processed.output["extraction_id"], "base_revision": 1,
+        "target_model": "storage.File", "target_id": str(file.sqid),
+    }, actor)
+    assert run.status == "succeeded" and run.outcome == "inference_failed"
+    assert run.output["inference_failure"]["reason"] == "Select an available inference model."
+    assert system_queryset(Extraction).count() == 1
+
+
+def test_unusable_retained_recognition_model_routes_to_review(step_evidence):
+    actor, file = step_evidence
+    processed = prepare_and_process(
+        actor, file, profile_config={"unresolved_reasons": ["needs_mapping"]}, recognized=True,
+    )
+    retained_model = system_queryset(InferenceModel).get()
+    with actor_context(actor):
+        replacement = InferenceModel.objects.create(
+            provider_id=retained_model.provider_id, name="replacement", model_use="multimodal",
+        )
+    system_queryset(InferenceModel).filter(pk=retained_model.pk).update(status="retired")
+    run = execute(InferEvidenceStep, {
+        "base_extraction_id": processed.output["extraction_id"], "base_revision": 1,
+        "target_model": "storage.File", "target_id": str(file.sqid), "model_id": str(replacement.sqid),
+    }, actor)
+    assert run.status == "succeeded" and run.outcome == "inference_failed"
+    assert run.output["inference_failure"]["reason"] == "Select an available inference model."
+
+
+def test_inference_programming_failure_remains_a_failed_step(step_evidence, monkeypatch):
+    actor, file = step_evidence
+    processed = prepare_and_process(actor, file, profile_config={"unresolved_reasons": ["needs_mapping"]})
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("Bad inference implementation")
+
+    monkeypatch.setattr("angee.workflows_extraction.steps.map_parts", broken)
+    run = execute(InferEvidenceStep, {
+        "base_extraction_id": processed.output["extraction_id"], "base_revision": 1,
+        "target_model": "storage.File", "target_id": str(file.sqid),
+    }, actor)
+    assert run.status == "failed" and run.outcome == "error"
+    assert system_queryset(Extraction).count() == 1
 
 
 def test_native_text_acquisition_drops_script_and_checks_digest(step_evidence):

@@ -8,6 +8,9 @@ the normalized immutable document selected when a run starts.
 It also plans ready and skipped nodes from retained step rows without querying
 the database. Named outcomes route control, lists of targets fan out, and joins
 wait until all incoming sources have settled.
+Publication freezes node labels and declared outcome labels with the graph.
+Run and step reads expose those labels beside the stable keys; result aliases
+have their own reader labels.
 Draft save and publication resolve each `await_run` child under the author's
 workflow read scope. A published parent stores the child's outcome-to-output-schema
 contract in the node config; execution uses that frozen contract. A child outcome
@@ -66,6 +69,8 @@ The trigger's `enable_preview` discloses the source grants and the people and
 groups with workflow monitoring access to an eligible enabler. Monitoring is the
 workflow permission inherited by runs; starters without monitoring access do not
 appear. The console shows this disclosure before it confirms enablement.
+Grant listings identify each target by its model noun and disclose its record
+label only while the reader retains access to that target.
 Retention prunes a cited run only after its continuations and reprocesses are
 pruned; retained events protect their trigger and survive pruning of their run.
 IO bodies run after their claim commits, without a transaction. Their result is

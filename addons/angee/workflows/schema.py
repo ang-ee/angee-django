@@ -7,7 +7,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db.models import Prefetch
+from django.db.models import F, Prefetch
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -34,6 +34,7 @@ from angee.iam.identity import user_public_id
 from angee.iam.permissions import request_from_info
 from angee.iam.schema import UserType
 from angee.workflows.states import RunOrigin
+from angee.workflows.triggers import TriggerGrantTarget
 
 strawberry.enum(cast(Any, RunOrigin))
 
@@ -49,6 +50,9 @@ Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 DecisionGroup = apps.get_model("decisions", "DecisionGroup")
 Decision = apps.get_model("decisions", "Decision")
+_RUN_POLICY_VERSION = Prefetch(
+    "version", queryset=system_queryset(WorkflowVersion).only("document"), to_attr="policy_version",
+)
 _STEP_POLICY_VERSION = Prefetch(
     "run__version", queryset=system_queryset(WorkflowVersion).only("document"), to_attr="policy_version",
 )
@@ -83,6 +87,10 @@ class WorkflowVersionType(AngeeNode):
 class WorkflowRunType(RecordReferenceNode):
     """Execution state, admission and result visible through the run's policy."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name,
+        annotate={"_workflow_name": F("version__workflow__name")}, only=["created_at", "version_id"],
+    )
     version: WorkflowVersionType | None = actor_scoped_to_one("version")
     parent_step: StepRunType | None = actor_scoped_to_one("parent_step")
     reprocess_of: WorkflowRunType | None = actor_scoped_to_one("reprocess_of")
@@ -105,6 +113,9 @@ class WorkflowRunType(RecordReferenceNode):
         return run.policy_version.definition.redacted_input(run.input, readable)
     output: JSON
     outcome: auto
+    outcome_label: str = strawberry_django.field(
+        only=["outcome", "version_id"], prefetch_related=[_RUN_POLICY_VERSION],
+    )
     error: str | None
     request_key: auto
     created_at: auto
@@ -155,6 +166,7 @@ class StepRunType(AngeeNode):
     artifacts: list[StepArtifactType] = actor_scoped_to_many("artifacts")
     watches: list[StepWatchType] = actor_scoped_to_many("watches")
     node_key: auto
+    node_label: str = strawberry_django.field(only=["node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION])
     rank: auto
     map_index: auto
     is_mapped: bool = strawberry_django.field(only=["node_key"])
@@ -175,6 +187,9 @@ class StepRunType(AngeeNode):
     input: JSON
     output: JSON
     outcome: auto
+    outcome_label: str = strawberry_django.field(
+        only=["node_key", "outcome", "run_id"], prefetch_related=[_STEP_POLICY_VERSION],
+    )
     state: JSON
     created_at: auto
     updated_at: auto
@@ -263,6 +278,7 @@ class TriggerGrantType:
     resource_type: str
     resource_id: str
     relation: str
+    target_kind: str
     target_label: str | None
 
 
@@ -314,6 +330,10 @@ class TriggerType(AngeeNode):
             TriggerGrantType(
                 resource_type=str(row.resource_type), resource_id=str(row.resource_id),
                 relation=str(row.relation),
+                target_kind=TriggerGrantTarget.from_stored({
+                    "resource_type": str(row.resource_type), "resource_id": str(row.resource_id),
+                    "relation": str(row.relation),
+                }).target_kind(),
                 target_label=labels.get((str(row.resource_type), str(row.resource_id))),
             )
             for row in rows

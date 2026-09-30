@@ -186,8 +186,20 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     objects = WorkflowRunManager()
 
     def __str__(self) -> str:
-        """Use the public execution identity without loading its workflow."""
-        return str(self.sqid)
+        """Identify an execution by its workflow and start time."""
+        if self.version_id is None:
+            return str(self._meta.verbose_name)
+        name = getattr(self, "_workflow_name", None)
+        if name is None:
+            with system_context(reason="workflows.run_label"):
+                name = self.policy_version.workflow.name
+        started = self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "not started"
+        return f"{name} · {started}"
+
+    @property
+    def outcome_label(self) -> str:
+        """Use the frozen publication's reader vocabulary for a terminal result."""
+        return self.policy_version.definition.run_outcome_label(self.outcome) if self.outcome else ""
 
     @cached_property
     def policy_version(self) -> Any:
@@ -347,6 +359,17 @@ class StepRun(AngeeDataModel):
     def __str__(self) -> str:
         """Distinguish mapped items while preserving the authored node name."""
         return f"{self.node_key} [{self.map_index}]" if self.is_mapped else self.node_key
+
+    @property
+    def node_label(self) -> str:
+        """Return this row's published node label."""
+        return self.run.policy_version.definition.node_label(self.node_key)
+
+    @property
+    def outcome_label(self) -> str:
+        """Return this row's published outcome label."""
+        return (self.run.policy_version.definition.node_outcome_label(self.node_key, self.outcome)
+                if self.outcome else "")
 
     @property
     def is_mapped(self) -> bool:
@@ -727,13 +750,18 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
                 type(self).objects.reconcile_grants(self, ())
 
     def __str__(self) -> str:
-        """Identify configuration without loading permission-sensitive relations."""
+        """Identify the source and its model's reader-facing noun."""
         try:
-            source = self.source_class.display_label()
-        except ImproperlyConfigured:
+            source_class = self.source_class
+            source = source_class.display_label()
+            model = source_class.model(self)
+        except (ImproperlyConfigured, ValidationError):
             source = str(self.source)
-        model = self.source_model
-        return f"{source}: {model}" if model else source
+            try:
+                model = apps.get_model(self.model_label)
+            except (LookupError, ValueError):
+                return source
+        return f"{source}: {model._meta.verbose_name}"
 
     class Meta:
         """Compose admission configuration and its permission identity."""

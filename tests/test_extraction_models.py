@@ -136,6 +136,8 @@ def test_retention_preserves_sources_parts_pages_and_typed_missing_values(eviden
     image = PageCarrier(source_position=0, page_position=0, width=40, height=60, dpi=100)
     row = retain(pages=(image,))
 
+    assert str(row) == str(row.target)
+
     assert row.revision == 1
     assert row.sources.count() == row.parts.count() == row.pages.count() == 1
     retained_source = row.document_sources()[0]

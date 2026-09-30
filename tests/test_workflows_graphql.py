@@ -147,11 +147,12 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
       stepattempt { display_name }
       stepartifact { display_name }
     }"""
+    run_label = str(run)
     with CaptureQueriesContext(connection) as one:
         assert result_data(execute_schema(schema, labels, user=owner)) == {
             "workflow": [{"display_name": workflow.name}],
             "workflowversion": [{"display_name": "Version 1"}],
-            "workflowrun": [{"display_name": run.sqid}],
+            "workflowrun": [{"display_name": run_label}],
             "steprun": [{"display_name": "entry"}],
             "stepattempt": [{"display_name": "Attempt 1"}],
             "stepartifact": [{"display_name": "Execution evidence"}],
@@ -313,6 +314,20 @@ def test_narrow_origin_and_actor_projection_does_not_fetch_each_run(schema, exec
                 schema, "{ workflowrun { origin run_as { id display_name } display_name } }", user=actor,
             ))
         assert len(data["workflowrun"]) == count
+        counts.append(len(queries))
+    assert counts[0] == counts[1]
+
+
+def test_narrow_outcome_label_uses_published_vocabulary_without_row_queries(schema, execution):
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), actor=actor)
+    counts = []
+    for count in (1, 4):
+        while system_queryset(WorkflowRun).count() < count:
+            run_until(start_run(workflow, actor=actor))
+        with CaptureQueriesContext(connection) as queries:
+            data = result_data(execute_schema(schema, "{ workflowrun { outcome outcome_label } }", user=actor))
+        assert data["workflowrun"] == [{"outcome": "done", "outcome_label": "Done"}] * count
         counts.append(len(queries))
     assert counts[0] == counts[1]
 

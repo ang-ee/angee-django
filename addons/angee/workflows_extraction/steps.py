@@ -6,9 +6,10 @@ from dataclasses import replace
 from typing import Annotated, Any, Literal, cast
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from angee.agents.models import InferenceModelUnavailable
 from angee.base.impl import resolve_impl_class
 from angee.extraction.acquisition import (
     ExtractionConfig,
@@ -416,13 +417,29 @@ class InferEvidenceStep(_IOStep, Step[InferEvidenceInput, InferEvidenceOutput, I
                 outcome="source_unavailable",
             )
         model.objects.inference_authority_base(base, actor=ctx.actor)
-        model_id = str(base.model.sqid) if base.model_id else ""
-        inference_model = _model(
-            ctx, model_id if base.awaiting_correspondence else value.model_id or model_id, ExtractionRole.MAPPING
-        )
-        recognition_model = _model(
-            ctx, str(base.recognition_model.sqid) if base.recognition_model_id else "", ExtractionRole.RECOGNITION
-        )
+        model_id = str(base.model.sqid) if base.inference_configured else ""
+        selected_model_id = model_id if base.awaiting_correspondence else value.model_id or model_id
+        if not base.awaiting_correspondence and not selected_model_id:
+            return ctx.done(InferEvidenceOutput(
+                **output,
+                inference_failure={
+                    "stage": "inference", "code": "model_unavailable", "reason": "Select an inference model.",
+                },
+            ), outcome="inference_failed")
+        try:
+            inference_model = _model(ctx, selected_model_id, ExtractionRole.MAPPING)
+            recognition_model = _model(
+                ctx, str(base.recognition_model.sqid) if base.recognition_model_id else "", ExtractionRole.RECOGNITION
+            )
+        except (PermissionDenied, InferenceModelUnavailable) as error:
+            return ctx.done(InferEvidenceOutput(
+                **output,
+                inference_failure={
+                    "stage": "inference", "code": "model_unavailable",
+                    "reason": str(error) if isinstance(error, InferenceModelUnavailable)
+                    else "The selected inference model is unavailable.",
+                },
+            ), outcome="inference_failed")
         failure = None
         if base.awaiting_correspondence:
             result = Result(

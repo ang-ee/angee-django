@@ -15,6 +15,7 @@ from rebac import PermissionDenied, RebacMixin, system_context
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
 
+from angee.base.exceptions import exception_text
 from angee.base.scoping import read_scoped_queryset
 from angee.base.transitions import TransitionNotAllowed
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
@@ -26,6 +27,10 @@ _RebacActionTarget = TypeVar("_RebacActionTarget", bound=RebacMixin)
 _P = ParamSpec("_P")
 
 logger = logging.getLogger(__name__)
+
+
+class ActionTargetUnavailable(ValidationError):
+    """A target preflight whose details stay in form errors under a generic banner."""
 
 
 @strawberry.type
@@ -81,11 +86,10 @@ class ActionResult:
         becomes the in-band ``validation_errors`` map a typed-args action form binds
         to its inputs: field names are camel-cased to match GraphQL arguments by
         default; ``camel_case_keys=False`` preserves authored schema paths.
-        ``NON_FIELD_ERRORS`` (or any key that matches
-        no argument) surfaces at form level. Any other exception — or a
-        ``ValidationError`` with only non-field messages — yields a message-only
-        failure. ``summary`` is the human banner shown either way; the raw exception
-        text is never leaked into it.
+        ``NON_FIELD_ERRORS`` (or any key that matches no argument) surfaces at
+        form level. Non-field domain validation also supplies the banner; target
+        preflights and other exceptions keep the generic summary without leaking
+        diagnostics.
         """
 
         validation_errors = (
@@ -93,7 +97,12 @@ class ActionResult:
             if isinstance(error, ValidationError) else None
         )
         if validation_errors is not None:
-            return cls(ok=False, message=summary, validation_errors=validation_errors)
+            message = summary
+            if isinstance(error, ValidationError) and not isinstance(error, ActionTargetUnavailable):
+                message = "; ".join(error.message_dict.get(NON_FIELD_ERRORS, ())) or summary
+            return cls(ok=False, message=message, validation_errors=validation_errors)
+        if isinstance(error, ValidationError):
+            return cls(ok=False, message=exception_text(error))
         return cls(ok=False, message=summary)
 
 
@@ -118,7 +127,7 @@ def action_guard(
 
     Runs the resolver body; a raised baseline domain error
     (:data:`BASELINE_ACTION_ERRORS`) — plus any addon-local ``errors`` — is mapped
-    through :meth:`ActionResult.from_error` with ``summary`` as the human banner, so
+    through :meth:`ActionResult.from_error` with ``summary`` as the fallback banner, so
     the body raises naturally and one owner projects the failure (a Django
     ``ValidationError`` carrying ``error_dict`` becomes the field-keyed in-band
     ``validation_errors`` map a typed-args form binds). Any other exception
@@ -165,7 +174,7 @@ def authorized_action_target(
     3. The resolved row must grant the per-row REBAC ``permission`` (e.g.
        ``"write"``, ``"write__status"``).
 
-    Not-found and denied raise the non-field ``ValidationError`` shape
+    Not-found and denied raise the non-field ``ActionTargetUnavailable`` shape
     :func:`action_guard` maps to an in-band :class:`ActionResult`: the verb's
     guard ``summary`` banners the toast while the specific reason rides
     ``validation_errors[NON_FIELD_ERRORS]``. The returned row stays bound to the
@@ -206,9 +215,13 @@ def _require_action_permission(
     """Preserve the shared not-found and row-permission result contract."""
 
     if instance is None:
-        raise ValidationError({NON_FIELD_ERRORS: [f"{model._meta.object_name} {public_id_value(id)!r} was not found."]})
+        raise ActionTargetUnavailable({NON_FIELD_ERRORS: [
+            f"{model._meta.object_name} {public_id_value(id)!r} was not found.",
+        ]})
     if not instance.has_access(permission):
-        raise ValidationError({NON_FIELD_ERRORS: [f"You are not allowed to modify this {model._meta.verbose_name}."]})
+        raise ActionTargetUnavailable({NON_FIELD_ERRORS: [
+            f"You are not allowed to modify this {model._meta.verbose_name}.",
+        ]})
     return cast(_RebacActionTarget, instance)
 
 

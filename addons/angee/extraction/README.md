@@ -26,6 +26,10 @@ Inference preserves source-grounded facts, correction authority and retained
 carriers. Revisions reference the same digest-bound part files instead of copying
 the full carrier value into each part row. It rechecks source access before model work; explicit correspondence
 finalizes the held candidate without another inference call.
+An extraction reports whether a mapping model is configured. If a needed model
+is absent or unusable, `infer_evidence` settles on `inference_failed` with a
+reader-facing reason so the graph can route to review; implementation failures
+still fail the step.
 
 Acquisition and inference run as IO steps with fenced heartbeats, declared retry
 policy and retained artifacts. Non-idempotent inference marks its effect before
