@@ -129,7 +129,7 @@ def test_console_resource_metadata_declares_message_surface() -> None:
     } == {
         "thread": ("messaging.Thread", "thread__title__text"),
         "sender": ("parties.Handle", "sender__display_name"),
-        "channel": ("integrate.Integration", "channel__display_name"),
+        "channel": ("messaging.Channel", "channel__display_name"),
         "subtype": ("messaging.MessageSubtype", "subtype__key"),
     }
 

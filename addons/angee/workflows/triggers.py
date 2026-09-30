@@ -6,7 +6,7 @@ import logging
 from contextvars import Context
 from dataclasses import dataclass, field, replace
 from inspect import getattr_static
-from typing import Any
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
@@ -85,8 +85,8 @@ class TriggerSource(ImplBase):
     """
     registry_setting = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
 
-    model_label = ""
-    scope_fields: tuple[str, ...] = ()
+    model_label: ClassVar[str] = ""
+    scope_fields: ClassVar[tuple[str, ...]] = ()
     """Trigger fields whose edits invalidate its contributed grants."""
 
     @classmethod
