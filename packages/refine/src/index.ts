@@ -167,7 +167,6 @@ export {
   tanStackRouterProvider,
 } from "./router";
 export {
-  authoredQueryMeta,
   authoredQueryReadsAnyModel,
 } from "./query-invalidation";
 export {
