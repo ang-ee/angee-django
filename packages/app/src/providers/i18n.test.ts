@@ -63,6 +63,7 @@ describe("scoped vocabulary validation", () => {
     { app: "desk", menus: { missing: "Unknown" } },
     { app: "desk", resources: { "missing.Model": { label: "Unknown" } } },
     { app: "desk", resources: { "notes.Note": { fields: { missing: "Unknown" } } } },
+    { app: "desk", resources: { "notes.Note": { fields: { title: { tones: { HIGH: "invisible" } } } } } },
     { app: "desk", resources: { "notes.Note": { relations: { missing: "Unknown" } } } },
   ];
   test.each(invalidVocabulary)("rejects unknown vocabulary references: %j", (declaration) => {
@@ -78,6 +79,26 @@ describe("scoped vocabulary validation", () => {
     expect(resolve("desk", "desk.record").vocabulary.resources["notes.Note"]).toEqual({ pluralLabel: "Documents", fields: { title: "Subject" } });
     expect(resolve().i18n.provider.translate("title", { namespace: "notes" })).toBe("Notes");
     expect(resolve().vocabulary.resources).toEqual({});
+  });
+
+  test("route field tones extend inherited field copy without losing either map", () => {
+    const resolve = compose([
+      { app: "desk", resources: { "notes.Note": { fields: { title: { label: "Subject", tones: { HIGH: "warning" } } } } } },
+      { app: "desk", route: "desk.all", resources: { "notes.Note": { fields: { title: { tones: { LOW: "neutral" } } } } } },
+    ]);
+    expect(resolve("desk", "desk.record").vocabulary.resources["notes.Note"]?.fields?.title).toEqual({
+      label: "Subject", tones: { HIGH: "warning", LOW: "neutral" },
+    });
+  });
+
+  test("a route label keeps the app's field tones", () => {
+    const resolve = compose([
+      { app: "desk", resources: { "notes.Note": { fields: { title: { tones: { HIGH: "warning" } } } } } },
+      { app: "desk", route: "desk.all", resources: { "notes.Note": { fields: { title: "Request" } } } },
+    ]);
+    expect(resolve("desk", "desk.record").vocabulary.resources["notes.Note"]?.fields?.title).toEqual({
+      label: "Request", tones: { HIGH: "warning" },
+    });
   });
 
   test("rejects competing declarations", () => {

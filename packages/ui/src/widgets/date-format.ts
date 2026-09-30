@@ -45,6 +45,8 @@ export interface HumanDateOptions {
   timeZone?: string;
   /** Reference date for year-sensitive or relative labels. */
   now?: Date;
+  /** List cells omit the current year; full labels retain it for record reads and hover. */
+  density?: "list" | "full";
 }
 
 let humanDateLocale = "en";
@@ -69,7 +71,7 @@ export function formatDate(value: DateFormatValue, options: HumanDateOptions = {
   return new Intl.DateTimeFormat(localeCode(options.locale), {
     month: "short",
     day: "numeric",
-    ...(year(date) !== year(now) ? { year: "numeric" } : {}),
+    ...(options.density === "full" || year(date) !== year(now) ? { year: "numeric" } : {}),
     ...(options.timeZone ? { timeZone: options.timeZone } : {}),
   }).format(date);
 }
@@ -148,10 +150,11 @@ export function formatDuration(
 /** Full timestamp; explicit zones retain seconds, while local widget labels omit them. */
 export function formatDateTime(
   value: DateFormatValue,
-  options: { timeZone?: string; locale?: string | Locale } = {},
+  options: HumanDateOptions = {},
 ): string {
   const date = dateFromValue(value);
   if (!date) return "";
+  if (options.density === "list") return formatDate(date, options);
   return new Intl.DateTimeFormat(localeCode(options.locale), {
     dateStyle: "medium",
     // Zoned formatting historically includes seconds; local widget labels do not.

@@ -228,6 +228,7 @@ export function ListViewContent<TRow extends Row = Row>({
 
   return (
     <ResourceListFrame
+      heading={chrome?.heading}
       className={className}
       presentation={presentation}
       toolbar={toolbar}

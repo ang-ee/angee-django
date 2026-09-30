@@ -1264,7 +1264,7 @@ describe("createApp route tree", () => {
     }]));
     const root = app.mount(host);
     try {
-      await waitFor(() => expect(host.querySelector(".bg-accent-soft")?.textContent).toBe("REVIEWED"));
+      await waitFor(() => expect(host.querySelector(".bg-accent-soft")?.textContent).toBe("Reviewed"));
     } finally {
       root.unmount();
       host.remove();

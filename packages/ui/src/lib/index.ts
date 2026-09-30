@@ -9,6 +9,7 @@ export { tv, type VariantProps } from "./variants";
 export { ANGEE_TW_MERGE_CONFIG } from "./tailwind-merge-config";
 export {
   TONES,
+  isTone,
   FILLS,
   toneFill,
   toneClass,

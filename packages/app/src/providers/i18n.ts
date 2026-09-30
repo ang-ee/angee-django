@@ -6,6 +6,7 @@ import type { AppVocabulary, RuntimeVocabulary } from "@angee/ui/runtime";
 import { canonicalModelLabel, type DataResourceMetadata, type ResourceVocabulary } from "@angee/metadata";
 import type { MenuTree } from "@angee/ui/chrome/menu-tree";
 import type { AddonRoute } from "../define-addon";
+import { isTone } from "@angee/ui/lib";
 
 export interface AngeeI18nProviderOptions {
   locale?: string;
@@ -89,8 +90,11 @@ export function composeAppVocabulary(
     for (const [spelling, words] of Object.entries(declaration.resources ?? {})) {
       const model = canonicalModelLabel(resources, spelling);
       const fields = new Set(resources.filter((resource) => resource.modelLabel === model).flatMap((resource) => (resource.fields ?? []).map((field) => field.name)));
-      for (const field of Object.keys(words.fields ?? {})) {
+      for (const [field, word] of Object.entries(words.fields ?? {})) {
         if (!fields.has(field)) throw new Error(`Vocabulary references unknown field "${model}.${field}".`);
+        if (typeof word !== "string") for (const [value, tone] of Object.entries(word.tones ?? {})) {
+          if (!value.trim() || !isTone(tone)) throw new Error(`Vocabulary field "${model}.${field}" names an unknown tone "${String(tone)}" for "${value}".`);
+        }
       }
       const relations = new Set(resources.filter((resource) => resource.modelLabel === model)
         .flatMap((resource) => (resource.grantable ?? []).map((relation) => relation.relation)));
@@ -131,7 +135,17 @@ export function composeAppVocabulary(
       Object.assign(vocabulary.menus, scope.menus);
       for (const [model, words] of Object.entries(scope.resources ?? {})) {
         const inherited = vocabulary.resources[model];
-        vocabulary.resources[model] = { ...inherited, ...words, fields: { ...inherited?.fields, ...words.fields } };
+        const fields = { ...inherited?.fields, ...words.fields };
+        for (const [field, word] of Object.entries(words.fields ?? {})) {
+          const previous = inherited?.fields?.[field];
+          if (previous !== undefined && (typeof word === "object" || typeof previous === "object")) {
+            const inheritedField = typeof previous === "string" ? { label: previous, tones: undefined } : previous;
+            const overrideField = typeof word === "string" ? { label: word, tones: undefined } : word;
+            fields[field] = { ...inheritedField, ...overrideField,
+              tones: { ...inheritedField.tones, ...overrideField.tones } };
+          }
+        }
+        vocabulary.resources[model] = { ...inherited, ...words, fields };
       }
     }
     const instance = languageOwner.cloneInstance({ forkResourceStore: true, lng: languageOwner.language });

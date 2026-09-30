@@ -57,7 +57,11 @@ An addon can specialize existing copy and declare named resource views:
 The referenced app root, route, menu IDs, message keys and metadata fields must
 exist. Duplicate vocabulary scopes fail composition. App scope precedes route
 scope; nearer route ancestors win. Scoped field labels override
-authored labels without altering wire metadata. Ordinary addon i18n bundles
+authored labels without altering wire metadata. A field may declare
+`{ label: "Priority", tones: { HIGH: "warning" } }` in place of a string label;
+the scoped map colors that field's badge, and route maps extend app maps.
+Labels still come from enum option descriptions or declared widget options.
+Ordinary addon i18n bundles
 still reject duplicate keys; scoped overrides use `vocabulary`.
 
 Preset IDs use the declaring addon's prefix and queries validate against emitted

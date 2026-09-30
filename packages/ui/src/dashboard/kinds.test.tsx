@@ -128,7 +128,7 @@ describe("dashboard table columns", () => {
     expect(within(rows[1]!).getAllByRole("cell").map((cell) => cell.textContent))
       .toEqual(["run-1", "Document intake", "Confirm details", "Pending review"]);
     expect(within(rows[2]!).getAllByRole("cell").map((cell) => cell.textContent))
-      .toEqual(["", "", "", ""]);
+      .toEqual(["—", "—", "—", "—"]);
   });
 
   test("defaults to selected logical fields in declaration order, excluding native identity", () => {
@@ -185,7 +185,7 @@ describe("dashboard table columns", () => {
     const rows = screen.getAllByRole("row");
     expect(within(rows[1]!).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["0", "Inbox", "Awaiting review"]);
     expect(within(rows[2]!).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["7", "chan_2", "Awaiting review"]);
-    expect(within(rows[3]!).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["", "", ""]);
+    expect(within(rows[3]!).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["—", "—", "—"]);
   });
 
   test.each([

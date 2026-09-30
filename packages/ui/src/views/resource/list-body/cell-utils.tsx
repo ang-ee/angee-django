@@ -36,9 +36,10 @@ export function cellContent<TRow extends Row>(
   const tone = columnTone(column, value);
   if (tone) {
     const label = value == null ? "" : String(value);
-    return <Badge tone={tone}>{enumValue?.label ?? (label ? statusLabel(label) : "-")}</Badge>;
+    return <Badge tone={tone}>{enumValue?.label ?? (label ? statusLabel(label) : "—")}</Badge>;
   }
   if (Array.isArray(value)) {
+    if (value.length === 0) return "—";
     return (
       <span className="inline-flex min-w-0 flex-wrap items-center gap-1">
         {value.map((item, index) => (
@@ -202,7 +203,7 @@ function formatMeasureValue(value: unknown): string {
 }
 
 function displayValue(value: unknown, t: UiTranslate): React.ReactNode {
-  if (value == null) return "";
+  if (value == null || value === "") return "—";
   if (typeof value === "boolean") return t(value ? "list.yes" : "list.no");
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);

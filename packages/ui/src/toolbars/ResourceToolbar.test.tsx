@@ -105,6 +105,7 @@ describe("ResourceToolbar list-kind regression", () => {
       favorites: [preset], activeFavoriteIds: [preset.id], onFavoriteToggle });
     const button = screen.getByRole("button", { name: "Open records" });
     expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.className).toContain("rounded-full");
     fireEvent.click(button);
     expect(onFavoriteToggle).toHaveBeenCalledWith(preset);
   });

@@ -20,7 +20,6 @@ export const enKnowledgeMessages: Record<string, string> = {
   "notes.added": "Note added.",
   "notes.bodyRequired": "Write a note before posting.",
   "notes.createError": "Could not create the note.",
-  "notes.bodyError": "Could not save the note.",
   "loading": "Loading knowledge",
   "vaults.unavailableTitle": "Knowledge unavailable",
   "vaults.emptyTitle": "No vaults",

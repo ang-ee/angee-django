@@ -29,6 +29,14 @@ export function TaskAccessCardSkeleton(): ReactElement {
   </Card>;
 }
 
+/** The pill and the sentence for each access state. */
+const STATE_COPY = {
+  approved: { pill: "access.state.approved", sentence: "access.copy.approved" },
+  denied: { pill: "access.state.denied", sentence: "access.copy.denied" },
+  pending: { pill: "access.state.pending", sentence: "access.copy.pending" },
+  unavailable: { pill: "access.state.unavailable", sentence: "access.copy.unavailable" },
+} as const;
+
 /** Render the Need owner's current access decision without another collection surface. */
 export function TaskAccessDecisions({
   needs, canManage = false,
@@ -45,20 +53,20 @@ export function TaskAccessDecisions({
     const name = need.claimed_name || need.party?.display_name || t("access.requester");
     const email = need.claimed_email;
     const verdict = need.access_verdict?.toUpperCase();
-    const state = verdict === "COMPLETED" ? "approved"
+    const state = STATE_COPY[verdict === "COMPLETED" ? "approved"
       : verdict === "REJECTED" ? "denied"
-        : need.access_decision?.is_open ? "pending" : "unavailable";
+        : need.access_decision?.is_open ? "pending" : "unavailable"];
     return <Card key={need.id}>
       <CardHeader className="flex-row flex-wrap items-center gap-2">
         <Avatar size="sm" initials={avatarInitials(name)} />
         <span className="font-medium">{name}</span>
         {email ? <span className="text-fg-muted">{email}</span> : null}
         <Badge shape="pill" tone={statusTone(need.access_verdict, { REJECTED: "danger" })}>
-          {t(`access.state.${state}`)}
+          {t(state.pill)}
         </Badge>
       </CardHeader>
       <CardContent className="pt-0 text-sm text-fg-muted">
-        {t(`access.copy.${state}`, { email: email || t("access.emailUnknown") })}
+        {t(state.sentence, { email: email || t("access.emailUnknown") })}
       </CardContent>
       <CardFooter className="flex-wrap">
         {canManage ? <TaskAccessActions need={need} /> : null}

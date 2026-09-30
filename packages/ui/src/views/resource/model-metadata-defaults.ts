@@ -17,6 +17,7 @@ import type { ModelFieldMetadata } from "@angee/metadata";
 import type { WidgetOption } from "../../widgets";
 import type { ColumnDescriptor, FieldDescriptor } from "../page";
 import { titleCase } from "../../lib/titleCase";
+import { isTone, type Tone } from "../../lib/tones";
 import { enumValueLabel, groupFieldLabel } from "./resource-view-list-body";
 
 /** A form field's resolved relation target — which model the picker lists, its
@@ -234,6 +235,10 @@ export function columnsWithMetadataDefaults<TRow extends object>(
   return columns.map((column) => {
     const field = metadata?.fields[column.field];
     const options = enumOptions(field);
+    const widget = column.widget ?? (field?.kind === "enum" ? "statusBadge" : field?.widget);
+    const vocabularyTones = field?.tones
+      ? Object.fromEntries(Object.entries(field.tones).filter((entry): entry is [string, Tone] => isTone(entry[1])))
+      : undefined;
     // A relation-terminal column (`product` or `project.product`) names a GraphQL
     // object, which cannot be selected as a leaf. The metadata owner resolves its
     // id + record-representation leaves and the scalar display path, so the query
@@ -255,23 +260,24 @@ export function columnsWithMetadataDefaults<TRow extends object>(
         ? { selectionPaths: relationRepresentation.selectionPaths }
         : {}),
       header: fieldLabel(column.field, field, column.header),
-      // A bare column inherits the backend's explicit widget (e.g. `"money"` over a
-      // Decimal), so its cell renders through the registered widget instead of the raw
-      // scalar. Only the explicit backend widget is inherited — kind/scalar-derived
-      // defaults stay out, because list cells render enums, relations, and plain
-      // scalars natively (unlike a form, which needs an edit widget per field). A
+      // A bare enum uses the badge; other columns inherit only the backend's
+      // explicit widget (e.g. `"money"` over a Decimal). Scalar and relation
+      // cells otherwise render natively. A
       // relation resolved to its label path renders the scalar label as text, so it
       // drops the relation's `many2one` edit widget.
-      ...(!relationLabelField && column.widget === undefined && field?.widget
-        ? { widget: field.widget }
+      ...(!relationLabelField && column.widget === undefined && widget
+        ? { widget }
         : {}),
       ...(column.currencyField === undefined && field?.currencyField
         ? { currencyField: field.currencyField }
         : {}),
       ...(column.options === undefined &&
-      isEnumOptionWidget(column.widget) &&
+      isEnumOptionWidget(widget ?? undefined) &&
       options.length > 0
         ? { options }
+        : {}),
+      ...(column.tone === undefined && vocabularyTones
+        ? { tone: vocabularyTones }
         : {}),
     };
   });

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { AppRuntimeProvider } from "../../runtime";
 import type { TypedDocumentNode } from "@angee/refine";
@@ -34,6 +34,7 @@ vi.mock("./authored-resource-mutation", () => ({
 import {
   DeclaredRowActions,
   defineRowAction,
+  useDescriptorRowActions,
   useRowActionsController,
   useRowActionsSurface,
   type RowActionDeclaration,
@@ -61,6 +62,34 @@ const ROWS: readonly TestRow[] = [
 ];
 
 describe("declared row actions", () => {
+  test("descriptor permissions omit verbs the row does not grant", () => {
+    const { result } = renderHook(() => useDescriptorRowActions([{ id: "approve", label: "Approve", permission: "write" }]));
+    const action = result.current.rowActions[0]!;
+    expect(action.visible({ id: "one", permissions: [] })).toBe(false);
+    expect(action.visible({ id: "two", permissions: ["write"] })).toBe(true);
+  });
+  test("keeps the primary verb visible, reveals secondary verbs on row hover, and retains menu verbs", async () => {
+    const action = (id: string, extras: { primary?: boolean; placement?: "menu" } = {}) => defineRowAction<TestRow>({
+      kind: "page", id, label: id, variant: "ghost", pendingPolicy: "disable-actions",
+      onSelect: vi.fn(), ...extras,
+    });
+    const menuSelect = vi.fn();
+    const actions = [action("Accept", { primary: true }), action("Inspect"), defineRowAction<TestRow>({
+      kind: "page", id: "remove", label: "Remove", variant: "danger", placement: "menu",
+      pendingPolicy: "disable-actions", onSelect: menuSelect,
+    })];
+    function RowSet() {
+      const controller = useRowActionsController<TestRow>();
+      return <div className="group/record"><DeclaredRowActions actions={actions} controller={controller} row={ROWS[0]!} /></div>;
+    }
+    render(<RowSet />);
+    expect(screen.getByRole("button", { name: "Accept" }).className).toContain("bg-brand");
+    expect(screen.getByRole("button", { name: "Inspect" }).parentElement?.className).toContain("group-hover/record:opacity-100");
+    expect(screen.getByRole("button", { name: "Actions" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Remove" }));
+    await waitFor(() => expect(menuSelect).toHaveBeenCalledWith(ROWS[0]));
+  });
   test("preview leaves row verbs visible but disables pointer and keyboard activation", () => {
     render(<AppRuntimeProvider runtime={{ auth: { user: { id: "person", name: "Person" }, status: "authenticated", hasRole: () => false,
       viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
