@@ -55,6 +55,38 @@ test("linked UI keeps the complete CodeMirror graph out of dependency optimizati
   }
 });
 
+test("preloads generated metadata by source path with a custom asset name and base", async () => {
+  const webRoot = mkdtempSync(join(tmpdir(), "angee-vite-metadata-"));
+  try {
+    writeFileSync(join(webRoot, "package.json"), '{"dependencies":{}}\n');
+    const config = await defineAngeeWebViteConfig({
+      prebundleAngeePackages: false,
+      gqlRuntimeDir: join(webRoot, "runtime", "gql"),
+      webRoot,
+    });
+    const plugin = (config.plugins as Plugin[]).find((entry) => entry.name === "angee:schema-metadata-preload");
+    expect(plugin?.apply).toBe("build");
+    const resolveHook = plugin?.configResolved;
+    const setBase = (typeof resolveHook === "function" ? resolveHook : resolveHook?.handler) as
+      ((config: { base: string }) => void) | undefined;
+    setBase?.({ base: "/preview/" });
+    const htmlHook = plugin?.transformIndexHtml;
+    const transform = (typeof htmlHook === "function" ? htmlHook : htmlHook?.handler) as
+      ((html: string, context: { bundle: Record<string, unknown> }) => unknown) | undefined;
+    const tags = transform?.("", { bundle: {
+      metadata: { type: "asset", fileName: "data/custom-name.bin", originalFileNames: ["/project/runtime/schemas/public.metadata.json"] },
+      decoy: { type: "asset", fileName: "data/console.metadata-abc.json", originalFileNames: ["/project/other.json"] },
+    } });
+    expect(tags).toEqual([{
+      tag: "link",
+      attrs: { rel: "preload", as: "fetch", crossorigin: "anonymous", href: "/preview/data/custom-name.bin" },
+      injectTo: "head",
+    }]);
+  } finally {
+    rmSync(webRoot, { recursive: true, force: true });
+  }
+});
+
 // The prebundle cache-bust: `optimizeDeps.force` flips true only when a linked
 // `@angee/*` package source changed since the last start, so a workspace edit is
 // never served stale while an unchanged, install-stable tree stays cached.

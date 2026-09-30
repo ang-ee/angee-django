@@ -191,19 +191,21 @@ function emitAppModule(runtimeDir, manifest, schemaNames, addonSources, installe
   });
   const schemaImports = [];
   const schemaEntries = schemaNames.map((name, index) => {
+    // Metadata is bulk generated data, not code: a URL import lets the browser
+    // parse JSON instead of inlining it into the entry chunk or a dev sourcemap.
     schemaImports.push(
-      `import schema${index}Metadata from ${JSON.stringify(`../schemas/${name}.metadata.json`)};`,
+      `import schema${index}MetadataUrl from ${JSON.stringify(`../schemas/${name}.metadata.json?url&no-inline`)};`,
       `import { operationDocuments as schema${index}Documents } from ${JSON.stringify(`../gql/${name}/actions`)};`,
     );
     const sdlPath = path.join(runtimeDir, "schemas", `${name}.graphql`);
     const lines = [
-      `  ${JSON.stringify(name)}: {`,
-      `    url: "/graphql/${name}/",`,
-      `    metadata: schema${index}Metadata,`,
-      `    operationDocuments: schema${index}Documents,`,
+      `    ${JSON.stringify(name)}: {`,
+      `      url: "/graphql/${name}/",`,
+      `      metadata: schema${index}Metadata,`,
+      `      operationDocuments: schema${index}Documents,`,
     ];
-    if (schemaIsLive(sdlPath)) lines.push("    live: true,");
-    lines.push("  },");
+    if (schemaIsLive(sdlPath)) lines.push("      live: true,");
+    lines.push("    },");
     return lines.join("\n");
   });
   const addonValues = addonPackages.map((_pkg, index) => `addon${index}`).join(", ");
@@ -220,9 +222,21 @@ function emitAppModule(runtimeDir, manifest, schemaNames, addonSources, installe
     "  throw new Error(\"Composed theme contributions must reference their package's canonical ./themes definitions in id order.\");",
     "}",
     "",
-    "export const schemas = {",
+    "async function fetchSchemaMetadata(url: string): Promise<unknown> {",
+    "  const response = await fetch(url);",
+    '  if (!response.ok) throw new Error(`Failed to load schema metadata from ${url}: ${response.status} ${response.statusText}`);',
+    // createApp validates the parsed wire metadata at its existing normalization boundary.
+    "  return await response.json();",
+    "}",
+    "",
+    "export async function loadComposedSchemas() {",
+    `  const [${schemaNames.map((_name, index) => `schema${index}Metadata`).join(", ")}] = await Promise.all([`,
+    ...schemaNames.map((_name, index) => `    fetchSchemaMetadata(schema${index}MetadataUrl),`),
+    "  ]);",
+    "  return {",
     schemaEntries.join("\n"),
-    "} as const;",
+    "  } as const;",
+    "}",
     "",
   ].join("\n");
   const outPath = path.join(runtimeDir, "web", "app.ts");
