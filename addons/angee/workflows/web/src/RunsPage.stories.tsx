@@ -6,7 +6,7 @@ import { createRouteHref, JsonValueSchema } from "@angee/ui";
 
 import { RunsPage } from "./RunsPage";
 import type { Run, StepRun } from "./testing/documents.console";
-import { runFixture, runResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
+import { runFixture, runResourceFixture, runEvidenceResourceFixture, runSubjectFixture, stepRunFixture, stepRunResourceFixture, workflowResourceFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture, watchResourceFixture } from "./testing";
 import { workflowVersionFixture } from "./catalogue/testing";
 import { triggerEventResourceFixture } from "./trigger-testing";
 
@@ -54,9 +54,11 @@ const runtime = {
 
 /** Real router, query transport and generated mutation documents over retained fixture rows. */
 export function RunStory({ list = false, waiting = false, redacted = false, unavailable = false, queryError = false, rejectAction = false,
-  run, steps, children, onRequest }: {
+  run, steps, children, evidence = [], onRequest }: {
   list?: boolean; waiting?: boolean; redacted?: boolean; unavailable?: boolean; queryError?: boolean; rejectAction?: boolean;
-  run?: Run; steps?: readonly StepRun[]; children?: readonly Run[]; onRequest?: (request: RunRequest) => void;
+  run?: Run; steps?: readonly StepRun[]; children?: readonly Run[];
+  evidence?: readonly { id: string; record_model: string | null; record_id: string | null }[];
+  onRequest?: (request: RunRequest) => void;
 }) {
   const schemas = useMemo(() => {
     let current = run ?? runFixture();
@@ -98,6 +100,9 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       if (query.includes("user_by_pk")) return jsonResponse({ data: { user_by_pk: current.run_as } });
       if (query.includes("triggerevent_by_pk")) return jsonResponse({ data: { triggerevent_by_pk: { id: "wte_review", display_name: "Review event" } } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
+      if (query.includes("workflowrunevidence")) return jsonResponse({ data: {
+        workflowrunevidence: evidence, workflowrunevidence_aggregate: { aggregate: { count: evidence.length } },
+      } });
       if (query.includes("steprun_by_pk")) return jsonResponse({ data: { steprun_by_pk: currentSteps.find((step) => step.id === variables.id) ?? null } });
       if (query.includes("stepattempt_by_pk")) return jsonResponse({ data: { stepattempt_by_pk: currentSteps.flatMap((step) => step.attempts).find((attempt) => attempt.id === variables.id) } });
       for (const [name, rows] of [["stepattempt", currentSteps.flatMap((step) => step.attempts)], ["stepartifact", currentSteps.flatMap((step) => step.artifacts)], ["stepwatch", currentSteps.flatMap((step) => step.watches)]] as const) {
@@ -119,11 +124,11 @@ export function RunStory({ list = false, waiting = false, redacted = false, unav
       return jsonResponse({ data: { workflowrun: rows, workflowrun_aggregate: { aggregate: { count: rows.length } } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
-      runResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
+      runResourceFixture, runEvidenceResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, artifactResourceFixture, userResourceFixture,
       triggerEventResourceFixture, watchResourceFixture,
     ] } } } };
-  }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, onRequest]);
+  }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"
     initialEntry={list ? "/workflows/runs" : "/workflows/runs/wfr_review"} runtime={runtime}
     resourceName="workflows.WorkflowRun" resourceLabel="Runs" operationDocuments={documents}>

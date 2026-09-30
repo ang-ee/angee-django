@@ -13,7 +13,7 @@ test("enable and disable dispatch the displayed trigger through native actions",
   expect(enabled.getAttribute("aria-checked")).toBe("false");
   expect(enabled.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(await screen.findByRole("button", { name: "Enable trigger" }));
-  const confirmation = await screen.findByRole("dialog");
+  const confirmation = await screen.findByRole("alertdialog");
   expect(within(confirmation).getByText("member on trigger editor (notes role)")).toBeTruthy();
   expect(within(confirmation).getByText("User: Review owner")).toBeTruthy();
   expect(within(confirmation).getByText("Group: Reviewers")).toBeTruthy();

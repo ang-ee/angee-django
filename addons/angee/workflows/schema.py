@@ -117,6 +117,7 @@ class WorkflowRunType(RecordReferenceNode):
         only=["outcome", "version_id"], prefetch_related=[_RUN_POLICY_VERSION],
     )
     error: str | None
+    failure_reason: str | None = strawberry_django.field(only=["outcome", "error", "output"])
     request_key: auto
     created_at: auto
     updated_at: auto

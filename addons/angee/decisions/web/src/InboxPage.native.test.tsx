@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 
-import { Conflict, Inbox, InvalidAttempt, Open, ReadOnly, Settled, SettledWithoutFacts } from "./InboxPage.stories";
+import { Conflict, Inbox, InvalidAttempt, Open, PendingWithoutFacts, ReadOnly, Settled, SettledWithoutFacts, SiblingClosed } from "./InboxPage.stories";
 
 beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
 afterEach(cleanup);
@@ -41,6 +41,19 @@ describe("decision stories with native router, queries, and generated mutations"
     render(Settled.render());
     await screen.findByText(/Already reviewed/);
     for (const label of ["Expires", "Resolved by", "Resolved at", "Closed reason"]) expect(screen.getByText(label)).toBeTruthy();
+  });
+
+  test("empty pending facts omit the overview group", async () => {
+    render(PendingWithoutFacts.render());
+    await screen.findByRole("heading", { name: "Review" });
+    expect(screen.queryByText("Requester")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Decision" })).toBeNull();
+  });
+
+  test("a sibling-settled seat shows its closed reason as its status", async () => {
+    render(SiblingClosed.render());
+    expect((await screen.findAllByText("Sibling settled")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("listitem", { name: "Pending" })).toBeNull();
   });
 
   test("opens an inbox seat, validates its action branch, and records the answer through the real transport", async () => {
@@ -86,6 +99,8 @@ describe("decision stories with native router, queries, and generated mutations"
     expect(screen.queryByRole("button", { name: "Decide" })).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Action" })).toBeNull();
+    expect(screen.getByText("Note")).toBeTruthy();
+    expect(screen.getByText("Reference")).toBeTruthy();
   });
 
   test("retains the answer draft and refreshes the revision after a rejected attempt", async () => {

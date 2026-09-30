@@ -31,6 +31,13 @@ export function RunsList({ baseFilter, embedded = false }: {
       { id: "steps", label: t("run.steps"), render: ({ recordId }) => <StepRuns runId={recordId} /> },
       { id: "children", label: t("run.children"), render: ({ recordId }) =>
         <RunsList embedded baseFilter={{ "parent_step.run": { exact: recordId } }} /> },
+      { id: "evidence", label: t("run.evidence"), render: ({ recordId }) =>
+        <List resource="workflows.WorkflowRunEvidence" scope="local" presentation="embedded"
+          baseFilter={{ run: { exact: recordId } }} fields={["record_model"]} emptyContent={t("run.noEvidence")}>
+          <Column field="record_id" header={t("run.evidence")} render={(row) =>
+            typeof row.record_model === "string" && typeof row.record_id === "string"
+              ? <RecordReference model={row.record_model} id={row.record_id} /> : t("run.redactedEvidence")} />
+        </List> },
     ]}>
     <List order={{ created_at: "DESC" }} defaultGroups={{ list: { field: "status" }, board: { field: "status" } }}
       emptyContent={t("runs.empty")}>
@@ -62,7 +69,8 @@ export function RunsList({ baseFilter, embedded = false }: {
         <Field name="parent_step.run" label={t("run.parent")} showWhen={(row) => Boolean(rowValueAtPath(row, "parent_step.run"))} />
         <Field name="trigger_event" label={t("trigger.event")} showWhen={(row) => Boolean(row.trigger_event)} />
       </Group>
-      <Field name="error" label={t("run.retainedError")} widget="textarea" showWhen={(row) => Boolean(row.error)} />
+      <Field name="failure_reason" label={t("run.failureReason")} widget="textarea"
+        showWhen={(row) => row.outcome === "error" && Boolean(row.failure_reason)} />
       <Field name="input" label={t("run.input")} widget="json" />
       <Field name="output" label={t("run.output")} widget="json" />
       <Action id="cancel" label={t("action.cancel_workflow_run")} primary danger

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import strawberry
 import strawberry_django
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
@@ -63,6 +64,7 @@ def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.Query
     ))
 
 
+@strawberry.type
 class RecordReferenceNode(AngeeNode):
     """Project a generic record reference only while its current target is readable."""
 

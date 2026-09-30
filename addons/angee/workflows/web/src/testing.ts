@@ -38,7 +38,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
   { name: "origin", kind: "enum", values: origins, readable: true, aggregatable: false,
     filterable: true, groupable: true,
     creatable: false, updatable: false, requiredOnCreate: false },
-  ...["error", "can_cancel", "can_reprocess", "input", "output"].map((name) => ({
+  ...["error", "failure_reason", "can_cancel", "can_reprocess", "input", "output"].map((name) => ({
     name, kind: "scalar" as const, scalar: name.startsWith("can_") ? "Boolean" : name === "input" || name === "output" ? "JSON" : "String",
     readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
   })),
@@ -48,7 +48,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
   }))],
   query: testResourceQuery({ fields: {
     ...Object.fromEntries([
-      "id", "origin", "outcome", "subject_model", "subject_id", "error", "input", "output", "can_cancel", "can_reprocess",
+      "id", "origin", "outcome", "subject_model", "subject_id", "error", "failure_reason", "input", "output", "can_cancel", "can_reprocess",
       "run_as.id", "run_as.display_name", "reprocess_of.id",
       "version.id", "version.number", "version.workflow.id", "version.workflow.name",
       "version.workflow.key", "parent_step.id", "parent_step.run.id", "trigger_event.id",
@@ -78,6 +78,18 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
       server: { input: "VERSION__WORKFLOW", key: "version__workflow_id",
         labelInput: "VERSION__WORKFLOW__NAME", labelKey: "version__workflow__name" },
       drill: { kind: "identity", field: "version.workflow", valueKey: "version__workflow_id", nullMode: "isNull", valueMap: [] } }),
+  } }),
+});
+
+export const runEvidenceResourceFixture = testDataResource("workflows.WorkflowRunEvidence", {
+  capabilities: ["list", "detail"],
+  roots: { list: "workflowrunevidence", detail: "workflowrunevidence_by_pk", aggregate: "workflowrunevidence_aggregate" },
+  typeNames: { filter: "workflowrunevidence_bool_exp", order: "workflowrunevidence_order_by" },
+  fields: ["id", "record_model", "record_id"].map((name) => retainedField(name)),
+  query: testResourceQuery({ fields: {
+    id: testQueryField("id"), record_model: testQueryField("record_model"), record_id: testQueryField("record_id"),
+    run: testQueryField("run", { kind: "relation", scalar: "ID",
+      filter: { field: "run", scalar: "ID", values: [], operators: ["exact"] } }),
   } }),
 });
 
@@ -169,7 +181,7 @@ export function runFixture(overrides: Partial<Run> = {}): Run {
   return {
     id: "wfr_review", status: "FAILED", origin: "MANUAL", subject_model: "notes.Note", subject_id: "nte_7",
     can_cancel: false, can_reprocess: true,
-    run_as: { id: "usr_operator", display_name: "Operator" }, input: { reference: "R-7" }, output: {}, outcome: "", error: "",
+    run_as: { id: "usr_operator", display_name: "Operator" }, input: { reference: "R-7" }, output: {}, outcome: "", error: "", failure_reason: null,
     created_at: "2026-09-29T09:00:00Z", finished_at: "2026-09-29T09:01:00Z", reprocess_of: null, parent_step: null, trigger_event: null,
     version: { id: "wfv_review", number: 2,
       workflow: { id: "wfl_review", key: "record_review", name: "Record review", subject_model: "notes.Note" } },

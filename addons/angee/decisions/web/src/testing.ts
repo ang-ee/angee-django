@@ -5,6 +5,9 @@ const verdicts = [
   { value: "PENDING", description: "Pending" }, { value: "COMPLETED", description: "Completed" },
   { value: "REJECTED", description: "Rejected" },
 ];
+const closedReasons = [
+  { value: "RESOLVED", description: "Resolved" }, { value: "SIBLING_SETTLED", description: "Sibling settled" },
+];
 
 export const decisionGroupFixture = testDataResource("decisions.DecisionGroup", {
   capabilities: ["list", "detail"], roots: { list: "decision_groups", detail: "decision_groups_by_pk" },
@@ -15,6 +18,8 @@ export const decisionResourceFixture = testDataResource("decisions.Decision", {
   capabilities: ["list", "detail"],
   recordRepresentation: "kind_label",
   fields: [{ name: "verdict", kind: "enum", scalar: "String", values: verdicts, readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
+  }, { name: "closed_reason", kind: "enum", scalar: "String", values: closedReasons, readable: true,
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
   }, { name: "assignees", kind: "list", scalar: null, relationModelLabel: "iam.User", readable: true,
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,

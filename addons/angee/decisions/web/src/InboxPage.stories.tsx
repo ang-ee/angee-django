@@ -12,6 +12,8 @@ export default { title: "Decisions/Inbox", parameters: { layout: "fullscreen" } 
 export const Open = { render: () => <DecisionStory /> };
 export const Settled = { render: () => <DecisionStory settled /> };
 export const SettledWithoutFacts = { render: () => <DecisionStory settled emptyFacts /> };
+export const PendingWithoutFacts = { render: () => <DecisionStory pendingEmpty /> };
+export const SiblingClosed = { render: () => <DecisionStory siblingClosed /> };
 export const Inbox = { render: () => <DecisionStory inbox /> };
 export const Conflict = { render: () => <DecisionStory conflict /> };
 export const InvalidAttempt = { render: () => <DecisionStory invalidAttempt /> };
@@ -29,8 +31,9 @@ const runtime = {
   auth: { user: { id: "usr_reviewer", name: "Reviewer" }, status: "authenticated" as const, hasRole: () => false },
 };
 
-function DecisionStory({ settled = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false, emptyFacts = false }: {
+function DecisionStory({ settled = false, inbox = false, conflict = false, invalidAttempt = false, readOnly = false, emptyFacts = false, pendingEmpty = false, siblingClosed = false }: {
   settled?: boolean; inbox?: boolean; conflict?: boolean; invalidAttempt?: boolean; readOnly?: boolean; emptyFacts?: boolean;
+  pendingEmpty?: boolean; siblingClosed?: boolean;
 }) {
   const schemas = useMemo(() => {
     let conflicting = conflict;
@@ -39,6 +42,8 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
     if (settled) current = { ...current, is_open: false, can_act: false, verdict: "COMPLETED", closed_reason: "RESOLVED", resolution: { action: "accept", note: "Already reviewed", reference: "R-7" },
       resolved_by: { display_name: "Reviewer" }, resolved_at: "2026-09-29T09:30:00Z" };
     if (emptyFacts) current = { ...current, expires_at: null, resolved_by: null, resolved_at: null, closed_reason: null };
+    if (pendingEmpty) current = { ...current, requester: null, expires_at: null };
+    if (siblingClosed) current = { ...current, is_open: false, can_act: false, verdict: "PENDING", closed_reason: "SIBLING_SETTLED", resolution: {} };
     const fixture = storySchema(async (_input, init) => {
       const { query, variables } = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       if (query.includes("decide(")) {
@@ -67,7 +72,7 @@ function DecisionStory({ settled = false, inbox = false, conflict = false, inval
       decisionSubjectFixture,
       decisionUserFixture,
     ] } } } };
-  }, [settled, conflict, invalidAttempt, readOnly, emptyFacts]);
+  }, [settled, conflict, invalidAttempt, readOnly, emptyFacts, pendingEmpty, siblingClosed]);
   return <RoutedRuntimeFixture activeSchema="console" schemas={schemas} collectionPath="/decisions" initialEntry={inbox ? "/decisions" : "/decisions/dcn_review"}
     runtime={runtime} resourceName={DECISION_MODEL} resourceLabel="Decisions" operationDocuments={documents}>
     <InboxPage />

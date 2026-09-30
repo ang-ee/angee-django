@@ -2,7 +2,7 @@ import { graphql, type DocumentType } from "@angee/gql/console";
 
 const RunFields = graphql(`
   fragment WorkflowRunFixture on WorkflowRunType {
-    id status origin outcome error input output created_at finished_at
+    id status origin outcome error failure_reason input output created_at finished_at
     can_cancel can_reprocess run_as { id display_name }
     subject_model subject_id reprocess_of { id }
     parent_step { id run { id } }

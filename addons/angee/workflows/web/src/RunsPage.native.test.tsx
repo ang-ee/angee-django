@@ -62,6 +62,19 @@ test("parent references and the child tab compose the existing scoped runs list"
   await waitFor(() => expect(document.querySelector('a[href="/workflows/runs/wfr_child"]')).not.toBeNull());
 });
 
+test("retained evidence links readable records and marks redacted records", async () => {
+  const requests: RunRequest[] = [];
+  render(<RunStory evidence={[
+    { id: "wre_readable", record_model: "notes.Note", record_id: "nte_7" },
+    { id: "wre_hidden", record_model: null, record_id: null },
+  ]} onRequest={(request) => requests.push(request)} />);
+  fireEvent.click(await screen.findByRole("tab", { name: "Evidence" }));
+  expect((await screen.findByRole("link", { name: "Review notes" })).getAttribute("href")).toBe("/notes/nte_7");
+  expect(await screen.findByText("Record unavailable")).toBeTruthy();
+  expect(requests.find(({ query }) => query.includes("workflowrunevidence("))?.variables.where)
+    .toEqual({ _and: [{ run: { _eq: "wfr_review" } }] });
+});
+
 test("a run waiter shows its target as a normal record reference", async () => {
   render(<RunStory steps={[stepRunFixture({ status: "WAITING", waiting_kind: "RUN",
     awaited_run: { id: "wfr_child" }, can_retry: false })]} />);
@@ -273,7 +286,7 @@ test("run query failures retain the shared retry action", async () => {
 
 test("backend capability facts hide operator actions and retain complete error evidence", async () => {
   const error = "Retained details: " + "all evidence remains visible. ".repeat(50);
-  render(<RunStory run={runFixture({ can_reprocess: false, error })} />);
+  render(<RunStory run={runFixture({ can_reprocess: false, outcome: "error", failure_reason: error })} />);
   expect(await screen.findByText(error.trim())).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
 });

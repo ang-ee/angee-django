@@ -3,12 +3,13 @@ import { rowValueAtPath } from "@angee/metadata";
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useMemo, type ReactElement } from "react";
 import {
-  Action, Column, ErrorBanner, Field, Form, Group, List, LoadingPanel,
+  Action, Column, ErrorBanner, Field, Form, Group, LabeledDescriptorField, List, LoadingPanel,
   RecordReference, ResourceList, useActionOutcomeMutation, useAppRuntime,
   useEnumOptions, useRouteHref, useRuntimeAuth, useUiT,
   type RecordPanelContext, type ResourceViewFilter, type StringIdRow,
 } from "@angee/ui";
 import { jsonSchemaActionArgs } from "@angee/ui/views/json-schema";
+import { parseFormSpecPayload } from "@angee/ui";
 
 import { DecisionContext } from "./DecisionContext";
 import { DECISION_MODEL, DECISION_MODELS, DecisionDocument } from "./documents.console";
@@ -22,6 +23,7 @@ export function InboxPage(): ReactElement {
   const { user } = useRuntimeAuth();
   const { widgets } = useAppRuntime();
   const verdicts = useEnumOptions(DECISION_MODEL, "verdict");
+  const closedReasons = useEnumOptions(DECISION_MODEL, "closed_reason");
   const [decide] = useActionOutcomeMutation<ActionFieldName>("decide", {
     dataProviderName: "console", invalidateModels: DECISION_MODELS,
   });
@@ -54,19 +56,25 @@ export function InboxPage(): ReactElement {
         <Column field="verdict" header={t("inbox.verdict")} widget="statusBadge" />
       </List>
       <Form resource={DECISION_MODEL} readOnly returning={["revision", "is_open", "can_act", "form_schema", "resolution", "subject_model", "subject_id"]}
+        formExtras={({ record }) => record?.is_open === false && record.verdict !== "PENDING" && record.resolution
+          ? <DecisionAnswer schema={record.form_schema} resolution={record.resolution} /> : null}
         headerExtras={({ record }) => typeof record?.subject_model === "string" && typeof record.subject_id === "string"
           ? <RecordReference model={record.subject_model} id={record.subject_id} /> : null}>
         <Field name="is_open" hidden />
         <Field name="kind_label" title />
-        <Field name="verdict" widget="statusbar" options={verdicts} />
+        <Field name="verdict" widget="statusbar" options={verdicts} resolve={(row) =>
+          row.is_open === false && row.verdict === "PENDING" && typeof row.closed_reason === "string"
+            ? { name: "verdict", options: closedReasons.filter((option) => option.value.toUpperCase() === row.closed_reason),
+                valueCodec: { toControl: () => row.closed_reason, fromControl: (value) => value } }
+            : { name: "verdict", options: verdicts }} />
         <Group label={t("decision.title")} columns={2}>
-          <Field name="requester.display_name" label={t("decision.requester")} />
+          <Field name="requester.display_name" label={t("decision.requester")}
+            showWhen={(row) => Boolean(rowValueAtPath(row, "requester.display_name"))} />
           <Field name="expires_at" label={t("decision.expiry")} showWhen={(row) => row.is_open === false && Boolean(row.expires_at)} />
           <Field name="resolved_by.display_name" label={t("decision.resolver")} showWhen={(row) => row.is_open === false && Boolean(rowValueAtPath(row, "resolved_by.display_name"))} />
           <Field name="resolved_at" label={t("decision.resolvedAt")} showWhen={(row) => row.is_open === false && Boolean(row.resolved_at)} />
           <Field name="closed_reason" label={t("decision.closedReason")} showWhen={(row) => row.is_open === false && Boolean(row.closed_reason)} />
         </Group>
-        <Field name="resolution" widget="json" label={t("decision.answer")} showWhen={(record) => record.is_open === false} />
         <Action id="decide" label={t("decision.submit")} primary icon="check"
           visibleWhen={(record) => record.is_open === true && record.can_act === true}
           args={({ record }) => {
@@ -91,6 +99,26 @@ export function InboxPage(): ReactElement {
       </Form>
     </ResourceList>
   );
+}
+
+function DecisionAnswer({ schema, resolution }: { schema: unknown; resolution: unknown }): ReactElement {
+  const t = useDecisionsT();
+  const uiT = useUiT();
+  const { widgets } = useAppRuntime();
+  const values = useMemo(() => parseFormSpecPayload(resolution), [resolution]);
+  const definition = useMemo(() => jsonSchemaActionArgs(schema, widgets, { initialValues: resolution, translate: uiT }),
+    [schema, widgets, resolution, uiT]);
+  const fields = typeof definition.fields === "function" ? definition.fields(values) : definition.fields;
+  return <section className="space-y-3">
+    <h3 className="border-b border-border-subtle pb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+      {t("decision.answer")}
+    </h3>
+    <div className="grid gap-4 sm:grid-cols-2">
+      {fields.filter((field) => rowValueAtPath(values, field.name) !== undefined).map((field) =>
+        <LabeledDescriptorField key={field.name} field={field.name === "action" ? { ...field, label: t("decision.action") } : field}
+          value={rowValueAtPath(values, field.name)} dialogValues={values} readOnly onChange={() => {}} />)}
+    </div>
+  </section>;
 }
 
 /** Lazy retained context composes consumer slots in the record tab and action form. */

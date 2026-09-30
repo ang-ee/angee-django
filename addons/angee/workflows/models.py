@@ -36,6 +36,7 @@ from angee.workflows.managers import (
 )
 from angee.workflows.resources import TriggerResource, WorkflowDefinitionResource
 from angee.workflows.states import (
+    ERROR_OUTCOME,
     NAME_MAX_LENGTH,
     AttemptResult,
     RunOrigin,
@@ -225,6 +226,24 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
     def is_terminal(self) -> bool:
         """Whether this run has finished its lifecycle."""
         return self.status in RunStatus.terminal_values()
+
+    @property
+    def failure_reason(self) -> str | None:
+        """Surface the retained reader-facing failure from the run or its failed step.
+
+        ``error`` stays out: it is gated to run writers (``read__error``).
+        """
+        if self.outcome != ERROR_OUTCOME:
+            return None
+        if isinstance(self.output, dict) and isinstance(self.output.get("error"), str) and self.output["error"]:
+            return self.output["error"]
+        with system_context(reason="workflows.failure_reason"):
+            outputs = self.step_runs.filter(status=StepRunStatus.FAILED).order_by(
+                "rank", "map_index", "pk",
+            ).values_list("output", flat=True)
+            return next((output["error"] for output in outputs
+                         if isinstance(output, dict) and isinstance(output.get("error"), str)
+                         and output["error"]), None)
 
     def can_cancel(self, actor: Any) -> bool:
         """A writer may cancel active execution or clean up a terminal run's open rows."""
