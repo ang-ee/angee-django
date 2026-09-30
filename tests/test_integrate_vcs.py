@@ -157,7 +157,7 @@ def test_run_sync_refreshes_sources_and_records_lifecycle(composed_tables: None)
     assert vcs.last_sync_started_at == now
     assert vcs.last_sync_completed_at is not None
     assert vcs.last_sync_completed_at >= now
-    assert vcs.last_sync_status == "ok"
+    assert vcs.sync_stage == vcs.SyncStage.COMPLETED
     assert vcs.last_sync_items == 1
     assert vcs.next_sync_at == vcs.last_sync_completed_at + timedelta(seconds=vcs.poll_interval)
 

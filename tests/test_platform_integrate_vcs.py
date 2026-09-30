@@ -88,8 +88,8 @@ def test_remote_catalogue_reconciles_metadata_and_retains_removed_declarations(
     assert row.label == ""
     assert str(row) == "catalog_remote.base"
     assert row.namespace == "catalog_remote"
-    assert row.source == Addon.Source.REMOTE
-    assert row.state == Addon.State.DISABLED
+    assert row.source == Addon.AddonSource.REMOTE
+    assert row.state == Addon.AddonState.DISABLED
     assert row.description == "Remote declaration"
     assert row.keywords == ["catalogue"]
     assert row.category == "Integration"
@@ -109,14 +109,14 @@ def test_remote_catalogue_reconciles_metadata_and_retains_removed_declarations(
     assert source.refresh() == 0
     with system_context(reason="test catalogue read"):
         row.refresh_from_db()
-    assert row.state == Addon.State.REMOVED
+    assert row.state == Addon.AddonState.REMOVED
     assert row.description == "Updated declaration"
     assert row.depends_on == ["angee.iam", "catalog_remote.dependency"]
     assert row.vcs_source_id == source.pk
     assert row.vcs_path == "addons/base"
 
 
-@pytest.mark.parametrize("origin_kind", [Addon.Source.LOCAL, Addon.Source.INSTALLED])
+@pytest.mark.parametrize("origin_kind", [Addon.AddonSource.LOCAL, Addon.AddonSource.INSTALLED])
 def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it_becomes_remote(
     catalog_source: tuple[Source, Path], monkeypatch: pytest.MonkeyPatch, origin_kind: str
 ) -> None:
@@ -126,7 +126,7 @@ def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it
     manifest = AddonManifest(name="catalog_remote.base", depends_on=("local.dependency",))
     origin = (
         marker.parent
-        if origin_kind == Addon.Source.LOCAL
+        if origin_kind == Addon.AddonSource.LOCAL
         else EntryPoint(name=manifest.name, value=manifest.name, group="angee.addons")
     )
     available = {manifest.name: (manifest, origin)}
@@ -136,7 +136,7 @@ def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it
             name=manifest.name,
             label="native_label",
             source=origin_kind,
-            state=Addon.State.ENABLED,
+            state=Addon.AddonState.ENABLED,
             description="Available declaration",
             depends_on=list(manifest.depends_on),
             forced=True,
@@ -152,7 +152,7 @@ def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it
     with system_context(reason="test catalogue read"):
         row.refresh_from_db()
     assert row.source == origin_kind
-    assert row.state == Addon.State.ENABLED
+    assert row.state == Addon.AddonState.ENABLED
     assert row.label == "native_label"
     assert row.description == "Available declaration"
     assert row.depends_on == ["local.dependency"]
@@ -165,8 +165,8 @@ def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it
     assert source.refresh() == 1
     with system_context(reason="test catalogue read"):
         row.refresh_from_db()
-    assert row.source == Addon.Source.REMOTE
-    assert row.state == Addon.State.DISABLED
+    assert row.source == Addon.AddonSource.REMOTE
+    assert row.state == Addon.AddonState.DISABLED
     assert row.label == ""
     assert row.description == "Remote declaration"
     assert row.depends_on == ["angee.iam", "catalog_remote.dependency"]
@@ -203,7 +203,7 @@ def test_remote_catalogue_keeps_unknown_identity_without_importing_the_remote_na
     with system_context(reason="test catalogue read"):
         row = Addon.objects.get(name="catalog_remote_identity.base")
     assert row.label == ""
-    assert row.state == Addon.State.DISABLED
+    assert row.state == Addon.AddonState.DISABLED
     assert row.depends_on == ["catalog_remote.dependency"]
     assert not any(
         name == "catalog_remote_identity" or name.startswith("catalog_remote_identity.") for name in sys.modules

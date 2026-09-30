@@ -22,6 +22,7 @@ from collections.abc import Iterable, Mapping
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -1481,6 +1482,7 @@ class Integration(SqidMixin, ImplDefaultsMixin, AuditMixin, AngeeModel):
 
     runtime = True
     rebac_grantable = {"reader": "write"}
+    integration_create_mode: ClassVar[IntegrationCreateMode | None] = None
 
     Lifecycle = IntegrationLifecycle
     """Expose the lifecycle vocabulary off the row for callers that cannot import this module."""
@@ -1956,6 +1958,13 @@ def merge_json_state(
     return document
 
 
+class IntegrationCreateMode(StrEnum):
+    """How the console starts creation of a concrete integration."""
+
+    FORM = "form"
+    CONNECT = "connect"
+
+
 class Bridge(models.Model, metaclass=RebacModelBase):
     """Abstract base for child models that synchronize or subscribe to vendor data.
 
@@ -2001,14 +2010,8 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     next_subscription_refresh_at = models.DateTimeField(null=True, blank=True)
     last_sync_started_at = models.DateTimeField(null=True, blank=True)
     last_sync_completed_at = models.DateTimeField(null=True, blank=True)
-    last_sync_status = models.CharField(max_length=64, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
-    sync_stage = models.CharField(
-        max_length=32,
-        choices=SyncStage.choices,
-        default=SyncStage.IDLE,
-        db_index=True,
-    )
+    sync_stage = StateField(choices_enum=SyncStage, default=SyncStage.IDLE, db_index=True)
     sync_error = models.TextField(blank=True, default="")
     sync_run_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     """Opaque execution-owner run identity, retained after terminal settlement."""
@@ -2207,13 +2210,13 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
     # Direct syncs hold their advisory lock; dispatched syncs retain a run pointer
     # until their execution owner durably reports the terminal outcome.
-    LIVE_SYNC_STAGES: ClassVar[tuple[str, ...]] = (
-        str(SyncStage.DISCOVERING),
-        str(SyncStage.SYNCING),
+    LIVE_SYNC_STAGES: ClassVar[tuple[SyncStage, ...]] = (
+        SyncStage.DISCOVERING,
+        SyncStage.SYNCING,
     )
 
     @property
-    def effective_sync_stage(self) -> str:
+    def effective_sync_stage(self) -> SyncStage:
         """Reconcile direct workers against their lock; dispatched runs settle durably.
 
         Queued work has not acquired a lock yet. A retained dispatch is owned by
@@ -2221,14 +2224,14 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         prove another worker's liveness, so that backend trusts the stored stage.
         """
 
-        stage = str(self.sync_stage)
+        stage = self.SyncStage(self.sync_stage)
         if (
             stage in self.LIVE_SYNC_STAGES
             and not self.sync_is_dispatched
             and task_locks_are_cross_process()
             and not self.is_syncing
         ):
-            return str(self.SyncStage.FAILED)
+            return self.SyncStage.FAILED
         return stage
 
     @property
@@ -2433,7 +2436,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """Persist one successful scheduler sync result and healthy status report."""
 
         self.last_sync_completed_at = now
-        self.last_sync_status = "ok"
         self.last_sync_items = result
         self.sync_stage = self.SyncStage.COMPLETED
         self.sync_error = ""
@@ -2456,7 +2458,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                     "last_sync_summary",
                     "last_sync_completed_at",
                     "last_sync_items",
-                    "last_sync_status",
                     "next_sync_at",
                     "sync_error",
                     "sync_progress",
@@ -2470,7 +2471,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
         failure = _safe_integration_failure(error)
         error_message = failure.message
-        self.last_sync_status = "error"
         self.sync_stage = self.SyncStage.FAILED
         self.sync_error = error_message
         self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
@@ -2479,7 +2479,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
             cast(Any, self).report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
             self.save(
                 update_fields=[
-                    "last_sync_status",
                     "next_sync_at",
                     "sync_error",
                     "sync_progress",
@@ -2492,7 +2491,7 @@ class Bridge(models.Model, metaclass=RebacModelBase):
         """Clear a stale failure once a live session proves the account healthy.
 
         The mirror of :meth:`record_sync_error` — that method is the only writer
-        of ``sync_error``, ``last_sync_status == "error"``, and the ``error``
+        of ``sync_error``, ``sync_stage == FAILED``, and the ``error``
         outcome key, and only the poll scheduler's start/finish markers drop them
         again. A live-desired bridge never enters the poll loop
         (:meth:`Channel._next_sync_at` returns ``None`` while ``desired`` is
@@ -2517,20 +2516,20 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                 type(self).objects.sudo(reason="integrate.bridge.clear_sync_error").lock_if_supported().get(pk=self.pk)
             )
             progress = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
-            if not row.sync_error and row.last_sync_status != "error" and "error" not in progress:
+            if not row.sync_error and row.sync_stage != row.SyncStage.FAILED and "error" not in progress:
                 return
-            row.last_sync_status = "ok"
+            row.sync_stage = row.SyncStage.COMPLETED if row.last_sync_completed_at else row.SyncStage.IDLE
             row.sync_error = ""
             row.sync_progress = row._sync_marker()
             row.save(
                 update_fields=[
-                    "last_sync_status",
+                    "sync_stage",
                     "sync_error",
                     "sync_progress",
                     "updated_at",
                 ],
             )
-        self.last_sync_status = row.last_sync_status
+        self.sync_stage = row.sync_stage
         self.sync_error = row.sync_error
         self.sync_progress = row.sync_progress
 

@@ -83,7 +83,7 @@ export const MessagingChannelHealth = graphql(`
       display_name
       backend_class
       pairing_state
-      last_sync_status
+      sync_stage
       last_sync_completed_at
       sync_error
     }
@@ -441,7 +441,7 @@ export const PostRecordMessageDocument = graphql(`
     $modelLabel: String!
     $recordId: ID!
     $body: String!
-    $kind: String = "comment"
+    $kind: RecordMessagePostKind = COMMENT
     $parentMessageId: ID = null
     $attachmentIds: [ID!] = []
     $recipientUserIds: [ID!] = []

@@ -1213,7 +1213,7 @@ def test_sync_integration_queues_bridge_for_an_admin(
         )
     )["vcs_bridges_by_pk"]
     assert projected == {
-        "sync_stage": "queued",
+        "sync_stage": "QUEUED",
         "sync_error": "",
         "sync_progress": bridge.sync_progress,
         "last_sync_summary": {},

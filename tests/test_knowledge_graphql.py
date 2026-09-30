@@ -231,7 +231,7 @@ def test_update_page_body_reports_unsupported_kind(composed_tables: None) -> Non
     alice = create_user("alice")
     vault = vault_for(alice)
     with actor_context(alice):
-        folder = Page.objects.create_in(vault, title="Projects", kind=Page.Kind.FOLDER)
+        folder = Page.objects.create_in(vault, title="Projects", kind=Page.PageKind.FOLDER)
 
     payload = result_data(
         execute_schema(

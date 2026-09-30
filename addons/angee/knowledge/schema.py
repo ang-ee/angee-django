@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from enum import Enum
 from functools import partial
 from typing import Annotated, Any, cast
 
@@ -42,6 +41,7 @@ from angee.knowledge.models import (
     AmbiguousMatchError,
     RecordBindingManager,
     SectionNotFoundError,
+    SectionOp,
     StaleBodyError,
     StructuredEditError,
     UnsupportedPageKindError,
@@ -50,6 +50,7 @@ from angee.knowledge.models import (
 Vault = apps.get_model("knowledge", "Vault")
 Page = apps.get_model("knowledge", "Page")
 MarkdownPage = apps.get_model("knowledge", "MarkdownPage")
+strawberry.enum(SectionOp)
 Link = apps.get_model("knowledge", "Link")
 RecordBinding = apps.get_model("knowledge", "RecordBinding")
 
@@ -270,20 +271,6 @@ class PageBodyPayload:
     markdown: MarkdownPageType | None = None
     error: str | None = None
     error_code: str | None = strawberry.field(name="error_code", default=None)
-
-
-@strawberry.enum
-class SectionOp(Enum):
-    """How :meth:`patch_page_section` splices content into a section.
-
-    The member value is the op token the markdown owner
-    (:meth:`MarkdownPage.spliced_section`) accepts; the upper-case member
-    name is the wire enum value.
-    """
-
-    REPLACE = "replace"
-    APPEND = "append"
-    PREPEND = "prepend"
 
 
 def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:

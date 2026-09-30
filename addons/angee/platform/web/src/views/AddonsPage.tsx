@@ -3,7 +3,7 @@ import { type ReactElement } from "react";
 import {
   Badge, Chip, ListView, SlotOutlet, useStatusTone, textRoleVariants, useRouteHref, useSlot, type CardActionContext, type ListColumn, type ResourceToolbarGroupOption } from "@angee/ui";
 
-import { usePlatformT } from "../i18n";
+import { addonEnumLabel, usePlatformT } from "../i18n";
 import {
   AddonCard,
   AddonCardActions,
@@ -41,7 +41,7 @@ function columns(t: (key: string) => string, statusTone: ReturnType<typeof useSt
       header: t("col.kind"),
       // Route every enum cell through i18n so list and card read the same labels.
       render: (row) => (
-        <Badge tone={row.kind === "consumer" ? "brand" : "neutral"}>{t(`kind.${row.kind}`)}</Badge>
+        <Badge tone={row.kind === "CONSUMER" ? "brand" : "neutral"}>{addonEnumLabel(t, "kind", row.kind)}</Badge>
       ),
     },
     {
@@ -49,14 +49,14 @@ function columns(t: (key: string) => string, statusTone: ReturnType<typeof useSt
       header: t("col.source"),
       render: (row) => (
         <Badge tone={statusTone(row.source, SOURCE_TONES, { unknownTone: "neutral" })}>
-          {t(`source.${row.source}`)}
+          {addonEnumLabel(t, "source", row.source)}
         </Badge>
       ),
     },
     {
       field: "state",
       header: t("col.state"),
-      render: (row) => <Badge tone={statusTone(row.state, STATE_TONES)}>{t(`state.${row.state}`)}</Badge>,
+      render: (row) => <Badge tone={statusTone(row.state, STATE_TONES)}>{addonEnumLabel(t, "state", row.state)}</Badge>,
     },
     { field: "model_count", header: t("col.models") },
     { field: "field_count", header: t("col.fields") },

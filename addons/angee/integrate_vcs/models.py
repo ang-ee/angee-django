@@ -15,7 +15,7 @@ from angee.base.fields import EncryptedField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
-from angee.integrate.models import Bridge
+from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
 from angee.integrate_vcs.backend import VCSBackend
 from angee.integrate_vcs.templates import parse_template_meta
@@ -43,7 +43,7 @@ class VcsBridge(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_create_mode = "FORM"
+    integration_create_mode = IntegrationCreateMode.FORM
     integration_kind_label = "VCS bridge"
 
     backend_class = ImplClassField(VCSBackend,

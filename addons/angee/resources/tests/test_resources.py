@@ -15,14 +15,14 @@ from rebac import system_context
 from rebac.errors import MissingActorError
 
 from angee.addons import addon_manifest
-from angee.base.models import CATALOGUE_TIERS, AngeeModel
+from angee.base.models import AngeeModel
+from angee.base.tiers import ResourceTier
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.grants import _grant_tuples, materialize_grant_groups
 from angee.resources.loader import AngeeResource, build_resource
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.models import Resource
-from angee.resources.tiers import ResourceTier
 from angee.resources.widgets import (
     XrefForeignKeyWidget,
     XrefManyToManyWidget,
@@ -308,12 +308,6 @@ def test_resource_entries_reject_malformed_exclusion_setting(settings: Any) -> N
 
     with pytest.raises(ImproperlyConfigured, match="ANGEE_RESOURCE_EXCLUDED_ENTRIES"):
         SelectionValidationLedger.objects._entries_for((), tiers=[Resource.Tier.DEMO])
-
-
-def test_catalogue_tier_literals_match_resource_tiers() -> None:
-    """Base catalogue tier literals stay in sync with the resource tier owner."""
-
-    assert set(CATALOGUE_TIERS) == set(ResourceTier.values)
 
 
 def test_entry_graph_detects_cycles(tmp_path: Path) -> None:

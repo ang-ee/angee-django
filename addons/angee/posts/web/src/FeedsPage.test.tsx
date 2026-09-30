@@ -160,7 +160,7 @@ describe("FeedsPage", () => {
         "handle.display_name",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
+        "sync_stage",
         "last_sync_completed_at",
       ]),
     );

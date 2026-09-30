@@ -35,17 +35,9 @@ from angee.base.mixins import SqidMixin, TimestampMixin
 from angee.base.pagination import KeysetOrder, KeysetPage
 from angee.base.permissions import effective_rebac_definition
 from angee.base.scoping import lock_if_supported
+from angee.base.tiers import ResourceTier
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
-
-
-CATALOGUE_TIERS = ("master", "install", "demo")
-"""Resource tiers a catalogue model may declare.
-
-Mirrors :class:`angee.resources.tiers.ResourceTier`, the authoritative resource
-tier owner. ``angee.base`` cannot import the resources addon without reversing the
-dependency direction, so the resources test suite pins these literals in sync.
-"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,7 +297,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     its own class body to opt in, matching ``runtime``'s structural-marker shape.
     """
 
-    catalogue_tier: str = CATALOGUE_TIERS[0]
+    catalogue_tier: str = ResourceTier.MASTER
     """Resource tier the catalogue rows belong to; read non-inherited."""
 
     catalogue_tiers: tuple[str, ...] | None = None
@@ -352,7 +344,7 @@ class AngeeModel(TimestampMixin, RebacMixin):
     def get_catalogue_tier(cls) -> str:
         """Return this class's declared catalogue tier, defaulting to master."""
 
-        return str(cls.__dict__.get("catalogue_tier", CATALOGUE_TIERS[0]))
+        return str(cls.__dict__.get("catalogue_tier", ResourceTier.MASTER))
 
     @classmethod
     def get_catalogue_tiers(cls) -> tuple[str, ...]:
@@ -551,15 +543,15 @@ class AngeeModel(TimestampMixin, RebacMixin):
         declared = cls.__dict__.get("catalogue_tiers")
         tiers = (default_tier,) if declared is None else declared
         if (
-            default_tier in CATALOGUE_TIERS
+            default_tier in ResourceTier.values
             and isinstance(tiers, tuple)
             and bool(tiers)
-            and all(isinstance(tier, str) and tier in CATALOGUE_TIERS for tier in tiers)
+            and all(isinstance(tier, str) and tier in ResourceTier.values for tier in tiers)
             and len(set(tiers)) == len(tiers)
             and default_tier in tiers
         ):
             return []
-        expected = ", ".join(repr(value) for value in CATALOGUE_TIERS)
+        expected = ", ".join(repr(value) for value in ResourceTier.values)
         return [
             checks.Error(
                 f"{cls._meta.label}.catalogue_tier must be a member of its nonempty, unique "

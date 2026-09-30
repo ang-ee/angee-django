@@ -21,9 +21,9 @@ from import_export.results import Result, RowResult
 
 from angee.addons import addon_manifest
 from angee.base.impl import resolve_impl_class
+from angee.base.tiers import ResourceTier
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
-from angee.resources.tiers import ResourceTier
 
 
 class _ResourceAddon(Protocol):

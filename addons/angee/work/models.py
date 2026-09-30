@@ -22,6 +22,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator, RegexVa
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
+from django_choices_field import IntegerChoicesField
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -204,8 +205,8 @@ class Queue(models.Model, metaclass=RebacModelBase):
         validators=(MinValueValidator(1),),
     )
     cycle_cooldown_weeks = models.PositiveSmallIntegerField(default=0)
-    cycle_start_day = models.PositiveSmallIntegerField(
-        choices=CycleStartDay.choices,
+    cycle_start_day = IntegerChoicesField(
+        choices_enum=CycleStartDay,
         default=CycleStartDay.MONDAY,
         validators=(MinValueValidator(0), MaxValueValidator(6)),
     )

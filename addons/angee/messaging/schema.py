@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 from datetime import date
+from enum import StrEnum
 from typing import Annotated, Any, Self, cast
 
 import strawberry
@@ -925,12 +926,20 @@ class RecordThreadInput(RecordReferenceInput):
     message_types: list[str] = strawberry.field(name="message_types", default_factory=list)
 
 
+@strawberry.enum
+class RecordMessagePostKind(StrEnum):
+    """Kinds of author-created record chatter."""
+
+    COMMENT = "comment"
+    NOTE = "note"
+
+
 @strawberry.input
 class RecordMessagePostInput(RecordReferenceInput):
     """Fields accepted when posting an internal chatter message."""
 
     body: str
-    kind: str = "comment"
+    kind: RecordMessagePostKind = RecordMessagePostKind.COMMENT
     parent_message_id: strawberry.ID | None = strawberry.field(name="parent_message_id", default=None)
     attachment_ids: list[strawberry.ID] = strawberry.field(name="attachment_ids", default_factory=list)
     recipient_user_ids: list[strawberry.ID] = strawberry.field(name="recipient_user_ids", default_factory=list)
@@ -1366,8 +1375,7 @@ class MessagingMutation:
             attachments = _storage_files(input.attachment_ids)
             recipient_user_ids = tuple(user.pk for user in _users_from_public_ids(input.recipient_user_ids))
             parent = _message(input.parent_message_id) if input.parent_message_id is not None else None
-            kind = _record_message_post_kind(input.kind)
-            if kind == "note":
+            if input.kind is RecordMessagePostKind.NOTE:
                 if recipient_user_ids or input.autofollow_recipients:
                     raise ValueError("Internal notes cannot target recipients.")
                 message = cast(Any, record).message_log(input.body, attachments=attachments, parent=parent)
@@ -1773,7 +1781,6 @@ _CHANNEL_RESOURCE = hasura_model_resource(
         "backend_class",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
@@ -1793,7 +1800,6 @@ _CHANNEL_RESOURCE = hasura_model_resource(
         "backend_class",
         "lifecycle",
         "runtime_status",
-        "last_sync_status",
         "sync_stage",
         *_CHANNEL_EXTENSION_GROUP_FIELDS,
     ],
@@ -2075,17 +2081,6 @@ def _referenced_record(input: RecordReferenceInput) -> Any | None:
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
     return None if record is None else _readable_record(record)
-
-
-def _record_message_post_kind(kind: str) -> str:
-    """Return the normalized side-chatter post kind."""
-
-    value = str(kind or "comment").strip().lower()
-    if value in {"comment", "message"}:
-        return "comment"
-    if value == "note":
-        return "note"
-    raise ValueError("Message kind must be 'comment' or 'note'.")
 
 
 def _message_reaction_groups(message: Any, user: Any | None) -> list[MessageReactionGroupType]:

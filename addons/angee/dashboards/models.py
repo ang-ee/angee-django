@@ -12,6 +12,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import PermissionDenied, current_actor, system_context, to_subject_ref
 
+from angee.base.fields import StateField
 from angee.base.mixins import (
     ArchiveMixin,
     ArchiveQuerySet,
@@ -587,7 +588,7 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
     shared_reader_policy_fields = ("owner",)
     rebac_grantable = {"viewer": "share", "editor": "share"}
 
-    class Scope(models.TextChoices):
+    class DashboardScope(models.TextChoices):
         PERSONAL = "personal", "Personal"
         ADDON = "addon", "Addon"
         RESOURCE = "resource", "Resource"
@@ -599,7 +600,7 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
         null=True,
         blank=True,
     )
-    scope = models.CharField(max_length=16, choices=Scope, db_index=True)
+    scope = StateField(choices_enum=DashboardScope, db_index=True)
     scope_key = models.CharField(max_length=255, null=True, blank=True)
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
@@ -665,7 +666,7 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
     def set_personal_archived(self, *, archived: bool, expected_revision: int) -> Any:
         """Archive one personal dashboard under its revision lock and actor gate."""
 
-        if self.scope != self.Scope.PERSONAL:
+        if self.scope != self.DashboardScope.PERSONAL:
             raise ValidationError("Only personal dashboards can be archived.")
         actor = self.actor()
         if not self.has_access("archive"):
@@ -710,7 +711,7 @@ class Dashboard(ConditionalSharedReaderMixin, ResourceLoadMixin, ArchiveMixin, A
 
         if self.owner_id is not None:
             raise ValidationError({"owner": "Resource-installed dashboards cannot name an actor owner."})
-        if self.scope not in {self.Scope.ADDON, self.Scope.RESOURCE}:
+        if self.scope not in {self.DashboardScope.ADDON, self.DashboardScope.RESOURCE}:
             raise ValidationError({"scope": "Resource-installed dashboards require addon or resource scope."})
         snapshot = self.snapshot()
         canonical = canonical_dashboard_snapshot(snapshot)

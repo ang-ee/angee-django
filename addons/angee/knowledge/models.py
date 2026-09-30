@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, ClassVar, cast
 
 from django.conf import settings
@@ -208,7 +209,7 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
 
     sqid_prefix = "pg_"
 
-    class Kind(models.TextChoices):
+    class PageKind(models.TextChoices):
         """Built-in page kinds.
 
         ``kind`` itself is an open ``CharField`` — extension addons store
@@ -232,7 +233,7 @@ class Page(SqidMixin, AuditMixin, AngeeModel, HistoryMixin):
         blank=True,
         related_name="children",
     )
-    kind = models.CharField(max_length=16, default=Kind.NOTE, db_index=True)
+    kind = models.CharField(max_length=16, default=PageKind.NOTE, db_index=True)
     title = models.CharField(max_length=512, db_index=True)
     icon = models.CharField(max_length=64, blank=True, default="")
 
@@ -726,6 +727,14 @@ class MarkdownPageManager(AngeeManager):
         return "" if markdown is None else markdown.body
 
 
+class SectionOp(StrEnum):
+    """How a markdown section is spliced; member names are GraphQL wire values."""
+
+    REPLACE = "replace"
+    APPEND = "append"
+    PREPEND = "prepend"
+
+
 class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
     """Markdown body sidecar for markdown-based page kinds.
 
@@ -740,14 +749,11 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
 
     sqid_prefix = "mdp_"
 
-    page_kinds: ClassVar[tuple[str, ...]] = cast("tuple[str, ...]", (Page.Kind.NOTE, Page.Kind.TEMPLATE))
+    page_kinds: ClassVar[tuple[str, ...]] = cast("tuple[str, ...]", (Page.PageKind.NOTE, Page.PageKind.TEMPLATE))
     """Page kinds that carry a markdown body sidecar."""
 
     excerpt_chars: ClassVar[int] = 180
     """Number of body characters surfaced by :attr:`excerpt`."""
-
-    SECTION_OPS: ClassVar[tuple[str, ...]] = ("replace", "append", "prepend")
-    """Section splice operations accepted by :meth:`spliced_section`."""
 
     page = models.OneToOneField(
         "knowledge.Page",
@@ -860,10 +866,10 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
         return matches[0]
 
     @staticmethod
-    def spliced_section(body: str, heading_path: str | list[str], op: str, content: str) -> str:
+    def spliced_section(body: str, heading_path: str | list[str], op: SectionOp | str, content: str) -> str:
         """Return ``body`` with one section's content spliced, never re-rendered.
 
-        ``op`` is one of :attr:`SECTION_OPS`: ``replace`` swaps the section body,
+        ``op`` is a :class:`SectionOp`: ``replace`` swaps the section body,
         ``append``/``prepend`` add ``content`` after/before it (after nested
         children for ``append`` — the range is section-inclusive). The heading
         line and everything outside the section are byte-identical (after CRLF
@@ -872,14 +878,20 @@ class MarkdownPage(SqidMixin, AuditMixin, AngeeModel, RevisionMixin):
         — e.g. inside a code block — are untouched.
         """
 
-        if op not in MarkdownPage.SECTION_OPS:
-            raise StructuredEditError(f"Unknown section op {op!r}; expected one of {MarkdownPage.SECTION_OPS}.")
+        try:
+            op = SectionOp(op)
+        except ValueError as error:
+            raise StructuredEditError(f"Unknown section op {op!r}; expected one of {tuple(SectionOp)}.") from error
         normalized = MarkdownPage._normalize_newlines(body)
         start, end = MarkdownPage.section_range(normalized, heading_path)
         lines = normalized.split("\n")
         existing = lines[start + 1 : end]
         addition = MarkdownPage._normalize_newlines(content).split("\n")
-        blocks = {"replace": [addition], "prepend": [addition, existing], "append": [existing, addition]}[op]
+        blocks = {
+            SectionOp.REPLACE: [addition],
+            SectionOp.PREPEND: [addition, existing],
+            SectionOp.APPEND: [existing, addition],
+        }[op]
         section_body = MarkdownPage._join_blocks(blocks)
         spliced = [lines[start]]
         if section_body:

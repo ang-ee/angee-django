@@ -11,7 +11,7 @@ from django.db import models
 from rebac.mixins import REBAC_META_OPTIONS
 
 from angee.base.mixins import RevisionMixin
-from angee.base.models import CATALOGUE_TIERS
+from angee.base.tiers import ResourceTier
 from angee.compose.model_composition import ModelComposition
 
 
@@ -66,7 +66,7 @@ def render_models(composition: ModelComposition, label: str, *, runtime_module: 
             body_lines.extend(
                 [
                     "    catalogue = True",
-                    f"    catalogue_tier = {source.__dict__.get('catalogue_tier', CATALOGUE_TIERS[0])!r}",
+                    f"    catalogue_tier = {source.__dict__.get('catalogue_tier', ResourceTier.MASTER)!r}",
                     *([f"    catalogue_tiers = {catalogue_tiers!r}"] if catalogue_tiers is not None else []),
                     "",
                 ]

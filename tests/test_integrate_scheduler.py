@@ -195,7 +195,7 @@ def test_enqueued_due_bridge_persists_success_telemetry(transactional_db: None) 
     assert bridge.last_sync_started_at == now
     assert bridge.last_sync_completed_at is not None
     assert bridge.last_sync_completed_at >= now
-    assert bridge.last_sync_status == "ok"
+    assert bridge.sync_stage == bridge.SyncStage.COMPLETED
     assert bridge.last_sync_items == 7
     assert bridge.sync_stage == Bridge.SyncStage.COMPLETED
     assert bridge.sync_error == ""
@@ -317,7 +317,7 @@ def test_enqueued_due_bridge_records_errors_on_integration_runtime_status(transa
     bridge.refresh_from_db()
     integration.refresh_from_db()
     assert bridge.last_sync_started_at == now
-    assert bridge.last_sync_status == "error"
+    assert bridge.sync_stage == bridge.SyncStage.FAILED
     assert bridge.sync_stage == Bridge.SyncStage.FAILED
     assert bridge.sync_error == "Integration operation failed."
     assert bridge.sync_progress["stage"] == Bridge.SyncStage.FAILED
@@ -366,7 +366,7 @@ def test_enqueued_due_bridge_success_recovers_bridge_and_integration_runtime_sta
     assert success_result == {"ran": 1, "errors": 0}
     bridge.refresh_from_db()
     integration.refresh_from_db()
-    assert bridge.last_sync_status == "ok"
+    assert bridge.sync_stage == bridge.SyncStage.COMPLETED
     assert bridge.last_sync_items == 5
     assert bridge.last_sync_completed_at is not None
     assert bridge.next_sync_at == bridge.last_sync_completed_at + timedelta(seconds=23)

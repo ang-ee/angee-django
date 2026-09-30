@@ -15,7 +15,7 @@ from rebac import system_context
 
 from angee.base.fields import StateField
 from angee.base.impl import ImplClassField
-from angee.integrate.models import Bridge
+from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.sync import current_bridge_progress
 from angee.storage import exceptions
 from angee.storage_integrate.mounts import MountBackend, MountEntry
@@ -50,7 +50,7 @@ class Mount(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_create_mode = "CONNECT"
+    integration_create_mode = IntegrationCreateMode.CONNECT
     integration_kind_label = "Mount"
     live_impl_field = "backend_class"
 

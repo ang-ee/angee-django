@@ -103,7 +103,7 @@ def test_create_in_requires_vault_write(composed_tables: None) -> None:
     with actor_context(alice):
         page = Page.objects.create_in(vault, title="Reading list")
 
-    assert page.kind == Page.Kind.NOTE
+    assert page.kind == Page.PageKind.NOTE
     assert page.created_by == alice
     assert [row.title for row in Page.objects.as_user(alice)] == ["Reading list"]
     assert list(Page.objects.as_user(bob)) == []
@@ -116,7 +116,7 @@ def test_create_in_refuses_cross_vault_parent(composed_tables: None) -> None:
     research = vault_for(alice, name="Research")
     journal = vault_for(alice, name="Journal")
     with actor_context(alice):
-        folder = Page.objects.create_in(journal, title="Projects", kind=Page.Kind.FOLDER)
+        folder = Page.objects.create_in(journal, title="Projects", kind=Page.PageKind.FOLDER)
         with pytest.raises(ValueError, match="same vault"):
             Page.objects.create_in(research, parent=folder, title="Escapee")
 
@@ -143,7 +143,7 @@ def test_page_inherits_parent_read(composed_tables: None) -> None:
     bob = create_user("bob")
     vault = vault_for(alice)
     with actor_context(alice):
-        folder = Page.objects.create_in(vault, title="Projects", kind=Page.Kind.FOLDER)
+        folder = Page.objects.create_in(vault, title="Projects", kind=Page.PageKind.FOLDER)
         Page.objects.create_in(vault, parent=folder, title="Roadmap")
         Page.objects.create_in(vault, title="Private")
 
@@ -160,7 +160,7 @@ def test_folder_delete_cascades_past_foreign_children(composed_tables: None) -> 
     vault = vault_for(alice)
     _grant(vault, "editor", editor)
     with actor_context(alice):
-        folder = Page.objects.create_in(vault, title="Projects", kind=Page.Kind.FOLDER)
+        folder = Page.objects.create_in(vault, title="Projects", kind=Page.PageKind.FOLDER)
     with actor_context(editor):
         Page.objects.create_in(vault, parent=folder, title="Editor child")
 
@@ -241,7 +241,7 @@ def test_write_body_rejects_bodyless_kinds(composed_tables: None) -> None:
     alice = create_user("alice")
     vault = vault_for(alice)
     with actor_context(alice):
-        folder = Page.objects.create_in(vault, title="Projects", kind=Page.Kind.FOLDER)
+        folder = Page.objects.create_in(vault, title="Projects", kind=Page.PageKind.FOLDER)
         with pytest.raises(UnsupportedPageKindError):
             MarkdownPage.objects.write_body(folder, "nope")
 

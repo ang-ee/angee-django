@@ -7,9 +7,9 @@ from django.db import models
 from angee.base.fields import StateField
 from angee.base.identity import instance_from_public_id
 from angee.base.models import AngeeModel
+from angee.base.tiers import ResourceTier
 from angee.resources.entries import resolve_model
 from angee.resources.managers import ResourceManager
-from angee.resources.tiers import ResourceTier
 
 
 class Resource(AngeeModel):

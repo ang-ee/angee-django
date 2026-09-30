@@ -179,9 +179,9 @@ export function FeedsPage(): React.ReactElement {
         <Column field="lifecycle" header={t("feed.lifecycle")} widget="statusBadge" />
         <Column field="runtime_status" header={t("feed.runtime")} widget="statusBadge" />
         {IntegrationSyncColumns({
-          fields: ["last_sync_status", "last_sync_completed_at"],
+          fields: ["sync_stage", "last_sync_completed_at"],
           labels: {
-            last_sync_status: t("feed.sync"),
+            sync_stage: t("feed.sync"),
             last_sync_completed_at: t("feed.syncedAt"),
           },
         })}
@@ -205,9 +205,9 @@ function FeedForm({ resource: _resource, ...props }: RegisteredFormProps): React
         <Field name="config" label={t("feed.config")} readOnly />
         {IntegrationSyncFields({
           label: t("feed.sync"),
-          fields: ["last_sync_status", "last_sync_completed_at", "last_sync_items", "sync_progress", "sync_error"],
+          fields: ["sync_stage", "last_sync_completed_at", "last_sync_items", "sync_progress", "sync_error"],
           labels: {
-            last_sync_status: t("feed.sync"),
+            sync_stage: t("feed.sync"),
             last_sync_completed_at: t("feed.syncedAt"),
             last_sync_items: t("feed.items"),
             sync_progress: t("feed.progress"),

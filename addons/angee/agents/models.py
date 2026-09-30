@@ -51,6 +51,7 @@ from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
+from angee.integrate.models import IntegrationCreateMode
 
 
 class InferenceModelUse(models.TextChoices, StrEnum):
@@ -288,7 +289,7 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_create_mode = "FORM"
+    integration_create_mode = IntegrationCreateMode.FORM
     integration_kind_label = "Inference provider"
 
     backend_class = ImplClassField(InferenceBackend,

@@ -54,7 +54,7 @@ from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeModel
 from angee.base.refs import RecordRefMixin
 from angee.base.serialization import strip_null_bytes
-from angee.integrate.models import Bridge
+from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.messaging.backends import ChannelBackend
 from angee.messaging.managers import (
     ChannelManager,
@@ -872,7 +872,7 @@ class Channel(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_create_mode = "CONNECT"
+    integration_create_mode = IntegrationCreateMode.CONNECT
     integration_kind_label = "Channel"
     live_impl_field = "backend_class"
 

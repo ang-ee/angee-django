@@ -45,7 +45,7 @@ from angee.base.fields import SqidField, StateField
 from angee.base.impl import ImplClassField
 from angee.base.mixins import AuditMixin, HierarchyMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel
-from angee.integrate.models import Bridge
+from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
@@ -172,7 +172,7 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         return any(character.isalpha() for character in name)
 
     @property
-    def concrete_kind(self) -> str | None:
+    def concrete_kind(self) -> RelationshipKind.PartyKind | None:
         """Return this party's concrete kind (``"person"`` / ``"organization"``), or ``None``.
 
         A structural fact read straight from the multi-table-inheritance child rows
@@ -187,7 +187,7 @@ class Party(SqidMixin, AuditMixin, AngeeModel):
         ):
             child = kind.model()
             if child is not None and child._base_manager.filter(pk=self.pk).exists():
-                return str(kind)
+                return kind
         return None
 
     def canonical(self) -> Party:
@@ -1363,7 +1363,7 @@ class Directory(Bridge):
 
     runtime = True
     extends = "integrate.Integration"
-    integration_create_mode = "CONNECT"
+    integration_create_mode = IntegrationCreateMode.CONNECT
     integration_kind_label = "Directory"
 
     backend_class = ImplClassField(DirectoryBackend,

@@ -1,4 +1,4 @@
-"""Resource tier choices used by the resource ledger and manifests."""
+"""Catalogue tier vocabulary shared by model declarations and resource loading."""
 
 from __future__ import annotations
 

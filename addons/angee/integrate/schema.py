@@ -9,8 +9,8 @@ related row.
 
 from __future__ import annotations
 
-import enum
 import logging
+from enum import StrEnum
 from functools import partial
 from typing import Any, cast
 
@@ -60,7 +60,7 @@ from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.errors import IntegrationError
-from angee.integrate.models import Bridge, IntegrationLifecycle
+from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationLifecycle
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, INVALID_STATE, OAuthFlowError
 from angee.integrate.queue import queue_bridge_sync
@@ -95,12 +95,7 @@ class ConsoleImplChoicesQuery:
         return resolve_impl_choices(model, field)
 
 
-@strawberry.enum
-class IntegrationCreateMode(enum.Enum):
-    """How the console starts creation for an integration capability."""
-
-    FORM = "FORM"
-    CONNECT = "CONNECT"
+strawberry.enum(IntegrationCreateMode)
 
 
 @strawberry.type
@@ -126,8 +121,8 @@ class ConsoleIntegrationCapabilitiesQuery:
         for model in Integration.concrete_child_models():
             if model._meta.label not in exposed:
                 continue
-            raw_mode = getattr(model, "integration_create_mode", None)
-            if raw_mode not in {mode.value for mode in IntegrationCreateMode}:
+            mode = model.integration_create_mode
+            if mode is None:
                 continue
             try:
                 model.objects.check_create()
@@ -138,19 +133,19 @@ class ConsoleIntegrationCapabilitiesQuery:
                     resource=model._meta.label,
                     label=str(model.integration_kind_value()),
                     icon=None,
-                    create_mode=IntegrationCreateMode(raw_mode),
+                    create_mode=mode,
                 )
             )
         return capabilities
 
 
 @strawberry.enum
-class ConcreteIntegrationTargetState(enum.Enum):
+class ConcreteIntegrationTargetState(StrEnum):
     """Permission-safe resolution state for an Integration parent row."""
 
-    AVAILABLE = "AVAILABLE"
-    UNAVAILABLE = "UNAVAILABLE"
-    AMBIGUOUS = "AMBIGUOUS"
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    AMBIGUOUS = "ambiguous"
 
 
 @strawberry.type
@@ -1204,10 +1199,10 @@ class BridgeSyncStatusMixin:
         return bool(cast(Any, self).is_syncing)
 
     @strawberry_django.field(name="sync_stage", only=["id", "sync_stage", "sync_run_id"])
-    def sync_stage(self) -> str:
+    def sync_stage(self) -> Bridge.SyncStage:
         """Reconcile direct workers against their lock; retained runs settle durably."""
 
-        return str(cast(Any, self).effective_sync_stage)
+        return cast(Any, self).effective_sync_stage
 
 
 @strawberry.type
@@ -1219,7 +1214,6 @@ class BridgeTypeMixin(IntegrationLabelMixin, BridgeSyncStatusMixin):
     lifecycle: auto
     runtime_status: auto
     config: strawberry.scalars.JSON
-    last_sync_status: auto
     last_sync_completed_at: auto
     last_sync_items: auto
     last_sync_summary: strawberry.scalars.JSON
