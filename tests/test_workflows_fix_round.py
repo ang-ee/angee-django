@@ -66,7 +66,7 @@ def test_active_settlement_data_error_closes_attempt_and_can_be_retried(executio
     step = retained_step(run)
 
     def reject_once(self, row, settlement, **kwargs):
-        settlements.append(settlement.kind)
+        settlements.append(type(settlement.settlement).__name__.lower())
         if settlements == ["done"]:
             raise DataError("Result cannot be stored")
         return original(self, row, settlement, **kwargs)

@@ -2,16 +2,16 @@
 
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from pydantic import BaseModel, ConfigDict
 
-from angee.base.jsonschema import union_schema, validate, validator
+from angee.base.jsonschema import union_schema
 from angee.base.scoping import system_queryset
 from angee.workflows.states import Outcome, WaitingKind
-from angee.workflows.steps import Done, Settlement, Step
+from angee.workflows.steps import Done, Step, _Settlement
 
 _expecting: ContextVar[tuple[str, ...]] = ContextVar("workflow_expected_contracts", default=())
 
@@ -31,20 +31,29 @@ class AwaitRunConfig(BaseModel):
 
 
 @dataclass(frozen=True)
-class AwaitedRun(Settlement):
+class _AwaitedRun(_Settlement):
     """Retain an observed child in either its waiting or terminal settlement."""
 
-    kind: Literal["done", "run"] = "run"
     run_id: int = 0
+    completed: bool = False
+    output: Any = None
+    outcome: str = ""
 
-    def admit(self, ctx: Any) -> AwaitedRun:
+    def check(self, step: type[Step], *, config: Any = None) -> _AwaitedRun:
+        if not self.completed:
+            return self
+        checked = Done(output=self.output, outcome=self.outcome).check(step, config=config)
+        return replace(self, output=checked.output, outcome=checked.outcome)
+
+    def admit(self, ctx: Any) -> _AwaitedRun:
         """Record the target through the same fence for waiting and completed observations."""
         type(ctx.step_run).objects.record_await(ctx.step_run, run_id=self.run_id)
         return self
 
-    def wait_parameters(self) -> dict[str, Any] | None:
-        """Park through the same transition as the other wait settlements."""
-        return {"kind": WaitingKind.RUN} if self.kind == "run" else None
+    def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
+        if self.completed:
+            return Done(output=self.output, outcome=self.outcome).transition(rows, step_run, attempt)
+        return rows.to_waiting(kind=WaitingKind.RUN)
 
 
 class AwaitRun(Step[AwaitRunInput, Any, AwaitRunConfig]):
@@ -86,23 +95,9 @@ class AwaitRun(Step[AwaitRunInput, Any, AwaitRunConfig]):
         schemas = cls.expected_schemas(config)
         return union_schema(*(schema for outcome, schema in schemas.items() if outcomes is None or outcome in outcomes))
 
-    @classmethod
-    def check(cls, settlement: Settlement, *, config: Any = None) -> Settlement:
-        """Validate persisted JSON once, preserving the observed outcome and target."""
-        if isinstance(settlement, AwaitedRun) and settlement.kind == "run":
-            return settlement
-        if isinstance(settlement, (Done, AwaitedRun)) and settlement.kind == "done":
-            outcome = cls.parse_value(settlement.outcome, Outcome, "outcome")
-            schemas = cls.expected_schemas(config)
-            if outcome not in schemas:
-                raise ValidationError(f"The expected workflow does not offer outcome {outcome!r}.")
-            validate(validator(schemas[outcome]), settlement.output)
-            return replace(settlement, outcome=outcome)
-        return super().check(settlement, config=config)
-
-    def run(self, ctx: Any) -> Settlement:
+    def run(self, ctx: Any) -> _Settlement:
         """Load through the actor's read rule; terminal rows require no child lock."""
         child = ctx.load(apps.get_model("workflows", "WorkflowRun"), ctx.input.run_id)
         child.check_await(ctx.run, expects=ctx.config.expects)
-        return AwaitedRun(run_id=child.pk, kind="done" if child.is_terminal else "run",
+        return _AwaitedRun(run_id=child.pk, completed=child.is_terminal,
                           output=child.output, outcome=child.outcome)

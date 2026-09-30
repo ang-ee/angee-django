@@ -21,7 +21,7 @@ from angee.base.scoping import system_queryset
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.exceptions import RetryableDecisionError
 from angee.decisions.forms import Action
-from angee.decisions.states import Verdict
+from angee.decisions.states import ClosedReason, Verdict
 from angee.workflows.definition import Definition
 from angee.workflows.reviews import Review, ReviewStep
 from angee.workflows.runner import runner
@@ -260,6 +260,7 @@ def test_unanswered_outcomes_are_owned_by_decisions(review, closure):
         )], actor=actor)
     run_until(run)
     assert run.status == "succeeded" and run.outcome == closure and run.output == {}
+    assert isinstance(system_queryset(DecisionGroup).get(pk=step.decision_group_id).outcome, ClosedReason)
 
 
 def test_sweep_recovers_a_missed_settlement_signal(review, monkeypatch):

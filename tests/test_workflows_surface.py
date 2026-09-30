@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import inspect
 import pkgutil
+from typing import get_args
 
 from django.apps import apps
 from django.db import models
@@ -47,11 +48,11 @@ EXPECTED_VERBS = {
 }
 
 EXPECTED_TYPES = {
-    "awaits": "AwaitRun AwaitRunConfig AwaitRunInput AwaitedRun",
+    "awaits": "AwaitRun AwaitRunConfig AwaitRunInput",
     "context": "StepContext",
-    "maps": "Map MapInput MapItem MapWait",
-    "reviews": "Ask Review ReviewConfig ReviewSeat ReviewStep",
-    "steps": "Done EmptyOutput Fail NextPage RetryPolicy Retryable Settlement Step StepMode Superseded Wait",
+    "maps": "Map MapInput MapItem",
+    "reviews": "Review ReviewConfig ReviewSeat ReviewStep",
+    "steps": "Ask Done EmptyOutput Fail NextPage RetryPolicy Retryable Step StepMode Superseded Wait",
 }
 
 EXPECTED_RUNNER = tuple(
@@ -125,7 +126,7 @@ def test_workflows_public_surface() -> None:
             name for name, member in vars(module).items()
             if name.isidentifier() and not name.startswith("_")
             and inspect.isclass(member) and member.__module__ == module.__name__
-            and (module_info.name in EXPECTED_TYPES or issubclass(member, (Step, Settlement)))
+            and (module_info.name in EXPECTED_TYPES or issubclass(member, (Step, *get_args(Settlement.__value__))))
         ))
         if public_types:
             types[module_info.name] = public_types
@@ -141,6 +142,14 @@ def test_workflows_public_surface() -> None:
                 for verb in _public_verbs(cls, "workflows", object)
             )
     assert types == {module: tuple(names.split()) for module, names in EXPECTED_TYPES.items()}
+    assert tuple(member.__name__ for member in get_args(Settlement.__value__)) == (
+        "Done", "Wait", "NextPage", "Fail", "Ask",
+    )
+    assert all(
+        {"check", "admit", "transition"} <= set(dir(member))
+        and "kind" not in member.__dataclass_fields__
+        for member in get_args(Settlement.__value__)
+    )
     assert tuple(sorted(runner)) == EXPECTED_RUNNER
 
     settings = {}

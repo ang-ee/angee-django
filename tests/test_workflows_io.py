@@ -690,7 +690,7 @@ def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step
 
     def reject_result_once(self, step_run, settlement):
         if step_run.node_key == "sibling":
-            settlements.append(settlement.kind)
+            settlements.append(type(settlement.settlement).__name__.lower())
             if settlements == ["done"]:
                 raise DataError("Result contains an invalid JSON value")
         return original_settle(self, step_run, settlement)

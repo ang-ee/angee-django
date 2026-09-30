@@ -11,7 +11,7 @@ from angee.base.impl import ImplBase
 from angee.base.jsonschema import validator
 from angee.workflows.bindings import SourceBinding
 from angee.workflows.definition import Definition
-from angee.workflows.states import ERROR_OUTCOME
+from angee.workflows.states import ERROR_OUTCOME, WaitingKind
 from angee.workflows.steps import Step, Wait, resolve_step
 from angee.workflows.testing.models import Workflow
 
@@ -638,7 +638,7 @@ def test_wait_requires_aware_deadline():
     """Time waits reject deadlines without a timezone."""
     with pytest.raises(ValueError, match="aware"):
         Wait(until=datetime(2026, 1, 1))
-    assert Wait(until=datetime(2026, 1, 1, tzinfo=timezone.utc)).kind == "wait"
+    assert Wait(until=datetime(2026, 1, 1, tzinfo=timezone.utc)).waiting_kind == WaitingKind.TIME
 
 
 def test_resolve_step_rejects_timeouts_that_would_disable_postgresql_limit(register_step):

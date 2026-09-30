@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from datetime import timedelta
-from typing import Any, ClassVar, Literal, cast
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
@@ -18,34 +18,9 @@ from angee.decisions.contracts import DEFAULT_REQUESTER, DecisionContext, Decisi
 from angee.decisions.exceptions import ResolverAuthorityError
 from angee.decisions.forms import Action, resolve_action
 from angee.decisions.managers import ResolvedDecision
-from angee.workflows.states import Outcome, WaitingKind
-from angee.workflows.steps import Done, NextPage, RetryPolicy, Settlement, Step, StepMode, Wait
-
-
-@dataclass(frozen=True)
-class Ask(Settlement):
-    """Raw review requests; validation and admission run at the body boundary."""
-
-    kind: Literal["ask"] = field(default="ask", init=False)
-    requests: tuple[DecisionRequest, ...] = ()
-    policy: str = "first"
-    group_id: Any = None
-    errors: dict[str, list[str]] = field(default_factory=dict)
-
-    def admit(self, ctx: Any) -> Ask:
-        """Admit or re-ask through decisions after settlement validation succeeds."""
-        manager = apps.get_model("decisions", "Decision").objects
-        if self.group_id is None:
-            group = manager.admit_group(self.requests, actor=ctx.actor, policy=self.policy)
-        else:
-            group = manager.reask(
-                self.group_id, actor=ctx.actor, actions=ctx.step.actions_for(ctx.config), errors=self.errors,
-            )
-        return replace(self, group_id=group.pk)
-
-    def wait_parameters(self) -> dict[str, Any]:
-        """Park on the admitted group through the fenced queryset transition."""
-        return {"kind": WaitingKind.DECISION, "state": self.state, "decision_group_id": self.group_id}
+from angee.decisions.states import ClosedReason
+from angee.workflows.states import Outcome
+from angee.workflows.steps import Ask, Done, NextPage, RetryPolicy, Settlement, Step, StepMode, Wait
 
 
 class ReviewStep[I, O, C, B](Step[I, O, C]):
@@ -61,7 +36,7 @@ class ReviewStep[I, O, C, B](Step[I, O, C]):
     _model_parameters = (*Step._model_parameters, "basis_model")
     actions: ClassVar[tuple[type[Action], ...]] = ()
     outcomes: ClassVar[dict[Outcome, str]] = {}
-    empty_outcomes = Step.empty_outcomes | {"expired", "superseded"}
+    empty_outcomes = Step.empty_outcomes | {str(ClosedReason.EXPIRED), str(ClosedReason.SUPERSEDED)}
     max_rounds: ClassVar[int] = 3
     retry = RetryPolicy(max_attempts=3, backoff=timedelta(seconds=1))
 
@@ -126,24 +101,9 @@ class ReviewStep[I, O, C, B](Step[I, O, C]):
             if outcome in cls.empty_outcomes:
                 raise ValidationError("Review action outcomes cannot use reserved outcomes.")
             outcomes[outcome] = action.label
-        return {**outcomes, "expired": "Expired", "superseded": "Superseded"}
-
-    @classmethod
-    def check(cls, settlement: Settlement, *, config: Any = None) -> Settlement:
-        """Check basis once before admission; unanswered closures have no output."""
-        if isinstance(settlement, Ask):
-            offered = cls.actions_for(config)
-            requests = []
-            for request in settlement.requests:
-                if any(action not in offered for action in request.actions):
-                    raise ValidationError("A seat offers an action outside this review's declaration.")
-                parsed = cls.parse_value(request.basis, cls.basis_model, "basis")
-                basis = cls._adapter(cls.basis_model).dump_python(parsed, mode="json", by_alias=True)
-                requests.append(request.model_copy(update={"basis": basis}))
-            return replace(settlement, requests=tuple(requests), state=cls.serialize_state(settlement.state))
-        if isinstance(settlement, Done) and settlement.outcome in {"expired", "superseded"}:
-            return Done(outcome=settlement.outcome)
-        return super().check(settlement, config=config)
+        expired = cast(ClosedReason, ClosedReason.EXPIRED)
+        superseded = cast(ClosedReason, ClosedReason.SUPERSEDED)
+        return {**outcomes, expired: expired.label, superseded: superseded.label}
 
     def run(self, ctx: Any) -> Settlement:
         """Dispatch from the retained group, never a separately persisted phase."""
@@ -156,9 +116,9 @@ class ReviewStep[I, O, C, B](Step[I, O, C]):
         if group.settled_at is None:
             raise ValidationError("The decision group is still open.")
         if outcome := group.outcome:
-            if outcome == "canceled":
+            if outcome == ClosedReason.CANCELED:
                 return ctx.fail("The decision group was canceled.")
-            return Done(outcome=outcome)
+            return Done(outcome=str(ClosedReason.EXPIRED) if outcome == ClosedReason.INVALID_ATTEMPTS else outcome)
         round_number = ctx.state["review_round"]
         artifact_count = len(ctx.pending_artifacts)
         try:

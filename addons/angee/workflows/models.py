@@ -269,7 +269,7 @@ class StepRun(AngeeDataModel):
     page_index = models.PositiveIntegerField(default=0, editable=False)
     retries = models.PositiveIntegerField(default=0)
     retry_acknowledged_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
         help_text="Pending duplicate-effect acknowledgement, transferred to the next committed attempt.",
     )
     dispatches = models.PositiveIntegerField(default=0)
@@ -380,6 +380,24 @@ class StepRun(AngeeDataModel):
                 ),
                 name="workflows_step_waiting_kind",
             ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.TIME,
+                             wake_at__isnull=False, wait_reason="")
+                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD, wait_reason="")
+                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
+                               decision_group__isnull=False, wake_at__isnull=True, wait_reason="")
+                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RUN,
+                               awaited_run__isnull=False, wake_at__isnull=True, wait_reason="")
+                    | models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.MAP,
+                               wake_at__isnull=True, wait_reason="")
+                    | (models.Q(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.OPERATOR,
+                                wake_at__isnull=True) & ~models.Q(wait_reason=""))
+                    | (~models.Q(status=StepRunStatus.WAITING)
+                       & models.Q(wake_at__isnull=True, wait_reason=""))
+                ),
+                name="workflows_step_wait_columns",
+            ),
         ]
         indexes = [
             models.Index(
@@ -414,7 +432,7 @@ class StepAttempt(AngeeDataModel):
     stacktrace = DiagnosticTextField(max_length=65536, blank=True, default="")
     effect_started_at = models.DateTimeField(null=True, blank=True)
     acknowledged_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
     )
 
     objects = AngeeManager.from_queryset(StepAttemptQuerySet)()
@@ -430,6 +448,11 @@ class StepAttempt(AngeeDataModel):
         rebac_resource_type = "workflows/step_attempt"
         constraints = [
             models.UniqueConstraint(fields=("step_run", "number"), name="workflows_attempt_number_unique"),
+            models.CheckConstraint(
+                condition=(models.Q(finished_at__isnull=True, result__isnull=True)
+                           | models.Q(finished_at__isnull=False, result__isnull=False)),
+                name="workflows_attempt_finished_result",
+            ),
         ]
 
 

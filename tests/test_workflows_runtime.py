@@ -20,7 +20,7 @@ from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid
 from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunManager
 from angee.workflows.runner import runner
-from angee.workflows.states import RunStatus, StepRunStatus
+from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Done, Fail, RetryPolicy, Step, StepMode, Superseded, Wait
 from angee.workflows.testing.drivers import capture_tasks, load_workflow, observe, register_steps, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun, WorkflowVersion
@@ -110,7 +110,6 @@ def test_outcome_and_result_alias_store_the_shared_boundary(execution, register_
     [
         ("reserved", "error"), ("undeclared", "missing"), ("pattern", "outcome"),
         ("output", "output"), ("wait_state", "serialize"), ("fail_error", "error"),
-        ("fail_retryable", "retryable"),
     ],
 )
 def test_settlement_validation_rolls_back_body(execution, register_step, helper, invalid, cause):
@@ -134,7 +133,6 @@ def test_settlement_validation_rolls_back_body(execution, register_step, helper,
                 "output": done(outcome="done", output={"value": "invalid"}),
                 "wait_state": wait(until=ctx.now, state=object()),
                 "fail_error": ctx.fail(object()) if helper == "context" else Fail(error=object()),
-                "fail_retryable": Fail(error="Rejected", retryable=object()),
             }[invalid]
             returned.append(settlement)
             return settlement
@@ -545,6 +543,29 @@ def test_constraints_and_actor_admission(execution):
     assert attempt.result == "failed" and "outside system_context" in attempt.error
     with actor_context(actor):
         assert WorkflowRun.objects.filter(pk=run.pk).exists()
+
+
+def test_attempt_result_and_wait_companions_are_database_invariants(execution):
+    """Direct writes cannot retain an impossible attempt or wait shape."""
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="settlement_constraints", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    row = system_queryset(StepRun).get(run=run)
+    invalid_waits = (
+        {"status": StepRunStatus.WAITING, "waiting_kind": WaitingKind.TIME},
+        {"status": StepRunStatus.WAITING, "waiting_kind": WaitingKind.RECORD, "wait_reason": "bad"},
+        {"status": StepRunStatus.WAITING, "waiting_kind": WaitingKind.DECISION},
+        {"status": StepRunStatus.WAITING, "waiting_kind": WaitingKind.RUN},
+        {"wake_at": Now()},
+    )
+    for values in invalid_waits:
+        with pytest.raises(IntegrityError), transaction.atomic(), system_context(reason="test.wait_constraint"):
+            StepRun.objects.filter(pk=row.pk).update(**values)
+    assert runner.execute(row.pk)
+    attempt = system_queryset(StepAttempt).get(step_run=row)
+    for values in ({"result": None}, {"finished_at": None}):
+        with pytest.raises(IntegrityError), transaction.atomic(), system_context(reason="test.attempt_constraint"):
+            StepAttempt.objects.filter(pk=attempt.pk).update(**values)
 
 
 def test_holder_resend_refreshes_backlogged_ready_row_before_tick(execution, settings):
@@ -1285,8 +1306,8 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
     settlements = []
 
     def reject_result(self, row, settlement):
-        settlements.append(settlement.kind)
-        if settlement.kind == "done":
+        settlements.append(type(settlement.settlement).__name__.lower())
+        if isinstance(settlement.settlement, Done):
             raise DataError("Result persistence failed before its deadline elapsed")
         return original_settle(self, row, settlement)
 

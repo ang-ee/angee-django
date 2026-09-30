@@ -9,7 +9,7 @@ from pydantic import BaseModel, field_serializer
 
 from angee.workflows.context import StepContext
 from angee.workflows.reviews import ReviewStep
-from angee.workflows.steps import NextPage, RetryPolicy, Step, StepMode, resolve_step
+from angee.workflows.steps import Fail, NextPage, RetryPolicy, Step, StepMode, resolve_step
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 
 
@@ -28,6 +28,14 @@ def context(step: type[Step]) -> StepContext:
         run=WorkflowRun(), step_run=StepRun(), step=step, attempt=StepAttempt(),
         input={}, config=None, actor=None, now=timezone.now(),
     )
+
+
+def test_consumer_failure_has_no_runner_diagnostics():
+    """A step can state an error without controlling retry or timeout bookkeeping."""
+    assert Fail(error="Rejected").error == "Rejected"
+    for field in ("retryable", "timed_out", "stacktrace"):
+        with pytest.raises(TypeError, match=field):
+            Fail(error="Rejected", **{field: True})
 
 
 def test_mode_defaults_preserve_custom_inherited_timeouts(register_step):

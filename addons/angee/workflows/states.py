@@ -37,10 +37,7 @@ class TerminalStates(models.TextChoices):
     @classmethod
     def terminal_values(cls) -> tuple[str, ...]:
         """Return the terminal values supported by this lifecycle."""
-        return tuple(
-            member.value for name, member in cls.__members__.items()
-            if name in {"SUCCEEDED", "FAILED", "SKIPPED", "CANCELED"}
-        )
+        return (cls.SUCCEEDED, cls.FAILED, cls.CANCELED)
 
 
 class RunOrigin(models.TextChoices):
@@ -56,11 +53,11 @@ class RunOrigin(models.TextChoices):
 class RunStatus(TerminalStates):
     """Lifecycle of one workflow run."""
 
-    RUNNING = "running"
-    WAITING = "waiting"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    CANCELED = "canceled"
+    RUNNING = "running", "Running"
+    WAITING = "waiting", "Waiting"
+    SUCCEEDED = "succeeded", "Succeeded"
+    FAILED = "failed", "Failed"
+    CANCELED = "canceled", "Canceled"
 
 
 class RunRelation(models.TextChoices):
@@ -73,13 +70,17 @@ class RunRelation(models.TextChoices):
 class StepRunStatus(TerminalStates):
     """Lifecycle of one graph node's execution."""
 
-    READY = "ready"
-    RUNNING = "running"
-    WAITING = "waiting"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-    CANCELED = "canceled"
+    READY = "ready", "Ready"
+    RUNNING = "running", "Running"
+    WAITING = "waiting", "Waiting"
+    SUCCEEDED = "succeeded", "Succeeded"
+    FAILED = "failed", "Failed"
+    SKIPPED = "skipped", "Skipped"
+    CANCELED = "canceled", "Canceled"
+
+    @classmethod
+    def terminal_values(cls) -> tuple[str, ...]:
+        return tuple(str(member) for member in (cls.SUCCEEDED, cls.FAILED, cls.SKIPPED, cls.CANCELED))
 
     @property
     def has_outcome(self) -> bool:

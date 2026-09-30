@@ -32,14 +32,13 @@ from angee.jobs.enqueue import enqueue_task
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition, DefinitionInvalid, Issue
 from angee.workflows.states import (
     CANCELED_OUTCOME,
-    ERROR_OUTCOME,
     AttemptResult,
     RunRelation,
     RunStatus,
     StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import Fail, Settlement, StepMode, Superseded, io_timeout_budget
+from angee.workflows.steps import StepMode, Superseded, io_timeout_budget
 from angee.workflows.triggers import TriggerSource
 
 logger = logging.getLogger(__name__)
@@ -414,7 +413,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             steps, reviews = steps + changed, reviews + closed
             if not run.is_terminal:
                 children += bool(index)
-                self._write_state(run, status=RunStatus.CANCELED, outcome=CANCELED_OUTCOME, output={})
+                self._write_state(run, status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME, output={})
                 changed = 1
             if changed or closed:
                 run.refresh_from_db()
@@ -463,7 +462,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
 
     def reopen(self, run: Any) -> None:
         """Clear a locked run's terminal facts and replan retained step rows."""
-        self._write_state(run, status=RunStatus.RUNNING, outcome="", output={})
+        self._write_state(run, status=str(RunStatus.RUNNING), outcome="", output={})
         run.refresh_from_db()
         from angee.workflows.runner import runner
 
@@ -540,14 +539,14 @@ class StepWatchManager(AngeeManager):
             for target in targets.values():
                 self.get_or_create(step_run=step_run, content_type=target.content_type, object_id=target.object_id)
 
-    def wait_kind(self, step_run: Any, until: datetime | None) -> str:
+    def wait_kind(self, step_run: Any, until: datetime | None) -> WaitingKind:
         """Admit a record wait, or require the time wait's explicit deadline."""
         with system_context(reason="workflows.watch_wait"):
             if self.filter(step_run=step_run).exists():
-                return str(WaitingKind.RECORD)
+                return cast(WaitingKind, WaitingKind.RECORD)
         if until is None:
             raise ValidationError("A wait requires a deadline or a watched record.")
-        return str(WaitingKind.TIME)
+        return cast(WaitingKind, WaitingKind.TIME)
 
     def record_change(self, record: Any) -> None:
         """Mark committed observation obligations while shared dispatch holds the record lock."""
@@ -650,57 +649,31 @@ class StepRunQuerySet(AngeeQuerySet):
             pk=step_run.pk, status=StepRunStatus.RUNNING, attempt=step_run.attempt, deadline_at__gt=Now(),
         )
 
-    def settle(self, step_run: Any, settlement: Settlement) -> None:
+    def settle(self, step_run: Any, attempt: Any) -> None:
         """Record a settlement only while its numbered claim is live."""
-        self.fenced(step_run)._record_settlement(step_run, settlement)
+        self.fenced(step_run)._record_settlement(step_run, attempt)
 
-    def expire(self, step_run: Any) -> None:
+    def expire(self, step_run: Any, attempt: Any) -> None:
         """Recover an expired claim under the tick's run and step locks."""
         self.expired().filter(pk=step_run.pk, attempt=step_run.attempt)._record_settlement(
-            step_run, Fail(error="The attempt deadline expired.", retryable=True, timed_out=True),
+            step_run, attempt,
         )
 
-    def _record_settlement(self, step_run: Any, settlement: Settlement) -> None:
+    def _record_settlement(self, step_run: Any, attempt: Any) -> None:
         """Persist one eligible claim and close its attempt through shared policy."""
-        attempt_result = AttemptResult.SUCCEEDED
-        if (wait_parameters := settlement.wait_parameters()) is not None:
-            changed = self.to_waiting(**wait_parameters)
-        elif settlement.kind == "next_page":
-            changed = self.to_ready(state=settlement.state, reset_retries=True, next_page=True)
-        else:
-            values = self._cleared_wait()
-            if settlement.kind == "done":
-                values.update(
-                    status=StepRunStatus.SUCCEEDED, output=strip_null_bytes(settlement.output),
-                    outcome=settlement.outcome, retries=0,
-                )
-                changed = self.update(**values)
-            else:
-                attempt_result = AttemptResult.TIMED_OUT if settlement.timed_out else AttemptResult.FAILED
-                retries = step_run.retries + 1
-                if settlement.retryable and step_run.requires_duplicate_acknowledgement:
-                    changed = self.to_waiting(
-                        kind=cast(str, WaitingKind.OPERATOR), reason="possible duplicate effect", retries=retries,
-                    )
-                elif settlement.retryable and retries < step_run.step.retry.max_attempts:
-                    changed = self.to_waiting(
-                        until=Now() + step_run.step.retry.delay_for(retries), state=step_run.state, retries=retries,
-                    )
-                else:
-                    values.update(status=StepRunStatus.FAILED, outcome=ERROR_OUTCOME, output={}, retries=retries)
-                    changed = self.update(**values)
+        changed = attempt.settlement.transition(self, step_run, attempt)
         if changed != 1:
             raise Superseded
-        if wait_parameters is None or wait_parameters.get("kind") != WaitingKind.RECORD:
+        if not attempt.settlement.keeps_watches:
             step_run.watches.all().delete()
         if step_run.attempts.filter(number=step_run.attempt).close(
-            attempt_result, settlement.error, settlement.stacktrace,
+            attempt.result, attempt.error, attempt.stacktrace,
         ) != 1:
             raise Superseded
 
     def to_waiting(
         self, *, until: Any = None, state: Any = None, retries: int | None = None,
-        kind: str = cast(str, WaitingKind.TIME), reason: str = "",
+        kind: WaitingKind = cast(WaitingKind, WaitingKind.TIME), reason: str = "",
         decision_group_id: Any = None,
     ) -> int:
         """Park running rows, preserving retries unless a failure consumed one."""

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from angee.base.identity import public_id_of
 from angee.base.jsonschema import schemas_match, validator
 from angee.base.scoping import system_queryset
-from angee.workflows.awaits import AwaitedRun, AwaitRun, AwaitRunConfig, AwaitRunInput
+from angee.workflows.awaits import AwaitRun, AwaitRunConfig, AwaitRunInput, _AwaitedRun
 from angee.workflows.definition import Definition
 from angee.workflows.runner import runner
 from angee.workflows.steps import Done, EmptyOutput, Step
@@ -179,12 +179,12 @@ def test_await_checks_output_against_the_selected_child_outcome(execution):
         AwaitRun.check(Done(output={"value": 2}, outcome="declined"), config=config)
     with pytest.raises(ValidationError, match="does not offer"):
         AwaitRun.check(Done(output={}, outcome="unknown"), config=config)
-    wait = AwaitedRun(run_id=123)
+    wait = _AwaitedRun(run_id=123)
     assert AwaitRun.check(wait, config=config) is wait
-    assert wait.wait_parameters() == {"kind": "run"}
-    done = AwaitedRun(run_id=123, kind="done", outcome="accepted", output={"value": 3})
+    assert wait.completed is False
+    done = _AwaitedRun(run_id=123, completed=True, outcome="accepted", output={"value": 3})
     checked = AwaitRun.check(done, config=config)
-    assert isinstance(checked, AwaitedRun) and checked.run_id == 123 and checked.wait_parameters() is None
+    assert isinstance(checked, _AwaitedRun) and checked.run_id == 123 and checked.completed
 
 
 @pytest.mark.django_db(transaction=True)

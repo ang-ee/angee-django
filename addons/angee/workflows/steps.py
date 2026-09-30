@@ -2,26 +2,37 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from functools import cache
 from types import get_original_bases
-from typing import Annotated, Any, ClassVar, Literal, TypeVar, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar, cast, get_args, get_origin
 
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db.models.functions import Now
 from django.utils import timezone
-from pydantic import BaseModel, ConfigDict, Field, PydanticInvalidForJsonSchema
+from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
 
 from angee.base.impl import ImplBase, resolve_impl_class
-from angee.base.jsonschema import check_schema
+from angee.base.jsonschema import check_schema, validate, validator
 from angee.base.serialization import strip_null_bytes
-from angee.workflows.states import DONE_OUTCOME, ERROR_OUTCOME, Outcome
+from angee.decisions.contracts import DecisionRequest
+from angee.workflows.states import (
+    DONE_OUTCOME,
+    ERROR_OUTCOME,
+    Outcome,
+    StepRunStatus,
+    WaitingKind,
+)
 
 IO_SETTLE_WINDOW = timedelta(seconds=30)
 """Time reserved below worker limits for an IO attempt's fenced settlement."""
+
+if TYPE_CHECKING:
+    from angee.workflows.reviews import ReviewStep
 
 
 def io_timeout_budget() -> timedelta:
@@ -61,72 +72,163 @@ class RetryPolicy:
         return self.backoff * 2 ** max(0, retries - 1)
 
 
-@dataclass(frozen=True)
-class Settlement:
-    """A body's completed, waiting or failed attempt, checked before persistence."""
+class _Settlement:
+    """Shared in-process protocol for public and planner-owned settlements."""
 
-    kind: Literal["done", "wait", "next_page", "fail", "ask", "map", "run"]
-    output: Any = field(default_factory=dict)
-    outcome: str = ""
-    until: datetime | None = None
-    state: Any = field(default_factory=dict)
-    error: str = ""
-    retryable: bool = False
-    stacktrace: str = ""
-    timed_out: bool = False
+    def check(self, step: type[Step], *, config: Any = None) -> _Settlement:
+        """Validate the body's values before any row transition."""
+        return self
 
-    def __post_init__(self) -> None:
-        if self.kind == "wait" and self.until is not None and timezone.is_naive(self.until):
-            raise ValueError("A wait deadline requires an aware datetime.")
-
-    def admit(self, ctx: Any) -> Settlement:
+    def admit(self, ctx: Any) -> _Settlement:
         """Prepare checked settlement resources inside the body's transaction."""
         return self
 
-    def wait_parameters(self) -> dict[str, Any] | None:
-        """Return owner transition arguments when this settlement parks the row."""
-        return None
+    def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
+        """Apply this settlement through the queryset's named transition."""
+        raise NotImplementedError
+
+    @property
+    def keeps_watches(self) -> bool:
+        return False
 
 
 @dataclass(frozen=True)
-class Done(Settlement):
+class Done(_Settlement):
     """A completed step carrying its raw output and named success outcome."""
 
-    kind: Literal["done"] = field(default="done", init=False)
+    output: Any = field(default_factory=dict)
+    outcome: str = DONE_OUTCOME
+
+    def check(self, step: type[Step], *, config: Any = None) -> Done:
+        outcome = step.parse_value(self.outcome, Outcome, "outcome")
+        if (outcome == ERROR_OUTCOME and outcome not in step.outcomes_for(config)
+                or outcome not in step.available_outcomes(config)):
+            raise ValidationError(f"Step {step.key!r} does not offer success outcome {outcome!r}.")
+        if outcome in step.empty_outcomes:
+            return Done(outcome=outcome)
+        parsed = step.parse_value({} if self.output is None else self.output, step.output_model, "output")
+        output = strip_null_bytes(step._adapter(step.output_model).dump_python(parsed, mode="json", by_alias=True))
+        if step.output_model is Any:
+            schema = step.output_schema(config=config, outcomes={outcome})
+            if schema:
+                validate(validator(schema), output)
+        return Done(output=output, outcome=outcome)
+
+    def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
+        return rows.update(
+            **rows._cleared_wait(), status=StepRunStatus.SUCCEEDED,
+            output=self.output, outcome=self.outcome, retries=0,
+        )
 
 
 @dataclass(frozen=True)
-class Wait(Settlement):
+class Wait(_Settlement):
     """A record or time wait preserving the checkpoint and retry count."""
 
-    kind: Literal["wait"] = field(default="wait", init=False)
-    waiting_kind: Literal["time", "record"] = "time"
+    until: datetime | None = None
+    state: Any = field(default_factory=dict)
+    waiting_kind: WaitingKind = cast(WaitingKind, WaitingKind.TIME)
+
+    def __post_init__(self) -> None:
+        if self.until is not None and isinstance(self.until, datetime) and timezone.is_naive(self.until):
+            raise ValueError("A wait deadline requires an aware datetime.")
+
+    def check(self, step: type[Step], *, config: Any = None) -> Wait:
+        until = step.parse_value(self.until, datetime | None, "until")
+        if until is not None and timezone.is_naive(until):
+            raise ValidationError("A wait deadline requires an aware datetime.")
+        waiting_kind = step.parse_value(self.waiting_kind, WaitingKind, "waiting_kind")
+        if waiting_kind not in (WaitingKind.TIME, WaitingKind.RECORD):
+            raise ValidationError("A consumer wait must be a time or record wait.")
+        return replace(self, until=until, state=step.serialize_state(self.state), waiting_kind=waiting_kind)
 
     def admit(self, ctx: Any) -> Wait:
         """Let the watch owner choose the wait kind after body validation."""
         kind = apps.get_model("workflows", "StepWatch").objects.wait_kind(ctx.step_run, self.until)
         return replace(self, waiting_kind=kind)
 
-    def wait_parameters(self) -> dict[str, Any]:
-        """Use the shared wake transition with the body's checkpoint."""
-        return {"kind": self.waiting_kind, "until": self.until, "state": self.state}
+    def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
+        return rows.to_waiting(kind=self.waiting_kind, until=self.until, state=self.state)
+
+    @property
+    def keeps_watches(self) -> bool:
+        return self.waiting_kind == WaitingKind.RECORD
 
 
 @dataclass(frozen=True)
-class NextPage(Settlement):
+class NextPage(_Settlement):
     """A completed page whose checkpoint continues in a new attempt."""
 
-    kind: Literal["next_page"] = field(default="next_page", init=False)
+    state: Any = field(default_factory=dict)
+
+    def check(self, step: type[Step], *, config: Any = None) -> NextPage:
+        return replace(self, state=step.serialize_state(self.state))
+
+    def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
+        return rows.to_ready(state=self.state, reset_retries=True, next_page=True)
 
 
 @dataclass(frozen=True)
-class Fail(Settlement):
+class Fail(_Settlement):
     """An unsuccessful attempt whose body writes must roll back."""
 
-    kind: Literal["fail"] = field(default="fail", init=False)
+    error: str = ""
+
+    def check(self, step: type[Step], *, config: Any = None) -> Fail:
+        return replace(self, error=step.parse_value(self.error, str, "error"))
+
+    def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
+        retries = step_run.retries + 1
+        if attempt.retryable and step_run.requires_duplicate_acknowledgement:
+            return rows.to_waiting(kind=WaitingKind.OPERATOR, reason="possible duplicate effect", retries=retries)
+        if attempt.retryable and retries < step_run.step.retry.max_attempts:
+            return rows.to_waiting(
+                until=Now() + step_run.step.retry.delay_for(retries),
+                state=step_run.state, retries=retries,
+            )
+        return rows.update(
+            **rows._cleared_wait(), status=StepRunStatus.FAILED,
+            outcome=ERROR_OUTCOME, output={}, retries=retries,
+        )
 
 
-type _ContinuationOrFailure = Annotated[Wait | NextPage | Fail, Field(discriminator="kind")]
+@dataclass(frozen=True)
+class Ask(_Settlement):
+    """A review request checked before the decision owner admits it."""
+
+    requests: tuple[DecisionRequest, ...] = ()
+    policy: str = "first"
+    group_id: Any = None
+    errors: dict[str, list[str]] = field(default_factory=dict)
+    state: Any = field(default_factory=dict)
+
+    def check(self, step: type[Step], *, config: Any = None) -> Ask:
+        review = cast("type[ReviewStep[Any, Any, Any, Any]]", step)
+        offered = review.actions_for(config)
+        requests = []
+        for request in self.requests:
+            if any(action not in offered for action in request.actions):
+                raise ValidationError("A seat offers an action outside this review's declaration.")
+            parsed = review.parse_value(request.basis, review.basis_model, "basis")
+            basis = review._adapter(review.basis_model).dump_python(parsed, mode="json", by_alias=True)
+            requests.append(request.model_copy(update={"basis": basis}))
+        return replace(self, requests=tuple(requests), state=step.serialize_state(self.state))
+
+    def admit(self, ctx: Any) -> Ask:
+        manager = apps.get_model("decisions", "Decision").objects
+        if self.group_id is None:
+            group = manager.admit_group(self.requests, actor=ctx.actor, policy=self.policy)
+        else:
+            group = manager.reask(
+                self.group_id, actor=ctx.actor, actions=ctx.step.actions_for(ctx.config), errors=self.errors,
+            )
+        return replace(self, group_id=group.pk)
+
+    def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
+        return rows.to_waiting(kind=WaitingKind.DECISION, state=self.state, decision_group_id=self.group_id)
+
+
+type Settlement = Done | Wait | NextPage | Fail | Ask
 
 
 class EmptyOutput(BaseModel):
@@ -245,7 +347,7 @@ class Step[I, O, C](ImplBase):
         return strip_null_bytes(cls._adapter(Any).dump_python({} if state is None else state, mode="json"))
 
     @classmethod
-    def check(cls, settlement: Settlement, *, config: Any = None) -> Settlement:
+    def check(cls, settlement: _Settlement, *, config: Any = None) -> _Settlement:
         """Validate and serialize a body's settlement once, at the body boundary.
 
         Helpers construct plain values. The runner calls this inside the body's
@@ -254,24 +356,11 @@ class Step[I, O, C](ImplBase):
         Pydantic receives the original values exactly once,
         preserving its validation aliases, validators and serialization behavior.
         """
-        if isinstance(settlement, Done):
-            outcome = cls.parse_value(settlement.outcome, Outcome, "outcome")
-            if outcome == ERROR_OUTCOME or outcome not in cls.available_outcomes(config):
-                raise ValidationError(f"Step {cls.key!r} does not offer success outcome {outcome!r}.")
-            adapter = cls._adapter(cls.output_model)
-            parsed = cls.parse_value({} if settlement.output is None else settlement.output, cls.output_model, "output")
-            return Done(
-                output=strip_null_bytes(adapter.dump_python(parsed, mode="json", by_alias=True)),
-                outcome=outcome,
-            )
-        if not isinstance(settlement, (Wait, NextPage, Fail)):
-            raise ValidationError("A step must return Done, Wait, NextPage or Fail.")
-        checked = cls.parse_value(asdict(settlement), _ContinuationOrFailure, "settlement")
-        if isinstance(checked, (Wait, NextPage)):
-            checked = replace(checked, state=cls.serialize_state(checked.state))
-        return checked
+        if not isinstance(settlement, _Settlement):
+            raise ValidationError("A step must return a settlement.")
+        return settlement.check(cls, config=config)
 
-    def run(self, ctx: Any) -> Settlement:
+    def run(self, ctx: Any) -> _Settlement:
         """Execute under the context actor with the class's declared transaction boundary."""
         raise NotImplementedError
 

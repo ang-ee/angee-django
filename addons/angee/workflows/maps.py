@@ -1,13 +1,13 @@
 """Bounded map bodies and the typed partial-result contract consumers import."""
 
-from dataclasses import dataclass, field
-from typing import Any, Literal, Self
+from dataclasses import dataclass
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.experimental.missing_sentinel import MISSING
 
 from angee.workflows.states import ERROR_OUTCOME, Outcome, WaitingKind
-from angee.workflows.steps import EmptyOutput, Settlement, Step
+from angee.workflows.steps import EmptyOutput, Step, _Settlement
 
 
 class MapInput(BaseModel):
@@ -42,14 +42,11 @@ class MapItem[O](BaseModel):
 
 
 @dataclass(frozen=True)
-class MapWait(Settlement):
+class _MapWait(_Settlement):
     """Park the containing step while the graph planner admits its body rows."""
 
-    kind: Literal["map"] = field(default="map", init=False)
-
-    def wait_parameters(self) -> dict[str, Any]:
-        """Compose the same settlement-owned seam as time and decision waits."""
-        return {"kind": WaitingKind.MAP}
+    def transition(self, rows: Any, step_run: Any, attempt: Any) -> int:
+        return rows.to_waiting(kind=WaitingKind.MAP)
 
 
 class Map(Step[MapInput, list[MapItem[Any]], None]):
@@ -76,14 +73,9 @@ class Map(Step[MapInput, list[MapItem[Any]], None]):
             model = model | EmptyOutput
         return cls._schema(list[MapItem[model]], "serialization")  # type: ignore[valid-type]
 
-    @classmethod
-    def check(cls, settlement: Settlement, *, config: Any = None) -> Settlement:
-        """Check the map wait at its owner; ordinary results use Step.check once."""
-        return settlement if isinstance(settlement, MapWait) else super().check(settlement, config=config)
-
-    def run(self, ctx: Any) -> Settlement:
+    def run(self, ctx: Any) -> _Settlement:
         """Wait for bodies or return ordered typed evidence with one error query."""
         items = ctx.step_run.map_rows().collect_map(len(ctx.input.items))
-        return MapWait() if items is None else self.done(
+        return _MapWait() if items is None else self.done(
             items, outcome="failed" if any("error" in item for item in items) else "done",
         )

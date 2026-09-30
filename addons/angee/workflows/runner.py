@@ -7,9 +7,10 @@ import time
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
@@ -28,7 +29,7 @@ from angee.decisions.exceptions import RetryableDecisionError
 from angee.graphql.publishing import publish_change
 from angee.workflows.managers import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
 from angee.workflows.states import DONE_OUTCOME, ERROR_OUTCOME, AttemptResult, RunStatus, StepRunStatus, WaitingKind
-from angee.workflows.steps import Fail, Retryable, Settlement, StepMode, Superseded, io_timeout_budget
+from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _Settlement, io_timeout_budget
 
 logger = logging.getLogger(__name__)
 TICK_CANDIDATE_LIMIT = 1000
@@ -40,6 +41,35 @@ cannot hide later items within this bound; each is independently rechecked.
 
 if TYPE_CHECKING:
     from angee.workflows.context import StepContext
+
+
+@dataclass(frozen=True)
+class _AttemptRecord:
+    """Runner-owned outcome and diagnostics for one claimed attempt."""
+
+    settlement: _Settlement
+    result: AttemptResult = cast(AttemptResult, AttemptResult.SUCCEEDED)
+    error: str = ""
+    stacktrace: str = ""
+    retryable: bool = False
+    timed_out: bool = False
+
+    @classmethod
+    def from_settlement(cls, settlement: _Settlement) -> _AttemptRecord:
+        if isinstance(settlement, Fail):
+            return cls(settlement, result=cast(AttemptResult, AttemptResult.FAILED), error=settlement.error)
+        return cls(settlement)
+
+    @classmethod
+    def failure(
+        cls, error: str, *, stacktrace: str = "", retryable: bool = False, timed_out: bool = False,
+    ) -> _AttemptRecord:
+        return cls(
+            Fail(error=error), result=cast(
+                AttemptResult, AttemptResult.TIMED_OUT if timed_out else AttemptResult.FAILED,
+            ),
+            error=error, stacktrace=stacktrace, retryable=retryable, timed_out=timed_out,
+        )
 
 
 class Runner:
@@ -57,7 +87,7 @@ class Runner:
         self,
         run: Any,
         step_run: Any = None,
-        settlement: Settlement | None = None,
+        settlement: _AttemptRecord | None = None,
         *,
         artifacts: list[Any] | None = None,
     ) -> None:
@@ -76,7 +106,7 @@ class Runner:
                 if settlement is not None:
                     with transaction.atomic():
                         step_runs.settle(step_run, settlement)
-                        if settlement.kind != "fail" and artifacts:
+                        if not isinstance(settlement.settlement, Fail) and artifacts:
                             step_run.artifacts.bulk_create(artifacts)
                 # A preserved IO sibling may settle after failure. Its evidence
                 # changes, but the terminal run and graph plan stay untouched.
@@ -131,8 +161,8 @@ class Runner:
                         # A planning error follows a completed settlement and
                         # cannot replace it. A failed settlement still owns its fence.
                         if step_runs.filter(pk=step_run.pk, status=StepRunStatus.RUNNING).exists():
-                            step_runs.settle(step_run, Fail(
-                                error=attempt_error, stacktrace=traceback.format_exc(), timed_out=timed_out,
+                            step_runs.settle(step_run, _AttemptRecord.failure(
+                                attempt_error, stacktrace=traceback.format_exc(), timed_out=timed_out,
                             ))
                             recorded_on_attempt = True
                 with _record_failure("attempt close"):
@@ -209,9 +239,9 @@ class Runner:
             return False
 
     @staticmethod
-    def _failure(failure: Exception) -> Fail:
-        return Fail(
-            error=exception_text(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
+    def _failure(failure: Exception) -> _AttemptRecord:
+        return _AttemptRecord.failure(
+            exception_text(failure), timed_out=isinstance(failure, SoftTimeLimitExceeded),
             retryable=isinstance(failure, (Retryable, RetryableDecisionError)) or (
                 isinstance(failure, OperationalError)
                 and _sqlstate(failure) in RETRYABLE_SQLSTATES
@@ -219,7 +249,7 @@ class Runner:
             stacktrace=traceback.format_exc(),
         )
 
-    def _run_body(self, ctx: StepContext) -> Settlement:
+    def _run_body(self, ctx: StepContext) -> _AttemptRecord:
         """Validate once with the body, rolling back DATABASE writes on failure."""
         database = ctx.step.mode == StepMode.DATABASE
         try:
@@ -230,15 +260,15 @@ class Runner:
                     raise RuntimeError("The step body must run under its actor, outside system_context.")
                 settlement = ctx.step.check(ctx.step().run(ctx), config=ctx.config)
                 settlement = settlement.admit(ctx)
-                if database and settlement.kind == "fail":
+                if database and isinstance(settlement, Fail):
                     transaction.set_rollback(True)
-                return settlement
+                return _AttemptRecord.from_settlement(settlement)
         except Superseded:
             raise
         except Exception as failure:
             return self._failure(failure)
 
-    def _settle_io(self, ctx: StepContext, settlement: Settlement) -> bool:
+    def _settle_io(self, ctx: StepContext, settlement: _AttemptRecord) -> bool:
         """Retry a fenced result transaction until its claim's current deadline."""
         while timezone.now() < ctx.step_run.deadline_at:
             try:
@@ -378,7 +408,9 @@ class Runner:
         step_run.run = run
         try:
             with transaction.atomic():
-                run.step_runs.expire(step_run)
+                run.step_runs.expire(step_run, _AttemptRecord.failure(
+                    "The attempt deadline expired.", retryable=True, timed_out=True,
+                ))
         except ImproperlyConfigured as failure:
             step_run.attempts.filter(number=step_run.attempt).close(AttemptResult.TIMED_OUT, exception_text(failure))
             run.step_runs.filter(pk=step_run.pk).to_waiting(

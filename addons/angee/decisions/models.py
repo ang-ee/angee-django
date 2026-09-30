@@ -63,13 +63,13 @@ class DecisionGroup(AppendOnlyModel, AngeeDataModel):
         return policy.settled(decisions)
 
     @property
-    def outcome(self) -> str | None:
+    def outcome(self) -> ClosedReason | None:
         """Return expired, superseded or canceled; None leaves answer handling to the waiter."""
         if self.settled_at is None:
             return None
         reason = (system_queryset(self.decisions.model).filter(group_id=self.pk).unanswered()
                   .order_by("index").values_list("closed_reason", flat=True).first())
-        return "expired" if reason in (ClosedReason.EXPIRED, ClosedReason.INVALID_ATTEMPTS) else reason
+        return ClosedReason(reason) if reason is not None else None
 
     def validate_append(self) -> None:
         if self.settled_at is not None:
