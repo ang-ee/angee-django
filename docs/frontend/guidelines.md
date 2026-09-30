@@ -176,8 +176,8 @@ shared UI copy through an addon bundle.
   [`WidgetSpec.visibility`](../../packages/ui/src/dashboard/headless.ts) names
   the resource scope that authorizes listing; the dashboards backend answers
   for the current actor before the UI mounts queries and packs visible widgets.
-  An authorized empty result remains visible. Authored widgets own their refresh
-  controls; the shared footer appears only for built-in data bindings.
+  An authorized empty result remains visible. Built-in query widgets put Refresh
+  in their options menu; authored widgets own their refresh controls.
 - **React state has one owner.** Keep canonical facts in the smallest owner:
   route/search facts in TanStack Router/nuqs, server facts in Refine core reads
   and TanStack Query, native controlled table state in `ResourceViewProvider`,

@@ -14,6 +14,7 @@ import { AppRuntimeProvider } from "../runtime/runtime";
 import { createRouteHref } from "../runtime/route-href";
 import { useResourceView } from "../views/resource/resource-view-context";
 import { ResourceToolbar } from "../toolbars/ResourceToolbar";
+import { GanttLane } from "../views/gantt/gantt-lane";
 
 const TableWidget = BUILTIN_DASHBOARD_WIDGET_KINDS.find(({ id }) => id === "table")!.Component;
 const ResourceViewWidget = BUILTIN_DASHBOARD_WIDGET_KINDS.find(({ id }) => id === "resourceView")!.Component;
@@ -256,6 +257,7 @@ describe("dashboard table columns", () => {
 
 test("hosts a shipped list preset with reduced chrome and reports the server total", () => {
   const onCountChange = vi.fn();
+  const rowVerb = vi.fn();
   const observed = vi.fn();
   function DeclaredView(props: HostedResourceViewProps) {
     const view = useResourceView();
@@ -264,7 +266,7 @@ test("hosts a shipped list preset with reduced chrome and reports the server tot
       props.onListStateChange({ rows: [], total: 17, page: 1, pageSize: 20,
         pageCount: 1, hasNext: false, hasPrev: false, fetching: false });
     }, [props.onListStateChange]);
-    return <><div>Standard list</div><ResourceToolbar
+    return <><div>Standard list</div><button type="button" onClick={rowVerb}>Open record</button><ResourceToolbar
       pager={{ total: 17, page: 1, pageSize: 20 }} view="list" availableViews={["list", "board"]}
       filterOptions={[{ id: "open", label: "Open", filter: { status: "open" } }]}
       onViewChange={() => {}} onFilterTextChange={() => {}} chrome={props.chrome}
@@ -282,6 +284,8 @@ test("hosts a shipped list preset with reduced chrome and reports the server tot
       data={data} hostedView={DeclaredView} onCountChange={onCountChange} />
   </AppRuntimeProvider>);
   expect(screen.getByText("Standard list")).toBeTruthy();
+  screen.getByRole("button", { name: "Open record" }).click();
+  expect(rowVerb).toHaveBeenCalledOnce();
   expect(screen.getByLabelText("Filter records")).toBeTruthy();
   expect(screen.queryByLabelText("Previous page")).toBeNull();
   expect(screen.queryByLabelText("Board view")).toBeNull();
@@ -290,4 +294,22 @@ test("hosts a shipped list preset with reduced chrome and reports the server tot
     preset: "desk.open", baseFilter: { status: { exact: "open" } } });
   expect(observed.mock.lastCall?.[0].queryError).toBeFalsy();
   expect(onCountChange).toHaveBeenCalledWith(17);
+});
+
+test("a hosted Gantt keeps the declaration's lane details", () => {
+  const hosted: WidgetSpec = { ...spec, kind: "resourceView",
+    data: { shape: "resourceView", preset: "desk.schedule" },
+    options: { fullViewRoute: "desk.schedule" } };
+  function DeclaredView(props: HostedResourceViewProps) {
+    return <div data-presentation={props.presentation}>
+      <GanttLane details={{ title: "Review rollout", secondary: "Planning", people: [{ id: "one", name: "Ari" }] }} />
+    </div>;
+  }
+  render(<AppRuntimeProvider runtime={{ resourceViews: {
+    "desk.schedule": { id: "desk.schedule", preset: "desk.schedule", label: "Schedule",
+      resource: "notes.Note", view: "gantt" },
+  } }}><ResourceViewWidget spec={hosted} data={data} hostedView={DeclaredView} /></AppRuntimeProvider>);
+  expect(screen.getByText("Review rollout").closest("[data-presentation]")?.getAttribute("data-presentation")).toBe("embedded");
+  expect(screen.getByText("Planning")).toBeTruthy();
+  expect(screen.getByText("Ari")).toBeTruthy();
 });

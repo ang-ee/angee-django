@@ -4,7 +4,7 @@ import pytest
 from django.apps import apps
 from django.core.exceptions import ValidationError
 
-from angee.dashboards.models import widget_visibility_answers
+from angee.dashboards.models import canonical_dashboard_snapshot, widget_visibility_answers
 from tests import projects_models  # noqa: F401 -- registers the concrete work.Queue and projects.Task
 
 
@@ -40,3 +40,25 @@ def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
         [{"resource": "projects.Task", "key": "queue__slug", "value": "incoming"}], actor
     ) == [True]
     assert seen == [(projects_models.Queue, actor)]
+
+
+def test_declared_task_queue_scope_validates_in_a_widget_snapshot(monkeypatch):
+    monkeypatch.setattr("angee.dashboards.models.read_scoped_queryset", lambda _model, _actor: None)
+    snapshot = canonical_dashboard_snapshot({
+        "schemaVersion": 1,
+        "columns": 12,
+        "widgets": [{
+            "schemaVersion": 1,
+            "id": "inbox",
+            "kind": "table",
+            "kindVersion": 1,
+            "title": "Inbox",
+            "visibility": {"resource": "projects.Task", "key": "queue__slug", "value": "incoming"},
+            "data": {"shape": "rows", "source": {"resource": "projects.Task"}},
+            "options": {},
+            "x": 0, "y": 0, "w": 6, "h": 4, "isArchived": False,
+        }],
+    })
+    assert snapshot["widgets"][0]["visibility"] == {
+        "resource": "projects.Task", "key": "queue__slug", "value": "incoming",
+    }

@@ -7,6 +7,7 @@ import { useDashboardRegistry } from "../runtime/runtime";
 import { useDndKitSensors } from "../lib/dnd";
 import { cn } from "../lib/cn";
 import { Button } from "../ui/button";
+import { DropdownMenu } from "../ui/dropdown-menu";
 import { Glyph } from "../chrome/Glyph";
 import { Input } from "../ui/input";
 import { ErrorBanner } from "../fragments/ErrorBanner";
@@ -517,13 +518,13 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
         ...(transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : {}),
       }}
     >
-      <header className="flex min-h-9 shrink-0 items-center gap-1 border-b border-border-subtle px-2 py-1">
+      <header className={cn("flex min-h-9 shrink-0 items-center gap-1 border-b border-border-subtle px-2 py-1", !editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" && "pr-9")}>
         <div id={titleId} className={editing ? "sr-only" : "min-w-0 flex-1"}>
           <SectionHeading
             label={!editing && fullViewHref ? <Link to={fullViewHref} className="hover:underline">{visibleTitle}</Link> : visibleTitle}
-            count={count == null ? undefined : count}
-            hint={typeof widget.options.hint === "string" ? widget.options.hint : undefined}
-            audience={typeof widget.options.audience === "string" ? widget.options.audience : undefined}
+            count={count == null ? undefined : `· ${count}`}
+            hint={typeof widget.options.hint === "string" ? `· ${widget.options.hint}` : undefined}
+            audience={typeof widget.options.audience === "string" ? `· ${widget.options.audience}` : undefined}
           />
         </div>
         {!editing && fullViewHref ? <Link to={fullViewHref} aria-label={t("surface.fullView", { title: visibleTitle })} className="shrink-0 rounded-4 p-1 text-fg-muted hover:text-fg focus-visible:focus-ring"><Glyph name="arrow-up-right" size={14} /></Link> : null}
@@ -546,15 +547,16 @@ function DashboardCell({ widget, registry, definition, editing, pageScope, onArc
           </>
         ) : null}
       </header>
-      <ResolvedWidget widget={widget} registry={registry} definition={definition} pageScope={pageScope} titleId={titleId} onCountChange={setCount} />
+      <ResolvedWidget widget={widget} registry={registry} definition={definition} editing={editing} pageScope={pageScope} titleId={titleId} onCountChange={setCount} />
     </article>
   );
 }
 
-function ResolvedWidget({ widget, registry, definition, pageScope, titleId, onCountChange }: {
+function ResolvedWidget({ widget, registry, definition, editing, pageScope, titleId, onCountChange }: {
   widget: WidgetSpec;
   registry: DashboardRegistry;
   definition?: DashboardDefinition;
+  editing: boolean;
   pageScope?: DashboardPageScope;
   titleId: string;
   onCountChange: (count: number | null) => void;
@@ -564,7 +566,7 @@ function ResolvedWidget({ widget, registry, definition, pageScope, titleId, onCo
   if (!kind || kind.version !== widget.kindVersion || kind.shape !== widget.data.shape) {
     return <ErrorBanner className="m-3" description={t("surface.widgetKindUnavailable", { kind: widget.kind, version: widget.kindVersion })} />;
   }
-  return <WidgetDataBody widget={widget} kind={kind} definition={definition} pageScope={pageScope} titleId={titleId} onCountChange={onCountChange} />;
+  return <WidgetDataBody widget={widget} kind={kind} definition={definition} editing={editing} pageScope={pageScope} titleId={titleId} onCountChange={onCountChange} />;
 }
 
 function normalizeDashboardWidgetTitle(title: string, resource: string, resourceLabel: string): string {
@@ -574,10 +576,11 @@ function normalizeDashboardWidgetTitle(title: string, resource: string, resource
   return title;
 }
 
-function WidgetDataBody({ widget, kind, definition, pageScope, titleId, onCountChange }: {
+function WidgetDataBody({ widget, kind, definition, editing, pageScope, titleId, onCountChange }: {
   widget: WidgetSpec;
   kind: DashboardWidgetKind;
   definition?: DashboardDefinition;
+  editing: boolean;
   pageScope?: DashboardPageScope;
   titleId: string;
   onCountChange: (count: number | null) => void;
@@ -586,9 +589,9 @@ function WidgetDataBody({ widget, kind, definition, pageScope, titleId, onCountC
   const data = useDashboardWidgetData(widget, pageScope);
   React.useEffect(() => {
     if (widget.data.shape !== "resourceView" && widget.data.shape !== "none") {
-      onCountChange(widget.kind === "stat" ? null : data.count ?? null);
+      onCountChange(widget.kind === "stat" ? data.value : data.count ?? null);
     }
-  }, [data.count, onCountChange, widget.data.shape, widget.kind]);
+  }, [data.count, data.value, onCountChange, widget.data.shape, widget.kind]);
   const Component = kind.Component;
   const Authored = definition?.authored?.[widget.id];
   const HostedView = widget.data.shape === "resourceView" ? definition?.views?.[widget.data.preset] : undefined;
@@ -600,13 +603,14 @@ function WidgetDataBody({ widget, kind, definition, pageScope, titleId, onCountC
       <div className={cn("min-h-0 flex-1", kind.shape === "rows" || kind.shape === "resourceView" ? "overflow-auto" : "overflow-hidden")}>
         <Component spec={widget} data={data} titleId={titleId} authored={Authored ? <Authored /> : undefined} hostedView={HostedView} onCountChange={onCountChange} />
       </div>
-      {widget.data.shape !== "none" && widget.data.shape !== "resourceView" ? <footer className="flex shrink-0 items-center justify-end gap-2 pt-1 text-2xs text-fg-subtle">
-        {pageScope ? (
-          <span>{pageScope.resource === widget.data.source.resource ? t("surface.pageFilters") : t("surface.independentSource")}</span>
-        ) : null}
-        <span>{data.live ? t("surface.live") : data.updatedAt ? t("surface.readAt", { time: new Date(data.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }) : t("surface.manual")}</span>
-        <button type="button" className="rounded-4 px-1 text-fg-muted hover:text-fg focus-visible:focus-ring" onClick={data.refetch}>{t("surface.refresh")}</button>
-      </footer> : null}
+      {!editing && widget.data.shape !== "none" && widget.data.shape !== "resourceView" ? (
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger render={<button type="button" className="absolute right-1 top-1 rounded-4 p-1 text-fg-muted hover:text-fg focus-visible:focus-ring" aria-label={t("surface.widgetMenu", { title: widget.title })}><Glyph name="more-horizontal" fallbackName="more-vertical" size={14} /></button>} />
+          <DropdownMenu.Portal><DropdownMenu.Positioner align="end" sideOffset={4}><DropdownMenu.Content>
+            <DropdownMenu.Item onClick={data.refetch}>{t("surface.refresh")}</DropdownMenu.Item>
+          </DropdownMenu.Content></DropdownMenu.Positioner></DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      ) : null}
     </div>
   );
 }

@@ -79,6 +79,20 @@ test("reuses the empty query field map while metadata is unavailable", () => {
   expect(result.current.identity).toBeNull();
 });
 
+test("a reader-relative task filter stays intact in the dashboard row query", () => {
+  state.resource = testDataResource("projects.Task", { query: testResourceQuery({ fields: {
+    id: testQueryField("id", { scalar: "ID" }),
+    waiting_for: testQueryField("waiting_for"),
+  } }) });
+  const waiting: WidgetSpec = { ...spec, data: { shape: "rows", source: {
+    resource: "projects.Task", fields: ["id"], filter: { waiting_for: { exact: "me" } },
+  } } };
+  renderHook(() => useDashboardWidgetData(waiting));
+  expect(state.list).toHaveBeenCalledWith(expect.objectContaining({
+    scope: expect.objectContaining({ filter: { waiting_for: { exact: "me" } } }),
+  }));
+});
+
 test("a value measure is a heading count only for the count operation", () => {
   state.resource = testDataResource("messaging.Message", {
     query: testResourceQuery({ fields: { id: testQueryField("id") } }),

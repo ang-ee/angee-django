@@ -96,7 +96,7 @@ test("pending visibility never starts a protected data query", () => {
   expect(state.reads).not.toHaveBeenCalled();
 });
 
-test("authored widgets omit the disconnected footer while data widgets refresh their binding", () => {
+test("query widgets keep refresh in their menu and never show a status footer", async () => {
   const authored: DashboardDefinition = {
     ...definition,
     widgets: [{
@@ -107,10 +107,34 @@ test("authored widgets omit the disconnected footer while data widgets refresh t
   };
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} definition={authored} />);
   const authoredCell = screen.getByRole("heading", { name: "Summary" }).closest("article")!;
-  expect(within(authoredCell).queryByRole("button", { name: "Refresh" })).toBeNull();
+  expect(within(authoredCell).queryByRole("button", { name: "Summary options" })).toBeNull();
   const dataCell = screen.getByRole("heading", { name: "Shared work" }).closest("article")!;
-  fireEvent.click(within(dataCell).getByRole("button", { name: "Refresh" }));
+  expect(dataCell.querySelector("footer")).toBeNull();
+  expect(within(dataCell).queryByText("Live")).toBeNull();
+  expect(within(dataCell).queryByRole("button", { name: "Refresh" })).toBeNull();
+  fireEvent.click(within(dataCell).getByRole("button", { name: "Shared work options" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Refresh" }));
   expect(state.refetch).toHaveBeenCalledOnce();
+});
+
+test("widget headings compose loaded totals, hints, and audience without statistic captions", () => {
+  state.count = 7;
+  const reading: DashboardDefinition = { ...definition, widgets: [{
+    ...widget, id: "reading", title: "Open requests", visibility: undefined,
+    options: { hint: "Filed this week", audience: "Reviewers" },
+  }] };
+  renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} definition={reading} />);
+  const heading = screen.getByRole("heading", { name: /Open requests/ });
+  expect(heading.parentElement?.textContent).toBe("Open requests· 7· Filed this week· Reviewers");
+  expect(screen.queryByText("Value")).toBeNull();
+  cleanup();
+  const statistic: DashboardDefinition = { ...reading, widgets: [{
+    ...reading.widgets[0]!, id: "statistic", title: "Decisions", kind: "stat",
+    data: { shape: "value", source: { resource: "projects.Task", measure: { op: "count" } } },
+  }] };
+  renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }} definition={statistic} />);
+  expect(screen.getByRole("heading", { name: /Decisions/ }).parentElement?.textContent).toContain("· 0");
+  expect(screen.queryByText("Value")).toBeNull();
 });
 
 test("absent dashboards use the server edit answer and declaration can turn editing off", () => {
@@ -150,7 +174,7 @@ test("the visible layout is the source for duplication when a declaration advanc
   expect(visibleDashboardSnapshot(registry, target, { ...ready, declarationRevision: definition.revision })).toBe(stale);
 });
 
-test("a statistic keeps its metric value without repeating it in the heading", () => {
+test("a statistic uses its loaded value in the heading and body", () => {
   state.count = 5;
   const stat = { ...widget, id: "stat", kind: "stat", title: "Total", visibility: undefined,
     data: { shape: "value" as const, source: { resource: "projects.Task", measure: { op: "count" as const } } },
@@ -158,7 +182,7 @@ test("a statistic keeps its metric value without repeating it in the heading", (
   renderDashboard(<DashboardSurface target={{ scope: "addon", key: "overview" }}
     definition={{ ...definition, widgets: [stat] }} />);
   const article = screen.getByRole("heading", { name: "Total" }).closest("article")!;
-  expect(article.querySelector("header")?.textContent).toBe("Total");
+  expect(article.querySelector("header")?.textContent).toContain("Total· 0");
   expect(article.textContent).toContain("0");
 });
 
