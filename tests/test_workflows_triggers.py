@@ -4,8 +4,8 @@ from datetime import timedelta
 
 import pytest
 import strawberry_django
-from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import IntegrityError, models, transaction
+from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
+from django.db import IntegrityError, OperationalError, models, transaction
 from django.db.models.functions import Now, Upper
 from django.db.models.signals import post_save
 from rebac import actor_context, current_actor, system_context, to_subject_ref
@@ -384,6 +384,8 @@ def test_trigger_actor_boundaries_drop_ambient_system_privileges(trigger_setup, 
         trigger = Trigger.objects.enable(trigger, actor=actor)
     if boundary != "enable":
         owner = triggers.RecordChanged if boundary == "check_access" else Trigger
+        if owner is Trigger:
+            monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
         monkeypatch.setattr(owner, boundary, observe)
         capture(record)
         with system_context(reason="test trigger admission actor boundary"):
@@ -431,6 +433,7 @@ def test_domain_hooks_own_input_and_rejections_without_disabling(trigger_setup, 
         record.save()
         raise ValidationError("Domain admission declined.")
 
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
     monkeypatch.setattr(Trigger, "check_admission", reject)
     assert Trigger.objects.drain() == 0
     record.refresh_from_db()
@@ -442,3 +445,119 @@ def test_domain_hooks_own_input_and_rejections_without_disabling(trigger_setup, 
     capture(record)
     assert Trigger.objects.drain() == 1
     assert system_queryset(WorkflowRun).get().input == {"value": record.pk}
+
+
+def test_transient_trigger_error_remains_pending_for_later_drain(trigger_setup, monkeypatch):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    original = Trigger.trigger_input
+    calls = 0
+
+    def transient(self, record):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OperationalError("temporary connection failure")
+        return original(self, record)
+
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
+    monkeypatch.setattr(Trigger, "trigger_input", transient)
+    assert Trigger.objects.drain() == 0
+    event = system_queryset(TriggerEvent).get()
+    assert event.evaluated_at is None and event.rejection == ""
+    assert Trigger.objects.drain() == 1
+
+
+def test_unexpected_trigger_configuration_error_isolates_candidate(trigger_setup, monkeypatch, caplog):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    second = vault_for(actor, name="Other")
+    capture(record)
+    capture(second)
+    original = Trigger.validate_configuration
+
+    def broken(self):
+        if self.pk == trigger.pk and not getattr(self, "_retried", False):
+            raise RuntimeError("unexpected configuration bug")
+        return original(self)
+
+    monkeypatch.setattr(Trigger, "validate_configuration", broken)
+    # A second trigger owns an independent candidate in the same drain.
+    with actor_context(actor):
+        other = Trigger.objects.create(
+            workflow=trigger.workflow, source="record_changed", model_label="knowledge.vault",
+            condition={},
+        )
+    Trigger.objects.enable(other, actor=actor)
+    capture(second)
+    assert Trigger.objects.drain() >= 1
+    assert "unexpected configuration bug" in caplog.text
+    assert system_queryset(TriggerEvent).filter(trigger=trigger, evaluated_at__isnull=True).exists()
+
+
+def test_domain_rejection_is_sanitized(trigger_setup, monkeypatch):
+    actor, _, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+
+    def reject(self, record, *, actor):
+        raise ValidationError("Rejected\x00 secret")
+
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
+    monkeypatch.setattr(Trigger, "check_admission", reject)
+    assert Trigger.objects.drain() == 0
+    event = system_queryset(TriggerEvent).get()
+    assert "Rejected" in event.rejection and "\x00" not in event.rejection
+
+
+def test_trigger_hook_contributions_are_source_scoped_and_conflicts_fail():
+    seen = []
+
+    class RecordHook:
+        trigger_sources = ("record_changed",)
+
+        def trigger_input(self, record):
+            return {"record": record}
+
+        def check_admission(self, record, *, actor):
+            seen.append("record")
+
+    class MessageHook:
+        trigger_sources = ("message_ingested",)
+
+        def trigger_input(self, record):
+            return {"message": record}
+
+        def check_admission(self, record, *, actor):
+            seen.append("message")
+
+    class Combined(RecordHook, MessageHook):
+        source = "record_changed"
+        _trigger_hooks = Trigger._trigger_hooks
+        admission_input = Trigger.admission_input
+        admit_record = Trigger.admit_record
+
+    trigger = Combined()
+    hooks = trigger._trigger_hooks("trigger_input")
+    assert hooks == [RecordHook.trigger_input]
+    assert trigger._trigger_hooks("check_admission") == [RecordHook.check_admission]
+    assert trigger.admission_input("row") == {"record": "row"}
+    trigger.admit_record("row", actor=None)
+    assert seen == ["record"]
+    trigger.source = "other"
+    assert trigger.admission_input("row") == {}
+    trigger.admit_record("row", actor=None)
+    assert seen == ["record"]
+
+    class AnotherRecordHook:
+        trigger_sources = ("record_changed",)
+
+        def trigger_input(self, record):
+            return {"other": record}
+
+    class Conflict(RecordHook, AnotherRecordHook):
+        source = "record_changed"
+
+    with pytest.raises(ImproperlyConfigured, match="Multiple trigger_input"):
+        Trigger._trigger_hooks(Conflict(), "trigger_input")

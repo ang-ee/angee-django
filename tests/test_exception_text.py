@@ -20,3 +20,15 @@ from angee.base.exceptions import exception_text
 ])
 def test_exception_text_uses_native_validation_messages(error, expected):
     assert exception_text(error) == expected
+
+
+def test_exception_text_diagnostic_keeps_type_and_cause():
+    try:
+        try:
+            raise LookupError("missing owner")
+        except LookupError as cause:
+            raise ValueError("invalid plan") from cause
+    except ValueError as error:
+        assert exception_text(error, diagnostic=True) == (
+            "ValueError: invalid plan; caused by LookupError: missing owner"
+        )

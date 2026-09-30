@@ -22,7 +22,7 @@ from angee.workflows import managers
 from angee.workflows.definition import Definition, DefinitionInvalid
 from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunManager
 from angee.workflows.states import RunStatus, StepRunStatus
-from angee.workflows.steps import Done, Fail, RetryPolicy, Step, Wait
+from angee.workflows.steps import Done, Fail, RetryPolicy, Step, Superseded, Wait
 from angee.workflows.testing.drivers import load_workflow, register_steps, run_until
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun, WorkflowVersion
 from tests.conftest import create_user
@@ -340,7 +340,7 @@ def test_cancel_preserves_failed_run_terminal_fields(execution, monkeypatch):
     assert StepRun.objects.execute(step_run.pk)
     failed = system_queryset(WorkflowRun).get(pk=run.pk)
     original = (failed.status, failed.outcome, failed.output, failed.error, failed.finished_at)
-    assert original[:4] == (RunStatus.FAILED, "error", {}, "Result assembly failed.")
+    assert original[:4] == (RunStatus.FAILED, "error", {}, "ValueError: Result assembly failed.")
     assert original[4] is not None
 
     WorkflowRun.objects.cancel(run, actor=actor)
@@ -571,7 +571,7 @@ def test_holder_resend_refreshes_backlogged_ready_row_before_tick(execution, set
     assert system_queryset(WorkflowRun).get(pk=run.pk).status == RunStatus.SUCCEEDED
 
 
-def test_t19_result_binding_error_preserves_successful_body(execution, register_step, monkeypatch):
+def test_t19_result_binding_error_preserves_successful_body(execution, register_step, monkeypatch, caplog):
     """A result projection defect fails the run durably after the final body commits."""
     actor, _ = execution
     workflow = load_workflow(document("entry"), key="result_failure", actor=actor)
@@ -587,11 +587,34 @@ def test_t19_result_binding_error_preserves_successful_body(execution, register_
     retained = system_queryset(WorkflowRun).get(pk=run.pk)
     assert (retained.status, retained.outcome, retained.output) == (RunStatus.FAILED, "error", {})
     assert "Injected result binding failure" in retained.error
+    assert retained.error.startswith("ValidationError:")
+    assert "Workflow run" in caplog.text and "Injected result binding failure" in caplog.text
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Successful body retained"
     assert system_queryset(StepRun).get(pk=step_run.pk).status == StepRunStatus.SUCCEEDED
     assert system_queryset(StepAttempt).get(step_run=step_run).result == "succeeded"
     assert system_queryset(StepAttempt).get(step_run=step_run).error == ""
     assert not StepRun.objects.execute(step_run.pk)
+
+
+def test_settlement_error_is_recorded_on_attempt_once(execution, monkeypatch):
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="settlement_error_place", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    row = system_queryset(StepRun).get(run=run)
+    original = StepRunQuerySet.settle
+    calls = 0
+
+    def fail_once(self, step_run, settlement):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise DataError("invalid result")
+        return original(self, step_run, settlement)
+
+    monkeypatch.setattr(StepRunQuerySet, "settle", fail_once)
+    assert StepRun.objects.execute(row.pk)
+    assert system_queryset(WorkflowRun).get(pk=run.pk).error == ""
+    assert system_queryset(StepAttempt).get(step_run=row).error == "DataError: invalid result"
 
 
 def test_reprocess_uses_current_publication_and_ambient_actor(execution):
@@ -611,6 +634,25 @@ def test_reprocess_uses_current_publication_and_ambient_actor(execution):
     assert replay.subject_content_type_id == run.subject_content_type_id
     assert replay.subject_object_id == run.subject_object_id
     assert replay.run_as_id == actor.pk
+
+
+def test_run_version_remains_pinned_across_republish(execution):
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="version_pin", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor, input={"value": 8}, request_key="test:version_pin")
+    pinned = run.version_id
+    Workflow.objects.save_draft(
+        workflow, draft=document("entry", "last"), expected_revision=workflow.draft_revision, actor=actor,
+    )
+    current = Workflow.objects.publish(workflow, actor=actor)
+    assert current.pk != pinned
+    assert WorkflowRun.objects.start(
+        workflow, actor=actor, input={"value": 8}, request_key="test:version_pin",
+    ).pk == run.pk
+    run_until(run)
+    retained = system_queryset(WorkflowRun).get(pk=run.pk)
+    assert retained.version_id == pinned and retained.status == RunStatus.SUCCEEDED
+    assert system_queryset(StepRun).filter(run=run).count() == 1
 
 
 @pytest.mark.parametrize("step", ["echo", "pause"])
@@ -866,6 +908,40 @@ def test_tick_bad_candidate_does_not_abort_later_candidates(execution, monkeypat
     assert system_queryset(StepRun).get(pk=step_runs[1].pk).status == StepRunStatus.READY
 
 
+def test_tick_superseded_candidate_does_not_abort_later_candidates(execution, monkeypatch):
+    actor, _ = execution
+    workflow = load_workflow(document("entry", step="pause"), key="tick_superseded", actor=actor)
+    runs = [WorkflowRun.objects.start(workflow, actor=actor) for _ in range(2)]
+    rows = [system_queryset(StepRun).get(run=run) for run in runs]
+    for row in rows:
+        assert StepRun.objects.execute(row.pk)
+    original = StepRunQuerySet.to_ready
+
+    def wake(self, **kwargs):
+        if self.filter(pk=rows[0].pk).exists():
+            raise Superseded("This candidate lost its fence.")
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(StepRunQuerySet, "to_ready", wake)
+    assert StepRun.objects.wake() == 1
+    assert system_queryset(StepRun).get(pk=rows[1].pk).status == StepRunStatus.READY
+
+
+def test_operator_retry_resets_delivery_allowance(execution, settings):
+    actor, _ = execution
+    settings.ANGEE_WORKFLOW_MAX_DISPATCHES = 2
+    workflow = load_workflow(document("entry"), key="retry_delivery_allowance", actor=actor)
+    run = WorkflowRun.objects.start(workflow, actor=actor)
+    row = system_queryset(StepRun).get(run=run)
+    for _ in range(2):
+        with system_context(reason="test exhausted delivery"):
+            StepRun.objects.filter(pk=row.pk).update(dispatched_at=Now() - timedelta(seconds=61))
+        assert StepRun.objects.redispatch() == 1
+    assert system_queryset(StepRun).get(pk=row.pk).waiting_kind == "operator"
+    ready = StepRun.objects.retry_step(row, actor=actor)
+    assert ready.dispatches == 0
+
+
 def test_t18_five_minute_backlog_does_not_exhaust_dispatches(execution):
     """A queued step behind five minutes of other runs must remain executable."""
     actor, _ = execution
@@ -1059,7 +1135,7 @@ def test_failure_text_strips_nul_and_respects_field_bounds(execution, register_s
         assert retained_run.error == ""
     else:
         assert attempt.result == "succeeded" and attempt.error == ""
-        assert retained_run.error == expected[:WorkflowRun._meta.get_field("error").max_length]
+        assert retained_run.error == ("ValueError: " + expected)[:WorkflowRun._meta.get_field("error").max_length]
 
 
 @pytest.mark.parametrize("failure_write", ["state", "publication"])
@@ -1092,7 +1168,7 @@ def test_failure_recording_database_errors_preserve_successful_body(
     assert any(record.exc_info and isinstance(record.exc_info[1], IntegrityError) for record in caplog.records)
     if failure_write == "publication":
         retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
-        assert retained_run.status == RunStatus.FAILED and retained_run.error == "Injected result failure."
+        assert retained_run.status == RunStatus.FAILED and retained_run.error == "ValueError: Injected result failure."
 
 
 def test_failure_attempt_close_database_error_preserves_successful_body(execution, register_step, monkeypatch, caplog):
@@ -1114,7 +1190,7 @@ def test_failure_attempt_close_database_error_preserves_successful_body(executio
     assert StepRun.objects.execute(step_run.pk)
     assert system_queryset(Workflow).get(pk=workflow.pk).name == "Successful body retained"
     retained_run = system_queryset(WorkflowRun).get(pk=run.pk)
-    assert retained_run.status == RunStatus.FAILED and retained_run.error == "Injected settlement failure."
+    assert retained_run.status == RunStatus.FAILED and retained_run.error == "ValueError: Injected settlement failure."
     assert system_queryset(StepAttempt).get(step_run=step_run).finished_at is None
     assert any(record.exc_info and isinstance(record.exc_info[1], IntegrityError) for record in caplog.records)
 

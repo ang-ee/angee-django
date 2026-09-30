@@ -732,6 +732,16 @@ def test_derived_input_schema_includes_later_binding_fields():
     assert not contract.is_valid({"value": 1, "later": "invalid"})
 
 
+def test_unbound_entry_input_still_declares_an_object(register_step):
+    class UntypedEntry(Step[None, None, None]):
+        key = "untyped_entry"
+
+    register_step(UntypedEntry)
+    definition = graph({"start": {"step": UntypedEntry.key}})
+    assert definition.input_schema["type"] == "object"
+    assert not validator(definition.input_schema).is_valid([])
+
+
 def test_whole_input_projection_extends_run_input_and_limits_entry_fields(register_step):
     """A later whole projection contributes its own fields to the run input."""
 

@@ -56,6 +56,26 @@ def row(run, key=None):
     return query.get(node_key=key) if key else query.get()
 
 
+def test_same_request_key_concurrent_starts_return_one_run(execution):
+    """Separate PostgreSQL connections converge on the committed unique request."""
+    actor, _ = execution
+    workflow = load_workflow(document("entry"), key="same_key_start", actor=actor)
+    ready = Barrier(3)
+
+    def start():
+        ready.wait(timeout=10)
+        return WorkflowRun.objects.start(
+            workflow, actor=actor, input={"value": 4}, request_key="test:concurrent_same_key",
+        ).pk
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(in_connection, start)
+        second = pool.submit(in_connection, start)
+        ready.wait(timeout=10)
+        assert first.result(timeout=15) == second.result(timeout=15)
+    assert system_queryset(WorkflowRun).filter(request_key="test:concurrent_same_key").count() == 1
+
+
 def test_t1_duplicate_database_delivery_executes_one_body(execution, register_step):
     """Duplicate DATABASE messages race the run lock and only one reaches the body."""
     actor, _ = execution

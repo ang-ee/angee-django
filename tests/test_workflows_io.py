@@ -398,7 +398,7 @@ def test_reprocess_retains_lineage_and_uses_the_current_publication(execution):
 def test_io_settlement_retries_database_failure_without_repeating_body(execution, register_step, monkeypatch):
     """A transient result write retries its transaction and retains one claimed attempt."""
     actor, _ = execution
-    bodies, settlements = [], []
+    bodies, settlements, delays = [], [], []
     original = StepRunQuerySet.settle
 
     class DurableResult(Echo):
@@ -415,11 +415,13 @@ def test_io_settlement_retries_database_failure_without_repeating_body(execution
         return original(self, step_run, settlement)
 
     register_step(DurableResult)
+    monkeypatch.setattr(managers.time, "sleep", delays.append)
     monkeypatch.setattr(StepRunQuerySet, "settle", settle)
     workflow = load_workflow(document("entry"), key="settlement_retry", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     assert StepRun.objects.execute(step_row(run).pk)
     assert bodies == [1] and settlements == [1, 1]
+    assert len(delays) == 1 and delays[0] > 0
     assert system_queryset(WorkflowRun).get(pk=run.pk).output == {"value": 42}
     assert system_queryset(StepAttempt).filter(step_run__run=run).count() == 1
 
@@ -582,7 +584,8 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
     ]
     assert StepRun.objects.execute(sibling.pk) is False
     assert StepRun.objects.tick() == {
-        "woken": 0, "reaped": 0, "redispatched": 0, "decisions": 0, "runs": 0, "pruned": 0, "drained": 0,
+        "woken": 0, "reaped": 0, "redispatched": 0, "decisions": 0, "runs": 0, "records": 0,
+        "pruned": 0, "drained": 0,
     }
     sibling.refresh_from_db()
     assert (sibling.status, sibling.state, sibling.wake_at, sibling.attempt, sibling.retries) == preserved
@@ -705,7 +708,7 @@ def test_late_io_result_data_error_stays_on_its_attempt(execution, register_step
     assert sibling.status == StepRunStatus.FAILED and sibling.outcome == "error" and sibling.output == {}
     attempt = system_queryset(StepAttempt).get(step_run=sibling)
     assert attempt.result == "failed" and attempt.finished_at is not None
-    assert attempt.error == "Result contains an invalid JSON value"
+    assert attempt.error == "DataError: Result contains an invalid JSON value"
     assert "DataError" in attempt.stacktrace
     assert observed["status"] == RunStatus.FAILED
     assert system_queryset(WorkflowRun).filter(pk=run.pk).values(*observed).get() == observed

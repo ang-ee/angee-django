@@ -36,6 +36,7 @@ def test_two_saves_racing_admission_retain_one_ledger_and_run(trigger_setup, mon
         entered.set()
         assert release.wait(15)
 
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
     monkeypatch.setattr(Trigger, "check_admission", pause)
 
     def save():
@@ -87,6 +88,7 @@ def test_reentrant_capture_does_not_lock_other_triggers(trigger_setup, monkeypat
             assert release_hook.wait(15)
         record.save(update_fields=("name",))
 
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
     monkeypatch.setattr(Trigger, "check_admission", write)
     RecordChanged.connect()
 
@@ -133,6 +135,7 @@ def test_domain_hook_write_and_concurrent_save_share_record_first_lock_order(tri
         record.name = "Admitted"
         record.save()
 
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
     monkeypatch.setattr(Trigger, "check_admission", write)
 
     def save():

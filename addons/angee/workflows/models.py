@@ -507,7 +507,12 @@ class DecisionWorkflow(models.Model):
 
 
 class Trigger(ResourceLoadMixin, AngeeDataModel):
-    """Disabled-by-default admission policy; extensions own domain input and guards."""
+    """Disabled-by-default admission policy with source-scoped domain hooks.
+
+    An ``extends`` donor implementing ``trigger_input`` or ``check_admission``
+    declares ``trigger_sources`` as registered source keys. Admission runs all
+    matching guards and accepts at most one matching input builder.
+    """
 
     runtime = True
     resource_class = TriggerResource
@@ -547,6 +552,8 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
 
     def validate_configuration(self) -> tuple[Any, Any]:
         """Use the model's final resource input and native filter compiler."""
+        self._trigger_hooks("trigger_input")
+        self._trigger_hooks("check_admission")
         model = self.source_class.model(self)
         if self.workflow.subject_model and self.workflow.subject_model != model._meta.label_lower:
             raise ValidationError("The trigger source does not match the workflow subject model.")
@@ -558,6 +565,37 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
 
     def check_admission(self, record: Any, *, actor: Any) -> None:
         """Domain extensions may reject this record without disabling the trigger."""
+
+    def _trigger_hooks(self, name: str) -> list[Any]:
+        """Select only source-declared donor hooks in stable order; reject ambiguous input."""
+        hooks = []
+        for donor in type(self).mro():
+            hook = donor.__dict__.get(name)
+            if hook is None or donor is Trigger:
+                continue
+            sources = donor.__dict__.get("trigger_sources")
+            if not isinstance(sources, tuple) or any(not isinstance(source, str) for source in sources):
+                raise ImproperlyConfigured(f"{donor.__name__}.{name} must declare trigger_sources as a tuple of keys.")
+            if self.source in sources:
+                hooks.append((donor, hook))
+        hooks.sort(key=lambda item: (item[0].__module__, item[0].__qualname__))
+        if name == "trigger_input" and len(hooks) > 1:
+            raise ImproperlyConfigured("Multiple trigger_input hooks contribute to this source.")
+        return [hook for _, hook in hooks]
+
+    def admission_input(self, record: Any) -> dict[str, Any]:
+        """Build source-specific input from at most one declared domain contributor."""
+        hooks = self._trigger_hooks("trigger_input")
+        return hooks[0](self, record) if hooks else Trigger.trigger_input(self, record)
+
+    def admit_record(self, record: Any, *, actor: Any) -> None:
+        """Apply every source-specific domain admission policy."""
+        hooks = self._trigger_hooks("check_admission")
+        if hooks:
+            for hook in hooks:
+                hook(self, record, actor=actor)
+        else:
+            Trigger.check_admission(self, record, actor=actor)
 
     def clean(self) -> None:
         """Reject invalid authoring at save and preserve the server-owned actor."""

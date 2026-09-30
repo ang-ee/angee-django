@@ -11,7 +11,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.db.models import F, Q
 from django.db.models.functions import Now
 from django.db.models.signals import post_save
@@ -25,6 +25,7 @@ from angee.base.impl import ImplBase
 from angee.base.models import AngeeManager, AngeeQuerySet
 from angee.base.refs import canonical_record_target
 from angee.base.scoping import lock_if_supported, read_scoped_queryset, system_queryset
+from angee.base.serialization import strip_null_bytes
 
 logger = logging.getLogger(__name__)
 TRIGGER_DRAIN_LIMIT = 100
@@ -267,9 +268,12 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     raise ValidationError("The trigger requires an active acting user.")
                 model, condition = trigger.validate_configuration()
             except (ValidationError, ImproperlyConfigured, LookupError) as error:
-                reason = exception_text(error)
+                reason = strip_null_bytes(exception_text(error))
                 self._disable(trigger, reason)
                 system_queryset(events).filter(pk=current.pk).update(evaluated_at=F("changed_at"), rejection=reason)
+                return False
+            except Exception:
+                logger.exception("Workflow trigger configuration failed for event %s.", current.pk)
                 return False
             try:
                 with transaction.atomic(), actor_context(trigger.run_as):
@@ -282,16 +286,22 @@ class TriggerManager(AngeeManager.from_queryset(TriggerQuerySet)):  # type: igno
                     if record is None:
                         raise PermissionDenied("The record is inaccessible or no longer matches the condition.")
                     trigger.source_class.check_access(trigger, trigger.run_as, record)
-                    trigger.check_admission(record, actor=trigger.run_as)
+                    trigger.admit_record(record, actor=trigger.run_as)
                     run = apps.get_model("workflows", "WorkflowRun").objects.start(
-                        trigger.workflow, actor=trigger.run_as, subject=record, input=trigger.trigger_input(record),
+                        trigger.workflow, actor=trigger.run_as, subject=record, input=trigger.admission_input(record),
                         request_key=f"trigger:{public_id_of(trigger)}:{public_id_of(record)}",
                     )
                     system_queryset(type(run)).filter(pk=run.pk).update(trigger_event=current)
-            except Exception as error:
+            except (ValidationError, PermissionDenied) as error:
                 system_queryset(events).filter(pk=current.pk).update(
-                    evaluated_at=F("changed_at"), rejection=exception_text(error),
+                    evaluated_at=F("changed_at"), rejection=strip_null_bytes(exception_text(error)),
                 )
+                return False
+            except DatabaseError:
+                logger.exception("Workflow trigger admission will retry event %s.", current.pk)
+                return False
+            except Exception:
+                logger.exception("Workflow trigger admission failed for event %s.", current.pk)
                 return False
             system_queryset(events).filter(pk=current.pk).update(
                 evaluated_at=F("changed_at"), admitted_at=Now(), rejection="", run=run,

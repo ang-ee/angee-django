@@ -742,7 +742,9 @@ class Definition(BaseModel):
         schema implication is deliberately outside the binding contract.
         """
         entry = self.nodes[self.entry]
-        schema = schema_at(self.node_input_schema(self.entry), []) or {} if entry.input is None else {}
+        schema = {"type": "object"}
+        if entry.input is None:
+            schema = schema_at(self.node_input_schema(self.entry), []) or schema
         return compose_schema(schema, (
             (binding.path, expected, required, binding.project)
             for binding, expected, required in self._input_bindings()

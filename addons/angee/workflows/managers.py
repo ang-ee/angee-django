@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
@@ -323,7 +324,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     raise ValidationError("The parent run no longer exists.")
                 parent.require_access("write", actor)
                 if request_key is None:
-                    request_key = f"child:{parent_step.sqid}"
+                    request_key = f"child:{parent_step.sqid}:{parent_step.page_index}"
             workflow.refresh_from_db()
             workflow.validate_subject(subject)
             if subject is not None:
@@ -441,8 +442,10 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                     or step_run is not None and step_run.step.mode == "IO"
                 ):
                     raise
-                run_error = exception_text(failure)
+                logger.exception("Workflow run %s failed during advancement.", run.pk)
+                run_error = exception_text(failure, diagnostic=True)
                 timed_out = isinstance(failure, SoftTimeLimitExceeded)
+                recorded_on_attempt = False
                 if step_run is not None:
                     with _record_failure("settlement failure"):
                         # A planning error follows a completed settlement and
@@ -451,6 +454,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                             step_runs.settle(step_run, Fail(
                                 error=run_error, stacktrace=traceback.format_exc(), timed_out=timed_out,
                             ))
+                            recorded_on_attempt = True
                 with _record_failure("attempt close"):
                     if step_run is not None:
                         closed = step_run.attempts.close(
@@ -458,7 +462,7 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
                             run_error if timed_out else settlement.error if settlement else "",
                             traceback.format_exc() if timed_out else settlement.stacktrace if settlement else "",
                         )
-                        if timed_out and closed:
+                        if recorded_on_attempt or timed_out and closed:
                             run_error = ""
                 if not run.is_terminal:
                     with _record_failure("run state"):
@@ -477,12 +481,23 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
         )
         if status in RunStatus.terminal_values() and not run.is_terminal:
             if status != RunStatus.CANCELED:
-                awaited = run.step_runs.exclude(awaited_run_id=None).values("awaited_run_id")
-                abandoned = self.filter(parent_step__run=run, relation=RunRelation.OWNED).exclude(pk__in=awaited)
-                for child_id in abandoned.order_by("pk").values_list("pk", flat=True):
-                    with self.hold_owned(child_id) as children:
-                        self._cancel_locked(children)
+                def cancel_children() -> None:
+                    self.cancel_abandoned(run.pk)
+
+                transaction.on_commit(cancel_children, robust=True)
             enqueue_task("workflows.wake_run", kwargs={"run_id": run.pk}, robust=True)
+
+    def cancel_abandoned(self, run_id: int) -> None:
+        """Close unawaited owned children after the parent's terminal write commits."""
+        with system_context(reason="workflows.cancel_abandoned"):
+            parent = self.filter(pk=run_id, status__in=RunStatus.terminal_values()).first()
+            if parent is None:
+                return
+            awaited = parent.step_runs.exclude(awaited_run_id=None).values("awaited_run_id")
+            abandoned = self.filter(parent_step__run=parent, relation=RunRelation.OWNED).exclude(pk__in=awaited)
+            for child_id in abandoned.order_by("pk").values_list("pk", flat=True):
+                with self.hold_owned(child_id) as children:
+                    self._cancel_locked(children)
 
     def _cancel_locked(self, runs: list[Any]) -> Cancellation:
         """Cancel open rows in an already-held tree without rewriting terminal facts."""
@@ -794,13 +809,14 @@ class StepRunQuerySet(AngeeQuerySet):
 
     def to_ready(
         self, *, state: Any = None, reset_retries: bool = False,
-        acknowledged_by_id: Any = None, next_page: bool = False,
+        acknowledged_by_id: Any = None, next_page: bool = False, reset_dispatches: bool = False,
     ) -> int:
         """Wake waiting rows and clear wait/deadline state; delivery is commit-owned."""
         return self.filter(status__in=(StepRunStatus.WAITING, StepRunStatus.FAILED, StepRunStatus.RUNNING)).update(
             **self._cleared_wait(), status=StepRunStatus.READY, dispatched_at=Now(),
             state=F("state") if state is None else state, retries=0 if reset_retries else F("retries"),
             outcome="", output={}, retry_acknowledged_by_id=acknowledged_by_id,
+            dispatches=0 if reset_dispatches else F("dispatches"),
             page_index=F("page_index") + 1 if next_page else F("page_index"),
         )
 
@@ -997,7 +1013,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
             except Superseded:
                 break
             except OperationalError:
-                pass
+                time.sleep(min(0.05, max(0, (ctx.step_run.deadline_at - timezone.now()).total_seconds())))
             except SoftTimeLimitExceeded as failure:
                 settlement = self._failure(failure)
         logger.warning("Workflow step %s attempt %s lost its IO settlement fence.", ctx.step_run.pk, ctx.attempt.number)
@@ -1069,6 +1085,7 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
                     raise ValidationError("Retry requires accepting a possible duplicate effect.")
                 run.step_runs.filter(pk=current.pk).to_ready(
                     acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,
+                    reset_dispatches=True,
                 )
                 self.run_model.objects.reopen(run)
                 current.refresh_from_db()
@@ -1123,14 +1140,17 @@ class StepRunManager(AngeeManager.from_queryset(StepRunQuerySet)):  # type: igno
         with system_context(reason="workflows.tick"):
             candidates = candidates.exclude(run__status__in=RunStatus.terminal_values())
             for pk, run_id in list(candidates.order_by("pk").values_list("pk", "run_id")[:TICK_CANDIDATE_LIMIT]):
-                with _record_failure(f"tick candidate {pk}"):
-                    with self.run_model.objects.hold(run_id, skip_locked=True) as run:
-                        if run is None or run.is_terminal:
-                            continue
-                        step_run = candidates.filter(pk=pk).lock_if_supported(no_key=True).first()
-                        if step_run is not None:
-                            action(run, step_run)
-                            count += 1
+                try:
+                    with _record_failure(f"tick candidate {pk}"):
+                        with self.run_model.objects.hold(run_id, skip_locked=True) as run:
+                            if run is None or run.is_terminal:
+                                continue
+                            step_run = candidates.filter(pk=pk).lock_if_supported(no_key=True).first()
+                            if step_run is not None:
+                                action(run, step_run)
+                                count += 1
+                except Superseded:
+                    continue
         return count
 
     def wake(self) -> int:

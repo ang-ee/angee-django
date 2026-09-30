@@ -10,6 +10,7 @@ from angee.base.scoping import system_queryset
 from angee.graphql.publishing import change_published
 from angee.jobs.enqueue import celery_app
 from angee.workflows.awaits import AwaitRunInput
+from angee.workflows.managers import WorkflowRunQuerySet
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until
@@ -26,7 +27,7 @@ def child_graph(execution, register_step):
     actor, sent = execution
     admitted = []
 
-    def build(*, relation="owned", await_child=True, repeat=False, request_key=None, subject=None,
+    def build(*, relation="owned", await_child=True, repeat=False, next_page=False, request_key=None, subject=None,
               subject_model="", run_actor=None, grant_child=True, child_step="echo"):
         child_workflow = load_workflow(
             document("entry", step=child_step), key=f"child-{len(admitted)}", actor=actor,
@@ -45,6 +46,8 @@ def child_graph(execution, register_step):
                 )
                 admitted.append(child)
                 if repeat and not ctx.state:
+                    if next_page:
+                        return ctx.next_page({"again": True})
                     return ctx.wait(until=ctx.now - timedelta(seconds=1), state={"again": True})
                 return ctx.done({"run_id": str(child.sqid)})
 
@@ -148,8 +151,35 @@ def test_child_reexecution_replays_pinned_request_after_republish(child_graph, r
     run_until(parent)
     assert len(admitted) == 2 and admitted[1].pk == first.pk
     assert admitted[1].version_id == first.version_id
-    assert first.request_key == (request_key or f"child:{first.parent_step.sqid}")
+    assert first.request_key == (request_key or f"child:{first.parent_step.sqid}:{first.parent_step.page_index}")
     assert system_queryset(WorkflowRun).filter(parent_step__run=parent).count() == 1
+
+
+def test_derived_child_key_changes_with_parent_page(child_graph):
+    actor, _, admitted, build = child_graph
+    parent, _ = build(repeat=True, next_page=True)
+    run_until(parent)
+    first = admitted[0]
+    second = admitted[1]
+    assert first.pk != second.pk
+    assert first.request_key != second.request_key
+    assert first.parent_step_id == second.parent_step_id
+
+
+def test_child_cleanup_failure_cannot_roll_back_parent_terminal_state(child_graph, monkeypatch, caplog):
+    _, _, admitted, build = child_graph
+    parent, _ = build(await_child=False)
+    original = WorkflowRunQuerySet.hold_owned
+
+    def unavailable(self, run_id, **kwargs):
+        if run_id == admitted[0].pk:
+            raise RuntimeError("Child cancellation unavailable")
+        return original(self, run_id, **kwargs)
+
+    monkeypatch.setattr(WorkflowRunQuerySet, "hold_owned", unavailable)
+    run_until(parent)
+    assert system_queryset(WorkflowRun).get(pk=parent.pk).status == "succeeded"
+    assert "Child cancellation unavailable" in caplog.text
 
 
 @pytest.mark.parametrize("missing", ["start", "subject_read"])
