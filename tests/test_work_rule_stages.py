@@ -13,6 +13,11 @@ from tests.native_work import WorkCase
 
 
 class RuleStageTests(WorkCase):
+    def test_stage_path_classification_is_owned_by_the_stage(self):
+        self.assertTrue(self.stages["Ready"].on_path)
+        self.assertTrue(self.stages["Active"].on_path)
+        self.assertFalse(self.stages["Removed"].on_path)
+
     def test_generated_update_refuses_rule_stage(self):
         task = self.task()
         request = RequestFactory().post("/graphql/")

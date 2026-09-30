@@ -385,6 +385,15 @@ class Stage(StagePrimitive, AuditMixin, AngeeDataModel):
         return not self.rule_owned and not self.conceals
 
     @property
+    def on_path(self) -> bool:
+        """Whether the stage belongs to the queue's ordinary progress path."""
+
+        return not self.conceals and self.category not in (
+            self.StageCategory.CANCELED,
+            self.StageCategory.DUPLICATE,
+        )
+
+    @property
     def entry_reserved(self) -> bool:
         """Whether only the stage's owning verb or rule may enter it."""
 

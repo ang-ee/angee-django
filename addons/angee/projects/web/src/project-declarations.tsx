@@ -1,6 +1,5 @@
 import {
   Action,
-  Badge,
   Column,
   Facet,
   Field,
@@ -10,13 +9,10 @@ import {
   ListView,
   type GanttViewSpec,
   useEnumOptions,
-  useStatusTone,
-  optionLabel,
   useActionResultMutation,
   useRecordAction,
   defineRowAction,
   type StringIdRow,
-  type WidgetOption,
   type RecordPanelContext,
   type RecordTabDescriptor,
   type FormProps,
@@ -46,7 +42,6 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
   const t = useProjectsT();
   const startResolutionOptions = useEnumOptions(PROJECT_MODEL, "start_date_resolution");
   const targetResolutionOptions = useEnumOptions(PROJECT_MODEL, "target_date_resolution");
-  const statusOptions = useEnumOptions(PROJECT_MODEL, "status");
   const [pause] = useActionResultMutation("pause_project", {
     invalidateModels: [PROJECT_MODEL],
   });
@@ -67,16 +62,13 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
     <Form
       resource={PROJECT_MODEL}
       layout="tabs"
-      returning={["permissions", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(selection.returning ?? [])]}
-      headerExtras={({ record }) => record?.status
-        ? <ProjectLifecycleBadge value={String(record.status)} options={statusOptions} />
-        : null}
+      returning={["permissions", "on_path", "status_changed_at", "selectable_milestones.id", "current_milestone.id", "current_milestone.name", ...(selection.returning ?? [])]}
       contextLine={selection.contextLine}
     >
       <Field name="title" title />
       <Field name="revision" readOnly hidden />
       <Field name="status" readOnly hidden />
-      <Field name="current_milestone" status widget="projects.phase" />
+      <Field name="current_milestone" status widget="projects.phase" fill />
       {(selection.groups ?? ["planning", "details"]).includes("planning") ? <Group label={t("project.group.planning")} columns={2}>
         <Field name="owner" readOnly />
         <Field name="lead" />
@@ -124,11 +116,6 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
       {selection.extraActions}
     </Form>
   );
-}
-
-function ProjectLifecycleBadge({ value, options }: { value: string; options: readonly WidgetOption[] }): React.ReactElement {
-  const tone = useStatusTone();
-  return <Badge tone={tone(value)} density="compact" shape="pill">{optionLabel(options, value)}</Badge>;
 }
 
 function isActiveProject(record: { status?: unknown }): boolean {

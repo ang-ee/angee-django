@@ -212,6 +212,8 @@ class ProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
     title: auto
     body: auto
     status: auto
+    on_path: bool = strawberry_django.field(only=["status"])
+    status_changed_at: auto
     start_date: auto
     start_date_resolution: auto
     target_date: auto
@@ -244,6 +246,8 @@ class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
     title: auto
     body: auto
     status: auto
+    on_path: bool = strawberry_django.field(only=["status"])
+    status_changed_at: auto
     start_date: auto
     start_date_resolution: auto
     target_date: auto

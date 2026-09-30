@@ -482,6 +482,13 @@ shared UI copy through an addon bundle.
   collapsed Details group when their create-default behavior must remain available.
   Projects exports its [standard declarations](../../addons/angee/projects/README.md)
   so consumer routes compose the same forms, lists and record tabs.
+- **Statusbar steps are projections of owner facts.** `StatusbarSteps` renders only
+  steps declared on the path, and a side or terminal state as one muted chip.
+  Server-owned transitions declare `selectable` from eligible choices, and the
+  owner confirms before writing. Plain form options update form state until Save.
+  Use `fill` for record-width bars and pass the slot's available `containerWidth`
+  when it is known. Enum labels for status controls and cells resolve through
+  `canonicalOptionValue`, regardless of GraphQL read casing.
 - **Contribute a saved-record tab from the data view** through
   `formViewSectionsSlot(resource)` with a direct `<Tab>` declaration. Canonical
   parent sections are inherited by concrete child forms; contribute once at the

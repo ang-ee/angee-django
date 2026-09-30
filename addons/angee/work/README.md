@@ -1,5 +1,10 @@
 # Work
 
+The [stage statusbar](web/src/stage-statusbar.tsx) reads each stage's model-owned
+`on_path` projection. Canceled, duplicate and concealing stages appear as one
+side-state chip while the ordinary stages remain in queue order. The task's
+reopen verb stays in the form header action bar.
+
 The setup contributors consume native project teams and optional milestone
 `active_stage` choices through their ordinary sharing and stage-validation owners.
 

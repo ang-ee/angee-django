@@ -77,7 +77,7 @@ function VisibilityWidget(props: WidgetRenderProps): ReactElement {
     const Edit = selectWidget.edit;
     if (Edit) return <Edit {...props as WidgetRenderProps<string>} />;
   }
-  return <Badge tone="neutral" density="compact">{optionLabel(props.field?.options, canonicalOptionValue(props.field?.options, props.value) ?? String(props.value ?? ""))}</Badge>;
+  return <Badge tone="neutral" density="compact">{optionLabel(props.field?.options, String(props.value ?? ""))}</Badge>;
 }
 
 function RecordVisibilityWidget({ field }: WidgetRenderProps): ReactElement {
