@@ -13,6 +13,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q
 from rebac import PermissionDenied, current_actor
 from strawberry import auto
@@ -111,6 +112,7 @@ class DashboardPayload:
     name: str | None = None
     description: str | None = None
     snapshot: JSON | None = None
+    declaration_revision: str = ""
     can_edit: bool = False
     can_reset: bool = False
     can_archive: bool = False
@@ -130,6 +132,7 @@ class DashboardSummaryType:
     revision: int
     is_archived: bool
     resources: list[str]
+    presets: list[str]
     can_edit: bool
     can_archive: bool
 
@@ -145,12 +148,20 @@ class DashboardSummaryPageType:
 
 def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
     permissions = held_permissions(row, ("write", "archive"))
+    widgets = row.widgets.all()
     sources = {
         str(widget.data.get("source", {}).get("resource"))
-        for widget in row.widgets.all()
+        for widget in widgets
         if isinstance(widget.data, dict)
         and isinstance(widget.data.get("source"), dict)
         and widget.data["source"].get("resource")
+    }
+    presets = {
+        str(widget.data["preset"])
+        for widget in widgets
+        if isinstance(widget.data, dict)
+        and widget.data.get("shape") == "resourceView"
+        and isinstance(widget.data.get("preset"), str)
     }
     return DashboardSummaryType(
         id=cast(PublicID, require_public_id(Dashboard, row.pk)),
@@ -163,6 +174,7 @@ def _summary_item(row: Any, info: strawberry.Info) -> DashboardSummaryType:
         revision=row.revision,
         is_archived=row.is_archived,
         resources=sorted(sources),
+        presets=sorted(presets),
         can_edit="write" in permissions,
         can_archive=row.scope == "personal" and "archive" in permissions,
     )
@@ -208,6 +220,7 @@ def _payload(dashboard: Any, *, status: str = "ready") -> DashboardPayload:
         name=dashboard.name,
         description=dashboard.description,
         snapshot=cast(JSON, dashboard.snapshot()),
+        declaration_revision=dashboard.declaration_revision,
         can_edit="write" in permissions,
         can_reset=dashboard.scope != "personal" and "reset" in permissions,
         can_archive=dashboard.scope == "personal" and "archive" in permissions,
@@ -250,7 +263,16 @@ class DashboardQuery:
     def dashboard(self, info: strawberry.Info, target: DashboardTargetInput) -> DashboardPayload:
         row = _resolve_target(info, target)
         if row is None:
-            return DashboardPayload(status="absent" if target.scope is not DashboardScope.PERSONAL else "unavailable")
+            if target.scope is DashboardScope.PERSONAL:
+                return DashboardPayload(status="unavailable")
+            if current_actor() is None:
+                return DashboardPayload(status="absent")
+            try:
+                Dashboard.objects.check_create({"owner": (session_user(info),)})
+                can_edit = True
+            except PermissionDenied:
+                can_edit = False
+            return DashboardPayload(status="absent", can_edit=can_edit)
         return _payload(row)
 
     @strawberry.field
@@ -416,36 +438,40 @@ class DashboardMutation:
         target: DashboardTargetInput,
         name: str,
         client_creation_key: str,
+        snapshot: JSON,
     ) -> DashboardPayload:
         user = session_user(info)
         source = _resolve_target(info, target)
         if source is None:
             return DashboardPayload(status="unavailable")
         try:
-            created = Dashboard.objects.create_personal(
-                user,
-                name=name,
-                client_creation_key=client_creation_key,
-            )
-            snapshot = source.snapshot()
+            visible = canonical_dashboard_snapshot(snapshot)
             duplicated_widgets = []
-            for index, widget in enumerate(snapshot["widgets"]):
+            for index, widget in enumerate(visible["widgets"]):
                 if widget["isArchived"]:
                     continue
                 duplicate = {**widget, "id": f"copy-{index + 1}"}
                 duplicate.pop("definitionRef", None)
                 duplicated_widgets.append(duplicate)
-            snapshot["widgets"] = duplicated_widgets
-            canonical = canonical_dashboard_snapshot(snapshot)
-            saved = Dashboard.objects.save_snapshot(
-                user,
-                scope="personal",
-                scope_key=None,
-                persisted_id=created.pk,
-                expected_revision=created.revision,
-                snapshot=canonical,
-                name=created.name,
-            )
+            visible["widgets"] = duplicated_widgets
+            canonical = canonical_dashboard_snapshot(visible)
+            with transaction.atomic():
+                created = Dashboard.objects.create_personal(
+                    user,
+                    name=name,
+                    client_creation_key=client_creation_key,
+                )
+                if created.revision > 1:
+                    return _payload(created)
+                saved = Dashboard.objects.save_snapshot(
+                    user,
+                    scope="personal",
+                    scope_key=None,
+                    persisted_id=created.pk,
+                    expected_revision=created.revision,
+                    snapshot=canonical,
+                    name=created.name,
+                )
         except StaleRevisionError as error:
             return DashboardPayload(status="conflict", current_revision=error.current, message=str(error))
         except DashboardConflictError as error:

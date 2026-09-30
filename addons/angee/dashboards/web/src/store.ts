@@ -9,6 +9,7 @@ import {
   type DashboardLoadState,
   type DashboardSaveCommand,
   type DashboardSaveResult,
+  type DashboardSnapshot,
   type DashboardStore,
   type DashboardSummary,
   type DashboardTarget,
@@ -87,14 +88,15 @@ function loadState(
   fetching: boolean,
   error: Error | null,
 ): DashboardLoadState {
-  if (error) return { status: "error", error };
-  if (!payload) return fetching ? { status: "loading" } : { status: "unavailable" };
-  if (payload.status === "absent") return { status: "absent" };
-  if (payload.status === "forbidden") return { status: "forbidden", message: payload.message ?? undefined };
-  if (payload.status === "unavailable") return { status: "unavailable", message: payload.message ?? undefined };
-  if (payload.status !== "ready") return { status: "error", error: payloadError(payload) ?? new Error("Dashboard load failed.") };
+  const rights = payload ? capabilities(payload) : { canEdit: false, canReset: false, canArchive: false };
+  if (error) return { status: "error", error, capabilities: rights };
+  if (!payload) return fetching ? { status: "loading", capabilities: rights } : { status: "unavailable", capabilities: rights };
+  if (payload.status === "absent") return { status: "absent", capabilities: rights };
+  if (payload.status === "forbidden") return { status: "forbidden", message: payload.message ?? undefined, capabilities: rights };
+  if (payload.status === "unavailable") return { status: "unavailable", message: payload.message ?? undefined, capabilities: rights };
+  if (payload.status !== "ready") return { status: "error", error: payloadError(payload) ?? new Error("Dashboard load failed."), capabilities: rights };
   if (!payload.id || payload.revision == null || payload.snapshot == null || !payload.name) {
-    return { status: "error", error: new Error("The dashboard API returned an incomplete snapshot.") };
+    return { status: "error", error: new Error("The dashboard API returned an incomplete snapshot."), capabilities: rights };
   }
   try {
     return {
@@ -103,11 +105,12 @@ function loadState(
       revision: payload.revision,
       name: payload.name,
       description: payload.description ?? undefined,
+      declarationRevision: payload.declaration_revision ?? "",
       snapshot: parseDashboardSnapshot(payload.snapshot),
-      capabilities: capabilities(payload),
+      capabilities: rights,
     };
   } catch (cause) {
-    return { status: "error", error: cause instanceof Error ? cause : new Error(String(cause)) };
+    return { status: "error", error: cause instanceof Error ? cause : new Error(String(cause)), capabilities: rights };
   }
 }
 
@@ -156,11 +159,12 @@ function useDashboard(target: DashboardTarget) {
       if (error) throw error;
     }, [resetMutation]),
     createPersonal,
-    duplicate: React.useCallback(async (duplicateTarget: DashboardTarget, input: { name: string; clientCreationKey: string }) => {
+    duplicate: React.useCallback(async (duplicateTarget: DashboardTarget, input: { name: string; clientCreationKey: string; snapshot: DashboardSnapshot }) => {
       const result = await duplicateMutation({
         target: targetInput(duplicateTarget),
         name: input.name,
         clientCreationKey: input.clientCreationKey,
+        snapshot: dashboardSnapshotInput(input.snapshot),
       });
       return saveResult(result?.duplicate_dashboard);
     }, [duplicateMutation]),
@@ -243,6 +247,7 @@ function useCatalogue(): DashboardCatalogueBinding {
       description: row.description || undefined,
       owner: row.owner_label ?? row.owner ?? undefined,
       resources: row.resources,
+      presets: row.presets,
       revision: row.revision,
       customized: row.scope !== "PERSONAL",
       available: !row.is_archived,

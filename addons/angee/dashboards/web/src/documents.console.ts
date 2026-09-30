@@ -9,7 +9,7 @@ export const DashboardWidgetVisibilityDocument = graphql(`
 export const DashboardDocument = graphql(`
   query Dashboard($target: DashboardTargetInput!) {
     dashboard(target: $target) {
-      status id revision name description snapshot
+      status id revision name description snapshot declaration_revision
       can_edit can_reset can_archive current_revision message
     }
   }
@@ -21,7 +21,7 @@ export const DashboardSummariesDocument = graphql(`
       status version next_cursor total
       items {
         id scope scope_key name description owner owner_label revision is_archived
-        resources can_edit can_archive
+        resources presets can_edit can_archive
       }
     }
   }
@@ -61,8 +61,8 @@ export const ResetDashboardDocument = graphql(`
 `);
 
 export const DuplicateDashboardDocument = graphql(`
-  mutation DuplicateDashboard($target: DashboardTargetInput!, $name: String!, $clientCreationKey: String!) {
-    duplicate_dashboard(target: $target, name: $name, client_creation_key: $clientCreationKey) {
+  mutation DuplicateDashboard($target: DashboardTargetInput!, $name: String!, $clientCreationKey: String!, $snapshot: JSON!) {
+    duplicate_dashboard(target: $target, name: $name, client_creation_key: $clientCreationKey, snapshot: $snapshot) {
       status id revision name description snapshot
       can_edit can_reset can_archive current_revision message
     }

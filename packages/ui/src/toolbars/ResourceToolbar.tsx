@@ -45,6 +45,7 @@ import {
 
 export interface ResourceToolbarProps {
   pager: PagerState;
+  chrome?: { viewSwitcher?: boolean; pager?: boolean; columnChooser?: boolean };
   maxGroupDepth?: number;
   view?: ResourceViewKind;
   group?: ResourceViewGroup | null;
@@ -246,6 +247,7 @@ export function ResourceToolbar({
   queryDirty = false,
   pagerSubject,
   pagerTotalUnit,
+  chrome,
   className,
   wrap = false,
 }: ResourceToolbarProps): ReactElement {
@@ -337,7 +339,7 @@ export function ResourceToolbar({
             <Glyph name="undo-2" fallbackName="x" />
           </Button>
         ) : null}
-        {capabilities.pagination ? (
+        {capabilities.pagination && chrome?.pager !== false ? (
           <Pager
             {...pager}
             subject={pagerSubject}
@@ -348,7 +350,7 @@ export function ResourceToolbar({
             onPageSizeChange={onPageSizeChange}
           />
         ) : null}
-        {view && onViewChange ? (
+        {chrome?.viewSwitcher !== false && view && onViewChange ? (
           <ResourceViewSwitcher
             view={view}
             kinds={availableViews}
@@ -357,7 +359,7 @@ export function ResourceToolbar({
             onViewChange={onViewChange}
           />
         ) : null}
-        {viewSwitcher}
+        {chrome?.viewSwitcher !== false ? viewSwitcher : null}
       </div>
     </section>
   );

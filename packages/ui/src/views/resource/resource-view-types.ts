@@ -15,6 +15,7 @@ import type {
   ResourceToolbarFilterField,
   ResourceToolbarFilterOption,
   ResourceToolbarGroupOption,
+  ResourceToolbarProps,
 } from "../../toolbars";
 import type {
   ListViewNavigationScope,
@@ -140,6 +141,8 @@ export interface ListViewProps<TRow extends Row = Row> {
   resource: string;
   /** Page/workspace surfaces fill their owner; embedded surfaces grow in flow. */
   presentation?: ResourceCollectionPresentation;
+  /** Controls retained when this list is hosted inside another surface. */
+  chrome?: ResourceToolbarProps["chrome"];
   /** CSS table sizing strategy. Fixed layout lets rich single-column rows truncate to their pane. */
   tableLayout?: ResourceTableLayout;
   /** Keep column headers visible or accessible-only. Defaults to visible. */

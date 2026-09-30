@@ -13,6 +13,27 @@ resolves policies under the effective actor; the surface mounts only permitted
 widgets and compacts their layout without deleting hidden declarations.
 Source queries continue to enforce their own row permissions. Settled visibility
 answers remain in use during refetch, so refresh does not blank the dashboard.
+Direct and related keys both require declaration in the resource's
+`hasura_container_scope_fields`; a unique scalar alone does not admit a
+visibility policy. Dotted input keys are rejected at validation; use the
+declared Django path with `__` separators.
+
+An installed definition's `revision` owns its baseline: when it differs from
+the saved declaration revision, the current declaration is displayed. The
+server supplies `can_edit` from the dashboard create permission even for an absent snapshot; `editable: false` on
+the definition removes layout editing and reset controls. A hosted resource
+view widget uses `kind: "resourceView"` and
+`data: {shape: "resourceView", preset: "addon.view-id"}`. The definition's
+code-only `views[preset]` component composes the same standard list declaration
+as the full page, receives `onListStateChange`, and forwards the provided
+embedded scope and reduced chrome settings. The preset owns the immutable
+filter and editable view defaults in both places; the list's server total is
+the widget heading count. `options.fullViewRoute` opens the full view, while
+`options.hint` and `options.audience` supply the rest of the heading.
+Value measures supply a heading count only for `count`; a statistic keeps its
+metric in the body without repeating it in the heading.
+Duplicating a dashboard copies the layout currently displayed, including a
+newer declared baseline, into an independent personal snapshot.
 
 The standard refresh footer belongs to built-in query bindings. Authored
 (`shape: none`) panels provide their own refresh controls when needed.
