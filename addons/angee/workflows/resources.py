@@ -40,16 +40,15 @@ class WorkflowDefinitionResource(AngeeResource):
 
 
 class TriggerResource(AngeeResource):
-    """Install declarations disabled; enabling always identifies the acting user."""
+    """Install declarations disabled; enabling grants the workflow principal."""
 
     def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
         """Treat activation as operator state, never declaration input."""
-        row.update(enabled=False, run_as=None, disabled_reason="")
+        row.update(enabled=False, disabled_reason="")
         super().before_import_row(row, **kwargs)
 
     def before_save_instance(self, instance: Any, row: Mapping[str, Any], **kwargs: Any) -> None:
         """Clear activation even when replacing a previously enabled declaration."""
         instance.enabled = False
-        instance.run_as = None
         instance.disabled_reason = ""
         super().before_save_instance(instance, row, **kwargs)

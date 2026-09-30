@@ -32,9 +32,9 @@ class Note(RecordChangedOptIn, SqidMixin, AuditMixin, ThreadedModelMixin, AngeeM
 
     @classmethod
     def record_changed_grant_targets(cls, trigger: Any) -> tuple[TriggerGrantTarget, ...]:
-        """Let this workflow principal read notes through the example's role."""
+        """Let this workflow principal publish notes through the example's role."""
         return (TriggerGrantTarget(
-            ObjectRef("notes/role", "trigger_reader"), "member", "effective_member",
+            ObjectRef("notes/role", "trigger_editor"), "member", "effective_member",
             ObjectRef("angee/role", "admin"),
         ),)
 

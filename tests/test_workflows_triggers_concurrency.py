@@ -6,6 +6,7 @@ from threading import Event
 import pytest
 from django.db import connection, transaction
 from rebac import actor_context
+from rebac.models import active_relationship_model
 
 from angee.base.scoping import system_queryset
 from angee.workflows.testing.drivers import trigger_source
@@ -156,3 +157,44 @@ def test_domain_hook_write_and_concurrent_save_share_record_first_lock_order(tri
     event.refresh_from_db()
     assert event.admitted_at and not event.rejection
     assert event.started_run.pk == system_queryset(WorkflowRun).get().pk
+
+
+def test_admission_holds_its_grant_while_other_triggers_enable(trigger_setup, monkeypatch):
+    """Admission leaves the workflow row free, and disable waits for its trigger lock."""
+    actor, workflow, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
+    capture(record)
+    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    entered, release = Event(), Event()
+    grant = active_relationship_model().objects.filter(
+        resource_type="knowledge/role", resource_id="vault_viewer", relation="member",
+        subject_id=str(workflow.user_id),
+    )
+
+    def check(self, source, *, actor):
+        assert grant.exists()
+        entered.set()
+        assert release.wait(15)
+        assert grant.exists()
+
+    monkeypatch.setattr(Trigger, "trigger_sources", ("record_changed",), raising=False)
+    monkeypatch.setattr(Trigger, "check_admission", check)
+    with actor_context(actor):
+        other = Trigger.objects.create(
+            workflow=workflow, source="record_changed", model_label="knowledge.vault",
+        )
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        admission, _ = submit(pool, lambda: Trigger.objects.admit(event))
+        try:
+            assert entered.wait(10)
+            enabled, _ = submit(pool, lambda: Trigger.objects.enable(other, actor=actor))
+            assert enabled.result(timeout=10).enabled  # The workflow row is not locked by admission.
+            disabled, pid = submit(pool, lambda: Trigger.objects.disable(trigger, actor=actor))
+            wait_for_lock(pid, disabled)
+        finally:
+            release.set()
+        assert admission.result(timeout=10)
+        disabled.result(timeout=10)
+    assert event.started_run.run_as_id == workflow.user_id
+    assert grant.exists()  # The other enabled trigger still contributes this tuple.

@@ -132,6 +132,11 @@ linking and human-only member pickers). Access pickers include readable service
 users; agents and workflows link one service user each, with their row lifecycle
 calling IAM's shared sync and deactivation helper.
 
+**Workflow principal** — the workflow's linked service user. Trigger source
+grants are direct REBAC tuples for this user. Admission, source and domain checks,
+and triggered runs act as it; the user who enables a trigger only authorizes
+the source grants at enable time.
+
 **Agent** — an autonomous capability represented by an `agents.Agent` and its
 linked service-account user row. The agent acts as that ordinary `auth/user`
 subject, and its reach is exactly the grants assigned to the service user.

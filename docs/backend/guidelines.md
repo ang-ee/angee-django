@@ -424,8 +424,12 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 data through REBAC, never a queryset bypass.
 
 - **One user identity for authorization and attribution.** Every person and
-  agent acts as its own `AUTH_USER_MODEL` row. An agent's `kind=service` account
-  is selected by `Agent.principal_subject()`; permissions and audit stamps use
+  agent acts as its own `AUTH_USER_MODEL` row. Workflows also act as their linked
+  `kind=service` user for trigger admission and triggered runs; source-declared
+  grants give that user its reach. The enabling user must have workflow write
+  access and each target's delegation permission, but is not the runtime actor.
+  An agent's `kind=service` account is selected by
+  `Agent.principal_subject()`; permissions and audit stamps use
   that same user. The agent's reach is its grants, independent of its owner's
   reach. Service users satisfy `authenticated` and `auth/user:*` like other
   users. `actor_user_id` converts the canonical PK subject ID to its FK type

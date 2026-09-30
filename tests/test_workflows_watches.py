@@ -1,8 +1,6 @@
 """Transactional record observation, shared wake recovery and permission-safe reads."""
 
-from contextlib import nullcontext
 from datetime import timedelta
-from unittest.mock import patch
 
 import pytest
 from django.db import transaction
@@ -158,7 +156,7 @@ def test_retention_cascades_watches_from_a_failed_runs_open_branch(watched_sourc
     assert not system_queryset(StepWatch).exists()
 
 
-@pytest.mark.parametrize("case", ["timeout", "empty", "io", "not_opted", "same_body_change"])
+@pytest.mark.parametrize("case", ["timeout", "empty", "io", "same_body_change"])
 def test_record_wait_admission_and_deadline_recovery(watched_source, register_step, case):
     actor, _sent, record = watched_source
 
@@ -175,10 +173,9 @@ def test_record_wait_admission_and_deadline_recovery(watched_source, register_st
 
     register_step(Observe)
     _run, step = start_watcher(Observe, record, actor)
-    with patch.object(Vault, "record_changed_enabled", False) if case == "not_opted" else nullcontext():
-        assert runner.execute(step.pk)
+    assert runner.execute(step.pk)
     step.refresh_from_db()
-    if case in {"empty", "io", "not_opted"}:
+    if case in {"empty", "io"}:
         assert step.status == "failed" and not system_queryset(StepWatch).exists()
     else:
         assert step.status == "waiting" and step.waiting_kind == "record"

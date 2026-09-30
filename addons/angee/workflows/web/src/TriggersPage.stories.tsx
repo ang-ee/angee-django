@@ -46,6 +46,10 @@ export function TriggerStory({ embedded = false, canEdit = true, onRequest }: { 
       onRequest?.(request);
       const { query } = request;
       if (query.includes("impl_choices")) return jsonResponse({ data: { impl_choices: ["record_changed", "custom_changed", "message_ingested"].map((key) => ({ key, label: key, defaults: { source_model: key === "message_ingested" ? "messaging.Message" : "" }, config_schema: null })) } });
+      if (query.includes("revoke_workflow_trigger_grant(")) {
+        current = { ...current, enabled: false, grants: [], disabled_reason: "The workflow principal's member grant was revoked; enable this trigger again." };
+        return jsonResponse({ data: { revoke_workflow_trigger_grant: { ok: true, message: current.disabled_reason, id: current.id } } });
+      }
       const action = ["enable_workflow_trigger", "disable_workflow_trigger"].find((name) => query.includes(name + "("));
       if (action) {
         current = { ...current, enabled: action === "enable_workflow_trigger" };

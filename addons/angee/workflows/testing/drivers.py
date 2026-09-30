@@ -19,7 +19,7 @@ from angee.jobs.enqueue import celery_app
 from angee.workflows.runner import runner
 from angee.workflows.states import StepRunStatus
 from angee.workflows.steps import Step
-from angee.workflows.triggers import RecordChanged
+from angee.workflows.triggers import RecordChanged, RecordChangedOptIn
 
 
 @contextmanager
@@ -53,16 +53,17 @@ def observe(model: type[Any]) -> Iterator[list[Any]]:
 
 @contextmanager
 def trigger_source(model: type[Any], *, connect: bool = False) -> Iterator[None]:
-    """Temporarily enable a declared model source and optional save hook."""
-    with patch.object(model, "record_changed_enabled", True):
+    """Scope a declared test source's native save receiver when requested."""
+    if not issubclass(model, RecordChangedOptIn):
+        raise ValueError(f"{model._meta.label} must inherit RecordChangedOptIn.")
+    if connect:
+        RecordChanged.validate_model(model)
+        post_save.connect(RecordChanged.changed, sender=model, weak=False)
+    try:
+        yield
+    finally:
         if connect:
-            RecordChanged.validate_model(model)
-            post_save.connect(RecordChanged.changed, sender=model, weak=False)
-        try:
-            yield
-        finally:
-            if connect:
-                post_save.disconnect(RecordChanged.changed, sender=model)
+            post_save.disconnect(RecordChanged.changed, sender=model)
 
 
 @contextmanager

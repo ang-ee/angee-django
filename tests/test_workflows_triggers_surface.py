@@ -41,18 +41,18 @@ def trigger_surface(execution, trigger_resource_schema):
 
 
 def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_surface):
-    """A workflow editor can author and enable; readers cannot modify or select run_as."""
+    """A workflow editor can author and enable; readers cannot modify activation."""
     schema, workflow, editor, viewer, starter = trigger_surface
     create = """mutation($workflow: ID!) {
       insert_trigger_one(object: {
         workflow: $workflow, source: "record_changed", model_label: "knowledge.vault", condition: {}
-      }) { id enabled run_as { id } disabled_reason source_model can_edit }
+      }) { id enabled disabled_reason source_model can_edit }
     }"""
     variables = {"workflow": workflow.sqid}
     for reader in (viewer, starter):
         assert execute_schema(schema, create, variables, user=reader).errors
     inserted = result_data(execute_schema(schema, create, variables, user=editor))["insert_trigger_one"]
-    assert inserted["enabled"] is False and inserted["run_as"] is None
+    assert inserted["enabled"] is False
     assert inserted["disabled_reason"] == "" and inserted["source_model"] == "knowledge.Vault"
     assert inserted["can_edit"] is True
     trigger = system_queryset(Trigger).get(sqid=inserted["id"])
@@ -70,16 +70,16 @@ def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_su
         "enable_workflow_trigger"
     ]["ok"]
     trigger = system_queryset(Trigger).get(pk=trigger.pk)
-    assert trigger.enabled and trigger.run_as_id == editor.pk
+    assert trigger.enabled and trigger.workflow.user_id != editor.pk
     for name in ("trigger_insert_input", "trigger_set_input"):
         fields = schema._schema.get_type(name).fields
-        assert {"enabled", "run_as", "disabled_reason"}.isdisjoint(fields)
+        assert {"enabled", "disabled_reason"}.isdisjoint(fields)
     disable = "mutation($id: ID!) { disable_workflow_trigger(id: $id) { ok } }"
     assert result_data(execute_schema(schema, disable, {"id": trigger.sqid}, user=editor))[
         "disable_workflow_trigger"
     ]["ok"]
     trigger = system_queryset(Trigger).get(pk=trigger.pk)
-    assert not trigger.enabled and trigger.run_as_id is None
+    assert not trigger.enabled
     result_data(execute_schema(schema, """mutation($id: String!) {
       update_trigger_by_pk(pk_columns: {id: $id}, _set: {condition: {name: {_eq: "Ready"}}}) { id }
     }""", {"id": trigger.sqid}, user=editor))
@@ -88,6 +88,40 @@ def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_su
       delete_trigger_by_pk(id: $id) { id }
     }""", {"id": trigger.sqid}, user=editor))
     assert not system_queryset(Trigger).filter(pk=trigger.pk).exists()
+
+
+def test_trigger_grants_are_visible_and_revocable_through_the_authoring_surface(trigger_surface):
+    schema, workflow, editor, viewer, _starter = trigger_surface
+    trigger = Trigger.objects.with_actor(editor).create(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+    )
+    Trigger.objects.enable(trigger, actor=editor)
+    query = """query($id: String!) {
+      trigger_by_pk(id: $id) {
+        id can_edit enabled disabled_reason
+        grants { resource_type resource_id relation target_label }
+      }
+    }"""
+    for actor, can_edit in ((editor, True), (viewer, False)):
+        data = result_data(execute_schema(schema, query, {"id": trigger.sqid}, user=actor))["trigger_by_pk"]
+        assert data["can_edit"] is can_edit
+        assert data["grants"] == [{
+            "resource_type": "knowledge/role", "resource_id": "vault_viewer",
+            "relation": "member", "target_label": None,
+        }]
+    revoke = """mutation($id: ID!) {
+      revoke_workflow_trigger_grant(
+        id: $id, resource_type: "knowledge/role", resource_id: "vault_viewer", relation: "member"
+      ) { ok message }
+    }"""
+    variables = {"id": trigger.sqid}
+    denied = result_data(execute_schema(schema, revoke, variables, user=viewer))["revoke_workflow_trigger_grant"]
+    assert not denied["ok"]
+    result = result_data(execute_schema(schema, revoke, variables, user=editor))["revoke_workflow_trigger_grant"]
+    assert result["ok"] and "workflow principal" in result["message"]
+    current = result_data(execute_schema(schema, query, variables, user=viewer))["trigger_by_pk"]
+    assert not current["enabled"] and "workflow principal" in current["disabled_reason"]
+    assert current["grants"] == []
 
 
 @pytest.mark.parametrize("source_path,model_label,label", [
@@ -162,11 +196,11 @@ def test_trigger_ledger_origin_and_filters_require_operator_visibility(trigger_s
     event = system_queryset(TriggerEvent).get(trigger=trigger)
     assert event.admitted_at is not None, event.rejection
     run = event.started_run
-    assert run.origin == "trigger" and run.trigger_event_id == event.pk and run.run_as_id == editor.pk
+    assert run.origin == "trigger" and run.trigger_event_id == event.pk and run.run_as_id == workflow.user_id
     query = """query(
       $workflow: String!, $trigger: String!, $model: String!, $record: String!, $event: String!, $run: String!
     ) {
-      trigger(where: {workflow: {_eq: $workflow}}) { id enabled source run_as { id } }
+      trigger(where: {workflow: {_eq: $workflow}}) { id enabled source }
       triggerevent(where: {trigger: {_eq: $trigger}, record_model: {_eq: $model}, record_id: {_eq: $record}}) {
         id record_model record_id changed_at evaluated_at admitted_at rejection started_run { id origin }
       }
@@ -284,13 +318,13 @@ def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution
     }}]}))
     fields = {
         "workflow": f"{owner.name}.graph", "source": "record_changed", "model_label": "knowledge.vault",
-        "condition": {}, "enabled": True, "run_as": editor.pk,
+        "condition": {}, "enabled": True,
     }
     (tmp_path / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
     result = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert result.created == 2
     trigger = system_queryset(Trigger).get()
-    assert not trigger.enabled and trigger.run_as_id is None and trigger.disabled_reason == ""
+    assert not trigger.enabled and trigger.disabled_reason == ""
     Trigger.objects.enable(trigger, actor=execution[0])
     unchanged = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert unchanged.skipped == 2
@@ -300,4 +334,4 @@ def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution
     replaced = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert replaced.updated == 1
     trigger = system_queryset(Trigger).get(pk=trigger.pk)
-    assert not trigger.enabled and trigger.run_as_id is None
+    assert not trigger.enabled

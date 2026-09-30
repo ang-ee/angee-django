@@ -40,8 +40,6 @@ class MtiParent(AngeeDataModel):
 class MtiChild(RecordChangedOptIn, MtiParent):
     """A REBAC-gated multi-table-inheritance child sharing ``MtiParent``'s pk."""
 
-    record_changed_enabled = False
-
     @classmethod
     def record_changed_grant_targets(cls, trigger):
         """Grant the fixture's existing concrete subjects for this test source."""

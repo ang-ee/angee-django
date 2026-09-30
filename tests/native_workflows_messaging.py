@@ -134,6 +134,26 @@ class MessageTriggerTests(TransactionTestCase):
         self.assertFalse(trigger.enabled)
         self.assertEqual(trigger.granted_relationships(actor=self.admin), ())
 
+    def test_grant_target_label_follows_the_readers_channel_scope(self):
+        """Workflow viewers see the tuple, but only channel readers see its label."""
+        trigger = self.trigger()
+        self.workflow.with_actor(self.admin).grant_record_access("viewer", self.other)
+        schema = GraphQLSchemas.from_discovery().build("console")
+        query = """query($id: String!) {
+          trigger_by_pk(id: $id) { grants { resource_type resource_id relation target_label } }
+        }"""
+        for actor, label in ((self.admin, str(self.channel)), (self.other, None)):
+            with actor_context(actor):
+                result = schema.execute_sync(
+                    query, variable_values={"id": trigger.sqid},
+                    context_value=SimpleNamespace(request=SimpleNamespace(user=actor)),
+                )
+            self.assertIsNone(result.errors, result.errors)
+            self.assertEqual(result.data["trigger_by_pk"]["grants"], [{
+                "resource_type": "messaging/channel", "resource_id": str(self.channel.pk),
+                "relation": "reader", "target_label": label,
+            }])
+
     def test_non_admin_enable_requires_channel_read(self):
         """Workflow write alone cannot scope a source to an unreadable channel."""
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.other)
@@ -142,10 +162,9 @@ class MessageTriggerTests(TransactionTestCase):
             Trigger.objects.enable(trigger, actor=self.other)
         trigger = system_queryset(Trigger).get(pk=trigger.pk)
         self.assertFalse(trigger.enabled)
-        self.assertIsNone(trigger.run_as_id)
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
         trigger = Trigger.objects.enable(trigger, actor=self.owner)
-        self.assertEqual(trigger.run_as_id, self.owner.pk)
+        self.assertTrue(trigger.enabled)
 
     def test_channel_reader_cannot_delegate_source_access(self):
         """Reading a channel does not authorize granting its reader tuple."""
@@ -155,6 +174,13 @@ class MessageTriggerTests(TransactionTestCase):
         with self.assertRaisesMessage(PermissionDenied, "cannot grant"):
             Trigger.objects.enable(trigger, actor=self.other)
         self.assertFalse(system_queryset(Trigger).get(pk=trigger.pk).enabled)
+        granted = Trigger.objects.enable(trigger, actor=self.admin)
+        with self.assertRaisesMessage(PermissionDenied, "cannot grant"):
+            Trigger.objects.revoke_grant(
+                granted, actor=self.other, resource_type="messaging/channel",
+                resource_id=str(self.channel.pk), relation="reader",
+            )
+        self.assertTrue(system_queryset(Trigger).get(pk=trigger.pk).enabled)
 
     def test_unscoped_message_trigger_cannot_enable_without_a_grant_target(self):
         """A message trigger must name the channel its principal may read."""
@@ -164,8 +190,8 @@ class MessageTriggerTests(TransactionTestCase):
             Trigger.objects.enable(trigger, actor=self.admin)
         self.assertFalse(system_queryset(Trigger).get(pk=trigger.pk).enabled)
 
-    def test_admission_rechecks_channel_read_even_with_message_read(self):
-        """A former channel owner retains authored message read, but loses admission."""
+    def test_admission_rechecks_channel_read_under_workflow_principal(self):
+        """The standing channel grant survives a change in the enabler's reach."""
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
         self.trigger(actor=self.owner)
         message = self.ingest()
@@ -174,14 +200,14 @@ class MessageTriggerTests(TransactionTestCase):
             self.channel.save(update_fields=("owner",))
         self.assertTrue(Message.objects.with_actor(self.owner).filter(pk=message.pk).exists())
         for event in system_queryset(TriggerEvent):
-            self.assertFalse(Trigger.objects.admit(event))
+            self.assertTrue(Trigger.objects.admit(event))
             event.refresh_from_db()
-            self.assertIsNone(event.admitted_at)
-            self.assertIn("channel", event.rejection.lower())
-        self.assertFalse(system_queryset(WorkflowRun).exists())
+            self.assertIsNotNone(event.admitted_at)
+            self.assertFalse(event.rejection)
+        self.assertEqual(system_queryset(WorkflowRun).get().run_as_id, self.workflow.user_id)
 
     def test_readable_channel_admits_once_for_non_admin(self):
-        """The enabling user owns the run and the retained admission survives replays."""
+        """The workflow principal owns the run and retained admission survives replays."""
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
         trigger = self.trigger(actor=self.owner)
         message = self.ingest()
@@ -191,7 +217,7 @@ class MessageTriggerTests(TransactionTestCase):
         message_ingested.send(sender=Message, instance=message)
         self.assertFalse(Trigger.objects.admit(event))
         run = system_queryset(WorkflowRun).get()
-        self.assertEqual(run.run_as_id, self.owner.pk)
+        self.assertEqual(run.run_as_id, self.workflow.user_id)
         self.assertEqual(run.trigger_event_id, event.pk)
         self.assertEqual(run.record_ref.public_id, message.sqid)
         self.assertEqual(run.origin, "trigger")
@@ -207,7 +233,6 @@ class MessageTriggerTests(TransactionTestCase):
             trigger.save(update_fields=("channel",))
         trigger.refresh_from_db()
         self.assertFalse(trigger.enabled)
-        self.assertIsNone(trigger.run_as_id)
         self.assertIn("changed", trigger.disabled_reason)
 
     def test_admission_rechecks_current_message_channel(self):

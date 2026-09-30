@@ -9,10 +9,11 @@ import strawberry_django
 from django.apps import apps
 from django.db import models
 from django.db.models import Prefetch
+from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.base.scoping import system_queryset
+from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.decisions.schema import DecisionGroupType
 from angee.graphql.actions import (
     ActionResult,
@@ -262,6 +263,16 @@ class StepArtifactType(AngeeNode):
         return PublicID(cast(Any, self).record_public_id)
 
 
+@strawberry.type
+class TriggerGrantType:
+    """One direct source grant held by a workflow principal."""
+
+    resource_type: str
+    resource_id: str
+    relation: str
+    target_label: str | None
+
+
 @strawberry_django.type(Trigger)
 class TriggerType(AngeeNode):
     """A workflow's editable event admission policy and server-owned activation."""
@@ -273,8 +284,32 @@ class TriggerType(AngeeNode):
     source_model: str = strawberry_django.field(only=["source", "model_label"])
     condition: JSON
     enabled: auto
-    run_as: UserType | None = actor_scoped_to_one("run_as")
     disabled_reason: auto
+
+    @strawberry_django.field
+    def grants(self, info: strawberry.Info) -> list[TriggerGrantType]:
+        """List live direct tuples; reveal a target label only through readable rows."""
+        actor = request_from_info(info).user
+        rows = cast(Any, self).granted_relationships(actor=actor)
+        labels: dict[tuple[str, str], str] = {}
+        for resource_type in sorted({str(row.resource_type) for row in rows}):
+            model = model_for_resource_type(resource_type)
+            if model is None or not model._meta.managed:
+                continue
+            visible = read_scoped_queryset(model, actor)
+            if visible is None:
+                continue
+            ids = [str(row.resource_id) for row in rows if row.resource_type == resource_type]
+            for target in visible.filter(pk__in=ids):
+                labels[(resource_type, str(target.pk))] = str(target)
+        return [
+            TriggerGrantType(
+                resource_type=str(row.resource_type), resource_id=str(row.resource_id),
+                relation=str(row.relation),
+                target_label=labels.get((str(row.resource_type), str(row.resource_id))),
+            )
+            for row in rows
+        ]
 
     @strawberry_django.field
     def can_edit(self, info: strawberry.Info) -> bool:
@@ -403,6 +438,21 @@ class WorkflowActionMutation:
         trigger = authorized_action_target(info, Trigger, id, "write")
         Trigger.objects.disable(trigger, actor=request_from_info(info).user)
         return ActionResult(ok=True, message="Trigger disabled.", id=trigger.sqid)
+
+    @strawberry.mutation
+    @action_guard("Revoke trigger grant failed.")
+    def revoke_workflow_trigger_grant(
+        self, info: strawberry.Info, id: PublicID, resource_type: str, resource_id: str, relation: str,
+    ) -> ActionResult:
+        """Revoke one source grant through the same workflow write gate as enable."""
+        trigger = authorized_action_target(info, Trigger, id, "write")
+        current = Trigger.objects.revoke_grant(
+            trigger, actor=request_from_info(info).user,
+            resource_type=resource_type, resource_id=resource_id, relation=relation,
+        )
+        return ActionResult(
+            ok=True, message=current.disabled_reason or "Trigger grant revoked.", id=trigger.sqid,
+        )
 
     @strawberry.mutation
     @action_guard("Cancel run failed.")

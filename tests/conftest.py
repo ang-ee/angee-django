@@ -142,8 +142,6 @@ class WebhookSubscription(AbstractWebhookSubscription):
 class Vault(RecordChangedOptIn, AbstractVault):
     """Concrete knowledge vault used by source-addon tests."""
 
-    record_changed_enabled = False
-
     @classmethod
     def record_changed_grant_targets(cls, trigger):
         """The test source delegates its global role from workflow writers."""
@@ -162,8 +160,6 @@ class Vault(RecordChangedOptIn, AbstractVault):
 
 class Page(RecordChangedOptIn, AbstractPage):
     """Concrete knowledge page used by source-addon tests."""
-
-    record_changed_enabled = False
 
     @classmethod
     def record_changed_grant_targets(cls, trigger):
