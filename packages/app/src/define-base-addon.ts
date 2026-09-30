@@ -40,8 +40,6 @@ export interface BaseAddonRoute extends AddonRoute {
 }
 
 export interface ResourcePageRoutesOptions {
-  /** Aside policy inherited by the record route. */
-  chatter?: AddonRoute["chatter"];
   /** Layout for both routes. Defaults to the rendered addon's console layout. */
   layout?: string;
   /** Menu id that owns the list route chrome. */
@@ -80,7 +78,6 @@ export function resourcePageRoutes(
       ...(options.recordModel ? { recordModel: options.recordModel } : {}),
       ...(options.recordMatch ? { recordMatch: options.recordMatch } : {}),
       ...(options.menu ? { menu: options.menu } : {}),
-      ...(options.chatter !== undefined ? { chatter: options.chatter } : {}),
       ...(options.defaultResourceView ? { defaultResourceView: options.defaultResourceView } : {}),
     },
     {

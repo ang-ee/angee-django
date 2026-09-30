@@ -14,7 +14,10 @@ ResourceView consumes [addon presets and scoped vocabulary](../app/README.md#app
 from runtime: fixed filters join the provider's effective base filter, and native
 column visibility survives saved views. Relation columns retain their authored
 field as their table ID even when metadata resolves a different display path.
-Console chatter follows the route's inherited admission policy.
+Console chatter follows the app's inherited surface policy. A named slot,
+aside or drawer list restricts that address; an omitted address keeps its
+contributions. Public and sign-in routes stay unfiltered. An unscoped chatter
+contribution appears on record routes by default; a route that lists it by id shows it on any page.
 Dashboard widget titles link to the source collection, and table rows use the
 resource record route. Widget options `fullViewRoute`, `recordRoute`, and
 `recordParam` select explicit destinations when the default route is unsuitable.

@@ -54,6 +54,15 @@ export {
   type SpotlightProps,
 } from "./Spotlight";
 export { Systray, type SystrayProps } from "./Systray";
+export {
+  SurfacePresentationProvider,
+  useSurfacePresentation,
+  useSurfaceAdmission,
+  isSurfaceSlotAdmitted,
+  admittedAsideTabs,
+  type SurfaceAdmission,
+  type SurfacePresentation,
+} from "./surface-policy";
 export { TopBar, type TopBarProps } from "./TopBar";
 export {
   TopMenuTabs,

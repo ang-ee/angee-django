@@ -254,9 +254,13 @@ shared UI copy through an addon bundle.
   `useRecordPeek` Records tab can open evidence without discarding draft input
   in another panel; unmounting the temporary peek must leave other publishers'
   tabs and composer intact. Chatter stays in the shell's right pane. Consumers
-  do not mount their own chatter. The inherited route `chatter` declaration
-  owns visibility and tab admission; the shell applies it before mounting tabs.
-  See the [route projection](../../packages/app/src/chatter-routes.ts) and
+  do not mount their own chatter. The inherited app and route `surface`
+  declaration owns contribution admission and aside visibility; the shell
+  applies it before mounting tabs. Only named slot, aside and drawer lists
+  restrict contributions; omitted addresses retain their defaults, including
+  in a confined app. Public and sign-in routes are unfiltered. App-keyed route
+  scopes can narrow a route owned by another addon. A tab without a model scope
+  appears only on record routes. See the [route policy](../../packages/app/src/route-policy.ts) and
   [Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
 - Human-in-the-loop queues use the resource page shell for filtering, grouping,
   paging, record selection, and URL state. The workflows Decision inbox keeps
@@ -502,11 +506,12 @@ shared UI copy through an addon bundle.
   Hasura resource owns filter/order/group/facet capabilities; the list owns
   controls, paging and `rowActions`, including confirmations for generated action
   callbacks. See [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
-  Declare `admitContributions` once on `ResourceList`, `FormView` or `Form` to
-  select section and verb ids; omission admits all, `[]` admits none, and unknown
-  ids fail before record reads. [FormView](../../packages/ui/src/views/form/form-view-surface.ts)
-  owns admission and required-field selection; authored fields and passive
-  chrome remain host-owned.
+  Declare section and verb ids in the app's `surface.admit.slots` for
+  `form-view.sections` and `form-view.record-actions`; app-keyed route scopes
+  can narrow either list. Omitting a slot keeps all its contributions and `[]`
+  keeps none. [FormView](../../packages/ui/src/views/form/form-view-surface.ts)
+  selects required fields from the route-projected contributions; authored
+  fields and passive chrome remain host-owned.
 - **Record verbs compose the shared action owner.** A slot contribution may render
   [RecordActionBar](../../packages/ui/src/views/form/RecordActionBar.tsx)
   with server-gated descriptors. [Record chrome](../../packages/ui/src/views/form/use-form-view-record-chrome.ts)

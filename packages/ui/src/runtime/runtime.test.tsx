@@ -297,6 +297,17 @@ describe("useModelSlot", () => {
       "specialized",
     ]);
   });
+
+  test("ignores a legacy page id excluded by the route projection", () => {
+    const wrapper = wrapperFor({ slots: [
+      { slot: "form-view.sections", model: "notes.Note", id: "notes.kept" },
+    ] });
+    const { result } = renderHook(() => useModelSlot(
+      { slot: "form-view.sections", model: "notes.Note" },
+      { admit: ["notes.kept", "notes.excluded"] },
+    ), { wrapper });
+    expect(result.current.map((entry) => entry.id)).toEqual(["notes.kept"]);
+  });
 });
 
 describe("useRuntimeUserPreferences", () => {

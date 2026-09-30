@@ -79,6 +79,7 @@ import { readAppRailPreferences } from "@angee/ui/chrome/app-rail-preferences";
 import { baseIcons } from "@angee/ui/chrome/icon-registry";
 import { ViewAsBanner, ViewAsPicker } from "@angee/ui/chrome/ViewAs";
 import { USER_MENU_ITEMS_SLOT } from "@angee/ui/chrome/UserMenu";
+import { SurfacePresentationProvider, type SurfacePresentation } from "@angee/ui/chrome/surface-policy";
 import { CONSOLE_NOTICE_SLOT } from "@angee/ui/layouts/ConsoleLayout";
 import { LoadingPanel } from "@angee/ui/fragments/index";
 import {
@@ -126,12 +127,14 @@ import {
   resourceMutationsForSchema,
 } from "./resource-projection";
 import { chatterRouteIndex } from "./chatter-routes";
+import { admittedContributions, routePolicyIndex } from "./route-policy";
 import { inheritedRouteFact, resolveRoutePaths } from "./route-paths";
 import {
   compareCodePoint,
   createAddonRouteNodes,
   createLayoutRoutes,
   layoutNamesForRoutes,
+  layoutRequiresAuth,
 } from "./route-tree";
 
 export {
@@ -169,7 +172,6 @@ export interface CreateAppInput {
   loginPath?: string;
   /** Host-level UI slot contributions, merged with the addons'. */
   slots?: readonly SlotContribution[];
-  /** Host copy overrides; every key must exist in the composed bundles. */
   /** Build-owned defaults used until an authenticated user overrides them. */
   appearance?: HostAppearanceDefaults;
 }
@@ -290,6 +292,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
   );
   const menuTree = MenuTree.from(menus);
   const projection = new AppRouteProjection(routes, menuTree, input.confineTo);
+  const surfaceForRoute = routePolicyIndex(routes, composed.surface, menuTree, composed);
+  const unrestrictedSurface: SurfacePresentation = {};
   const navigationTree = projection.navigationTree;
   for (const preset of Object.values(composed.resourceViews)) {
     const models = Object.values(schemas).flatMap((schema) => {
@@ -413,6 +417,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const activeRoute = useActiveRoute(routes);
     const app = projection.activeApp(pathname);
     const words = vocabularyForRoute(app, activeRoute?.name);
+    const publicRoute = !layoutRequiresAuth(activeRoute?.layout ?? "console", input.layouts)
+      || pathname.replace(/\/$/, "") === loginPath.replace(/\/$/, "");
+    const surface = publicRoute ? unrestrictedSurface : surfaceForRoute(app, activeRoute?.name);
     const scopedRuntime = useMemo(() => {
       const selected = projection.resourceRoutes(app, activeRoute?.name);
       return {
@@ -420,20 +427,25 @@ export function createApp(input: CreateAppInput): AngeeApp {
         i18n: words.i18n.instance,
         vocabulary: words.vocabulary,
         defaultResourceView: projection.defaultResourceView(activeRoute?.name),
+        slots: admittedContributions(runtime.slots, surface.admit, "slots"),
+        chatter: admittedContributions(runtime.chatter, surface.admit, "aside"),
+        drawers: admittedContributions(runtime.drawers, surface.admit, "drawers"),
         routesByResource: selected,
         routeHref,
       };
-    }, [app, activeRoute?.name, words]);
+    }, [app, activeRoute?.name, words, surface]);
     return (
       <NuqsAdapter>
         <OperationDocumentsProvider documents={operationDocuments}>
-          <AppRuntimeProvider runtime={scopedRuntime}>
-            <ModalsHost>
-              <ToastProvider>
-                <RefineRoot i18nProvider={words.i18n.provider} />
-              </ToastProvider>
-            </ModalsHost>
-          </AppRuntimeProvider>
+          <SurfacePresentationProvider value={surface}>
+            <AppRuntimeProvider runtime={scopedRuntime}>
+              <ModalsHost>
+                <ToastProvider>
+                  <RefineRoot i18nProvider={words.i18n.provider} />
+                </ToastProvider>
+              </ModalsHost>
+            </AppRuntimeProvider>
+          </SurfacePresentationProvider>
         </OperationDocumentsProvider>
       </NuqsAdapter>
     );

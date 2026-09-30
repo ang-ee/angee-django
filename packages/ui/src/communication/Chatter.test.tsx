@@ -14,6 +14,7 @@ import {
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { baseIcons } from "../chrome/icon-registry";
+import { SurfacePresentationProvider, type SurfacePresentation } from "../chrome/surface-policy";
 import {
   AppRuntimeProvider,
   type AppRuntime,
@@ -30,7 +31,7 @@ describe("Chatter", () => {
   test("route tabs admit defaults and contributions before rendering or counting", async () => {
     const excludedRender = vi.fn(() => <span>Excluded content</span>);
     const excludedCount = vi.fn(() => 9);
-    renderChatter({ chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", recordParam: "id", chatter: { tabs: ["comments"] } }], chatter: [
+    renderChatter({ surface: { chatter: { tabs: ["comments"] } }, chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", recordParam: "id" }], chatter: [
       { id: "agents", label: "Agents", useCount: excludedCount, render: excludedRender },
     ] });
     expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
@@ -43,7 +44,8 @@ describe("Chatter", () => {
   test("route selection can admit a conditional tab", async () => {
     const hiddenRender = vi.fn(() => <span>Not yet visible</span>);
     renderChatter({
-      chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/record", recordParam: "id", chatter: { tabs: ["activity", "conditional"] } }],
+      surface: { chatter: { tabs: ["activity", "conditional"] } },
+      chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/record", recordParam: "id" }],
       chatter: [{ id: "conditional", when: () => false, render: hiddenRender }],
     });
     expect(await screen.findByRole("tab", { name: "Activity" })).toBeTruthy();
@@ -53,8 +55,33 @@ describe("Chatter", () => {
 
   test("an empty route tab list removes the aside, including published tabs", () => {
     render(chatterContentView(<PublishedContent content={{ tabs: [{ id: "local", label: "Local", children: <span>Local content</span> }] }} />,
-      "local", { chatterRoutes: [{ name: "notes.home", path: "/", viewType: "notes/home", chatter: { tabs: [] } }] }));
+      "local", { surface: { chatter: { tabs: [] } }, chatterRoutes: [{ name: "notes.home", path: "/", viewType: "notes/home" }] }));
     expect(screen.queryByRole("complementary")).toBeNull();
+  });
+
+  test("an aside with every selected tab excluded is absent", async () => {
+    renderChatter({ surface: { admit: { aside: [] }, chatter: { tabs: ["comments"] } } });
+    expect(await screen.findByText("Aside hidden")).toBeTruthy();
+    expect(screen.queryByRole("complementary")).toBeNull();
+  });
+
+  test("an empty ordered tab list removes the record aside", async () => {
+    renderChatter({ surface: { chatter: { tabs: [] } } });
+    expect(await screen.findByText("Aside hidden")).toBeTruthy();
+    expect(screen.queryByRole("complementary")).toBeNull();
+  });
+
+  test("a route tab excluded by aside admission needs no active runtime entry", async () => {
+    renderChatter({ surface: { admit: { aside: ["comments"] }, chatter: { tabs: ["agents", "comments"] } } });
+    expect(await screen.findByRole("tab", { name: "Comments" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Agents" })).toBeNull();
+  });
+
+  test("a published tab can satisfy the route list and aside admission", async () => {
+    render(chatterContentView(<PublishedContent content={{ tabs: [{ id: "local", label: "Local", children: <span>Local content</span> }] }} />,
+      "local", { surface: { admit: { aside: ["local"] }, chatter: { tabs: ["local"] } } }));
+    expect(await screen.findByRole("tab", { name: "Local" })).toBeTruthy();
+    expect(screen.getByText("Local content")).toBeTruthy();
   });
 
   test("unknown route tabs fail before a contribution's render or count hook", () => {
@@ -63,7 +90,8 @@ describe("Chatter", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(() => render(chatterContentView(null, "comments", {
-        chatterRoutes: [{ name: "notes.home", path: "/", viewType: "notes/home", chatter: { tabs: ["typo"] } }],
+        surface: { chatter: { tabs: ["typo"] } },
+        chatterRoutes: [{ name: "notes.home", path: "/", viewType: "notes/home" }],
         chatter: [{ id: "known", render: excludedRender, useCount: excludedCount }],
       }))).toThrow('unknown contribution id "typo"');
       expect(excludedRender).not.toHaveBeenCalled();
@@ -352,19 +380,24 @@ function useCommentsCount(
   return context.view.sqid === "rec_1" ? 7 : undefined;
 }
 
-function renderChatter(runtime: Partial<AppRuntime>, record = true): void {
+type TestRuntime = Partial<AppRuntime> & { surface?: SurfacePresentation };
+
+function renderChatter(runtime: TestRuntime, record = true): void {
+  const { surface = {}, ...appRuntime } = runtime;
   function VisibilityProbe() { return <span>{useChatterPresentation().visible ? "Aside available" : "Aside hidden"}</span>; }
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const recordRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: record ? "/records/$id" : "/records",
     component: () => (
-      <AppRuntimeProvider runtime={{ icons: baseIcons, chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" }], ...runtime }}>
-        <ChatterProvider defaultTab="agents">
-          <VisibilityProbe />
-          <Chatter />
-        </ChatterProvider>
-      </AppRuntimeProvider>
+      <SurfacePresentationProvider value={surface}>
+        <AppRuntimeProvider runtime={{ icons: baseIcons, chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" }], ...appRuntime }}>
+          <ChatterProvider defaultTab="agents">
+            <VisibilityProbe />
+            <Chatter />
+          </ChatterProvider>
+        </AppRuntimeProvider>
+      </SurfacePresentationProvider>
     ),
   });
   const router = createRouter({
@@ -375,15 +408,18 @@ function renderChatter(runtime: Partial<AppRuntime>, record = true): void {
   render(<RouterProvider router={router} />);
 }
 
-function chatterContentView(children: React.ReactNode, defaultTab: string, runtime: Partial<AppRuntime> = {}): React.ReactElement {
+function chatterContentView(children: React.ReactNode, defaultTab: string, runtime: TestRuntime = {}): React.ReactElement {
+  const { surface = {}, ...appRuntime } = runtime;
   return (
     <RouterContextProvider router={createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) })}>
-      <AppRuntimeProvider runtime={{ icons: baseIcons, ...runtime }}>
-        <ChatterProvider defaultTab={defaultTab}>
-          {children}
-          <Chatter />
-        </ChatterProvider>
-      </AppRuntimeProvider>
+      <SurfacePresentationProvider value={surface}>
+        <AppRuntimeProvider runtime={{ icons: baseIcons, ...appRuntime }}>
+          <ChatterProvider defaultTab={defaultTab}>
+            {children}
+            <Chatter />
+          </ChatterProvider>
+        </AppRuntimeProvider>
+      </SurfacePresentationProvider>
     </RouterContextProvider>
   );
 }
@@ -393,22 +429,23 @@ function renderChatterContent(children: React.ReactNode, defaultTab: string) {
 }
 
 
-test("non-record pages hide empty chatter and admit a contributed inbox", async () => {
+test("unscoped contributions stay off pages without a record", async () => {
   renderChatter({}, false);
   expect(await screen.findByText("Aside hidden")).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
   expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
   cleanup();
   renderChatter({ chatter: [{ id: "inbox", label: "Inbox", render: () => <span>Inbox content</span> }] }, false);
-  expect(await screen.findByRole("tab", { name: "Inbox" })).toBeTruthy();
-  expect(screen.getByText("Aside available")).toBeTruthy();
+  expect(await screen.findByText("Aside hidden")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "Inbox" })).toBeNull();
   expect(screen.queryByRole("tab", { name: "Comments" })).toBeNull();
 });
 
 test("a hidden record route suppresses the aside before contributions execute", async () => {
   const renderTab = vi.fn(() => <span>Private panel</span>);
   renderChatter({
-    chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id", chatter: "hidden" }],
+    surface: { chatter: "hidden" },
+    chatterRoutes: [{ name: "notes.record", path: "/records/$id", viewType: "notes/note", modelLabel: "notes.Note", recordParam: "id" }],
     chatter: [{ id: "extra", render: renderTab }],
   }, true);
   expect(await screen.findByText("Aside hidden")).toBeTruthy();
@@ -417,7 +454,7 @@ test("a hidden record route suppresses the aside before contributions execute", 
 });
 
 test("a route can explicitly opt a non-record page into default chatter", async () => {
-  renderChatter({ chatterRoutes: [{ name: "notes.all", path: "/records", viewType: "notes/note", chatter: { tabs: ["comments", "activity"] } }] }, false);
+  renderChatter({ surface: { chatter: { tabs: ["comments", "activity"] } }, chatterRoutes: [{ name: "notes.all", path: "/records", viewType: "notes/note" }] }, false);
   expect(await screen.findByText("Aside available")).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
   expect(screen.getByRole("tab", { name: "Activity" })).toBeTruthy();

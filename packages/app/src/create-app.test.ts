@@ -14,6 +14,7 @@ import {
   useRouteHref,
 } from "@angee/ui/runtime";
 import { useParams } from "@tanstack/react-router";
+import { useSurfacePresentation } from "@angee/ui/chrome/surface-policy";
 import { resourcePageRoutes } from "./define-base-addon";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -1201,16 +1202,19 @@ describe("createApp resource route index", () => {
 
     function ChatterRouteProbe(): ReactNode {
       const route = useChatterRoutes().find((item) => item.name === "notes.record");
+      const surface = useSurfacePresentation();
       return createElement(
         "span",
         null,
-        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"} ${route?.chatter === "hidden" ? "hidden" : route?.chatter?.tabs?.join(",") ?? "all"}`,
+        `${route?.modelLabel ?? "none"} ${route?.canonicalLabel ?? "none"} ${route?.recordParam ?? "none"} ${surface.chatter === "hidden" ? "hidden" : surface.chatter?.tabs?.join(",") ?? "all"}`,
       );
     }
 
     const input = testAppInput([
       {
         id: "notes",
+        menus: [{ id: "notes", route: "notes.home" }],
+        surface: [{ app: "notes", route: "notes.home", chatter: { tabs: ["comments"] } }],
         routes: [
           {
             name: "notes.home",
@@ -1218,7 +1222,6 @@ describe("createApp resource route index", () => {
             layout: "console",
             component: ChatterRouteProbe,
             resource: "Note",
-            chatter: { tabs: ["comments"] },
           },
           {
             name: "notes.record",

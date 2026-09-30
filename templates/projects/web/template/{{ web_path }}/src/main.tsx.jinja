@@ -21,11 +21,7 @@ createApp({
     ...composedAddons,
   ],
   layouts: {
-{% if console_chatter %}
     console: { chrome: ConsoleLayout },
-{% else %}
-    console: { chrome: ({ children }) => <ConsoleLayout showChatter={false}>{children}</ConsoleLayout> },
-{% endif %}
     public: { schema: "public" },
   },
   schemas,

@@ -44,7 +44,6 @@ export function chatterRouteIndex(
       ...(modelLabel ? { modelLabel } : {}),
       ...(canonicalLabel ? { canonicalLabel } : {}),
       ...(recordParam ? { recordParam } : {}),
-      chatter: inheritedRouteFact(route, routesByName, (item) => item.chatter),
     };
   });
 }

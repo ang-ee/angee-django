@@ -18,6 +18,7 @@ export interface TopBarProps {
    * the menu (matching the console layout). */
   brand?: ReactNode;
   hideSearch?: boolean;
+  showBreadcrumb?: boolean;
   onHelp?: () => void;
   onNotifications?: () => void;
   navigation?: {
@@ -43,6 +44,7 @@ export interface TopBarProps {
 export function TopBar({
   brand,
   hideSearch = false,
+  showBreadcrumb = true,
   onHelp,
   onNotifications,
   navigation,
@@ -69,7 +71,7 @@ export function TopBar({
       {navigation ? <NavigationToggleButton navigation={navigation} /> : null}
       {brand}
       {primaryPane ? <PrimaryPaneToggleButton pane={primaryPane} /> : null}
-      <Breadcrumb className="ml-1 max-sm:hidden" />
+      {showBreadcrumb ? <Breadcrumb className="ml-1 max-sm:hidden" /> : null}
       <div className="min-w-2 flex-1" />
       {children}
       {hideSearch ? null : (

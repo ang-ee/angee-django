@@ -37,11 +37,6 @@ home:
   default: ""
   help: Home route name or absolute path; empty selects the first non-public route.
 
-console_chatter:
-  type: bool
-  default: true
-  help: Show the console chatter pane.
-
 confine_to:
   type: str
   default: ""

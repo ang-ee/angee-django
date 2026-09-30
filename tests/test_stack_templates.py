@@ -742,7 +742,6 @@ def test_project_web_confinement_answer_renders_only_when_set() -> None:
     answers = yaml.safe_load((project / "copier.yml").read_text())
     template = (project / "template" / "{{ web_path }}" / "src" / "main.tsx.jinja").read_text()
     inputs = {name: answers[name]["default"] for name in ("home", "confine_to")}
-    inputs["console_chatter"] = "true" if answers["console_chatter"]["default"] else ""
     for confine_to in (inputs["confine_to"], "requests", 'requests"\\draft'):
         values = {**inputs, "confine_to": confine_to}
         rendered = _render_conditionals(template, values)

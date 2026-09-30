@@ -38,6 +38,8 @@ import { RECORD_SEARCH_KEYS, isModelScopedSlot } from "@angee/ui/runtime";
 import { STATUS_TONES, type StatusToneMap } from "@angee/ui/widgets/status-tones";
 import { getIcon } from "@angee/ui/chrome/icon-registry";
 import { optionToken } from "@angee/ui/widgets/types";
+import type { AppSurface } from "./route-policy";
+export type { AppSurface, SurfaceAdmission, SurfaceDeclaration } from "./route-policy";
 import {
   DASHBOARD_STORE_SLOT,
   parseDashboardSnapshot,
@@ -92,8 +94,6 @@ export interface AddonRoute {
   defaultResourceView?: string;
   /** This collection's record route owns records with the declared field value. */
   recordMatch?: { field: string; equals: string };
-  /** Inherited aside policy; tabs selects default, contributed and published ids. */
-  chatter?: "hidden" | { tabs?: readonly string[] };
 }
 
 /** A provider mounted once around one layout's chrome and routed content. */
@@ -117,6 +117,8 @@ export interface AddonManifest {
   statusTones?: StatusToneMap;
   i18n?: I18nResources;
   vocabulary?: readonly AppVocabulary[];
+  /** App and app-keyed route scopes, inherited like vocabulary. */
+  surface?: readonly AppSurface[];
   resourceViews?: readonly ResourceViewPreset[];
   icons?: Readonly<Record<string, unknown>>;
   forms?: FormOverrideMap;
@@ -162,6 +164,7 @@ export interface ComposedAddons {
   statusTones: StatusToneMap;
   i18n: I18nResources;
   vocabulary: readonly AppVocabulary[];
+  surface: readonly AppSurface[];
   resourceViews: Readonly<Record<string, ResourceViewPreset>>;
   icons: Readonly<Record<string, unknown>>;
   forms: FormOverrideMap;
@@ -427,6 +430,7 @@ export function composeAddons(
     statusTones,
     i18n,
     vocabulary: addons.flatMap((addon) => addon.vocabulary ?? []),
+    surface: addons.flatMap((addon) => addon.surface ?? []),
     resourceViews,
     icons,
     forms,

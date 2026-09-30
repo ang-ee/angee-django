@@ -6,6 +6,7 @@ import { BreadcrumbLabelProvider } from "../chrome/Breadcrumb";
 import { DocumentTitle } from "../chrome/DocumentTitle";
 import { DrawerRail } from "../chrome/DrawerRail";
 import { TopBar } from "../chrome/TopBar";
+import { useSurfacePresentation } from "../chrome/surface-policy";
 import { Chatter, useChatterPresentation } from "../communication/Chatter";
 import { ChatterProvider, useChatter, type ChatterPaneController } from "../communication/chatter-context";
 import { useUiT } from "../i18n";
@@ -37,7 +38,8 @@ export interface ConsoleLayoutProps {
 }
 
 export function ConsoleLayout(props: ConsoleLayoutProps): React.ReactElement {
-  return <ChatterProvider defaultCollapsed><ConsoleLayoutBody {...props} /></ChatterProvider>;
+  const { shell } = useSurfacePresentation();
+  return <ChatterProvider defaultCollapsed={!shell?.asideOpen}><ConsoleLayoutBody {...props} /></ChatterProvider>;
 }
 
 function ConsoleLayoutBody({
@@ -45,6 +47,7 @@ function ConsoleLayoutBody({
   className,
 }: ConsoleLayoutProps): React.ReactElement {
   const { visible: showChatter } = useChatterPresentation();
+  const { shell } = useSurfacePresentation();
   const notices = useSlot(CONSOLE_NOTICE_SLOT);
   const [controlHost, setControlHost] =
     React.useState<HTMLDivElement | null>(null);
@@ -118,6 +121,8 @@ function ConsoleLayoutBody({
                 )}
                 <TopBar
                   className="area-topbar"
+                  showBreadcrumb={shell?.breadcrumb !== false}
+                  hideSearch={shell?.commandSearch === false}
                   navigation={mobileViewport ? {
                     open: navigationOpen,
                     toggle: () => {
@@ -158,6 +163,7 @@ function ConsoleLayoutBody({
                 </div>
                 <ConsoleWorkbench
                   showChatter={showChatter}
+                  asideOpen={shell?.asideOpen === true}
                   onPrimaryController={handlePrimaryController}
                   onCompactChatterController={setCompactChatterController}
                 >
@@ -217,11 +223,13 @@ function ConsoleLayoutBody({
  */
 function ConsoleWorkbench({
   showChatter,
+  asideOpen,
   onPrimaryController,
   onCompactChatterController,
   children,
 }: {
   showChatter: boolean;
+  asideOpen: boolean;
   onPrimaryController: (controller: PaneToggleController | null) => void;
   onCompactChatterController: (controller: PaneToggleController | null) => void;
   children: React.ReactNode;
@@ -301,7 +309,7 @@ function ConsoleWorkbench({
         className="area-content"
         autoSave="console.workbench.v2"
         scrollMode="contained"
-        secondaryDefaultCollapsed
+        secondaryDefaultCollapsed={!asideOpen}
         primary={
           desktopPrimary != null ? (
             <ControlBandProvider host={undefined}>
