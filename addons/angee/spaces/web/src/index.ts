@@ -24,4 +24,5 @@ const spaces = defineBaseAddon({
   i18n: { spaces: enSpacesMessages },
 });
 
+export { useGroupRecordTabs } from "./SpacesPage";
 export default spaces;

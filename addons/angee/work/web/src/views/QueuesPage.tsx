@@ -37,16 +37,7 @@ export function QueuesPage(): React.ReactElement {
   const recordId = useRouteRecordId();
   const visibilityOptions = useEnumOptions(QUEUE_MODEL, "visibility");
   const estimateOptions = useEnumOptions(QUEUE_MODEL, "estimate_scale");
-  const recordTabs = React.useMemo<readonly RecordTabDescriptor[]>(
-    () => [
-      {
-        id: "stages",
-        label: t("queue.stages.tab"),
-        render: (context) => <QueueStagesTab {...context} />,
-      },
-    ],
-    [t],
-  );
+  const recordTabs = useQueueRecordTabs();
   const smartButtons = React.useMemo<readonly RecordSmartButtonDescriptor[]>(
     () =>
       ([
@@ -184,5 +175,20 @@ function QueueStagesTab({ recordId }: RecordPanelContext): React.ReactElement {
         </DrawerResourceList>
       </SettingsSection>
     </SettingsShell>
+  );
+}
+
+/** The queue record's tabs (stages), for a host that shows a queue on its own page. */
+export function useQueueRecordTabs(): readonly RecordTabDescriptor[] {
+  const t = useWorkT();
+  return React.useMemo<readonly RecordTabDescriptor[]>(
+    () => [
+      {
+        id: "stages",
+        label: t("queue.stages.tab"),
+        render: (context) => <QueueStagesTab {...context} />,
+      },
+    ],
+    [t],
   );
 }

@@ -374,6 +374,12 @@ function GroupThreadsTab({ recordId }: RecordPanelContext): React.ReactElement {
   );
 }
 
+/** The group record's tabs (roster, threads), for a host that shows a group on its own page. */
+export function useGroupRecordTabs(): readonly RecordTabDescriptor[] {
+  const t = useSpacesT();
+  return React.useMemo(() => groupRecordTabs(t), [t]);
+}
+
 function groupRecordTabs(t: ReturnType<typeof useSpacesT>): readonly RecordTabDescriptor[] {
   return [
     {
