@@ -403,4 +403,5 @@ export { ManageAccessDialog, type ManageAccessDialogProps, type RecordAccessEntr
 export { SubjectPicker, type SubjectPickerProps } from "./access/SubjectPicker";
 
 export { GanttView, type GanttViewProps, type GanttEvent, type GanttResource, type GanttScale } from "./gantt/GanttView";
+export { GanttLane, type GanttLaneDetails, type GanttLanePerson } from "./gantt/gantt-lane";
 export type { GanttViewSpec } from "./resource/resource-view-types";

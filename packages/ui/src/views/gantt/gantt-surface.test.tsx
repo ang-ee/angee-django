@@ -5,6 +5,7 @@ import type * as React from "react";
 import { addWeeks, startOfDay, startOfWeek } from "date-fns";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, createAngeeI18nInstance } from "../../runtime";
+import { setHumanDateLocale } from "../../widgets/date-format";
 import type { GanttProps } from "./gantt";
 import GanttSurface from "./gantt-surface";
 
@@ -15,7 +16,7 @@ vi.mock("./gantt-nav", () => ({
   GanttNav: () => null, GanttNavToday: () => null, GanttNavPrev: () => null,
   GanttNavNext: () => null, GanttTitle: () => null, GanttScaleSwitcher: () => null,
 }));
-afterEach(() => { cleanup(); drawing.props = null; });
+afterEach(() => { cleanup(); drawing.props = null; setHumanDateLocale("en"); });
 
 describe("Gantt drawing adapter", () => {
   test("disables drag, resize, slot selection, row selection and write callbacks", () => {

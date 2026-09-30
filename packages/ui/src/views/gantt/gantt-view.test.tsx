@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { Gantt } from "./gantt";
 import { GanttView } from "./gantt-view";
 import GanttSurface from "./gantt-surface";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 const resources = [{ id: "project", title: "Project" }, { id: "empty", title: "Unscheduled" }];
 const events = [
@@ -31,6 +31,7 @@ describe("Gantt row and control geometry", () => {
     expect(current.getAttribute("aria-current")).toBe("step");
   });
   test("packs overlapping bars inside matching, non-shrinking tree and timeline rows", () => {
+    vi.setSystemTime(new Date(2026, 8, 30));
     const view = render(<GanttSurface resources={resources} events={events} date={new Date(2026, 9, 1)} defaultScale="quarter" />);
     const row = view.container.querySelector<HTMLElement>('[data-gantt-resource="project"]')!;
     const treeRow = view.container.querySelector<HTMLElement>('[data-slot="gantt-row-group"][data-gantt-row-id="project"]')!;
@@ -49,7 +50,7 @@ describe("Gantt row and control geometry", () => {
     expect(view.container.querySelector<HTMLElement>('[data-gantt-resource="empty"]')?.style.height).toBe("3.5rem");
     expect(view.container.querySelector<HTMLElement>('[data-slot="gantt-tree-pane"]')?.style.width).toBe("224px");
     expect(view.container.querySelector<HTMLElement>('[data-slot="gantt-tree-cell"]')?.style.width).toBe("224px");
-    expect(screen.getByRole("button", { name: /First phase, Sep 22 - Nov 1, 2026/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /First phase, Sep 22 – Nov 1/ })).toBeTruthy();
   });
 
   test("reuses a lane after a non-overlapping bar ends", () => {

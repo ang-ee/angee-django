@@ -314,6 +314,7 @@ function GanttBar<TData = unknown>({
     }),
     style: {
       "--gantt-event-color": event.color ?? "var(--brand)",
+      "--gantt-event-on-color": event.onColor ?? "var(--color-on-brand)",
     } as CSSProperties,
     onPointerDown: (e: React.PointerEvent) => {
       e.stopPropagation()
@@ -341,7 +342,7 @@ function GanttBar<TData = unknown>({
       // placeholder behind the dashed preview - no dramatic restyle
       "data-[drag-kind=resize-start]:opacity-40 data-[drag-kind=resize-end]:opacity-40",
       "data-selected:bg-(--gantt-event-color)/30",
-      "data-current:ring-2 data-current:ring-inset data-current:ring-(--gantt-event-color) data-current:bg-(--gantt-event-color)/40",
+      "data-current:bg-(--gantt-event-color) data-current:text-(--gantt-event-on-color) data-current:hover:bg-(--gantt-event-color)",
       /* the diamond is the milestone's body, so the shell sheds its own
          tinted fill and centers the glyph on the instant */
       milestone &&

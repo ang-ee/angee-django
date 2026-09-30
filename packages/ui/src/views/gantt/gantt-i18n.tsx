@@ -7,11 +7,10 @@ import type {
 } from "./gantt-types"
 import {
   format,
-  isSameMonth,
-  isSameYear,
   subMilliseconds,
   type Locale,
 } from "date-fns"
+import { formatDate, formatDateRange } from "../../widgets/date-format"
 
 interface GanttI18nConfig {
   labels: {
@@ -146,11 +145,14 @@ const DEFAULT_FORMATS: GanttI18nConfig["formats"] = {
  * formats.eventTime without replacing formatEventTime still sees it applied).
  */
 function makeDefaultGanttFunctions(
-  cfg: Pick<GanttI18nConfig, "labels" | "formats">
+  cfg: Pick<GanttI18nConfig, "labels" | "formats">,
+  timeZone?: string,
 ): GanttI18nConfig["functions"] {
   return {
     formatTitle: (scale, { date, activeRange, locale }) => {
       const opts = { locale }
+      // Gantt supplies a TZDate for day/month/quarter/year titles, so custom
+      // date-fns patterns retain the chart's configured calendar zone.
       if (scale === "day") {
         return format(date, cfg.formats.dayTitle, opts)
       }
@@ -163,58 +165,51 @@ function makeDefaultGanttFunctions(
       if (scale === "year") {
         return format(date, "yyyy", opts)
       }
-      // week: smart range label, last day is activeRange.end - 1ms.
-      // subMilliseconds keeps the zoned date type (a plain new Date(ms)
-      // would flip the label to the machine zone near midnight)
+      // The title date is already zoned by Gantt; the week endpoints are raw
+      // instants, so the shared formatter receives Gantt's time zone.
       const rangeEnd = subMilliseconds(activeRange.end, 1)
       const start = activeRange.start
-      if (isSameMonth(start, rangeEnd)) {
-        return `${format(start, "MMMM d", opts)} - ${format(rangeEnd, "d, yyyy", opts)}`
-      }
-      if (isSameYear(start, rangeEnd)) {
-        return `${format(start, "MMM d", opts)} - ${format(rangeEnd, "MMM d, yyyy", opts)}`
-      }
-      return `${format(start, "MMM d, yyyy", opts)} - ${format(rangeEnd, "MMM d, yyyy", opts)}`
+      return formatDateRange(start, rangeEnd, { locale, timeZone })
     },
     formatEventTime: (start, end, allDay, locale) => {
       const opts = { locale }
+      const dateOptions = { locale, timeZone }
       if (end.getTime() === start.getTime()) {
         // a milestone is an instant, not a range - "9:00 AM - 9:00 AM" reads
         // like a data bug
         return allDay
-          ? format(start, "MMM d, yyyy", opts)
-          : format(start, `MMM d, ${cfg.formats.eventTime}`, opts)
+          ? formatDate(start, dateOptions)
+          : `${formatDate(start, dateOptions)}, ${format(start, cfg.formats.eventTime, opts)}`
       }
       if (allDay) {
         // a gantt bar is a DATE RANGE: show it, never a bare "All day".
-        // Ends are exclusive midnights, so the last shown day is end - 1ms;
-        // subMilliseconds keeps the caller's zoned date type intact.
+        // Ends are exclusive midnights, so the last shown day is end - 1ms.
+        // The bar passes zoned dates; the shared formatter also receives the
+        // configured zone for its current-year and calendar-day decisions.
         const last =
           end.getTime() - 1 >= start.getTime() ? subMilliseconds(end, 1) : start
-        const sameDay =
-          format(start, "yyyy-MM-dd") === format(last, "yyyy-MM-dd")
-        if (sameDay) return format(start, "MMM d, yyyy", opts)
-        if (isSameYear(start, last)) {
-          return `${format(start, "MMM d", opts)} - ${format(last, "MMM d, yyyy", opts)}`
+        if (format(start, "yyyy-MM-dd") === format(last, "yyyy-MM-dd")) {
+          return formatDate(start, dateOptions)
         }
-        return `${format(start, "MMM d, yyyy", opts)} - ${format(last, "MMM d, yyyy", opts)}`
+        return formatDateRange(start, last, dateOptions)
       }
       const fmt = cfg.formats.eventTime
-      // Multi-day timed events carry the date on both sides. Compare calendar
-      // days off the last rendered instant (end is exclusive, so a 14:00 to
-      // midnight bar still ends on the start day). Elapsed ms would miss an
-      // exactly-24h bar and a DST day that only runs 23 hours.
+      // Compare calendar days off the last instant because end is exclusive.
+      // A multi-day label is one span with both date-time endpoints, never a
+      // date span followed by a separate daily time window.
       const lastInstant =
         end.getTime() - 1 >= start.getTime() ? subMilliseconds(end, 1) : start
       if (format(start, "yyyy-MM-dd") !== format(lastInstant, "yyyy-MM-dd")) {
-        return `${format(start, `MMM d, ${fmt}`, opts)} - ${format(end, `MMM d, ${fmt}`, opts)}`
+        return formatDateRange(start, end, {
+          ...dateOptions,
+          formatEndpoint: (date, label) => `${label}, ${format(date, fmt, opts)}`,
+        })
       }
-      return `${format(start, fmt, opts)} - ${format(end, fmt, opts)}`
+      return `${formatDate(start, dateOptions)}, ${format(start, fmt, opts)} – ${format(end, fmt, opts)}`
     },
     formatDayRange: (range, locale) => {
-      const opts = { locale }
       const rangeEnd = subMilliseconds(range.end, 1)
-      return `${format(range.start, "MMM d", opts)} - ${format(rangeEnd, "MMM d", opts)}`
+      return formatDateRange(range.start, rangeEnd, { locale, timeZone })
     },
     formatEventAriaLabel: ({
       title,
@@ -264,24 +259,24 @@ interface GanttI18nOverrides {
  * `labels.continues`) override reaches the default renderers; explicit
  * `functions` overrides still win.
  */
-function mergeGanttI18n(overrides?: GanttI18nOverrides): GanttI18nConfig {
-  if (!overrides) return DEFAULT_GANTT_I18N
+function mergeGanttI18n(overrides?: GanttI18nOverrides, timeZone?: string): GanttI18nConfig {
+  if (!overrides && !timeZone) return DEFAULT_GANTT_I18N
   const labels = {
     ...DEFAULT_LABELS,
-    ...overrides.labels,
+    ...overrides?.labels,
     // nested section: replace individual scale names, never the whole set
     scales: {
       ...DEFAULT_LABELS.scales,
-      ...overrides.labels?.scales,
+      ...overrides?.labels?.scales,
     },
   }
-  const formats = { ...DEFAULT_FORMATS, ...overrides.formats }
+  const formats = { ...DEFAULT_FORMATS, ...overrides?.formats }
   return {
     labels,
     formats,
     functions: {
-      ...makeDefaultGanttFunctions({ labels, formats }),
-      ...overrides.functions,
+      ...makeDefaultGanttFunctions({ labels, formats }, timeZone),
+      ...overrides?.functions,
     },
   }
 }

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { GanttView } from "@angee/ui";
+import { GanttLane, GanttView } from "@angee/ui";
 import { toneColorVar } from "@angee/ui/lib/tones";
 import { Badge } from "@angee/ui/ui/badge";
 
@@ -11,7 +11,7 @@ const meta = {
   args: {
     defaultDate: anchor,
     defaultScale: "month",
-    nowIndicator: false,
+    nowIndicator: true,
     resources: [
       { id: "north", title: "North team" },
       { id: "south", title: "South team" },
@@ -19,13 +19,14 @@ const meta = {
     ],
     events: [
       { id: "one", title: "Review", resourceId: "north", start: new Date("2026-09-08T00:00:00Z"), end: new Date("2026-09-18T00:00:00Z"), color: toneColorVar("brand") },
-      { id: "two", title: "Delivery", resourceId: "north", start: new Date("2026-09-12T00:00:00Z"), end: new Date("2026-09-22T00:00:00Z"), color: toneColorVar("success") },
+      { id: "two", title: "Delivery", resourceId: "north", start: new Date("2026-09-12T00:00:00Z"), end: new Date("2026-09-22T00:00:00Z"), color: toneColorVar("brand"), current: true, note: "Next: handoff" },
       { id: "three", title: "Planning", resourceId: "south", start: new Date("2026-09-10T00:00:00Z"), end: new Date("2026-09-16T00:00:00Z"), color: toneColorVar("warning") },
     ],
-    renderRowContent: (row) => <div className="flex min-w-0 items-center gap-2">
-      <span className="truncate" title={row.title}>{row.title}</span>
-      {row.id === "west" ? <Badge tone="neutral">Available</Badge> : null}
-    </div>,
+    renderRowContent: (row) => row.id === "west" ? <div className="flex min-w-0 items-center gap-2">
+      <GanttLane details={{ title: row.title, href: `/teams/${row.id}` }} />
+      <Badge tone="neutral">Available</Badge>
+    </div> : <GanttLane details={{ title: row.title, href: `/teams/${row.id}`, secondary: "Current phase: delivery",
+      people: [{ id: "ada", name: "Ada Lovelace" }, { id: "grace", name: "Grace Hopper" }] }} />,
   },
   decorators: [(Story) => <div className="h-[600px] bg-sheet"><Story /></div>],
 } satisfies Meta<typeof GanttView>;

@@ -18,11 +18,26 @@ Console chatter follows the route's inherited admission policy.
 Dashboard widget titles link to the source collection, and table rows use the
 resource record route. Widget options `fullViewRoute`, `recordRoute`, and
 `recordParam` select explicit destinations when the default route is unsuitable.
-Gantt `renderRowContent` replaces the sidebar title. Use `sidebarWidth` and
-`minRowHeight` to size rich labels; overlapping bars grow both panes together.
+Collection Gantt `lane` declares selected fields and returns a linked title,
+optional secondary line, named people, and a short note after the last bar.
+The shared `GanttLane` renders those parts; empty parts disappear. Use
+`sidebarWidth` and `minRowHeight` to size rich labels; overlapping bars grow
+both panes together. The lane heading comes from its resource vocabulary.
+Plain lane-title clicks use the app router; modified clicks retain the native
+link. For a linked lane, `onRowClick` handles a plain click ahead of `rowHref`
+or the declared lane `href`; with only `onRowClick`, the title is a brand-styled
+button.
 Collection Date fields include the target calendar day and show date-only labels.
 The initial collection window fits schedules and today at week granularity;
 an explicit historical anchor and subsequent navigation use native scale periods.
+Gantt day and range labels use its configured time zone; timed multi-day bars
+read as one span from the start date and time to the end date and time.
+Shared `formatDate` uses a compact, locale-aware calendar date and adds the year
+outside the current year. `formatDateRange`, `formatRelativeTime`, and
+`formatDuration` cover ranges, activity labels, and compact or full units.
+The app runtime i18n provider sets the shared formatter language. Pure calls
+use that language unless a locale is passed, with English before a runtime is
+known. Zoned full timestamps retain seconds and now use that same language.
 
 `useRuntimeViewAs`, `ViewAsBanner` and `ViewAsPicker` consume an injected
 `RuntimeAuthState.viewAs` controller. Its identity and selectable people come from the

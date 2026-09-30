@@ -427,6 +427,15 @@ shared UI copy through an addon bundle.
   [`GanttCollectionSurface`](../../packages/ui/src/views/gantt/gantt-collection-surface.tsx).
   `GanttViewSpec.current` names the lane field holding its current bar identity;
   the collection selects it and emphasizes that bar independently of selection.
+  `GanttViewSpec.lane` selects its own fields and returns a linked title, optional
+  secondary line, named people, and a short note after the last scheduled bar.
+  Empty parts are omitted; the lane heading uses the lane resource vocabulary.
+  Human dates, ranges, relative times and durations come from the shared
+  [`date-format`](../../packages/ui/src/widgets/date-format.ts) owner. The app
+  runtime i18n provider sets the default language for pure formatters; explicit
+  locales override it. Gantt passes its configured time zone to date ranges
+  and week headers. Lane links use router navigation on plain clicks, with
+  `onRowClick` taking precedence when the host supplies it.
   Optional `markers` declares a second resource's date and lane relation. Both
   sources load every record on the current lane page through their own query
   contracts; marker filters are independent of bar filters. Due dates render as

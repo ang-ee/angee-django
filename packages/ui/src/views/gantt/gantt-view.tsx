@@ -99,6 +99,7 @@ import {
   TooltipTrigger,
 } from "../../ui/tooltip"
 import { Glyph } from "../../chrome/Glyph"
+import { formatDateRange } from "../../widgets/date-format"
 
 /** Current time, refreshed on an interval and on tab focus. */
 function useNow(intervalMs = 30_000): Date {
@@ -630,7 +631,7 @@ function GanttView({
       } else {
         groups.push({
           key: weekKey,
-          label: `${settings.i18n.labels.week(weekNumber)} ${format(weekStart, "MMM d", { locale: settings.locale })} - ${format(addDays(weekStart, 6), "d", { locale: settings.locale })}`,
+          label: `${settings.i18n.labels.week(weekNumber)} ${formatDateRange(weekStart, addDays(weekStart, 6), { locale: settings.locale, timeZone })}`,
           span: weight,
         })
       }
@@ -2893,8 +2894,8 @@ function GanttNowLine({
 }
 
 /**
- * The now-line's dot cap, pinned INSIDE the sticky header at the header/body
- * boundary: it stays put while the line scrolls beneath the header.
+ * The now-line's labelled cap, pinned inside the sticky header while its line
+ * scrolls beneath it.
  */
 function GanttNowDot({
   rangeStartMs,
@@ -2904,16 +2905,19 @@ function GanttNowDot({
   rangeEndMs: number
 }) {
   const now = useNow()
+  const settings = useGanttSettings()
   const ms = now.getTime()
   if (ms < rangeStartMs || ms >= rangeEndMs) return null
   const fraction = (ms - rangeStartMs) / (rangeEndMs - rangeStartMs)
   return (
     <span
-      aria-hidden
       data-slot="gantt-now-dot"
-      className="bg-danger absolute -bottom-0.75 z-10 size-1.5 -translate-x-1/2 rounded-full"
+      className="absolute -bottom-0.75 z-10 -translate-x-1/2"
       style={{ insetInlineStart: `${fraction * 100}%` }}
-    />
+    >
+      <span className="bg-brand absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full px-1.5 py-px text-2xs font-medium text-on-brand">{settings.i18n.labels.today}</span>
+      <span aria-hidden className="bg-brand block size-1.5 rounded-full" />
+    </span>
   )
 }
 
@@ -3915,7 +3919,7 @@ const GanttTimelineRow = memo(function GanttTimelineRow({
                   data-slot="gantt-bar-label"
                   data-placement={placement}
                   className={cn(
-                    "text-fg pointer-events-none absolute top-1/2 z-10 max-w-60 -translate-y-1/2 truncate font-medium",
+                    "text-fg pointer-events-none absolute top-1/2 z-10 flex max-w-80 -translate-y-1/2 items-center gap-2 truncate font-medium",
                     // one label at a time: the resize ghost carries it while
                     // this bar is the faded placeholder
                     "group-data-[drag-kind^=resize]/gantt-seg:opacity-0",
@@ -3929,9 +3933,17 @@ const GanttTimelineRow = memo(function GanttTimelineRow({
                       : "end-full me-2"
                   )}
                 >
-                  {segment.occurrence.event.title}
+                  <span className="truncate">{segment.occurrence.event.title}</span>
+                  {placement === "after" && !segment.continuesAfter && segment.occurrence.event.note ? (
+                    <span data-slot="gantt-bar-note" className="shrink-0 font-normal text-fg-muted">{segment.occurrence.event.note}</span>
+                  ) : null}
                 </span>
               )}
+              {placement !== "after" && !segment.continuesAfter && segment.occurrence.event.note ? (
+                <span data-slot="gantt-bar-note" className="pointer-events-none absolute start-full top-1/2 z-10 ms-2 max-w-60 -translate-y-1/2 truncate text-xs text-fg-muted">
+                  {segment.occurrence.event.note}
+                </span>
+              ) : null}
             </div>
           )
         })}
