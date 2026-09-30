@@ -15,6 +15,7 @@ from angee.graphql.data import declared_hasura_resource_fields, hasura_model_res
 from angee.graphql.data.hasura import with_filter_aliases
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.iam.schema import UserType
 
 DecisionGroup = apps.get_model("decisions", "DecisionGroup")
@@ -44,7 +45,7 @@ class DecisionType(AngeeNode):
     index: auto
     kind: auto
     kind_label: str = strawberry_django.field(only=["kind"])
-    requester: UserType | None
+    requester: UserType | None = actor_scoped_to_one("requester")
     assignees: list[UserType]
     form_schema: JSON
     basis: JSON
@@ -54,7 +55,7 @@ class DecisionType(AngeeNode):
     closed_reason: auto
     superseded_by: DecisionType | None
     resolution: JSON
-    resolved_by: UserType | None
+    resolved_by: UserType | None = actor_scoped_to_one("resolved_by")
     resolved_at: auto
     invalid_attempts: auto
     max_attempts: auto

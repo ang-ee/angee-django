@@ -647,11 +647,14 @@ def with_filter_aliases(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
 
     Keep guarded scalars inside correlated subqueries so related-object loading
     can enforce its own materialization guards on the outer queryset unchanged.
+    The outer queryset scopes the root row; the inner lookup repeats only its
+    primary key, while the expression guards every related target. Copying the
+    outer scope would repeat permission evaluation for each declared alias.
     """
     projected = {}
     for alias, path in declared_filter_aliases(queryset.model).items():
         expression = actor_scoped_relation_expression(queryset, path)
-        source = aggregate_queryset(queryset).order_by().filter(pk=models.OuterRef("pk"))
+        source = system_queryset(queryset.model).order_by().filter(pk=models.OuterRef("pk"))
         projected[alias] = models.Subquery(source.annotate(
             _angee_scalar=expression if expression is not None else models.F(path),
         ).values("_angee_scalar")[:1])
