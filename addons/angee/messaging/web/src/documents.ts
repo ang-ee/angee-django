@@ -212,6 +212,10 @@ export const RecordMessageFields = graphql(`
     message_type
     can_edit
     can_delete
+    author_label
+    is_self
+    is_reply
+    edited_at
     sender {
       id
       display_name
@@ -336,6 +340,7 @@ export const RecordFollowerFields = graphql(`
   }
 `);
 
+/** Chatter omits the optional reply-count resolver; explicit stream queries can select it. */
 export const RecordThreadDocument = graphql(`
   query MessagingRecordThread(
     $modelLabel: String!
@@ -345,6 +350,7 @@ export const RecordThreadDocument = graphql(`
     $before: ID = null
     $after: ID = null
     $around: ID = null
+    $messageTypes: [String!] = []
   ) {
     record_thread(
       input: {
@@ -355,6 +361,7 @@ export const RecordThreadDocument = graphql(`
         before: $before
         after: $after
         around: $around
+        message_types: $messageTypes
       }
     ) {
       error
@@ -365,6 +372,8 @@ export const RecordThreadDocument = graphql(`
         ...RecordThreadSummaryFields
       }
       message_result_count
+      audience_label
+      post_kinds
       messages {
         ...RecordMessageFields
       }
