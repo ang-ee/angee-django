@@ -196,10 +196,13 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
     targetType: resource.resourceType ?? "",
     targetIds: [...stableTargetIds],
   }, { enabled: open && stableTargetIds.length > 0 && Boolean(resource.grantable?.length), dataProviderName: "console", models: [resource.modelLabel] });
+  // The reader roster is a sharer's read: a reader who cannot share the record does not ask for it.
+  const maySeeReaders = !resource.grantable?.length
+    || (record != null && resource.grantable.some((relation) => holdsPermission(record, relation.permission)));
   const readers = useAuthoredQuery(RecordReadersDocument, {
     targetType: resource.resourceType ?? "",
     targetId: stableTargetIds[0] ?? "",
-  }, { enabled: stableTargetIds.length === 1,
+  }, { enabled: stableTargetIds.length === 1 && maySeeReaders,
     dataProviderName: "console", models: [resource.modelLabel] });
   const options = React.useMemo(() => ({
     idArgument: null,

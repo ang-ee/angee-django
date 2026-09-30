@@ -31,7 +31,7 @@ vi.mock("@angee/ui", async () => {
     avatarInitials: (name: string) => name.slice(0, 1),
     createNamespaceT: (_namespace: string, messages: Record<string, string>) => () =>
       (key: string, vars?: Record<string, string>) => (messages[key] ?? key).replace(
-        /{{(\w+)}}/g, (_match, name: string) => vars?.[name] ?? "",
+        /{(\w+)}/g, (_match, name: string) => vars?.[name] ?? "",
       ),
     useRouteHref: () => (route: string, values: { id: string }) => `/${route}/${values.id}`,
     useStatusTone: () => (value: string | null, override?: Record<string, string>) =>
