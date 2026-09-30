@@ -233,7 +233,7 @@ class WorkflowManager(AngeeManager):
             if issues:
                 raise DefinitionInvalid(issues)
             assert definition is not None
-            document = definition.model_dump(mode="json", by_alias=True)
+            document = definition.published_document()
             digest = canonical_json_sha256(document)
             if current.published_id and current.published.content_hash == digest:
                 version = current.published

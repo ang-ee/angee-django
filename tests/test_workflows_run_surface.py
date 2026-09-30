@@ -341,3 +341,32 @@ def test_map_body_fact_uses_node_identity_including_first_item(node_key, map_ind
     """Unsaved values prove the model fact without inventing persisted map work."""
     row = StepRun(node_key=node_key, map_index=map_index)
     assert row.is_mapped is expected
+
+
+def test_published_labels_describe_node_and_run_outcomes(schema, execution):
+    actor, _sent = execution
+    workflow = load_workflow({
+        "nodes": {"source_facts": {"step": "route", "config": {"outcome": "left"}}},
+        "results": [{"from": "source_facts", "as": "accepted"}],
+    }, name="Labeled flow", actor=actor)
+    published = workflow.published.document
+    assert published["nodes"]["source_facts"]["label"] == "Source facts"
+    assert published["nodes"]["source_facts"]["outcome_labels"]["left"] == "Left"
+    assert published["outcome_labels"]["accepted"] == "Accepted"
+
+    run = start_run(workflow, actor=actor)
+    run_until(run)
+    assert run.outcome == "accepted"
+    assert str(run).startswith("Labeled flow")
+    data = result_data(execute_schema(schema, """query($id: String!) {
+      workflowrun_by_pk(id: $id) {
+        outcome outcome_label step_runs { node_key node_label outcome outcome_label }
+      }
+    }""", {"id": run.sqid}, user=actor))["workflowrun_by_pk"]
+    assert data == {
+        "outcome": "accepted", "outcome_label": "Accepted",
+        "step_runs": [{
+            "node_key": "source_facts", "node_label": "Source facts",
+            "outcome": "left", "outcome_label": "Left",
+        }],
+    }

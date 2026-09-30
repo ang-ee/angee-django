@@ -152,7 +152,7 @@ def test_trigger_grants_are_visible_and_revocable_through_the_authoring_surface(
     query = """query($id: String!) {
       trigger_by_pk(id: $id) {
         id can_edit enabled disabled_reason
-        grants { resource_type resource_id relation target_label }
+        grants { resource_type resource_id relation target_kind target_label }
       }
     }"""
     for actor, can_edit in ((editor, True), (viewer, False)):
@@ -160,7 +160,7 @@ def test_trigger_grants_are_visible_and_revocable_through_the_authoring_surface(
         assert data["can_edit"] is can_edit
         assert data["grants"] == [{
             "resource_type": "knowledge/role", "resource_id": "vault_viewer",
-            "relation": "member", "target_label": None,
+            "relation": "member", "target_kind": "knowledge role", "target_label": None,
         }]
     revoke = """mutation($id: ID!) {
       revoke_workflow_trigger_grant(
@@ -176,6 +176,28 @@ def test_trigger_grants_are_visible_and_revocable_through_the_authoring_surface(
     assert not current["enabled"] and "workflow principal" in current["disabled_reason"]
     assert "knowledge/role:vault_viewer" not in current["disabled_reason"]
     assert current["grants"] == []
+
+
+def test_grant_target_label_requires_target_read_access(trigger_surface, monkeypatch):
+    schema, workflow, editor, viewer, _starter = trigger_surface
+    target = vault_for(editor, name="Readable grant target")
+
+    def grants(cls, trigger):
+        return (TriggerGrantTarget(to_object_ref(target), "viewer", "write"),)
+
+    monkeypatch.setattr(Vault, "record_changed_grant_targets", classmethod(grants))
+    trigger = Trigger.objects.with_actor(editor).create(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+    )
+    Trigger.objects.enable(trigger, actor=editor)
+    query = "query($id: String!) { trigger_by_pk(id: $id) { grants { target_kind target_label } } }"
+    variables = {"id": trigger.sqid}
+    assert result_data(execute_schema(schema, query, variables, user=editor))["trigger_by_pk"]["grants"] == [
+        {"target_kind": "vault", "target_label": "Readable grant target"},
+    ]
+    assert result_data(execute_schema(schema, query, variables, user=viewer))["trigger_by_pk"]["grants"] == [
+        {"target_kind": "vault", "target_label": None},
+    ]
 
 
 @pytest.mark.parametrize("source_path,model_label,label", [
@@ -194,7 +216,7 @@ def test_resolved_model_and_title_share_source_owner_without_row_queries(
     assert FixedVaultSource.choice().defaults["source_model"] == "knowledge.Vault"
     query = "{ trigger { display_name source_model condition } }"
     expected = {
-        "display_name": f"{label}: knowledge.Vault", "source_model": "knowledge.Vault",
+        "display_name": f"{label}: vault", "source_model": "knowledge.Vault",
         "condition": {"name": {"_eq": "Ready"}},
     }
     counts = []
@@ -217,7 +239,7 @@ def test_message_source_defaults_and_record_model_use_the_same_canonical_identit
     }
     trigger = Trigger(source="message_ingested")
     assert trigger.source_model == MessageIngested.choice().defaults["source_model"] == "messaging.Message"
-    assert str(trigger) == "Message ingested: messaging.Message"
+    assert str(trigger) == "Message ingested: message"
 
 
 def test_source_choices_follow_workflow_authority_without_widening_other_registries(trigger_surface):

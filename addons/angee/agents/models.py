@@ -81,6 +81,10 @@ class InferenceModelStatus(models.TextChoices):
     RETIRED = "retired", "Retired"
 
 
+class InferenceModelUnavailable(ValueError):
+    """A selected catalogue model cannot serve the requested inference role."""
+
+
 class MCPPlacement(models.TextChoices):
     """Where an MCP server runs relative to the platform."""
 
@@ -492,9 +496,11 @@ class InferenceModel(AuditMixin, AngeeDataModel):
         """Require a callable lifecycle and one of the declared model uses."""
 
         if self.status in {InferenceModelStatus.DEPRECATED, InferenceModelStatus.RETIRED}:
-            raise ValueError("Select an available inference model.")
+            raise InferenceModelUnavailable("Select an available inference model.")
         if self.model_use not in uses:
-            raise ValueError(f"Inference requires a model with one of these uses: {', '.join(sorted(uses))}.")
+            raise InferenceModelUnavailable(
+                f"Inference requires a model with one of these uses: {', '.join(sorted(uses))}."
+            )
 
     def require_usable(
         self,

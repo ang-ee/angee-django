@@ -164,15 +164,16 @@ def test_action_result_from_error_keeps_non_field_errors_at_form_level() -> None
     error = ValidationError({NON_FIELD_ERRORS: ["The document is out of balance."]})
     result = ActionResult.from_error(error, "Cannot post.")
 
+    assert result.message == "The document is out of balance."
     assert result.validation_errors == {NON_FIELD_ERRORS: ["The document is out of balance."]}
 
 
 def test_action_result_from_error_falls_back_to_message_only() -> None:
-    """A non-field ``ValidationError`` and any other exception yield a message-only result."""
+    """Non-field validation stays readable; unrelated exception details stay private."""
 
     non_field = ActionResult.from_error(ValidationError("Whole thing is wrong."), "Bad request.")
     assert non_field.ok is False
-    assert non_field.message == "Bad request."
+    assert non_field.message == "Whole thing is wrong."
     assert non_field.validation_errors is None
 
     other = ActionResult.from_error(RuntimeError("boom"), "Sync failed.")

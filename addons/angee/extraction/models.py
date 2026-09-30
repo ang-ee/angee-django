@@ -138,6 +138,16 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel):
         """Return the one protected target record."""
         return self.file if self.file_id is not None else self.message
 
+    def __str__(self) -> str:
+        """Use the target's own reader label for retained evidence."""
+        target = self.target
+        return str(target) if target is not None else str(self._meta.verbose_name)
+
+    @property
+    def inference_configured(self) -> bool:
+        """Whether this revision retains a mapping model for later inference."""
+        return self.model_id is not None
+
     @property
     def record_model_label(self) -> str:
         return record_ref_for(self.target).model_label

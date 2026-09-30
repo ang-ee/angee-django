@@ -66,6 +66,13 @@ class TriggerGrantTarget:
     grant_permission: str = field(default="", compare=False)
     grant_resource: ObjectRef | None = field(default=None, compare=False)
 
+    def target_kind(self) -> str:
+        """Use the model's reader noun, falling back to the declared resource kind."""
+        model = model_for_resource_type(self.resource.resource_type)
+        if model is not None:
+            return str(model._meta.verbose_name)
+        return self.resource.resource_type.replace("/", " ").replace("_", " ")
+
     def target_label(self) -> str:
         """Describe a grant target without exposing a raw authorization ID."""
         model = model_for_resource_type(self.resource.resource_type)
@@ -74,7 +81,7 @@ class TriggerGrantTarget:
             if target is not None:
                 return (str(target) if type(target).__str__ is not models.Model.__str__
                         else str(target._meta.verbose_name))
-        kind = self.resource.resource_type.replace("/", " ").replace("_", " ")
+        kind = self.target_kind()
         if self.resource.resource_type.endswith("/role"):
             return f"{str(self.resource.resource_id).replace('_', ' ')} ({kind})"
         return kind

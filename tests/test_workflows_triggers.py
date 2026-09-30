@@ -450,7 +450,7 @@ def test_unimportable_source_disables_and_keeps_the_row_readable(trigger_setup, 
       trigger(where: {id: {_eq: $id}}) { id source source_model display_name enabled disabled_reason }
     }""", {"id": trigger.sqid}, user=actor))["trigger"]
     assert len(data) == 1 and data[0]["source_model"] == "knowledge.Vault"
-    assert data[0]["display_name"] == "record_changed: knowledge.Vault"
+    assert data[0]["display_name"] == "record_changed: vault"
     assert data[0]["enabled"] is False
     assert data[0]["disabled_reason"] == trigger.disabled_reason
 
