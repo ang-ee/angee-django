@@ -135,7 +135,13 @@ calling IAM's shared sync and deactivation helper.
 **Workflow principal** — the workflow's linked service user. Trigger source
 grants are direct REBAC tuples for this user. Admission, source and domain checks,
 and triggered runs act as it; the user who enables a trigger only authorizes
-the source grants at enable time.
+the source grants at enable time. A human-published version may run as this
+principal only while its publisher can delegate every enabled trigger grant;
+the same check governs child runs. System-installed versions are trusted.
+
+**Trigger enable preview** — the prospective source grants and the users and
+groups with workflow monitoring access to runs the trigger will start. Only a
+user eligible to enable the trigger may see it.
 
 **Agent** — an autonomous capability represented by an `agents.Agent` and its
 linked service-account user row. The agent acts as that ordinary `auth/user`

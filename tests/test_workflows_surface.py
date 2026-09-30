@@ -52,7 +52,7 @@ EXPECTED_VERBS = {
         "to_waiting undispatched"
     ),
     "workflows.StepWatch.manager": "record_change register wait_kind",
-    "workflows.Trigger.manager": "admit disable drain enable lock_grants reconcile_grants revoke_grant",
+    "workflows.Trigger.manager": "admit disable drain enable enable_preview lock_grants reconcile_grants revoke_grant",
     "workflows.Trigger.queryset": "bulk_create update",
     "workflows.TriggerEvent.manager": "record_change",
     "workflows.TriggerEvent.queryset": "pending",

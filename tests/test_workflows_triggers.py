@@ -9,7 +9,7 @@ from django.core.exceptions import ImproperlyConfigured, PermissionDenied, Valid
 from django.db import IntegrityError, OperationalError, models, transaction
 from django.db.models.functions import Now, Upper
 from django.db.models.signals import post_save
-from rebac import RelationshipTuple, actor_context, current_actor, system_context, to_subject_ref
+from rebac import RelationshipTuple, actor_context, current_actor, system_context, to_object_ref, to_subject_ref
 from rebac.actors import is_sudo
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationship
@@ -23,6 +23,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.knowledge import schema as knowledge_schema
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
+from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until, trigger_source
 from angee.workflows.testing.models import (
     StepAttempt,
@@ -34,7 +35,7 @@ from angee.workflows.testing.models import (
 )
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.mtidemo.models import MtiParent
-from tests.workflow_steps import document
+from tests.workflow_steps import Value, document
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("workflow_step_classes")]
 
@@ -65,6 +66,16 @@ def trigger_setup(execution, trigger_resource_schema):
 def capture(record):
     """Bulk and signal writers share the same durable owner."""
     triggers.RecordChanged.dispatch(type(record), record)
+
+
+def restrict_source_grant_to_record(monkeypatch, record):
+    """Let the record owner, but not an unrelated workflow editor, delegate it."""
+    def targets(cls, trigger):
+        return (triggers.TriggerGrantTarget(
+            triggers.ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(record),
+        ),)
+
+    monkeypatch.setattr(Vault, "record_changed_grant_targets", classmethod(targets))
 
 
 def test_record_changed_system_check_requires_grant_targets(monkeypatch):
@@ -125,6 +136,11 @@ def test_workflow_principal_grants_are_listable_and_repaired_on_reenable(trigger
         "knowledge/role", "vault_viewer", "member",
     )
     assert grant.subject_id == str(workflow.user_id)
+    assert enabled.granted_targets == [{
+        "resource_type": "knowledge/role", "resource_id": "vault_viewer", "relation": "member",
+        "grant_permission": "write", "grant_resource_type": "workflows/workflow",
+        "grant_resource_id": str(workflow.pk),
+    }]
 
     delete_relationship(RelationshipTuple(
         resource=triggers.TriggerGrantTarget.from_stored(enabled.granted_targets[0]).resource,
@@ -246,6 +262,110 @@ def test_enabler_losing_record_read_does_not_change_principal_admission(trigger_
     event = system_queryset(TriggerEvent).get(record_object_id=record.pk)
     assert event.admitted_at and not event.rejection
     assert system_queryset(WorkflowRun).get().run_as_id == workflow.user_id
+
+
+def test_editor_publication_cannot_use_principal_grants(trigger_setup, monkeypatch):
+    admin, workflow, record, trigger = trigger_setup
+    editor = create_user("trigger-publisher")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    restrict_source_grant_to_record(monkeypatch, record)
+    Trigger.objects.enable(trigger, actor=admin)
+    load_workflow(document("entry", "finish"), key=workflow.key, actor=editor,
+                  subject_model="knowledge.Vault")
+    capture(record)
+
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    event = system_queryset(TriggerEvent).get(trigger=trigger)
+    assert not trigger.enabled
+    assert "Version 2" in trigger.disabled_reason
+    assert "trigger-publisher" in trigger.disabled_reason
+    assert "member" in trigger.disabled_reason
+    assert "vault_viewer" not in trigger.disabled_reason
+    assert event.rejection == trigger.disabled_reason
+    assert not system_queryset(WorkflowRun).exists()
+
+
+def test_admin_publication_keeps_principal_admission(trigger_setup):
+    admin, workflow, record, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=admin)
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    assert system_queryset(WorkflowRun).get().version.published_by_id == admin.pk
+
+
+def test_system_installed_publication_keeps_principal_admission(trigger_setup):
+    admin, workflow, record, trigger = trigger_setup
+    with system_context(reason="test.workflow system installation"):
+        installed = load_workflow(document("entry", "finish"), key=workflow.key,
+                                  subject_model="knowledge.Vault")
+    assert installed.published.published_by_id is None
+    Trigger.objects.enable(trigger, actor=admin)
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    assert system_queryset(WorkflowRun).get().version_id == installed.published_id
+
+
+def test_publisher_losing_delegation_stops_later_admission(trigger_setup):
+    admin, workflow, record, trigger = trigger_setup
+    editor = create_user("revoked-publisher")
+    workflow.with_actor(admin).grant_record_access("editor", editor)
+    load_workflow(document("entry", "finish"), key=workflow.key, actor=editor,
+                  subject_model="knowledge.Vault")
+    Trigger.objects.enable(trigger, actor=admin)
+    workflow.with_actor(admin).revoke_record_access("editor", editor)
+    capture(record)
+
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    assert not trigger.enabled and "revoked-publisher" in trigger.disabled_reason
+    assert not system_queryset(WorkflowRun).exists()
+
+
+def test_missing_stored_grant_provenance_requires_reenable(trigger_setup):
+    admin, workflow, record, trigger = trigger_setup
+    trigger = Trigger.objects.enable(trigger, actor=admin)
+    stored = [{key: value for key, value in target.items() if not key.startswith("grant_")}
+              for target in trigger.granted_targets]
+    system_queryset(Trigger).filter(pk=trigger.pk).update(granted_targets=stored)
+    capture(record)
+
+    assert Trigger.objects.drain() == 0
+    trigger.refresh_from_db()
+    assert not trigger.enabled
+    assert "grant provenance is missing" in trigger.disabled_reason
+    assert "enable the trigger again" in trigger.disabled_reason
+
+
+def test_child_start_refuses_version_published_without_principal_delegation(trigger_setup, monkeypatch, register_step):
+    admin, workflow, record, trigger = trigger_setup
+    editor = create_user("child-publisher")
+    child = load_workflow(document("entry"), key="untrusted-child", actor=admin)
+    child.with_actor(admin).grant_record_access("editor", editor)
+    load_workflow(document("entry", "finish"), key=child.key, actor=editor)
+
+    class StartChild(Step[Value, Value, None]):
+        key = "start_untrusted_child"
+
+        def run(self, ctx):
+            ctx.start_run(child)
+            return ctx.done(ctx.input)
+
+    register_step(StartChild)
+    load_workflow(document("entry", step=StartChild.key), key=workflow.key, actor=admin,
+                  subject_model="knowledge.Vault")
+    restrict_source_grant_to_record(monkeypatch, record)
+    Trigger.objects.enable(trigger, actor=admin)
+    workflow.refresh_from_db()
+    child.with_actor(admin).grant_record_access("starter", workflow.user)
+    capture(record)
+    assert Trigger.objects.drain() == 1
+    parent = system_queryset(WorkflowRun).get(trigger_event__trigger=trigger)
+    run_until(parent)
+    assert parent.status == "failed"
+    attempt = system_queryset(StepAttempt).get(step_run__run=parent)
+    assert "child-publisher" in attempt.error and "member" in attempt.error
+    assert not system_queryset(WorkflowRun).filter(parent_step__run=parent).exists()
 
 
 def test_deleted_record_is_rejected_instead_of_remaining_pending(trigger_setup):

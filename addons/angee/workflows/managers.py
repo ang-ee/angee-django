@@ -44,7 +44,7 @@ from angee.workflows.states import (
     WaitingKind,
 )
 from angee.workflows.steps import StepMode, Superseded, io_timeout_budget
-from angee.workflows.triggers import TriggerSource
+from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
@@ -438,6 +438,17 @@ class WorkflowRunManager(AngeeManager.from_queryset(WorkflowRunQuerySet)):  # ty
             version = version or workflow.published
             if version is None or version.workflow_id != workflow.pk:
                 raise ValidationError("A published version of this workflow is required.")
+            principal_workflow = system_queryset(apps.get_model("workflows", "Workflow")).filter(
+                user_id=identity["run_as_id"],
+            ).first()
+            if principal_workflow is not None and version.published_by_id is not None:
+                publisher = version.published_by
+                granted = system_queryset(apps.get_model("workflows", "Trigger")).filter(
+                    workflow=principal_workflow, enabled=True,
+                ).order_by("pk").values_list("granted_targets", flat=True)
+                for values in granted:
+                    for value in values:
+                        TriggerGrantTarget.from_stored(value).require_publisher_access(publisher, version)
             normalized = version.definition.validate_input(payload)
             references = list(version.definition.input_evidence(normalized))
             if subject is not None:

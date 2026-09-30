@@ -2,9 +2,17 @@
 
 import pytest
 import yaml
+from django.apps import apps
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import RelationshipTuple, delete_relationship, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    RelationshipTuple,
+    delete_relationship,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.base.scoping import system_queryset
 from angee.integrate.schema import ConsoleImplChoicesQuery
@@ -12,7 +20,7 @@ from angee.resources.testing.models import Resource
 from angee.workflows import schema as workflow_schema
 from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import Trigger, TriggerEvent
-from angee.workflows.triggers import TriggerSource
+from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 from angee.workflows_messaging.sources import MessageIngested
 from tests.conftest import Vault, addon_schema, create_user, execute_schema, make_addon, result_data, vault_for
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
@@ -88,6 +96,51 @@ def test_native_trigger_crud_and_actions_keep_activation_server_owned(trigger_su
       delete_trigger_by_pk(id: $id) { id }
     }""", {"id": trigger.sqid}, user=editor))
     assert not system_queryset(Trigger).filter(pk=trigger.pk).exists()
+
+
+def test_enable_preview_discloses_grants_and_run_readers_only_to_enablers(trigger_surface):
+    schema, workflow, editor, viewer, starter = trigger_surface
+    admin = workflow.created_by
+    group = apps.get_model("iam", "Group")
+    with system_context(reason="test.workflow reader group"):
+        reviewers = group.objects.create(name="Reviewers")
+    workflow.with_actor(admin).grant_record_access("viewer", reviewers)
+    trigger = Trigger.objects.with_actor(editor).create(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+    )
+    query = """query($id: String!) {
+      trigger_by_pk(id: $id) { enable_preview { grants run_readers } }
+    }"""
+    variables = {"id": trigger.sqid}
+    preview = result_data(execute_schema(schema, query, variables, user=editor))[
+        "trigger_by_pk"
+    ]["enable_preview"]
+    assert preview["grants"] == ["member on vault viewer (knowledge role)"]
+    assert f"User: {editor.username}" in preview["run_readers"]
+    assert f"User: {viewer.username}" in preview["run_readers"]
+    assert "Group: Reviewers" in preview["run_readers"]
+    assert f"User: {starter.username}" not in preview["run_readers"]
+    for actor in (viewer, starter):
+        assert result_data(execute_schema(schema, query, variables, user=actor))[
+            "trigger_by_pk"
+        ]["enable_preview"] is None
+
+
+def test_enable_preview_hides_reader_list_from_editor_without_delegation(trigger_surface, monkeypatch):
+    schema, workflow, editor, _viewer, _starter = trigger_surface
+    owner = workflow.created_by
+    target = vault_for(owner, name="Private delegation target")
+
+    def grants(cls, trigger):
+        return (TriggerGrantTarget(to_object_ref(target), "reader", "write"),)
+
+    monkeypatch.setattr(Vault, "record_changed_grant_targets", classmethod(grants))
+    trigger = Trigger.objects.with_actor(editor).create(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+    )
+    query = "query($id: String!) { trigger_by_pk(id: $id) { can_edit enable_preview { run_readers } } }"
+    result = result_data(execute_schema(schema, query, {"id": trigger.sqid}, user=editor))["trigger_by_pk"]
+    assert result == {"can_edit": True, "enable_preview": None}
 
 
 def test_trigger_grants_are_visible_and_revocable_through_the_authoring_surface(trigger_surface):

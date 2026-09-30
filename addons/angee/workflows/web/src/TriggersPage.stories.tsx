@@ -40,7 +40,7 @@ const runtime = {
 /** Native form and actions over retained trigger rows, with generated mutation documents. */
 export function TriggerStory({ embedded = false, canEdit = true, onRequest }: { embedded?: boolean; canEdit?: boolean; onRequest?: (request: TriggerRequest) => void }) {
   const schemas = useMemo(() => {
-    let current = { ...triggerFixture, can_edit: canEdit };
+    let current = { ...triggerFixture, can_edit: canEdit, enable_preview: canEdit ? triggerFixture.enable_preview : null };
     const fixture = storySchema(async (_input, init) => {
       const request = v.parse(RequestSchema, JSON.parse(String(init?.body ?? "{}")));
       onRequest?.(request);

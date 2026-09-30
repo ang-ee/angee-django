@@ -35,7 +35,7 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
       <Column field="enabled" header={t("trigger.enabled")} widget="boolean" />
       <Column field="disabled_reason" header={t("trigger.disabledReason")} />
     </List>
-    <Form returning={["enabled", "source", "source_model", "can_edit"]} readOnlyWhen={(row) => row.can_edit !== true}
+    <Form returning={["enabled", "source", "source_model", "can_edit", "enable_preview.grants", "enable_preview.run_readers"]} readOnlyWhen={(row) => row.can_edit !== true}
       deleteVisibleWhen={(row) => row.can_edit === true}>
       <Field name="display_name" title readOnly />
       <Group columns={2}>
@@ -47,7 +47,22 @@ export function TriggersList({ workflowId }: { workflowId?: string }) {
       </Group>
       <Field name="condition" label={t("trigger.condition")} widget="angee.workflows.condition" defaultValue={{}} />
       <Field name="disabled_reason" label={t("trigger.disabledReason")} readOnly widget="textarea" showWhen={(row) => Boolean(row.disabled_reason)} />
-      <Action id="enable" label={t("trigger.enable")} primary visibleWhen={(row) => row.can_edit === true && row.enabled === false} run={enable} />
+      <Action id="enable" label={t("trigger.enable")} primary
+        visibleWhen={(row) => row.can_edit === true && row.enabled === false && row.enable_preview != null}
+        confirm={(row) => {
+          const preview = row.enable_preview as { grants: string[]; run_readers: string[] };
+          return {
+            title: t("trigger.enableConfirm"),
+            body: <div>
+              <p>{t("trigger.enableGrants")}</p>
+              <ul>{preview.grants.map((grant) => <li key={grant}>{grant}</li>)}</ul>
+              <p>{t("trigger.enableReaders")}</p>
+              {preview.run_readers.length
+                ? <ul>{preview.run_readers.map((reader) => <li key={reader}>{reader}</li>)}</ul>
+                : <p>{t("trigger.noRunReaders")}</p>}
+            </div>,
+          };
+        }} run={enable} />
       <Action id="disable" label={t("trigger.disable")} visibleWhen={(row) => row.can_edit === true && row.enabled === true} run={disable} />
     </Form>
   </View>;

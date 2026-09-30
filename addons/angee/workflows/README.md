@@ -45,12 +45,25 @@ commit together. After commit, every ready row of an active run is sent to the j
 queue, including parallel branches whose earlier message encountered a busy run.
 Run admission stores its origin and exactly one protected cause in the same
 insert: a parent step, a prior run, or a trigger event. Manual runs have no cause.
+When the actor is a workflow principal, admission also checks the pinned
+version's human publisher against every delegation permission held through that
+principal's enabled triggers. The source-owned `TriggerGrantTarget` stores the
+permission and its resource beside each granted tuple. System-installed versions
+have no human publisher and remain trusted. A refusal disables a trigger with a
+readable reason; a child start fails its step with the same reason. Publishing
+remains available to workflow authors, while executing as a principal requires
+current delegation authority. Enabled triggers stored before this provenance was
+recorded must be enabled again before human-published versions can run.
 It also checks the actor's standing read access to the subject and each
 record-reference field in the entry step's frozen input schema. The run retains
 one canonical `WorkflowRunEvidence` edge per source; ordinary input fields do
 not create edges. Readers can inspect these references through the run resource,
 with identities redacted when their current record access is gone. Evidence
 edges are pruned with their run and do not protect source records from deletion.
+The trigger's `enable_preview` discloses the source grants and the people and
+groups with workflow monitoring access to an eligible enabler. Monitoring is the
+workflow permission inherited by runs; starters without monitoring access do not
+appear. The console shows this disclosure before it confirms enablement.
 Retention prunes a cited run only after its continuations and reprocesses are
 pruned; retained events protect their trigger and survive pruning of their run.
 IO bodies run after their claim commits, without a transaction. Their result is
