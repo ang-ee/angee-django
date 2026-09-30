@@ -1,9 +1,9 @@
 import * as React from "react";
-import { holdsPermission } from "@angee/metadata";
+import { holdsPermission, type Row } from "@angee/metadata";
 import {
-  ActionFormDialog, Avatar, Button, Chip, EmptyState, ErrorBanner, MessageRow,
+  ActionFormDialog, Avatar, Button, Chip, EmptyState, ErrorBanner, MessageRow, RecordActionBar,
   SectionHeading, Tag, avatarInitials, useActionForm, useRuntimeViewAs,
-  type ResourceListProps,
+  type RecordActionDescriptor, type ResourceListProps,
 } from "@angee/ui";
 
 import { RecordThreadConversation, type RecordThreadConversationProps } from "./RecordThreadConversation";
@@ -33,6 +33,10 @@ export interface StreamChildItem {
   prompt?: string;
   submitLabel?: string;
   readerLine?: string;
+  /** The item's own verbs (pass on, resolve…), run against `record`; shown on the row. */
+  actions?: readonly RecordActionDescriptor[];
+  record?: Row | null;
+  onActed?: () => void;
 }
 
 /** px-list owns this shape. The lane compiles against its merged createAction seam. */
@@ -107,10 +111,14 @@ function ChildStreamItem({ item, modelLabel, submitKey }: {
         {item.body ? <div>{item.body}</div> : null}
       </MessageRow>
     </ul>
-    <Button type="button" variant="ghost" size="sm" aria-expanded={expanded}
-      onClick={() => setExpanded((open) => !open)}>
-      {t(expanded ? "stream.hideThread" : "stream.showThread")}
-    </Button>
+    <div className="flex flex-wrap items-center gap-2">
+      <Button type="button" variant="ghost" size="sm" aria-expanded={expanded}
+        onClick={() => setExpanded((open) => !open)}>
+        {t(expanded ? "stream.hideThread" : "stream.showThread")}
+      </Button>
+      {item.actions?.length ? <RecordActionBar record={item.record ?? null} actions={item.actions}
+        reload={item.onActed} /> : null}
+    </div>
     {expanded ? <RecordThreadConversation modelLabel={modelLabel} recordId={item.id}
       submitKey={submitKey} stream={{ audience: item.audienceLabel ?? undefined,
         prompt: item.prompt, submitLabel: item.submitLabel, readerLine: item.readerLine,
