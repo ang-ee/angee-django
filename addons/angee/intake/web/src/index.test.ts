@@ -15,7 +15,6 @@ describe("intake addon manifest", () => {
       ["intake.people-rail", TASK_MODEL, "form-view.rail"],
       ["decisions.subject.intake.Need", NEED_MODEL, "form-view.sections"],
       ["intake.task-access-decisions", TASK_MODEL, "form-view.sections"],
-      ["intake.task-access-actions", TASK_MODEL, "form-view.record-actions"],
       ["intake.project-needs", PROJECT_MODEL, "form-view.sections"],
       ["intake.task-needs", TASK_MODEL, "form-view.sections"],
     ]);

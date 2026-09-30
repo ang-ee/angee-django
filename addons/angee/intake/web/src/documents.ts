@@ -30,8 +30,10 @@ export const TaskAccessNeedsDocument = graphql(`
       revision
       permissions
       claimed_name
+      claimed_email
       requester_user
       party { id display_name }
+      access_verdict
       access_decision { id is_open verdict }
     }
   }
