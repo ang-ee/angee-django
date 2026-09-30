@@ -638,7 +638,7 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
         since a per-row REBAC ``create`` cannot evaluate a not-yet-inserted row.
         """
 
-        drive = self._drive_for(drive_id=drive_id, drive_slug=drive_slug)
+        drive = self._drive_for(drive_id=drive_id, drive_slug=drive_slug, folder_id=folder_id)
         if not drive.storage.writable:
             raise exceptions.UploadConflict("drive is read-only")
         folder = self._folder_for(folder_id, drive=drive)
@@ -1087,12 +1087,20 @@ class FileManager(RebacManager.from_queryset(FileQuerySet)):  # type: ignore[mis
             raise exceptions.UploadTargetNotFound("file not found")
         return row
 
-    def _drive_for(self, *, drive_id: str, drive_slug: str) -> Any:
-        """Return the actor-readable, unarchived drive a draft targets."""
+    def _drive_for(self, *, drive_id: str, drive_slug: str, folder_id: str = "") -> Any:
+        """Return the actor-readable, unarchived drive a draft targets.
+
+        A named folder belongs to exactly one drive, so a draft that names only
+        its folder targets that folder's drive.
+        """
 
         drive_model = self.model._meta.get_field("drive").related_model
         if drive_id:
             drive = drive_model._default_manager.all().from_public_id(str(drive_id))
+        elif folder_id and not drive_slug:
+            folder_model = self.model._meta.get_field("folder").related_model
+            folder = folder_model._default_manager.all().from_public_id(str(folder_id))
+            drive = None if folder is None or folder.is_virtual else folder.drive
         else:
             slug = drive_slug or str(settings.ANGEE_STORAGE_DEFAULT_DRIVE)
             drive = drive_model._default_manager.filter(slug=slug).first()

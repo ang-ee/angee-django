@@ -199,7 +199,7 @@ class ExtractionOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     extraction_id: str
-    revision: int
+    revision: int = Field(ge=1)
 
 
 class ProcessEvidenceOutput(ExtractionOutput):

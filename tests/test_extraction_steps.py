@@ -540,10 +540,26 @@ def test_native_acquisition_retains_bounded_rasters(step_evidence, media_type):
         assert page.image(retained).image_bytes
 
 
-def test_document_extraction_installs(execution):
+@pytest.mark.parametrize("with_inference", [False, True])
+def test_document_extraction_installs(execution, with_inference):
+    """The shipped graph can feed its exact retained revision into native inference."""
     actor, _sent = execution
     path = Path(__file__).parents[1] / "addons/angee/workflows_extraction/resources/install/100_workflows.workflow.yaml"
     fields = yaml.safe_load(path.read_text())["rows"][0]["fields"]
+    if with_inference:
+        fields["draft"]["nodes"]["process_evidence"]["next"] = {
+            "processed": "infer_evidence", "source_hold": "infer_evidence",
+        }
+        fields["draft"]["nodes"]["infer_evidence"] = {
+            "step": "infer_evidence",
+            "input": {
+                "base_extraction_id": {"from": "process_evidence", "path": ["extraction_id"]},
+                "base_revision": {"from": "process_evidence", "path": ["revision"]},
+                "target_model": {"from": "input", "path": ["target_model"]},
+                "target_id": {"from": "input", "path": ["target_id"]},
+            },
+        }
+        fields["draft"]["results"] = [{"from": "infer_evidence"}]
     _definition, issues = Definition.check(fields["draft"])
     assert not issues
     workflow = load_workflow(fields["draft"], key=fields["key"], actor=actor)
