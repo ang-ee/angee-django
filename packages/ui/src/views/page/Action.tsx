@@ -165,6 +165,8 @@ interface ActionBinding {
 export interface ActionProps extends ActionBinding {
   id: string;
   label: ReactNode;
+  /** Projected permission required to offer this record verb. */
+  permission?: string;
   icon?: string;
   disabled?: boolean;
   danger?: boolean;

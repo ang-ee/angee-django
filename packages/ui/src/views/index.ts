@@ -213,13 +213,20 @@ export {
 } from "./form/registered-form";
 export {
   FormView,
+  SectionHeading,
+  RecordRailGroup,
   acknowledgeFormSubmit,
   FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_RECORD_CHROME_SLOT,
+  FORM_VIEW_RAIL_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
+  formViewRailSlot,
   formViewRecordActionsSlot,
   formViewSectionsSlot,
   type FormViewProps,
+  type SectionHeadingProps,
+  type RecordRailField,
+  type RecordRailGroupProps,
   type FormSubmit,
   type FormSubmitAcknowledgement,
   type FormSubmitContext,
@@ -232,6 +239,7 @@ export {
   type RecordToolbarContext,
   type RecordTabDescriptor,
 } from "./form/FormView";
+export { type RecordActionDescriptor } from "./form/RecordActionBar";
 export {
   RecordChrome,
   RecordChromeProvider,

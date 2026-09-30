@@ -160,8 +160,6 @@ export interface ResourceListProps<TRow extends Row = Row> {
   /** Tabs rendered for a saved record beside the form's "Overview" tab (not on
    * create) — e.g. provisioning and chat panels. See `FormView.recordTabs`. */
   recordTabs?: FormViewProps["recordTabs"];
-  /** Limit contributed sections and record verbs by contribution id. Omit for all. */
-  admitContributions?: FormViewProps["admitContributions"];
   /** Saved-record presentation forwarded to `FormView`. */
   recordPresentation?: FormViewProps["recordPresentation"];
   /** Initial saved-record tab forwarded to `FormView`. */

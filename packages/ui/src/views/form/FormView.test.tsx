@@ -216,6 +216,31 @@ describe("FormView", () => {
     await screen.findByRole("menuitem", { name: "Archive" });
   });
 
+  test("Action and record-action slots require their declared permission", async () => {
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
+    const renderActions = () => renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" title />
+      <Action id="archive" label="Archive" permission="write" run={vi.fn()} />
+    </FormView>, undefined, undefined, { slots: [{
+      ...formViewRecordActionsSlot("notes.Note"), id: "notes.reopen", permission: "write",
+      content: <button type="button">Reopen</button>,
+    }] });
+    renderActions();
+    await screen.findByRole("heading", { name: "First" });
+    expect(screen.queryByRole("button", { name: "Reopen" })).toBeNull();
+    // The verb is a menu item: open the menu when there is one and look for it there.
+    const actionsMenu = screen.queryByRole("button", { name: "Actions" });
+    if (actionsMenu) fireEvent.click(actionsMenu);
+    expect(screen.queryByRole("menuitem", { name: "Archive" })).toBeNull();
+
+    cleanup();
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read", "write"] };
+    renderActions();
+    expect(await screen.findByRole("button", { name: "Reopen" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Archive" })).toBeTruthy();
+  });
+
   test("hides the record delete action when its predicate does not match", async () => {
     const deleteAction = {
       canDelete: true,
@@ -336,12 +361,14 @@ describe("FormView", () => {
         id="note-1"
         fields={fields}
         title={() => "Draft Document"}
+        toolbar={<button type="button">Close record</button>}
         formExtras={() => <p>No readable documents attached</p>}
       />,
     );
 
     expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close record" })).toBeTruthy();
     expect(screen.getAllByText("Loading…").length).toBeGreaterThan(0);
     expect(screen.queryByText("Draft Document")).toBeNull();
     expect(screen.queryByText("No readable documents attached")).toBeNull();
@@ -399,6 +426,85 @@ describe("FormView", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Schedule" }));
     expect(await screen.findByText("Location")).toBeTruthy();
     expect(screen.queryByText("Summary")).toBeNull();
+  });
+
+  test("keeps collapsible groups closed in the stacked body of a tabbed form", async () => {
+    renderWithProviders(<Form resource="notes.Note" id="note-1" layout="tabs">
+      <Field name="title" title />
+      <Group label="Details" collapsible defaultOpen={false}><Field name="wordCount" /></Group>
+      <Group label="Schedule"><Field name="reminderAt" /></Group>
+    </Form>);
+    expect(await screen.findByRole("tab", { name: "Schedule" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Details" })).toBeNull();
+    const details = screen.getByRole("button", { name: "Details" });
+    expect(details.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(details);
+    expect(details.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("locks the saved form when projected permissions omit write", async () => {
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["read"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[{ name: "title", title: true }]} />);
+    expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+  });
+
+  test("refuses an absent record without record chrome or fallback title", () => {
+    renderWithProviders(<FormView resource="notes.Note" id="missing"
+      fields={[{ name: "title", title: true }]}
+      acknowledgedSource={{ record: null, values: null, loading: false }}
+      actions={[{ id: "open", label: "Open", run: vi.fn() }]}
+      recordTabs={[{ id: "activity", label: "Activity", render: () => "Activity panel" }]}
+      contextLine={() => "Private context"} />);
+    expect(screen.getByText("Record unavailable")).toBeTruthy();
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+    expect(screen.queryByText("Private context")).toBeNull();
+    expect(screen.queryByText("Untitled")).toBeNull();
+  });
+
+  test("lets a long saved title wrap in the hero", async () => {
+    sdkMocks.record = { ...sdkMocks.record, title: "A long record title with several words that need wrapping" };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" readOnly fields={[{ name: "title", title: true }]} />);
+    const heading = await screen.findByRole("heading", { name: String(sdkMocks.record.title) });
+    expect(heading.className).toContain("break-words");
+    expect(heading.className).not.toContain("truncate");
+  });
+
+  test("uses a wrapping editor for a writable title", async () => {
+    sdkMocks.record = { ...sdkMocks.record, permissions: ["write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[{ name: "title", title: true }]} />);
+    const editor = await screen.findByRole("textbox", { name: "Title" }) as HTMLTextAreaElement;
+    expect(editor.tagName).toBe("TEXTAREA");
+    Object.defineProperty(editor, "scrollHeight", { configurable: true, get: () => editor.value.length * 2 });
+    fireEvent.change(editor, { target: { value: "A long title that should grow as it wraps" } });
+    expect(editor.style.height).toBe(`${editor.value.length * 2}px`);
+    expect(editor.className).not.toContain("field-sizing");
+  });
+
+  test("renders slot-contributed rail fields through the form's editable widgets", async () => {
+    const priority = { name: "priority", kind: "scalar" as const, scalar: "String", readable: true,
+      aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false };
+    const resource = testDataResource("notes.Note", { fields: [priority] });
+    const record = { id: "note-1", title: "First", priority: "High", permissions: ["read", "write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      fields={[{ name: "title", title: true }]}
+      recordTabs={[{ id: "activity", label: "Activity", keepMounted: true, render: () => <p>Recent activity</p> }]}
+      acknowledgedSource={{ record, values: record }} />,
+    { types: { NoteType: { resource, fields: { priority } } } }, undefined,
+    { slots: [{ id: "properties", ...FormView.railSlot("notes.Note"),
+      content: <FormView.RailGroup id="properties" label="Properties"
+        fields={[{ field: { name: "priority" } }]} /> }] });
+    const rail = await screen.findByRole("complementary");
+    expect(within(rail).getByText("Properties")).toBeTruthy();
+    const input = within(rail).getByRole("textbox", { name: "Priority" });
+    expect((input as HTMLInputElement).value).toBe("High");
+    fireEvent.change(input, { target: { value: "Low" } });
+    expect((input as HTMLInputElement).value).toBe("Low");
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(screen.getByText("Recent activity")).toBeTruthy();
+    expect(within(screen.getByRole("complementary")).getByText("Properties")).toBeTruthy();
+    expect(document.querySelectorAll("aside")).toHaveLength(1);
   });
 
   test("derives a slug from the header title field while creating", async () => {
@@ -1987,109 +2093,16 @@ describe("FormView", () => {
     });
   });
 
-  test("admits section and verb ids before selecting fields or evaluating tabs", async () => {
-    const excludedVisibility = vi.fn(() => true);
-    renderWithProviders(
-      <FormView resource="notes.Note" id="note-1" admitContributions={["notes.kept", "notes.verb"]}>
-        <Field name="title" label="Title" title />
-      </FormView>, { types: { NoteType: {
-        ...defaultModel("NoteType", "notes.Note"),
-        fields: {
-          title: { name: "title", kind: "scalar", scalar: "String" },
-          wordCount: { name: "wordCount", kind: "scalar", scalar: "Int" },
-          reminderAt: { name: "reminderAt", kind: "scalar", scalar: "DateTime" },
-          createdAt: { name: "createdAt", kind: "scalar", scalar: "DateTime" },
-        },
-      } } }, undefined, {
-        slots: [
-          { ...formViewSectionsSlot("notes.Note"), id: "notes.kept", content: <><Group label="Kept"><Field name="wordCount" label="Words" /></Group><Action id="kept-action" label="Kept action" placement="toolbar" run={vi.fn()} /></> },
-          { ...formViewSectionsSlot("notes.Note"), id: "notes.excluded", content: <>
-            <Group label="Excluded"><Field name="reminderAt" label="Reminder" required /></Group>
-            <Tab id="excluded-tab" label="Excluded tab" requiredFields={["createdAt"]} visibleWhen={excludedVisibility}>Excluded panel</Tab>
-            <Action id="excluded-action" label="Excluded action" run={vi.fn()} />
-          </> },
-          { ...formViewRecordActionsSlot("notes.Note"), id: "notes.verb", content: <button>Kept verb</button> },
-          { ...formViewRecordActionsSlot("notes.Note"), id: "notes.excluded-verb", content: <button>Excluded verb</button> },
-        ],
-      },
-    );
+  test("uses every model contribution without a page admission prop", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+    </FormView>, undefined, undefined, { slots: [
+      { ...formViewSectionsSlot("notes.Note"), id: "notes.extra", content:
+        <Group label="Extra"><Field name="reminderAt" label="Reminder" /></Group> },
+    ] });
     await screen.findByDisplayValue("First");
-    expect(screen.getByText("Kept")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Kept action" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Excluded action" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Kept verb" })).toBeTruthy();
-    expect(screen.queryByText("Excluded")).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Excluded tab" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Excluded verb" })).toBeNull();
-    expect(sdkMocks.recordSelection).toContain("wordCount");
-    expect(sdkMocks.recordSelection).not.toContain("reminderAt");
-    expect(sdkMocks.recordSelection).not.toContain("createdAt");
-    expect(excludedVisibility).not.toHaveBeenCalled();
-  });
-
-  test("an empty admit list excludes contributed required fields from create validation and submission", async () => {
-    sdkMocks.record = null;
-    renderWithProviders(
-      <FormView resource="notes.Note" admitContributions={[]}><Field name="title" label="Title" title /></FormView>,
-      undefined, undefined, { slots: [{ ...formViewSectionsSlot("notes.Note"), id: "notes.required", content:
-        <Group label="Extra"><Field name="slotCode" required label="Required extra" /></Group>,
-      }] },
-    );
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Only the title" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
-    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { title: "Only the title" } }));
-    expect(screen.queryByLabelText("Required extra")).toBeNull();
-  });
-
-  test("validates admitted implementation verbs before the saved implementation has loaded", async () => {
-    sdkMocks.record = { ...sdkMocks.record, kind: "WHATSAPP" };
-    renderWithProviders(
-      <FormView resource="notes.Note" id="note-1" admitContributions={["backend.connect"]}><Field name="title" title /></FormView>,
-      implMetadata(), undefined, { slots: [
-        { ...formViewRecordActionsSlot("parties.Party"), id: "lifecycle.pause", content: <button>Pause</button> },
-        { ...formViewRecordActionsSlot("notes.Note", "whatsapp"), id: "backend.connect", content: <button>Connect selected backend</button> },
-      ] },
-    );
-    expect(await screen.findByRole("button", { name: "Connect selected backend" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
-  });
-
-  test("an excluded inherited tab never reads its canonical-only dependencies", async () => {
-    const metadata = mtiMetadata();
-    const parent = metadata.types.PartyType!;
-    const withParentField = { ...metadata, types: { ...metadata.types, PartyType: {
-      ...parent, fields: { ...parent.fields, extra: { name: "extra", kind: "scalar" as const, scalar: "String" } },
-    } } };
-    const visibility = vi.fn(() => true);
-    renderWithProviders(<FormView resource="notes.Note" id="note-1" admitContributions={[]}><Field name="title" title /></FormView>,
-      withParentField, undefined, { slots: [{ ...formViewSectionsSlot("parties.Party"), id: "party.extra", content:
-        <Tab id="extra" label="Extra" requiredFields={["extra"]} visibleWhen={visibility}>Extra panel</Tab>,
-      }] });
-    await screen.findByDisplayValue("First");
-    expect(sdkMocks.getOne.mock.calls.some(([params]) => params.resource === parent.resource.roots.list)).toBe(false);
-    expect(sdkMocks.recordSelection).not.toContain("extra");
-    expect(visibility).not.toHaveBeenCalled();
-  });
-
-  test("rejects unknown contribution ids before reading a record", () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      expect(() => renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} admitContributions={["notes.typo"]} />))
-        .toThrow('unknown contribution id "notes.typo"');
-      expect(sdkMocks.getOne).not.toHaveBeenCalled();
-    } finally { consoleError.mockRestore(); }
-  });
-
-  test.each([false, true])("ResourceList forwards admission declared on the Form=%s", async (onForm) => {
-    renderWithProviders(<ResourceList resource="notes.Note" placement="inline" scope="local" recordId="note-1"
-      columns={[{ field: "title" }]} admitContributions={onForm ? undefined : []}>
-      <Form admitContributions={onForm ? [] : undefined}><Field name="title" label="Title" title /></Form>
-    </ResourceList>, undefined, undefined, { slots: [{
-      ...formViewSectionsSlot("notes.Note"), id: "notes.extra", content: <Group label="Extra"><Field name="reminderAt" label="Reminder" /></Group>,
-    }] });
-    await screen.findByDisplayValue("First");
-    expect(screen.queryByText("Extra")).toBeNull();
-    expect(sdkMocks.recordSelection).not.toContain("reminderAt");
+    expect(screen.getByText("Extra")).toBeTruthy();
+    expect(sdkMocks.recordSelection).toContain("reminderAt");
   });
 
   test("places the declared status field before the hero and the lead body before secondary fields", async () => {
@@ -2596,6 +2609,24 @@ describe("FormView", () => {
     expect(await screen.findByLabelText("Reminder")).toBeTruthy();
     expect(screen.getByText("Related records")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Editor action" })).toBeNull();
+  });
+
+  test("workspace record panels keep full-height content beside one rail", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields}
+      recordPresentation="workspace" defaultRecordTab="editor"
+      recordTabs={[{ id: "editor", label: "Editor", keepMounted: true,
+        render: () => <div data-testid="workspace-canvas" className="h-full">Canvas</div> }]}
+    />, undefined, undefined, { slots: [{ id: "properties", ...FormView.railSlot("notes.Note"),
+      content: <FormView.RailGroup id="properties" label="Properties" content={<p>Summary</p>} />,
+    }] });
+
+    const panel = await screen.findByRole("tabpanel", { name: "Editor" });
+    expect(within(panel).getByTestId("workspace-canvas")).toBeTruthy();
+    expect(panel.className).toContain("flex-1");
+    expect(panel.firstElementChild?.className).toContain("h-full");
+    expect(panel.innerHTML).not.toContain("max-w-[1100px]");
+    expect(within(panel).getByRole("complementary")).toBeTruthy();
+    expect(document.querySelectorAll("aside")).toHaveLength(1);
   });
 
   test("workspace records without tabs keep the compact header and scrolling form body", async () => {

@@ -26,6 +26,24 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 
 describe("RecordActionBar", () => {
+  test("omits verbs whose declared permission the record lacks", async () => {
+    const run = vi.fn();
+    renderActionBar(<RecordActionBar record={{ ...record, permissions: ["read"] }} actions={[
+      { id: "edit", label: "Edit", permission: "write", placement: "toolbar", run },
+      { id: "approve", label: "Approve", permission: "manage", run },
+      { id: "inspect", label: "Inspect", permission: "read", run },
+    ]} />);
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(screen.queryByRole("menuitem", { name: "Approve" })).toBeNull();
+    expect(await screen.findByRole("menuitem", { name: "Inspect" })).toBeTruthy();
+  });
+
+  test("omits unavailable delete instead of disabling it", () => {
+    renderActionBar(<RecordActionBar record={record} actions={[]}
+      deleteAction={{ canDelete: false, isPending: false, onDelete: vi.fn() }} />);
+    expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
+  });
   test("contributed descriptors compose into the existing Actions menu", async () => {
     const run = vi.fn();
     renderActionBar(<RecordActionBar record={record} actions={[]} contributedActions={

@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  holdsPermission,
   rowPublicId,
   type DataResourceMetadata,
   type Row,
@@ -13,14 +14,10 @@ import {
 import { optionToken } from "../../widgets/types";
 import type { RecordChromeContext } from "../resource/record-chrome-context";
 import {
-  FORM_VIEW_RECORD_ACTIONS_SLOT,
-  FORM_VIEW_SECTIONS_SLOT,
   formViewRecordActionsSlot,
 } from "./form-view-slots";
 
 export interface UseFormViewRecordChromeProps {
-  /** Validated by the form surface against the complete section/verb inventory. */
-  admitContributions?: readonly string[];
   dataResource: DataResourceMetadata | null;
   modelLabel: string;
   canonicalResource: string;
@@ -38,7 +35,6 @@ export interface FormViewRecordChromeSurface {
 
 /** Resolve passive chrome and increasingly-specific record-action slots. */
 export function useFormViewRecordChrome({
-  admitContributions,
   dataResource,
   modelLabel,
   canonicalResource,
@@ -74,18 +70,16 @@ export function useFormViewRecordChrome({
     }
     return targets;
   }, [canonicalResource, dataResource, modelLabel, record]);
-  const recordActionEntries = useModelSlot(recordActionTargets, {
-    admit: admitContributions,
-    inventorySlots: [FORM_VIEW_SECTIONS_SLOT, FORM_VIEW_RECORD_ACTIONS_SLOT],
-    owner: `FormView "${modelLabel}"`,
-  });
+  const recordActionEntries = useModelSlot(recordActionTargets);
   const recordActions = React.useMemo(() => {
     const byId = new Map<string, SlotContribution>();
-    for (const entry of recordActionEntries) byId.set(entry.id, entry);
+    for (const entry of recordActionEntries) {
+      if (!entry.permission || holdsPermission(record, entry.permission)) byId.set(entry.id, entry);
+    }
     return [...byId.values()].sort(
       (left, right) => (left.sequence ?? 0) - (right.sequence ?? 0),
     );
-  }, [recordActionEntries]);
+  }, [record, recordActionEntries]);
 
   return { recordChromeContext, recordActions };
 }

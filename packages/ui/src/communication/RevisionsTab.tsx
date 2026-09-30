@@ -38,7 +38,7 @@ export function RevisionsTab({
       />
     );
   }
-  if (revisions.error) {
+  if (revisions.error && revisions.revisions.length === 0) {
     return (
       <ErrorBanner
         title={t("revisions.unavailable")}

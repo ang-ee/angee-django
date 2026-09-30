@@ -3,7 +3,7 @@ import { Controller, get, useFormState, useWatch, type Control } from "react-hoo
 
 // Render-only bindings for the headless FormView surface.
 
-import { Input } from "../../ui/input";
+import { Textarea } from "../../ui/textarea";
 import { Badge } from "../../ui/badge";
 import {
   FieldDescription,
@@ -11,7 +11,6 @@ import {
   FieldRoot,
 } from "../../ui/field";
 import { FormGrid } from "../../ui/form-layout";
-import { SectionEyebrow } from "../../ui/section-eyebrow";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import { Tabs } from "../../ui/tabs";
 import { Collapsible } from "../../ui/collapsible";
@@ -46,11 +45,12 @@ import {
 } from "./form-view-model";
 import type { FormViewSurface, RecordToolbarContext } from "./form-view-surface";
 import { directDottedPathMessages } from "./validation-errors";
+import { SectionHeading } from "./SectionHeading";
 
 const TITLE_TEXT_CLASS =
-  "block w-full min-w-0 truncate text-28 font-semibold leading-9 text-fg";
-const TITLE_INPUT_CLASS =
-  "h-auto min-h-9 rounded-none border-0 bg-transparent px-0 py-0 shadow-none " +
+  "block w-full min-w-0 break-words text-28 font-semibold leading-9 text-fg";
+const TITLE_EDITOR_CLASS =
+  "min-h-9 overflow-hidden rounded-none border-0 bg-transparent px-0 py-0 shadow-none " +
   "text-28 font-semibold leading-9 hover:border-transparent focus:border-transparent " +
   "focus:bg-transparent focus-visible:border-transparent placeholder:text-fg-subtle";
 const EDITABLE_FIELD_CONTROL_CLASS = cn(
@@ -70,6 +70,40 @@ const FIELD_ROOT_CLASS = "block min-w-0";
 const FIELD_LABEL_CLASS =
   "mb-1 flex min-h-4 items-center justify-between gap-2 text-xs font-medium uppercase tracking-wide text-fg-muted";
 const FIELD_CONTROL_CLASS = "min-w-0";
+
+function WrappingTitleEditor({
+  value,
+  controlRef,
+  ...props
+}: React.ComponentProps<typeof Textarea> & {
+  value: string;
+  controlRef?: (element: HTMLTextAreaElement | null) => void;
+}): React.ReactElement {
+  const editor = React.useRef<HTMLTextAreaElement>(null);
+  const resize = React.useCallback(() => {
+    const element = editor.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight}px`;
+  }, []);
+  React.useLayoutEffect(resize, [resize, value]);
+  React.useEffect(() => {
+    const element = editor.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    let width = element.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth === width) return;
+      width = element.clientWidth;
+      resize();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [resize]);
+  return <Textarea {...props} value={value} rows={1} resize="none" ref={(element) => {
+    editor.current = element;
+    controlRef?.(element);
+  }} />;
+}
 
 /** Shared centered body width for the form and its saved-record panels. */
 export const FORM_VIEW_COLUMN_CLASS =
@@ -129,6 +163,17 @@ export function FormViewRecordHeader({
         titleRelation.labelField,
       )
     : undefined;
+  const statusContainerRef = React.useRef<HTMLDivElement>(null);
+  const [statusContainerWidth, setStatusContainerWidth] = React.useState<number>();
+  React.useEffect(() => {
+    const container = statusContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setStatusContainerWidth(entry.contentRect.width);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [awaiting, compact, currentStatusField]);
   if (awaiting) {
     return (
       <header className={cn("grid", compact ? "gap-1" : "gap-4")}>
@@ -163,14 +208,14 @@ export function FormViewRecordHeader({
           }}
         />
       ) : currentStatusField ? (
-        <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-3 max-[900px]:w-full">
+        <div ref={statusContainerRef} className="flex min-w-0 w-full flex-wrap items-center gap-3">
           <Controller
             control={form.control}
             name={currentStatusField.name}
             render={({ field: controller }) => (
               <FieldDescriptorControl
                 controlRef={controller.ref}
-                field={currentStatusField}
+                field={{ ...currentStatusField, containerWidth: statusContainerWidth }}
                 value={controller.value}
                 row={displayRecord ?? undefined}
                 readOnly={fieldReadOnly(currentStatusField)}
@@ -189,14 +234,14 @@ export function FormViewRecordHeader({
         <div className="flex min-w-0 items-center gap-3">
           <div className="min-w-0 flex-1">
         {title !== undefined ? (
-          <h1 className={compact ? "truncate text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>{title}</h1>
+          <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>{title}</h1>
         ) : currentTitleField ? (
           <Controller
             control={form.control}
             name={currentTitleField.name}
             render={({ field: controller }) =>
               fieldReadOnly(currentTitleField) ? (
-                <h1 className={compact ? "truncate text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
+                <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
                   {titleText(
                     titleRelation
                       ? titleSelectedOption?.label ?? relationValueId(controller.value)
@@ -205,7 +250,7 @@ export function FormViewRecordHeader({
                   )}
                 </h1>
               ) : titleRelation ? (
-                <div className={compact ? "min-w-0 text-base font-semibold" : TITLE_TEXT_CLASS}>
+                <div className={compact ? "min-w-0 break-words text-base font-semibold" : TITLE_TEXT_CLASS}>
                   <RelationFieldWidget
                     controlRef={controller.ref}
                     value={relationValueId(controller.value) || null}
@@ -224,13 +269,14 @@ export function FormViewRecordHeader({
                   />
                 </div>
               ) : (
-                <Input
-                  ref={controller.ref}
+                <WrappingTitleEditor
+                  controlRef={controller.ref}
+                  data-form-title="true"
                   value={String(controller.value ?? "")}
                   placeholder={currentTitleField.placeholder ?? t("form.untitled")}
                   aria-label={fieldAriaLabel(currentTitleField)}
                   className={cn(
-                    compact ? "h-8 border-0 bg-transparent px-0 text-base font-semibold shadow-none" : cn(TITLE_TEXT_CLASS, TITLE_INPUT_CLASS),
+                    compact ? "min-h-8 overflow-hidden border-0 bg-transparent px-0 text-base font-semibold shadow-none" : cn(TITLE_TEXT_CLASS, TITLE_EDITOR_CLASS),
                   )}
                   onChange={(event) => {
                     startFieldInteraction(currentTitleField.name);
@@ -244,7 +290,7 @@ export function FormViewRecordHeader({
             }
           />
         ) : (
-          <h1 className={compact ? "truncate text-base font-semibold text-fg" : "truncate text-28 font-semibold leading-9 text-fg"}>
+          <h1 className={compact ? "break-words text-base font-semibold text-fg" : TITLE_TEXT_CLASS}>
             {titleText(
               recordRepresentationValue(displayRecord, modelMetadata),
               t("form.record"),
@@ -267,7 +313,7 @@ export function FormViewRecordHeader({
         {/* A declared context line is the record's one compact subtitle; the
             generic id/created/updated line is the fallback for forms without one. */}
         {!compact && !contextLine ? <RecordSubtitle loading={loading} loadingLabel={t("form.loading")} parts={subtitleParts} /> : null}
-        {contextLine ? <p className="mt-1 truncate text-xs text-fg-muted">{contextLine}</p> : null}
+        {contextLine ? <p className="mt-1 break-words text-xs text-fg-muted">{contextLine}</p> : null}
       </div>
       {extra ? <div className={compact ? "pt-1" : undefined}>{extra}</div> : null}
     </header>
@@ -372,10 +418,11 @@ export function FormViewOverview({
     if (layout !== "tabs") {
       return renderOverviewSections(list);
     }
-    const stacked = list.filter((section) => section.label == null);
+    const stacked = list.filter((section) => section.label == null || section.collapsible);
     const groupTabs = list.filter(
       (section) =>
         section.label != null
+        && !section.collapsible
         && (section.fields.length > 0 || section.render !== undefined),
     );
     const tabbedSections: FormSectionModel[] = [
@@ -401,7 +448,7 @@ export function FormViewOverview({
       {currentBodyField ? (
         <section className="grid gap-2">
           {currentBodyField.label ? (
-            <SectionEyebrow as="span">{currentBodyField.label}</SectionEyebrow>
+            <SectionHeading as="h2" label={currentBodyField.label} />
           ) : null}
           <Controller
             control={form.control}
@@ -438,15 +485,8 @@ export function FormViewOverview({
       </div>
       {layout !== "tabs" && editableLines ? (
         <section className="grid gap-3">
-          <SectionEyebrow
-            as="h3"
-            spacing="field"
-            tracking="wide"
-            weight="semibold"
-            className="border-b border-border-subtle pb-1"
-          >
-            {t("lines.section")}
-          </SectionEyebrow>
+          <SectionHeading label={t("lines.section")}
+            className="border-b border-border-subtle pb-1" />
           {editableLines}
         </section>
       ) : null}
@@ -458,10 +498,12 @@ function BoundFormField({
   surface,
   field,
   relation,
+  rail = false,
 }: {
   surface: FormViewSurface;
   field: FieldDescriptor;
   relation: RelationFieldInfo | undefined;
+  rail?: boolean;
 }): React.ReactElement {
   const value = useWatch({ control: surface.form.control, name: field.name });
   const readOnly = surface.fieldReadOnly(field);
@@ -483,6 +525,7 @@ function BoundFormField({
         <BoundFieldRow
           controlRef={controller.ref}
           field={field}
+          rail={rail}
           relation={relation}
           selectedOption={selectedOption}
           value={value}
@@ -499,6 +542,21 @@ function BoundFormField({
       )}
     />
   );
+}
+
+/** Rail fields use the same form controller and widget binding as body fields. */
+export function FormViewRail({ surface }: { surface: FormViewSurface }): React.ReactElement | null {
+  if (surface.railGroups.length === 0) return null;
+  return <aside className="min-w-0 border-t border-border-subtle pt-5 @min-[52rem]:border-l @min-[52rem]:border-t-0 @min-[52rem]:pl-5 @min-[52rem]:pt-0">
+    <div className="grid gap-7">
+      {surface.railGroups.map((group) => <section key={group.id} className="grid gap-3">
+        <SectionHeading label={group.label} summary={group.summary} hint={group.hint} audience={group.audience} />
+        {(group.fields ?? []).map(({ field }) => <BoundFormField key={field.name} surface={surface} field={field}
+          relation={surface.relationByField.get(field.name)} rail />)}
+        {group.content}
+      </section>)}
+    </div>
+  </aside>;
 }
 
 function RecordSubtitle({
@@ -576,9 +634,7 @@ function FormSection({
       <Collapsible.Root open={open} onOpenChange={setOpen} className="grid gap-3">
         <Collapsible.Trigger className="flex items-center gap-2 border-b border-border-subtle pb-1">
           <Collapsible.Icon />
-          <SectionEyebrow as="span" spacing="field" tracking="wide" weight="semibold">
-            {section.label}
-          </SectionEyebrow>
+          <SectionHeading as="span" label={section.label} count={section.badge} />
         </Collapsible.Trigger>
         <Collapsible.Panel keepMounted>{content}</Collapsible.Panel>
       </Collapsible.Root>
@@ -587,15 +643,8 @@ function FormSection({
   return (
     <section className="grid gap-3">
       {section.label ? (
-        <SectionEyebrow
-          as="h3"
-          spacing="field"
-          tracking="wide"
-          weight="semibold"
-          className="border-b border-border-subtle pb-1"
-        >
-          {section.label}
-        </SectionEyebrow>
+        <SectionHeading label={section.label} count={section.badge}
+          className="border-b border-border-subtle pb-1" />
       ) : null}
       {content}
     </section>
@@ -659,6 +708,7 @@ function FormSectionTabs({
       </Tabs.List>
       {sections.map((section) => (
         <Tabs.Panel key={section.key} value={section.key}>
+          <SectionHeading label={section.label} count={section.badge} className="mb-3" />
           <FormSection
             section={{ ...section, label: undefined }}
             renderField={renderField}
@@ -686,6 +736,7 @@ function ConditionalSections({
 
 function BoundFieldRow({
   field,
+  rail = false,
   relation,
   selectedOption,
   value,
@@ -697,6 +748,7 @@ function BoundFieldRow({
   controlRef,
 }: {
   field: FieldDescriptor;
+  rail?: boolean;
   relation?: RelationFieldInfo;
   selectedOption?: RelationOption;
   value: unknown;
@@ -716,9 +768,9 @@ function BoundFieldRow({
   return (
     <FieldRoot
       invalid={displayedMessages.length > 0}
-      className={cn(FIELD_ROOT_CLASS, gridFieldClass(field))}
+      className={cn(FIELD_ROOT_CLASS, gridFieldClass(field), rail && "grid grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)] items-start gap-x-2")}
     >
-      <FieldLabel className={FIELD_LABEL_CLASS}>
+      <FieldLabel className={cn(FIELD_LABEL_CLASS, rail && "mb-0 min-h-8 normal-case tracking-normal")}>
         {field.label ?? field.name}
       </FieldLabel>
       <div

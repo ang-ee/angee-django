@@ -9,6 +9,7 @@ import { ControlBand, ControlBandProvider } from "../../layouts/ControlBand";
 import { cn } from "../../lib/cn";
 import { SlotOutlet } from "../../lib/slot-outlet";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
+import { EmptyState } from "../../fragments/EmptyState";
 import { Skeleton, SkeletonStatus } from "../../ui/skeleton";
 import {
   RecordChrome,
@@ -23,6 +24,7 @@ import {
   FORM_VIEW_OVERVIEW_TAB_ID,
   useFormViewSurface,
   type RecordPanelContext,
+  type RecordTabDescriptor,
   type OverviewTabOptions,
   type RecordPresentation,
   type RecordToolbarContext,
@@ -31,6 +33,7 @@ import {
 import {
   FORM_VIEW_COLUMN_CLASS,
   FormViewOverview,
+  FormViewRail,
   FormViewRecordHeader,
 } from "./form-view-body";
 import type { EditableLineSupplementalColumn, EditableLinesProps } from "./EditableLines";
@@ -38,6 +41,12 @@ import { recordRepresentationValue, titleText } from "./form-view-model";
 import { useRuntimeViewAs } from "../../runtime";
 import { useAppRuntime } from "../../runtime";
 import { resolveTabLabel } from "../page";
+import { SectionHeading } from "./SectionHeading";
+import { RecordRailGroup } from "./form-view-rail";
+import { formViewRailSlot } from "./form-view-slots";
+
+export { SectionHeading, type SectionHeadingProps } from "./SectionHeading";
+export { RecordRailGroup, type RecordRailField, type RecordRailGroupProps } from "./form-view-rail";
 
 export {
   acknowledgeFormSubmit,
@@ -46,7 +55,9 @@ export {
 export {
   FORM_VIEW_RECORD_ACTIONS_SLOT,
   FORM_VIEW_RECORD_CHROME_SLOT,
+  FORM_VIEW_RAIL_SLOT,
   FORM_VIEW_SECTIONS_SLOT,
+  formViewRailSlot,
   formViewRecordActionsSlot,
   formViewSectionsSlot,
 } from "./form-view-slots";
@@ -117,7 +128,7 @@ export interface FormViewProps extends UseFormViewSurfaceProps {
  * Thin form shell. `useFormViewSurface` owns declarations through submit/diff;
  * the section owners below only bind that view model to shared UI primitives.
  */
-export function FormView(props: FormViewProps): React.ReactElement {
+function FormViewComponent(props: FormViewProps): React.ReactElement {
   const model = useModelMetadata(props.resource);
   const identity = `${model?.resource?.schemaName ?? "default"}:${model?.resource?.modelLabel ?? props.resource}:${props.id ?? "create"}`;
   return <FormViewInstance
@@ -126,13 +137,19 @@ export function FormView(props: FormViewProps): React.ReactElement {
   />;
 }
 
+/** Existing public FormView export also exposes form-owned declaration seams. */
+export const FormView = Object.assign(FormViewComponent, {
+  RailGroup: RecordRailGroup,
+  SectionHeading,
+  railSlot: formViewRailSlot,
+});
+
 function FormViewInstance(props: FormViewProps): React.ReactElement {
   const { i18n } = useAppRuntime();
   const preview = useRuntimeViewAs();
   const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const {
     resource,
-    admitContributions,
     id,
     readOnly = false,
     fields,
@@ -177,7 +194,6 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   } = props;
   const surface = useFormViewSurface({
     resource,
-    admitContributions,
     id,
     readOnly,
     fields,
@@ -248,11 +264,14 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
     ) || null,
     publishBreadcrumbLabel && !isCreate,
   );
+  const awaitingRecord = !isCreate && displayRecord == null && loading;
+  if (!isCreate && !awaitingRecord && displayRecord == null) {
+    return <EmptyState icon="lock" title={t("form.recordUnavailable")} className="min-h-64 p-8" />;
+  }
   const toolbarStartNode =
     typeof toolbarStart === "function"
       ? toolbarStart(recordToolbarContext)
       : toolbarStart;
-  const awaitingRecord = !isCreate && displayRecord == null && loading;
   const overview = awaitingRecord ? (
     <SkeletonStatus label={t("form.loading")} className="grid gap-4 py-5">
       <Skeleton shape="text" className="h-6 w-2/3" />
@@ -270,23 +289,32 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   const orderedTabs = overviewTab?.position === "last"
     ? [...recordTabList, { id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }]
     : [{ id: FORM_VIEW_OVERVIEW_TAB_ID, label: overviewLabel }, ...recordTabList];
-  const overviewBody = recordChromeContext ? (
-    <RecordChromeProvider value={recordChromeContext}>
-      {overview}
-    </RecordChromeProvider>
-  ) : overview;
   const recordExtrasPanel =
     !awaitingRecord && recordPanelContext && recordExtras ? (
       <div className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}>
         {recordExtras(recordPanelContext)}
       </div>
     ) : null;
-  const overviewWithFormExtras = (
-    <>
-      {overviewBody}
-      {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
-    </>
-  );
+  const withRail = (body: React.ReactNode, active: boolean, workspace = false) => <div className={cn("@container w-full", workspace && "h-full min-h-0")}>
+    <div className={cn("grid gap-6", workspace && "min-h-full grid-rows-[minmax(0,1fr)_auto] @min-[52rem]:h-full @min-[52rem]:grid-rows-none", active && surface.railGroups.length > 0 && "@min-[52rem]:grid-cols-[minmax(0,1fr)_14rem]")}>
+      <div className={cn("min-w-0", workspace && "min-h-0")}>{body}</div>
+      {active ? <FormViewRail surface={surface} /> : null}
+    </div>
+  </div>;
+  const overviewContent = withRail(<>
+    {overview}
+    {!awaitingRecord && formExtras ? <div className="pt-2">{formExtras(recordToolbarContext)}</div> : null}
+  </>, !tabbed || activeRecordTab === FORM_VIEW_OVERVIEW_TAB_ID);
+  const overviewWithFormExtras = recordChromeContext
+    ? <RecordChromeProvider value={recordChromeContext}>{overviewContent}</RecordChromeProvider>
+    : overviewContent;
+  const renderRecordPanel = (tab: RecordTabDescriptor) => {
+    if (!recordPanelContext) return null;
+    const content = withRail(tab.render(recordPanelContext), activeRecordTab === tab.id, recordPresentation === "workspace");
+    return recordChromeContext
+      ? <RecordChromeProvider value={recordChromeContext}>{content}</RecordChromeProvider>
+      : content;
+  };
   const formTitle = typeof title === "function" ? title(recordToolbarContext) : title;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
   const headerContextLine = awaitingRecord ? undefined : contextLine?.(recordToolbarContext);
@@ -299,13 +327,14 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   };
 
   const handleFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
+    const titleEditor = event.target instanceof HTMLTextAreaElement
+      && event.target.dataset.formTitle === "true";
     if (
-      !isCreate ||
+      (!isCreate && !titleEditor) ||
       event.key !== "Enter" ||
       event.defaultPrevented ||
       event.nativeEvent.isComposing ||
-      !(event.target instanceof HTMLInputElement) ||
-      event.target.type !== "text"
+      (!titleEditor && (!(event.target instanceof HTMLInputElement) || event.target.type !== "text"))
     ) {
       return;
     }
@@ -343,7 +372,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             </Button>
           </div>
         ) : null}
-        {!readOnly && (
+        {!awaitingRecord && !readOnly && (
           declaredActions.length > 0 ||
           visibleDeleteAction !== undefined ||
           menuRecordActions.length > 0
@@ -364,7 +393,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             blocked={actionsBlocked}
           />
         ) : null}
-        {!readOnly && recordChromeContext ? (
+        {!awaitingRecord && !readOnly && recordChromeContext ? (
           <RecordChromeProvider value={recordChromeContext}>
             <SlotOutlet entries={primaryRecordActions} />
           </RecordChromeProvider>
@@ -409,10 +438,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
                   value={tab.id}
                   icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
                 >
-                  {resolveTabLabel(tab.label, i18n)}
-                  {"badge" in tab && tab.badge != null ? (
-                    <Tabs.Count>{tab.badge}</Tabs.Count>
-                  ) : null}
+                  <SectionHeading as="span" label={resolveTabLabel(tab.label, i18n)}
+                    count={"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : undefined} />
                 </Tabs.Tab>
               ))}
             </Tabs.List>
@@ -483,8 +510,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
                   value={tab.id}
                   icon={"icon" in tab ? renderGlyph(tab.icon) : undefined}
                 >
-                  {resolveTabLabel(tab.label, i18n)}
-                  {"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : null}
+                  <SectionHeading as="span" label={resolveTabLabel(tab.label, i18n)}
+                    count={"badge" in tab && tab.badge != null ? <Tabs.Count>{tab.badge}</Tabs.Count> : undefined} />
                 </Tabs.Tab>
               ))}
             </Tabs.List>
@@ -501,10 +528,10 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
             key={tab.id}
             value={tab.id}
             keepMounted={tab.keepMounted}
-            className="min-h-0 flex-1 overflow-hidden pt-0"
+            className="min-h-0 flex-1 overflow-auto pt-0"
           >
             <ControlBandProvider host={undefined}>
-              {recordPanelContext ? (recordChromeContext ? <RecordChromeProvider value={recordChromeContext}>{tab.render(recordPanelContext)}</RecordChromeProvider> : tab.render(recordPanelContext)) : null}
+              {renderRecordPanel(tab)}
             </ControlBandProvider>
           </Tabs.Panel>
         ))}
@@ -535,15 +562,7 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
           className={cn(FORM_VIEW_COLUMN_CLASS, "pb-12")}
         >
           <ControlBandProvider host={undefined}>
-            {recordPanelContext ? (
-              recordChromeContext ? (
-                <RecordChromeProvider value={recordChromeContext}>
-                  {tab.render(recordPanelContext)}
-                </RecordChromeProvider>
-              ) : (
-                tab.render(recordPanelContext)
-              )
-            ) : null}
+            {renderRecordPanel(tab)}
           </ControlBandProvider>
         </Tabs.Panel>
       ))}

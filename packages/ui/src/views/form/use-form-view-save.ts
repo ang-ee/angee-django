@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   fieldUpdatable,
+  holdsPermission,
   refineResourceName,
   type DataResourceLinesMetadata,
   type DataResourceMetadata,
@@ -249,6 +250,7 @@ export function useFormViewSave({
   const detailKey = React.useMemo(() => keys().data(dataResource?.schemaName ?? "default")
     .resource(identifier ?? "").action("one").id(id ?? "")
     .params({ fields: mutationFields }).get(), [dataResource?.schemaName, id, identifier, keys, mutationFields]);
+  const nativeReadEnabled = acknowledgedSource === undefined && !isCreate && Boolean(id && dataResource?.roots.detail);
   const read = useOne<RowRecord, HttpError>({
     resource: refineResource,
     id: id ?? undefined,
@@ -256,7 +258,7 @@ export function useFormViewSave({
     meta: { fields: mutationFields },
     queryOptions: {
       queryKey: detailKey,
-      enabled: acknowledgedSource === undefined && !isCreate && Boolean(id && dataResource?.roots.detail),
+      enabled: nativeReadEnabled,
     },
   });
   const record = acknowledgedSource !== undefined
@@ -264,7 +266,7 @@ export function useFormViewSave({
     : read.result ?? null;
   const displayRecord = record;
   const editBasisRecordRef = React.useRef<Row | null>(displayRecord);
-  const loading = acknowledgedSource?.loading ?? read.query.isFetching;
+  const loading = acknowledgedSource?.loading ?? (nativeReadEnabled && (read.query.isPending || read.query.isFetching));
   const reload = React.useCallback(() => {
     if (acknowledgedSource !== undefined) {
       acknowledgedSource.reload?.();
@@ -413,11 +415,13 @@ export function useFormViewSave({
     () =>
       readOnly ||
       recordUnavailable ||
+      (!isCreate && (Array.isArray(record?.permissions) || Boolean(modelMetadata?.fields.permissions))
+        && !holdsPermission(record, "write")) ||
       (!isCreate && record !== null && Boolean(readOnlyWhen?.(record))) ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
       (formFields.length > 0 && formFields.every((field) => field.readOnly)),
-    [dataResource, formFields, isCreate, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
+    [dataResource, formFields, isCreate, modelMetadata, readOnly, record, readOnlyWhen, recordUnavailable, submitOwner],
   );
   const formIsDirty = form.formState.isDirty;
   const pending = create.mutation.isPending || update.mutation.isPending || customSubmit.isPending || resourceSave.fetching || form.formState.isSubmitting;

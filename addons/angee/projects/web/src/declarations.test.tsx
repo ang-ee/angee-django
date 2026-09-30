@@ -10,7 +10,7 @@ import {
 
 import {
   MILESTONE_MODEL, PROJECT_MODEL, TASK_MODEL, projectListDeclaration, projectRecordTabs,
-  projectGanttSpec, projectRecordTabsFor, projectTimelineSpec, projectTimelineTab, taskRecordTabs, taskRecordTabsFor, useProjectFormDeclaration,
+  projectGanttSpec, projectRecordTabsFor, projectTimelineSpec, projectTimelineTab, taskRecordTabs, taskRecordTabsFor, useProjectFormDeclaration, useProjectListDeclaration,
   useTaskFormDeclaration, useTaskListDeclaration,
 } from "./index";
 import { ProjectsPage } from "./views/ProjectsPage";
@@ -52,10 +52,19 @@ describe("composable standard project and task declarations", () => {
     const props = propsOf<ListProps>(projectListDeclaration);
     expect(props.resource).toBe(PROJECT_MODEL);
     expect(props.defaultGroup).toEqual({ field: "status" });
+    expect(props.defaultGroups?.gantt).toBeNull();
     expect(props.gantt).toBe(projectGanttSpec);
     expect(projectGanttSpec.linked).toEqual({ resource: MILESTONE_MODEL, lane: "project" });
     expect(parsePageColumns(props.children).map(({ field }) => field)).toEqual(["title", "current_milestone", "status", "lead", "target_date", "updated_at"]);
     expect(parsePageFacets(props.children).map(({ field }) => field)).toEqual(["lead"]);
+  });
+
+  test("project list options choose views without seeding a Gantt group", () => {
+    const declaration = useProjectListDeclaration({ availableViews: ["list", "gantt"], defaultView: "gantt" });
+    const props = propsOf<ListProps>(declaration);
+    expect(props.availableViews).toEqual(["list", "gantt"]);
+    expect(props.defaultView).toBe("gantt");
+    expect(props.defaultGroups?.gantt).toBeNull();
   });
 
   test("the project form declares its phase status field, hero, and lifecycle actions", () => {
@@ -96,23 +105,23 @@ describe("composable standard project and task declarations", () => {
 
   test("consumer selections keep dependency fields and reuse native groups and verbs", () => {
     const line = () => "Context";
-    const { result: project } = renderHook(() => useProjectFormDeclaration({ groups: ["planning"], verbs: ["complete"], verbLabels: { complete: "Finish" }, contextLine: line }));
+    const { result: project } = renderHook(() => useProjectFormDeclaration({ groups: ["planning"], verbs: ["complete"], contextLine: line }));
     const projectProps = propsOf<FormProps>(project.current);
     expect(projectProps.contextLine).toBe(line);
     expect(parsePageGroups(projectProps.children).map(({ label }) => label)).toEqual(["Planning"]);
     expect(parsePageActions(projectProps.children).map(({ id }) => id)).toEqual(["complete"]);
-    expect(parsePageActions(projectProps.children)[0]?.label).toBe("Finish");
+    expect(parsePageActions(projectProps.children)[0]).toMatchObject({ label: "Complete", permission: "write" });
     expect(parsePageFields(projectProps.children).map(({ name }) => name)).toEqual([
       "title", "revision", "status", "current_milestone", "owner", "lead", "start_date",
       "start_date_resolution", "target_date", "target_date_resolution", "body",
     ]);
 
-    const { result: task } = renderHook(() => useTaskFormDeclaration({ groups: ["assignment"], verbs: ["complete"], verbLabels: { complete: "Finish" }, contextLine: line }));
+    const { result: task } = renderHook(() => useTaskFormDeclaration({ groups: ["assignment"], verbs: ["complete"], contextLine: line }));
     const taskProps = propsOf<FormProps>(task.current);
     expect(taskProps.contextLine).toBe(line);
     expect(parsePageGroups(taskProps.children).map(({ label }) => label)).toEqual(["Assignment"]);
     expect(parsePageActions(taskProps.children).map(({ id }) => id)).toEqual(["complete"]);
-    expect(parsePageActions(taskProps.children)[0]?.label).toBe("Finish");
+    expect(parsePageActions(taskProps.children)[0]).toMatchObject({ label: "Complete", permission: "write" });
     expect(parsePageFields(taskProps.children).map(({ name }) => name)).toContain("revision");
   });
 

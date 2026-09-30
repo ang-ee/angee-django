@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   publish: vi.fn(),
   test: vi.fn(),
   refetch: vi.fn(),
+  sourceLoadings: [] as boolean[],
 }));
 
 vi.mock("@angee/refine", async (importOriginal) => {
@@ -60,7 +61,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 }));
 
 function FormProbe(props: Record<string, unknown>): React.ReactElement {
-  const source = props.acknowledgedSource as { record: Record<string, unknown> | null; values: Values | null; reload: () => void } | undefined;
+  const source = props.acknowledgedSource as { record: Record<string, unknown> | null; values: Values | null; loading: boolean; reload: () => void } | undefined;
+  state.sourceLoadings.push(Boolean(source?.loading));
   const [baseline, setBaseline] = React.useState<Values | null>(null);
   const [current, setCurrent] = React.useState<Values | null>(null);
   React.useEffect(() => {
@@ -113,7 +115,15 @@ beforeEach(() => {
   state.save.mockReset();
   state.publish.mockReset();
   state.refetch.mockReset();
+  state.sourceLoadings = [];
   state.refetch.mockImplementation(async () => ({ data: { workflow_definition: state.snapshot } }));
+});
+
+test("keeps an authored form loading until its successful query is acknowledged", async () => {
+  render(<WorkflowDefinitionForm resource="workflows.Workflow" id="workflow_1" />);
+  expect(await screen.findByLabelText("Workflow name")).toBeTruthy();
+  expect(state.sourceLoadings[0]).toBe(true);
+  expect(state.sourceLoadings.at(-1)).toBe(false);
 });
 
 test("keeps the admitted revision during a dirty background refresh and submits one atomic edit", async () => {

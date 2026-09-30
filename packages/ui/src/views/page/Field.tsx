@@ -68,6 +68,10 @@ export interface FieldDescriptor extends FieldPresentation {
   title?: boolean;
   /** Place this field above the record heading. */
   status?: boolean;
+  /** Occupy the available record status row; interpreted by status widgets. */
+  fill?: boolean;
+  /** Width measured by the record status row for responsive status widgets. */
+  containerWidth?: number;
   body?: boolean;
   kind?: PageFieldKind;
   description?: ReactNode;

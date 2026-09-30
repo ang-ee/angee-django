@@ -1032,7 +1032,9 @@ and current contracts before applying a historical example to a new deployment.
   through the same native instance loader; preflights compose this public owner.
   [`WorkflowDefinitionResource`](../../addons/angee/workflows/resources.py) is the
   facet-reconciliation example. Source omission and explicit null must remain
-  distinguishable through dataset normalization.
+  distinguishable through dataset normalization. The loader's atomic import
+  also opens django-reversion's native revision context, so a seeded
+  revisioned model has a snapshot even when no HTTP middleware ran.
 - **A resource row references any record through its record-reference prefix
   column.** For a model composing [`RecordRefMixin`](../../angee/base/refs.py),
   the loader adds a column named by `record_ref_field_prefix` whose xref
