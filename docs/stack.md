@@ -57,7 +57,7 @@ into a remote permission store.
 | croniter | Cron-expression schedule parsing | schedule triggers compute `next_fire_at` (workflows) |
 | python-dateutil | RFC-5545 recurrence-rule parsing and expansion (`rrulestr`) | `angee.scheduling` owns recurrence — `RecurrenceField` (a validated RRULE column) + `Recurrence.occurrences(window)`, bounded, timezone-aware expansion in the project `TIME_ZONE` |
 | phonenumbers | Region-aware telephone parsing, validation, matching, and E.164 formatting | `parties.Handle.normalize_value` parses phone/WhatsApp values with `region=None`, so canonical E.164 input requires a leading `+country` code; invalid, impossible, or region-unknown values use the digit-only comparison fallback, and signature evidence mines through the same owner |
-| channels + channels-redis + uvicorn | ASGI/WebSocket transport and serving; Redis-backed channel layer for production fanout | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`); in-memory channel layer remains dev/test only; change-group membership is a lease each live subscriber renews, so members orphaned by a restart expire (`angee.graphql.constants`) |
+| channels + channels-redis + uvicorn | ASGI/WebSocket transport and serving; Redis-backed channel layer for production fanout | GraphQL subscription mounting; uvicorn serves the composed ASGI app and sends the lifespan that enters the MCP mount's `http_app` lifespan (`angee.asgi`) in every worker; in-memory channel layer remains dev/test only; change-group membership is a lease each live subscriber renews, so members orphaned by a restart expire (`angee.graphql.constants`) |
 | django-zed-rebac 0.23.0 | Filtered constant relations (a row everyone reads because of its own column, with no tuple); self-recursive arrows (role inclusion, hierarchy parents) served by a maintained permission index; the stored schema loaded once per revision; REBAC engine, Zed introspection/rendering/extension, model subject identity, memberships and garbage collection, live ORM backing and indexed SQL permission scoping; prepared-instance `QuerySet.insert` composed by `create`; candidate-aware save-base create gate projects only required relations through native ORM routing, with per-relation unknowns denying dependent arms; trusted `proposed_relationships` hook for model-owned tuple facts persisted atomically after insert (field/const-backed relations remain library-owned); `manage.py rebac grant`, `revoke`, and `relationships` | Addon schema composition and [filtered row-visibility declarations](backend/guidelines.md#rebac), resource grant policy and IAM product surfaces through public REBAC APIs |
 | django-axes | Login failure throttling at Django's `authenticate()`/auth-backend signal seam | IAM composes the app, standalone backend, and middleware so password GraphQL login stays a thin `authenticate(request=...)` caller |
 | django-sqids | Opaque external IDs | `SqidMixin`, `SqidField` (NULL-safe decode on joins), GraphQL boundary scalar |
@@ -69,7 +69,8 @@ into a remote permission store.
 | pyyaml | YAML parsing substrate | Resource loader reads `.yaml`/`.yml` resource files; django-yamlconf consumes project settings YAML |
 | ruamel.yaml | Comment/format-preserving round-trip YAML editing | The `AddonInstaller`'s `settings.yaml` `INSTALLED_APPS` install/disable edit — the one writer that must preserve operator comments and layout (pyyaml round-trips lose them); not used at boot |
 | django-yamlconf | Django settings YAML overlays | `angee.compose.settings` loads `settings.yaml` beside `manage.py`; `Composer` applies addon `autoconfig.py` fragments |
-| django-environ | Typed boot environment access and URL parsers | `angee.compose.settings` reads Angee bootstrap env vars and honors the standard service URLs a deployment injects — `DATABASE_URL`→`DATABASES`, `CACHE_URL`→`CACHES`, `EMAIL_URL`→`EMAIL_*` — override-safe (an explicit project setting wins), falling back to the SQLite/Django floor when unset |
+| django-environ | Typed boot environment access and URL parsers | `angee.compose.settings` reads Angee bootstrap env vars and honors the standard service URLs a deployment injects — `DATABASE_URL`→`DATABASES`, `CACHE_URL`→`CACHES`, `EMAIL_URL`→`EMAIL_*` — override-safe (an explicit project setting wins), falling back to the SQLite/Django floor when unset. |
+| psycopg pool | Bounded PostgreSQL connections per process through Django's native `OPTIONS.pool` | `ProjectContract` maps `ANGEE_DB_POOL`, `ANGEE_DB_POOL_MIN_SIZE`, `ANGEE_DB_POOL_MAX_SIZE`, and `ANGEE_DB_POOL_TIMEOUT` into the PostgreSQL database config when enabled. The stack template enables it only for production Django workers; Celery and management jobs keep Django's short-lived connection default. |
 | django-anymail | Vendor-neutral Django email backend API across transactional ESPs, plus the deterministic test backend | `angee.messaging` renders outbound `Message` parts and envelopes into `AnymailMessage`; deployments select an ESP through `EMAIL_BACKEND` plus `ANYMAIL`/`ANYMAIL_*` environment settings, while an unconfigured stack logs and declines delivery without touching Django's implicit localhost SMTP backend |
 | pyjwt[crypto] | JWT/JOSE signature + claims verification and JWKS fetch | OIDC id_token verification (`OAuthClientOidcProtocol.verify_id_token`); kept because `authlib.jose` is deprecated. The OAuth2 token exchange itself is owned by authlib |
 | authlib | OAuth2/OIDC client protocol — authorization-code + refresh-token requests, client authentication, PKCE (RFC 7636), and token revocation (RFC 7009) | Thin per-`OAuthClient` `OAuth2Client` adapter behind the stable `OAuthClientProtocol` seam, plus the non-standard JSON-token-body shim; id_token verification stays on pyjwt |
@@ -121,6 +122,58 @@ Audit-history exclusions: `django-easy-audit` was evaluated and rejected because
 GPL code is incompatible with a framework composed into commercial consumers.
 `django-reversion-compare` was evaluated and rejected for the same GPL reason;
 `django-reversion` itself remains the locked owner for snapshots and revert.
+
+### Stack serve mode
+
+Both stack templates take `serve_mode: development | production`. The framework
+template also chooses `runtime_mode: process | docker`; the instance template
+remains Docker only. Production serving requires Docker mode; the framework
+Copier validator marks production with process mode invalid. A process render
+still uses the complete development stack if validation is bypassed. Framework development
+runs the autoreloading ASGI `runserver` and Vite HMR. Its single process
+serializes synchronous GraphQL requests, so local page-burst timings do not
+represent production concurrency.
+Instances keep their built SPA and single uvicorn worker in development.
+Production uses `manage.py serve` to run the composed `angee.asgi:application`
+under uvicorn without autoreload or the `ANGEE_DEV_SDL` regeneration gate.
+`serve_workers: 0` uses CPU count (at least two); an explicit value must be at
+least two. Uvicorn starts the ASGI lifespan in every worker. The MCP session
+manager and process memory are worker-local; Redis owns shared cache and channel
+fanout, and Celery beat stays in its one separate worker service.
+
+Production framework stacks build the frontend after codegen with
+`pnpm --dir <web_path> build`. Caddy serves `dist` with an `index.html` SPA
+fallback, proxies declared Django paths, and strips `/operator` only for the
+narrow `/operator/graphql` route. It sets the operator allowed origin to the
+stack's browser origin. The inner Caddy waits for the edge's Compose alias on
+public ingress and trusts its connected Compose network CIDRs with strict
+right-to-left client IP parsing. It forwards the verified client IP as a single
+`X-Forwarded-For` address. Django trusts the connected default network CIDR for
+uvicorn's forwarded headers. Container IP changes within either network do not
+leave stale trusted addresses; each container derives its CIDR at startup.
+Localhost has no edge hop for the frontend. The local instance template still binds its
+ingress to localhost. The public `/operator/graphql` route is unauthenticated
+at the edge and reaches the operator daemon, which holds the Docker socket;
+expose this route only with the operator's own request authorization in place.
+
+Production Django enables psycopg's pool with zero minimum connections,
+`db_pool_max_size: 2` per worker and `db_pool_timeout: 5` seconds by default.
+The pool default's concurrency rationale lives beside
+[`ProjectContract`](../angee/compose/project.py). The earlier 16-connection page-load count
+came from persistent per-thread connections before pooling, not 16 simultaneous
+connections needed by one worker. The pool waits at most five seconds for a
+free connection before raising a pool timeout error. Confirm the bound under a
+page burst with a live subscription. Size the stack so **`serve_workers ×
+db_pool_max_size + Celery connections + management-job connections ≤ PostgreSQL
+max_connections`**, with headroom for administration. The actual worker count is CPU count when the
+input is zero. Celery and one-shot management jobs have no pool and close
+connections after use; development also has no pool. Django persistent
+connections remain disabled under ASGI. A `DATABASE_URL` that supplies
+non-zero `CONN_MAX_AGE` fails when the pool is enabled; zero is accepted by
+Django's native pool. An explicit `DATABASES` project
+setting remains authoritative. The framework template's Playwright image must
+match the `@angee/e2e` version in `pnpm-lock.yaml`, enforced by the stack
+template test.
 
 ## Frontend
 
