@@ -21,6 +21,7 @@ from angee.workflows.managers import PublishResult
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Settlement, Step
 from angee.workflows.testing import drivers as test_drivers
+from angee.workflows.triggers import RecordChanged, RecordChangedOptIn, TriggerGrantTarget, TriggerSource
 
 EXPECTED_MODELS = {
     "workflows": "StepArtifact StepAttempt StepRun StepWatch Trigger TriggerEvent Workflow WorkflowRun WorkflowVersion",
@@ -204,6 +205,21 @@ def test_run_origin_and_trigger_event_surface() -> None:
     assert {constraint.name for constraint in run._meta.constraints} >= {"workflows_run_origin_cause"}
     assert {constraint.name for constraint in event._meta.constraints} >= {"workflows_event_admission_evaluated"}
     assert {index.name for index in event._meta.indexes} >= {"workflows_event_pending"}
+
+
+def test_trigger_principal_and_source_grant_surface() -> None:
+    """A workflow owns a user principal and sources declare its grant scope."""
+    workflow = apps.get_model("workflows", "Workflow")
+    trigger = apps.get_model("workflows", "Trigger")
+    assert workflow._meta.get_field("user").one_to_one
+    assert workflow._meta.get_field("user").remote_field.on_delete is PROTECT
+    assert isinstance(trigger._meta.get_field("granted_targets"), models.JSONField)
+    assert issubclass(RecordChanged, TriggerSource)
+    assert callable(TriggerSource.grant_targets)
+    assert callable(RecordChangedOptIn.record_changed_grant_targets)
+    assert tuple(TriggerGrantTarget.__dataclass_fields__) == (
+        "resource", "relation", "grant_permission", "grant_resource",
+    )
 
 
 def test_evidence_owner_surface() -> None:

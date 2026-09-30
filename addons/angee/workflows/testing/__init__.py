@@ -16,8 +16,9 @@ Pytest suites opt into ``angee.workflows.testing.fixtures`` alongside
 also supplies an acting administrator. ``workflow_permissions`` lives in core
 ``angee.testing.fixtures`` and composes installed permission contributions.
 ``observe(model)`` collects committed change publications. ``trigger_source(model)``
-temporarily opts a model into record-change admission; pass ``connect=True`` to
-exercise native save capture. Both are scoped context managers.
+temporarily enables a model's declared ``RecordChangedOptIn``; the model must
+implement ``record_changed_grant_targets``. Pass ``connect=True`` to exercise
+native save capture. Both are scoped context managers.
 ``register_step`` contributes a class to the existing registry through the
 ``register_steps`` context manager in ``testing.drivers``,
 also available to ``TransactionTestCase``. Bind ``run_factory(workflow, actor=...)``

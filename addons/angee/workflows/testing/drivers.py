@@ -53,8 +53,8 @@ def observe(model: type[Any]) -> Iterator[list[Any]]:
 
 @contextmanager
 def trigger_source(model: type[Any], *, connect: bool = False) -> Iterator[None]:
-    """Temporarily opt a model in, optionally connecting its native save hook."""
-    with patch.object(model, "workflow_trigger", True, create=True):
+    """Temporarily enable a declared model source and optional save hook."""
+    with patch.object(model, "record_changed_enabled", True):
         if connect:
             RecordChanged.validate_model(model)
             post_save.connect(RecordChanged.changed, sender=model, weak=False)

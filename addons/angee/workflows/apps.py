@@ -3,8 +3,10 @@
 from typing import Any
 
 from django.apps import AppConfig, apps
+from django.db.models.signals import post_delete, pre_delete
 
 from angee.decisions.signals import decision_group_settled
+from angee.iam.service_users import deactivate_service_user
 
 
 def wake_review(sender: Any, *, group: Any, **kwargs: Any) -> None:
@@ -12,6 +14,19 @@ def wake_review(sender: Any, *, group: Any, **kwargs: Any) -> None:
     from angee.workflows.runner import runner
 
     runner.wake_decisions(group.pk)
+
+
+def deactivate_workflow_principal(sender: Any, *, instance: Any, **kwargs: Any) -> None:
+    """Deactivate the linked user after any workflow deletion path."""
+
+    deactivate_service_user(instance)
+
+
+def revoke_deleted_trigger_grants(sender: Any, *, instance: Any, **kwargs: Any) -> None:
+    """Release a trigger's tuples on instance and queryset deletion alike."""
+
+    sender.objects._lock_workflow(instance.workflow_id)
+    sender.objects._set_grants(instance, ())
 
 
 class WorkflowsConfig(AppConfig):
@@ -23,6 +38,14 @@ class WorkflowsConfig(AppConfig):
     def ready(self) -> None:
         """Subscribe the waiter owner to the decisions lifecycle."""
         decision_group_settled.connect(wake_review, dispatch_uid="workflows.review_settled")
+        post_delete.connect(
+            deactivate_workflow_principal, sender=apps.get_model("workflows", "Workflow"),
+            dispatch_uid="workflows.service_user.deactivate",
+        )
+        pre_delete.connect(
+            revoke_deleted_trigger_grants, sender=apps.get_model("workflows", "Trigger"),
+            dispatch_uid="workflows.trigger_grants.revoke",
+        )
         field = apps.get_model("workflows", "Trigger")._meta.get_field("source")
         for key in field.registered_keys():
             field.resolve_class(key).connect()

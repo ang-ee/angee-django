@@ -7,6 +7,7 @@ from typing import Any
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from rebac import ObjectRef
 
 from angee.base.fields import StateField
 from angee.base.mixins import (
@@ -17,9 +18,10 @@ from angee.base.mixins import (
 )
 from angee.base.models import AngeeModel
 from angee.messaging.models import ThreadedModelMixin
+from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class Note(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, RevisionMixin):
+class Note(RecordChangedOptIn, SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, RevisionMixin):
     """A short note used to exercise backend composition.
 
     Metadata changes are audited through ``history``; the ``body`` field is
@@ -27,7 +29,14 @@ class Note(SqidMixin, AuditMixin, ThreadedModelMixin, AngeeModel, HistoryMixin, 
     """
 
     runtime = True
-    workflow_trigger = True
+
+    @classmethod
+    def record_changed_grant_targets(cls, trigger: Any) -> tuple[TriggerGrantTarget, ...]:
+        """Let this workflow principal read notes through the example's role."""
+        return (TriggerGrantTarget(
+            ObjectRef("notes/role", "trigger_reader"), "member", "effective_member",
+            ObjectRef("angee/role", "admin"),
+        ),)
 
     revisioned_fields = ("body",)
     rebac_grantable = {"reader": "share", "editor": "share"}

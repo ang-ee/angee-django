@@ -21,7 +21,6 @@ from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
 from django.db.models.signals import class_prepared, post_delete
@@ -51,6 +50,7 @@ from angee.base.impl import ImplClassField, ImplDefaultsMixin
 from angee.base.mixins import AuditMixin, SqidMixin
 from angee.base.models import AngeeManager, AngeeModel, role_anchor
 from angee.base.transitions import StateTransitions, save_state, transition
+from angee.iam.service_users import deactivate_service_user, sync_service_user
 from angee.integrate.models import IntegrationCreateMode
 
 
@@ -808,59 +808,6 @@ class MCPTool(SqidMixin, AuditMixin, AngeeModel):
         return self.name
 
 
-class AgentManager(AngeeManager):
-    """Manager owning service-user lifecycle for agent principals."""
-
-    def service_username(self, agent: Any) -> str:
-        """Return the deterministic username for ``agent``'s service user."""
-
-        return f"agent-{agent.sqid}"
-
-    def sync_service_user(self, agent: Any) -> Any:
-        """Create or update ``agent``'s non-login service user.
-
-        The service row is system-owned attribution state, not actor-authored
-        profile data, so it is written elevated and keyed only by the agent's
-        stable sqid-derived username.
-        """
-
-        if agent.pk is None:
-            raise ValueError("Agent must be saved before syncing its service user.")
-        user_model = get_user_model()
-        username = self.service_username(agent)
-        defaults = {
-            "first_name": agent.name,
-            "last_name": "",
-            "email": "",
-            "kind": "service",
-        }
-        with system_context(reason="agents.service_user.sync"), transaction.atomic():
-            if agent.user_id:
-                user: Any = agent.user
-                changed: set[str] = set()
-                for field, value in {"username": username, **defaults}.items():
-                    if getattr(user, field) != value:
-                        setattr(user, field, value)
-                        changed.add(field)
-                if changed:
-                    user.save(update_fields=changed)
-                return user
-            user, _created = user_model._base_manager.update_or_create(username=username, defaults=defaults)
-            agent.user = user
-            type(agent)._base_manager.filter(pk=agent.pk).update(user_id=user.pk)
-            return user
-
-    def deactivate_service_user(self, agent: Any) -> None:
-        """Deactivate ``agent``'s linked service user, leaving attribution FKs intact."""
-
-        if not agent.user_id:
-            return
-        user_model = get_user_model()
-        manager = user_model._base_manager
-        with system_context(reason="agents.service_user.deactivate"):
-            manager.filter(pk=agent.user_id).update(is_active=False)
-
-
 class Agent(SqidMixin, AuditMixin, AngeeModel):
     """An agent definition (or, when ``is_template``, an agent template).
 
@@ -966,7 +913,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         },
     )
 
-    objects = AgentManager()
+    objects = AngeeManager()
 
     class Meta:
         """Django model options for agents."""
@@ -996,7 +943,7 @@ class Agent(SqidMixin, AuditMixin, AngeeModel):
         with transaction.atomic():
             super().save(*args, **kwargs)
             if creating or (should_check_name and persisted_name != self.name):
-                type(self).objects.sync_service_user(self)
+                sync_service_user(self, prefix="agent")
 
     def principal_subject(self) -> SubjectRef:
         """Return the service user's REBAC subject for actions this agent performs.
@@ -1670,7 +1617,7 @@ def _deactivate_agent_service_user(
     """Deactivate an agent service user after every delete path Django supports."""
 
     del sender, kwargs
-    type(instance).objects.deactivate_service_user(instance)
+    deactivate_service_user(instance)
 
 
 def _connect_agent_lifecycle(sender: type[models.Model], **kwargs: Any) -> None:

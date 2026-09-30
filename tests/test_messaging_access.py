@@ -33,6 +33,7 @@ def test_channel_owner_reaches_threads_and_messages(messaging_access_schema: str
     service = user_model.objects.create_user(username="message-channel-service", kind="service")
     author = user_model.objects.create_user(username="message-channel-author", kind="person")
     outsider = user_model.objects.create_user(username="message-channel-outsider", kind="person")
+    reader = user_model.objects.create_user(username="message-channel-reader", kind="service")
     with system_context(reason="tests.messaging.channel_access"):
         vendor = Vendor.objects.create(slug="message-channel-access", display_name="Message channel access")
         person_channel = Channel.objects.create(vendor=vendor, owner=person, backend_class="manual")
@@ -82,3 +83,12 @@ def test_channel_owner_reaches_threads_and_messages(messaging_access_schema: str
     assert not person_thread.with_actor(outsider).has_access("read")
     assert not thread_message.with_actor(outsider).has_access("read")
     assert not channel_message.with_actor(outsider).has_access("read")
+
+    person_channel.with_actor(person).grant_record_access("reader", reader)
+    assert person_channel.with_actor(reader).has_access("read")
+    assert not person_channel.integration_ptr.with_actor(reader).has_access("read")
+    assert thread_message.with_actor(reader).has_access("read")
+    assert channel_message.with_actor(reader).has_access("read")
+    person_channel.with_actor(person).revoke_record_access("reader", reader)
+    assert not thread_message.with_actor(reader).has_access("read")
+    assert not channel_message.with_actor(reader).has_access("read")

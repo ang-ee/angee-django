@@ -186,10 +186,10 @@ class WorkflowManager(AngeeManager):
                 workflow = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
                 if workflow.subject_model != subject_model and workflow.versions.exists():
                     raise ValidationError("The subject model cannot change after a workflow version exists.")
-                self.filter(pk=workflow.pk).update(
-                    name=name, description=description, subject_model=subject_model, updated_at=Now(),
-                )
-                workflow.refresh_from_db()
+                workflow.name = name
+                workflow.description = description
+                workflow.subject_model = subject_model
+                workflow.save(update_fields={"name", "description", "subject_model", "updated_at"})
                 return workflow
 
     def save_draft(

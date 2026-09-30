@@ -12,7 +12,8 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.functions import Coalesce, Now
 from django.utils.functional import cached_property
-from rebac import system_context
+from rebac import system_context, to_subject_ref
+from rebac.models import active_relationship_model
 
 from angee.base.fields import DiagnosticTextField, ModelLabelField, StateField
 from angee.base.impl import ImplClassField
@@ -21,6 +22,7 @@ from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet
 from angee.base.refs import RecordRefMixin
 from angee.base.scoping import read_scoped_queryset, system_queryset
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.service_users import sync_service_user
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition
 from angee.workflows.managers import (
@@ -52,6 +54,10 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     rebac_grantable = {"editor": "write", "viewer": "write", "starter": "write", "operator": "write"}
     sqid_prefix = "wfl_"
 
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        editable=False, related_name="workflow_principal",
+    )
     key = models.SlugField(max_length=100, unique=True)
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True, default="")
@@ -81,6 +87,20 @@ class Workflow(ResourceLoadMixin, AuditMixin, AngeeDataModel):
             subject is None or subject._meta.label != self.subject_model
         ):
             raise ValidationError("The workflow subject has the wrong model.")
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Keep the service principal's name synchronized with its workflow."""
+
+        creating = self._state.adding
+        update_fields = kwargs.get("update_fields")
+        name_written = update_fields is None or "name" in update_fields
+        previous_name = None
+        if not creating and name_written:
+            previous_name = type(self)._base_manager.filter(pk=self.pk).values_list("name", flat=True).first()
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            if creating or (name_written and previous_name != self.name):
+                sync_service_user(self, prefix="workflow")
 
     def __str__(self) -> str:
         """Return the authored workflow name."""
@@ -558,6 +578,8 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     model_label: str = ModelLabelField(max_length=200, blank=True, default="")
     condition = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=False, editable=False)
+    granted_targets = models.JSONField(default=list, editable=False)
+    """Targets this trigger contributes to the workflow principal's direct tuples."""
     run_as = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, editable=False,
     )
@@ -585,6 +607,23 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
             return self.source_class.model(self)._meta.label
         except ImproperlyConfigured:
             return self.model_label
+
+    def granted_relationships(self, *, actor: Any) -> tuple[Any, ...]:
+        """List the currently stored direct tuples contributed by this trigger."""
+
+        self.workflow.require_access("write", actor)
+        if not self.workflow.user_id or not self.granted_targets:
+            return ()
+        subject = to_subject_ref(self.workflow.user)
+        keys = {
+            (value["resource_type"], value["resource_id"], value["relation"])
+            for value in self.granted_targets
+        }
+        rows = active_relationship_model().objects.filter(
+            subject_type=subject.subject_type, subject_id=subject.subject_id,
+            optional_subject_relation=subject.optional_relation,
+        )
+        return tuple(row for row in rows if (row.resource_type, str(row.resource_id), row.relation) in keys)
 
     def validate_configuration(self) -> tuple[Any, Any]:
         """Use the model's final resource input and native filter compiler."""
@@ -639,6 +678,7 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
         self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
         self.validate_configuration()
         previous = system_queryset(type(self)).filter(pk=self.pk).first() if self.pk else None
+        self.granted_targets = previous.granted_targets if previous is not None else []
         if previous is not None and self.workflow_id != previous.workflow_id:
             raise ValidationError("A trigger's workflow cannot be changed.")
         if self.enabled and (previous is None or not previous.enabled or self.run_as_id != previous.run_as_id):
@@ -656,13 +696,18 @@ class Trigger(ResourceLoadMixin, AngeeDataModel):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate native saves as well as resource writes."""
         with transaction.atomic():
+            if self.pk:
+                type(self).objects._lock_workflow(self.workflow_id)
+            previous = None
             if not self._state.adding:
-                system_queryset(type(self)).filter(pk=self.pk).lock_if_supported(no_key=True).get()
+                previous = system_queryset(type(self)).filter(pk=self.pk).lock_if_supported(no_key=True).get()
             self.clean()
             self.workflow.require_access("write", self.actor())
             if not self.enabled and kwargs.get("update_fields") is not None:
                 kwargs["update_fields"] = {*kwargs["update_fields"], "enabled", "run_as", "disabled_reason"}
             super().save(*args, **kwargs)
+            if previous is not None and previous.granted_targets and not self.enabled:
+                type(self).objects._set_grants(self, ())
 
     def __str__(self) -> str:
         """Identify configuration without loading permission-sensitive relations."""

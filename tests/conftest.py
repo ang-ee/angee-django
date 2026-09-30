@@ -18,7 +18,7 @@ from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
-from rebac import actor_context, system_context
+from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
 from angee.addons import addon_manifest
@@ -61,6 +61,7 @@ from angee.storage.models import MimeType as AbstractMimeType
 from angee.storage.models import StorageRole as AbstractStorageRole
 from angee.storage_integrate.models import Mount as AbstractMount
 from angee.storage_integrate.models import MountMode
+from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 from tests import (  # noqa: F401 -- register shared FK targets before native database setup
     agents_models,
     decisions_models,
@@ -138,8 +139,17 @@ class WebhookSubscription(AbstractWebhookSubscription):
         rebac_resource_type = "integrate/webhook_subscription"
 
 
-class Vault(AbstractVault):
+class Vault(RecordChangedOptIn, AbstractVault):
     """Concrete knowledge vault used by source-addon tests."""
+
+    record_changed_enabled = False
+
+    @classmethod
+    def record_changed_grant_targets(cls, trigger):
+        """The test source delegates its global role from workflow writers."""
+        return (TriggerGrantTarget(
+            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
+        ),)
 
     class Meta(AbstractVault.Meta):
         """Django model options for the canonical test vault."""
@@ -150,8 +160,17 @@ class Vault(AbstractVault):
         rebac_resource_type = "knowledge/vault"
 
 
-class Page(AbstractPage):
+class Page(RecordChangedOptIn, AbstractPage):
     """Concrete knowledge page used by source-addon tests."""
+
+    record_changed_enabled = False
+
+    @classmethod
+    def record_changed_grant_targets(cls, trigger):
+        """Page read follows the vault permission boundary in this fixture."""
+        return (TriggerGrantTarget(
+            ObjectRef("knowledge/role", "vault_viewer"), "member", "write", to_object_ref(trigger.workflow),
+        ),)
 
     class Meta(AbstractPage.Meta):
         """Django model options for the canonical test page."""

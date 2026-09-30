@@ -113,6 +113,12 @@ class NoteWorkflowStepTests(TransactionTestCase):
         self.assertTrue(trigger.enabled)
         self.assertEqual(trigger.run_as_id, self.admin.pk)
 
+    def test_note_reader_role_requires_admin_to_delegate(self) -> None:
+        """Workflow edit access alone cannot grant global note read to its principal."""
+        self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
+        with self.assertRaisesMessage(PermissionDenied, "cannot grant"):
+            Trigger.objects.enable(self.load_trigger(), actor=self.owner)
+
     def test_entering_review_admits_the_shipped_workflow_as_the_enabling_actor(self) -> None:
         """The note signal, retained ledger and publication use their actual owners."""
         trigger = Trigger.objects.enable(self.load_trigger(), actor=self.admin)
