@@ -92,6 +92,8 @@ export function StatusbarSteps({ steps, value, onChange, onEditDates, readOnly, 
   const twoLine = path.some((step, index) => Boolean(dateRange(step) || (index === current && step.note)));
   const selectable = (step: StatusbarStep) => !readOnly && Boolean(onChange) && step.selectable === true && !step.disabled && step.value !== currentValue;
   const choose = (step: StatusbarStep) => { if (selectable(step)) onChange?.(step.value); };
+  // No step and no state to name (a project with no milestones yet): nothing to show.
+  if (path.length === 0 && terminal === undefined) return <></>;
   return <div ref={hostRef} className={cn("relative min-w-0", fill ? "w-full" : "inline-block max-w-full")}>
     <div ref={barRef} role="list" aria-label={ariaLabel} aria-hidden={collapsed || undefined}
       className={cn("isolate flex w-max items-stretch", twoLine ? "h-12" : "h-8", fill && "min-w-full", collapsed && "pointer-events-none invisible absolute left-0 top-0")}>

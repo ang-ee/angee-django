@@ -317,7 +317,8 @@ function FormViewInstance(props: FormViewProps): React.ReactElement {
   };
   const formTitle = typeof title === "function" ? title(recordToolbarContext) : title;
   const headerExtra = awaitingRecord ? undefined : headerExtras?.(recordToolbarContext);
-  const headerContextLine = awaitingRecord ? undefined : contextLine?.(recordToolbarContext);
+  // A declared context line replaces the generic subtitle even when it says nothing for this record.
+  const headerContextLine = awaitingRecord ? undefined : contextLine ? (contextLine(recordToolbarContext) ?? <></>) : undefined;
   const recordHeader = (compact = false) => {
     const header = <FormViewRecordHeader surface={surface} compact={compact} awaiting={awaitingRecord} title={formTitle}
       extra={headerExtra} contextLine={headerContextLine} />;
