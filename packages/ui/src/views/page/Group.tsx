@@ -6,6 +6,10 @@ import { PAGE_ELEMENT_SLOT } from "./types";
 
 export interface GroupProps {
   label?: ReactNode;
+  /** One sentence beside the label saying what the group holds or where it comes from. */
+  hint?: ReactNode;
+  /** Who reads this group, shown at the heading's right. */
+  audience?: ReactNode;
   columns?: number;
   collapsible?: boolean;
   defaultOpen?: boolean;
@@ -17,6 +21,8 @@ export interface GroupProps {
 
 export interface GroupDescriptor {
   label?: ReactNode;
+  hint?: ReactNode;
+  audience?: ReactNode;
   columns?: number;
   collapsible?: boolean;
   defaultOpen?: boolean;

@@ -53,6 +53,8 @@ export interface LinesSeed {
 export interface FormSectionModel {
   key: string;
   label?: ReactNode;
+  hint?: ReactNode;
+  audience?: ReactNode;
   icon?: ReactNode;
   badge?: ReactNode;
   columns?: number;
@@ -91,6 +93,8 @@ export function formSections(
       {
         key: `group:${index}:${String(group.label ?? "")}`,
         label: group.label,
+        ...(group.hint !== undefined ? { hint: group.hint } : {}),
+        ...(group.audience !== undefined ? { audience: group.audience } : {}),
         columns: group.columns,
         collapsible: group.collapsible,
         defaultOpen: group.defaultOpen,

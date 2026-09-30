@@ -41,7 +41,7 @@ const intake = defineBaseAddon({
       ...formViewSectionsSlot(TASK_MODEL), id: "intake.task-access-decisions", sequence: 50,
       // Access decisions are the request's writers' business; a requester reading their own request never sees them.
       permission: "write", requiredFields: ["permissions"],
-      content: <Group label={<AccessLabel />} savedOnly content={<TaskAccessGroup />} />,
+      content: <Group label={<AccessLabel />} hint={<AccessHint />} savedOnly content={<TaskAccessGroup />} />,
     },
     {
       ...formViewRecordActionsSlot(TASK_MODEL), id: "intake.task-access-actions", sequence: 50,
@@ -126,4 +126,9 @@ export default intake;
 function AccessLabel(): ReactElement {
   const t = useIntakeT();
   return <>{t("access.label")}</>;
+}
+
+function AccessHint(): ReactElement {
+  const t = useIntakeT();
+  return <>{t("access.hint")}</>;
 }

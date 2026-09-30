@@ -226,6 +226,8 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
 function groupDescriptor(props: GroupProps): GroupDescriptor {
   return cachedDescriptor(groupDescriptorCache, props, () => ({
     ...(props.label !== undefined ? { label: props.label } : {}),
+    ...(props.hint !== undefined ? { hint: props.hint } : {}),
+    ...(props.audience !== undefined ? { audience: props.audience } : {}),
     ...(props.columns !== undefined ? { columns: props.columns } : {}),
     ...(props.collapsible !== undefined ? { collapsible: props.collapsible } : {}),
     ...(props.defaultOpen !== undefined ? { defaultOpen: props.defaultOpen } : {}),

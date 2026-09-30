@@ -634,7 +634,7 @@ function FormSection({
       <Collapsible.Root open={open} onOpenChange={setOpen} className="grid gap-3">
         <Collapsible.Trigger className="flex items-center gap-2 border-b border-border-subtle pb-1">
           <Collapsible.Icon />
-          <SectionHeading as="span" label={section.label} count={section.badge} />
+          <SectionHeading as="span" label={section.label} count={section.badge} hint={section.hint} audience={section.audience} />
         </Collapsible.Trigger>
         <Collapsible.Panel keepMounted>{content}</Collapsible.Panel>
       </Collapsible.Root>
@@ -643,7 +643,7 @@ function FormSection({
   return (
     <section className="grid gap-3">
       {section.label ? (
-        <SectionHeading label={section.label} count={section.badge}
+        <SectionHeading label={section.label} count={section.badge} hint={section.hint} audience={section.audience}
           className="border-b border-border-subtle pb-1" />
       ) : null}
       {content}

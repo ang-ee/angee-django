@@ -2,6 +2,7 @@ import { createNamespaceT } from "@angee/ui";
 
 export const enIntakeMessages: Record<string, string> = {
   "access.label": "Requester access",
+  "access.hint": "An account for whoever filed this request, so they can follow it signed in.",
   "access.error": "Access decisions could not be loaded.",
   "access.approve": "Approve",
   "access.deny": "Deny",
