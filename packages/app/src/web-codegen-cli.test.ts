@@ -67,6 +67,37 @@ describe("angee-web-codegen", () => {
     );
   });
 
+  it("emits URL imports and a parallel schema metadata loader", async () => {
+    const runtime = join(root, "runtime");
+    const web = join(root, "web");
+    const schemaDir = join(runtime, "schemas");
+    await mkdir(join(runtime, "web"), { recursive: true });
+    await mkdir(schemaDir, { recursive: true });
+    await mkdir(web, { recursive: true });
+    await writeFile(
+      join(runtime, "web", "manifest.json"),
+      JSON.stringify({ schema: 1, addonPackages: [], codegen: [], documentRoots: [] }),
+    );
+    for (const name of ["console", "public"]) {
+      await writeFile(join(schemaDir, `${name}.graphql`), "type Query { ping: String! }\n");
+      await writeFile(join(schemaDir, `${name}.metadata.json`), "{}\n");
+    }
+
+    await run("node", [CODEGEN, "--runtime", runtime, "--web-root", web]);
+
+    const appModule = await readFile(join(runtime, "web", "app.ts"), "utf8");
+    expect(appModule).toContain('import schema0MetadataUrl from "../schemas/console.metadata.json?url&no-inline";');
+    expect(appModule).toContain('import schema1MetadataUrl from "../schemas/public.metadata.json?url&no-inline";');
+    expect(appModule).toContain("export async function loadComposedSchemas()");
+    expect(appModule).toContain("Promise<unknown>");
+    expect(appModule).not.toContain("as AngeeSchemaMetadata");
+    expect(appModule).toMatch(/const \[schema0Metadata, schema1Metadata\] = await Promise\.all\(\[\s*fetchSchemaMetadata\(schema0MetadataUrl\),\s*fetchSchemaMetadata\(schema1MetadataUrl\),/);
+    expect(appModule).toContain("if (!response.ok) throw new Error");
+    expect(appModule).toContain("metadata: schema0Metadata");
+    expect(appModule).toContain("metadata: schema1Metadata");
+    expect(appModule).not.toContain("export const schemas =");
+  }, 30_000);
+
   it("resolves addon entry and documents from the manifest root", async () => {
     // A composed workspace addon need not be a direct host dependency.
     const runtime = join(root, "runtime");

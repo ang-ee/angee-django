@@ -336,6 +336,10 @@ error. Discovery does not inspect Python ASTs to predict runtime exports.
 conventional package. It renders `runtime/web/manifest.json` and Tailwind sources
 without importing GraphQL schemas. The frontend codegen owner consumes that
 manifest and SDL to produce `runtime/gql/` and `runtime/web/app.ts`.
+The generated web module exposes `loadComposedSchemas()` for parallel fetches of
+the emitted schema metadata JSON assets. The rendered host passes this loader to
+`@angee/app`'s `bootApp`; it awaits metadata before synchronous `createApp`
+composition. The app Vite config preloads those assets in built HTML.
 
 The durable boundary is: declare addon facts in `addon.toml`, derive integration
 from the unchanged hatch-angee manifest, and keep implementation with its owner.

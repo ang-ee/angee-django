@@ -4,6 +4,10 @@
 
 Install: `pnpm add @angee/app`
 
+The rendered host calls `bootApp({ target, loadSchemas, create })` to load
+generated metadata before composition. `create` receives the loaded schemas and
+returns the app to mount. See the [frontend guidelines](../../docs/frontend/guidelines.md).
+
 An addon may declare `brand: { name, mark }` once, with a registered glyph as its
 mark. The host owns `home` and `confineTo`: `createApp({ ..., home: "requests.all",
 confineTo: "requests" })` projects that menu root into the rail and command

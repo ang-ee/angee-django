@@ -752,6 +752,13 @@ Hard-won traps — the wise learn from others' mistakes
   Project TypeScript configs must allow importing `.ts`/`.tsx` extensions because
   the generated runtime imports addon index source files by their package export
   paths.
+- **Generated schema metadata loads before app composition.** The codegen-owned
+  `loadComposedSchemas()` fetches metadata JSON assets in parallel. The host
+  passes it to `@angee/app`'s `bootApp`, which shows the shared loading state and
+  retries fetch failures before calling synchronous `createApp`. Addon manifests
+  still compose synchronously; errors from metadata validation or route creation
+  propagate as programming errors. The `@angee/app/vite` config preloads the
+  metadata assets in built HTML.
 - **Generate operator types from the daemon-owned SDL.** The operator's
   [addon manifest](../../addons/angee/operator/addon.toml) contributes the
   committed SDL and daemon document glob to the shared codegen pass. Do not

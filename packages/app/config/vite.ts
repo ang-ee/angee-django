@@ -271,6 +271,7 @@ export async function defineAngeeWebViteConfig({
     root: webRoot,
     plugins: [
       angeeAppearancePlugin(appearancePayload),
+      preloadSchemaMetadata(),
       react(),
       tailwindcss(),
       // Only an actually included built package set needs an optimizer cache
@@ -353,6 +354,38 @@ export async function defineAngeeWebViteConfig({
     },
   });
   return mergeConfig(base, overrides);
+}
+
+// Generated metadata is fetched as data, so start its download with the entry
+// script. Match the source path, not Vite's configurable output asset name.
+function preloadSchemaMetadata(): Plugin {
+  let base = "/";
+  return {
+    name: "angee:schema-metadata-preload",
+    apply: "build",
+    configResolved(config) {
+      base = config.base;
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(_html, context) {
+        return Object.values(context.bundle ?? {})
+          .filter((asset) => asset.type === "asset" && asset.originalFileNames?.some((source) =>
+            /(^|\/)runtime\/schemas\/[^/]+\.metadata\.json$/.test(source.replaceAll("\\", "/"))))
+          .sort((left, right) => left.fileName.localeCompare(right.fileName))
+          .map((asset) => ({
+            tag: "link",
+            attrs: {
+              rel: "preload",
+              as: "fetch",
+              crossorigin: "anonymous",
+              href: `${base}${asset.fileName}`,
+            },
+            injectTo: "head" as const,
+          }));
+      },
+    },
+  };
 }
 
 const VIRTUAL_APPEARANCE = "virtual:angee-appearance";
