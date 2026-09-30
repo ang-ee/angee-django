@@ -61,6 +61,8 @@ const ResourceViewFavoritesPreferencesSchema = v.object({
 export interface ResourceViewFavoritesState {
   savedFavorites: readonly ResourceViewFavorite[];
   saveFavorite?: (label: string) => void;
+  renameFavorite?: (id: string, label: string) => void;
+  pinFavorite?: (id: string, pinned: boolean) => void;
 }
 
 /** Server-backed resource-view favorites over the runtime preference contract. */
@@ -68,6 +70,7 @@ export function useResourceViewFavorites(
   modelSpelling: string | undefined,
   state: ResourceViewState,
   collectionKey?: string,
+  presetIds?: readonly string[],
 ): ResourceViewFavoritesState {
   const metadata = useSchemaFieldMetadata();
   const { resourceViews } = useAppRuntime();
@@ -96,10 +99,17 @@ export function useResourceViewFavorites(
   const userFavorites = available && canonicalModel
     ? favoritesSlice.document.models[canonicalModel] ?? EMPTY_FAVORITES
     : EMPTY_FAVORITES;
+  const scopedUserFavorites = useMemo(
+    () => userFavorites.filter((favorite) => !favorite.preset || presetIds === undefined || presetIds.includes(favorite.preset)),
+    [userFavorites, presetIds],
+  );
   const savedFavorites = useMemo(() => [
-    ...Object.values(resourceViews).filter((preset) => preset.resource === canonicalModel),
-    ...userFavorites,
-  ], [resourceViews, canonicalModel, userFavorites]);
+    ...(presetIds ?? Object.keys(resourceViews).sort()).flatMap((id) => {
+      const preset = resourceViews[id];
+      return preset?.resource === canonicalModel ? [preset] : [];
+    }),
+    ...scopedUserFavorites,
+  ], [resourceViews, canonicalModel, scopedUserFavorites, presetIds]);
   const writable =
     available && favoritesSlice.writable && canonicalModel !== null;
 
@@ -115,8 +125,36 @@ export function useResourceViewFavorites(
     [canonicalModel, savedFavorites, state, updateFavorites, writable],
   );
 
+  const renameFavorite = useCallback((id: string, label: string) => {
+    const trimmed = label.trim();
+    if (!writable || !canonicalModel || !trimmed) return;
+    void updateFavorites((current) => updateUserFavorite(current, canonicalModel, id,
+      (favorite) => ({ ...favorite, label: trimmed }))).catch(() => undefined);
+  }, [canonicalModel, updateFavorites, writable]);
+  const pinFavorite = useCallback((id: string, pinned: boolean) => {
+    if (!writable || !canonicalModel) return;
+    void updateFavorites((current) => updateUserFavorite(current, canonicalModel, id,
+      (favorite) => ({ ...favorite, pinned }))).catch(() => undefined);
+  }, [canonicalModel, updateFavorites, writable]);
+
   if (!writable) return { savedFavorites };
-  return { savedFavorites, saveFavorite };
+  return { savedFavorites, saveFavorite, renameFavorite, pinFavorite };
+}
+
+function updateUserFavorite(
+  current: ResourceViewFavoritesSlice,
+  modelLabel: string,
+  id: string,
+  change: (favorite: ResourceViewFavorite) => ResourceViewFavorite,
+): ResourceViewFavoritesSlice {
+  if (!current.writable) return current;
+  const favorites = current.document.models[modelLabel];
+  if (!favorites?.some((favorite) => favorite.id === id)) return current;
+  return { ...current, document: { ...current.document,
+    models: { ...current.document.models,
+      [modelLabel]: favorites.map((favorite) => favorite.id === id ? change(favorite) : favorite),
+    },
+  } };
 }
 
 function appendResourceViewFavorite(

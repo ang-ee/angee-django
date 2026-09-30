@@ -1626,7 +1626,39 @@ test("unknown and incompatible default views fail at composition", () => {
   expect(() => createApp(input("notes.Note", preset.id))).not.toThrow();
   expect(() => createApp(input("notes.Note", "desk.missing"))).toThrow(/default resource view/);
   expect(() => createApp(input("teams.Team", preset.id))).toThrow(/incompatible/);
-  expect(() => createApp(input("teams.Team", preset.id, true))).toThrow(/incompatible/);
+  expect(() => createApp(input("teams.Team", preset.id, true))).toThrow(/route "desk.all" does not admit/);
+});
+
+test("a menu preset is admitted on its target route beside the route default", async () => {
+  let admitted: readonly string[] | undefined;
+  function Probe(): ReactNode {
+    admitted = useAppRuntime().menuResourceViewIds;
+    return createElement("span", null, "Menu preset probe");
+  }
+  const app = createApp({
+    ...testAppInput([{
+      id: "desk",
+      resourceViews: [
+        { id: "desk.open", label: "Open", resource: "notes.Note" },
+        { id: "desk.archived", label: "Archived", resource: "notes.Note" },
+      ],
+      routes: resourcePageRoutes("desk.all", "/desk", Probe, "notes.Note", { defaultResourceView: "desk.open" }),
+      menus: [{ id: "desk", route: "desk.all", defaultResourceView: "desk.archived" }],
+    }], { console: { requireAuth: false } }),
+    schemas: testSchemasWithConsoleResources([testDataResource("notes.Note")]),
+  });
+  const originalHref = `${location.pathname}${location.search}${location.hash}`;
+  history.replaceState(null, "", "/desk?preset=desk.archived");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = app.mount(host);
+  try {
+    await waitFor(() => expect(admitted).toEqual(["desk.archived"]));
+  } finally {
+    root.unmount();
+    host.remove();
+    history.replaceState(null, "", originalHref);
+  }
 });
 
 test("confined app links, vocabulary and Settings follow one projection across navigation", async () => {

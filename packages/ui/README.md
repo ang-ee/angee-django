@@ -14,6 +14,16 @@ ResourceView consumes [addon presets and scoped vocabulary](../app/README.md#app
 from runtime: fixed filters join the provider's effective base filter, and native
 column visibility survives saved views. Relation columns retain their authored
 field as their table ID even when metadata resolves a different display path.
+`ResourceList`/`ListView` may declare `presetIds` for route-local shipped views,
+`filterRow` with filter-option or shipped-preset quick ids and facet ids, and
+`boardCard` with a title and up to four fields. Saved favourites can be renamed
+and pinned into the filter row. `chrome` hides the view switcher, pager, or column
+chooser without changing the collection query.
+Toolbar Clear appears for changes beyond the collection default and restores its
+query and fixed preset scope.
+`ResourceList.createAction` places a typed server verb in the normal create
+position, using its projected `record` and `permission` for visibility; the
+default create label uses the resource vocabulary.
 Console chatter follows the route's inherited admission policy.
 Dashboard widget titles link to the source collection, and table rows use the
 resource record route. Widget options `fullViewRoute`, `recordRoute`, and

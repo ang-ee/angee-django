@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
     fields: [] as readonly string[],
     refresh: vi.fn(),
     selectedIds: new Set<string>(),
+    selectable: true,
     record: null as unknown,
   },
   query: {
@@ -99,6 +100,7 @@ describe("shared record access chrome", () => {
       fields: [],
       refresh: vi.fn(),
       selectedIds: new Set(),
+      selectable: true,
       record: null,
     };
     mocks.queryVariables = null;
@@ -130,6 +132,12 @@ describe("shared record access chrome", () => {
       targetIds: ["note-1", "note-2"],
     });
     expect(mocks.dialogProps?.label).toBeUndefined();
+  });
+
+  test("omits Share when a collection has no selection", () => {
+    mocks.list.selectable = false;
+    render(<ShareListChrome />);
+    expect(screen.queryByRole("button", { name: "Open access dialog" })).toBeNull();
   });
 
   test("opens the same access adapter from an external record action", () => {

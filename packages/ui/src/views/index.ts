@@ -6,6 +6,8 @@ export { List, type ListComponent, type ListProps } from "./resource/List";
 export {
   ListView,
   type ListViewProps,
+  type BoardCardSpec,
+  type ListChrome,
   type CardActionContext,
   type ListEmptyAction,
   type ListEmptyContent,
@@ -271,6 +273,7 @@ export {
   DrawerResourceList,
   REFINE_CREATE_ID,
   type ResourceListProps,
+  type ListCreateAction,
   type ResourceRecordRenderContext,
   type ResourceListSplitLayout,
   type ResourceListCalendarSpec,

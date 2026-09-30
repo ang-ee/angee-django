@@ -98,7 +98,8 @@ describe("declared row actions", () => {
     });
     expect(parentClick).not.toHaveBeenCalled();
     expect(mocks.danger).not.toHaveBeenCalled();
-    expect(screen.getAllByTestId("glyph-trash")).toHaveLength(2);
+    expect(screen.queryByTestId("glyph-trash")).toBeNull();
+    expect(screen.getAllByText("Remove")).toHaveLength(2);
 
     const option = mocks.mutationOptions[0] as {
       invalidateModels: readonly string[];
@@ -147,6 +148,16 @@ describe("declared row actions", () => {
 
     await waitFor(() => expect(mocks.mutate).toHaveBeenCalledTimes(1));
     expect(mocks.confirm).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["icon", true, false],
+    ["label", false, true],
+    ["both", true, true],
+  ] as const)("renders the declared %s row action presentation", (presentation, icon, label) => {
+    renderActions(defineRowAction({ ...typedActionInput(false), presentation }));
+    expect(screen.queryAllByTestId("glyph-trash").length > 0).toBe(icon);
+    expect(screen.queryAllByText("Remove").length > 0).toBe(label);
   });
 
   test("turns a domain-false result into the declared danger toast", async () => {

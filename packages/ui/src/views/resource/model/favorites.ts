@@ -8,6 +8,8 @@ import type { ResourceViewSort, ResourceViewInitialState } from "./filter";
 export interface ResourceViewFavorite {
   id: string;
   label: string;
+  /** Put this saved filter in the list's quick filter row. */
+  pinned?: boolean;
   pageSize?: number;
   sort?: ResourceViewSort | null;
   /** Opaque persisted intent; parsed by its query owner when applied. */
@@ -35,6 +37,7 @@ const ResourceViewSortSchema = v.object({
 export const ResourceViewFavoriteSchema = v.object({
   id: v.string(),
   label: v.string(),
+  pinned: v.optional(v.boolean()),
   pageSize: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
   sort: v.optional(v.nullable(ResourceViewSortSchema)),
   filter: v.optional(v.unknown()),
@@ -65,10 +68,11 @@ export function resourceViewPreset(
   presets: Readonly<Record<string, ResourceViewPreset>>,
   id: string | undefined,
   resource: string | undefined,
+  allowedIds?: readonly string[],
 ): ResourceViewPreset | undefined {
   if (!id) return undefined;
   const preset = presets[id];
-  if (!preset || preset.resource !== resource) {
+  if (!preset || preset.resource !== resource || (allowedIds && !allowedIds.includes(id))) {
     throw new Error(`Unknown resource view "${id}" for "${resource}".`);
   }
   return preset;

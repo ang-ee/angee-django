@@ -10,6 +10,7 @@ export {
   type ResourceToolbarFilterOption,
   type ResourceToolbarGroupOption,
   type ResourceToolbarProps,
+  type ResourceToolbarChrome,
   type ResourceToolbarViewControls,
   type ResourceViewSwitcherProps,
 } from "./ResourceToolbar";

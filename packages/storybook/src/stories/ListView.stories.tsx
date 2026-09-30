@@ -94,7 +94,11 @@ export const VisibleFieldsChooser: Story = {
   render: () => <ListFixture />,
 };
 
-function ListFixture() {
+export const QuickFilterRow: Story = {
+  render: () => <ListFixture withFilterRow />,
+};
+
+function ListFixture({ withFilterRow = false }: { withFilterRow?: boolean }) {
   return (
     <RuntimeFixture schemas={storySchemas}>
       <div className="max-w-5xl">
@@ -102,6 +106,15 @@ function ListFixture() {
           resource="notes.Note"
           columns={columns}
           rowActions={rowActions}
+          filterRow={withFilterRow ? { quickFilterIds: ["status:ACTIVE"], facetIds: ["status"] } : undefined}
+          filterOptions={withFilterRow ? [
+            { id: "status:ACTIVE", label: "Active", filter: { status: { exact: "ACTIVE" } } },
+            { id: "status:DRAFT", label: "Draft", filter: { status: { exact: "DRAFT" } } },
+            { id: "status:ARCHIVED", label: "Archived", filter: { status: { exact: "ARCHIVED" } } },
+          ] : undefined}
+          customFilterFields={withFilterRow ? [{ id: "status", label: "Status", type: "selection", options: [
+            { value: "ACTIVE", label: "Active" }, { value: "DRAFT", label: "Draft" }, { value: "ARCHIVED", label: "Archived" },
+          ] }] : undefined}
           createLabel="New note"
           onCreate={() => undefined}
         />

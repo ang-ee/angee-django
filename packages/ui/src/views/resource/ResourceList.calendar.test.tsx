@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render as rtlRender } from "@testing-library/react";
+import { act, cleanup, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 import type { ReactElement, ReactNode } from "react";
 
 import type { CalendarViewSpec } from "./resource-view-types";
@@ -17,9 +19,17 @@ import type { ResourceListCalendarSpec } from "./ResourceList";
 const captured = vi.hoisted(() => ({
   listCalendar: undefined as CalendarViewSpec | undefined,
   onCreateInLane: undefined as ListViewProps["onCreateInLane"],
+  onCreate: undefined as ListViewProps["onCreate"],
+  createLabel: undefined as ListViewProps["createLabel"],
   formDefaults: undefined as Record<string, unknown> | undefined,
   registeredFormId: undefined as string | null | undefined,
   registeredFormActions: undefined as FormViewProps["actions"],
+  invalidate: vi.fn(),
+}));
+
+vi.mock("@refinedev/core", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@refinedev/core")>(),
+  useInvalidate: () => captured.invalidate,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -31,6 +41,8 @@ vi.mock("./ListView", () => ({
   ListView: (props: ListViewProps & { calendar?: CalendarViewSpec }) => {
     captured.listCalendar = props.calendar;
     captured.onCreateInLane = props.onCreateInLane;
+    captured.onCreate = props.onCreate;
+    captured.createLabel = props.createLabel;
     return null;
   },
 }));
@@ -40,6 +52,11 @@ vi.mock("../form/FormView", () => ({
     captured.formDefaults = props.defaultValues as Record<string, unknown> | undefined;
     return null;
   },
+}));
+
+vi.mock("../form/ActionFormDialog", () => ({
+  ActionFormDialog: ({ action, onSucceeded }: { action: { label: string }; onSucceeded: (outcome: { ok: boolean; message: string; id: string }) => void }) =>
+    <div role="dialog">{action.label}<button type="button" onClick={() => onSucceeded({ ok: true, message: "Created", id: "note-2" })}>Save</button></div>,
 }));
 
 vi.mock("./useBulkDelete", () => ({
@@ -70,9 +87,42 @@ const SPEC: ResourceListCalendarSpec = {
 beforeEach(() => {
   captured.listCalendar = undefined;
   captured.onCreateInLane = undefined;
+  captured.onCreate = undefined;
+  captured.createLabel = undefined;
   captured.formDefaults = undefined;
   captured.registeredFormId = undefined;
   captured.registeredFormActions = undefined;
+  captured.invalidate.mockReset();
+});
+
+describe("ResourceList create action", () => {
+  const action = { id: "file-item", label: "File item", args: [], submit: vi.fn(),
+    permission: "create", record: { permissions: ["create"] } };
+
+  test("opens the shared typed action form from the native create command", () => {
+    render(<ResourceList resource="notes.Note" columns={[]} createAction={action} />);
+    expect(captured.createLabel).toBe("New note");
+    act(() => captured.onCreate?.());
+    expect(screen.getByRole("dialog").textContent).toContain("New note");
+  });
+
+  test("omits the command without the projected permission", () => {
+    render(<ResourceList resource="notes.Note" columns={[]}
+      createAction={{ ...action, record: { permissions: [] } }} />);
+    expect(captured.onCreate).toBeUndefined();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("a successful create refreshes the resource and opens its returned record", () => {
+    const onSelect = vi.fn();
+    const metadata = schemaFieldMetadataFromDataResources([testDataResource("notes.Note")]);
+    render(<ModelMetadataProvider metadata={metadata}><ResourceList resource="notes.Note" columns={[]}
+      createAction={action} onSelect={onSelect} /></ModelMetadataProvider>);
+    act(() => captured.onCreate?.());
+    act(() => screen.getByRole("button", { name: "Save" }).click());
+    expect(captured.invalidate).toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith("note-2");
+  });
 });
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach((client) => client.clear()); clients.length = 0; });

@@ -303,16 +303,29 @@ export function createApp(input: CreateAppInput): AngeeApp {
     });
     if (!valid) throw failure ?? new Error(`Unknown resource "${preset.resource}" in view "${preset.id}".`);
   }
-  const validateDefaultView = (id: string, route: BaseAddonRoute | undefined) => {
+  const validateDefaultView = (id: string, route: BaseAddonRoute | undefined, menuId?: string) => {
     const preset = composed.resourceViews[id];
     const model = route ? inheritedRouteFact(route, routesByName, (item) => item.recordModel ?? item.resource) : undefined;
-    if (!preset || preset.resource !== model) throw new Error(`Unknown or incompatible default resource view "${id}" on route "${route?.name}".`);
+    if (!preset || preset.resource !== model) {
+      throw new Error(menuId
+        ? `Menu item "${menuId}" selects resource view "${id}" that route "${route?.name}" does not admit.`
+        : `Unknown or incompatible default resource view "${id}" on route "${route?.name}".`);
+    }
   };
   for (const route of routes) {
     if (route.defaultResourceView) validateDefaultView(route.defaultResourceView, route);
   }
-  for (const item of menuTree.byId.values()) {
-    if (item.defaultResourceView) validateDefaultView(item.defaultResourceView, item.route ? routesByName.get(item.route) : undefined);
+  const menuPresetIdsByRoute = new Map<string, string[]>();
+  for (const item of [...menuTree.byId.values()].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (!item.defaultResourceView) continue;
+    const route = item.route ? routesByName.get(item.route) : undefined;
+    if (!route) {
+      throw new Error(`Menu item "${item.id}" selects resource view "${item.defaultResourceView}" without a target route.`);
+    }
+    validateDefaultView(item.defaultResourceView, route, item.id);
+    const admitted = menuPresetIdsByRoute.get(route.name) ?? [];
+    admitted.push(item.defaultResourceView);
+    menuPresetIdsByRoute.set(route.name, admitted);
   }
   const routesByResource = projection.resourceRoutes(input.confineTo);
 
@@ -415,11 +428,18 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const words = vocabularyForRoute(app, activeRoute?.name);
     const scopedRuntime = useMemo(() => {
       const selected = projection.resourceRoutes(app, activeRoute?.name);
+      const menuResourceViewIds = new Set<string>();
+      let route = activeRoute;
+      while (route) {
+        for (const id of menuPresetIdsByRoute.get(route.name) ?? []) menuResourceViewIds.add(id);
+        route = route.parent ? routesByName.get(route.parent) : undefined;
+      }
       return {
         ...runtime,
         i18n: words.i18n.instance,
         vocabulary: words.vocabulary,
         defaultResourceView: projection.defaultResourceView(activeRoute?.name),
+        menuResourceViewIds: [...menuResourceViewIds].sort(),
         routesByResource: selected,
         routeHref,
       };

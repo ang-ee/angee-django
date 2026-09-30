@@ -85,6 +85,94 @@ describe("ResourceToolbar under the calendar kind", () => {
 });
 
 describe("ResourceToolbar list-kind regression", () => {
+  test("omits the collection switcher with one declared kind", () => {
+    renderToolbar({ view: "list", availableViews: ["list"] });
+    expect(screen.queryByRole("button", { name: "List view" })).toBeNull();
+  });
+
+  test("honours reduced collection chrome without dropping the filter", () => {
+    renderToolbar({ view: "list", availableViews: ["list", "board"],
+      chrome: { viewSwitcher: false, pager: false } });
+    expect(screen.getByRole("button", { name: "Filter" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Previous page" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Board view" })).toBeNull();
+  });
+
+  test("uses a shipped preset as a declared quick filter", () => {
+    const onFavoriteToggle = vi.fn();
+    const preset = { id: "view.open", preset: "view.open", label: "Open records", filter: { status: { exact: "open" } } };
+    renderToolbar({ view: "list", filterRow: { quickFilterIds: [preset.id] },
+      favorites: [preset], activeFavoriteIds: [preset.id], onFavoriteToggle });
+    const button = screen.getByRole("button", { name: "Open records" });
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(button);
+    expect(onFavoriteToggle).toHaveBeenCalledWith(preset);
+  });
+
+  test("places grouping beside the filter instead of in its picker", () => {
+    renderToolbar({ view: "list", groupOptions: [{ id: "status", label: "Status", group: { field: "status" } }],
+      onGroupStackChange: vi.fn(), groupStack: [{ field: "status" }] });
+    const filter = screen.getByRole("button", { name: "Filter" });
+    const group = screen.getByRole("button", { name: "Group by" });
+    expect(filter.closest(".resource-toolbar-query")).toBe(group.closest(".resource-toolbar-query"));
+    expect(filter.parentElement?.className).toContain("flex-1");
+    expect(filter.parentElement?.className).not.toContain("w-full");
+    expect(screen.queryByRole("button", { name: /Remove.*group/i })).toBeNull();
+  });
+
+  test("names the active group from its curated shortcut first", () => {
+    renderToolbar({ view: "list", groupStack: [{ field: "updatedAt" }],
+      groupOptions: [{ id: "recent", label: "Updated", group: { field: "updatedAt" } }],
+      customGroupOptions: [{ id: "raw", label: "Timestamp", group: { field: "updatedAt" } }] });
+    expect(screen.getByRole("button", { name: "Group by" }).textContent).toContain("Group by: Updated");
+  });
+
+  test("renders a compact filter row with quick toggles, facets and conditional Clear", async () => {
+    const onToggle = vi.fn();
+    const onFacetChange = vi.fn();
+    const onReset = vi.fn();
+    renderToolbar({ view: "list", filterRow: { quickFilterIds: ["mine"], facetIds: ["status"] },
+      filterOptions: [
+        { id: "mine", label: "Mine", filter: { owner: { exact: "me" } } },
+        { id: "status:open", label: "Open", filter: { status: { exact: "open" } } },
+      ], customFilterFields: [{ id: "status", label: "Status", type: "selection", options: [{ value: "open", label: "Open" }] }],
+      onFilterToggle: onToggle, onFacetChange, onQueryReset: onReset });
+    expect(screen.queryByLabelText("Filter records")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    expect(screen.getByRole("searchbox", { name: "Filter records" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mine" }));
+    expect(onToggle).toHaveBeenCalledWith("mine");
+    const facet = screen.getByRole("combobox", { name: "Status" });
+    fireEvent.click(facet);
+    const option = await screen.findByRole("option", { name: "Open" });
+    fireEvent.pointerDown(option, { pointerType: "mouse" });
+    fireEvent.click(option);
+    expect(onFacetChange).toHaveBeenCalledWith("status", "status:open");
+  });
+
+  test("a facet without a descriptor uses the field vocabulary label", () => {
+    renderToolbar({ view: "list", filterRow: { facetIds: ["due_at"] },
+      facetLabels: { due_at: "Due date" },
+      filterOptions: [{ id: "due_at:today", label: "Today", filter: { due_at: { exact: "today" } } }] });
+    expect(screen.getByRole("combobox", { name: "Due date" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "due_at" })).toBeNull();
+  });
+
+  test("shows pinned favourites in the row and exposes rename and pin in Favorites", () => {
+    const onFavoriteToggle = vi.fn();
+    const onFavoritePin = vi.fn();
+    renderToolbar({ view: "list", filterRow: {}, favorites: [{ id: "favorite:recent", label: "Recent", pinned: true,
+      filter: { status: { exact: "recent" } } }], onFavoriteToggle, onFavoritePin, queryDirty: true, onQueryReset: vi.fn() });
+    fireEvent.click(screen.getByRole("button", { name: "Recent" }));
+    expect(onFavoriteToggle).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Clear" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Filter and favorites" }));
+    fireEvent.click(screen.getByRole("button", { name: "Unpin favorite" }));
+    expect(onFavoritePin).toHaveBeenCalledWith("favorite:recent", false);
+  });
+
   test("keeps presets curated while a custom-only catalog exposes supported groups", () => {
     const onGroupStackChange = vi.fn();
     renderToolbar({
@@ -97,7 +185,7 @@ describe("ResourceToolbar list-kind regression", () => {
       onGroupStackChange,
     });
 
-    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByLabelText("Group by"));
     expect(screen.queryByRole("button", { name: "Counterparty" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
     expect(screen.getByLabelText("Group field").textContent).toContain("Counterparty");
@@ -114,7 +202,7 @@ describe("ResourceToolbar list-kind regression", () => {
       onGroupStackChange: vi.fn(),
     });
 
-    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByLabelText("Group by"));
     fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
     expect(screen.getByLabelText("Group field").textContent).toContain("Platform");
   });
@@ -135,8 +223,8 @@ describe("ResourceToolbar list-kind regression", () => {
       onGroupStackChange,
     });
 
-    expect(screen.getByText("Document date · Month")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("Filter and group"));
+    expect(screen.getByText(/Document date · Month/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Group by"));
     fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
     expect(screen.getByLabelText("Group granularity").textContent).toContain("Month");
   });
@@ -154,7 +242,7 @@ describe("ResourceToolbar list-kind regression", () => {
       onGroupStackChange={onGroupStackChange}
       onFilterTextChange={vi.fn()}
     />);
-    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByLabelText("Group by"));
     fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
 
     rerender(<ResourceToolbar
@@ -191,7 +279,7 @@ describe("ResourceToolbar list-kind regression", () => {
     };
     const { rerender } = render(<ResourceToolbar pager={PAGER}
       onFilterTextChange={vi.fn()} {...props} />);
-    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByLabelText("Group by"));
     fireEvent.click(screen.getByRole("button", { name: "Add custom group" }));
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     expect(onGroupStackChange).toHaveBeenCalledWith([{ field: "partner" }]);
@@ -234,7 +322,7 @@ describe("ResourceToolbar list-kind regression", () => {
       ],
       onGroupStackChange,
     });
-    fireEvent.click(screen.getByLabelText("Filter and group"));
+    fireEvent.click(screen.getByLabelText("Group by"));
     fireEvent.click(screen.getByText("Platform"));
     expect(onGroupStackChange).toHaveBeenCalledWith([{ field: "platform" }]);
   });

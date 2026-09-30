@@ -35,6 +35,9 @@ import { DashboardCollectionSurface } from "../../../dashboard/surface";
 export function ListView<TRow extends Row = Row>(
   props: ListViewProps<TRow>,
 ): React.ReactElement {
+  if (props.boardCard && (!props.boardCard.title || (props.boardCard.fields?.length ?? 0) > 4)) {
+    throw new Error("ListView boardCard needs a title and at most four detail fields.");
+  }
   return <ListViewFrame {...props} />;
 }
 
@@ -67,6 +70,7 @@ function ListViewFrame<TRow extends Row = Row>(
     ambient: resourceView,
     resource: props.source ? undefined : props.resource,
     baseFilter: props.baseFilter,
+    presetIds: props.presetIds,
     scope: props.scope,
     presentation: props.presentation,
     initialState: initial.state,
@@ -154,6 +158,7 @@ function ListViewBody<TRow extends Row = Row>({
   fields,
   baseFilter,
   filterOptions: explicitFilterOptions,
+  filterRow,
   facets,
   customFilterFields: explicitCustomFilterFields,
   groupOptions: explicitGroupOptions,
@@ -164,6 +169,7 @@ function ListViewBody<TRow extends Row = Row>({
   calendar,
   gantt,
   laneSource: laneSourceInput,
+  boardCard,
   onCreate,
   onCreateInLane,
   createLabel,
@@ -179,6 +185,7 @@ function ListViewBody<TRow extends Row = Row>({
   emptyContent,
   className,
   presentation = "page",
+  chrome,
   resourceView,
 }: ListViewProps<TRow> & {
   resourceView: ResourceViewContextValue;
@@ -207,7 +214,7 @@ function ListViewBody<TRow extends Row = Row>({
   const discoveredMetadata = useModelMetadata(source ? "" : resource);
   const modelMetadata = source ? null : discoveredMetadata;
   const recordMatchFields = useResourceRecordMatchFields(source ? "" : resource);
-  const queryFields = useValueStable([...(fields ?? []), ...recordMatchFields]);
+  const queryFields = useValueStable([...(fields ?? []), ...recordMatchFields, ...(boardCard ? [boardCard.title, ...(boardCard.fields ?? [])] : [])]);
   // The Calendar kind is offered only where the page declares occurrence sources;
   // the switcher's options derive from that (list + board always).
   const ganttAvailable = !source && Boolean(gantt && (laneSource || gantt.linked) && modelMetadata);
@@ -363,6 +370,7 @@ function ListViewBody<TRow extends Row = Row>({
       scalarFacets={scalarFacets}
       explicitGroupOptions={explicitGroupOptions}
       explicitFilterOptions={explicitFilterOptions}
+      filterRow={filterRow}
       explicitCustomFilterFields={explicitCustomFilterFields}
       defaultGroup={defaultGroup}
       defaultGroups={defaultGroups}
@@ -379,10 +387,12 @@ function ListViewBody<TRow extends Row = Row>({
       toolbarActions={toolbarActions}
       bulkActions={bulkActions}
       cardActions={cardActions}
+      boardCard={boardCard}
       renderCard={renderCard}
       emptyContent={resolvedEmptyContent}
       className={className}
       presentation={presentation}
+      chrome={chrome}
     />
   );
   if (resourceView.state.view === "gantt") {

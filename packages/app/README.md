@@ -59,10 +59,13 @@ still reject duplicate keys; scoped overrides use `vocabulary`.
 Preset IDs use the declaring addon's prefix and queries validate against emitted
 resource capabilities. Set `defaultResourceView: "desk.open"` on a route, in
 `resourcePageRoutes` options, or on a menu targeting that resource. Route defaults
-inherit into record children; menu choices travel as the `preset` search key.
+inherit into record children; menu choices travel as the `preset` search key and
+are admitted only on the target route. App creation rejects menu presets whose
+resource does not match that route.
 Editable filter, group, view, sort, page size and column visibility use the existing
 URL state, including namespaced collection state. The fixed filter stays on the
-declaration when the query is reset. Shipped views and user favorites appear
+declaration when the query is reset; toolbar Clear restores the route default.
+Shipped views and user favorites appear
 together in the view switcher. Saved favorites retain their selected preset and
 native column visibility; legacy favorites retain the currently selected preset.
 
